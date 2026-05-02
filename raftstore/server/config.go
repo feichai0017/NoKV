@@ -52,6 +52,7 @@ type MVCCMaintenanceConfig struct {
 
 	Apply        storemvcc.ApplyOptions
 	ResolveLocks storemvcc.ResolveLocksOptions
+	LockResolver storemvcc.LockResolver
 
 	RunOrphanDefaults bool
 	OrphanDefaults    storemvcc.OrphanDefaultOptions

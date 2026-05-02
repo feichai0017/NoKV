@@ -22,14 +22,14 @@ func TestClientSentinelHelpers(t *testing.T) {
 }
 
 func TestClientTypedErrors(t *testing.T) {
-	keyConflict := &KeyConflictError{
+	txnKeyErr := &TxnKeyError{
 		Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.Locked{PrimaryLock: []byte("pk")}}},
 	}
-	require.Contains(t, keyConflict.Error(), "prewrite key errors")
-	gotKeyConflict, ok := AsKeyConflict(keyConflict)
+	require.Contains(t, txnKeyErr.Error(), "transaction key errors")
+	gotTxnKeyErr, ok := AsTxnKeyError(txnKeyErr)
 	require.True(t, ok)
-	require.Same(t, keyConflict, gotKeyConflict)
-	_, ok = AsKeyConflict(errors.New("other"))
+	require.Same(t, txnKeyErr, gotTxnKeyErr)
+	_, ok = AsTxnKeyError(errors.New("other"))
 	require.False(t, ok)
 
 	routeErr := &RouteUnavailableError{Key: []byte("route-key"), Err: errors.New("dial failed")}

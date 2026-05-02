@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
 // MaintenanceProposer submits MVCC maintenance entries through the replicated
@@ -18,11 +19,12 @@ type MaintenanceProposer interface {
 	ProposeMVCCMaintenance(context.Context, []*entrykv.Entry) (entries, writeDeletes, defaultDeletes uint64, err error)
 }
 
-// LockResolverProposer submits semantic ResolveLock commands through raft.
-// Implementations must preserve the normal Percolator apply path instead of
-// translating locks into raw tombstones.
-type LockResolverProposer interface {
-	ProposeResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
+// LockResolver submits semantic transaction-resolution commands through the
+// authoritative region for each key. Implementations must preserve the normal
+// Percolator apply path instead of translating locks into raw tombstones.
+type LockResolver interface {
+	CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error)
+	ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error)
 }
 
 type maintenanceSubmitResult struct {
@@ -56,12 +58,19 @@ func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer
 	return result, nil
 }
 
-func proposeResolveLocks(ctx context.Context, proposer LockResolverProposer, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+func checkTxnStatus(ctx context.Context, resolver LockResolver, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+	if resolver == nil {
+		return nil, fmt.Errorf("raftstore/mvcc: nil lock resolver")
+	}
+	return resolver.CheckTxnStatus(ctx, primary, lockTs, currentTs)
+}
+
+func proposeResolveLocks(ctx context.Context, resolver LockResolver, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
-	if proposer == nil {
-		return 0, fmt.Errorf("raftstore/mvcc: nil lock resolver proposer")
+	if resolver == nil {
+		return 0, fmt.Errorf("raftstore/mvcc: nil lock resolver")
 	}
-	return proposer.ProposeResolveLocks(ctx, startVersion, commitVersion, keys)
+	return resolver.ResolveLocks(ctx, startVersion, commitVersion, keys)
 }

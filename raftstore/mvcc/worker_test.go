@@ -27,18 +27,18 @@ func TestMaintenanceWorkerRunOnceUsesReplicatedPaths(t *testing.T) {
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, orphanKey, 7, []byte("orphan"), 0, 0)
 
 	maintenance := &testMaintenanceProposer{db: db}
-	locks := &testLockResolverProposer{db: db}
+	locks := &testLockResolver{db: db}
 	worker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
-		MVCCStore:            db,
-		MaintenanceProposer:  maintenance,
-		LockResolverProposer: locks,
-		Interval:             time.Hour,
-		SafePoint:            func() uint64 { return 100 },
-		CurrentTs:            func() uint64 { return 20 },
-		Apply:                storemvcc.ApplyOptions{BatchEntries: 2},
-		ResolveLocks:         storemvcc.ResolveLocksOptions{BatchLocks: 1},
-		RunOrphanDefaults:    true,
-		OrphanDefaults:       storemvcc.OrphanDefaultOptions{BatchEntries: 1},
+		MVCCStore:           db,
+		MaintenanceProposer: maintenance,
+		LockResolver:        locks,
+		Interval:            time.Hour,
+		SafePoint:           func() uint64 { return 100 },
+		CurrentTs:           func() uint64 { return 20 },
+		Apply:               storemvcc.ApplyOptions{BatchEntries: 2},
+		ResolveLocks:        storemvcc.ResolveLocksOptions{BatchLocks: 1},
+		RunOrphanDefaults:   true,
+		OrphanDefaults:      storemvcc.OrphanDefaultOptions{BatchEntries: 1},
 	})
 	require.True(t, ok)
 
@@ -51,7 +51,8 @@ func TestMaintenanceWorkerRunOnceUsesReplicatedPaths(t *testing.T) {
 	require.Equal(t, uint64(1), snap.LastApply.AppliedDefaultDeletes)
 	require.Equal(t, uint64(1), snap.LastOrphanDefaults.AppliedDefaultDeletes)
 	require.GreaterOrEqual(t, maintenance.calls, 2)
-	require.Equal(t, 1, locks.calls)
+	require.Equal(t, 1, locks.statusCalls)
+	require.Zero(t, locks.calls)
 }
 
 func TestMaintenanceWorkerContinuesAfterResolveError(t *testing.T) {
@@ -65,14 +66,14 @@ func TestMaintenanceWorkerContinuesAfterResolveError(t *testing.T) {
 	applyMVCCGCLockRecord(t, db, lockKey, lockKey, 200, 5, kvrpcpb.Mutation_Put)
 
 	worker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
-		MVCCStore:            db,
-		MaintenanceProposer:  &testMaintenanceProposer{db: db},
-		LockResolverProposer: &failingLockResolverProposer{err: errors.New("resolve failed")},
-		Interval:             time.Hour,
-		SafePoint:            func() uint64 { return 100 },
-		CurrentTs:            func() uint64 { return 300 },
-		Apply:                storemvcc.ApplyOptions{BatchEntries: 8},
-		ResolveLocks:         storemvcc.ResolveLocksOptions{BatchLocks: 1},
+		MVCCStore:           db,
+		MaintenanceProposer: &testMaintenanceProposer{db: db},
+		LockResolver:        &failingLockResolver{err: errors.New("resolve failed")},
+		Interval:            time.Hour,
+		SafePoint:           func() uint64 { return 100 },
+		CurrentTs:           func() uint64 { return 300 },
+		Apply:               storemvcc.ApplyOptions{BatchEntries: 8},
+		ResolveLocks:        storemvcc.ResolveLocksOptions{BatchLocks: 1},
 	})
 	require.True(t, ok)
 
@@ -151,11 +152,11 @@ func TestMaintenanceWorkerAllowsLockResolutionOnly(t *testing.T) {
 	applyMVCCGCLockRecord(t, db, key, key, 10, 5, kvrpcpb.Mutation_Put)
 
 	worker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
-		MVCCStore:            db,
-		LockResolverProposer: &testLockResolverProposer{db: db},
-		Interval:             time.Hour,
-		CurrentTs:            func() uint64 { return 20 },
-		ResolveLocks:         storemvcc.ResolveLocksOptions{BatchLocks: 1},
+		MVCCStore:    db,
+		LockResolver: &testLockResolver{db: db},
+		Interval:     time.Hour,
+		CurrentTs:    func() uint64 { return 20 },
+		ResolveLocks: storemvcc.ResolveLocksOptions{BatchLocks: 1},
 	})
 	require.True(t, ok)
 	require.NoError(t, worker.RunOnce(context.Background()))
@@ -267,12 +268,16 @@ func (p *blockingMaintenanceProposer) ProposeMVCCMaintenance(ctx context.Context
 	return 0, 0, 0, ctx.Err()
 }
 
-type failingLockResolverProposer struct {
+type failingLockResolver struct {
 	err error
 }
 
-func (p *failingLockResolverProposer) ProposeResolveLocks(context.Context, uint64, uint64, [][]byte) (uint64, error) {
+func (p *failingLockResolver) ResolveLocks(context.Context, uint64, uint64, [][]byte) (uint64, error) {
 	return 0, p.err
+}
+
+func (p *failingLockResolver) CheckTxnStatus(context.Context, []byte, uint64, uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+	return &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 301}, nil
 }
 
 type sequencedMaintenanceProposer struct {

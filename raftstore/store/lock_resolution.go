@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -10,14 +11,14 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
-// ProposeResolveLocks submits a semantic Percolator ResolveLock command through
-// raft. It is used by cluster-mode MVCC maintenance; direct lock tombstones
-// would bypass apply observers and WatchSubtree notifications.
+// ResolveLocks submits a semantic Percolator ResolveLock command through raft.
+// It is used by cluster-mode MVCC maintenance; direct lock tombstones would
+// bypass apply observers and WatchSubtree notifications.
 //
 // The operation is atomic per region batch, not across regions. If one region
 // succeeds and a later region fails, the next maintenance pass must rescan and
 // converge through idempotent lock resolution.
-func (s *Store) ProposeResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
+func (s *Store) ResolveLocks(ctx context.Context, startVersion, commitVersion uint64, keys [][]byte) (uint64, error) {
 	if startVersion == 0 {
 		return 0, fmt.Errorf("raftstore: resolve locks start version is required")
 	}
@@ -52,6 +53,49 @@ func (s *Store) ProposeResolveLocks(ctx context.Context, startVersion, commitVer
 		resolved += count
 	}
 	return resolved, nil
+}
+
+// CheckTxnStatus routes the primary-key status check through the primary
+// region's normal raft apply path.
+func (s *Store) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, currentTs uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
+	if len(primary) == 0 {
+		return nil, fmt.Errorf("raftstore: primary key is required for check txn status")
+	}
+	meta, ok := s.RegionMetaByKey(primary)
+	if !ok {
+		return nil, fmt.Errorf("raftstore: no region for check txn status primary %x", primary)
+	}
+	resp, err := s.ProposeCommand(ctx, &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{
+			RegionId: meta.ID,
+			RegionEpoch: &metapb.RegionEpoch{
+				Version:     meta.Epoch.Version,
+				ConfVersion: meta.Epoch.ConfVersion,
+			},
+		},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS,
+			Cmd: &raftcmdpb.Request_CheckTxnStatus{CheckTxnStatus: &kvrpcpb.CheckTxnStatusRequest{
+				PrimaryKey:         append([]byte(nil), primary...),
+				LockTs:             lockTs,
+				CurrentTs:          currentTs,
+				CallerStartTs:      currentTs,
+				RollbackIfNotExist: true,
+				CurrentTime:        uint64(time.Now().Unix()),
+			}},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if regionErr := resp.GetRegionError(); regionErr != nil {
+		return nil, fmt.Errorf("raftstore: check txn status region %d failed: %v", meta.ID, regionErr)
+	}
+	responses := resp.GetResponses()
+	if len(responses) != 1 || responses[0].GetCheckTxnStatus() == nil {
+		return nil, fmt.Errorf("raftstore: check txn status region %d returned invalid response", meta.ID)
+	}
+	return responses[0].GetCheckTxnStatus(), nil
 }
 
 type resolveLockRegionBatch struct {

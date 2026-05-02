@@ -14,6 +14,7 @@ import (
 // Get issues a KvGet for the provided key/version. It retries on region errors.
 func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.GetResponse, error) {
 	var lastErr error
+	var lastKeyErr *kvrpcpb.KeyError
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
 		region, err := c.routeKeyWithRetry(ctx, key)
 		if err != nil {
@@ -40,10 +41,29 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.
 			}
 			continue
 		}
+		if keyErr := resp.GetError(); keyErr != nil {
+			if locked := keyErr.GetLocked(); locked != nil {
+				lastKeyErr = keyErr
+				resolved, err := c.resolveReadLock(ctx, locked, version)
+				if err != nil && !errors.Is(err, errReadLockStillLive) {
+					return nil, err
+				}
+				if !resolved {
+					if err := c.waitRetry(ctx, attempt, retryLockResolve); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
+			return nil, txnKeyError(keyErr)
+		}
 		return resp, nil
 	}
 	if lastErr != nil {
 		return nil, lastErr
+	}
+	if lastKeyErr != nil {
+		return nil, txnKeyError(lastKeyErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -70,6 +90,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 		ids    []string
 	}
 	var lastErr error
+	var lastKeyErr *kvrpcpb.KeyError
 	for attempt := 0; attempt < c.retry.MaxAttempts && len(pending) > 0; attempt++ {
 		groups := make(map[uint64]*regionBatch)
 		for keyID, key := range pending {
@@ -111,6 +132,20 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 				} else {
 					getResp = &kvrpcpb.GetResponse{NotFound: true}
 				}
+				if keyErr := getResp.GetError(); keyErr != nil {
+					if locked := keyErr.GetLocked(); locked != nil {
+						lastKeyErr = keyErr
+						resolved, err := c.resolveReadLock(ctx, locked, version)
+						if err != nil && !errors.Is(err, errReadLockStillLive) {
+							return nil, err
+						}
+						if !resolved {
+							lastErr = txnKeyError(keyErr)
+						}
+						continue
+					}
+					return nil, txnKeyError(keyErr)
+				}
 				results[keyID] = getResp
 				completed = append(completed, keyID)
 			}
@@ -124,6 +159,8 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 				kind = retryRouteUnavailable
 			} else if isTransportUnavailable(lastErr) {
 				kind = retryTransportUnavailable
+			} else if lastKeyErr != nil {
+				kind = retryLockResolve
 			}
 			if err := c.waitRetry(ctx, attempt, kind); err != nil {
 				return nil, err
@@ -133,6 +170,9 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	if len(pending) > 0 {
 		if lastErr != nil {
 			return nil, lastErr
+		}
+		if lastKeyErr != nil {
+			return nil, txnKeyError(lastKeyErr)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -202,6 +242,9 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	collected := make([]*kvrpcpb.KV, 0, limit)
 	currentKey := append([]byte(nil), startKey...)
 	remaining := limit
+	lockAttempts := 0
+	lastLock := ""
+	var lastKeyErr *kvrpcpb.KeyError
 	for remaining > 0 {
 		region, err := c.routeKeyWithRetry(ctx, currentKey)
 		if err != nil {
@@ -226,6 +269,31 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			}
 			continue
 		}
+		if keyErr := resp.GetError(); keyErr != nil {
+			if locked := keyErr.GetLocked(); locked != nil {
+				lastKeyErr = keyErr
+				lockID := readLockFingerprint(locked)
+				if lockID != lastLock {
+					lastLock = lockID
+					lockAttempts = 0
+				}
+				if lockAttempts >= c.retry.MaxAttempts {
+					return nil, txnKeyError(lastKeyErr)
+				}
+				resolved, err := c.resolveReadLock(ctx, locked, version)
+				if err != nil && !errors.Is(err, errReadLockStillLive) {
+					return nil, err
+				}
+				if !resolved {
+					if err := c.waitRetry(ctx, lockAttempts, retryLockResolve); err != nil {
+						return nil, err
+					}
+				}
+				lockAttempts++
+				continue
+			}
+			return nil, txnKeyError(keyErr)
+		}
 		kvs := resp.GetKvs()
 		collected = append(collected, kvs...)
 		if len(kvs) == 0 {
@@ -249,6 +317,42 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		currentKey = nextKey
 	}
 	return collected, nil
+}
+
+func readLockFingerprint(locked *kvrpcpb.Locked) string {
+	return string(locked.GetKey()) + "\x00" + fmt.Sprint(locked.GetLockVersion())
+}
+
+func (c *Client) resolveReadLock(ctx context.Context, locked *kvrpcpb.Locked, readTs uint64) (bool, error) {
+	if locked == nil {
+		return false, nil
+	}
+	lockKey := locked.GetKey()
+	if len(lockKey) == 0 || len(locked.GetPrimaryLock()) == 0 || locked.GetLockVersion() == 0 {
+		return false, txnKeyError(&kvrpcpb.KeyError{Locked: locked})
+	}
+	statusResp, err := c.CheckTxnStatus(ctx, locked.GetPrimaryLock(), locked.GetLockVersion(), readTs)
+	if err != nil {
+		return false, err
+	}
+	if statusResp == nil {
+		return false, fmt.Errorf("client: nil check txn status response for primary %q", locked.GetPrimaryLock())
+	}
+	if keyErr := statusResp.GetError(); keyErr != nil {
+		return false, txnKeyError(keyErr)
+	}
+	commitVersion := statusResp.GetCommitVersion()
+	switch {
+	case commitVersion > 0:
+		_, err = c.ResolveLocks(ctx, locked.GetLockVersion(), commitVersion, [][]byte{lockKey})
+		return err == nil, err
+	case statusResp.GetAction() == kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback ||
+		statusResp.GetAction() == kvrpcpb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
+		_, err = c.ResolveLocks(ctx, locked.GetLockVersion(), 0, [][]byte{lockKey})
+		return err == nil, err
+	default:
+		return false, errReadLockStillLive
+	}
 }
 
 func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64) (*kvrpcpb.ScanResponse, *errorpb.RegionError, error) {
@@ -414,7 +518,7 @@ func (c *Client) prewriteMutationsByRoute(ctx context.Context, primary []byte, s
 				break
 			}
 			if resp != nil && len(resp.GetErrors()) > 0 {
-				return prewritten, &KeyConflictError{Errors: resp.GetErrors()}
+				return prewritten, &TxnKeyError{Errors: resp.GetErrors()}
 			}
 			prewritten[group.region.desc.RegionID] = append(prewritten[group.region.desc.RegionID], collectKeys(group.mutations)...)
 			pending = removeMutationSet(pending, group.mutations)
@@ -499,8 +603,8 @@ func (c *Client) commitRegion(ctx context.Context, regionID uint64, keys [][]byt
 			}
 			continue
 		}
-		if resp != nil && resp.GetError() != nil {
-			return fmt.Errorf("client: commit key error: %v", resp.GetError())
+		if err := txnKeyError(resp.GetError()); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -543,8 +647,8 @@ func (c *Client) commitKeysByRoute(ctx context.Context, keys [][]byte, startVers
 				shouldRetry = true
 				break
 			}
-			if resp != nil && resp.GetError() != nil {
-				return fmt.Errorf("client: commit key error: %v", resp.GetError())
+			if err := txnKeyError(resp.GetError()); err != nil {
+				return err
 			}
 			pending = removeKeySet(pending, group.keys)
 		}
@@ -620,8 +724,8 @@ func (c *Client) rollbackKeysByRoute(ctx context.Context, keys [][]byte, startVe
 				shouldRetry = true
 				break
 			}
-			if resp != nil && resp.GetError() != nil {
-				return fmt.Errorf("client: rollback key error: %v", resp.GetError())
+			if err := txnKeyError(resp.GetError()); err != nil {
+				return err
 			}
 			pending = removeKeySet(pending, group.keys)
 		}
@@ -765,7 +869,7 @@ func (c *Client) resolveLocksByRoute(ctx context.Context, startVersion, commitVe
 			}
 			if resp != nil {
 				if keyErr := resp.GetError(); keyErr != nil {
-					return resolved, fmt.Errorf("client: resolve lock key error: %v", keyErr)
+					return resolved, txnKeyError(keyErr)
 				}
 				resolved += resp.GetResolvedLocks()
 			}

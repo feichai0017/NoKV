@@ -235,6 +235,63 @@ func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 	require.Equal(t, expiresAt, resp.GetKvs()[0].GetExpiresAt())
 }
 
+func TestHandleScanCommittedLockDoesNotHideVisiblePut(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	key := []byte("scan-lock-visible-put")
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, []byte("value1"), 0, 0)
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 20, mvcc.EncodeWrite(mvcc.Write{
+		Kind:    kvrpcpb.Mutation_Put,
+		StartTs: 10,
+	}), 0, 0)
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 30, nil, entrykv.BitDelete, 0)
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 40, mvcc.EncodeWrite(mvcc.Write{
+		Kind:    kvrpcpb.Mutation_Lock,
+		StartTs: 30,
+	}), 0, 0)
+
+	resp, err := handleScan(db, &kvrpcpb.ScanRequest{
+		StartKey:     key,
+		Limit:        1,
+		Version:      50,
+		IncludeStart: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.GetError())
+	require.Len(t, resp.GetKvs(), 1)
+	require.Equal(t, key, resp.GetKvs()[0].GetKey())
+	require.Equal(t, []byte("value1"), resp.GetKvs()[0].GetValue())
+}
+
+func TestHandleScanCommittedLockDoesNotCreateVisibleKey(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	key := []byte("scan-lock-only")
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, nil, entrykv.BitDelete, 0)
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, 20, mvcc.EncodeWrite(mvcc.Write{
+		Kind:    kvrpcpb.Mutation_Lock,
+		StartTs: 10,
+	}), 0, 0)
+
+	resp, err := handleScan(db, &kvrpcpb.ScanRequest{
+		StartKey:     key,
+		Limit:        1,
+		Version:      30,
+		IncludeStart: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.GetError())
+	require.Empty(t, resp.GetKvs())
+}
+
 func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

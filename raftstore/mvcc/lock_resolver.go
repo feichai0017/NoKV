@@ -46,10 +46,11 @@ type ResolveLocksStats struct {
 	RolledBackLocks    uint64
 }
 
-// ResolveExpiredLocksReplicated resolves expired locks through semantic raft
-// ResolveLock commands. Use this path for cluster-mode stores so apply
-// observers and watch streams see normal transaction-resolution events.
-func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, proposer LockResolverProposer, opt ResolveLocksOptions) (ResolveLocksStats, error) {
+// ResolveExpiredLocksReplicated resolves expired locks through primary-authority
+// CheckTxnStatus and semantic ResolveLock commands. Use this path for
+// cluster-mode stores so apply observers and watch streams see normal
+// transaction-resolution events.
+func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, resolver LockResolver, opt ResolveLocksOptions) (ResolveLocksStats, error) {
 	var stats ResolveLocksStats
 	if opt.CurrentTs == 0 {
 		return stats, nil
@@ -72,13 +73,13 @@ func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, propo
 		}
 		stats.add(batch.scan)
 		if len(batch.locks) > 0 {
-			decisions, resolved, err := planResolveLocks(ctx, db, opt.CurrentTs, batch.locks)
+			decisions, resolved, err := planResolveLocks(ctx, resolver, opt.CurrentTs, batch.locks)
 			if err != nil {
 				return stats, err
 			}
 			commands := groupResolveLockCommands(decisions)
 			for _, cmd := range commands {
-				applied, err := proposeResolveLocks(ctx, proposer, cmd.startTs, cmd.commitTs, cmd.keys)
+				applied, err := proposeResolveLocks(ctx, resolver, cmd.startTs, cmd.commitTs, cmd.keys)
 				if err != nil {
 					return stats, err
 				}
@@ -198,10 +199,10 @@ func seekLockStart(iter index.Iterator, afterUserKey []byte) {
 }
 
 type resolveLockDecision struct {
-	key      []byte
-	startTs  uint64
-	commitTs uint64
-	kind     kvrpcpb.Mutation_Op
+	key             []byte
+	startTs         uint64
+	commitTs        uint64
+	alreadyResolved bool
 }
 
 type resolveLockCommand struct {
@@ -210,14 +211,14 @@ type resolveLockCommand struct {
 	keys     [][]byte
 }
 
-func planResolveLocks(ctx context.Context, db txnstore.Store, currentTs uint64, locks []lockRecord) ([]resolveLockDecision, ResolveLocksStats, error) {
+func planResolveLocks(ctx context.Context, resolver LockResolver, currentTs uint64, locks []lockRecord) ([]resolveLockDecision, ResolveLocksStats, error) {
 	var stats ResolveLocksStats
 	decisions := make([]resolveLockDecision, 0, len(locks))
 	for _, rec := range locks {
 		if err := ctx.Err(); err != nil {
 			return nil, stats, err
 		}
-		decision, err := resolveOneLock(ctx, db, currentTs, rec)
+		decision, err := resolveOneLock(ctx, resolver, currentTs, rec)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -225,47 +226,55 @@ func planResolveLocks(ctx context.Context, db txnstore.Store, currentTs uint64, 
 			stats.RetainedLocks++
 			continue
 		}
+		if decision.alreadyResolved {
+			stats.ResolvedLocks++
+			if decision.commitTs == 0 {
+				stats.RolledBackLocks++
+			} else {
+				stats.CommittedLocks++
+			}
+			continue
+		}
 		decisions = append(decisions, *decision)
 	}
 	return decisions, stats, nil
 }
 
-func resolveOneLock(ctx context.Context, db txnstore.Store, currentTs uint64, rec lockRecord) (*resolveLockDecision, error) {
+func resolveOneLock(ctx context.Context, resolver LockResolver, currentTs uint64, rec lockRecord) (*resolveLockDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if write, commitTs, ok, err := writeByStartTs(db, rec.lock.Primary, rec.lock.Ts); err != nil {
+	status, err := checkTxnStatus(ctx, resolver, rec.lock.Primary, rec.lock.Ts, currentTs)
+	if err != nil {
 		return nil, err
-	} else if ok {
-		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return &resolveLockDecision{
-				key:     entrykv.SafeCopy(nil, rec.key),
-				startTs: rec.lock.Ts,
-				kind:    rec.lock.Kind,
-			}, nil
-		}
+	}
+	if status == nil {
+		return nil, fmt.Errorf("raftstore/mvcc: nil check txn status response for primary %x", rec.lock.Primary)
+	}
+	if keyErr := status.GetError(); keyErr != nil {
+		return nil, fmt.Errorf("raftstore/mvcc: check txn status key error for primary %x: %v", rec.lock.Primary, keyErr)
+	}
+	if commitTs := status.GetCommitVersion(); commitTs > 0 {
 		return &resolveLockDecision{
 			key:      entrykv.SafeCopy(nil, rec.key),
 			startTs:  rec.lock.Ts,
 			commitTs: commitTs,
-			kind:     rec.lock.Kind,
 		}, nil
 	}
-
-	if !bytes.Equal(rec.key, rec.lock.Primary) {
-		primary, err := lockForKey(db, rec.lock.Primary)
-		if err != nil {
-			return nil, err
+	switch status.GetAction() {
+	case kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+		kvrpcpb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
+		decision := &resolveLockDecision{
+			key:     entrykv.SafeCopy(nil, rec.key),
+			startTs: rec.lock.Ts,
 		}
-		if primary != nil && primary.Ts == rec.lock.Ts && !lockExpired(*primary, currentTs) {
-			return nil, nil
+		if bytes.Equal(rec.key, rec.lock.Primary) {
+			decision.alreadyResolved = true
 		}
+		return decision, nil
+	default:
+		return nil, nil
 	}
-	return &resolveLockDecision{
-		key:     entrykv.SafeCopy(nil, rec.key),
-		startTs: rec.lock.Ts,
-		kind:    rec.lock.Kind,
-	}, nil
 }
 
 func lockForKey(db txnstore.Store, key []byte) (*txnmvcc.Lock, error) {

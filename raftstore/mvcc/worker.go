@@ -17,9 +17,9 @@ const MaintenanceTaskName = "mvcc-maintenance"
 // raftstore node. The worker never writes through the local Store surface:
 // every destructive mutation must pass through the supplied raft proposers.
 type MaintenanceWorkerConfig struct {
-	MVCCStore            txnstore.Store
-	MaintenanceProposer  MaintenanceProposer
-	LockResolverProposer LockResolverProposer
+	MVCCStore           txnstore.Store
+	MaintenanceProposer MaintenanceProposer
+	LockResolver        LockResolver
 
 	Interval time.Duration
 	Timeout  time.Duration
@@ -69,7 +69,7 @@ func NewMaintenanceWorker(cfg MaintenanceWorkerConfig) (*MaintenanceWorker, bool
 		return nil, false
 	}
 	hasGCApply := cfg.SafePoint != nil && cfg.MaintenanceProposer != nil
-	hasLockResolution := cfg.CurrentTs != nil && cfg.LockResolverProposer != nil
+	hasLockResolution := cfg.CurrentTs != nil && cfg.LockResolver != nil
 	hasOrphanCleanup := cfg.RunOrphanDefaults && cfg.MaintenanceProposer != nil
 	if !hasGCApply && !hasLockResolution && !hasOrphanCleanup {
 		return nil, false
@@ -132,10 +132,10 @@ func (w *MaintenanceWorker) RunOnce(ctx context.Context) error {
 	if w.cfg.CurrentTs != nil {
 		currentTs = w.cfg.CurrentTs()
 	}
-	if currentTs != 0 && w.cfg.LockResolverProposer != nil {
+	if currentTs != 0 && w.cfg.LockResolver != nil {
 		resolveOpt := w.cfg.ResolveLocks
 		resolveOpt.CurrentTs = currentTs
-		resolveStats, resolveErr = ResolveExpiredLocksReplicated(runCtx, w.cfg.MVCCStore, w.cfg.LockResolverProposer, resolveOpt)
+		resolveStats, resolveErr = ResolveExpiredLocksReplicated(runCtx, w.cfg.MVCCStore, w.cfg.LockResolver, resolveOpt)
 	}
 	if w.cfg.SafePoint != nil && w.cfg.MaintenanceProposer != nil {
 		requestedSafePoint := w.cfg.SafePoint()

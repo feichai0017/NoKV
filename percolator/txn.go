@@ -106,8 +106,8 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 
 // validateCommitVersion rejects commits that would violate MVCC ordering.
 func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.KeyError {
-	if CommitVersion < StartVersion {
-		return keyErrorAbort("commit version is earlier than start version")
+	if CommitVersion <= StartVersion {
+		return keyErrorAbort("commit version must be greater than start version")
 	}
 	return nil
 }

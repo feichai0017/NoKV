@@ -865,9 +865,9 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), resolved)
 
-	errStr := (&KeyConflictError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
-	require.Contains(t, errStr, "client: prewrite key errors")
-	conflict, ok := AsKeyConflict(&KeyConflictError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}})
+	errStr := (&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
+	require.Contains(t, errStr, "client: transaction key errors")
+	conflict, ok := AsTxnKeyError(&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}})
 	require.True(t, ok)
 	require.Len(t, conflict.Errors, 1)
 }
@@ -880,6 +880,25 @@ func TestNewRequiresRegionResolver(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "region resolver required")
+}
+
+func TestNewDefaultsLockResolveBackoff(t *testing.T) {
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		RegionResolver: &mockRegionResolver{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Millisecond, cli.retry.LockResolveBackoff)
+	require.NoError(t, cli.Close())
+
+	cli, err = New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "127.0.0.1:1"}},
+		RegionResolver: &mockRegionResolver{},
+		Retry:          RetryPolicy{LockResolveBackoff: -1},
+	})
+	require.NoError(t, err)
+	require.Zero(t, cli.retry.LockResolveBackoff)
+	require.NoError(t, cli.Close())
 }
 
 func TestClientRegionResolverLookupAndCache(t *testing.T) {

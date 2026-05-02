@@ -24,6 +24,8 @@ var (
 	errLeaderUnknown = errors.New("client: leader unknown")
 	// errInvalidScanLimit indicates that scan was called with limit == 0.
 	errInvalidScanLimit = errors.New("client: scan limit must be > 0")
+	// errReadLockStillLive indicates that a read lock is valid and should be retried within the caller budget.
+	errReadLockStillLive = errors.New("client: read lock still live")
 )
 
 func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingRegionResolver) }
@@ -42,32 +44,45 @@ func IsLeaderUnknown(err error) bool { return errors.Is(err, errLeaderUnknown) }
 
 func IsInvalidScanLimit(err error) bool { return errors.Is(err, errInvalidScanLimit) }
 
-// KeyConflictError represents prewrite-time key conflicts surfaced by the raft
-// service. Callers can inspect the KeyErrors to resolve locks before retrying.
-type KeyConflictError struct {
+// TxnKeyError represents transaction key errors surfaced by raftstore.
+// Callers can inspect KeyErrors to resolve locks or retry timestamp-expired commits.
+type TxnKeyError struct {
 	Errors []*kvrpcpb.KeyError
 }
 
-func (e *KeyConflictError) Error() string {
-	return fmt.Sprintf("client: prewrite key errors: %+v", e.Errors)
+func (e *TxnKeyError) Error() string {
+	return fmt.Sprintf("client: transaction key errors: %+v", e.Errors)
 }
 
-// KeyErrors exposes the raw per-key conflicts without forcing callers to
+// KeyErrors exposes the raw per-key errors without forcing callers to
 // depend on this package's concrete error type.
-func (e *KeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
+func (e *TxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 	if e == nil {
 		return nil
 	}
 	return e.Errors
 }
 
-// AsKeyConflict extracts a KeyConflictError from err.
-func AsKeyConflict(err error) (*KeyConflictError, bool) {
-	var target *KeyConflictError
+// AsTxnKeyError extracts a TxnKeyError from err.
+func AsTxnKeyError(err error) (*TxnKeyError, bool) {
+	var target *TxnKeyError
 	if !errors.As(err, &target) {
 		return nil, false
 	}
 	return target, true
+}
+
+func txnKeyError(errs ...*kvrpcpb.KeyError) error {
+	filtered := make([]*kvrpcpb.KeyError, 0, len(errs))
+	for _, err := range errs {
+		if err != nil {
+			filtered = append(filtered, err)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &TxnKeyError{Errors: filtered}
 }
 
 // RouteUnavailableError indicates that the client could not resolve a route
