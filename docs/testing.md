@@ -7,8 +7,11 @@ This document inventories NoKV's automated coverage and provides guidance for ex
 ## 1. Quick Commands
 
 ```bash
-# All unit + integration tests (uses local module caches)
-GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...
+# All unit + integration tests, matching CI's package-serial default
+make test
+
+# Same full sweep with local module caches
+GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test -p 1 ./...
 
 # Focused distributed transaction suite
 go test ./percolator/... ./raftstore/client/... -run 'Test.*(Commit|Prewrite|TwoPhaseCommit)'
@@ -18,6 +21,12 @@ go test ./raftstore/integration -count=1
 
 # Core chaos gate for GC + raftstore + fsmeta runtime stability
 go test ./raftstore/mvcc ./raftstore/store ./raftstore/server ./raftstore/integration ./fsmeta/exec ./fsmeta/integration -count=1
+
+# Seeded fsmeta contract/model smoke
+make test-contract-smoke
+
+# Curated distributed correctness smoke used by CI before the full sweep
+make test-correctness-smoke
 
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 \
@@ -69,6 +78,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | LSM / Flush / Compaction | `engine/lsm/lsm_test.go`, `engine/lsm/picker_test.go`, `engine/lsm/planner_test.go`, `engine/lsm/compaction_test.go`, `engine/lsm/flush_runtime_test.go` | Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling. | Extend backpressure assertions and workload-shape coverage. |
 | Manifest | `engine/manifest/manager_test.go`, `engine/lsm/manifest_test.go` | CURRENT swap safety, rewrite crash handling, SST metadata persistence. | Simulate partial edit corruption, column family extensions. |
 | Percolator / Distributed Txn | `percolator/*_test.go`, `raftstore/client/client_test.go`, `stats_test.go` | Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting. | Mixed multi-region fuzzing with lock TTL and leader churn. |
+| FS Metadata Contract | `fsmeta/contract/*_test.go`, `fsmeta/exec/runner_test.go` | Seeded model-based coverage for create/update/lookup/readdir/snapshot/rename/link/unlink/session expiry against the executor API. | Extend the same contract harness to a real raftstore-backed runner and fault-injected retry schedule. |
 | DB Integration | `db_test.go`, `db_bench_test.go` | End-to-end writes, recovery, and throttle behaviour. | Combine compaction stress and multi-DB interference. |
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `cluster.sh`. |
@@ -114,6 +124,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **Node-local integration tests**: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.
 - **Multi-node deterministic data-plane integration tests**: `raftstore/integration` uses `raftstore/testcluster` to boot real stores, wire transports, and drive migration/member flows against live runtimes.
 - **Multi-node deterministic control-plane integration tests**: `coordinator/integration/*_test.go` uses `coordinator/testcluster` to boot `3 coordinator + replicated meta`, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.
+- **Model/contract tests**: `fsmeta/contract` generates deterministic operation scripts and compares the fsmeta executor against a reference model before the suite reaches raftstore/coordinator/meta fault matrices.
 - **Restart and recovery suites**: `raftstore/integration/restart_recovery_test.go` covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.
 - **Control-plane degradation and publish-boundary tests**: `raftstore/integration/coordinator_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live Coordinator outage after startup and failpoint-driven snapshot interruption before peer publication.
 
@@ -159,6 +170,7 @@ without manual timing assumptions or known flaky behaviour.
 | fsmeta watch | slow subscriber, expired cursor, reconnect/reconcile | watch replay is bounded; expired cursors force full-state reconcile instead of pretending exactly-once delivery | `fsmeta/exec/watch/router_test.go`, `fsmeta/client/reconcile_test.go`, `fsmeta/integration/e2e_test.go` | Covered |
 | fsmeta snapshot retention | SnapshotSubtree publish/retire, read-version use, MVCC retention floor | active snapshot epochs retain required MVCC history until explicit retire | `fsmeta/exec/runner_test.go`, `fsmeta/server/service_test.go`, `fsmeta/integration/e2e_test.go`, `raftstore/mvcc/policy_test.go` | Covered |
 | fsmeta session lifecycle | writer crash / heartbeat expiry / directory rejection / cleaner errors | stale writer sessions are expired by server time; directories cannot take file writer leases | `fsmeta/exec/runner_test.go`, `fsmeta/exec/session_cleaner_test.go` | Covered |
+| fsmeta operation contract | mixed namespace mutations, snapshot reads, hardlinks, writer sessions, time advance | executor-visible results match the reference model and stale owner cleanup cannot delete a reused live session | `fsmeta/contract/*_test.go`, `fsmeta/exec/runner_test.go::TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession` | Covered |
 | fsmeta namespace chaos | gateway restart, mixed mutations, subtree rename handoff | namespace operations remain transactionally visible and rooted handoff state converges after restart | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/integration/raftstore_runner_test.go` | Covered |
 
 CI policy for this matrix:
