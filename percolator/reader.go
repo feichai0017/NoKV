@@ -123,6 +123,9 @@ func (r *Reader) getWriteForRead(key []byte, readTs uint64) (*mvcc.Write, uint64
 	var result *mvcc.Write
 	var commitTs uint64
 	if err := r.scanWrites(key, func(w mvcc.Write, ts uint64) bool {
+		if ts <= readTs && w.Kind == kvrpcpb.Mutation_Lock {
+			return true
+		}
 		if ts <= readTs && (result == nil || ts > commitTs) {
 			copy := w
 			result = &copy

@@ -175,6 +175,84 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	require.Nil(t, lock)
 }
 
+func TestCommittedLockDoesNotHideVisiblePut(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("lock-visible-put")
+
+	put := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value1"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, put))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  put.StartVersion,
+		CommitVersion: 20,
+	}))
+
+	lock := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:  kvrpcpb.Mutation_Lock,
+			Key: key,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 30,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, lock))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  lock.StartVersion,
+		CommitVersion: 40,
+	}))
+
+	reader := NewReader(db)
+	val, _, err := reader.GetValue(key, 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value1"), val)
+
+	exists, err := keyExistsAt(reader, key, 50)
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+func TestCommittedLockDoesNotCreateVisibleKey(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	key := []byte("lock-only")
+
+	lock := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:  kvrpcpb.Mutation_Lock,
+			Key: key,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      3000,
+	}
+	require.Empty(t, Prewrite(db, latches, lock))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  lock.StartVersion,
+		CommitVersion: 20,
+	}))
+
+	reader := NewReader(db)
+	_, _, err := reader.GetValue(key, 30)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	exists, err := keyExistsAt(reader, key, 30)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
 func TestPrewriteAssertionNotExistRejectsVisibleValue(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
