@@ -627,6 +627,10 @@ func (s *mockService) KvCheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatu
 	return &kvrpcpb.KvCheckTxnStatusResponse{}, nil
 }
 
+func (s *mockService) KvTxnHeartBeat(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+	return &kvrpcpb.KvTxnHeartBeatResponse{}, nil
+}
+
 func (s *blockingService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	s.signal()
 	<-ctx.Done()

@@ -44,6 +44,97 @@ func IsLeaderUnknown(err error) bool { return errors.Is(err, errLeaderUnknown) }
 
 func IsInvalidScanLimit(err error) bool { return errors.Is(err, errInvalidScanLimit) }
 
+// RetryExhaustedError records a stable retry-budget failure for one client operation.
+type RetryExhaustedError struct {
+	Operation string
+	RegionID  uint64
+	Key       []byte
+}
+
+func (e *RetryExhaustedError) Error() string {
+	if e == nil {
+		return "client: retries exhausted"
+	}
+	switch {
+	case e.RegionID != 0:
+		return fmt.Sprintf("client: %s retries exhausted for region %d", e.Operation, e.RegionID)
+	case len(e.Key) > 0:
+		return fmt.Sprintf("client: %s retries exhausted for key %q", e.Operation, e.Key)
+	default:
+		return fmt.Sprintf("client: %s retries exhausted", e.Operation)
+	}
+}
+
+func IsRetryExhausted(err error) bool {
+	var target *RetryExhaustedError
+	return errors.As(err, &target)
+}
+
+// ProtocolError records local transaction/client contract violations.
+type ProtocolError struct {
+	Operation string
+	Detail    string
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return "client: protocol error"
+	}
+	if e.Operation == "" {
+		return fmt.Sprintf("client: protocol error: %s", e.Detail)
+	}
+	return fmt.Sprintf("client: %s protocol error: %s", e.Operation, e.Detail)
+}
+
+func IsProtocolError(err error) bool {
+	var target *ProtocolError
+	return errors.As(err, &target)
+}
+
+// RegionRoutingError records stable region-cache and RegionError failures.
+type RegionRoutingError struct {
+	Operation string
+	RegionID  uint64
+	Key       []byte
+	Detail    string
+	Err       error
+}
+
+func (e *RegionRoutingError) Error() string {
+	if e == nil {
+		return "client: region routing error"
+	}
+	msg := "client: region routing error"
+	if e.Operation != "" {
+		msg += " during " + e.Operation
+	}
+	if e.RegionID != 0 {
+		msg += fmt.Sprintf(" for region %d", e.RegionID)
+	}
+	if len(e.Key) > 0 {
+		msg += fmt.Sprintf(" key %q", e.Key)
+	}
+	if e.Detail != "" {
+		msg += ": " + e.Detail
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *RegionRoutingError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func IsRegionRoutingError(err error) bool {
+	var target *RegionRoutingError
+	return errors.As(err, &target)
+}
+
 // TxnKeyError represents transaction key errors surfaced by raftstore.
 // Callers can inspect KeyErrors to resolve locks or retry timestamp-expired commits.
 type TxnKeyError struct {

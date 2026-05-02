@@ -48,6 +48,14 @@ Examples:
 - `engine/vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
 - `engine/lsm/compaction.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
+- `percolator/errors.go`: transaction protocol key-error builders and
+  Percolator protocol sentinels
+- `raftstore/client/errors.go`: transaction client typed errors, route errors,
+  retry-budget exhaustion, and protocol-contract violations
+- `raftstore/store/errors.go`: raftstore lifecycle sentinels plus typed
+  transaction-maintenance region routing and protocol errors
+- `raftstore/mvcc/errors.go`: replicated MVCC maintenance and lock-resolution
+  sentinels
 - `pb/errorpb.proto`: region/store routing protobuf errors (`RegionError`,
   `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
 - `engine/wal/errors.go`: WAL encode/decode and segment errors

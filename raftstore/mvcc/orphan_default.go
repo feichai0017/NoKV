@@ -83,7 +83,7 @@ type orphanDefaultBatch struct {
 func collectOrphanDefaultBatch(ctx context.Context, db txnstore.Store, afterUserKey []byte, afterVersion uint64, maxEntries int) (orphanDefaultBatch, error) {
 	var batch orphanDefaultBatch
 	if db == nil {
-		return batch, fmt.Errorf("raftstore/mvcc: nil MVCC store")
+		return batch, errNilMVCCStore
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {

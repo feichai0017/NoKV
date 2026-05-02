@@ -38,7 +38,7 @@ func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer
 		return maintenanceSubmitResult{}, nil
 	}
 	if proposer == nil {
-		return maintenanceSubmitResult{}, fmt.Errorf("raftstore/mvcc: nil maintenance proposer")
+		return maintenanceSubmitResult{}, errNilMaintenanceProposer
 	}
 	applied, writeDeletes, defaultDeletes, err := proposer.ProposeMVCCMaintenance(ctx, entries)
 	result := maintenanceSubmitResult{
@@ -60,7 +60,7 @@ func proposeMaintenanceEntries(ctx context.Context, proposer MaintenanceProposer
 
 func checkTxnStatus(ctx context.Context, resolver LockResolver, primary []byte, lockTs, currentTs, currentTime uint64) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	if resolver == nil {
-		return nil, fmt.Errorf("raftstore/mvcc: nil lock resolver")
+		return nil, errNilLockResolver
 	}
 	return resolver.CheckTxnStatus(ctx, primary, lockTs, currentTs, currentTime)
 }
@@ -70,7 +70,7 @@ func proposeResolveLocks(ctx context.Context, resolver LockResolver, startVersio
 		return 0, nil
 	}
 	if resolver == nil {
-		return 0, fmt.Errorf("raftstore/mvcc: nil lock resolver")
+		return 0, errNilLockResolver
 	}
 	return resolver.ResolveLocks(ctx, startVersion, commitVersion, keys)
 }

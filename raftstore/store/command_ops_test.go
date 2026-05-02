@@ -1012,6 +1012,14 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
 		},
 		{
+			name: "txn heartbeat out of range",
+			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TXN_HEART_BEAT,
+				Cmd:     &raftcmdpb.Request_TxnHeartBeat{TxnHeartBeat: &kvrpcpb.TxnHeartBeatRequest{PrimaryKey: []byte("a")}},
+			}}},
+			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
+		},
+		{
 			name: "mvcc maintenance out of range",
 			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 				CmdType: raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE,

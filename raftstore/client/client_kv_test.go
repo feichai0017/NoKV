@@ -25,6 +25,7 @@ type scriptedKVService struct {
 	rollbackFn       func(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error)
 	resolveLockFn    func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error)
 	checkTxnStatusFn func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error)
+	txnHeartBeatFn   func(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error)
 }
 
 func (s *scriptedKVService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
@@ -81,6 +82,13 @@ func (s *scriptedKVService) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.K
 		return s.checkTxnStatusFn(ctx, req)
 	}
 	return s.mockService.KvCheckTxnStatus(ctx, req)
+}
+
+func (s *scriptedKVService) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+	if s.txnHeartBeatFn != nil {
+		return s.txnHeartBeatFn(ctx, req)
+	}
+	return s.mockService.KvTxnHeartBeat(ctx, req)
 }
 
 func TestClientCommitRegionReturnsKeyError(t *testing.T) {
@@ -175,7 +183,7 @@ func TestClientGetResolvesCommittedLockAndRetries(t *testing.T) {
 			require.Equal(t, []byte("primary"), req.GetRequest().GetPrimaryKey())
 			require.Equal(t, uint64(10), req.GetRequest().GetLockTs())
 			require.Equal(t, uint64(20), req.GetRequest().GetCurrentTs())
-			require.NotZero(t, req.GetRequest().GetCurrentTime())
+			require.Zero(t, req.GetRequest().GetCurrentTime())
 			return &kvrpcpb.KvCheckTxnStatusResponse{
 				Response: &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 30},
 			}, nil
@@ -619,6 +627,58 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	cli.mu.RUnlock()
 }
 
+func TestClientTxnHeartBeatRoutesPrimaryAndDelegatesPhysicalTime(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var calls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		txnHeartBeatFn: func(_ context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+			calls++
+			require.Equal(t, uint64(1), req.GetContext().GetRegionId())
+			require.Equal(t, []byte("primary"), req.GetRequest().GetPrimaryKey())
+			require.Equal(t, uint64(10), req.GetRequest().GetStartVersion())
+			require.Equal(t, uint64(3000), req.GetRequest().GetTtlExtension())
+			require.Zero(t, req.GetRequest().GetCurrentTime())
+			return &kvrpcpb.KvTxnHeartBeatResponse{
+				Response: &kvrpcpb.TxnHeartBeatResponse{
+					LockTtl:        5000,
+					LockExpireTime: 9000,
+					Action:         kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended,
+				},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.TxnHeartBeat(context.Background(), []byte("primary"), 10, 3000)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended, resp.GetAction())
+	require.Equal(t, uint64(5000), resp.GetLockTtl())
+	require.Equal(t, 1, calls)
+}
+
 func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	cluster := newMockCluster(clusterRegion{
 		meta: &metapb.RegionDescriptor{
@@ -702,7 +762,8 @@ func TestClientTwoPhaseCommitRejectsMissingPrimaryMutation(t *testing.T) {
 	err = cli.TwoPhaseCommit(context.Background(), []byte("omega"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value")},
 	}, 1, 2, 3)
-	require.EqualError(t, err, fmt.Sprintf("client: primary key %q missing from mutations", []byte("omega")))
+	require.True(t, IsProtocolError(err))
+	require.ErrorContains(t, err, fmt.Sprintf("primary key %q missing from mutations", []byte("omega")))
 }
 
 func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *testing.T) {

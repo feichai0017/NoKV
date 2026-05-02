@@ -9,6 +9,7 @@ The scope here is the current code path:
 - `BatchRollback`
 - `ResolveLock`
 - `CheckTxnStatus`
+- `TxnHeartBeat`
 - MVCC read visibility (`KvGet`/`KvScan` through `percolator.Reader`)
 
 ---
@@ -57,6 +58,7 @@ Key files:
 | `KvBatchRollback` | `CMD_BATCH_ROLLBACK` | `BatchRollback` |
 | `KvResolveLock` | `CMD_RESOLVE_LOCK` | `ResolveLock` |
 | `KvCheckTxnStatus` | `CMD_CHECK_TXN_STATUS` | `CheckTxnStatus` |
+| `KvTxnHeartBeat` | `CMD_TXN_HEART_BEAT` | `TxnHeartBeat` |
 | `KvGet` | `CMD_GET` | `Reader.GetLock` + `Reader.GetValue` |
 | `KvScan` | `CMD_SCAN` | `Reader.GetLock` + CFWrite iteration + `GetInternalEntry` |
 
@@ -76,7 +78,8 @@ NoKV uses three MVCC column families:
 
 - `Primary`
 - `Ts` (start timestamp)
-- `TTL`
+- `StartTime` (physical Unix millisecond lock creation time)
+- `TTL` (milliseconds from `StartTime`)
 - `Kind` (`Put/Delete/Lock`)
 - `MinCommitTs`
 
@@ -182,15 +185,19 @@ For each key:
 
 ---
 
-## 6. Transaction Status Check
+## 6. Transaction Liveness and Status
 
 `CheckTxnStatus` targets the primary key and decides whether txn is alive, committed, or should be rolled back.
+For RPC callers, `kv.Service` stamps `current_time` with the store's physical
+clock before proposing the raft command when the caller leaves it unset. The
+replicated command still carries a concrete timestamp, so apply remains
+deterministic across replicas.
 
 Decision order:
 
 1. Read lock on primary
 2. If lock exists but `lock.ts != req.lock_ts` -> `KeyError.Locked`
-3. If lock exists and TTL expired (`current_ts >= lock.ts + ttl`):
+3. If lock exists and TTL expired (`current_time >= lock.start_time + ttl`):
    - rollback primary
    - action = `TTLExpireRollback`
 4. If lock exists and caller pushes timestamp:
@@ -202,6 +209,20 @@ Decision order:
 6. If no lock and no write, and `rollback_if_not_exist` is true:
    - write rollback marker
    - action `LockNotExistRollback`
+
+`TxnHeartBeat` is the owner-side liveness path for long transactions:
+
+1. It targets only the primary lock.
+2. It rejects missing primary key/start version/current time/TTL extension at
+   the Percolator command boundary. RPC and store callers can omit
+   `current_time`; the store fills it before raft proposal.
+3. It never resurrects expired locks. If the primary is already expired, it
+   rolls back the primary and returns `TxnHeartBeatTTLExpireRollback`.
+4. For a live primary lock, it extends the physical deadline by setting
+   `ttl = max(ttl, current_time - start_time + ttl_extension)`.
+5. If the primary is already committed, it reports `commit_version`; if the
+   primary lock is absent with no commit record, it writes a rollback marker to
+   fence late commits.
 
 ---
 

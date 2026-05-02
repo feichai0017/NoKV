@@ -121,7 +121,7 @@ type resolveLockBatch struct {
 func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTime uint64, afterUserKey []byte, maxExpiredLocks int, maxLocks uint64) (resolveLockBatch, error) {
 	var batch resolveLockBatch
 	if db == nil {
-		return batch, fmt.Errorf("raftstore/mvcc: nil MVCC store")
+		return batch, errNilMVCCStore
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {
@@ -160,7 +160,7 @@ func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTime
 		}
 		lock, err := txnmvcc.DecodeLock(entry.Value)
 		if err != nil {
-			return batch, fmt.Errorf("raftstore/mvcc: decode CFLock %x: %w", userKey, err)
+			return batch, errDecodeCFLock(userKey, err)
 		}
 		batch.scan.ScannedLocks++
 		if !lockExpired(lock, currentTime) {
@@ -253,10 +253,10 @@ func resolveOneLock(ctx context.Context, resolver LockResolver, currentTs, curre
 		return nil, err
 	}
 	if status == nil {
-		return nil, fmt.Errorf("raftstore/mvcc: nil check txn status response for primary %x", rec.lock.Primary)
+		return nil, fmt.Errorf("%w for primary %x", errNilCheckTxnStatusResult, rec.lock.Primary)
 	}
 	if keyErr := status.GetError(); keyErr != nil {
-		return nil, fmt.Errorf("raftstore/mvcc: check txn status key error for primary %x: %v", rec.lock.Primary, keyErr)
+		return nil, errCheckTxnStatusKeyError(rec.lock.Primary, keyErr)
 	}
 	if commitTs := status.GetCommitVersion(); commitTs > 0 {
 		return &resolveLockDecision{
@@ -298,7 +298,7 @@ func lockForKey(db txnstore.Store, key []byte) (*txnmvcc.Lock, error) {
 	}
 	lock, err := txnmvcc.DecodeLock(entry.Value)
 	if err != nil {
-		return nil, fmt.Errorf("raftstore/mvcc: decode primary lock %x: %w", key, err)
+		return nil, errDecodeCFLock(key, err)
 	}
 	return &lock, nil
 }

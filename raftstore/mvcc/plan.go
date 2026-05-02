@@ -123,7 +123,7 @@ type walkResult struct {
 func walk(ctx context.Context, db txnstore.Store, policy SafePointPolicy, afterUserKey []byte, stats *PlanStats, fn groupFn) (walkResult, error) {
 	var result walkResult
 	if db == nil {
-		return result, fmt.Errorf("raftstore/mvcc: nil MVCC store")
+		return result, errNilMVCCStore
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {

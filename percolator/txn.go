@@ -1,7 +1,8 @@
 // Package percolator implements Google-Percolator-style distributed
 // MVCC two-phase commit over NoKV's key/value substrate.
 //
-// Protocol ops: Prewrite, Commit, Rollback, ResolveLock, CheckTxnStatus.
+// Protocol ops: Prewrite, Commit, Rollback, ResolveLock, CheckTxnStatus,
+// TxnHeartBeat.
 // Concurrency is controlled by a striped-mutex latch manager
 // (percolator/latch) shared per raftstore/kv service instance.
 // The timestamp oracle is provided by coordinator/tso.
@@ -13,7 +14,7 @@
 package percolator
 
 import (
-	"fmt"
+	"bytes"
 	"time"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -54,7 +55,7 @@ func Prewrite(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRe
 func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
 	key := mut.GetKey()
 	if len(key) == 0 {
-		return keyErrorAbort("empty key in mutation")
+		return keyErrorAbort(errEmptyMutationKey)
 	}
 	lock, err := reader.GetLock(key)
 	if err != nil {
@@ -89,7 +90,7 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
 		)
 	default:
-		return keyErrorAbort(fmt.Sprintf("unsupported mutation op %v", mut.Op))
+		return keyErrorAbortf(errUnsupportedMutationOp, "%v", mut.Op)
 	}
 	newLock := mvcc.Lock{
 		Primary:     kv.SafeCopy(nil, req.PrimaryLock),
@@ -110,7 +111,7 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 // validateCommitVersion rejects commits that would violate MVCC ordering.
 func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.KeyError {
 	if CommitVersion <= StartVersion {
-		return keyErrorAbort("commit version must be greater than start version")
+		return keyErrorAbort(errCommitVersionNotAfterStart)
 	}
 	return nil
 }
@@ -130,7 +131,7 @@ func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitReques
 	reader := NewReader(db)
 	for _, key := range req.Keys {
 		if len(key) == 0 {
-			return keyErrorAbort("empty key in commit")
+			return keyErrorAbort(errEmptyCommitKey)
 		}
 		lock, err := reader.GetLock(key)
 		if err != nil {
@@ -143,11 +144,11 @@ func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitReques
 			}
 			if write != nil {
 				if write.Kind == kvrpcpb.Mutation_Rollback {
-					return keyErrorAbort("transaction already rolled back")
+					return keyErrorAbort(errTxnAlreadyRolledBack)
 				}
 				continue
 			}
-			return keyErrorAbort("lock not found")
+			return keyErrorAbort(errLockNotFound)
 		}
 		if lock.Ts != req.StartVersion {
 			return keyErrorLocked(key, lock)
@@ -169,7 +170,7 @@ func BatchRollback(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Batch
 	reader := NewReader(db)
 	for _, key := range req.Keys {
 		if len(key) == 0 {
-			return keyErrorAbort("empty key in rollback")
+			return keyErrorAbort(errEmptyRollbackKey)
 		}
 		if err := rollbackKey(db, reader, key, req.StartVersion); err != nil {
 			return err
@@ -290,52 +291,93 @@ func CheckTxnStatus(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Chec
 	return resp
 }
 
-// keyErrorLocked builds a KeyError for a locked key.
-func keyErrorLocked(key []byte, lock *mvcc.Lock) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{
-		Locked: &kvrpcpb.Locked{
-			PrimaryLock: lock.Primary,
-			Key:         kv.SafeCopy(nil, key),
-			LockVersion: lock.Ts,
-			LockTtl:     lock.TTL,
-			LockType:    lock.Kind,
-			MinCommitTs: lock.MinCommitTs,
-		},
+// TxnHeartBeat extends the primary lock TTL for a live transaction. It never
+// resurrects an expired or already-resolved primary lock.
+func TxnHeartBeat(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.TxnHeartBeatRequest) *kvrpcpb.TxnHeartBeatResponse {
+	resp := &kvrpcpb.TxnHeartBeatResponse{}
+	if req == nil {
+		return resp
 	}
-}
-
-func keyErrorWriteConflict(key, primary []byte, conflictTs, startTs, currentTs uint64) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{
-		WriteConflict: &kvrpcpb.WriteConflict{
-			Key:        kv.SafeCopy(nil, key),
-			Primary:    kv.SafeCopy(nil, primary),
-			ConflictTs: conflictTs,
-			StartTs:    startTs,
-			CommitTs:   currentTs,
-		},
+	if len(req.PrimaryKey) == 0 {
+		resp.Error = keyErrorAbort(errTxnHeartbeatPrimaryRequired)
+		return resp
 	}
-}
-
-func keyErrorRetryable(err error) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{Retryable: err.Error()}
-}
-
-func keyErrorAlreadyExists(key []byte) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: kv.SafeCopy(nil, key)}}
-}
-
-func keyErrorAbort(msg string) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{Abort: msg}
-}
-
-func keyErrorCommitTsExpired(key []byte, commitTs, minCommitTs uint64) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{
-		CommitTsExpired: &kvrpcpb.CommitTsExpired{
-			Key:         kv.SafeCopy(nil, key),
-			CommitTs:    commitTs,
-			MinCommitTs: minCommitTs,
-		},
+	if req.StartVersion == 0 {
+		resp.Error = keyErrorAbort(errTxnHeartbeatStartRequired)
+		return resp
 	}
+	if req.TtlExtension == 0 {
+		resp.Error = keyErrorAbort(errTxnHeartbeatTTLRequired)
+		return resp
+	}
+	if req.CurrentTime == 0 {
+		resp.Error = keyErrorAbort(errTxnHeartbeatTimeRequired)
+		return resp
+	}
+
+	guard := latches.Acquire([][]byte{req.PrimaryKey})
+	defer guard.Release()
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(req.PrimaryKey)
+	if err != nil {
+		resp.Error = keyErrorRetryable(err)
+		return resp
+	}
+	if lock != nil {
+		if lock.Ts != req.StartVersion {
+			resp.Error = keyErrorLocked(req.PrimaryKey, lock)
+			return resp
+		}
+		if !bytes.Equal(lock.Primary, req.PrimaryKey) {
+			resp.Error = keyErrorAbort(errTxnHeartbeatPrimaryMismatch)
+			return resp
+		}
+		if isLockExpired(lock, req.CurrentTime) {
+			if err := rollbackKey(db, reader, req.PrimaryKey, req.StartVersion); err != nil {
+				resp.Error = err
+				return resp
+			}
+			resp.Action = kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExpireRollback
+			return resp
+		}
+		desiredTTL := req.TtlExtension
+		if req.CurrentTime > lock.StartTime {
+			desiredTTL = req.CurrentTime - lock.StartTime + req.TtlExtension
+		}
+		if desiredTTL > lock.TTL {
+			lock.TTL = desiredTTL
+			if err := applyVersionedOps(db, versionedOp{
+				cf:      kv.CFLock,
+				key:     req.PrimaryKey,
+				version: lockColumnTs,
+				value:   mvcc.EncodeLock(*lock),
+			}); err != nil {
+				resp.Error = keyErrorRetryable(err)
+				return resp
+			}
+			resp.Action = kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended
+		}
+		resp.LockTtl = lock.TTL
+		resp.LockExpireTime = lockExpireTime(lock)
+		return resp
+	}
+
+	write, commitTs, err := reader.GetWriteByStartTs(req.PrimaryKey, req.StartVersion)
+	if err != nil {
+		resp.Error = keyErrorRetryable(err)
+		return resp
+	}
+	if write != nil && write.Kind != kvrpcpb.Mutation_Rollback {
+		resp.CommitVersion = commitTs
+		return resp
+	}
+	if err := rollbackKey(db, reader, req.PrimaryKey, req.StartVersion); err != nil {
+		resp.Error = err
+		return resp
+	}
+	resp.Action = kvrpcpb.TxnHeartBeatAction_TxnHeartBeatLockNotExistRollback
+	return resp
 }
 
 func keyExistsAt(reader *Reader, key []byte, readTs uint64) (bool, error) {
@@ -361,7 +403,7 @@ func commitKey(db txnstore.Store, reader *Reader, key []byte, lock *mvcc.Lock, c
 	}
 	if write != nil {
 		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return keyErrorAbort("transaction already rolled back")
+			return keyErrorAbort(errTxnAlreadyRolledBack)
 		}
 		if err := applyVersionedOps(db, versionedOp{
 			cf:      kv.CFLock,
@@ -455,4 +497,14 @@ func isLockExpired(lock *mvcc.Lock, currentTime uint64) bool {
 		return false
 	}
 	return currentTime >= lock.StartTime && currentTime-lock.StartTime >= lock.TTL
+}
+
+func lockExpireTime(lock *mvcc.Lock) uint64 {
+	if lock == nil || lock.StartTime == 0 || lock.TTL == 0 {
+		return 0
+	}
+	if ^uint64(0)-lock.StartTime < lock.TTL {
+		return ^uint64(0)
+	}
+	return lock.StartTime + lock.TTL
 }

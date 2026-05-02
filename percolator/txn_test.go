@@ -646,6 +646,44 @@ func TestBatchRollbackDoesNotDeleteOtherTransactionLock(t *testing.T) {
 	require.Equal(t, []byte("value"), value)
 }
 
+func TestLateBatchRollbackAfterCommitPreservesCommittedWrite(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("late-rollback")
+	startTs := uint64(20)
+	commitTs := uint64(30)
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+	require.Nil(t, BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+		Keys:         [][]byte{key},
+		StartVersion: startTs,
+	}))
+
+	reader := NewReader(db)
+	write, gotCommitTs, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, kvrpcpb.Mutation_Put, write.Kind)
+	require.Equal(t, commitTs, gotCommitTs)
+	value, _, err := reader.GetValue(key, commitTs+1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), value)
+}
+
 func TestResolveLockCommit(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
@@ -671,6 +709,54 @@ func TestResolveLockCommit(t *testing.T) {
 	val, _, err := reader.GetValue([]byte("res"), 60)
 	require.NoError(t, err)
 	require.Equal(t, []byte("val"), val)
+}
+
+func TestResolveLockCommitsSecondaryAfterPrimaryCommitCrashWindow(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	primary := []byte("crash-primary")
+	secondary := []byte("crash-secondary")
+	startTs := uint64(40)
+	commitTs := uint64(50)
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: primary, Value: []byte("primary-value")},
+			{Op: kvrpcpb.Mutation_Put, Key: secondary, Value: []byte("secondary-value")},
+		},
+		PrimaryLock:  primary,
+		StartVersion: startTs,
+		LockTtl:      1000,
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{primary},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+
+	count, keyErr := ResolveLock(db, latches, &kvrpcpb.ResolveLockRequest{
+		Keys:          [][]byte{secondary},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	require.Nil(t, keyErr)
+	require.Equal(t, uint64(1), count)
+
+	reader := NewReader(db)
+	value, _, err := reader.GetValue(secondary, commitTs+1)
+	require.NoError(t, err)
+	require.Equal(t, []byte("secondary-value"), value)
+	lock, err := reader.GetLock(secondary)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	count, keyErr = ResolveLock(db, latches, &kvrpcpb.ResolveLockRequest{
+		Keys:          [][]byte{secondary},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	require.Nil(t, keyErr)
+	require.Zero(t, count)
 }
 
 // TestResolveLockNilRequest verifies ResolveLock ignores nil requests.
@@ -1074,6 +1160,148 @@ func TestCheckTxnStatusExpiresFromPhysicalTimeWithoutLogicalTSODistance(t *testi
 	})
 	require.Nil(t, resp.GetError())
 	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, resp.GetAction())
+}
+
+func TestTxnHeartBeatExtendsPrimaryLockTTL(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("hb-primary")
+	startTs := uint64(100)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      100,
+	}))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	originalStart := lock.StartTime
+
+	hb := TxnHeartBeat(db, latches, &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   key,
+		StartVersion: startTs,
+		TtlExtension: 200,
+		CurrentTime:  originalStart + 50,
+	})
+	require.Nil(t, hb.GetError())
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended, hb.GetAction())
+	require.Equal(t, uint64(250), hb.GetLockTtl())
+	require.Equal(t, originalStart+250, hb.GetLockExpireTime())
+
+	status := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         key,
+		LockTs:             startTs,
+		CurrentTs:          startTs + 1_000_000,
+		RollbackIfNotExist: true,
+		CurrentTime:        originalStart + 150,
+	})
+	require.Nil(t, status.GetError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction, status.GetAction())
+
+	lock, err = reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, uint64(250), lock.TTL)
+}
+
+func TestTxnHeartBeatDoesNotResurrectExpiredPrimary(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("hb-expired")
+	startTs := uint64(100)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      5,
+	}))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	hb := TxnHeartBeat(db, latches, &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   key,
+		StartVersion: startTs,
+		TtlExtension: 100,
+		CurrentTime:  lock.StartTime + lock.TTL,
+	})
+	require.Nil(t, hb.GetError())
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExpireRollback, hb.GetAction())
+
+	lock, err = reader.GetLock(key)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind)
+}
+
+func TestTxnHeartBeatReportsCommittedPrimary(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("hb-committed")
+	startTs := uint64(100)
+	commitTs := uint64(120)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      100,
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+
+	hb := TxnHeartBeat(db, latches, &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   key,
+		StartVersion: startTs,
+		TtlExtension: 100,
+		CurrentTime:  1,
+	})
+	require.Nil(t, hb.GetError())
+	require.Equal(t, commitTs, hb.GetCommitVersion())
+}
+
+func TestTxnHeartBeatFencesMissingPrimaryWithRollback(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("hb-missing")
+	startTs := uint64(100)
+
+	hb := TxnHeartBeat(db, latches, &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   key,
+		StartVersion: startTs,
+		TtlExtension: 100,
+		CurrentTime:  1,
+	})
+	require.Nil(t, hb.GetError())
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatLockNotExistRollback, hb.GetAction())
+
+	reader := NewReader(db)
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind)
 }
 
 func TestReaderGetValueFromShortValueWithExpiresAt(t *testing.T) {

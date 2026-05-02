@@ -28,7 +28,7 @@ func (f TxnFloor) Active() bool {
 func PlanTxnFloor(ctx context.Context, db txnstore.Store) (TxnFloor, error) {
 	var floor TxnFloor
 	if db == nil {
-		return floor, fmt.Errorf("raftstore/mvcc: nil MVCC store")
+		return floor, errNilMVCCStore
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {
@@ -60,7 +60,7 @@ func PlanTxnFloor(ctx context.Context, db txnstore.Store) (TxnFloor, error) {
 		}
 		lock, err := txnmvcc.DecodeLock(entry.Value)
 		if err != nil {
-			return floor, fmt.Errorf("raftstore/mvcc: decode CFLock %x: %w", userKey, err)
+			return floor, errDecodeCFLock(userKey, err)
 		}
 		if lock.Ts == 0 {
 			iter.Next()
