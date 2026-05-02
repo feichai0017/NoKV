@@ -33,6 +33,11 @@ The current v1 API is defined by `pb/fsmeta/fsmeta.proto`. `fsmeta/server` expos
 | `Unlink` | Delete a dentry; decrement link count and delete the inode record when the last link is removed. |
 | `OpenWriteSession` / `HeartbeatWriteSession` / `CloseWriteSession` / `ExpireWriteSessions` | Maintain exclusive writer leases for file inodes with a session-id key plus an inode-owner key. Expiry cleanup uses server time and is bounded/repeatable. |
 
+Expired writer sessions are reclaimed by a bounded background pass. Set the
+cleanup interval to roughly half of the smallest expected session TTL when fast
+lease takeover matters; after a writer stops heartbeating, a stale session may
+remain visible until the next cleanup pass.
+
 ## 3. Data model
 
 `fsmeta`'s key schema is in `fsmeta/keys.go`; value schema is in `fsmeta/value.go`.

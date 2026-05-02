@@ -118,12 +118,7 @@ func (s *Store) RegionMetaByKey(key []byte) (localmeta.RegionMeta, bool) {
 	if s == nil || len(key) == 0 || s.regionMgr() == nil {
 		return localmeta.RegionMeta{}, false
 	}
-	for _, meta := range s.regionMgr().listMetas() {
-		if keyInRange(meta, key) {
-			return meta, true
-		}
-	}
-	return localmeta.RegionMeta{}, false
+	return s.regionMgr().metaByKey(key)
 }
 
 // RegionSnapshot returns a snapshot containing all region metadata currently

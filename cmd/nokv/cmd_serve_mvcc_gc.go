@@ -8,27 +8,37 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/config"
-	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	rootclient "github.com/feichai0017/NoKV/meta/root/client"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 )
 
-type serveTSOSource struct {
-	coord   *coordclient.GRPCClient
-	timeout time.Duration
-	lag     uint64
-	mu      sync.Mutex
+type serveTSOClient interface {
+	Tso(context.Context, *coordpb.TsoRequest) (*coordpb.TsoResponse, error)
 }
 
-func newServeTSOSource(coord *coordclient.GRPCClient, timeout time.Duration, lag uint64) *serveTSOSource {
+type serveTSOSource struct {
+	coord    serveTSOClient
+	timeout  time.Duration
+	lag      uint64
+	cacheTTL time.Duration
+	now      func() time.Time
+
+	mu            sync.Mutex
+	lastCurrent   uint64
+	lastCurrentAt time.Time
+}
+
+func newServeTSOSource(coord serveTSOClient, timeout time.Duration, lag uint64, cacheTTL time.Duration) *serveTSOSource {
 	if coord == nil || lag == 0 {
 		return nil
 	}
 	return &serveTSOSource{
-		coord:   coord,
-		timeout: timeout,
-		lag:     lag,
+		coord:    coord,
+		timeout:  timeout,
+		lag:      lag,
+		cacheTTL: cacheTTL,
+		now:      time.Now,
 	}
 }
 
@@ -45,10 +55,21 @@ func (s *serveTSOSource) Current() uint64 {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	resp, err := s.coord.Tso(ctx, &coordpb.TsoRequest{Count: 1})
-	if err != nil {
-		return 0
+	now := time.Now
+	if s.now != nil {
+		now = s.now
 	}
-	return resp.GetTimestamp()
+	if err == nil && resp != nil && resp.GetTimestamp() != 0 {
+		current := resp.GetTimestamp()
+		s.lastCurrent = current
+		s.lastCurrentAt = now()
+		return current
+	}
+	currentNow := now()
+	if s.lastCurrent != 0 && s.cacheTTL > 0 && !currentNow.Before(s.lastCurrentAt) && currentNow.Sub(s.lastCurrentAt) <= s.cacheTTL {
+		return s.lastCurrent
+	}
+	return 0
 }
 
 func (s *serveTSOSource) SafePoint() uint64 {

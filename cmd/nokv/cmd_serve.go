@@ -50,6 +50,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCPlanInterval := fs.Duration("mvcc-gc-plan-interval", 0, "interval for read-only MVCC GC planning; zero disables")
 	mvccGCMaintenanceInterval := fs.Duration("mvcc-gc-maintenance-interval", 0, "interval for replicated MVCC GC maintenance; zero disables")
 	mvccGCSafePointLag := fs.Uint64("mvcc-gc-safe-point-lag", 0, "TSO lag retained behind the coordinator timestamp before MVCC GC may reclaim versions")
+	mvccGCTSOCacheTTL := fs.Duration("mvcc-gc-tso-cache-ttl", time.Minute, "maximum age of the last successful coordinator TSO reused for MVCC GC; zero disables cache")
 	mvccGCTimeout := fs.Duration("mvcc-gc-timeout", 30*time.Second, "timeout for one MVCC GC maintenance pass")
 	mvccGCBatchEntries := fs.Int("mvcc-gc-batch-entries", 0, "maximum MVCC GC tombstones per replicated maintenance batch")
 	mvccGCMaxKeys := fs.Uint64("mvcc-gc-max-keys", 0, "maximum MVCC user keys scanned by one destructive maintenance pass; zero means unlimited")
@@ -161,7 +162,10 @@ func runServeCmd(w io.Writer, args []string) error {
 		if *mvccGCSafePointLag == 0 {
 			return fmt.Errorf("--mvcc-gc-safe-point-lag is required when MVCC GC is enabled")
 		}
-		tsoSource = newServeTSOSource(coordCli, *coordTimeout, *mvccGCSafePointLag)
+		if *mvccGCTSOCacheTTL < 0 {
+			return fmt.Errorf("--mvcc-gc-tso-cache-ttl must be non-negative")
+		}
+		tsoSource = newServeTSOSource(coordCli, *coordTimeout, *mvccGCSafePointLag, *mvccGCTSOCacheTTL)
 		rootCtx, cancelRoot := context.WithTimeout(context.Background(), 5*time.Second)
 		retentionSource, err = newServeRootRetentionSource(rootCtx, cfg, scopeNorm, *mvccGCMetaRootAddr)
 		cancelRoot()

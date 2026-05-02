@@ -10,6 +10,10 @@ import (
 // MaintenanceProposer submits MVCC maintenance entries through the replicated
 // raft command path. Implementations must treat each entry key as a user-key
 // scoped mutation after decoding its internal key.
+//
+// A call may span multiple regions. Implementations are allowed to commit a
+// subset of region-local batches before returning an error; MVCC maintenance is
+// intentionally at-least-once and idempotent, not cross-region atomic.
 type MaintenanceProposer interface {
 	ProposeMVCCMaintenance(context.Context, []*entrykv.Entry) (uint64, error)
 }

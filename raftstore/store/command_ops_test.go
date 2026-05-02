@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	NoKV "github.com/feichai0017/NoKV"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -146,6 +148,45 @@ func TestStoreProposeMVCCMaintenance(t *testing.T) {
 	require.NotZero(t, got.Meta&entrykv.BitDelete)
 }
 
+func TestStoreProposeMVCCMaintenanceFailsClosedWhenNotLeader(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	st := NewStore(Config{Scheduler: newTestSchedulerSink(), StoreID: 1, CommandApplier: newTestMVCCApplier(db)})
+	t.Cleanup(func() { st.Close() })
+
+	region := &localmeta.RegionMeta{
+		ID:       119,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 19}},
+	}
+	cfg := &peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              19,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}
+	p, err := st.StartPeer(cfg, []myraft.Peer{{ID: 19}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+
+	entry := entrykv.NewInternalEntry(entrykv.CFWrite, []byte("gc-not-leader-key"), 33, nil, entrykv.BitDelete, 0)
+	defer entry.DecrRef()
+	applied, err := st.ProposeMVCCMaintenance(context.Background(), []*entrykv.Entry{entry})
+	require.ErrorContains(t, err, "region 119")
+	require.Zero(t, applied)
+	_, err = db.GetInternalEntry(entrykv.CFWrite, []byte("gc-not-leader-key"), 33)
+	require.Error(t, err)
+}
+
 func TestStoreProposeMVCCMaintenanceConvergesAfterPartialRegionFailure(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := newTestSchedulerSink()
@@ -227,6 +268,70 @@ func TestStoreProposeMVCCMaintenanceConvergesAfterPartialRegionFailure(t *testin
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), applied)
 	gotRight, err := db.GetInternalEntry(entrykv.CFWrite, []byte("t-gc-key"), 44)
+	require.NoError(t, err)
+	defer gotRight.DecrRef()
+	require.NotZero(t, gotRight.Meta&entrykv.BitDelete)
+}
+
+func TestStoreProposeMVCCMaintenanceRoutesAfterSplit(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	coord := newTestSchedulerSink()
+	st := NewStore(Config{
+		Scheduler:      coord,
+		StoreID:        1,
+		CommandApplier: newTestMVCCApplier(db),
+		PeerBuilder:    mvccTestPeerBuilder(t, db, localMeta, 1),
+	})
+	t.Cleanup(func() { st.Close() })
+
+	parent := localmeta.RegionMeta{
+		ID:       131,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 31}},
+	}
+	parentCfg, err := mvccTestPeerBuilder(t, db, localMeta, 1)(parent)
+	require.NoError(t, err)
+	parentPeer, err := st.StartPeer(parentCfg, []myraft.Peer{{ID: 31}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(parentPeer.ID()) })
+	require.NoError(t, parentPeer.Campaign())
+
+	child := localmeta.RegionMeta{
+		ID:       132,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 32}},
+	}
+	require.NoError(t, st.ProposeSplit(parent.ID, child, child.StartKey))
+	require.Eventually(t, func() bool {
+		_, ok := st.RegionMetaByID(child.ID)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+	childPeer, ok := st.Peer(child.Peers[0].PeerID)
+	require.True(t, ok)
+	require.NoError(t, childPeer.Campaign())
+	require.Eventually(t, func() bool {
+		status, ok := st.RegionRuntimeStatus(child.ID)
+		return ok && status.Hosted && status.Leader
+	}, time.Second, 10*time.Millisecond)
+
+	leftEntry := entrykv.NewInternalEntry(entrykv.CFWrite, []byte("b-post-split-gc"), 33, nil, entrykv.BitDelete, 0)
+	defer leftEntry.DecrRef()
+	rightEntry := entrykv.NewInternalEntry(entrykv.CFWrite, []byte("t-post-split-gc"), 44, nil, entrykv.BitDelete, 0)
+	defer rightEntry.DecrRef()
+
+	applied, err := st.ProposeMVCCMaintenance(context.Background(), []*entrykv.Entry{leftEntry, rightEntry})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), applied)
+
+	gotLeft, err := db.GetInternalEntry(entrykv.CFWrite, []byte("b-post-split-gc"), 33)
+	require.NoError(t, err)
+	defer gotLeft.DecrRef()
+	require.NotZero(t, gotLeft.Meta&entrykv.BitDelete)
+	gotRight, err := db.GetInternalEntry(entrykv.CFWrite, []byte("t-post-split-gc"), 44)
 	require.NoError(t, err)
 	defer gotRight.DecrRef()
 	require.NotZero(t, gotRight.Meta&entrykv.BitDelete)
@@ -395,6 +500,36 @@ func applyTestLockRecord(t *testing.T, db txnstore.Store, key []byte, startTs, t
 	entry := entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, lock, 0, 0)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
+}
+
+func mvccTestPeerBuilder(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, storeID uint64) PeerBuilder {
+	t.Helper()
+	return func(meta localmeta.RegionMeta) (*peer.Config, error) {
+		var peerID uint64
+		for _, peerMeta := range meta.Peers {
+			if peerMeta.StoreID == storeID {
+				peerID = peerMeta.PeerID
+				break
+			}
+		}
+		if peerID == 0 {
+			return nil, fmt.Errorf("store %d missing peer in region %d", storeID, meta.ID)
+		}
+		return &peer.Config{
+			RaftConfig: myraft.Config{
+				ID:              peerID,
+				ElectionTick:    5,
+				HeartbeatTick:   1,
+				MaxSizePerMsg:   1 << 20,
+				MaxInflightMsgs: 256,
+				PreVote:         true,
+			},
+			Transport: noopTransport{},
+			Storage:   mustPeerStorage(t, db, localMeta, meta.ID),
+			GroupID:   meta.ID,
+			Region:    localmeta.CloneRegionMetaPtr(&meta),
+		}, nil
+	}
 }
 
 func TestStoreProposeMVCCMaintenanceRejectsNonTombstone(t *testing.T) {

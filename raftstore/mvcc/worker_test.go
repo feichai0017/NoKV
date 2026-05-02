@@ -205,6 +205,53 @@ func TestMaintenanceWorkerCloseCancelsRunningPass(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestMaintenanceWorkerRestartConvergesAfterPartialPass(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	keyA := []byte("vol/restart-a")
+	keyB := []byte("vol/restart-b")
+	for _, key := range [][]byte{keyA, keyB} {
+		applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
+		applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
+		applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
+	}
+
+	firstWorker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
+		MVCCStore: db,
+		MaintenanceProposer: &sequencedMaintenanceProposer{
+			db:   db,
+			errs: []error{nil, errors.New("node restarted during gc")},
+		},
+		Interval:  time.Hour,
+		SafePoint: func() uint64 { return 100 },
+		Apply:     storemvcc.ApplyOptions{BatchEntries: 2},
+	})
+	require.True(t, ok)
+	err := firstWorker.RunOnce(context.Background())
+	require.ErrorContains(t, err, "node restarted during gc")
+	require.Equal(t, uint64(1), firstWorker.Snapshot().LastApply.AppliedWriteDeletes)
+
+	secondWorker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
+		MVCCStore:           db,
+		MaintenanceProposer: &testMaintenanceProposer{db: db},
+		Interval:            time.Hour,
+		SafePoint:           func() uint64 { return 100 },
+		Apply:               storemvcc.ApplyOptions{BatchEntries: 2},
+	})
+	require.True(t, ok)
+	require.NoError(t, secondWorker.RunOnce(context.Background()))
+
+	assertWriteTombstoned(t, db, keyA, 40)
+	assertWriteTombstoned(t, db, keyB, 40)
+}
+
+func assertWriteTombstoned(t *testing.T, db *NoKV.DB, key []byte, commitTs uint64) {
+	t.Helper()
+	entry, err := db.GetInternalEntry(entrykv.CFWrite, key, commitTs)
+	require.NoError(t, err)
+	defer entry.DecrRef()
+	require.NotZero(t, entry.Meta&entrykv.BitDelete)
+}
+
 type blockingMaintenanceProposer struct {
 	entered chan struct{}
 	once    sync.Once

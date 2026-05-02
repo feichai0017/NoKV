@@ -14,6 +14,11 @@ import (
 // ProposeMVCCMaintenance submits prebuilt MVCC tombstones through Raft. This
 // command is only for internal GC cleanup; user-visible transaction resolution
 // must use the semantic Percolator commands.
+//
+// The operation is atomic per region batch, not across regions. If one region
+// succeeds and a later region fails, the caller sees the error and a lower
+// applied count; the next GC pass must rescan and converge via idempotent
+// tombstones.
 func (s *Store) ProposeMVCCMaintenance(ctx context.Context, entries []*entrykv.Entry) (uint64, error) {
 	if len(entries) == 0 {
 		return 0, nil

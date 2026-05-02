@@ -32,7 +32,10 @@ type Options struct {
 	MonitorInterval time.Duration
 
 	// SessionCleanupInterval controls stale writer-session cleanup. Zero uses
-	// the package default; negative disables automatic cleanup.
+	// the package default; negative disables automatic cleanup. Set this to
+	// roughly half of the smallest expected writer-session TTL when fast lease
+	// takeover matters; expired sessions may remain visible until the next
+	// cleanup pass.
 	SessionCleanupInterval time.Duration
 
 	// SessionCleanupLimit bounds one stale-session cleanup pass per mount. Zero

@@ -1,11 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"fmt"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	"sort"
 	"sync"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -14,10 +16,16 @@ import (
 type regionManager struct {
 	mu            sync.RWMutex
 	metaByID      map[uint64]localmeta.RegionMeta
+	metaByStart   []regionStartIndexEntry
 	peers         map[uint64]*peer.Peer
 	localMeta     *localmeta.Store
 	regionMetrics *metrics.RegionMetrics
 	notify        func(regionEvent)
+}
+
+type regionStartIndexEntry struct {
+	start []byte
+	id    uint64
 }
 
 // syncPeerMirror updates a peer's in-memory region snapshot after the local
@@ -51,6 +59,7 @@ func (rm *regionManager) loadBootstrapSnapshot(snapshot map[uint64]localmeta.Reg
 			rm.regionMetrics.RecordUpdate(metaCopy)
 		}
 	}
+	rm.rebuildRangeIndexLocked()
 	rm.mu.Unlock()
 }
 
@@ -103,6 +112,25 @@ func (rm *regionManager) listMetas() []localmeta.RegionMeta {
 	return out
 }
 
+func (rm *regionManager) metaByKey(key []byte) (localmeta.RegionMeta, bool) {
+	if rm == nil || len(key) == 0 {
+		return localmeta.RegionMeta{}, false
+	}
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	idx := sort.Search(len(rm.metaByStart), func(i int) bool {
+		return bytes.Compare(rm.metaByStart[i].start, key) > 0
+	}) - 1
+	if idx < 0 {
+		return localmeta.RegionMeta{}, false
+	}
+	meta, ok := rm.metaByID[rm.metaByStart[idx].id]
+	if !ok || !keyInRange(meta, key) {
+		return localmeta.RegionMeta{}, false
+	}
+	return localmeta.CloneRegionMeta(meta), true
+}
+
 func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool) error {
 	if rm == nil {
 		return errRegionManagerNil
@@ -140,6 +168,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool
 	rm.mu.Lock()
 	_, existed := rm.metaByID[metaCopy.ID]
 	rm.metaByID[metaCopy.ID] = localmeta.CloneRegionMeta(metaCopy)
+	rm.rebuildRangeIndexLocked()
 	p := rm.peers[metaCopy.ID]
 	rm.mu.Unlock()
 
@@ -192,6 +221,7 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error
 	rm.mu.Lock()
 	delete(rm.metaByID, regionID)
 	delete(rm.peers, regionID)
+	rm.rebuildRangeIndexLocked()
 	rm.mu.Unlock()
 	if rm.regionMetrics != nil {
 		rm.regionMetrics.RecordRemove(regionID)
@@ -202,6 +232,23 @@ func (rm *regionManager) applyRegionRemoval(regionID uint64, publish bool) error
 		})
 	}
 	return nil
+}
+
+func (rm *regionManager) rebuildRangeIndexLocked() {
+	rm.metaByStart = rm.metaByStart[:0]
+	for id, meta := range rm.metaByID {
+		rm.metaByStart = append(rm.metaByStart, regionStartIndexEntry{
+			start: append([]byte(nil), meta.StartKey...),
+			id:    id,
+		})
+	}
+	sort.Slice(rm.metaByStart, func(i, j int) bool {
+		cmp := bytes.Compare(rm.metaByStart[i].start, rm.metaByStart[j].start)
+		if cmp != 0 {
+			return cmp < 0
+		}
+		return rm.metaByStart[i].id < rm.metaByStart[j].id
+	})
 }
 
 func catalogApplyRootEvent(meta localmeta.RegionMeta, existed bool) rootevent.Event {
