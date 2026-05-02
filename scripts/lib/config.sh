@@ -23,6 +23,12 @@ nokv_config_coordinator_workdir() {
   nokv-config coordinator --config "$config_path" --scope host --format simple --field workdir 2>/dev/null | tr -d '\r' | sed -n '1p'
 }
 
+nokv_config_meta_root_lines() {
+  local config_path=$1
+  local scope=${2:-host}
+  nokv-config meta-root --config "$config_path" --scope "$scope" --format simple
+}
+
 nokv_config_store_lines() {
   local config_path=$1
   nokv-config stores --config "$config_path" --format simple

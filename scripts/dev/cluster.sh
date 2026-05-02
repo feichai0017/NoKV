@@ -30,7 +30,7 @@ Notes:
   - cluster.sh is a bootstrap/dev launcher, not a restart workflow.
   - Fresh store workdirs are seeded from config.regions; existing runtime workdirs are reused as-is.
   - For production-style restarts, run the ops scripts directly against the same durable workdirs:
-      scripts/ops/serve-meta-root.sh --workdir ... --node-id ... --peer ...
+      scripts/ops/serve-meta-root.sh --config ... --node-id ...
       scripts/ops/serve-coordinator.sh --coordinator-id ... --root-peer ...
       scripts/ops/serve-store.sh --config ... --store-id ...
 USAGE
@@ -216,29 +216,29 @@ for idx in "${!STORE_IDS[@]}"; do
   done
 done
 
-ROOT_NODE_IDS=(1 2 3)
-ROOT_GRPC_ADDRS=("127.0.0.1:2380" "127.0.0.1:2381" "127.0.0.1:2382")
-ROOT_TRANSPORT_ADDRS=("127.0.0.1:3380" "127.0.0.1:3381" "127.0.0.1:3382")
-ROOT_PEER_FLAGS=(
-  "--peer" "1=${ROOT_TRANSPORT_ADDRS[0]}"
-  "--peer" "2=${ROOT_TRANSPORT_ADDRS[1]}"
-  "--peer" "3=${ROOT_TRANSPORT_ADDRS[2]}"
-)
+ROOT_NODE_IDS=()
+ROOT_GRPC_ADDRS=()
+while read -r node_id grpc_addr _transport_addr _root_workdir; do
+  ROOT_NODE_IDS+=("$node_id")
+  ROOT_GRPC_ADDRS+=("$grpc_addr")
+done < <(nokv_config_meta_root_lines "$CONFIG_PATH" host)
+if [[ "${#ROOT_NODE_IDS[@]}" -ne 3 ]]; then
+  nokv_die "cluster.sh: meta_root.peers must contain exactly 3 peers"
+fi
 
 for idx in "${!ROOT_NODE_IDS[@]}"; do
   node_id="${ROOT_NODE_IDS[$idx]}"
   grpc_addr="${ROOT_GRPC_ADDRS[$idx]}"
-  transport_addr="${ROOT_TRANSPORT_ADDRS[$idx]}"
   root_workdir="$WORKDIR/meta-root-$node_id"
   mkdir -p "$root_workdir"
-  echo "Starting metadata root ${node_id} (grpc=${grpc_addr} raft=${transport_addr})"
+  echo "Starting metadata root ${node_id} (grpc=${grpc_addr})"
   start_with_logs root_pid "meta-root-${node_id}" "$root_workdir/root.log" \
     "$ROOT_DIR/scripts/ops/serve-meta-root.sh" \
+      --config "$CONFIG_PATH" \
+      --scope host \
       --addr "$grpc_addr" \
       --workdir "$root_workdir" \
-      --node-id "$node_id" \
-      --transport-addr "$transport_addr" \
-      "${ROOT_PEER_FLAGS[@]}"
+      --node-id "$node_id"
   ROOT_PIDS+=("$root_pid")
 done
 

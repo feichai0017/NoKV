@@ -755,6 +755,35 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
+func TestExecutorRetriesLockedTxnContention(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErrs = []error{
+		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+			Locked: &kvrpcpb.Locked{
+				PrimaryLock: []byte("dentry"),
+				Key:         []byte("dentry"),
+				LockVersion: 2,
+				LockTtl:     defaultLockTTL,
+			},
+		}}},
+		nil,
+	}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, uint64(5), runner.nextTS)
+	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+}
+
 func TestExecutorLookupReturnsNotFound(t *testing.T) {
 	executor, err := New(newFakeRunner())
 	require.NoError(t, err)

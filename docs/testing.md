@@ -28,8 +28,29 @@ make test-contract-smoke
 # Same generated fsmeta contract scripts through raftstore/client/percolator
 make test-raftstore-contract-smoke
 
+# Bounded generated model/fault schedules for PR CI
+make test-model-smoke
+
+# Explicit crash-window matrix around 2PC and raft Ready apply/send
+make test-crash-matrix-smoke
+
+# Seeded deterministic fault simulation over a real split-region cluster
+make test-deterministic-simulation-smoke
+
+# Bounded concurrent fsmeta history checks for PR CI
+make test-history-smoke
+
 # Curated distributed correctness smoke used by CI before the full sweep
 make test-correctness-smoke
+
+# Longer seeded correctness/failpoint matrix for nightly CI
+make test-correctness-nightly
+
+# Docker-compose black-box history checker with service restarts / crashes
+make test-docker-chaos
+
+# Short soak smoke; use NOKV_SOAK_DURATION=24h or 72h for release hardening
+make test-soak-smoke
 
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 \
@@ -80,12 +101,12 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | WAL | `engine/wal/manager_test.go` | Segment rotation, sync semantics, replay tolerance for truncation, directory bootstrap. | Add IO fault injection, concurrent append stress. |
 | LSM / Flush / Compaction | `engine/lsm/lsm_test.go`, `engine/lsm/picker_test.go`, `engine/lsm/planner_test.go`, `engine/lsm/compaction_test.go`, `engine/lsm/flush_runtime_test.go` | Memtable correctness, iterator merging, flush pipeline metrics, compaction scheduling. | Extend backpressure assertions and workload-shape coverage. |
 | Manifest | `engine/manifest/manager_test.go`, `engine/lsm/manifest_test.go` | CURRENT swap safety, rewrite crash handling, SST metadata persistence. | Simulate partial edit corruption, column family extensions. |
-| Percolator / Distributed Txn | `percolator/*_test.go`, `raftstore/client/client_test.go`, `stats_test.go` | Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, metrics accounting. | Mixed multi-region fuzzing with lock TTL and leader churn. |
-| FS Metadata Contract | `fsmeta/contract/*_test.go`, `fsmeta/exec/runner_test.go`, `fsmeta/integration/contract_test.go` | Seeded model-based coverage for create/update/lookup/readdir/snapshot/rename/link/unlink/session expiry against both the executor API and a real split-region raftstore-backed runner. | Add fault-injected retry schedules around the raftstore-backed contract. |
+| Percolator / Distributed Txn | `percolator/*_test.go`, `raftstore/client/client_test.go`, `stats_test.go` | Prewrite/Commit/ResolveLock flows, 2PC retries, timestamp-driven MVCC behaviour, generated transaction-history serializability, rollback marker visibility, lock cleanup, explicit primary-committed / primary-rollback crash windows, restart idempotency, and metrics accounting. | Expand generated recovery schedules for long-transaction heartbeat churn. |
+| FS Metadata Contract | `fsmeta/contract/*_test.go`, `fsmeta/exec/runner_test.go`, `fsmeta/integration/contract_test.go`, `fsmeta/integration/history_contract_test.go` | Seeded model-based coverage for create/update/lookup/readdir/snapshot/rename/link/unlink/session expiry against both the executor API and a real split-region raftstore-backed runner. Bounded concurrent history checks linearize overlapped fsmeta operations against the same reference model. | Add fault-injected retry schedules around the raftstore-backed contract. |
 | DB Integration | `db_test.go`, `db_bench_test.go` | End-to-end writes, recovery, and throttle behaviour. | Combine compaction stress and multi-DB interference. |
 | CLI & Stats | `cmd/nokv/main_test.go`, `stats_test.go` | Golden JSON output, stats snapshot correctness, hot key ranking. | CLI error handling, expvar HTTP integration tests. |
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `cluster.sh`. |
-| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
+| Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, deterministic split-region simulation schedules, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
 | Benchmark | `benchmark/ycsb/ycsb_test.go`, `benchmark/ycsb/ycsb_runner.go` | YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting. | Automate multi-node deployments and add longer-running, multi-GB stability baselines. |
 
 ---
@@ -127,9 +148,15 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 - **Node-local integration tests**: store/admin tests verify snapshot install, membership application, and region runtime publication without booting a full cluster.
 - **Multi-node deterministic data-plane integration tests**: `raftstore/integration` uses `raftstore/testcluster` to boot real stores, wire transports, and drive migration/member flows against live runtimes.
 - **Multi-node deterministic control-plane integration tests**: `coordinator/integration/*_test.go` uses `coordinator/testcluster` to boot `3 coordinator + replicated meta`, exercise rooted watch/reload propagation, follower write rejection, allocator-fence/remove-region propagation, and control-plane read staleness without mixing those cases into store/data-plane tests.
-- **Model/contract tests**: `fsmeta/contract` generates deterministic operation scripts and compares the fsmeta executor against a reference model before the suite reaches raftstore/coordinator/meta fault matrices. `fsmeta/integration/contract_test.go` reuses those scripts against the real raftstore/client/percolator path on a split-region test cluster.
+- **Model/contract tests**: `percolator/txn_model_test.go` generates transaction histories and checks timestamp-order serializability against the real protocol API. `fsmeta/contract` generates deterministic operation scripts and compares the fsmeta executor against a reference model before the suite reaches raftstore/coordinator/meta fault matrices. `fsmeta/contract/history_test.go` runs bounded concurrent batches and searches for a valid linearization of each observed history. `fsmeta/integration/contract_test.go` and `fsmeta/integration/history_contract_test.go` reuse those scripts against the real raftstore/client/percolator path on a split-region test cluster.
+- **Generated data-plane fault tests**: `raftstore/integration/twopc_fault_model_test.go` runs bounded generated 2PC schedules across split regions, leader transfer, partial quorum failure, client retry, and lock resolution.
+- **Generated control-plane model tests**: `coordinator/integration/root_model_test.go` runs rooted event schedules and verifies epoch deltas, snapshot replay/materialization, and follower watch catch-up.
+- **Crash-consistency matrix tests**: `percolator/crash_matrix_test.go` covers primary committed / secondary unresolved, primary rollback / secondary unresolved, and commit/rollback idempotency after restart. `raftstore/peer/peer_test.go::TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks` covers the raft apply/advance/send boundary.
+- **Deterministic simulation smoke**: `raftstore/integration/deterministic_simulation_test.go` uses seeded schedules over a real split-region cluster to replay commit, leader-transfer, partial-quorum rollback, delayed transport recovery, target-store restart, and stale lock-resolution pressure.
 - **Restart and recovery suites**: `raftstore/integration/restart_recovery_test.go` covers restarted followers, removed-peer dehost persistence, and leader restart with subsequent membership changes.
 - **Control-plane degradation and publish-boundary tests**: `raftstore/integration/coordinator_degraded_test.go` and `raftstore/integration/snapshot_interruption_test.go` cover live Coordinator outage after startup and failpoint-driven snapshot interruption before peer publication.
+- **Black-box Docker chaos**: `scripts/chaos/docker_fsmeta_history.sh` boots the Docker HA stack and runs `cmd/nokv-fsmeta-history`, a bounded external fsmeta history checker, after coordinator/store/meta-root/fsmeta restarts or single-process kills.
+- **Long soak**: `scripts/soak/fsmeta_soak.sh` runs `cmd/nokv-fsmeta-soak`, which repeatedly mixes namespace history checking with session, snapshot, watch, and cleanup probes. Use `NOKV_SOAK_DURATION=24h` or `72h` for release hardening; PR CI should keep this as a short manual smoke.
 
 When adding new distributed tests:
 
@@ -173,8 +200,14 @@ without manual timing assumptions or known flaky behaviour.
 | fsmeta watch | slow subscriber, expired cursor, reconnect/reconcile | watch replay is bounded; expired cursors force full-state reconcile instead of pretending exactly-once delivery | `fsmeta/exec/watch/router_test.go`, `fsmeta/client/reconcile_test.go`, `fsmeta/integration/e2e_test.go` | Covered |
 | fsmeta snapshot retention | SnapshotSubtree publish/retire, read-version use, MVCC retention floor | active snapshot epochs retain required MVCC history until explicit retire | `fsmeta/exec/runner_test.go`, `fsmeta/server/service_test.go`, `fsmeta/integration/e2e_test.go`, `raftstore/mvcc/policy_test.go` | Covered |
 | fsmeta session lifecycle | writer crash / heartbeat expiry / directory rejection / cleaner errors | stale writer sessions are expired by server time; directories cannot take file writer leases | `fsmeta/exec/runner_test.go`, `fsmeta/exec/session_cleaner_test.go` | Covered |
-| fsmeta operation contract | mixed namespace mutations, snapshot reads, hardlinks, writer sessions, time advance, split-region raftstore routing | executor-visible results match the reference model and stale owner cleanup cannot delete a reused live session | `fsmeta/contract/*_test.go`, `fsmeta/integration/contract_test.go`, `fsmeta/exec/runner_test.go::TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession` | Covered |
+| fsmeta operation contract | mixed namespace mutations, snapshot reads, hardlinks, writer sessions, time advance, split-region raftstore routing, bounded concurrent histories | executor-visible results match the reference model; overlapped API calls admit a legal serial order; stale owner cleanup cannot delete a reused live session | `fsmeta/contract/*_test.go`, `fsmeta/integration/contract_test.go`, `fsmeta/integration/history_contract_test.go`, `fsmeta/exec/runner_test.go::TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession` | Covered |
 | fsmeta namespace chaos | gateway restart, mixed mutations, subtree rename handoff | namespace operations remain transactionally visible and rooted handoff state converges after restart | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/integration/raftstore_runner_test.go` | Covered |
+| Percolator history model | generated Put/Delete/rollback transaction histories | reads match a timestamp-ordered serial history; committed and rolled-back records do not leave visible stale locks or hide older values | `percolator/txn_model_test.go`, `percolator/txn_test.go` | Covered |
+| Percolator crash matrix | primary committed with secondary unresolved, primary rollback with secondary unresolved, restart between commit/rollback retries | secondary resolution follows primary authority; repeated commit/rollback after restart is idempotent and does not change visibility | `percolator/crash_matrix_test.go` | Covered |
+| Raft Ready advance/send boundary | fail after Ready has been handled and raft node advanced but before outbound messages are sent | the peer can process later Ready batches and still serve linearizable reads after the failpoint is cleared | `raftstore/peer/peer_test.go::TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks` | Covered |
+| Raftstore 2PC generated fault schedule | split-region writes, leader transfer, partial child-region quorum failure, client retry, rollback resolution | committed cross-region transactions remain visible and failed partial-quorum attempts do not leak committed writes | `raftstore/integration/twopc_fault_model_test.go` | Covered |
+| Deterministic split-region simulation | generated commit, leader transfer, partial quorum, delayed link recovery, target-store restart, stale lock resolution | every seed is reproducible; committed model state remains visible after each injected transition | `raftstore/integration/deterministic_simulation_test.go` | Covered |
+| Rooted control-plane generated model | store/mount/snapshot/quota/region event schedule with follower watch catch-up | cluster/membership epochs advance only on authority-changing events; replayed state equals live snapshot; follower watch converges | `coordinator/integration/root_model_test.go` | Covered |
 
 CI policy for this matrix:
 
@@ -188,9 +221,38 @@ CI policy for this matrix:
    must not assert a fixed raft recovery latency unless latency is the feature
    being tested.
 
+Nightly policy:
+
+1. PR CI runs bounded smoke through `make test-correctness-smoke`, including
+   `make test-history-smoke` and `make test-model-smoke`.
+2. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
+   and steps, replays raftstore/fsmeta contract/history schedules with longer
+   bounds, repeats crash-matrix boundaries, replays deterministic split-region
+   fault simulation, and repeats failpoint-heavy coordinator/meta/raftstore suites.
+3. A nightly-only failure should still be triaged as a correctness issue unless
+   the failure is clearly in the test harness.
+
+Black-box and soak policy:
+
+1. `make test-docker-chaos` is the Jepsen-style Docker smoke: it validates
+   external fsmeta histories against the reference model while one service at a
+   time is restarted or killed between histories.
+2. `.github/workflows/docker-chaos.yml` runs that Docker smoke on schedule and
+   on demand.
+3. `make test-soak-smoke` is intentionally short by default. Real release
+   hardening should run `NOKV_SOAK_DURATION=24h ./scripts/soak/fsmeta_soak.sh`
+   and a separate `72h` pass on a machine where Docker is allowed to keep state
+   for the whole run.
+4. `.github/workflows/soak-correctness.yml` provides a bounded hosted-runner
+   soak. It is not a replacement for a 24h/72h self-hosted soak.
+
 Next fault-matrix additions should focus on:
 
 - more publish-boundary failpoints around snapshot install and migration init
 - deeper transport/interleave chaos beyond partition + recovery, especially more concurrent membership combinations and repeated multi-link flaps
+- unknown-result aware history checking for operations interrupted by gateway
+  restart mid-RPC
+- fake-clock driven long-transaction simulation that can force heartbeat,
+  expiry, resolver, and GC interaction without wall-clock sleeps
 
 Keep this matrix updated when adding new modules or scenarios so documentation and automation remain aligned.

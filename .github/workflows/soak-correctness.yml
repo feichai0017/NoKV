@@ -1,0 +1,39 @@
+name: Soak Correctness
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Soak duration, for example 30m, 24h, or 72h"
+        required: false
+        default: "30m"
+      rolling_restarts:
+        description: "Enable rolling Docker restarts during the soak"
+        required: false
+        default: "true"
+  schedule:
+    - cron: "41 15 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  fsmeta-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Docker fsmeta soak
+        env:
+          NOKV_SOAK_DOWN: "1"
+          NOKV_SOAK_DURATION: ${{ github.event.inputs.duration || '45m' }}
+          NOKV_SOAK_ROLLING_RESTARTS: ${{ github.event.inputs.rolling_restarts == 'false' && '0' || '1' }}
+          NOKV_SOAK_STEPS: "64"
+          NOKV_SOAK_BATCH: "3"
+        run: ./scripts/soak/fsmeta_soak.sh

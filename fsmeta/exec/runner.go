@@ -17,7 +17,8 @@ import (
 )
 
 const defaultLockTTL uint64 = 3000
-const maxCommitTsExpiredRetries = 3
+const maxTxnContentionRetries = 3
+const txnContentionRetryBackoff = time.Millisecond
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
 type KV struct {
@@ -1193,7 +1194,7 @@ func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, erro
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
-	for attempt := 0; attempt <= maxCommitTsExpiredRetries; attempt++ {
+	for attempt := 0; attempt <= maxTxnContentionRetries; attempt++ {
 		startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
 		if err != nil {
 			return err
@@ -1202,20 +1203,32 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 		if err == nil {
 			return nil
 		}
-		if !isCommitTsExpired(err) {
+		if !isRetryableTxnContention(err) {
 			return translateMutateError(err)
 		}
 		last = err
-		if attempt == maxCommitTsExpiredRetries {
+		if attempt == maxTxnContentionRetries {
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
 		e.txnRetriesTotal.Add(1)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+			return err
 		}
 	}
 	return translateMutateError(last)
+}
+
+func waitTxnContentionRetry(ctx context.Context, attempt int) error {
+	delay := txnContentionRetryBackoff << attempt
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func cloneBytes(in []byte) []byte {
@@ -1315,15 +1328,21 @@ func translateMutateError(err error) error {
 	return err
 }
 
-func isCommitTsExpired(err error) bool {
+func isRetryableTxnContention(err error) bool {
 	var keyErrs keyErrorCarrier
 	if !errors.As(err, &keyErrs) {
 		return false
 	}
+	retryable := false
 	for _, keyErr := range keyErrs.KeyErrors() {
-		if keyErr != nil && keyErr.GetCommitTsExpired() != nil {
-			return true
+		if keyErr == nil {
+			continue
 		}
+		if keyErr.GetCommitTsExpired() != nil || keyErr.GetLocked() != nil {
+			retryable = true
+			continue
+		}
+		return false
 	}
-	return false
+	return retryable
 }

@@ -255,6 +255,31 @@ func TestCommittedLockDoesNotCreateVisibleKey(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestRollbackMarkerDoesNotHideVisiblePut(t *testing.T) {
+	db := openTestDB(t)
+	key := []byte("rollback-visible-put")
+
+	applyVersionedEntryForTxnTest(t, db, kv.CFDefault, key, 10, []byte("value1"), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 20, mvcc.EncodeWrite(mvcc.Write{
+		Kind:    kvrpcpb.Mutation_Put,
+		StartTs: 10,
+	}), 0)
+	applyVersionedEntryForTxnTest(t, db, kv.CFDefault, key, 30, nil, kv.BitDelete)
+	applyVersionedEntryForTxnTest(t, db, kv.CFWrite, key, 30, mvcc.EncodeWrite(mvcc.Write{
+		Kind:    kvrpcpb.Mutation_Rollback,
+		StartTs: 30,
+	}), 0)
+
+	reader := NewReader(db)
+	val, _, err := reader.GetValue(key, 40)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value1"), val)
+
+	exists, err := keyExistsAt(reader, key, 40)
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 func TestPrewriteAssertionNotExistRejectsVisibleValue(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -531,6 +556,38 @@ func TestCommitMissingLockWithExistingWriteIsIdempotent(t *testing.T) {
 	require.Nil(t, err)
 }
 
+func TestCommitRemovesAllLocks(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("commit-a"), []byte("commit-b"), []byte("commit-c")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Delete, Key: keys[1]},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 18,
+		LockTtl:      1000,
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          keys,
+		StartVersion:  18,
+		CommitVersion: 25,
+	}))
+
+	reader := NewReader(db)
+	for _, key := range keys {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.Nil(t, lock, "key=%s", key)
+		write, commitTs, err := reader.GetWriteByStartTs(key, 18)
+		require.NoError(t, err)
+		require.NotNil(t, write, "key=%s", key)
+		require.Equal(t, uint64(25), commitTs, "key=%s", key)
+	}
+}
+
 // TestCommitReturnsLockedOnDifferentTransactionLock rejects foreign locks.
 func TestCommitReturnsLockedOnDifferentTransactionLock(t *testing.T) {
 	db := openTestDB(t)
@@ -595,6 +652,39 @@ func TestBatchRollbackRemovesLock(t *testing.T) {
 	require.NotNil(t, write)
 	require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind)
 	require.Equal(t, uint64(8), commitTs)
+}
+
+func TestBatchRollbackRemovesAllLocks(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("rk-a"), []byte("rk-b"), []byte("rk-c")}
+	req := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Delete, Key: keys[1]},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 18,
+		LockTtl:      1000,
+	}
+	require.Empty(t, Prewrite(db, latches, req))
+	require.Nil(t, BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+		Keys:         keys,
+		StartVersion: 18,
+	}))
+
+	reader := NewReader(db)
+	for _, key := range keys {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.Nil(t, lock, "key=%s", key)
+		write, commitTs, err := reader.GetWriteByStartTs(key, 18)
+		require.NoError(t, err)
+		require.NotNil(t, write, "key=%s", key)
+		require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind, "key=%s", key)
+		require.Equal(t, uint64(18), commitTs, "key=%s", key)
+	}
 }
 
 func TestBatchRollbackDoesNotDeleteOtherTransactionLock(t *testing.T) {

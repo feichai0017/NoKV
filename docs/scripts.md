@@ -85,19 +85,16 @@ This split is deliberate:
 - Example:
   ```bash
   ./scripts/ops/serve-meta-root.sh \
+    --config ./raft_config.example.json \
+    --scope host \
     --addr 127.0.0.1:2380 \
     --workdir ./artifacts/cluster/meta-root-1 \
-    --node-id 1 \
-    --transport-addr 127.0.0.1:3380 \
-    --peer 1=127.0.0.1:3380 \
-    --peer 2=127.0.0.1:3381 \
-    --peer 3=127.0.0.1:3382
+    --node-id 1
   ```
 - Notes:
-  - `--peer` values are metadata-root raft transport addresses, not gRPC
-    service addresses
-  - `--workdir`, `--node-id`, `--transport-addr`, and exactly 3 `--peer`
-    values are required; there is no single-process local mode
+  - `meta_root.peers` in the config is the only peer-list source
+  - `--workdir` is only a local directory override for the selected node
+  - `--config` and `--node-id` are required; there is no single-process local mode
   - forwards shutdown signals to `nokv meta-root`
 
 ### `scripts/ops/serve-coordinator.sh`

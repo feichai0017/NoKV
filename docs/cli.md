@@ -226,7 +226,7 @@ nokv meta-root \
 
 - `scripts/ops/serve-meta-root.sh`
   - Starts one replicated `meta-root` peer and forwards shutdown signals.
-  - Requires `--workdir`, `--node-id`, `--transport-addr`, and 3 `--peer` values.
+  - Requires `--config` and `--node-id`; `meta_root.peers` is the only peer-list source.
 - `scripts/ops/serve-coordinator.sh`
   - Starts one `nokv coordinator` against an external meta-root cluster.
   - Requires `--coordinator-id` and 3 `--root-peer` values (meta-root gRPC endpoints).

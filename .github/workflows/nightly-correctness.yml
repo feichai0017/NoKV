@@ -1,0 +1,29 @@
+name: Nightly Correctness
+
+on:
+  schedule:
+    - cron: "23 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Install tools
+        run: make install-tools
+
+      - name: Nightly correctness matrix
+        run: make test-correctness-nightly

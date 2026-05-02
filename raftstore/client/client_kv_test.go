@@ -826,6 +826,58 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *
 	require.Equal(t, 1, primaryRollbackHits)
 }
 
+func TestClientTwoPhaseCommitRollsBackPrewritesAfterPrimaryCommitTsExpired(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	svc.commitFn = func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		return &kvrpcpb.KvCommitResponse{
+			Response: &kvrpcpb.CommitResponse{
+				Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+					Key:         []byte("alfa"),
+					CommitTs:    51,
+					MinCommitTs: 55,
+				}},
+			},
+		}, nil
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v2")},
+	}, 50, 51, 3000)
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 1)
+	require.NotNil(t, txnErr.Errors[0].GetCommitTsExpired())
+
+	cluster.mu.Lock()
+	_, pending := cluster.regions[1].pending[50]
+	rollbackHits := cluster.regions[1].rollbackHits
+	cluster.mu.Unlock()
+	require.False(t, pending, "prewrites must be rolled back after deterministic primary commit rejection")
+	require.Equal(t, 1, rollbackHits)
+}
+
 func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
