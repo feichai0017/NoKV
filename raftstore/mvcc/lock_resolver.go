@@ -18,8 +18,12 @@ const defaultResolveLockBatch = 4096
 
 // ResolveLocksOptions bounds one local expired-lock resolution pass.
 type ResolveLocksOptions struct {
-	// CurrentTs is the timestamp used for TTL checks. Zero disables resolution.
+	// CurrentTs is the logical timestamp used for CheckTxnStatus and
+	// min-commit-ts pushes. Zero disables resolution.
 	CurrentTs uint64
+	// CurrentTime is the physical Unix millisecond time used for TTL checks.
+	// Zero disables resolution.
+	CurrentTime uint64
 	// BatchLocks limits how many expired locks are resolved in one semantic
 	// ResolveLock proposal batch. A non-positive value uses the default.
 	BatchLocks int
@@ -46,12 +50,13 @@ type ResolveLocksStats struct {
 	RolledBackLocks    uint64
 }
 
-// ResolveExpiredLocksReplicated resolves expired locks through semantic raft
-// ResolveLock commands. Use this path for cluster-mode stores so apply
-// observers and watch streams see normal transaction-resolution events.
-func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, proposer LockResolverProposer, opt ResolveLocksOptions) (ResolveLocksStats, error) {
+// ResolveExpiredLocksReplicated resolves expired locks through primary-authority
+// CheckTxnStatus and semantic ResolveLock commands. Use this path for
+// cluster-mode stores so apply observers and watch streams see normal
+// transaction-resolution events.
+func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, resolver LockResolver, opt ResolveLocksOptions) (ResolveLocksStats, error) {
 	var stats ResolveLocksStats
-	if opt.CurrentTs == 0 {
+	if opt.CurrentTs == 0 || opt.CurrentTime == 0 {
 		return stats, nil
 	}
 	var afterUserKey []byte
@@ -66,19 +71,19 @@ func ResolveExpiredLocksReplicated(ctx context.Context, db txnstore.Store, propo
 			}
 			maxLocks = opt.MaxLocks - stats.ScannedLocks
 		}
-		batch, err := collectResolveLockBatch(ctx, db, opt.CurrentTs, afterUserKey, opt.batchLocks(), maxLocks)
+		batch, err := collectResolveLockBatch(ctx, db, opt.CurrentTime, afterUserKey, opt.batchLocks(), maxLocks)
 		if err != nil {
 			return stats, err
 		}
 		stats.add(batch.scan)
 		if len(batch.locks) > 0 {
-			decisions, resolved, err := planResolveLocks(ctx, db, opt.CurrentTs, batch.locks)
+			decisions, resolved, err := planResolveLocks(ctx, resolver, opt.CurrentTs, opt.CurrentTime, batch.locks)
 			if err != nil {
 				return stats, err
 			}
 			commands := groupResolveLockCommands(decisions)
 			for _, cmd := range commands {
-				applied, err := proposeResolveLocks(ctx, proposer, cmd.startTs, cmd.commitTs, cmd.keys)
+				applied, err := proposeResolveLocks(ctx, resolver, cmd.startTs, cmd.commitTs, cmd.keys)
 				if err != nil {
 					return stats, err
 				}
@@ -113,10 +118,10 @@ type resolveLockBatch struct {
 	done        bool
 }
 
-func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs uint64, afterUserKey []byte, maxExpiredLocks int, maxLocks uint64) (resolveLockBatch, error) {
+func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTime uint64, afterUserKey []byte, maxExpiredLocks int, maxLocks uint64) (resolveLockBatch, error) {
 	var batch resolveLockBatch
 	if db == nil {
-		return batch, fmt.Errorf("raftstore/mvcc: nil MVCC store")
+		return batch, errNilMVCCStore
 	}
 	iter := db.NewInternalIterator(&index.Options{IsAsc: true})
 	if iter == nil {
@@ -155,10 +160,10 @@ func collectResolveLockBatch(ctx context.Context, db txnstore.Store, currentTs u
 		}
 		lock, err := txnmvcc.DecodeLock(entry.Value)
 		if err != nil {
-			return batch, fmt.Errorf("raftstore/mvcc: decode CFLock %x: %w", userKey, err)
+			return batch, errDecodeCFLock(userKey, err)
 		}
 		batch.scan.ScannedLocks++
-		if !lockExpired(lock, currentTs) {
+		if !lockExpired(lock, currentTime) {
 			batch.scan.RetainedLocks++
 			iter.Next()
 			continue
@@ -198,10 +203,10 @@ func seekLockStart(iter index.Iterator, afterUserKey []byte) {
 }
 
 type resolveLockDecision struct {
-	key      []byte
-	startTs  uint64
-	commitTs uint64
-	kind     kvrpcpb.Mutation_Op
+	key             []byte
+	startTs         uint64
+	commitTs        uint64
+	alreadyResolved bool
 }
 
 type resolveLockCommand struct {
@@ -210,14 +215,14 @@ type resolveLockCommand struct {
 	keys     [][]byte
 }
 
-func planResolveLocks(ctx context.Context, db txnstore.Store, currentTs uint64, locks []lockRecord) ([]resolveLockDecision, ResolveLocksStats, error) {
+func planResolveLocks(ctx context.Context, resolver LockResolver, currentTs, currentTime uint64, locks []lockRecord) ([]resolveLockDecision, ResolveLocksStats, error) {
 	var stats ResolveLocksStats
 	decisions := make([]resolveLockDecision, 0, len(locks))
 	for _, rec := range locks {
 		if err := ctx.Err(); err != nil {
 			return nil, stats, err
 		}
-		decision, err := resolveOneLock(ctx, db, currentTs, rec)
+		decision, err := resolveOneLock(ctx, resolver, currentTs, currentTime, rec)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -225,47 +230,55 @@ func planResolveLocks(ctx context.Context, db txnstore.Store, currentTs uint64, 
 			stats.RetainedLocks++
 			continue
 		}
+		if decision.alreadyResolved {
+			stats.ResolvedLocks++
+			if decision.commitTs == 0 {
+				stats.RolledBackLocks++
+			} else {
+				stats.CommittedLocks++
+			}
+			continue
+		}
 		decisions = append(decisions, *decision)
 	}
 	return decisions, stats, nil
 }
 
-func resolveOneLock(ctx context.Context, db txnstore.Store, currentTs uint64, rec lockRecord) (*resolveLockDecision, error) {
+func resolveOneLock(ctx context.Context, resolver LockResolver, currentTs, currentTime uint64, rec lockRecord) (*resolveLockDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if write, commitTs, ok, err := writeByStartTs(db, rec.lock.Primary, rec.lock.Ts); err != nil {
+	status, err := checkTxnStatus(ctx, resolver, rec.lock.Primary, rec.lock.Ts, currentTs, currentTime)
+	if err != nil {
 		return nil, err
-	} else if ok {
-		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return &resolveLockDecision{
-				key:     entrykv.SafeCopy(nil, rec.key),
-				startTs: rec.lock.Ts,
-				kind:    rec.lock.Kind,
-			}, nil
-		}
+	}
+	if status == nil {
+		return nil, fmt.Errorf("%w for primary %x", errNilCheckTxnStatusResult, rec.lock.Primary)
+	}
+	if keyErr := status.GetError(); keyErr != nil {
+		return nil, errCheckTxnStatusKeyError(rec.lock.Primary, keyErr)
+	}
+	if commitTs := status.GetCommitVersion(); commitTs > 0 {
 		return &resolveLockDecision{
 			key:      entrykv.SafeCopy(nil, rec.key),
 			startTs:  rec.lock.Ts,
 			commitTs: commitTs,
-			kind:     rec.lock.Kind,
 		}, nil
 	}
-
-	if !bytes.Equal(rec.key, rec.lock.Primary) {
-		primary, err := lockForKey(db, rec.lock.Primary)
-		if err != nil {
-			return nil, err
+	switch status.GetAction() {
+	case kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback,
+		kvrpcpb.CheckTxnStatusAction_CheckTxnStatusLockNotExistRollback:
+		decision := &resolveLockDecision{
+			key:     entrykv.SafeCopy(nil, rec.key),
+			startTs: rec.lock.Ts,
 		}
-		if primary != nil && primary.Ts == rec.lock.Ts && !lockExpired(*primary, currentTs) {
-			return nil, nil
+		if bytes.Equal(rec.key, rec.lock.Primary) {
+			decision.alreadyResolved = true
 		}
+		return decision, nil
+	default:
+		return nil, nil
 	}
-	return &resolveLockDecision{
-		key:     entrykv.SafeCopy(nil, rec.key),
-		startTs: rec.lock.Ts,
-		kind:    rec.lock.Kind,
-	}, nil
 }
 
 func lockForKey(db txnstore.Store, key []byte) (*txnmvcc.Lock, error) {
@@ -285,7 +298,7 @@ func lockForKey(db txnstore.Store, key []byte) (*txnmvcc.Lock, error) {
 	}
 	lock, err := txnmvcc.DecodeLock(entry.Value)
 	if err != nil {
-		return nil, fmt.Errorf("raftstore/mvcc: decode primary lock %x: %w", key, err)
+		return nil, errDecodeCFLock(key, err)
 	}
 	return &lock, nil
 }
@@ -331,11 +344,11 @@ func writeByStartTs(db txnstore.Store, key []byte, startTs uint64) (txnmvcc.Writ
 	return txnmvcc.Write{}, 0, false, nil
 }
 
-func lockExpired(lock txnmvcc.Lock, currentTs uint64) bool {
-	if lock.TTL == 0 || currentTs == 0 {
+func lockExpired(lock txnmvcc.Lock, currentTime uint64) bool {
+	if lock.TTL == 0 || lock.StartTime == 0 || currentTime == 0 {
 		return false
 	}
-	return currentTs >= lock.Ts && currentTs-lock.Ts >= lock.TTL
+	return currentTime >= lock.StartTime && currentTime-lock.StartTime >= lock.TTL
 }
 
 func groupResolveLockCommands(decisions []resolveLockDecision) []resolveLockCommand {

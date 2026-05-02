@@ -22,14 +22,14 @@ func TestClientSentinelHelpers(t *testing.T) {
 }
 
 func TestClientTypedErrors(t *testing.T) {
-	keyConflict := &KeyConflictError{
+	txnKeyErr := &TxnKeyError{
 		Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.Locked{PrimaryLock: []byte("pk")}}},
 	}
-	require.Contains(t, keyConflict.Error(), "prewrite key errors")
-	gotKeyConflict, ok := AsKeyConflict(keyConflict)
+	require.Contains(t, txnKeyErr.Error(), "transaction key errors")
+	gotTxnKeyErr, ok := AsTxnKeyError(txnKeyErr)
 	require.True(t, ok)
-	require.Same(t, keyConflict, gotKeyConflict)
-	_, ok = AsKeyConflict(errors.New("other"))
+	require.Same(t, txnKeyErr, gotTxnKeyErr)
+	_, ok = AsTxnKeyError(errors.New("other"))
 	require.False(t, ok)
 
 	routeErr := &RouteUnavailableError{Key: []byte("route-key"), Err: errors.New("dial failed")}
@@ -53,4 +53,27 @@ func TestClientTypedErrors(t *testing.T) {
 	require.Same(t, notFound, gotNotFound)
 	_, ok = AsRegionNotFound(errors.New("other"))
 	require.False(t, ok)
+
+	retry := &RetryExhaustedError{Operation: "commit", RegionID: 7}
+	require.Contains(t, retry.Error(), "commit retries exhausted")
+	require.True(t, IsRetryExhausted(retry))
+	require.False(t, IsRetryExhausted(errors.New("other")))
+
+	protocol := &ProtocolError{Operation: "mutate", Detail: "primary key required"}
+	require.Contains(t, protocol.Error(), "mutate protocol error")
+	require.True(t, IsProtocolError(protocol))
+	require.False(t, IsProtocolError(errors.New("other")))
+
+	routing := &RegionRoutingError{
+		Operation: "resolve region",
+		RegionID:  11,
+		Key:       []byte("key"),
+		Detail:    "missing peers",
+		Err:       errors.New("resolver failed"),
+	}
+	require.Contains(t, routing.Error(), "region routing error")
+	require.Contains(t, routing.Error(), "missing peers")
+	require.EqualError(t, routing.Unwrap(), "resolver failed")
+	require.True(t, IsRegionRoutingError(routing))
+	require.False(t, IsRegionRoutingError(errors.New("other")))
 }

@@ -32,6 +32,7 @@ const (
 	retryRouteUnavailable retryKind = iota
 	retryTransportUnavailable
 	retryRegionError
+	retryLockResolve
 )
 
 func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
@@ -231,6 +232,8 @@ func (c *Client) waitRetry(ctx context.Context, attempt int, kind retryKind) err
 		backoff = c.retry.TransportUnavailableBackoff
 	case retryRegionError:
 		backoff = c.retry.RegionErrorBackoff
+	case retryLockResolve:
+		backoff = c.retry.LockResolveBackoff
 	default:
 		backoff = 0
 	}

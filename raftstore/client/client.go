@@ -44,6 +44,7 @@ type RetryPolicy struct {
 	RouteUnavailableBackoff     time.Duration
 	TransportUnavailableBackoff time.Duration
 	RegionErrorBackoff          time.Duration
+	LockResolveBackoff          time.Duration
 }
 
 // Client provides Region-aware helpers for NoKV RPCs, including 2PC.
@@ -92,6 +93,7 @@ func New(cfg Config) (*Client, error) {
 	retry.RouteUnavailableBackoff = normalizeRetryBackoff(retry.RouteUnavailableBackoff, 20*time.Millisecond)
 	retry.TransportUnavailableBackoff = normalizeRetryBackoff(retry.TransportUnavailableBackoff, 10*time.Millisecond)
 	retry.RegionErrorBackoff = normalizeRetryBackoff(retry.RegionErrorBackoff, 0)
+	retry.LockResolveBackoff = normalizeRetryBackoff(retry.LockResolveBackoff, 10*time.Millisecond)
 	return &Client{
 		stores:             make(map[uint64]*storeConn),
 		regions:            make(map[uint64]*regionState),

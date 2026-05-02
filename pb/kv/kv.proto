@@ -138,6 +138,13 @@ enum CheckTxnStatusAction {
   CheckTxnStatusMinCommitTsPushed = 3;
 }
 
+enum TxnHeartBeatAction {
+  TxnHeartBeatNoAction = 0;
+  TxnHeartBeatTTLExtended = 1;
+  TxnHeartBeatTTLExpireRollback = 2;
+  TxnHeartBeatLockNotExistRollback = 3;
+}
+
 message CheckTxnStatusRequest {
   bytes primary_key = 1;
   uint64 lock_ts = 2;
@@ -152,6 +159,21 @@ message CheckTxnStatusResponse {
   uint64 lock_ttl = 2;
   uint64 commit_version = 3;
   CheckTxnStatusAction action = 4;
+}
+
+message TxnHeartBeatRequest {
+  bytes primary_key = 1;
+  uint64 start_version = 2;
+  uint64 ttl_extension = 3;
+  uint64 current_time = 4;
+}
+
+message TxnHeartBeatResponse {
+  KeyError error = 1;
+  uint64 lock_ttl = 2;
+  uint64 lock_expire_time = 3;
+  uint64 commit_version = 4;
+  TxnHeartBeatAction action = 5;
 }
 
 message InternalEntryTombstone {
@@ -265,6 +287,16 @@ message KvCheckTxnStatusResponse {
   nokv.error.v1.RegionError region_error = 2;
 }
 
+message KvTxnHeartBeatRequest {
+  Context context = 1;
+  TxnHeartBeatRequest request = 2;
+}
+
+message KvTxnHeartBeatResponse {
+  TxnHeartBeatResponse response = 1;
+  nokv.error.v1.RegionError region_error = 2;
+}
+
 enum ApplyWatchEventSource {
   APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
   APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
@@ -299,6 +331,7 @@ service NoKV {
   rpc KvBatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
   rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
   rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
+  rpc KvTxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
   rpc KvWatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
 }
 

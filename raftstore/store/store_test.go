@@ -816,6 +816,12 @@ func newTestMVCCApplier(db txnstore.Store) func(*raftcmdpb.RaftCmdRequest) (*raf
 					Error:         err,
 					ResolvedLocks: count,
 				}}})
+			case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
+				result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_CheckTxnStatus{CheckTxnStatus: result}})
+			case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
+				result := percolator.TxnHeartBeat(db, latches, r.GetTxnHeartBeat())
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TxnHeartBeat{TxnHeartBeat: result}})
 			case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 				count, keyErr, err := applyTestMVCCMaintenance(db, r.GetMvccMaintenance())
 				if err != nil {

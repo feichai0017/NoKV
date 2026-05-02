@@ -17,11 +17,36 @@ import (
 
 type scriptedKVService struct {
 	mockService
+	getFn            func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error)
+	batchGetFn       func(context.Context, *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error)
+	scanFn           func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error)
 	prewriteFn       func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error)
 	commitFn         func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error)
 	rollbackFn       func(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error)
 	resolveLockFn    func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error)
 	checkTxnStatusFn func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error)
+	txnHeartBeatFn   func(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error)
+}
+
+func (s *scriptedKVService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+	if s.getFn != nil {
+		return s.getFn(ctx, req)
+	}
+	return s.mockService.KvGet(ctx, req)
+}
+
+func (s *scriptedKVService) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+	if s.batchGetFn != nil {
+		return s.batchGetFn(ctx, req)
+	}
+	return s.mockService.KvBatchGet(ctx, req)
+}
+
+func (s *scriptedKVService) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+	if s.scanFn != nil {
+		return s.scanFn(ctx, req)
+	}
+	return s.mockService.KvScan(ctx, req)
 }
 
 func (s *scriptedKVService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
@@ -59,6 +84,13 @@ func (s *scriptedKVService) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.K
 	return s.mockService.KvCheckTxnStatus(ctx, req)
 }
 
+func (s *scriptedKVService) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+	if s.txnHeartBeatFn != nil {
+		return s.txnHeartBeatFn(ctx, req)
+	}
+	return s.mockService.KvTxnHeartBeat(ctx, req)
+}
+
 func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 	cluster := newMockCluster(clusterRegion{
 		meta: &metapb.RegionDescriptor{
@@ -78,7 +110,11 @@ func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 		commitFn: func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 			return &kvrpcpb.KvCommitResponse{
 				Response: &kvrpcpb.CommitResponse{
-					Error: &kvrpcpb.KeyError{Abort: "commit failed"},
+					Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+						Key:         []byte("alfa"),
+						CommitTs:    22,
+						MinCommitTs: 30,
+					}},
 				},
 			}, nil
 		},
@@ -99,7 +135,361 @@ func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 	cli.mu.Unlock()
 
 	err = cli.commitRegion(context.Background(), 1, [][]byte{[]byte("alfa")}, 11, 22)
-	require.ErrorContains(t, err, "commit key error")
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 1)
+	require.NotNil(t, txnErr.Errors[0].GetCommitTsExpired())
+	require.Equal(t, uint64(30), txnErr.Errors[0].GetCommitTsExpired().GetMinCommitTs())
+}
+
+func TestClientGetResolvesCommittedLockAndRetries(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var getCalls int
+	var checkCalls int
+	var resolveCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			getCalls++
+			if getCalls == 1 {
+				return &kvrpcpb.KvGetResponse{
+					Response: &kvrpcpb.GetResponse{
+						Error: &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
+							PrimaryLock: []byte("primary"),
+							Key:         []byte("alfa"),
+							LockVersion: 10,
+						}},
+					},
+				}, nil
+			}
+			return &kvrpcpb.KvGetResponse{
+				Response: &kvrpcpb.GetResponse{Value: []byte("visible")},
+			}, nil
+		},
+		checkTxnStatusFn: func(_ context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+			checkCalls++
+			require.Equal(t, []byte("primary"), req.GetRequest().GetPrimaryKey())
+			require.Equal(t, uint64(10), req.GetRequest().GetLockTs())
+			require.Equal(t, uint64(20), req.GetRequest().GetCurrentTs())
+			require.Zero(t, req.GetRequest().GetCurrentTime())
+			return &kvrpcpb.KvCheckTxnStatusResponse{
+				Response: &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 30},
+			}, nil
+		},
+		resolveLockFn: func(_ context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+			resolveCalls++
+			require.Equal(t, uint64(10), req.GetRequest().GetStartVersion())
+			require.Equal(t, uint64(30), req.GetRequest().GetCommitVersion())
+			require.Equal(t, [][]byte{[]byte("alfa")}, req.GetRequest().GetKeys())
+			return &kvrpcpb.KvResolveLockResponse{
+				Response: &kvrpcpb.ResolveLockResponse{ResolvedLocks: 1},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("visible"), resp.GetValue())
+	require.Equal(t, 2, getCalls)
+	require.Equal(t, 1, checkCalls)
+	require.Equal(t, 1, resolveCalls)
+}
+
+func TestClientGetReturnsLiveLockAfterRetryBudget(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var checkCalls int
+	var resolveCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			return &kvrpcpb.KvGetResponse{
+				Response: &kvrpcpb.GetResponse{
+					Error: &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
+						PrimaryLock: []byte("primary"),
+						Key:         []byte("alfa"),
+						LockVersion: 10,
+					}},
+				},
+			}, nil
+		},
+		checkTxnStatusFn: func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+			checkCalls++
+			return &kvrpcpb.KvCheckTxnStatusResponse{
+				Response: &kvrpcpb.CheckTxnStatusResponse{
+					LockTtl: 100,
+					Action:  kvrpcpb.CheckTxnStatusAction_CheckTxnStatusMinCommitTsPushed,
+				},
+			}, nil
+		},
+		resolveLockFn: func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+			resolveCalls++
+			return &kvrpcpb.KvResolveLockResponse{}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 1, LockResolveBackoff: -1},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
+	require.Nil(t, resp)
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 1)
+	require.NotNil(t, txnErr.Errors[0].GetLocked())
+	require.Equal(t, 1, checkCalls)
+	require.Equal(t, 0, resolveCalls)
+}
+
+func TestClientBatchGetResolvesCommittedLockAndKeepsCompletedReads(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var batchCalls int
+	var checkCalls int
+	var resolveCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		batchGetFn: func(_ context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+			batchCalls++
+			responses := make([]*kvrpcpb.GetResponse, 0, len(req.GetRequest().GetRequests()))
+			for _, getReq := range req.GetRequest().GetRequests() {
+				switch string(getReq.GetKey()) {
+				case "alfa":
+					responses = append(responses, &kvrpcpb.GetResponse{Value: []byte("value-a")})
+				case "bravo":
+					if batchCalls == 1 {
+						responses = append(responses, &kvrpcpb.GetResponse{
+							Error: &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
+								PrimaryLock: []byte("primary"),
+								Key:         []byte("bravo"),
+								LockVersion: 10,
+							}},
+						})
+						continue
+					}
+					responses = append(responses, &kvrpcpb.GetResponse{Value: []byte("value-b")})
+				default:
+					responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
+				}
+			}
+			return &kvrpcpb.KvBatchGetResponse{
+				Response: &kvrpcpb.BatchGetResponse{Responses: responses},
+			}, nil
+		},
+		checkTxnStatusFn: func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+			checkCalls++
+			return &kvrpcpb.KvCheckTxnStatusResponse{
+				Response: &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 30},
+			}, nil
+		},
+		resolveLockFn: func(_ context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+			resolveCalls++
+			require.Equal(t, uint64(10), req.GetRequest().GetStartVersion())
+			require.Equal(t, uint64(30), req.GetRequest().GetCommitVersion())
+			require.Equal(t, [][]byte{[]byte("bravo")}, req.GetRequest().GetKeys())
+			return &kvrpcpb.KvResolveLockResponse{
+				Response: &kvrpcpb.ResolveLockResponse{ResolvedLocks: 1},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	got, err := cli.BatchGet(context.Background(), [][]byte{[]byte("alfa"), []byte("bravo")}, 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value-a"), got["alfa"].GetValue())
+	require.Equal(t, []byte("value-b"), got["bravo"].GetValue())
+	require.Equal(t, 2, batchCalls)
+	require.Equal(t, 1, checkCalls)
+	require.Equal(t, 1, resolveCalls)
+}
+
+func TestClientScanReturnsNonLockKeyError(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		scanFn: func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+			return &kvrpcpb.KvScanResponse{
+				Response: &kvrpcpb.ScanResponse{
+					Kvs: []*kvrpcpb.KV{{
+						Key:   []byte("alfa"),
+						Value: []byte("partial"),
+					}},
+					Error: &kvrpcpb.KeyError{Abort: "scan failed"},
+				},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	kvs, err := cli.Scan(context.Background(), []byte("alfa"), 1, 20)
+	require.Nil(t, kvs)
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 1)
+	require.Equal(t, "scan failed", txnErr.Errors[0].GetAbort())
+}
+
+func TestClientScanResolvesCommittedLockAndRetriesWithoutPartialResult(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var scanCalls int
+	var checkCalls int
+	var resolveCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		scanFn: func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+			scanCalls++
+			if scanCalls == 1 {
+				return &kvrpcpb.KvScanResponse{
+					Response: &kvrpcpb.ScanResponse{
+						Kvs: []*kvrpcpb.KV{{
+							Key:   []byte("alfa"),
+							Value: []byte("partial"),
+						}},
+						Error: &kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{
+							PrimaryLock: []byte("primary"),
+							Key:         []byte("bravo"),
+							LockVersion: 10,
+						}},
+					},
+				}, nil
+			}
+			return &kvrpcpb.KvScanResponse{
+				Response: &kvrpcpb.ScanResponse{
+					Kvs: []*kvrpcpb.KV{{
+						Key:   []byte("bravo"),
+						Value: []byte("visible"),
+					}},
+				},
+			}, nil
+		},
+		checkTxnStatusFn: func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+			checkCalls++
+			return &kvrpcpb.KvCheckTxnStatusResponse{
+				Response: &kvrpcpb.CheckTxnStatusResponse{CommitVersion: 30},
+			}, nil
+		},
+		resolveLockFn: func(_ context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+			resolveCalls++
+			require.Equal(t, uint64(10), req.GetRequest().GetStartVersion())
+			require.Equal(t, uint64(30), req.GetRequest().GetCommitVersion())
+			require.Equal(t, [][]byte{[]byte("bravo")}, req.GetRequest().GetKeys())
+			return &kvrpcpb.KvResolveLockResponse{
+				Response: &kvrpcpb.ResolveLockResponse{ResolvedLocks: 1},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	kvs, err := cli.Scan(context.Background(), []byte("alfa"), 1, 20)
+	require.NoError(t, err)
+	require.Len(t, kvs, 1)
+	require.Equal(t, []byte("bravo"), kvs[0].GetKey())
+	require.Equal(t, []byte("visible"), kvs[0].GetValue())
+	require.Equal(t, 2, scanCalls)
+	require.Equal(t, 1, checkCalls)
+	require.Equal(t, 1, resolveCalls)
 }
 
 func TestClientResolveLocksRetriesOnNotLeader(t *testing.T) {
@@ -225,7 +615,7 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	resp, err := cli.CheckTxnStatus(context.Background(), []byte("alfa"), 10, 20)
+	resp, err := cli.CheckTxnStatus(context.Background(), []byte("alfa"), 10, 20, 30)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, uint64(77), resp.GetCommitVersion())
@@ -235,6 +625,58 @@ func TestClientCheckTxnStatusRetriesOnNotLeader(t *testing.T) {
 	cli.mu.RLock()
 	require.Equal(t, uint64(2), cli.regions[1].leader)
 	cli.mu.RUnlock()
+}
+
+func TestClientTxnHeartBeatRoutesPrimaryAndDelegatesPhysicalTime(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var calls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		txnHeartBeatFn: func(_ context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+			calls++
+			require.Equal(t, uint64(1), req.GetContext().GetRegionId())
+			require.Equal(t, []byte("primary"), req.GetRequest().GetPrimaryKey())
+			require.Equal(t, uint64(10), req.GetRequest().GetStartVersion())
+			require.Equal(t, uint64(3000), req.GetRequest().GetTtlExtension())
+			require.Zero(t, req.GetRequest().GetCurrentTime())
+			return &kvrpcpb.KvTxnHeartBeatResponse{
+				Response: &kvrpcpb.TxnHeartBeatResponse{
+					LockTtl:        5000,
+					LockExpireTime: 9000,
+					Action:         kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended,
+				},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.TxnHeartBeat(context.Background(), []byte("primary"), 10, 3000)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended, resp.GetAction())
+	require.Equal(t, uint64(5000), resp.GetLockTtl())
+	require.Equal(t, 1, calls)
 }
 
 func TestClientResolveLocksReturnsKeyError(t *testing.T) {
@@ -273,7 +715,10 @@ func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	_, err = cli.ResolveLocks(context.Background(), 10, 11, [][]byte{[]byte("alfa")})
-	require.ErrorContains(t, err, "resolve lock key error")
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 1)
+	require.Equal(t, "resolve failed", txnErr.Errors[0].GetAbort())
 }
 
 func TestClientTwoPhaseCommitRejectsMissingPrimaryMutation(t *testing.T) {
@@ -317,7 +762,8 @@ func TestClientTwoPhaseCommitRejectsMissingPrimaryMutation(t *testing.T) {
 	err = cli.TwoPhaseCommit(context.Background(), []byte("omega"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value")},
 	}, 1, 2, 3)
-	require.EqualError(t, err, fmt.Sprintf("client: primary key %q missing from mutations", []byte("omega")))
+	require.True(t, IsProtocolError(err))
+	require.ErrorContains(t, err, fmt.Sprintf("primary key %q missing from mutations", []byte("omega")))
 }
 
 func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *testing.T) {

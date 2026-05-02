@@ -300,6 +300,20 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 	key := []byte("lock-key")
 	prewriteKey(t, h.service, h.ctx, key, []byte("value"), 10)
 
+	heartBeatResp, err := h.service.KvTxnHeartBeat(context.Background(), &kvrpcpb.KvTxnHeartBeatRequest{
+		Context: h.ctx,
+		Request: &kvrpcpb.TxnHeartBeatRequest{
+			PrimaryKey:   key,
+			StartVersion: 10,
+			TtlExtension: 5000,
+			CurrentTime:  0,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, heartBeatResp)
+	require.Nil(t, heartBeatResp.GetRegionError())
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended, heartBeatResp.GetResponse().GetAction())
+
 	resp, err := h.service.KvCheckTxnStatus(context.Background(), &kvrpcpb.KvCheckTxnStatusRequest{
 		Context: h.ctx,
 		Request: &kvrpcpb.CheckTxnStatusRequest{

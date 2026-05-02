@@ -45,13 +45,15 @@ type MVCCMaintenanceConfig struct {
 	Interval time.Duration
 	Timeout  time.Duration
 
-	SafePoint func() uint64
-	CurrentTs func() uint64
-	Retention func() rootstate.SnapshotRetentionIndex
-	Mount     storemvcc.MountResolver
+	SafePoint   func() uint64
+	CurrentTs   func() uint64
+	CurrentTime func() uint64
+	Retention   func() rootstate.SnapshotRetentionIndex
+	Mount       storemvcc.MountResolver
 
 	Apply        storemvcc.ApplyOptions
 	ResolveLocks storemvcc.ResolveLocksOptions
+	LockResolver storemvcc.LockResolver
 
 	RunOrphanDefaults bool
 	OrphanDefaults    storemvcc.OrphanDefaultOptions

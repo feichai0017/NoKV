@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -21,6 +23,38 @@ type Service struct {
 // NewService constructs a NoKV service bound to the provided store.
 func NewService(st *store.Store) *Service {
 	return &Service{store: st}
+}
+
+func servicePhysicalTimeMillis() uint64 {
+	return uint64(time.Now().UnixMilli())
+}
+
+func checkTxnStatusRequestWithServiceTime(req *kvrpcpb.CheckTxnStatusRequest) *kvrpcpb.CheckTxnStatusRequest {
+	currentTime := req.GetCurrentTime()
+	if currentTime == 0 {
+		currentTime = servicePhysicalTimeMillis()
+	}
+	return &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         append([]byte(nil), req.GetPrimaryKey()...),
+		LockTs:             req.GetLockTs(),
+		CurrentTs:          req.GetCurrentTs(),
+		RollbackIfNotExist: req.GetRollbackIfNotExist(),
+		CallerStartTs:      req.GetCallerStartTs(),
+		CurrentTime:        currentTime,
+	}
+}
+
+func txnHeartBeatRequestWithServiceTime(req *kvrpcpb.TxnHeartBeatRequest) *kvrpcpb.TxnHeartBeatRequest {
+	currentTime := req.GetCurrentTime()
+	if currentTime == 0 {
+		currentTime = servicePhysicalTimeMillis()
+	}
+	return &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   append([]byte(nil), req.GetPrimaryKey()...),
+		StartVersion: req.GetStartVersion(),
+		TtlExtension: req.GetTtlExtension(),
+		CurrentTime:  currentTime,
+	}
 }
 
 func (s *Service) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
@@ -243,11 +277,12 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnS
 	if req.GetRequest() == nil {
 		return nil, status.Error(codes.InvalidArgument, "check txn status request missing payload")
 	}
+	checkReq := checkTxnStatusRequestWithServiceTime(req.GetRequest())
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS,
-			Cmd:     &raftcmdpb.Request_CheckTxnStatus{CheckTxnStatus: req.GetRequest()},
+			Cmd:     &raftcmdpb.Request_CheckTxnStatus{CheckTxnStatus: checkReq},
 		}},
 	})
 	if err != nil {
@@ -256,6 +291,32 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnS
 	out := &kvrpcpb.KvCheckTxnStatusResponse{RegionError: resp.GetRegionError()}
 	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetCheckTxnStatus() != nil {
 		out.Response = resp.GetResponses()[0].GetCheckTxnStatus()
+	}
+	return out, nil
+}
+
+func (s *Service) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+	header, err := buildHeader(req.GetContext())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.GetRequest() == nil {
+		return nil, status.Error(codes.InvalidArgument, "txn heartbeat request missing payload")
+	}
+	heartBeatReq := txnHeartBeatRequestWithServiceTime(req.GetRequest())
+	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
+		Header: header,
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_TXN_HEART_BEAT,
+			Cmd:     &raftcmdpb.Request_TxnHeartBeat{TxnHeartBeat: heartBeatReq},
+		}},
+	})
+	if err != nil {
+		return nil, rpcStatus(err)
+	}
+	out := &kvrpcpb.KvTxnHeartBeatResponse{RegionError: resp.GetRegionError()}
+	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetTxnHeartBeat() != nil {
+		out.Response = resp.GetResponses()[0].GetTxnHeartBeat()
 	}
 	return out, nil
 }

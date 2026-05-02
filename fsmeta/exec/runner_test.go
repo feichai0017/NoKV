@@ -648,7 +648,7 @@ func TestExecutorLinkRejectsDirectory(t *testing.T) {
 
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	runner := newFakeRunner()
-	runner.mutateErr = fakeKeyConflictError{errors: []*kvrpcpb.KeyError{{
+	runner.mutateErr = fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
 		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("dentry")},
 	}}}
 	executor, err := New(runner)
@@ -667,7 +667,7 @@ func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
-		fakeKeyConflictError{errors: []*kvrpcpb.KeyError{{
+		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
 			CommitTsExpired: &kvrpcpb.CommitTsExpired{
 				Key:         []byte("dentry"),
 				CommitTs:    2,
@@ -1036,15 +1036,15 @@ func cloneMutation(mut *kvrpcpb.Mutation) *kvrpcpb.Mutation {
 	}
 }
 
-type fakeKeyConflictError struct {
+type fakeTxnKeyError struct {
 	errors []*kvrpcpb.KeyError
 }
 
-func (e fakeKeyConflictError) Error() string {
-	return "fake key conflict"
+func (e fakeTxnKeyError) Error() string {
+	return "fake txn key error"
 }
 
-func (e fakeKeyConflictError) KeyErrors() []*kvrpcpb.KeyError {
+func (e fakeTxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 	return e.errors
 }
 

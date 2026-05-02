@@ -37,7 +37,7 @@ type TxnRunner interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
-type keyConflictError interface {
+type keyErrorCarrier interface {
 	KeyErrors() []*kvrpcpb.KeyError
 }
 
@@ -1288,9 +1288,9 @@ func translateMutateError(err error) error {
 	if errors.Is(err, fsmeta.ErrExists) {
 		return err
 	}
-	var conflict keyConflictError
-	if errors.As(err, &conflict) {
-		for _, keyErr := range conflict.KeyErrors() {
+	var keyErrs keyErrorCarrier
+	if errors.As(err, &keyErrs) {
+		for _, keyErr := range keyErrs.KeyErrors() {
 			if keyErr != nil && keyErr.GetAlreadyExists() != nil {
 				return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
 			}
@@ -1300,11 +1300,11 @@ func translateMutateError(err error) error {
 }
 
 func isCommitTsExpired(err error) bool {
-	var conflict keyConflictError
-	if !errors.As(err, &conflict) {
+	var keyErrs keyErrorCarrier
+	if !errors.As(err, &keyErrs) {
 		return false
 	}
-	for _, keyErr := range conflict.KeyErrors() {
+	for _, keyErr := range keyErrs.KeyErrors() {
 		if keyErr != nil && keyErr.GetCommitTsExpired() != nil {
 			return true
 		}

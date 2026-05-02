@@ -43,11 +43,112 @@ var (
 	errInstallRegionSSTRequiresPeerBuild      = errors.New("raftstore: install region sst snapshot requires peer builder")
 	errFailpointAfterSnapshotApply            = errors.New("raftstore: failpoint after snapshot apply before publish")
 	errRouterRegisterNilPeer                  = errors.New("raftstore: router cannot register nil peer")
+	errResolveLocksStartVersionRequired       = errors.New("raftstore: resolve locks start version is required")
+	errEmptyResolveLockKey                    = errors.New("raftstore: empty resolve-lock key")
+	errCheckTxnStatusPrimaryRequired          = errors.New("raftstore: primary key is required for check txn status")
+	errTxnHeartBeatPrimaryRequired            = errors.New("raftstore: primary key is required for txn heartbeat")
 )
 
 func IsNilStore(err error) bool     { return errors.Is(err, errNilStore) }
 func IsZeroRegionID(err error) bool { return errors.Is(err, errZeroRegionID) }
 func IsZeroPeerID(err error) bool   { return errors.Is(err, errZeroPeerID) }
+
+// RegionRoutingError records stable region routing failures for store-local
+// transaction maintenance commands.
+type RegionRoutingError struct {
+	Operation string
+	RegionID  uint64
+	Key       []byte
+	Detail    string
+	Err       error
+}
+
+func (e *RegionRoutingError) Error() string {
+	if e == nil {
+		return "raftstore: region routing error"
+	}
+	msg := "raftstore: region routing error"
+	if e.Operation != "" {
+		msg += " during " + e.Operation
+	}
+	if e.RegionID != 0 {
+		msg += fmt.Sprintf(" for region %d", e.RegionID)
+	}
+	if len(e.Key) > 0 {
+		msg += fmt.Sprintf(" key %x", e.Key)
+	}
+	if e.Detail != "" {
+		msg += ": " + e.Detail
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *RegionRoutingError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func IsRegionRoutingError(err error) bool {
+	var target *RegionRoutingError
+	return errors.As(err, &target)
+}
+
+// ProtocolError records invalid command responses and transaction protocol
+// violations that should not be retried as ordinary storage errors.
+type ProtocolError struct {
+	Operation string
+	Detail    string
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return "raftstore: protocol error"
+	}
+	if e.Operation == "" {
+		return "raftstore: protocol error: " + e.Detail
+	}
+	return "raftstore: " + e.Operation + " protocol error: " + e.Detail
+}
+
+func IsProtocolError(err error) bool {
+	var target *ProtocolError
+	return errors.As(err, &target)
+}
+
+func errNoRegionForKey(operation string, key []byte) error {
+	return &RegionRoutingError{
+		Operation: operation,
+		Key:       append([]byte(nil), key...),
+		Detail:    "no region covers key",
+	}
+}
+
+func errRegionCommandFailed(operation string, regionID uint64, err any) error {
+	return &RegionRoutingError{
+		Operation: operation,
+		RegionID:  regionID,
+		Detail:    fmt.Sprintf("region command failed: %v", err),
+	}
+}
+
+func errInvalidRegionCommandResponse(operation string, regionID uint64) error {
+	return &ProtocolError{
+		Operation: operation,
+		Detail:    fmt.Sprintf("region %d returned invalid response", regionID),
+	}
+}
+
+func errRegionKeyError(operation string, regionID uint64, err any) error {
+	return &ProtocolError{
+		Operation: operation,
+		Detail:    fmt.Sprintf("region %d returned key error: %v", regionID, err),
+	}
+}
 
 func errPeerNotFound(id uint64) error { return fmt.Errorf("raftstore: peer %d not found", id) }
 func errPeerAlreadyRegistered(id uint64) error {

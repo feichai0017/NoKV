@@ -29,6 +29,7 @@ const (
 	NoKV_KvBatchRollback_FullMethodName  = "/nokv.kv.v1.NoKV/KvBatchRollback"
 	NoKV_KvResolveLock_FullMethodName    = "/nokv.kv.v1.NoKV/KvResolveLock"
 	NoKV_KvCheckTxnStatus_FullMethodName = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
+	NoKV_KvTxnHeartBeat_FullMethodName   = "/nokv.kv.v1.NoKV/KvTxnHeartBeat"
 	NoKV_KvWatchApply_FullMethodName     = "/nokv.kv.v1.NoKV/KvWatchApply"
 )
 
@@ -44,6 +45,7 @@ type NoKVClient interface {
 	KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error)
 	KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
+	KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
 	KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
 }
 
@@ -135,6 +137,16 @@ func (c *noKVClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusR
 	return out, nil
 }
 
+func (c *noKVClient) KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KvTxnHeartBeatResponse)
+	err := c.cc.Invoke(ctx, NoKV_KvTxnHeartBeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *noKVClient) KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &NoKV_ServiceDesc.Streams[0], NoKV_KvWatchApply_FullMethodName, cOpts...)
@@ -166,6 +178,7 @@ type NoKVServer interface {
 	KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error)
 	KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
+	KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
 	KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
 }
 
@@ -199,6 +212,9 @@ func (UnimplementedNoKVServer) KvResolveLock(context.Context, *KvResolveLockRequ
 }
 func (UnimplementedNoKVServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvCheckTxnStatus not implemented")
+}
+func (UnimplementedNoKVServer) KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KvTxnHeartBeat not implemented")
 }
 func (UnimplementedNoKVServer) KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method KvWatchApply not implemented")
@@ -367,6 +383,24 @@ func _NoKV_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NoKV_KvTxnHeartBeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KvTxnHeartBeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NoKVServer).KvTxnHeartBeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NoKV_KvTxnHeartBeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NoKVServer).KvTxnHeartBeat(ctx, req.(*KvTxnHeartBeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NoKV_KvWatchApply_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ApplyWatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -416,6 +450,10 @@ var NoKV_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "KvCheckTxnStatus",
 			Handler:    _NoKV_KvCheckTxnStatus_Handler,
+		},
+		{
+			MethodName: "KvTxnHeartBeat",
+			Handler:    _NoKV_KvTxnHeartBeat_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

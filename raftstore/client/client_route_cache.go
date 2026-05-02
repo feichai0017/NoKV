@@ -71,7 +71,7 @@ func (c *Client) routeKeyWithRetry(ctx context.Context, key []byte) (regionSnaps
 	if err := ctx.Err(); err != nil {
 		return regionSnapshot{}, err
 	}
-	return regionSnapshot{}, fmt.Errorf("client: route retries exhausted for key %q", key)
+	return regionSnapshot{}, &RetryExhaustedError{Operation: "route", Key: append([]byte(nil), key...)}
 }
 
 // regionForKeyFromCache returns a cached Region snapshot when the key is
@@ -114,7 +114,12 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 		return regionSnapshot{}, errResolvedRegionIDMissing
 	}
 	if len(desc.Peers) == 0 {
-		return regionSnapshot{}, fmt.Errorf("client: resolved region %d missing peers", desc.RegionID)
+		return regionSnapshot{}, &RegionRoutingError{
+			Operation: "resolve region",
+			RegionID:  desc.RegionID,
+			Key:       append([]byte(nil), key...),
+			Detail:    "resolved region missing peers",
+		}
 	}
 	leader := defaultLeaderStoreID(desc)
 	if old, ok := c.regionSnapshot(desc.RegionID); ok && old.leader != 0 && regionHasStoreID(desc, old.leader) {
@@ -124,7 +129,12 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	c.upsertRegionLocked(desc, leader)
 	c.mu.Unlock()
 	if !containsKey(desc, key) {
-		return regionSnapshot{}, fmt.Errorf("client: resolved region %d does not contain key %q", desc.RegionID, key)
+		return regionSnapshot{}, &RegionRoutingError{
+			Operation: "resolve region",
+			RegionID:  desc.RegionID,
+			Key:       append([]byte(nil), key...),
+			Detail:    "resolved region does not contain key",
+		}
 	}
 	return regionSnapshot{
 		desc:   desc,
@@ -171,14 +181,21 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 		c.mu.Lock()
 		c.removeRegionLocked(regionID)
 		c.mu.Unlock()
-		return fmt.Errorf(
-			"client: region %d store mismatch: requested store %d, actual store %d",
-			regionID,
-			storeMismatch.GetRequestStoreId(),
-			storeMismatch.GetActualStoreId(),
-		)
+		return &RegionRoutingError{
+			Operation: "handle region error",
+			RegionID:  regionID,
+			Detail: fmt.Sprintf(
+				"store mismatch: requested store %d, actual store %d",
+				storeMismatch.GetRequestStoreId(),
+				storeMismatch.GetActualStoreId(),
+			),
+		}
 	}
-	return fmt.Errorf("client: region %d error: %v", regionID, err)
+	return &RegionRoutingError{
+		Operation: "handle region error",
+		RegionID:  regionID,
+		Detail:    fmt.Sprintf("protobuf region error: %v", err),
+	}
 }
 
 func (c *Client) upsertRegionLocked(desc descriptor.Descriptor, leader uint64) {
@@ -271,7 +288,11 @@ func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 		}
 	}
 	if peerMeta == nil {
-		return nil, fmt.Errorf("client: leader store %d not found in region %d peers", leaderStoreID, region.desc.RegionID)
+		return nil, &RegionRoutingError{
+			Operation: "build request context",
+			RegionID:  region.desc.RegionID,
+			Detail:    fmt.Sprintf("leader store %d not found in region peers", leaderStoreID),
+		}
 	}
 	return &kvrpcpb.Context{
 		RegionId: region.desc.RegionID,

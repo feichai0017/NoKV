@@ -382,6 +382,11 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 			if len(key) > 0 && !keyInRange(meta, key) {
 				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 			}
+		case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
+			key := r.GetTxnHeartBeat().GetPrimaryKey()
+			if len(key) > 0 && !keyInRange(meta, key) {
+				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+			}
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 			for _, entry := range r.GetMvccMaintenance().GetTombstones() {
 				if entry == nil {

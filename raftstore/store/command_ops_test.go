@@ -347,7 +347,7 @@ func TestStoreProposeMVCCMaintenanceRoutesAfterSplit(t *testing.T) {
 	require.NotZero(t, gotRight.Meta&entrykv.BitDelete)
 }
 
-func TestStoreProposeResolveLocks(t *testing.T) {
+func TestStoreResolveLocks(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := newTestSchedulerSink()
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: newTestMVCCApplier(db)})
@@ -401,7 +401,7 @@ func TestStoreProposeResolveLocks(t *testing.T) {
 	require.Nil(t, resp.GetRegionError())
 	require.Empty(t, resp.GetResponses()[0].GetPrewrite().GetErrors())
 
-	resolved, err := st.ProposeResolveLocks(context.Background(), 20, 40, [][]byte{[]byte("resolve-key")})
+	resolved, err := st.ResolveLocks(context.Background(), 20, 40, [][]byte{[]byte("resolve-key")})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), resolved)
 
@@ -411,7 +411,7 @@ func TestStoreProposeResolveLocks(t *testing.T) {
 	require.Equal(t, []byte("resolve-value"), val)
 }
 
-func TestStoreProposeResolveLocksConvergesAfterPartialRegionFailure(t *testing.T) {
+func TestStoreResolveLocksConvergesAfterPartialRegionFailure(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := newTestSchedulerSink()
 	st := NewStore(Config{Scheduler: coord, StoreID: 1, CommandApplier: newTestMVCCApplier(db)})
@@ -455,7 +455,7 @@ func TestStoreProposeResolveLocksConvergesAfterPartialRegionFailure(t *testing.T
 	applyTestLockRecord(t, db, []byte("b-lock-key"), 20, 5)
 	applyTestLockRecord(t, db, []byte("t-lock-key"), 20, 5)
 
-	resolved, err := st.ProposeResolveLocks(context.Background(), 20, 0, [][]byte{
+	resolved, err := st.ResolveLocks(context.Background(), 20, 0, [][]byte{
 		[]byte("b-lock-key"),
 		[]byte("t-lock-key"),
 	})
@@ -488,7 +488,7 @@ func TestStoreProposeResolveLocksConvergesAfterPartialRegionFailure(t *testing.T
 	t.Cleanup(func() { st.StopPeer(rightPeer.ID()) })
 	require.NoError(t, rightPeer.Campaign())
 
-	resolved, err = st.ProposeResolveLocks(context.Background(), 20, 0, [][]byte{
+	resolved, err = st.ResolveLocks(context.Background(), 20, 0, [][]byte{
 		[]byte("b-lock-key"),
 		[]byte("t-lock-key"),
 	})
@@ -502,10 +502,11 @@ func TestStoreProposeResolveLocksConvergesAfterPartialRegionFailure(t *testing.T
 func applyTestLockRecord(t *testing.T, db txnstore.Store, key []byte, startTs, ttl uint64) {
 	t.Helper()
 	lock := txnmvcc.EncodeLock(txnmvcc.Lock{
-		Primary: key,
-		Ts:      startTs,
-		TTL:     ttl,
-		Kind:    kvrpcpb.Mutation_Put,
+		Primary:   key,
+		Ts:        startTs,
+		StartTime: startTs,
+		TTL:       ttl,
+		Kind:      kvrpcpb.Mutation_Put,
 	})
 	entry := entrykv.NewInternalEntry(entrykv.CFLock, key, entrykv.MaxVersion, lock, 0, 0)
 	defer entry.DecrRef()
@@ -1007,6 +1008,14 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 				CmdType: raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS,
 				Cmd:     &raftcmdpb.Request_CheckTxnStatus{CheckTxnStatus: &kvrpcpb.CheckTxnStatusRequest{PrimaryKey: []byte("a")}},
+			}}},
+			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
+		},
+		{
+			name: "txn heartbeat out of range",
+			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TXN_HEART_BEAT,
+				Cmd:     &raftcmdpb.Request_TxnHeartBeat{TxnHeartBeat: &kvrpcpb.TxnHeartBeatRequest{PrimaryKey: []byte("a")}},
 			}}},
 			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
 		},

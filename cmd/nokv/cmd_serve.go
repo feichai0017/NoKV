@@ -20,6 +20,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
+	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
@@ -155,6 +156,15 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 	defer func() { _ = coordCli.Close() }()
 
+	txnClient, err := raftclient.New(raftclient.Config{
+		RegionResolver: coordCli,
+		StoreResolver:  coordCli,
+	})
+	if err != nil {
+		return fmt.Errorf("create transaction lock resolver: %w", err)
+	}
+	defer func() { _ = txnClient.Close() }()
+
 	var tsoSource *serveTSOSource
 	var retentionSource *serveRootRetentionSource
 	mvccGCEnabled := *mvccGCPlanInterval > 0 || *mvccGCMaintenanceInterval > 0
@@ -247,6 +257,9 @@ func runServeCmd(w io.Writer, args []string) error {
 				}
 				return tsoSource.Current()
 			},
+			CurrentTime: func() uint64 {
+				return uint64(time.Now().UnixMilli())
+			},
 			Retention: func() rootstate.SnapshotRetentionIndex {
 				if retentionSource == nil {
 					return rootstate.SnapshotRetentionIndex{}
@@ -262,6 +275,7 @@ func runServeCmd(w io.Writer, args []string) error {
 				BatchLocks: *mvccGCResolveBatchLocks,
 				MaxLocks:   *mvccGCResolveMaxLocks,
 			},
+			LockResolver:      txnClient,
 			RunOrphanDefaults: *mvccGCMaintenanceInterval > 0,
 			OrphanDefaults: storemvcc.OrphanDefaultOptions{
 				BatchEntries: *mvccGCBatchEntries,
