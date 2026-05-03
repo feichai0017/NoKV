@@ -1,0 +1,7 @@
+# Recorded TLC output
+spec=spec/FSMetaNamespace.tla
+status=success
+
+Model checking completed. No error has been found.
+59619 states generated, 10736 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 15.

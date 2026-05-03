@@ -1,8 +1,14 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench
+.PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke
+.PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
+.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish tlc-root-replay-watch tlc-fsmeta-namespace
+.PHONY: tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample tlc-contrast-models
+.PHONY: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-percolator2pc record-tlc-mvccgc record-tlc-raftstore-apply-publish record-tlc-root-replay-watch record-tlc-fsmeta-namespace
+.PHONY: record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-formal-artifacts
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -35,6 +41,10 @@ help:
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
+	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
+	@echo "  make test-tla-smoke     - Run bounded TLA protocol model checks"
+	@echo "  make test-tla-nightly   - Run full TLA positive and contrast model matrix"
+	@echo "  make record-formal-artifacts - Record sanitized TLC outputs under spec/artifacts/"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-dev-up      - Build local image and start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
@@ -200,6 +210,101 @@ install-tools:
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
 	@echo "✓ Tools installed"
+
+install-tla-tools:
+	@echo "Installing pinned TLA+ tools locally..."
+	./scripts/tla/setup.sh
+
+test-tla-smoke: tlc-eunomia tlc-mountlifecycle tlc-subtreeauthority \
+	tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish \
+	tlc-root-replay-watch tlc-fsmeta-namespace
+
+test-tla-nightly: test-tla-smoke tlc-eunomiamultidim tlc-contrast-models
+
+define TLC_SPEC_TARGET
+$(1):
+	@echo "Running TLC on spec/$(2).tla..."
+	./scripts/tla/tlc.sh spec/$(2).tla
+endef
+
+define TLC_COUNTEREXAMPLE_TARGET
+$(1):
+	@echo "Running TLC on spec/$(2).tla ($(3))..."
+	@./scripts/tla/expect_counterexample.sh spec/$(2).tla
+	@echo "✓ TLC found the expected counterexample for $(2)"
+endef
+
+$(eval $(call TLC_SPEC_TARGET,tlc-eunomia,Eunomia))
+$(eval $(call TLC_SPEC_TARGET,tlc-eunomiamultidim,EunomiaMultiDim))
+$(eval $(call TLC_SPEC_TARGET,tlc-mountlifecycle,MountLifecycle))
+$(eval $(call TLC_SPEC_TARGET,tlc-subtreeauthority,SubtreeAuthority))
+$(eval $(call TLC_SPEC_TARGET,tlc-percolator2pc,Percolator2PC))
+$(eval $(call TLC_SPEC_TARGET,tlc-mvccgc,MVCCGC))
+$(eval $(call TLC_SPEC_TARGET,tlc-raftstore-apply-publish,RaftstoreApplyPublish))
+$(eval $(call TLC_SPEC_TARGET,tlc-root-replay-watch,RootReplayWatch))
+$(eval $(call TLC_SPEC_TARGET,tlc-fsmeta-namespace,FSMetaNamespace))
+
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leaseonly-counterexample,LeaseOnly,expecting stale reply counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leasestart-counterexample,LeaseStartOnly,expecting lease-start coverage counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-chubbyfenced-counterexample,ChubbyFencedLease,expecting coverage counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-tokenonly-counterexample,TokenOnly,expecting stale-delivery counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-subtreewithoutfrontiercoverage-counterexample,SubtreeWithoutFrontierCoverage,expecting inheritance counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-subtreewithoutseal-counterexample,SubtreeWithoutSeal,expecting primacy counterexample))
+
+tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
+
+define RECORD_TLC_SUCCESS_TARGET
+$(1):
+	@echo "Recording TLC output for $(2)..."
+	@if ./scripts/tla/record_tlc.sh spec/$(2).tla spec/artifacts/$(3).out; then \
+		echo "✓ Recorded TLC output for $(2)"; \
+	else \
+		echo "expected $(2) to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+endef
+
+define RECORD_TLC_COUNTEREXAMPLE_TARGET
+$(1):
+	@echo "Recording TLC counterexample for $(2)..."
+	@if ./scripts/tla/record_tlc.sh spec/$(2).tla spec/artifacts/$(3).out; then \
+		echo "expected $(2) recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		if grep -Eiq 'counterexample|Invariant .* is violated|The behavior up to this point is' spec/artifacts/$(3).out; then \
+			echo "✓ Recorded TLC counterexample for $(2)"; \
+		else \
+			cat spec/artifacts/$(3).out; \
+			echo "TLC failed without an invariant counterexample for $(2)"; \
+			exit 1; \
+		fi; \
+	fi
+endef
+
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-eunomia,Eunomia,tlc-eunomia))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-eunomiamultidim,EunomiaMultiDim,tlc-eunomiamultidim))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-mountlifecycle,MountLifecycle,tlc-mountlifecycle))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-subtreeauthority,SubtreeAuthority,tlc-subtreeauthority))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-percolator2pc,Percolator2PC,tlc-percolator2pc))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-mvccgc,MVCCGC,tlc-mvccgc))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-raftstore-apply-publish,RaftstoreApplyPublish,tlc-raftstore-apply-publish))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-root-replay-watch,RootReplayWatch,tlc-root-replay-watch))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-fsmeta-namespace,FSMetaNamespace,tlc-fsmeta-namespace))
+
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-leaseonly,LeaseOnly,tlc-leaseonly))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-tokenonly,TokenOnly,tlc-tokenonly))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-chubbyfenced,ChubbyFencedLease,tlc-chubbyfenced))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-leasestart,LeaseStartOnly,tlc-leasestart))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-subtreewithoutfrontiercoverage,SubtreeWithoutFrontierCoverage,tlc-subtreewithoutfrontiercoverage))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-subtreewithoutseal,SubtreeWithoutSeal,tlc-subtreewithoutseal))
+
+record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim \
+	record-tlc-mountlifecycle record-tlc-subtreeauthority \
+	record-tlc-percolator2pc record-tlc-mvccgc \
+	record-tlc-raftstore-apply-publish record-tlc-root-replay-watch \
+	record-tlc-fsmeta-namespace record-tlc-leaseonly record-tlc-tokenonly \
+	record-tlc-chubbyfenced record-tlc-leasestart \
+	record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal
 
 # Start Docker Compose cluster
 docker-up:

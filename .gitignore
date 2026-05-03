@@ -18,9 +18,7 @@ book/
 docs/research/
 docs/notes/
 docs/eunomia-audit.md
-spec/
 benchmark/eunomia/
-scripts/tla/
 cmd/nokv/cmd_eunomia_audit.go
 cmd/nokv/cmd_eunomia_audit_test.go
 
