@@ -13,8 +13,14 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/stretchr/testify/require"
 )
+
+type mvccGCPlannerHarness struct {
+	task    *dbruntime.PeriodicTask
+	planner *storemvcc.GCPlanner
+}
 
 func newMVCCGCPlannerTestOptions(t *testing.T) *NoKV.Options {
 	t.Helper()
@@ -54,11 +60,34 @@ func applyMVCCGCPlannerLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint6
 	applyMVCCGCPlannerEntry(t, db, kv.CFLock, key, kv.MaxVersion, lock, 0)
 }
 
-func waitMVCCGCPlannerSnapshot(t *testing.T, db *NoKV.DB, fn func(storemvcc.GCPlanSnapshot) bool) storemvcc.GCPlanSnapshot {
+func startMVCCGCPlannerHarness(t *testing.T, cfg storemvcc.GCPlanConfig) *mvccGCPlannerHarness {
+	t.Helper()
+	taskCfg, planner, ok := storemvcc.NewGCPlanTask(cfg)
+	require.True(t, ok)
+	task := dbruntime.NewPeriodicTask(taskCfg)
+	require.NotNil(t, task)
+	task.Start()
+	return &mvccGCPlannerHarness{task: task, planner: planner}
+}
+
+func (h *mvccGCPlannerHarness) Close() {
+	if h != nil && h.task != nil {
+		h.task.Close()
+	}
+}
+
+func (h *mvccGCPlannerHarness) Snapshot() storemvcc.GCPlanSnapshot {
+	if h == nil || h.planner == nil || h.task == nil {
+		return storemvcc.GCPlanSnapshot{}
+	}
+	return h.planner.Snapshot(h.task.Snapshot())
+}
+
+func waitMVCCGCPlannerSnapshot(t *testing.T, planner *mvccGCPlannerHarness, fn func(storemvcc.GCPlanSnapshot) bool) storemvcc.GCPlanSnapshot {
 	t.Helper()
 	var snap storemvcc.GCPlanSnapshot
 	require.Eventually(t, func() bool {
-		snap = db.MVCCGCPlanSnapshot()
+		snap = planner.Snapshot()
 		return fn(snap)
 	}, time.Second, 10*time.Millisecond)
 	return snap
@@ -69,22 +98,27 @@ func TestMVCCGCPlannerDisabledByDefault(t *testing.T) {
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
-	require.False(t, db.MVCCGCPlanSnapshot().Enabled)
+	_, _, ok := storemvcc.NewGCPlanTask(storemvcc.GCPlanConfig{MVCCStore: db})
+	require.False(t, ok)
 }
 
 func TestMVCCGCPlannerRunsReadOnlyPlan(t *testing.T) {
 	opt := newMVCCGCPlannerTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = func() uint64 { return 100 }
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
+	planner := startMVCCGCPlannerHarness(t, storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  5 * time.Millisecond,
+		SafePoint: func() uint64 { return 100 },
+	})
+	defer planner.Close()
 
 	key := []byte("planner-key")
 	applyMVCCGCPlannerWrite(t, db, key, 150, 140)
 	applyMVCCGCPlannerWrite(t, db, key, 90, 80)
 	applyMVCCGCPlannerWrite(t, db, key, 40, 30)
 
-	snap := waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	snap := waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return s.LastError == "" && s.LastPlan.DroppableWrites == 1
 	})
 	require.True(t, snap.Enabled)
@@ -100,21 +134,25 @@ func TestMVCCGCPlannerRunsReadOnlyPlan(t *testing.T) {
 func TestMVCCGCPlannerReadsSafePointEachRun(t *testing.T) {
 	var safePoint atomic.Uint64
 	opt := newMVCCGCPlannerTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = safePoint.Load
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
+	planner := startMVCCGCPlannerHarness(t, storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  5 * time.Millisecond,
+		SafePoint: safePoint.Load,
+	})
+	defer planner.Close()
 
 	key := []byte("dynamic-safe-point-key")
 	applyMVCCGCPlannerWrite(t, db, key, 150, 140)
 	applyMVCCGCPlannerWrite(t, db, key, 90, 80)
 	applyMVCCGCPlannerWrite(t, db, key, 40, 30)
-	waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return s.Runs > 0 && s.SkippedRuns > 0 && s.LastPlan.ScannedKeys == 0
 	})
 
 	safePoint.Store(100)
-	waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return s.LastError == "" && s.LastPlan.DroppableWrites == 1
 	})
 }
@@ -123,39 +161,48 @@ func TestMVCCGCPlannerRetainsLastPlanWhenSafePointDisabled(t *testing.T) {
 	var safePoint atomic.Uint64
 	safePoint.Store(100)
 	opt := newMVCCGCPlannerTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = safePoint.Load
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
+	planner := startMVCCGCPlannerHarness(t, storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  5 * time.Millisecond,
+		SafePoint: safePoint.Load,
+	})
+	defer planner.Close()
 
 	key := []byte("disabled-safe-point-key")
 	applyMVCCGCPlannerWrite(t, db, key, 150, 140)
 	applyMVCCGCPlannerWrite(t, db, key, 90, 80)
 	applyMVCCGCPlannerWrite(t, db, key, 40, 30)
-	waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return s.LastError == "" && s.LastPlan.DroppableWrites == 1
 	})
 
 	safePoint.Store(0)
 	time.Sleep(20 * time.Millisecond)
-	snap := db.MVCCGCPlanSnapshot()
+	snap := planner.Snapshot()
 	require.Equal(t, uint64(1), snap.LastPlan.DroppableWrites)
 	require.Greater(t, snap.SkippedRuns, uint64(0))
 }
 
 func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 	opt := newMVCCGCPlannerTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = func() uint64 { return 100 }
-	opt.MVCCGCSnapshotRetentionFn = func() rootstate.SnapshotRetentionIndex {
-		return rootstate.SnapshotRetentionIndex{
-			MountFloors: map[string]uint64{
-				"vol": 50,
-			},
-		}
-	}
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
+	planner := startMVCCGCPlannerHarness(t, storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  5 * time.Millisecond,
+		SafePoint: func() uint64 { return 100 },
+		Retention: func() rootstate.SnapshotRetentionIndex {
+			return rootstate.SnapshotRetentionIndex{
+				MountFloors: map[string]uint64{
+					"vol": 50,
+				},
+			}
+		},
+		Mount: fsmeta.StringMountResolver,
+	})
+	defer planner.Close()
 
 	volKey, err := fsmeta.EncodeInodeKey("vol", 10)
 	require.NoError(t, err)
@@ -168,7 +215,7 @@ func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 	}
 	applyMVCCGCPlannerLock(t, db, []byte("active-lock"), 60)
 
-	snap := waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	snap := waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return s.LastError == "" &&
 			s.LastTxnFloor.OldestStartTs == 60 &&
 			s.LastPlan.ScannedKeys == 2 &&
@@ -182,14 +229,18 @@ func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 
 func TestMVCCGCPlannerRecordsTxnFloorErrors(t *testing.T) {
 	opt := newMVCCGCPlannerTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = func() uint64 { return 100 }
 	db := openMVCCGCPlannerTestDB(t, opt)
 	defer func() { _ = db.Close() }()
+	planner := startMVCCGCPlannerHarness(t, storemvcc.GCPlanConfig{
+		MVCCStore: db,
+		Interval:  5 * time.Millisecond,
+		SafePoint: func() uint64 { return 100 },
+	})
+	defer planner.Close()
 
 	applyMVCCGCPlannerEntry(t, db, kv.CFLock, []byte("bad-lock"), kv.MaxVersion, []byte{0xff}, 0)
 
-	snap := waitMVCCGCPlannerSnapshot(t, db, func(s storemvcc.GCPlanSnapshot) bool {
+	snap := waitMVCCGCPlannerSnapshot(t, planner, func(s storemvcc.GCPlanSnapshot) bool {
 		return strings.Contains(s.LastError, "decode CFLock")
 	})
 	require.Equal(t, uint64(0), snap.LastPlan.ScannedKeys)

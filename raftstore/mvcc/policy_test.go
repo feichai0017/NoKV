@@ -23,7 +23,7 @@ func testMountResolver(userKey []byte) (string, bool) {
 	}
 }
 
-func TestMVCCGCSafePointFnPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
+func TestMVCCGCSafePointPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
 	volKey := []byte("vol/key")
 	dataKey := []byte("data/key")
 	otherKey := []byte("other/key")
@@ -46,7 +46,7 @@ func TestMVCCGCSafePointFnPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
 	require.Equal(t, uint64(80), policy.EffectiveForKey(otherKey))
 }
 
-func TestMVCCGCSafePointFnPolicyKeepsGlobalFloorAsUnknownLayoutFallback(t *testing.T) {
+func TestMVCCGCSafePointPolicyKeepsGlobalFloorAsUnknownLayoutFallback(t *testing.T) {
 	policy := storemvcc.SafePointPolicy{
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
@@ -62,7 +62,7 @@ func TestMVCCGCSafePointFnPolicyKeepsGlobalFloorAsUnknownLayoutFallback(t *testi
 	require.Equal(t, uint64(40), policy.EffectiveForKey([]byte("unknown/key")))
 }
 
-func TestMVCCGCSafePointFnPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.T) {
+func TestMVCCGCSafePointPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.T) {
 	policy := storemvcc.SafePointPolicy{
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
@@ -77,7 +77,7 @@ func TestMVCCGCSafePointFnPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.
 	require.Equal(t, uint64(50), policy.EffectiveForKey([]byte("raw-user-key")))
 }
 
-func TestMVCCGCSafePointFnPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
+func TestMVCCGCSafePointPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
 	policy := storemvcc.SafePointPolicy{
 		RequestedSafePoint: 0,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
@@ -93,12 +93,12 @@ func TestMVCCGCSafePointFnPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
 	require.Zero(t, policy.EffectiveForKey([]byte("vol/key")))
 }
 
-func TestMVCCGCSafePointFnPolicyUsesRequestedWhenUnblocked(t *testing.T) {
+func TestMVCCGCSafePointPolicyUsesRequestedWhenUnblocked(t *testing.T) {
 	policy := storemvcc.SafePointPolicy{RequestedSafePoint: 1_000}
 	require.Equal(t, uint64(1_000), policy.EffectiveForKey([]byte("vol/key")))
 }
 
-func TestMVCCGCSafePointFnPolicyPlansWritesWithKeyScopedFloor(t *testing.T) {
+func TestMVCCGCSafePointPolicyPlansWritesWithKeyScopedFloor(t *testing.T) {
 	volKey := []byte("vol/key")
 	otherKey := []byte("other/key")
 	versions := []txnmvcc.GCWriteVersion{

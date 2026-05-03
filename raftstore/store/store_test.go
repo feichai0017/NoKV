@@ -23,6 +23,7 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -548,7 +549,7 @@ func (noopTransport) Send(context.Context, myraft.Message) {}
 type testSchedulerSink struct {
 	mu      sync.RWMutex
 	regions map[uint64]regionHeartbeat
-	stores  map[uint64]StoreStats
+	stores  map[uint64]scheduler.StoreStats
 	history []schedulerEvent
 }
 
@@ -559,7 +560,7 @@ type slowSchedulerSink struct {
 
 type degradedSchedulerSink struct {
 	testSchedulerSink
-	status SchedulerStatus
+	status scheduler.Status
 }
 
 type regionHeartbeat struct {
@@ -576,7 +577,7 @@ type schedulerEvent struct {
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
-		stores:  make(map[uint64]StoreStats),
+		stores:  make(map[uint64]scheduler.StoreStats),
 	}
 }
 
@@ -619,7 +620,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 	return nil
 }
 
-func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) []Operation {
+func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	if s == nil || stats.StoreID == 0 {
 		return nil
 	}
@@ -630,8 +631,8 @@ func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) 
 	return nil
 }
 
-func (s *testSchedulerSink) Status() SchedulerStatus {
-	return SchedulerStatus{}
+func (s *testSchedulerSink) Status() scheduler.Status {
+	return scheduler.Status{}
 }
 
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
@@ -650,12 +651,12 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	return out
 }
 
-func (s *testSchedulerSink) StoreSnapshot() []StoreStats {
+func (s *testSchedulerSink) StoreSnapshot() []scheduler.StoreStats {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]StoreStats, 0, len(s.stores))
+	out := make([]scheduler.StoreStats, 0, len(s.stores))
 	for _, st := range s.stores {
 		out = append(out, st)
 	}
@@ -699,7 +700,7 @@ func (s *testSchedulerSink) Close() error {
 	return nil
 }
 
-func (s *degradedSchedulerSink) Status() SchedulerStatus {
+func (s *degradedSchedulerSink) Status() scheduler.Status {
 	return s.status
 }
 

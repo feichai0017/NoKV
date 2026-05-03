@@ -21,7 +21,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/runtime/commit"

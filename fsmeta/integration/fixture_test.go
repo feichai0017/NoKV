@@ -18,8 +18,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -73,7 +73,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), regionID, peerID)
-	testcluster.WaitForSchedulerMode(t, node, storepkg.SchedulerModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
 
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), parentRegionID, parentPeerID)
-	testcluster.WaitForSchedulerMode(t, node, storepkg.SchedulerModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
 
 	splitKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "m")
 	require.NoError(t, err)

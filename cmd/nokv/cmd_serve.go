@@ -23,11 +23,11 @@ import (
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 )
 
 var notifyContext = signal.NotifyContext
@@ -197,11 +197,6 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = NoKV.MemTableEngineART
 	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	if *mvccGCPlanInterval > 0 {
-		opt.MVCCGCPlanInterval = *mvccGCPlanInterval
-		opt.MVCCGCSafePointFn = tsoSource.SafePoint
-		opt.MVCCGCSnapshotRetentionFn = retentionSource.Retention
-	}
 	opt.AllowedModes = []raftmode.Mode{
 		raftmode.ModeStandalone,
 		raftmode.ModeSeeded,
@@ -281,12 +276,27 @@ func runServeCmd(w io.Writer, args []string) error {
 				BatchEntries: *mvccGCBatchEntries,
 			},
 		},
+		MVCCGCPlan: serverpkg.MVCCGCPlanConfig{
+			Interval: *mvccGCPlanInterval,
+			SafePoint: func() uint64 {
+				if tsoSource == nil {
+					return 0
+				}
+				return tsoSource.SafePoint()
+			},
+			Retention: func() rootstate.SnapshotRetentionIndex {
+				if retentionSource == nil {
+					return rootstate.SnapshotRetentionIndex{}
+				}
+				return retentionSource.Retention()
+			},
+			Mount: fsmeta.StringMountResolver,
+		},
 		TransportAddr: *listenAddr,
 	})
 	if err != nil {
 		return err
 	}
-	db.SetMVCCMaintenanceSnapshotSource(server.MVCCMaintenanceSnapshot)
 	registerRuntimeStore(server.Store())
 	defer unregisterRuntimeStore(server.Store())
 	defer func() {

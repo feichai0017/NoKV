@@ -24,9 +24,10 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
@@ -45,7 +46,7 @@ type Node struct {
 type NodeConfig struct {
 	AllowedModes      []raftmode.Mode
 	StartPeers        bool
-	Scheduler         storepkg.SchedulerClient
+	Scheduler         scheduler.Client
 	HeartbeatInterval time.Duration
 }
 
@@ -194,7 +195,7 @@ func (c *Coordinator) RetireStore(tb testing.TB, storeID uint64) {
 	c.PublishRootEvent(tb, rootevent.StoreRetired(storeID))
 }
 
-func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storepkg.SchedulerClient {
+func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) scheduler.Client {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -458,7 +459,7 @@ func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*N
 	return fmt.Sprint(parts)
 }
 
-func WaitForSchedulerMode(tb testing.TB, node *Node, mode storepkg.SchedulerMode, degraded bool) {
+func WaitForSchedulerMode(tb testing.TB, node *Node, mode scheduler.Mode, degraded bool) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

@@ -12,7 +12,7 @@ import (
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/meta/topology"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 )
 
 const defaultRPCTimeout = 2 * time.Second
@@ -31,7 +31,7 @@ type SchedulerClient struct {
 	timeout     time.Duration
 	onError     func(op string, err error)
 	mu          sync.RWMutex
-	status      storepkg.SchedulerStatus
+	status      scheduler.Status
 }
 
 // NewSchedulerClient constructs a coordinator-backed scheduler client.
@@ -96,7 +96,7 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 
 // StoreHeartbeat publishes store stats to the coordinator and returns any operations the coordinator
 // wants the store to apply.
-func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.StoreStats) []storepkg.Operation {
+func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	if s == nil || stats.StoreID == 0 || s.coordinator == nil {
 		return nil
 	}
@@ -122,20 +122,20 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats storepkg.Sto
 }
 
 // Status returns the current control-plane health view for this scheduler client.
-func (s *SchedulerClient) Status() storepkg.SchedulerStatus {
+func (s *SchedulerClient) Status() scheduler.Status {
 	if s == nil {
-		return storepkg.SchedulerStatus{}
+		return scheduler.Status{}
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.status
 }
 
-func fromPBOperations(ops []*coordpb.SchedulerOperation) []storepkg.Operation {
+func fromPBOperations(ops []*coordpb.SchedulerOperation) []scheduler.Operation {
 	if len(ops) == 0 {
 		return nil
 	}
-	converted := make([]storepkg.Operation, 0, len(ops))
+	converted := make([]scheduler.Operation, 0, len(ops))
 	for _, op := range ops {
 		if next, ok := fromPBOperation(op); ok {
 			converted = append(converted, next)
@@ -147,23 +147,23 @@ func fromPBOperations(ops []*coordpb.SchedulerOperation) []storepkg.Operation {
 	return converted
 }
 
-func fromPBOperation(op *coordpb.SchedulerOperation) (storepkg.Operation, bool) {
+func fromPBOperation(op *coordpb.SchedulerOperation) (scheduler.Operation, bool) {
 	if op == nil {
-		return storepkg.Operation{}, false
+		return scheduler.Operation{}, false
 	}
 	switch op.GetType() {
 	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER:
 		if op.GetRegionId() == 0 || op.GetSourcePeerId() == 0 || op.GetTargetPeerId() == 0 {
-			return storepkg.Operation{}, false
+			return scheduler.Operation{}, false
 		}
-		return storepkg.Operation{
-			Type:   storepkg.OperationLeaderTransfer,
+		return scheduler.Operation{
+			Type:   scheduler.OperationLeaderTransfer,
 			Region: op.GetRegionId(),
 			Source: op.GetSourcePeerId(),
 			Target: op.GetTargetPeerId(),
 		}, true
 	default:
-		return storepkg.Operation{}, false
+		return scheduler.Operation{}, false
 	}
 }
 
@@ -182,7 +182,7 @@ func (s *SchedulerClient) recordError(op string, err error) {
 	msg := op + ": " + err.Error()
 	now := time.Now()
 	s.mu.Lock()
-	s.status.Mode = storepkg.SchedulerModeUnavailable
+	s.status.Mode = scheduler.ModeUnavailable
 	s.status.Degraded = true
 	s.status.LastError = msg
 	s.status.LastErrorAt = now
@@ -195,7 +195,7 @@ func (s *SchedulerClient) markHealthy() {
 		return
 	}
 	s.mu.Lock()
-	s.status.Mode = storepkg.SchedulerModeHealthy
+	s.status.Mode = scheduler.ModeHealthy
 	s.status.Degraded = false
 	s.mu.Unlock()
 }

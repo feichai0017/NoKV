@@ -8,7 +8,7 @@ import (
 	"time"
 
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
-	"github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 )
 

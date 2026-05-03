@@ -12,7 +12,7 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"github.com/feichai0017/NoKV/meta/topology"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"google.golang.org/grpc"
 )
 
@@ -160,7 +160,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	})
 
 	sink.ReportRegionHeartbeat(context.Background(), 10)
-	ops := sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{
+	ops := sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{
 		StoreID:           1,
 		RegionNum:         3,
 		LeaderNum:         1,
@@ -178,7 +178,7 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	require.Equal(t, []uint64{10, 12}, pd.storeReqs[0].GetLeaderRegionIds())
 
 	require.Len(t, ops, 1)
-	require.Equal(t, storepkg.OperationLeaderTransfer, ops[0].Type)
+	require.Equal(t, scheduler.OperationLeaderTransfer, ops[0].Type)
 	require.Equal(t, uint64(10), ops[0].Region)
 	require.Equal(t, uint64(101), ops[0].Source)
 	require.Equal(t, uint64(201), ops[0].Target)
@@ -200,14 +200,14 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 		},
 	})
 
-	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
+	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 7})
 	require.Error(t, sink.PublishRootEvent(context.Background(), rootevent.RegionDescriptorPublished(testDescriptor(9, nil, nil, metaregion.Epoch{}, nil))))
 	require.Len(t, got, 2)
 	require.Contains(t, got[0], "StoreHeartbeat")
 	require.Contains(t, got[1], "PublishRootEvent")
 	status := sink.Status()
 	require.True(t, status.Degraded)
-	require.Equal(t, storepkg.SchedulerModeUnavailable, status.Mode)
+	require.Equal(t, scheduler.ModeUnavailable, status.Mode)
 	require.Contains(t, status.LastError, "PublishRootEvent")
 	require.False(t, status.LastErrorAt.IsZero())
 	require.NoError(t, sink.Close())
@@ -217,7 +217,7 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
 	pd := &fakePDClient{}
 	sink := NewSchedulerClient(SchedulerClientConfig{Coordinator: pd})
-	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 0})
+	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 0})
 	sink.ReportRegionHeartbeat(context.Background(), 0)
 	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
 	require.Empty(t, pd.storeReqs)
@@ -253,14 +253,14 @@ func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
 	pd := &fakePDClient{storeErr: errors.New("heartbeat failed")}
 	sink := NewSchedulerClient(SchedulerClientConfig{Coordinator: pd})
 
-	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
+	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 7})
 	require.True(t, sink.Status().Degraded)
 
 	pd.storeErr = nil
-	sink.StoreHeartbeat(context.Background(), storepkg.StoreStats{StoreID: 7})
+	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 7})
 	status := sink.Status()
 	require.False(t, status.Degraded)
-	require.Equal(t, storepkg.SchedulerModeHealthy, status.Mode)
+	require.Equal(t, scheduler.ModeHealthy, status.Mode)
 	require.Contains(t, status.LastError, "StoreHeartbeat")
 }
 
@@ -279,7 +279,7 @@ func TestFromPBOperationValidation(t *testing.T) {
 		TargetPeerId: 20,
 	})
 	require.True(t, ok)
-	require.Equal(t, storepkg.OperationLeaderTransfer, op.Type)
+	require.Equal(t, scheduler.OperationLeaderTransfer, op.Type)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) topology.Descriptor {

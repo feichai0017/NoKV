@@ -152,13 +152,3 @@ func ReadPlotConfigCSV(path string) (PlotConfig, error) {
 	cfg.Observations = cfg.Observations.withDefaults()
 	return cfg, nil
 }
-
-// ReadGroupedBarChartConfigCSV keeps backward compatibility for callers that
-// only care about chart styling.
-func ReadGroupedBarChartConfigCSV(path string) (GroupedBarChartConfig, error) {
-	cfg, err := ReadPlotConfigCSV(path)
-	if err != nil {
-		return GroupedBarChartConfig{}, err
-	}
-	return cfg.Chart, nil
-}

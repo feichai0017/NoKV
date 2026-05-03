@@ -18,6 +18,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
@@ -62,11 +63,11 @@ func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event roote
 	return nil
 }
 
-func (c *captureSchedulerClient) StoreHeartbeat(context.Context, store.StoreStats) []store.Operation {
+func (c *captureSchedulerClient) StoreHeartbeat(context.Context, scheduler.StoreStats) []scheduler.Operation {
 	return nil
 }
 
-func (c *captureSchedulerClient) Status() store.SchedulerStatus { return store.SchedulerStatus{} }
+func (c *captureSchedulerClient) Status() scheduler.Status { return scheduler.Status{} }
 
 func (c *captureSchedulerClient) Close() error { return nil }
 

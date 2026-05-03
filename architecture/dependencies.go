@@ -22,6 +22,7 @@ type GoPackage struct {
 type ImportRule struct {
 	Name          string
 	PackagePrefix string
+	PackageExact  bool
 	Forbidden     []string
 	Exempt        []string
 }
@@ -44,6 +45,16 @@ type Violation struct {
 }
 
 var importRules = []ImportRule{
+	{
+		Name:          "root package stays free of distributed assembly",
+		PackagePrefix: modulePath,
+		PackageExact:  true,
+		Forbidden: []string{
+			modulePath + "/fsmeta",
+			modulePath + "/raftstore/mvcc",
+			modulePath + "/raftstore/mode",
+		},
+	},
 	{
 		Name:          "fsmeta executor stays runtime-neutral",
 		PackagePrefix: modulePath + "/fsmeta/exec",
@@ -86,6 +97,8 @@ var combinedImportRules = []CombinedImportRule{
 var removedPathRules = []RemovedPathRule{
 	{Name: "raftstore descriptor package stays removed", Path: "raftstore/descriptor"},
 	{Name: "coordinator eunomia package stays removed", Path: "coordinator/protocol/eunomia"},
+	{Name: "raftstore mode package stays moved to runtime/mode", Path: "raftstore/mode"},
+	{Name: "raftstore migrate mode alias stays removed", Path: "raftstore/migrate/mode.go"},
 }
 
 func ModuleRoot() (string, error) {
@@ -128,7 +141,7 @@ func CheckImportRules(packages []GoPackage) []Violation {
 	var violations []Violation
 	for _, rule := range importRules {
 		for _, pkg := range packages {
-			if !pathMatches(pkg.ImportPath, rule.PackagePrefix) || rule.isExempt(pkg.ImportPath) {
+			if !rule.matchesPackage(pkg.ImportPath) || rule.isExempt(pkg.ImportPath) {
 				continue
 			}
 			for _, imp := range pkg.Imports {
@@ -192,6 +205,13 @@ func importsAll(imports, required []string) bool {
 		}
 	}
 	return true
+}
+
+func (r ImportRule) matchesPackage(path string) bool {
+	if r.PackageExact {
+		return path == r.PackagePrefix
+	}
+	return pathMatches(path, r.PackagePrefix)
 }
 
 func (r ImportRule) isExempt(path string) bool {

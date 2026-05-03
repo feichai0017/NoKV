@@ -26,6 +26,7 @@ import (
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
@@ -190,7 +191,7 @@ func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, 
 
 type captureScheduler struct {
 	mu    sync.Mutex
-	stats storepkg.StoreStats
+	stats scheduler.StoreStats
 	seen  bool
 }
 
@@ -200,7 +201,7 @@ func (s *captureScheduler) PublishRootEvent(context.Context, rootevent.Event) er
 	return nil
 }
 
-func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storepkg.StoreStats) []storepkg.Operation {
+func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	s.mu.Lock()
 	s.stats = stats
 	s.seen = true
@@ -208,15 +209,15 @@ func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storepkg.Stor
 	return nil
 }
 
-func (s *captureScheduler) Status() storepkg.SchedulerStatus {
-	return storepkg.SchedulerStatus{}
+func (s *captureScheduler) Status() scheduler.Status {
+	return scheduler.Status{}
 }
 
 func (s *captureScheduler) Close() error {
 	return nil
 }
 
-func (s *captureScheduler) latestStore() (storepkg.StoreStats, bool) {
+func (s *captureScheduler) latestStore() (scheduler.StoreStats, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats, s.seen

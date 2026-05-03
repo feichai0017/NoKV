@@ -16,9 +16,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
-	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -55,9 +52,9 @@ type Host interface {
 	WALTypedRecordWarnRatio() float64
 	WALTypedRecordWarnSegments() int64
 	ThermosTopK() int
-	RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer
-	MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot
-	MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot
+	RaftPointerSnapshot() func() map[uint64]RaftLogPointer
+	MVCCGCStatsSnapshot() MVCCGCStatsSnapshot
+	TransportMetrics() metrics.GRPCTransportMetrics
 }
 
 // Stats owns periodic runtime metric collection and snapshot publication.
@@ -79,6 +76,12 @@ var (
 type HotKeyStat struct {
 	Key   string `json:"key"`
 	Count int32  `json:"count"`
+}
+
+// RaftLogPointer is the runtime stats view of a raft WAL checkpoint.
+type RaftLogPointer struct {
+	Segment      uint32
+	SegmentIndex uint64
 }
 
 // LSMLevelStats captures aggregated metrics per LSM level.
@@ -124,18 +127,18 @@ func levelMetricsToStats(lvl metrics.LevelMetrics) LSMLevelStats {
 
 // StatsSnapshot captures a point-in-time view of internal backlog metrics.
 type StatsSnapshot struct {
-	Entries    int64                             `json:"entries"`
-	Flush      FlushStatsSnapshot                `json:"flush"`
-	Compaction CompactionStatsSnapshot           `json:"compaction"`
-	WAL        WALStatsSnapshot                  `json:"wal"`
-	Raft       RaftStatsSnapshot                 `json:"raft"`
-	Write      WriteStatsSnapshot                `json:"write"`
-	Region     RegionStatsSnapshot               `json:"region"`
-	MVCCGC     MVCCGCStatsSnapshot               `json:"mvcc_gc"`
-	Hot        HotStatsSnapshot                  `json:"hot"`
-	Cache      CacheStatsSnapshot                `json:"cache"`
-	LSM        LSMStatsSnapshot                  `json:"lsm"`
-	Transport  transportpkg.GRPCTransportMetrics `json:"transport"`
+	Entries    int64                        `json:"entries"`
+	Flush      FlushStatsSnapshot           `json:"flush"`
+	Compaction CompactionStatsSnapshot      `json:"compaction"`
+	WAL        WALStatsSnapshot             `json:"wal"`
+	Raft       RaftStatsSnapshot            `json:"raft"`
+	Write      WriteStatsSnapshot           `json:"write"`
+	Region     RegionStatsSnapshot          `json:"region"`
+	MVCCGC     MVCCGCStatsSnapshot          `json:"mvcc_gc"`
+	Hot        HotStatsSnapshot             `json:"hot"`
+	Cache      CacheStatsSnapshot           `json:"cache"`
+	LSM        LSMStatsSnapshot             `json:"lsm"`
+	Transport  metrics.GRPCTransportMetrics `json:"transport"`
 }
 
 // FlushStatsSnapshot summarizes flush queue depth and stage timing.
@@ -553,13 +556,12 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Region.Other = int64(rms.Other)
 	}
 
-	snap.MVCCGC = mvccGCStatsFromPlan(s.host.MVCCGCPlanSnapshot())
-	snap.MVCCGC.addMaintenance(s.host.MVCCMaintenanceSnapshot())
+	snap.MVCCGC = s.host.MVCCGCStatsSnapshot()
 
 	var (
 		wstats         *wal.Metrics
 		segmentMetrics map[uint32]wal.RecordMetrics
-		ptrs           map[uint64]localmeta.RaftLogPointer
+		ptrs           map[uint64]RaftLogPointer
 	)
 	// Aggregate metrics across every LSM data-plane WAL shard. Each
 	// shard owns its own fd / fsync worker, so we sum SegmentCount /
@@ -733,57 +735,6 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Hot.WriteRing = &hotStats
 	}
 	snap.Cache.IteratorReused = s.host.IteratorReused()
-	snap.Transport = transportpkg.GRPCMetricsSnapshot()
+	snap.Transport = s.host.TransportMetrics()
 	return snap
-}
-
-func mvccGCStatsFromPlan(plan storemvcc.GCPlanSnapshot) MVCCGCStatsSnapshot {
-	return MVCCGCStatsSnapshot{
-		Enabled:               plan.Enabled,
-		Runs:                  plan.Runs,
-		SkippedRuns:           plan.SkippedRuns,
-		LastUnix:              plan.LastUnix,
-		LastDurationMs:        plan.LastDurationMs,
-		LastError:             plan.LastError,
-		ActiveLocks:           plan.LastTxnFloor.ActiveLocks,
-		OldestStartTs:         plan.LastTxnFloor.OldestStartTs,
-		MaxStartTs:            plan.LastTxnFloor.MaxStartTs,
-		ScannedKeys:           plan.LastPlan.ScannedKeys,
-		DroppableKeys:         plan.LastPlan.DroppableKeys,
-		WriteVersions:         plan.LastPlan.WriteVersions,
-		RetainedWrites:        plan.LastPlan.RetainedWrites,
-		DroppableWrites:       plan.LastPlan.DroppableWrites,
-		AnchorWrites:          plan.LastPlan.AnchorWrites,
-		RetainedDefaultRefs:   plan.LastPlan.RetainedDefaultRefs,
-		DeletedWriteMarkers:   plan.LastPlan.DeletedWriteMarkers,
-		SafePointClampedKeys:  plan.LastPlan.SafePointClampedKeys,
-		MaxVersionsPerKey:     plan.LastPlan.MaxVersionsPerKey,
-		MinEffectiveSafePoint: plan.LastPlan.MinEffectiveSafePoint,
-		MaxEffectiveSafePoint: plan.LastPlan.MaxEffectiveSafePoint,
-	}
-}
-
-func (s *MVCCGCStatsSnapshot) addMaintenance(maintenance storemvcc.MaintenanceSnapshot) {
-	if s == nil {
-		return
-	}
-	s.MaintenanceEnabled = maintenance.Enabled
-	s.MaintenanceRuns = maintenance.Runs
-	s.MaintenanceLastUnix = maintenance.LastUnix
-	s.MaintenanceLastDurationMs = maintenance.LastDurationMs
-	s.MaintenanceLastError = maintenance.LastError
-	s.MaintenanceResolveError = maintenance.LastResolveError
-	s.MaintenanceApplyError = maintenance.LastApplyError
-	s.MaintenanceOrphanError = maintenance.LastOrphanError
-	s.MaintenanceSafePointSkipped = maintenance.LastSafePointSkipped
-	s.ScannedLocks = maintenance.LastResolveLocks.ScannedLocks
-	s.ExpiredLocks = maintenance.LastResolveLocks.ExpiredLocks
-	s.ResolvedLocks = maintenance.LastResolveLocks.ResolvedLocks
-	s.CommittedLocks = maintenance.LastResolveLocks.CommittedLocks
-	s.RolledBackLocks = maintenance.LastResolveLocks.RolledBackLocks
-	s.DeletedLockMarkers = maintenance.LastResolveLocks.DeletedLockMarkers
-	s.AppliedWriteDeletes = maintenance.LastApply.AppliedWriteDeletes
-	s.AppliedDefaultDeletes = maintenance.LastApply.AppliedDefaultDeletes
-	s.OrphanDefaults = maintenance.LastOrphanDefaults.OrphanDefaults
-	s.AppliedOrphanDefaults = maintenance.LastOrphanDefaults.AppliedDefaultDeletes
 }

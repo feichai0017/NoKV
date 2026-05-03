@@ -18,9 +18,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )

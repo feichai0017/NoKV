@@ -5,6 +5,7 @@ import (
 	"time"
 
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +27,7 @@ func TestStoreOperationCooldown(t *testing.T) {
 	go st.runOperationLoop()
 	defer st.stopOperationLoop()
 
-	op := Operation{Type: OperationLeaderTransfer, Region: 9, Source: 1, Target: 2}
+	op := scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 9, Source: 1, Target: 2}
 	key := operationKey{region: op.Region, typeID: op.Type}
 
 	st.enqueueOperation(op)
@@ -63,22 +64,22 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 			},
 		},
 	}
-	st.sched.operation.input <- scheduledOp{op: Operation{Type: OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}}
+	st.sched.operation.input <- scheduledOp{op: scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}}
 
-	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
+	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
 
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
-	require.Equal(t, SchedulerModeDegraded, status.Mode)
+	require.Equal(t, scheduler.ModeDegraded, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 	require.Contains(t, status.LastError, "scheduler queue full")
 
 	<-st.sched.operation.input
-	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
+	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
 
 	status = st.SchedulerStatus()
 	require.False(t, status.Degraded)
-	require.Equal(t, SchedulerModeHealthy, status.Mode)
+	require.Equal(t, scheduler.ModeHealthy, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 }
 
@@ -92,7 +93,7 @@ func TestStoreCloseReportsDroppedOperationsToScheduler(t *testing.T) {
 		OperationInterval:  time.Hour,
 	})
 
-	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
 	st.Close()
 
 	stores := sink.StoreSnapshot()
@@ -109,7 +110,7 @@ func TestStoreCloseKeepsDurableSchedulerOperations(t *testing.T) {
 		OperationInterval:  time.Hour,
 	})
 
-	st.enqueueOperation(Operation{Type: OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
 	require.Eventually(t, func() bool {
 		return len(localMeta.PendingSchedulerOperations()) == 1
 	}, time.Second, 10*time.Millisecond)

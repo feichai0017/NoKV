@@ -19,16 +19,14 @@ import (
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/runtime/commit"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
@@ -64,7 +62,8 @@ type (
 		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
 
-	mvccMaintenanceSnapshotSource func() storemvcc.MaintenanceSnapshot
+	mvccGCStatsSnapshotSource func() stats.MVCCGCStatsSnapshot
+	transportMetricsSource    func() metrics.GRPCTransportMetrics
 
 	// DB is the global handle for the engine and owns shared resources.
 	DB struct {
@@ -97,8 +96,8 @@ type (
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
 		raftMode        raftmode.Mode
-		mvccGCPlan      *storemvcc.GCPlanner
-		mvccMaintenance atomic.Value
+		mvccGCStats     atomic.Value
+		transportStats  atomic.Value
 		hotWriteLimited atomic.Uint64
 		background      dbruntime.BackgroundServices
 		runtimeModules  dbruntime.Registry
@@ -404,22 +403,10 @@ func Open(opt *Options) (_ *DB, err error) {
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
 		})
 	}
-	var periodicTasks []dbruntime.PeriodicTaskConfig
-	if task, state, ok := storemvcc.NewGCPlanTask(storemvcc.GCPlanConfig{
-		MVCCStore: db,
-		Interval:  db.opt.MVCCGCPlanInterval,
-		SafePoint: db.opt.MVCCGCSafePointFn,
-		Retention: db.opt.MVCCGCSnapshotRetentionFn,
-		Mount:     fsmeta.StringMountResolver,
-	}); ok {
-		db.mvccGCPlan = state
-		periodicTasks = append(periodicTasks, task)
-	}
 	db.background.Start(dbruntime.BackgroundConfig{
 		StartCompacter:     db.lsm.StartCompacter,
 		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
 		WALWatchdogConfigs: watchdogConfigs,
-		PeriodicTasks:      periodicTasks,
 	})
 	return db, nil
 }
@@ -873,34 +860,24 @@ func (db *DB) Info() *stats.Stats {
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
 func (db *DB) LSMWALs() []*wal.Manager              { return db.lsmWALs }
 func (db *DB) BackgroundWatchdogs() []*wal.Watchdog { return db.background.WALWatchdogs() }
-func (db *DB) MVCCGCPlanSnapshot() storemvcc.GCPlanSnapshot {
-	if db == nil || db.mvccGCPlan == nil {
-		return storemvcc.GCPlanSnapshot{}
-	}
-	return db.mvccGCPlan.Snapshot(db.background.PeriodicTaskSnapshot(storemvcc.GCPlanTaskName))
-}
-
-// SetMVCCMaintenanceSnapshotSource attaches the raftstore-owned replicated
-// MVCC maintenance observer used by runtime stats. The source is read-only:
-// DB only calls it while building snapshots and never owns the worker lifecycle.
-func (db *DB) SetMVCCMaintenanceSnapshotSource(source func() storemvcc.MaintenanceSnapshot) {
+func (db *DB) SetMVCCGCStatsSnapshotSource(source func() stats.MVCCGCStatsSnapshot) {
 	if db == nil || source == nil {
 		return
 	}
-	db.mvccMaintenance.Store(mvccMaintenanceSnapshotSource(source))
+	db.mvccGCStats.Store(mvccGCStatsSnapshotSource(source))
 }
 
-func (db *DB) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
+func (db *DB) MVCCGCStatsSnapshot() stats.MVCCGCStatsSnapshot {
 	if db == nil {
-		return storemvcc.MaintenanceSnapshot{}
+		return stats.MVCCGCStatsSnapshot{}
 	}
-	v := db.mvccMaintenance.Load()
+	v := db.mvccGCStats.Load()
 	if v == nil {
-		return storemvcc.MaintenanceSnapshot{}
+		return stats.MVCCGCStatsSnapshot{}
 	}
-	source, ok := v.(mvccMaintenanceSnapshotSource)
+	source, ok := v.(mvccGCStatsSnapshotSource)
 	if !ok || source == nil {
-		return storemvcc.MaintenanceSnapshot{}
+		return stats.MVCCGCStatsSnapshot{}
 	}
 	return source()
 }
@@ -916,11 +893,50 @@ func (db *DB) WALTypedRecordWarnRatio() float64    { return db.opt.WALTypedRecor
 func (db *DB) WALTypedRecordWarnSegments() int64   { return db.opt.WALTypedRecordWarnSegments }
 func (db *DB) ThermosTopK() int                    { return db.opt.ThermosTopK }
 
-func (db *DB) RaftPointerSnapshot() func() map[uint64]localmeta.RaftLogPointer {
+func (db *DB) RaftPointerSnapshot() func() map[uint64]stats.RaftLogPointer {
 	if db == nil || db.opt == nil {
 		return nil
 	}
-	return db.opt.RaftPointerSnapshot
+	source := db.opt.RaftPointerSnapshot
+	if source == nil {
+		return nil
+	}
+	return func() map[uint64]stats.RaftLogPointer {
+		ptrs := source()
+		if ptrs == nil {
+			return nil
+		}
+		out := make(map[uint64]stats.RaftLogPointer, len(ptrs))
+		for groupID, ptr := range ptrs {
+			out[groupID] = stats.RaftLogPointer{
+				Segment:      ptr.Segment,
+				SegmentIndex: ptr.SegmentIndex,
+			}
+		}
+		return out
+	}
+}
+
+func (db *DB) SetTransportMetricsSource(source func() metrics.GRPCTransportMetrics) {
+	if db == nil || source == nil {
+		return
+	}
+	db.transportStats.Store(transportMetricsSource(source))
+}
+
+func (db *DB) TransportMetrics() metrics.GRPCTransportMetrics {
+	if db == nil {
+		return metrics.GRPCTransportMetrics{}
+	}
+	v := db.transportStats.Load()
+	if v == nil {
+		return metrics.GRPCTransportMetrics{}
+	}
+	source, ok := v.(transportMetricsSource)
+	if !ok || source == nil {
+		return metrics.GRPCTransportMetrics{}
+	}
+	return source()
 }
 
 func (db *DB) RaftWALsLocked(fn func(wals []*wal.Manager)) {

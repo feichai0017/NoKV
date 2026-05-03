@@ -35,8 +35,22 @@ type Config struct {
 	// MVCCMaintenance enables replicated MVCC maintenance for cluster-mode
 	// stores. A zero Interval disables the worker.
 	MVCCMaintenance MVCCMaintenanceConfig
+	// MVCCGCPlan enables the read-only MVCC GC planner for raftstore runtimes.
+	// The planner records deletion candidates for stats; destructive cleanup is
+	// owned by MVCCMaintenance.
+	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
+}
+
+// MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore
+// server assembly.
+type MVCCGCPlanConfig struct {
+	Interval time.Duration
+
+	SafePoint func() uint64
+	Retention func() rootstate.SnapshotRetentionIndex
+	Mount     storemvcc.MountResolver
 }
 
 // MVCCMaintenanceConfig describes replicated MVCC maintenance owned by the

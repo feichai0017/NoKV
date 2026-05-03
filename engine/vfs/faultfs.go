@@ -254,14 +254,13 @@ func (r *FaultRule) matches(op Op, path, renameSrc, renameDst string) bool {
 		return false
 	}
 	if op == OpRename {
+		if r.Path != "" {
+			return false
+		}
 		if r.SrcPath != "" && r.SrcPath != renameSrc {
 			return false
 		}
 		if r.DstPath != "" && r.DstPath != renameDst {
-			return false
-		}
-		// Backward compatibility: Path can still match either side.
-		if r.Path != "" && r.Path != renameSrc && r.Path != renameDst {
 			return false
 		}
 		return true

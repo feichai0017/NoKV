@@ -14,6 +14,7 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -111,11 +112,13 @@ func (s *errorSchedulerSink) PublishRootEvent(_ context.Context, _ rootevent.Eve
 	return s.err
 }
 
-func (*errorSchedulerSink) StoreHeartbeat(context.Context, StoreStats) []Operation { return nil }
-func (*errorSchedulerSink) Status() SchedulerStatus                                { return SchedulerStatus{} }
-func (*errorSchedulerSink) Close() error                                           { return nil }
+func (*errorSchedulerSink) StoreHeartbeat(context.Context, scheduler.StoreStats) []scheduler.Operation {
+	return nil
+}
+func (*errorSchedulerSink) Status() scheduler.Status { return scheduler.Status{} }
+func (*errorSchedulerSink) Close() error             { return nil }
 
-func startTransitionExecutorStore(t *testing.T, scheduler SchedulerClient, campaign bool) (*Store, *peer.Peer, localmeta.RegionMeta) {
+func startTransitionExecutorStore(t *testing.T, sched scheduler.Client, campaign bool) (*Store, *peer.Peer, localmeta.RegionMeta) {
 	t.Helper()
 	db, localMeta := openStoreDB(t)
 	region := localmeta.RegionMeta{
@@ -126,7 +129,7 @@ func startTransitionExecutorStore(t *testing.T, scheduler SchedulerClient, campa
 		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
 		State:    metaregion.ReplicaStateRunning,
 	}
-	rs := NewStore(Config{Scheduler: scheduler, StoreID: 1})
+	rs := NewStore(Config{Scheduler: sched, StoreID: 1})
 	t.Cleanup(rs.Close)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{

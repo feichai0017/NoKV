@@ -11,7 +11,6 @@ import (
 
 	xxhash "github.com/cespare/xxhash/v2"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
-	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
@@ -62,14 +61,30 @@ type SubtreeHandoffPublisher interface {
 	CompleteSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error
 }
 
+// NegativeCache is the dentry-miss memo surface used by Lookup.
+type NegativeCache interface {
+	Has([]byte) bool
+	Remember([]byte)
+	Invalidate([]byte)
+}
+
+// DirPageCache is the ReadDirPlus page memo surface.
+type DirPageCache interface {
+	CurrentEpoch(dirpage.PageKey) uint64
+	Lookup(dirpage.PageKey, uint64) ([]dirpage.Entry, bool)
+	MaterializeAsync(dirpage.PageKey, uint64, []dirpage.Entry) error
+	Invalidate(dirpage.PageKey) uint64
+	Stats() dirpage.Stats
+}
+
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
 	runner                 TxnRunner
 	mounts                 MountResolver
 	quotas                 QuotaResolver
 	subtrees               SubtreeHandoffPublisher
-	negCache               *negativecache.Cache
-	dirPages               *dirpage.Cache
+	negCache               NegativeCache
+	dirPages               DirPageCache
 	lockTTL                uint64
 	now                    func() time.Time
 	txnRetriesTotal        atomic.Uint64
@@ -113,25 +128,21 @@ func WithQuotaResolver(resolver QuotaResolver) Option {
 	}
 }
 
-// WithNegativeCache wires a generic engine/slab/negativecache.Cache as the
-// fast-path "this dentry does not exist" memo. Lookup checks Has on the
-// dentry primary key before consulting the runner; misses are recorded via
-// Remember; mutating ops (Create/Link/Unlink/Rename/RenameSubtree) call
-// Invalidate on the touched dentry keys after a successful commit.
+// WithNegativeCache wires the fast-path "this dentry does not exist" memo.
+// Lookup checks Has on the dentry primary key before consulting the runner;
+// misses are recorded via Remember; mutating ops call Invalidate on the
+// touched dentry keys after a successful commit.
 //
-// Caller is responsible for constructing the cache with an identity
-// GroupKeyFn (each fsmeta key is its own invalidation group); a nil cache
-// disables the fast path.
-func WithNegativeCache(cache *negativecache.Cache) Option {
+// A nil cache disables the fast path.
+func WithNegativeCache(cache NegativeCache) Option {
 	return func(e *Executor) {
 		e.negCache = cache
 	}
 }
 
-// WithDirPageCache wires a generic engine/slab/dirpage.Cache as the
-// ReadDirPlus fast path. ReadDirPlus first asks the cache for a fresh
-// page set keyed by (mountHash, parentInode); on hit the runner-side
-// dentry scan + N inode BatchGet are skipped entirely. On miss, the
+// WithDirPageCache wires the ReadDirPlus fast path. ReadDirPlus first asks the
+// cache for a fresh page set keyed by (mountHash, parentInode); on hit the
+// runner-side dentry scan + N inode BatchGet are skipped entirely. On miss, the
 // runner path runs as today and the assembled DentryAttrPair slice is
 // asynchronously materialized into the cache for the next call.
 //
@@ -141,7 +152,7 @@ func WithNegativeCache(cache *negativecache.Cache) Option {
 //
 // A nil cache disables the fast path. The mount hash uses xxhash.Sum64
 // over the MountID string, so collision probability is negligible.
-func WithDirPageCache(cache *dirpage.Cache) Option {
+func WithDirPageCache(cache DirPageCache) Option {
 	return func(e *Executor) {
 		e.dirPages = cache
 	}

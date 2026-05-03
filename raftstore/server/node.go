@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/metrics"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -14,8 +15,11 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
+	dbruntime "github.com/feichai0017/NoKV/runtime"
+	runtimestats "github.com/feichai0017/NoKV/runtime/stats"
 	"google.golang.org/grpc"
 )
 
@@ -36,9 +40,19 @@ type Node struct {
 	store           *store.Store
 	transport       *transport.GRPCTransport
 	mvccMaintenance *storemvcc.MaintenanceWorker
+	mvccGCPlan      *storemvcc.GCPlanner
+	mvccGCPlanTask  *dbruntime.PeriodicTask
 	tickStop        chan struct{}
 	tickWG          sync.WaitGroup
 	tickEvery       time.Duration
+}
+
+type mvccGCStatsSink interface {
+	SetMVCCGCStatsSnapshotSource(func() runtimestats.MVCCGCStatsSnapshot)
+}
+
+type transportMetricsSink interface {
+	SetTransportMetricsSource(func() metrics.GRPCTransportMetrics)
 }
 
 // NewNode constructs one raftstore node using the provided configuration.
@@ -113,9 +127,26 @@ func NewNode(cfg Config) (*Node, error) {
 		store:     st,
 		transport: tr,
 	}
+	if sink, ok := cfg.Storage.MVCC.(transportMetricsSink); ok {
+		sink.SetTransportMetricsSource(transport.GRPCMetricsSnapshot)
+	}
+	if taskCfg, planner, ok := storemvcc.NewGCPlanTask(storemvcc.GCPlanConfig{
+		MVCCStore: cfg.Storage.MVCC,
+		Interval:  cfg.MVCCGCPlan.Interval,
+		SafePoint: cfg.MVCCGCPlan.SafePoint,
+		Retention: cfg.MVCCGCPlan.Retention,
+		Mount:     cfg.MVCCGCPlan.Mount,
+	}); ok {
+		node.mvccGCPlan = planner
+		node.mvccGCPlanTask = dbruntime.NewPeriodicTask(taskCfg)
+		node.mvccGCPlanTask.Start()
+	}
 	if worker, ok := newMVCCMaintenanceWorker(cfg.MVCCMaintenance, cfg.Storage.MVCC, st); ok {
 		node.mvccMaintenance = worker
 		worker.Start()
+	}
+	if sink, ok := cfg.Storage.MVCC.(mvccGCStatsSink); ok {
+		sink.SetMVCCGCStatsSnapshotSource(node.MVCCGCStatsSnapshot)
 	}
 	interval := cfg.RaftTickInterval
 	if interval <= 0 {
@@ -157,11 +188,28 @@ func (n *Node) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
 	return n.mvccMaintenance.Snapshot()
 }
 
+// MVCCGCStatsSnapshot returns the runtime stats view of raftstore MVCC GC state.
+func (n *Node) MVCCGCStatsSnapshot() runtimestats.MVCCGCStatsSnapshot {
+	if n == nil {
+		return runtimestats.MVCCGCStatsSnapshot{}
+	}
+	var plan storemvcc.GCPlanSnapshot
+	if n.mvccGCPlan != nil && n.mvccGCPlanTask != nil {
+		plan = n.mvccGCPlan.Snapshot(n.mvccGCPlanTask.Snapshot())
+	}
+	return raftstorestats.MVCCGC(plan, n.MVCCMaintenanceSnapshot())
+}
+
 // Close stops the node transport. The caller remains responsible for closing
 // the DB and store once outstanding operations are drained.
 func (n *Node) Close() error {
 	if n == nil {
 		return nil
+	}
+	if n.mvccGCPlanTask != nil {
+		n.mvccGCPlanTask.Close()
+		n.mvccGCPlanTask = nil
+		n.mvccGCPlan = nil
 	}
 	if n.mvccMaintenance != nil {
 		n.mvccMaintenance.Close()

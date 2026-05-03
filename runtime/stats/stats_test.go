@@ -12,13 +12,9 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/metrics"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/stretchr/testify/require"
 )
@@ -135,52 +131,33 @@ func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {
 	require.Nil(t, expvar.Get("NoKV.Stats.Write.Throttle"))
 }
 
-func TestStatsSnapshotIncludesMVCCGCPlanner(t *testing.T) {
+func TestStatsSnapshotIncludesMVCCGCSource(t *testing.T) {
 	opt := newTestOptions(t)
-	opt.MVCCGCPlanInterval = 5 * time.Millisecond
-	opt.MVCCGCSafePointFn = func() uint64 { return 100 }
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
-	db.SetMVCCMaintenanceSnapshotSource(func() storemvcc.MaintenanceSnapshot {
-		return storemvcc.MaintenanceSnapshot{
-			Enabled:              true,
-			Runs:                 2,
-			LastUnix:             123,
-			LastDurationMs:       4.5,
-			LastResolveError:     "resolve warn",
-			LastSafePointSkipped: true,
-			LastResolveLocks: storemvcc.ResolveLocksStats{
-				ScannedLocks:       5,
-				ExpiredLocks:       4,
-				ResolvedLocks:      3,
-				CommittedLocks:     2,
-				RolledBackLocks:    1,
-				DeletedLockMarkers: 3,
-			},
-			LastApply: storemvcc.ApplyStats{
-				AppliedWriteDeletes:   7,
-				AppliedDefaultDeletes: 8,
-			},
-			LastOrphanDefaults: storemvcc.OrphanDefaultStats{
-				OrphanDefaults:        9,
-				AppliedDefaultDeletes: 10,
-			},
+	db.SetMVCCGCStatsSnapshotSource(func() stats.MVCCGCStatsSnapshot {
+		return stats.MVCCGCStatsSnapshot{
+			Enabled:                     true,
+			Runs:                        1,
+			ScannedKeys:                 1,
+			DroppableWrites:             1,
+			WriteVersions:               3,
+			AnchorWrites:                1,
+			MaxVersionsPerKey:           3,
+			MaxEffectiveSafePoint:       100,
+			MaintenanceEnabled:          true,
+			MaintenanceRuns:             2,
+			MaintenanceResolveError:     "resolve warn",
+			MaintenanceSafePointSkipped: true,
+			ResolvedLocks:               3,
+			AppliedWriteDeletes:         7,
+			AppliedOrphanDefaults:       10,
 		}
 	})
 
-	key := []byte("stats-mvcc-gc-key")
-	applyStatsMVCCWrite(t, db, key, 150, 140)
-	applyStatsMVCCWrite(t, db, key, 90, 80)
-	applyStatsMVCCWrite(t, db, key, 40, 30)
-
-	var snap stats.StatsSnapshot
-	require.Eventually(t, func() bool {
-		snap = db.Info().Snapshot()
-		return snap.MVCCGC.Enabled &&
-			snap.MVCCGC.Runs > 0 &&
-			snap.MVCCGC.LastError == "" &&
-			snap.MVCCGC.DroppableWrites == 1
-	}, time.Second, 10*time.Millisecond)
+	snap := db.Info().Snapshot()
+	require.True(t, snap.MVCCGC.Enabled)
+	require.Equal(t, uint64(1), snap.MVCCGC.Runs)
 	require.Equal(t, uint64(1), snap.MVCCGC.ScannedKeys)
 	require.Equal(t, uint64(3), snap.MVCCGC.WriteVersions)
 	require.Equal(t, uint64(1), snap.MVCCGC.AnchorWrites)
@@ -205,14 +182,6 @@ func TestStatsSnapshotIncludesMVCCGCPlanner(t *testing.T) {
 	require.Equal(t, snap.MVCCGC.MaintenanceSafePointSkipped, exported.MVCCGC.MaintenanceSafePointSkipped)
 	require.Equal(t, snap.MVCCGC.ResolvedLocks, exported.MVCCGC.ResolvedLocks)
 	require.Equal(t, snap.MVCCGC.AppliedWriteDeletes, exported.MVCCGC.AppliedWriteDeletes)
-}
-
-func applyStatsMVCCWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
-	t.Helper()
-	write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
-	entry := entrykv.NewInternalEntry(entrykv.CFWrite, key, commitTs, write, 0, 0)
-	defer entry.DecrRef()
-	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
 func loadExpvarStatsSnapshot(t *testing.T) stats.StatsSnapshot {
