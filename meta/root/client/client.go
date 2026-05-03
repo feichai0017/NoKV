@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -21,10 +22,8 @@ import (
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 )
 
 const defaultCallTimeout = 3 * time.Second
@@ -458,11 +457,16 @@ func retryableRemoteError(err error, write bool) bool {
 	if transientConnectionClosing(err) {
 		return true
 	}
-	code := status.Code(err)
-	if code == codes.Unavailable || code == codes.DeadlineExceeded {
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable,
+		nokverrors.KindRouteUnavailable,
+		nokverrors.KindRetryable:
 		return true
+	case nokverrors.KindNotLeader:
+		return write
+	default:
+		return false
 	}
-	return write && code == codes.FailedPrecondition && strings.Contains(err.Error(), errMetadataRootNotLeader)
 }
 
 func transientConnectionClosing(err error) bool {

@@ -3,19 +3,17 @@ package client
 import (
 	"context"
 	"fmt"
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
-	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"strings"
 	"sync"
 	"time"
 
+	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
+	nokverrors "github.com/feichai0017/NoKV/errors"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -52,7 +50,6 @@ type GRPCClient struct {
 	tsoGen           witnessEraFloor
 	metadataGen      witnessEraFloor
 	metadataAttached metadataAttachedFloor
-	ablation         coordablation.Config
 }
 
 type grpcEndpoint struct {
@@ -108,19 +105,6 @@ func (c *GRPCClient) Close() error {
 		}
 	}
 	return firstErr
-}
-
-// ConfigureAblation installs first-cut client-side ablation switches for
-// verifier experiments. It should be set once during benchmark/test setup.
-func (c *GRPCClient) ConfigureAblation(cfg coordablation.Config) error {
-	if c == nil {
-		return nil
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	c.ablation = cfg
-	return nil
 }
 
 // StoreHeartbeat fans one heartbeat out to every known coordinator endpoint.
@@ -406,9 +390,6 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 	if c == nil {
 		return zero, errNoReachableAddress
 	}
-	if c.ablation.DisableClientVerify {
-		validate = nil
-	}
 	endpoints := c.orderedEndpoints()
 	if len(endpoints) == 0 {
 		return zero, errNoReachableAddress
@@ -435,15 +416,23 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 }
 
 func retryableRead(err error) bool {
-	code := status.Code(err)
-	return code == codes.Unavailable || code == codes.DeadlineExceeded || IsStaleWitnessEra(err)
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable,
+		nokverrors.KindRouteUnavailable,
+		nokverrors.KindRegionRouting,
+		nokverrors.KindStaleEpoch,
+		nokverrors.KindRetryable:
+		return true
+	default:
+		return false
+	}
 }
 
 func retryableWrite(err error) bool {
 	if retryableRead(err) {
 		return true
 	}
-	return IsNotLeader(err) || IsLeaseNotHeld(err)
+	return nokverrors.IsKind(err, nokverrors.KindNotLeader)
 }
 
 type witnessEraFloor struct {
@@ -523,7 +512,7 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 		return fmt.Errorf("%w: missing region descriptor on non-not-found reply", errInvalidWitness)
 	}
 	if resp.GetDescriptorRevision() != resp.GetRegionDescriptor().GetRootEpoch() {
-		return fmt.Errorf("%w: descriptor_revision=%d descriptor.root_epoch=%d", errInvalidWitness, resp.GetDescriptorRevision(), resp.GetRegionDescriptor().GetRootEpoch())
+		return fmt.Errorf("%w: descriptor_revision=%d topology.root_epoch=%d", errInvalidWitness, resp.GetDescriptorRevision(), resp.GetRegionDescriptor().GetRootEpoch())
 	}
 	if resp.GetDescriptorRevision() < expectation.requiredDescriptorRevision {
 		return fmt.Errorf("%w: descriptor_revision=%d required=%d", errInvalidWitness, resp.GetDescriptorRevision(), expectation.requiredDescriptorRevision)

@@ -21,6 +21,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -764,8 +765,8 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := &degradedSchedulerSink{
 		testSchedulerSink: *newTestSchedulerSink(),
-		status: SchedulerStatus{
-			Mode:      SchedulerModeUnavailable,
+		status: scheduler.Status{
+			Mode:      scheduler.ModeUnavailable,
 			Degraded:  true,
 			LastError: "coordinator unavailable",
 		},
@@ -817,7 +818,7 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
-	require.Equal(t, SchedulerModeUnavailable, status.Mode)
+	require.Equal(t, scheduler.ModeUnavailable, status.Mode)
 	require.Contains(t, status.LastError, "coordinator unavailable")
 
 	reader := percolator.NewReader(db)

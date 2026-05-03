@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // Kind identifies one globally ordered metadata mutation.
@@ -155,7 +155,7 @@ type Handover struct {
 
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
 type RegionDescriptorRecord struct {
-	Descriptor descriptor.Descriptor
+	Descriptor topology.Descriptor
 }
 
 // RegionRemoval removes one region descriptor from the rooted topology view.
@@ -167,18 +167,18 @@ type RegionRemoval struct {
 type RangeSplit struct {
 	ParentRegionID uint64
 	SplitKey       []byte
-	Left           descriptor.Descriptor
-	Right          descriptor.Descriptor
-	BaseParent     descriptor.Descriptor
+	Left           topology.Descriptor
+	Right          topology.Descriptor
+	BaseParent     topology.Descriptor
 }
 
 // RangeMerge describes one merge transition.
 type RangeMerge struct {
 	LeftRegionID  uint64
 	RightRegionID uint64
-	Merged        descriptor.Descriptor
-	BaseLeft      descriptor.Descriptor
-	BaseRight     descriptor.Descriptor
+	Merged        topology.Descriptor
+	BaseLeft      topology.Descriptor
+	BaseRight     topology.Descriptor
 }
 
 // PeerChange describes one region membership mutation.
@@ -186,8 +186,8 @@ type PeerChange struct {
 	RegionID uint64
 	StoreID  uint64
 	PeerID   uint64
-	Region   descriptor.Descriptor
-	Base     descriptor.Descriptor
+	Region   topology.Descriptor
+	Base     topology.Descriptor
 }
 
 // Event is one globally ordered metadata-root mutation.
@@ -391,11 +391,11 @@ func newHandoverEvent(holderID string, legacyEra, successorEra uint64, legacyDig
 	}
 }
 
-func RegionBootstrapped(desc descriptor.Descriptor) Event {
+func RegionBootstrapped(desc topology.Descriptor) Event {
 	return Event{Kind: KindRegionBootstrap, RegionDescriptor: &RegionDescriptorRecord{Descriptor: desc}}
 }
 
-func RegionDescriptorPublished(desc descriptor.Descriptor) Event {
+func RegionDescriptorPublished(desc topology.Descriptor) Event {
 	return Event{Kind: KindRegionDescriptorPublished, RegionDescriptor: &RegionDescriptorRecord{Descriptor: desc}}
 }
 
@@ -403,7 +403,7 @@ func RegionTombstoned(regionID uint64) Event {
 	return Event{Kind: KindRegionTombstoned, RegionRemoval: &RegionRemoval{RegionID: regionID}}
 }
 
-func RegionSplitPlanned(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
+func RegionSplitPlanned(parentRegionID uint64, splitKey []byte, left, right topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionSplitPlanned,
 		RangeSplit: &RangeSplit{
@@ -415,7 +415,7 @@ func RegionSplitPlanned(parentRegionID uint64, splitKey []byte, left, right desc
 	}
 }
 
-func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right descriptor.Descriptor) Event {
+func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionSplitCommitted,
 		RangeSplit: &RangeSplit{
@@ -427,7 +427,7 @@ func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right de
 	}
 }
 
-func RegionSplitCancelled(parentRegionID uint64, splitKey []byte, left, right, base descriptor.Descriptor) Event {
+func RegionSplitCancelled(parentRegionID uint64, splitKey []byte, left, right, base topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionSplitCancelled,
 		RangeSplit: &RangeSplit{
@@ -440,7 +440,7 @@ func RegionSplitCancelled(parentRegionID uint64, splitKey []byte, left, right, b
 	}
 }
 
-func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) Event {
+func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionMergePlanned,
 		RangeMerge: &RangeMerge{
@@ -451,7 +451,7 @@ func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged descriptor.De
 	}
 }
 
-func RegionMerged(leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) Event {
+func RegionMerged(leftRegionID, rightRegionID uint64, merged topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionMerged,
 		RangeMerge: &RangeMerge{
@@ -462,7 +462,7 @@ func RegionMerged(leftRegionID, rightRegionID uint64, merged descriptor.Descript
 	}
 }
 
-func RegionMergeCancelled(leftRegionID, rightRegionID uint64, merged, baseLeft, baseRight descriptor.Descriptor) Event {
+func RegionMergeCancelled(leftRegionID, rightRegionID uint64, merged, baseLeft, baseRight topology.Descriptor) Event {
 	return Event{
 		Kind: KindRegionMergeCancelled,
 		RangeMerge: &RangeMerge{
@@ -475,7 +475,7 @@ func RegionMergeCancelled(leftRegionID, rightRegionID uint64, merged, baseLeft, 
 	}
 }
 
-func PeerAdded(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+func PeerAdded(regionID, storeID, peerID uint64, region topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerAdded,
 		PeerChange: &PeerChange{
@@ -487,7 +487,7 @@ func PeerAdded(regionID, storeID, peerID uint64, region descriptor.Descriptor) E
 	}
 }
 
-func PeerAdditionPlanned(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+func PeerAdditionPlanned(regionID, storeID, peerID uint64, region topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerAdditionPlanned,
 		PeerChange: &PeerChange{
@@ -499,7 +499,7 @@ func PeerAdditionPlanned(regionID, storeID, peerID uint64, region descriptor.Des
 	}
 }
 
-func PeerAdditionCancelled(regionID, storeID, peerID uint64, region, base descriptor.Descriptor) Event {
+func PeerAdditionCancelled(regionID, storeID, peerID uint64, region, base topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerAdditionCancelled,
 		PeerChange: &PeerChange{
@@ -512,7 +512,7 @@ func PeerAdditionCancelled(regionID, storeID, peerID uint64, region, base descri
 	}
 }
 
-func PeerRemovalPlanned(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+func PeerRemovalPlanned(regionID, storeID, peerID uint64, region topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerRemovalPlanned,
 		PeerChange: &PeerChange{
@@ -524,7 +524,7 @@ func PeerRemovalPlanned(regionID, storeID, peerID uint64, region descriptor.Desc
 	}
 }
 
-func PeerRemovalCancelled(regionID, storeID, peerID uint64, region, base descriptor.Descriptor) Event {
+func PeerRemovalCancelled(regionID, storeID, peerID uint64, region, base topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerRemovalCancelled,
 		PeerChange: &PeerChange{
@@ -537,7 +537,7 @@ func PeerRemovalCancelled(regionID, storeID, peerID uint64, region, base descrip
 	}
 }
 
-func PeerRemoved(regionID, storeID, peerID uint64, region descriptor.Descriptor) Event {
+func PeerRemoved(regionID, storeID, peerID uint64, region topology.Descriptor) Event {
 	return Event{
 		Kind: KindPeerRemoved,
 		PeerChange: &PeerChange{

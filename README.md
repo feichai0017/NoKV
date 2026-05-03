@@ -106,7 +106,7 @@ NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-gl
 
 ## 🗂️ `fsmeta` — Namespace Metadata Service
 
-Native API surface (gRPC at `nokv-fsmeta:8090`, also embedded Go via `fsmeta/exec.OpenWithRaftstore`):
+Native API surface (gRPC at `nokv-fsmeta:8090`, also embedded Go via `fsmeta/runtime/raftstore.Open`):
 
 | Primitive | Semantics |
 |---|---|
@@ -158,12 +158,12 @@ import (
     "context"
 
     "github.com/feichai0017/NoKV/fsmeta"
-    fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+    fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 )
 
 func main() {
     ctx := context.Background()
-    rt, err := fsmetaexec.OpenWithRaftstore(ctx, fsmetaexec.Options{
+    rt, err := fsmetaraftstore.Open(ctx, fsmetaraftstore.Options{
         CoordinatorAddr: "127.0.0.1:2379",
     })
     if err != nil {
@@ -233,6 +233,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`percolator/`](./percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
+| [`dbcore/`](./dbcore) | DB-scoped runtime helpers: commit pipeline, iterator pools, workdir mode, stats, background services | [Runtime](docs/runtime.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |
 | [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/vfs.md) |

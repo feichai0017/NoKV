@@ -12,15 +12,15 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -293,7 +293,7 @@ func TestDetachedProtocolFaultMatrix(t *testing.T) {
 		return svc
 	}
 
-	baseDescriptors := map[uint64]descriptor.Descriptor{
+	baseDescriptors := map[uint64]topology.Descriptor{
 		1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 	}
 	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()

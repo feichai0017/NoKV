@@ -5,17 +5,17 @@ import (
 	"testing"
 	"time"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 func TestServiceDiagnosticsSnapshotIncludesEunomiaMetrics(t *testing.T) {
@@ -103,7 +103,7 @@ func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 			},
-			Descriptors: rootCloneDescriptorsForTest(map[uint64]descriptor.Descriptor{
+			Descriptors: rootCloneDescriptorsForTest(map[uint64]topology.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			}),
 		},

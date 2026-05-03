@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -50,7 +49,7 @@ func New(rpc fsmetapb.FSMetadataClient) *GRPCClient {
 // NewGRPCClient dials one FSMetadata endpoint and returns a typed client.
 func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
 	if addr == "" {
-		return nil, errors.New("fsmeta/client: address is required")
+		return nil, errAddressRequired
 	}
 	opts := normalizeDialOptions(dialOpts)
 	conn, err := grpc.NewClient(addr, opts...)
@@ -263,7 +262,7 @@ type WatchStream struct {
 // Recv blocks until the next watch event arrives.
 func (s *WatchStream) Recv() (fsmeta.WatchEvent, error) {
 	if s == nil || s.stream == nil {
-		return fsmeta.WatchEvent{}, errors.New("fsmeta/client: watch stream is not configured")
+		return fsmeta.WatchEvent{}, errWatchStreamNotConfigured
 	}
 	for {
 		resp, err := s.stream.Recv()
@@ -293,7 +292,7 @@ func waitForWatchReady(stream fsmetapb.FSMetadata_WatchSubtreeClient) (fsmeta.Wa
 			return fsmeta.WatchCursor{}, fmt.Errorf("%w: %s", fsmeta.ErrWatchOverflow, throttle.GetReason())
 		}
 		if resp.GetEvent() != nil {
-			return fsmeta.WatchCursor{}, errors.New("fsmeta/client: watch stream delivered event before ready")
+			return fsmeta.WatchCursor{}, errWatchEventBeforeReady
 		}
 	}
 }
@@ -310,7 +309,7 @@ func (s *WatchStream) ReadyCursor() fsmeta.WatchCursor {
 // Ack releases back-pressure budget for a received event.
 func (s *WatchStream) Ack(cursor fsmeta.WatchCursor) error {
 	if s == nil || s.stream == nil {
-		return errors.New("fsmeta/client: watch stream is not configured")
+		return errWatchStreamNotConfigured
 	}
 	return translateRPCError(s.stream.Send(&fsmetapb.WatchAckOrSubscribe{
 		Body: &fsmetapb.WatchAckOrSubscribe_Ack{Ack: &fsmetapb.WatchAck{Cursor: watchCursorToProto(cursor)}},
@@ -340,7 +339,7 @@ func (c *GRPCClient) Close() error {
 
 func (c *GRPCClient) requireRPC() error {
 	if c == nil || c.rpc == nil {
-		return errors.New("fsmeta/client: rpc client is not configured")
+		return errRPCClientNotConfigured
 	}
 	return nil
 }
@@ -383,7 +382,7 @@ func NewWatchSession(sub WatchSubscription) *WatchSession {
 // Recv receives the next watch event.
 func (s *WatchSession) Recv() (fsmeta.WatchEvent, error) {
 	if s == nil || s.sub == nil {
-		return fsmeta.WatchEvent{}, errors.New("fsmeta/client: watch session is not configured")
+		return fsmeta.WatchEvent{}, errWatchSessionNotConfigured
 	}
 	return s.sub.Recv()
 }
@@ -391,7 +390,7 @@ func (s *WatchSession) Recv() (fsmeta.WatchEvent, error) {
 // Ack acknowledges the cursor carried by event.
 func (s *WatchSession) Ack(event fsmeta.WatchEvent) error {
 	if s == nil || s.sub == nil {
-		return errors.New("fsmeta/client: watch session is not configured")
+		return errWatchSessionNotConfigured
 	}
 	return s.sub.Ack(event.Cursor)
 }
@@ -436,7 +435,7 @@ func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return fmt.Errorf("fsmeta/client: connection did not become ready")
+			return errConnectionNotReady
 		}
 	}
 }

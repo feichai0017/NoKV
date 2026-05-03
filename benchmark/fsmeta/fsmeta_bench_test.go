@@ -14,7 +14,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
-	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -166,7 +166,7 @@ func openBenchmarkClient(t *testing.T, ctx context.Context, driverName string) (
 			_ = coordRPC.Close()
 			t.Fatalf("open raftstore client: %v", err)
 		}
-		runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
+		runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 		if err != nil {
 			_ = kv.Close()
 			t.Fatalf("open raftstore runner: %v", err)

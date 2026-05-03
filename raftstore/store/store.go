@@ -16,8 +16,8 @@ package store
 
 import (
 	"context"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"sync"
 	"time"
 )
@@ -99,7 +99,7 @@ func NewStore(cfg Config) *Store {
 				lastApply: make(map[operationKey]time.Time),
 			},
 			publish: publishRuntime{
-				descriptors:      make(map[uint64]descriptor.Descriptor),
+				descriptors:      make(map[uint64]topology.Descriptor),
 				regionUpdates:    make(map[uint64]regionEvent),
 				heartbeatTimeout: heartbeatTimeout,
 				publishTimeout:   publishTimeout,

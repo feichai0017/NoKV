@@ -23,11 +23,6 @@ var (
 	// ErrInvalidRequest is returned if the user request is invalid.
 	ErrInvalidRequest = errors.New("Invalid request")
 
-	// ErrUnsupportedValueLog is returned when a legacy value-log pointer is
-	// encountered. NoKV no longer supports authoritative value separation;
-	// metadata values must be stored inline in the LSM.
-	ErrUnsupportedValueLog = errors.New("unsupported legacy value log data")
-
 	// ErrBlockedWrites is returned if the user called DropAll. During the process of dropping all
 	// data
 	ErrBlockedWrites = errors.New("Writes are blocked, possibly due to DropAll or Close")

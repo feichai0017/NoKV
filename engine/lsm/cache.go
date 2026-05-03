@@ -19,9 +19,6 @@ const (
 	minCacheCounters                     = 64
 )
 
-// CacheMetrics is an alias for the shared cache metrics snapshot type.
-type CacheMetrics = metrics.CacheSnapshot
-
 type cache struct {
 	indexes *coreCache.Cache
 	blocks  *blockCache

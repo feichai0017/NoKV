@@ -6,9 +6,9 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 )
@@ -84,7 +84,7 @@ func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 9, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	targetDir := t.TempDir()
 	target := testcluster.StartNode(t, 2, targetDir, nil, false)
 	defer seed.Close(t)
@@ -129,7 +129,7 @@ func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 19, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	targetDir := t.TempDir()
 	target := testcluster.StartNode(t, 2, targetDir, nil, false)
 	defer seed.Close(t)
@@ -170,7 +170,7 @@ func TestRemovedPeerRestartDoesNotRehost(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 21, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	defer seed.Close(t)
 	defer target.Close(t)
@@ -212,7 +212,7 @@ func TestRemovedPeerRestartDoesNotRehost(t *testing.T) {
 	status := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 21)
 	require.False(t, status.GetHosted())
 
-	seed.Restart(t, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed.Restart(t, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	seed.WirePeers(map[uint64]string{201: target.Addr()})
 	target.WirePeers(map[uint64]string{101: seed.Addr()})
 	testcluster.WaitForNotHosted(t, ctx, seed.Addr(), 21)
@@ -233,7 +233,7 @@ func TestLeaderRestartStillAllowsMembershipChanges(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 31, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)

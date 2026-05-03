@@ -5,7 +5,7 @@
 - Topic: NoKV's namespace metadata substrate.
 - Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
 - Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore/percolator/coordinator`.
-- Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime is `fsmeta/exec.OpenWithRaftstore`.
+- Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime adapter is `fsmeta/runtime/raftstore.Open`.
 
 ## 1. Conclusion
 
@@ -69,9 +69,9 @@ type TxnRunner interface {
 }
 ```
 
-The default runtime uses `OpenWithRaftstore` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
+The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
 
-`OpenWithRaftstore` can also wire two derived slab caches when explicitly configured:
+`fsmeta/runtime/raftstore.Open` can also wire two derived slab caches when explicitly configured:
 
 - `NegativeCacheDir` enables a persistent negative dentry cache. It remembers recent lookup misses and invalidates on namespace mutations.
 - `DirPageCacheDir` enables a ReadDirPlus page cache. It materializes fused dentry+inode pages and invalidates by parent directory epoch.
@@ -81,7 +81,7 @@ Both caches are derived state. They can be dropped or rebuilt without changing a
 The layering constraints are:
 
 - `Executor` does not directly know about raft region / store routing.
-- `OpenWithRaftstore` is NoKV's default adapter; it owns the raftstore wiring.
+- `fsmeta/runtime/raftstore` is NoKV's default adapter; it owns the raftstore wiring.
 - `meta/root` does not store high-frequency inode/dentry data — only lifecycle / authority truth.
 - `raftstore` and `percolator` don't understand fsmeta semantics; they only provide transactions and apply observation.
 

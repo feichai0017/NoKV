@@ -7,7 +7,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
@@ -28,12 +27,11 @@ func defaultPeerBuilder(storage Storage, localMeta *localmeta.Store, storeID uin
 		if err != nil {
 			return nil, fmt.Errorf("raftstore/server: open peer storage for region %d: %w", meta.ID, err)
 		}
-		snapshotBridge, ok := storage.MVCC.(snapshotpkg.SnapshotStore)
-		if !ok {
-			return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
+		if storage.Snapshot == nil {
+			return nil, fmt.Errorf("raftstore/server: snapshot storage is required")
 		}
 		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
-			result, err := snapshotBridge.ImportSnapshot(payload)
+			result, err := storage.Snapshot.ImportSnapshot(payload)
 			if err != nil {
 				return localmeta.RegionMeta{}, err
 			}
@@ -43,7 +41,7 @@ func defaultPeerBuilder(storage Storage, localMeta *localmeta.Store, storeID uin
 			RaftConfig:     defaultRaftConfig(baseRaft, peerID),
 			Transport:      tr,
 			Apply:          kv.NewEntryApplier(storage.MVCC),
-			SnapshotExport: snapshotBridge.ExportSnapshot,
+			SnapshotExport: storage.Snapshot.ExportSnapshot,
 			SnapshotApply:  snapshotApply,
 			Storage:        peerStorage,
 			GroupID:        meta.ID,

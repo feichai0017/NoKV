@@ -3,6 +3,9 @@ package store
 import (
 	"errors"
 	"fmt"
+
+	nokverrors "github.com/feichai0017/NoKV/errors"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
 var (
@@ -98,6 +101,10 @@ func IsRegionRoutingError(err error) bool {
 	return errors.As(err, &target)
 }
 
+func (e *RegionRoutingError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindRegionRouting
+}
+
 // ProtocolError records invalid command responses and transaction protocol
 // violations that should not be retried as ordinary storage errors.
 type ProtocolError struct {
@@ -118,6 +125,10 @@ func (e *ProtocolError) Error() string {
 func IsProtocolError(err error) bool {
 	var target *ProtocolError
 	return errors.As(err, &target)
+}
+
+func (e *ProtocolError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindProtocolViolation
 }
 
 func errNoRegionForKey(operation string, key []byte) error {
@@ -143,11 +154,16 @@ func errInvalidRegionCommandResponse(operation string, regionID uint64) error {
 	}
 }
 
-func errRegionKeyError(operation string, regionID uint64, err any) error {
-	return &ProtocolError{
-		Operation: operation,
-		Detail:    fmt.Sprintf("region %d returned key error: %v", regionID, err),
+func errRegionKeyError(operation string, regionID uint64, keyErr *kvrpcpb.KeyError) error {
+	err := nokverrors.NewTxnKeyError(keyErr)
+	if err == nil {
+		return nil
 	}
+	return nokverrors.Wrap(
+		nokverrors.KindOfKeyError(keyErr),
+		fmt.Sprintf("raftstore: %s region %d", operation, regionID),
+		err,
+	)
 }
 
 func errPeerNotFound(id uint64) error { return fmt.Errorf("raftstore: peer %d not found", id) }

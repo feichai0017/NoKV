@@ -7,8 +7,10 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -17,8 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -64,7 +65,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
+		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
 		StartPeers:        true,
 		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,
@@ -72,7 +73,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), regionID, peerID)
-	testcluster.WaitForSchedulerMode(t, node, storepkg.SchedulerModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
 
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
 	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
 	executorOpts = append(executorOpts, opts...)
@@ -127,7 +128,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
+		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
 		StartPeers:        true,
 		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,
@@ -135,7 +136,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), parentRegionID, parentPeerID)
-	testcluster.WaitForSchedulerMode(t, node, storepkg.SchedulerModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
 
 	splitKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "m")
 	require.NoError(t, err)
@@ -179,7 +180,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
 	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
 	executorOpts = append(executorOpts, opts...)

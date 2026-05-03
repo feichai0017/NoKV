@@ -3,22 +3,21 @@ package server
 import (
 	"context"
 	"errors"
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
-	"github.com/feichai0017/NoKV/coordinator/rootview"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	metawire "github.com/feichai0017/NoKV/meta/wire"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/coordinator/rootview"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -297,15 +296,15 @@ func (f *serialAppendStorage) AppendRootEvent(ctx context.Context, event rooteve
 	return f.fakeStorage.AppendRootEvent(ctx, event)
 }
 
-func rootCloneDescriptorsForTest(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
-	out := make(map[uint64]descriptor.Descriptor, len(in))
+func rootCloneDescriptorsForTest(in map[uint64]topology.Descriptor) map[uint64]topology.Descriptor {
+	out := make(map[uint64]topology.Descriptor, len(in))
 	for id, desc := range in {
 		out[id] = desc.Clone()
 	}
 	return out
 }
 
-func publishDescriptorEvent(t *testing.T, svc *Service, desc descriptor.Descriptor, expected uint64) error {
+func publishDescriptorEvent(t *testing.T, svc *Service, desc topology.Descriptor, expected uint64) error {
 	t.Helper()
 	event := rootevent.RegionBootstrapped(desc)
 	if svc != nil && svc.cluster != nil && svc.cluster.HasRegion(desc.RegionID) {
@@ -449,7 +448,7 @@ func TestServiceRefreshFromStorageRestoresStoreMembership(t *testing.T) {
 					RetiredAt: rootstate.Cursor{Term: 1, Index: 3},
 				},
 			},
-			Descriptors: make(map[uint64]descriptor.Descriptor),
+			Descriptors: make(map[uint64]topology.Descriptor),
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -523,7 +522,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 					ReadVersion: 33,
 				},
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				11: testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}}),
 			},
 		},
@@ -598,7 +597,7 @@ func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
 	storage := &fakeStorage{
 		leader:   false,
 		leaderID: 7,
-		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
 	require.NoError(t, svc.cluster.PublishRegionDescriptor(testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)))
@@ -617,13 +616,13 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	desc.RootEpoch = 5
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
 	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
-			Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
 			Tenure: rootstate.Tenure{
 				HolderID:        "c1",
 				ExpiresUnixNano: 10_000,
@@ -669,13 +668,13 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	desc.RootEpoch = 7
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
 	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
-			Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -709,7 +708,7 @@ func TestServiceGetRegionByKeyRejectsSplitPendingDescriptor(t *testing.T) {
 	left.RootEpoch = 6
 	right.RootEpoch = 6
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
@@ -738,7 +737,7 @@ func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
 	merged := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 2}, nil)
 	merged.RootEpoch = 9
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			merged.RegionID: merged,
 		},
 		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
@@ -760,7 +759,7 @@ func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
 }
 
 func TestServiceGetRegionByKeyUsesCachedRootSnapshot(t *testing.T) {
-	desc := descriptor.Descriptor{
+	desc := topology.Descriptor{
 		RegionID:  10,
 		StartKey:  []byte("a"),
 		EndKey:    []byte("z"),
@@ -769,7 +768,7 @@ func TestServiceGetRegionByKeyUsesCachedRootSnapshot(t *testing.T) {
 	desc.EnsureHash()
 	store := &fakeStorage{
 		snapshot: rootview.Snapshot{
-			Descriptors: map[uint64]descriptor.Descriptor{10: desc},
+			Descriptors: map[uint64]topology.Descriptor{10: desc},
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
 		},
 	}
@@ -785,7 +784,7 @@ func TestServiceGetRegionByKeyUsesCachedRootSnapshot(t *testing.T) {
 }
 
 func TestServiceGetRegionByKeyRefreshesCachedRootSnapshotAsync(t *testing.T) {
-	desc := descriptor.Descriptor{
+	desc := topology.Descriptor{
 		RegionID:  10,
 		StartKey:  []byte("a"),
 		EndKey:    []byte("z"),
@@ -794,7 +793,7 @@ func TestServiceGetRegionByKeyRefreshesCachedRootSnapshotAsync(t *testing.T) {
 	desc.EnsureHash()
 	store := &fakeStorage{
 		snapshot: rootview.Snapshot{
-			Descriptors: map[uint64]descriptor.Descriptor{10: desc},
+			Descriptors: map[uint64]topology.Descriptor{10: desc},
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3},
 		},
 	}
@@ -814,7 +813,7 @@ func TestServiceGetRegionByKeyRefreshesCachedRootSnapshotAsync(t *testing.T) {
 func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	storage := &fakeStorage{
 		leader:   true,
-		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
 	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
@@ -850,7 +849,7 @@ func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 	cluster := catalog.NewCluster()
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
 		},
 	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 3})
@@ -858,7 +857,7 @@ func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 5}, Revision: 7},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				11: testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
 			},
 		},
@@ -912,14 +911,14 @@ func TestServiceGetRegionByKeyBoundedRejectsBootstrapRequired(t *testing.T) {
 	cluster := catalog.NewCluster()
 	desc := testDescriptor(21, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
 	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2})
 	storage := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
 			RootToken:    rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 2, Index: 9}, Revision: 7},
 			CatchUpState: rootview.CatchUpStateBootstrapRequired,
-			Descriptors:  map[uint64]descriptor.Descriptor{desc.RegionID: desc},
+			Descriptors:  map[uint64]topology.Descriptor{desc.RegionID: desc},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -1175,13 +1174,13 @@ func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch:       5,
-			Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:        map[uint64]topology.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target}},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
 
-	applied := rootevent.PeerAdded(target.RegionID, 2, 201, func() descriptor.Descriptor {
+	applied := rootevent.PeerAdded(target.RegionID, 2, 201, func() topology.Descriptor {
 		desc := target.Clone()
 		desc.RootEpoch = 0
 		return desc
@@ -1217,7 +1216,7 @@ func TestServicePublishRootEventPersistsPeerPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 5,
-			Descriptors:  map[uint64]descriptor.Descriptor{current.RegionID: current},
+			Descriptors:  map[uint64]topology.Descriptor{current.RegionID: current},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
@@ -1258,7 +1257,7 @@ func TestServicePublishRootEventSkipsDuplicatePeerPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:  map[uint64]topology.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
 			},
@@ -1294,7 +1293,7 @@ func TestServicePublishRootEventSkipsCompletedPeerPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:  map[uint64]topology.Descriptor{target.RegionID: target},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
@@ -1336,7 +1335,7 @@ func TestServicePublishRootEventRejectsConflictingPeerPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:  map[uint64]topology.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
 			},
@@ -1377,7 +1376,7 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:  map[uint64]topology.Descriptor{target.RegionID: target},
 			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 				target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target},
 			},
@@ -1407,7 +1406,7 @@ func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				left.RegionID:  left,
 				right.RegionID: right,
 			},
@@ -1434,7 +1433,7 @@ func TestServiceRefreshFromStorageReplacesPendingTransitions(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 9,
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				left.RegionID:  left,
 				right.RegionID: right,
 			},
@@ -1466,7 +1465,7 @@ func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
 	target.EnsureHash()
 
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{target.RegionID: target},
+		Descriptors: map[uint64]topology.Descriptor{target.RegionID: target},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			target.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
@@ -1503,7 +1502,7 @@ func TestServiceAssessRootEventReturnsConflictAssessment(t *testing.T) {
 	target.EnsureHash()
 
 	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{target.RegionID: target},
+		Descriptors: map[uint64]topology.Descriptor{target.RegionID: target},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			target.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
@@ -1545,7 +1544,7 @@ func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors:  map[uint64]descriptor.Descriptor{target.RegionID: target},
+			Descriptors:  map[uint64]topology.Descriptor{target.RegionID: target},
 		},
 	}
 
@@ -1575,7 +1574,7 @@ func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 6,
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				left.RegionID:  left,
 				right.RegionID: right,
 			},
@@ -1602,7 +1601,7 @@ func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 7,
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				merged.RegionID: merged,
 			},
 		},
@@ -1628,7 +1627,7 @@ func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
 		leader: true,
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 7,
-			Descriptors:  map[uint64]descriptor.Descriptor{merged.RegionID: merged},
+			Descriptors:  map[uint64]topology.Descriptor{merged.RegionID: merged},
 			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
 				merged.RegionID: {Kind: rootstate.PendingRangeChangeMerge, LeftRegionID: 50, RightRegionID: 51, Merged: merged},
 			},
@@ -1676,7 +1675,7 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 
 func TestServicePublishRootEventSerializesStorageAppend(t *testing.T) {
 	store := &serialAppendStorage{
-		fakeStorage: fakeStorage{snapshot: rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}},
+		fakeStorage: fakeStorage{snapshot: rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}},
 		entered:     make(chan struct{}, 1),
 		release:     make(chan struct{}),
 	}
@@ -1723,7 +1722,7 @@ func TestServicePublishRootEventSerializesStorageAppend(t *testing.T) {
 
 func TestServiceRefreshFromStorageSerializesWithWrites(t *testing.T) {
 	store := &serialAppendStorage{
-		fakeStorage: fakeStorage{snapshot: rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}},
+		fakeStorage: fakeStorage{snapshot: rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}},
 		entered:     make(chan struct{}, 1),
 		release:     make(chan struct{}),
 	}
@@ -2141,7 +2140,7 @@ func TestServiceSealTenure(t *testing.T) {
 	desc := testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
 	desc.RootEpoch = 7
 	require.NoError(t, cluster.PublishRegionDescriptor(desc))
-	store.snapshot.Descriptors = map[uint64]descriptor.Descriptor{desc.RegionID: desc}
+	store.snapshot.Descriptors = map[uint64]topology.Descriptor{desc.RegionID: desc}
 
 	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 2})
 	require.NoError(t, err)
@@ -2195,47 +2194,6 @@ func TestServiceSealTenurePreActionGateRejectsStaleHolder(t *testing.T) {
 	require.Equal(t, 0, store.sealCalls)
 }
 
-func TestServiceSealTenureAblationNoop(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Era:             2,
-				Mandate:         rootproto.MandateDefault,
-			},
-		},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableSeal: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	require.NoError(t, svc.SealTenure())
-	require.Equal(t, 0, store.sealCalls)
-	require.Equal(t, rootstate.Legacy{}, store.snapshot.Legacy)
-}
-
-func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
-	store := &fakeStorage{}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.idWindowSize = 1
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableBudget: true}))
-
-	first, err := svc.reserveIDs(context.Background(), 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(10), first)
-	require.Equal(t, 1, store.saveCalls)
-
-	first, err = svc.reserveIDs(context.Background(), 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(11), first)
-	require.Equal(t, 1, store.saveCalls)
-	require.Greater(t, store.lastID, uint64(100))
-}
-
 func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
@@ -2265,68 +2223,6 @@ func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	require.Contains(t, err.Error(), errTenurePrefix)
 }
 
-func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Era:             2,
-				Mandate:         rootproto.MandateDefault,
-			},
-			Descriptors: map[uint64]descriptor.Descriptor{
-				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
-			},
-		},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReplyEvidence: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, allocResp.GetEra())
-	require.Zero(t, allocResp.GetConsumedFrontier())
-
-	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, tsoResp.GetEra())
-	require.Zero(t, tsoResp.GetConsumedFrontier())
-
-	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, getResp.GetEra())
-}
-
-func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
-	storage := &fakeStorage{
-		leader:   true,
-		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
-	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{FailStopOnRootUnreach: true}))
-	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
-	require.NoError(t, err)
-	storage.loadCalls = 0
-	storage.loadErr = errors.New("root unavailable")
-
-	time.Sleep(20 * time.Millisecond)
-	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		return storage.loadCalls >= 1
-	}, time.Second, 10*time.Millisecond)
-
-	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errRootUnavailable)
-}
-
 func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
@@ -2344,7 +2240,7 @@ func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7),
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
@@ -2382,7 +2278,7 @@ func TestServiceConfirmHandover(t *testing.T) {
 				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
 				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
@@ -2476,44 +2372,6 @@ func TestServiceReattachHandover(t *testing.T) {
 	require.Equal(t, rootproto.HandoverStageReattached, store.snapshot.Handover.Stage)
 }
 
-func TestServiceAblationDisableReattachNoop(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Era:             3,
-				Mandate:         rootproto.MandateDefault,
-			},
-			Legacy: rootstate.Legacy{
-				HolderID:  "c1",
-				Era:       2,
-				Mandate:   rootproto.MandateDefault,
-				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-			},
-			Handover: rootstate.Handover{
-				HolderID:     "c1",
-				LegacyEra:    2,
-				SuccessorEra: 3,
-				LegacyDigest: "seal-digest",
-				Stage:        rootproto.HandoverStageClosed,
-			},
-		},
-	}
-	store.snapshot.Tenure.LineageDigest = "seal-digest"
-
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReattach: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	require.NoError(t, svc.ReattachHandover())
-	require.Equal(t, 0, store.reattachCalls)
-	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
-}
-
 func TestServiceReattachHandoverRejectsLineageMismatch(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
@@ -2597,7 +2455,7 @@ func TestServiceMonotoneDutyFailsWhenDescriptorCoverageNotMet(t *testing.T) {
 				Mandate:   rootproto.MandateDefault,
 				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 100}, 8),
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
@@ -2652,7 +2510,7 @@ func TestServiceGetRegionByKeyFailsWhenDutyNotAdmitted(t *testing.T) {
 				Era:             2,
 				Mandate:         rootproto.MandateAllocID | rootproto.MandateTSO,
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
@@ -2683,7 +2541,7 @@ func TestServiceGetRegionByKeyAllowsReadOnlyServingFromCurrentRootedEra(t *testi
 				Era:             2,
 				Mandate:         rootproto.MandateDefault,
 			},
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
 		},
@@ -2806,7 +2664,7 @@ func TestServiceRefreshFromStorageReloadsViewAndAllocatorState(t *testing.T) {
 		fakeStorage: fakeStorage{leader: false, leaderID: 2},
 		snapshot: rootview.Snapshot{
 			ClusterEpoch: 4,
-			Descriptors: map[uint64]descriptor.Descriptor{
+			Descriptors: map[uint64]topology.Descriptor{
 				9: testDescriptor(9, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
 			},
 			Allocator: rootview.AllocatorState{
@@ -2907,8 +2765,8 @@ func TestServiceMutatingWritesRespectExpectedClusterEpoch(t *testing.T) {
 	require.Equal(t, uint64(10), store.snapshot.ClusterEpoch)
 }
 
-func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

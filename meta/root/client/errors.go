@@ -1,16 +1,16 @@
 package client
 
-import "errors"
+import nokverrors "github.com/feichai0017/NoKV/errors"
 
 var (
 	// errEmptyTarget indicates that a single remote root target was blank.
-	errEmptyTarget = errors.New("meta/root/client: empty target")
+	errEmptyTarget = nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/client: empty target")
 	// errEmptyTargetSet indicates that no remote root endpoints were configured.
-	errEmptyTargetSet = errors.New("meta/root/client: empty target set")
+	errEmptyTargetSet = nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/client: empty target set")
 	// errNilClient indicates that a metadata-root client was nil.
-	errNilClient = errors.New("meta/root/client: nil client")
+	errNilClient = nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/client: nil client")
 	// errNoEndpoints indicates that the metadata-root client has no dialed endpoints.
-	errNoEndpoints = errors.New("meta/root/client: no endpoints")
+	errNoEndpoints = nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/client: no endpoints")
 	// errNoReachableEndpoint indicates that no configured metadata-root endpoint responded.
-	errNoReachableEndpoint = errors.New("meta/root/client: no reachable endpoint")
+	errNoReachableEndpoint = nokverrors.New(nokverrors.KindUnavailable, "meta/root/client: no reachable endpoint")
 )

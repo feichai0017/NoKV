@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -12,6 +13,7 @@ import (
 )
 
 type fakeClient struct {
+	mu       sync.RWMutex
 	dentries map[string]fsmeta.DentryRecord
 }
 
@@ -20,6 +22,8 @@ func newFakeClient() *fakeClient {
 }
 
 func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.dentries[dentryID(req.Parent, req.Name)] = fsmeta.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
@@ -30,6 +34,8 @@ func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest, inode f
 }
 
 func (c *fakeClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
 	if !ok {
 		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
@@ -54,6 +60,8 @@ func (c *fakeClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) (
 }
 
 func (c *fakeClient) readDir(req fsmeta.ReadDirRequest) []fsmeta.DentryRecord {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make([]fsmeta.DentryRecord, 0)
 	for _, entry := range c.dentries {
 		if entry.Parent == req.Parent {

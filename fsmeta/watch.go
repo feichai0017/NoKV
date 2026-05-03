@@ -1,12 +1,6 @@
 package fsmeta
 
-import (
-	"context"
-	"errors"
-)
-
-var ErrWatchOverflow = errors.New("fsmeta: watch backlog overflow")
-var ErrWatchCursorExpired = errors.New("fsmeta: watch cursor expired")
+import "context"
 
 // WatchEventSource identifies the raftstore command source that made a key
 // visible to MVCC readers.
@@ -16,6 +10,18 @@ const (
 	WatchEventSourceCommit WatchEventSource = iota + 1
 	WatchEventSourceResolveLock
 )
+
+// ApplyEvent is the fsmeta watch router's input event. Runtime adapters convert
+// their storage-engine apply notifications into this neutral shape before
+// publishing through fsmeta/exec/watch.Router.
+type ApplyEvent struct {
+	RegionID      uint64
+	Term          uint64
+	Index         uint64
+	Source        WatchEventSource
+	CommitVersion uint64
+	Keys          [][]byte
+}
 
 // WatchCursor is a per-region raft apply cursor. It is the watch resume key.
 type WatchCursor struct {

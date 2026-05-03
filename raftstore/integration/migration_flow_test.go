@@ -6,8 +6,8 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func TestMigrationFlowEndToEnd(t *testing.T) {
 	_, err = migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer target3.Close(t)
@@ -124,7 +124,7 @@ func TestMigrationExpandWithSSTSnapshot(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	defer target2.Close(t)
 	defer seed.Close(t)

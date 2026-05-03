@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
@@ -118,12 +119,12 @@ func writeCheckpointAll(f interface{ Write([]byte) (int, error) }, data []byte) 
 	return nil
 }
 
-func resumeHint(mode Mode, checkpoint *Checkpoint) string {
+func resumeHint(mode workdirmode.Mode, checkpoint *Checkpoint) string {
 	if checkpoint == nil {
 		return ""
 	}
 	switch mode {
-	case ModePreparing:
+	case workdirmode.ModePreparing:
 		switch checkpoint.Stage {
 		case CheckpointPreparingWritten:
 			return "re-run nokv migrate init to continue after the mode gate was written"
@@ -134,12 +135,12 @@ func resumeHint(mode Mode, checkpoint *Checkpoint) string {
 		case CheckpointRaftSeeded:
 			return "re-run nokv migrate init to finalize seeded mode"
 		}
-	case ModeSeeded:
+	case workdirmode.ModeSeeded:
 		if checkpoint.Stage == CheckpointSeededFinalized {
 			return "local standalone-to-seed promotion already completed"
 		}
 		fallthrough
-	case ModeCluster:
+	case workdirmode.ModeCluster:
 		if checkpoint.Stage == CheckpointSeededFinalized {
 			return "local standalone-to-seed promotion already completed"
 		}

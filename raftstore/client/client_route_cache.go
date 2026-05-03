@@ -10,17 +10,17 @@ import (
 	"sort"
 	"time"
 
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 type regionState struct {
-	desc   descriptor.Descriptor
+	desc   topology.Descriptor
 	leader uint64
 }
 
 type regionSnapshot struct {
-	desc   descriptor.Descriptor
+	desc   topology.Descriptor
 	leader uint64
 }
 
@@ -198,7 +198,7 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 	}
 }
 
-func (c *Client) upsertRegionLocked(desc descriptor.Descriptor, leader uint64) {
+func (c *Client) upsertRegionLocked(desc topology.Descriptor, leader uint64) {
 	if desc.RegionID == 0 {
 		return
 	}
@@ -306,7 +306,7 @@ func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 
 // defaultLeaderStoreID derives a usable leader store from Region peers when no
 // explicit leader information is available.
-func defaultLeaderStoreID(desc descriptor.Descriptor) uint64 {
+func defaultLeaderStoreID(desc topology.Descriptor) uint64 {
 	if desc.RegionID == 0 {
 		return 0
 	}
@@ -318,7 +318,7 @@ func defaultLeaderStoreID(desc descriptor.Descriptor) uint64 {
 	return 0
 }
 
-func regionHasStoreID(desc descriptor.Descriptor, storeID uint64) bool {
+func regionHasStoreID(desc topology.Descriptor, storeID uint64) bool {
 	if desc.RegionID == 0 || storeID == 0 {
 		return false
 	}
@@ -330,7 +330,7 @@ func regionHasStoreID(desc descriptor.Descriptor, storeID uint64) bool {
 	return false
 }
 
-func containsKey(desc descriptor.Descriptor, key []byte) bool {
+func containsKey(desc topology.Descriptor, key []byte) bool {
 	if desc.RegionID == 0 {
 		return false
 	}

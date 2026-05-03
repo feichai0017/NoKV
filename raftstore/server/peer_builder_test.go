@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
@@ -30,7 +29,7 @@ func (fakeBuilderRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.P
 }
 
 var _ txnstore.Store = fakeBuilderMVCCStore{}
-var _ NoKV.RaftLog = fakeBuilderRaftLog{}
+var _ RaftLog = fakeBuilderRaftLog{}
 
 func TestDefaultRaftConfigAppliesDefaults(t *testing.T) {
 	cfg := defaultRaftConfig(myraft.Config{}, 17)
@@ -65,7 +64,7 @@ func TestDefaultPeerBuilderRequiresLocalPeer(t *testing.T) {
 	require.Contains(t, err.Error(), "missing peer")
 }
 
-func TestDefaultPeerBuilderRequiresSnapshotBridge(t *testing.T) {
+func TestDefaultPeerBuilderRequiresSnapshotStorage(t *testing.T) {
 	builder := defaultPeerBuilder(Storage{
 		MVCC: fakeBuilderMVCCStore{},
 		Raft: fakeBuilderRaftLog{},
@@ -75,5 +74,5 @@ func TestDefaultPeerBuilderRequiresSnapshotBridge(t *testing.T) {
 		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 11}},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "snapshot bridge")
+	require.Contains(t, err.Error(), "snapshot storage")
 }

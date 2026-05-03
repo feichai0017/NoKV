@@ -174,7 +174,124 @@ func TestModelOpenWithStaleOwnerDoesNotRemoveReusedLiveSession(t *testing.T) {
 	require.NoError(t, model.CheckInvariants())
 }
 
+func TestModelLinkRenameUnlinkMaintainsLinkCounts(t *testing.T) {
+	model := NewModel("vol")
+	require.NoError(t, model.Apply(Operation{
+		Kind:   OpCreate,
+		Mount:  "vol",
+		Parent: model.Root,
+		Name:   "file",
+		Inode:  10,
+		Type:   fsmeta.InodeTypeFile,
+		Mode:   0o600,
+	}).Err)
+	require.NoError(t, model.Apply(Operation{
+		Kind:       OpLink,
+		Mount:      "vol",
+		FromParent: model.Root,
+		FromName:   "file",
+		ToParent:   model.Root,
+		ToName:     "alias",
+	}).Err)
+	require.Equal(t, uint32(2), model.inodes[10].LinkCount)
+	require.NoError(t, model.CheckInvariants())
+
+	require.NoError(t, model.Apply(Operation{
+		Kind:       OpRenameSubtree,
+		Mount:      "vol",
+		FromParent: model.Root,
+		FromName:   "alias",
+		ToParent:   model.Root,
+		ToName:     "moved",
+	}).Err)
+	require.Equal(t, uint32(2), model.inodes[10].LinkCount)
+	require.NotContains(t, model.dentries, dentryKey{parent: model.Root, name: "alias"})
+	require.Contains(t, model.dentries, dentryKey{parent: model.Root, name: "moved"})
+	require.NoError(t, model.CheckInvariants())
+
+	require.NoError(t, model.Apply(Operation{
+		Kind:   OpUnlink,
+		Mount:  "vol",
+		Parent: model.Root,
+		Name:   "file",
+	}).Err)
+	require.Equal(t, uint32(1), model.inodes[10].LinkCount)
+	require.Contains(t, model.dentries, dentryKey{parent: model.Root, name: "moved"})
+	require.NoError(t, model.CheckInvariants())
+
+	require.NoError(t, model.Apply(Operation{
+		Kind:   OpUnlink,
+		Mount:  "vol",
+		Parent: model.Root,
+		Name:   "moved",
+	}).Err)
+	require.NotContains(t, model.inodes, fsmeta.InodeID(10))
+	require.NoError(t, model.CheckInvariants())
+}
+
+func TestModelSnapshotReadDirStaysStableAcrossNamespaceMutation(t *testing.T) {
+	model := NewModel("vol")
+	require.NoError(t, model.Apply(Operation{
+		Kind:   OpCreate,
+		Mount:  "vol",
+		Parent: model.Root,
+		Name:   "alpha",
+		Inode:  10,
+		Type:   fsmeta.InodeTypeFile,
+		Mode:   0o600,
+	}).Err)
+	require.NoError(t, model.ApplySnapshot(Operation{
+		Kind:        OpSnapshotSubtree,
+		Mount:       "vol",
+		Parent:      model.Root,
+		SnapshotRef: 0,
+	}, fsmeta.SnapshotSubtreeToken{
+		Mount:       "vol",
+		RootInode:   model.Root,
+		ReadVersion: 100,
+	}).Err)
+
+	require.NoError(t, model.Apply(Operation{
+		Kind:       OpRenameSubtree,
+		Mount:      "vol",
+		FromParent: model.Root,
+		FromName:   "alpha",
+		ToParent:   model.Root,
+		ToName:     "beta",
+	}).Err)
+
+	snapshot := model.Apply(Operation{
+		Kind:        OpReadDirPlus,
+		Mount:       "vol",
+		Parent:      model.Root,
+		Limit:       10,
+		SnapshotRef: 0,
+	})
+	require.NoError(t, snapshot.Err)
+	requireDentryNames(t, snapshot.Pairs, "alpha")
+
+	latest := model.Apply(Operation{
+		Kind:        OpReadDirPlus,
+		Mount:       "vol",
+		Parent:      model.Root,
+		Limit:       10,
+		SnapshotRef: -1,
+	})
+	require.NoError(t, latest.Err)
+	requireDentryNames(t, latest.Pairs, "beta")
+	require.NoError(t, model.CheckInvariants())
+}
+
 func TestEquivalentErrorMatchesWrappedSentinel(t *testing.T) {
 	require.True(t, EquivalentError(fmt.Errorf("wrapped: %w", fsmeta.ErrNotFound), fsmeta.ErrNotFound))
 	require.False(t, EquivalentError(fmt.Errorf("wrapped: %w", fsmeta.ErrNotFound), fsmeta.ErrExists))
+}
+
+func requireDentryNames(t *testing.T, pairs []fsmeta.DentryAttrPair, names ...string) {
+	t.Helper()
+	got := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		got = append(got, pair.Dentry.Name)
+	}
+	require.Equal(t, names, got)
 }

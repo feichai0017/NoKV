@@ -119,9 +119,6 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 		maxRootLag:                 req.MaxRootLag,
 	}
 	if loadErr != nil {
-		if s != nil && s.ablation.FailStopOnRootUnreach {
-			return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootUnavailable)
-		}
 		if admission.freshness == coordpb.Freshness_FRESHNESS_STRONG || admission.freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
 			return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootUnavailable)
 		}

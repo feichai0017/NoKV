@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 type PeerChangeLifecycleDecision uint8
@@ -84,7 +84,7 @@ func (c PeerChangeCompletion) Completed() bool {
 	return c.State == PeerChangeCompletionCompleted
 }
 
-func peerChangeSuperseded(current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) bool {
+func peerChangeSuperseded(current topology.Descriptor, hasCurrent bool, event rootevent.Event) bool {
 	if event.PeerChange == nil || !hasCurrent {
 		return false
 	}
@@ -95,7 +95,7 @@ func peerChangeSuperseded(current descriptor.Descriptor, hasCurrent bool, event 
 	return target.RootEpoch != 0 && current.RootEpoch > target.RootEpoch
 }
 
-func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeCompletion {
+func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange, current topology.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeCompletion {
 	if event.PeerChange == nil {
 		return PeerChangeCompletion{State: PeerChangeCompletionOpen}
 	}
@@ -118,7 +118,7 @@ func ObservePeerChangeCompletion(pendingPeerChanges map[uint64]PendingPeerChange
 	}
 }
 
-func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeLifecycle {
+func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current topology.Descriptor, hasCurrent bool, event rootevent.Event) PeerChangeLifecycle {
 	if event.PeerChange == nil {
 		return PeerChangeLifecycle{
 			Decision: PeerChangeLifecycleApply,
@@ -253,7 +253,7 @@ func ObservePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange,
 	}
 }
 
-func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current descriptor.Descriptor, hasCurrent bool, event rootevent.Event) (PeerChangeLifecycleDecision, error) {
+func EvaluatePeerChangeLifecycle(pendingPeerChanges map[uint64]PendingPeerChange, current topology.Descriptor, hasCurrent bool, event rootevent.Event) (PeerChangeLifecycleDecision, error) {
 	if event.PeerChange == nil {
 		return PeerChangeLifecycleApply, nil
 	}

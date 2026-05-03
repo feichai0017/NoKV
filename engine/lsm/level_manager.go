@@ -104,9 +104,6 @@ func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback
 	}
 }
 
-// LevelMetrics aliases the shared metrics package model to keep the lsm API stable.
-type LevelMetrics = metrics.LevelMetrics
-
 func (lm *levelManager) close() error {
 	var closeErr error
 	if lm.cache != nil {
@@ -338,18 +335,18 @@ func (lm *levelManager) compactionStats() (int64, float64) {
 	return int64(len(prios)), max
 }
 
-func (lm *levelManager) levelMetricsSnapshot() []LevelMetrics {
+func (lm *levelManager) levelMetricsSnapshot() []metrics.LevelMetrics {
 	if lm == nil {
 		return nil
 	}
-	metrics := make([]LevelMetrics, 0, len(lm.levels))
+	out := make([]metrics.LevelMetrics, 0, len(lm.levels))
 	for _, lh := range lm.levels {
 		if lh == nil {
 			continue
 		}
-		metrics = append(metrics, lh.metricsSnapshot())
+		out = append(out, lh.metricsSnapshot())
 	}
-	return metrics
+	return out
 }
 
 func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
@@ -377,9 +374,9 @@ func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
 	}
 }
 
-func (lm *levelManager) cacheMetrics() CacheMetrics {
+func (lm *levelManager) cacheMetrics() metrics.CacheSnapshot {
 	if lm == nil || lm.cache == nil {
-		return CacheMetrics{}
+		return metrics.CacheSnapshot{}
 	}
 	return lm.cache.metricsSnapshot()
 }

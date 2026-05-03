@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	fswatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -176,7 +177,7 @@ func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 
 	runtime := openRealClusterRuntime(t, ctx)
 	router := fswatch.NewRouter()
-	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(fsmetaraftstore.NewApplyObserver(router), 256)
 	require.NoError(t, err)
 	defer reg.Close()
 
@@ -228,7 +229,7 @@ func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
 
 	runtime := openRealClusterRuntime(t, ctx)
 	router := fswatch.NewRouter()
-	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(fsmetaraftstore.NewApplyObserver(router), 256)
 	require.NoError(t, err)
 	defer reg.Close()
 
@@ -287,7 +288,7 @@ func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
 
 	runtime := openRealClusterRuntime(t, ctx)
 	router := fswatch.NewRouter()
-	reg, err := runtime.node.Server.Store().RegisterApplyObserver(router, 256)
+	reg, err := runtime.node.Server.Store().RegisterApplyObserver(fsmetaraftstore.NewApplyObserver(router), 256)
 	require.NoError(t, err)
 	defer reg.Close()
 

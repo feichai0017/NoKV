@@ -8,18 +8,18 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDescriptorRoundTripPreservesAndDetachesData(t *testing.T) {
 	desc := testWireDescriptor(11, []byte("a"), []byte("m"))
-	desc.Lineage = []descriptor.LineageRef{{
+	desc.Lineage = []topology.LineageRef{{
 		RegionID: 7,
 		Epoch:    metaregion.Epoch{Version: 2, ConfVersion: 3},
 		Hash:     []byte("lineage"),
-		Kind:     descriptor.LineageKindSplitParent,
+		Kind:     topology.LineageKindSplitParent,
 	}}
 	original := desc.Clone()
 
@@ -34,7 +34,7 @@ func TestDescriptorRoundTripPreservesAndDetachesData(t *testing.T) {
 
 	roundTrip := DescriptorFromProto(pb)
 	require.True(t, original.Equal(roundTrip))
-	require.Equal(t, descriptor.Descriptor{}, DescriptorFromProto(nil))
+	require.Equal(t, topology.Descriptor{}, DescriptorFromProto(nil))
 
 	pb.StartKey[0] = 'z'
 	require.Equal(t, byte('a'), roundTrip.StartKey[0])
@@ -187,7 +187,7 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 				UpdatedAt:   rootproto.Cursor{Term: 2, Index: 11},
 			},
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			desc.RegionID: desc,
 		},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
@@ -375,8 +375,8 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
 }
 
-func testWireDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testWireDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

@@ -2,7 +2,7 @@ package state
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // ApplyEventToSnapshot applies one rooted metadata event into the compact
@@ -27,7 +27,7 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		snapshot.Quotas = make(map[string]QuotaFence)
 	}
 	if snapshot.Descriptors == nil {
-		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+		snapshot.Descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if snapshot.PendingPeerChanges == nil {
 		snapshot.PendingPeerChanges = make(map[uint64]PendingPeerChange)
@@ -312,7 +312,7 @@ func ApplyPeerChangeToSnapshot(snapshot *Snapshot, event rootevent.Event) bool {
 		return false
 	}
 	if snapshot.Descriptors == nil {
-		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+		snapshot.Descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if snapshot.PendingPeerChanges == nil {
 		snapshot.PendingPeerChanges = make(map[uint64]PendingPeerChange)
@@ -364,7 +364,7 @@ func ApplyRangeChangeToSnapshot(snapshot *Snapshot, event rootevent.Event) bool 
 		return false
 	}
 	if snapshot.Descriptors == nil {
-		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+		snapshot.Descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if snapshot.PendingPeerChanges == nil {
 		snapshot.PendingPeerChanges = make(map[uint64]PendingPeerChange)

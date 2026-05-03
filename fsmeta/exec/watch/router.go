@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
 const defaultWindow uint32 = 256
@@ -110,14 +109,11 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	}
 }
 
-// OnApply implements raftstore/store.ApplyObserver.
-func (r *Router) OnApply(evt storepkg.ApplyEvent) {
-	source := fsmeta.WatchEventSource(0)
+// OnApply publishes one storage-apply event after the runtime adapter has
+// converted it into fsmeta's neutral ApplyEvent shape.
+func (r *Router) OnApply(evt fsmeta.ApplyEvent) {
 	switch evt.Source {
-	case storepkg.ApplyEventSourceCommit:
-		source = fsmeta.WatchEventSourceCommit
-	case storepkg.ApplyEventSourceResolveLock:
-		source = fsmeta.WatchEventSourceResolveLock
+	case fsmeta.WatchEventSourceCommit, fsmeta.WatchEventSourceResolveLock:
 	default:
 		return
 	}
@@ -129,7 +125,7 @@ func (r *Router) OnApply(evt storepkg.ApplyEvent) {
 				Index:    evt.Index,
 			},
 			CommitVersion: evt.CommitVersion,
-			Source:        source,
+			Source:        evt.Source,
 			Key:           key,
 		})
 	}

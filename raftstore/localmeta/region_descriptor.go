@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // DescriptorToProto lifts one store-local region shape into the distributed
@@ -17,8 +17,8 @@ func DescriptorToProto(meta RegionMeta) *metapb.RegionDescriptor {
 
 // Descriptor lifts one store-local region shape into the distributed descriptor
 // domain object.
-func Descriptor(meta RegionMeta, rootEpoch uint64) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func Descriptor(meta RegionMeta, rootEpoch uint64) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  meta.ID,
 		StartKey:  append([]byte(nil), meta.StartKey...),
 		EndKey:    append([]byte(nil), meta.EndKey...),
@@ -42,7 +42,7 @@ func FromDescriptorProto(pbDesc *metapb.RegionDescriptor) (RegionMeta, error) {
 
 // FromDescriptor lowers one distributed descriptor into the store-local runtime
 // shape.
-func FromDescriptor(desc descriptor.Descriptor) RegionMeta {
+func FromDescriptor(desc topology.Descriptor) RegionMeta {
 	return RegionMeta{
 		ID:       desc.RegionID,
 		StartKey: append([]byte(nil), desc.StartKey...),

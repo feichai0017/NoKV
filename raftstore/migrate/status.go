@@ -3,13 +3,14 @@ package migrate
 import (
 	"context"
 	"fmt"
-	adminpb "github.com/feichai0017/NoKV/pb/admin"
-	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"os"
 	"path/filepath"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
@@ -40,20 +41,20 @@ type RuntimeStatus struct {
 
 // StatusResult describes the current migration mode of one workdir.
 type StatusResult struct {
-	WorkDir             string         `json:"workdir"`
-	Mode                Mode           `json:"mode"`
-	StoreID             uint64         `json:"store_id,omitempty"`
-	RegionID            uint64         `json:"region_id,omitempty"`
-	PeerID              uint64         `json:"peer_id,omitempty"`
-	LocalCatalogRegions int            `json:"local_catalog_regions,omitempty"`
-	SeedSnapshotDir     string         `json:"seed_snapshot_dir,omitempty"`
-	SeedSnapshotPresent bool           `json:"seed_snapshot_present,omitempty"`
-	Next                string         `json:"next,omitempty"`
-	ResumeHint          string         `json:"resume_hint,omitempty"`
-	Warnings            []string       `json:"warnings,omitempty"`
-	Checkpoint          *Checkpoint    `json:"checkpoint,omitempty"`
-	Runtime             *RuntimeStatus `json:"runtime,omitempty"`
-	RuntimeError        string         `json:"runtime_error,omitempty"`
+	WorkDir             string           `json:"workdir"`
+	Mode                workdirmode.Mode `json:"mode"`
+	StoreID             uint64           `json:"store_id,omitempty"`
+	RegionID            uint64           `json:"region_id,omitempty"`
+	PeerID              uint64           `json:"peer_id,omitempty"`
+	LocalCatalogRegions int              `json:"local_catalog_regions,omitempty"`
+	SeedSnapshotDir     string           `json:"seed_snapshot_dir,omitempty"`
+	SeedSnapshotPresent bool             `json:"seed_snapshot_present,omitempty"`
+	Next                string           `json:"next,omitempty"`
+	ResumeHint          string           `json:"resume_hint,omitempty"`
+	Warnings            []string         `json:"warnings,omitempty"`
+	Checkpoint          *Checkpoint      `json:"checkpoint,omitempty"`
+	Runtime             *RuntimeStatus   `json:"runtime,omitempty"`
+	RuntimeError        string           `json:"runtime_error,omitempty"`
 }
 
 // ReadStatus returns the current migration mode and seed identifiers for one
@@ -107,7 +108,7 @@ func ReadStatusWithConfig(cfg StatusConfig) (StatusResult, error) {
 		result.ResumeHint = resumeHint(result.Mode, checkpoint)
 	}
 
-	result.Next = describeMode(result, PlanResult{Eligible: result.Mode == ModeStandalone}).Next
+	result.Next = describeMode(result, PlanResult{Eligible: result.Mode == workdirmode.ModeStandalone}).Next
 
 	if cfg.AdminAddr != "" {
 		regionID := effectiveStatusRegionID(cfg.RegionID, result.RegionID)

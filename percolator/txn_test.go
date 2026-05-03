@@ -1301,6 +1301,63 @@ func TestTxnHeartBeatExtendsPrimaryLockTTL(t *testing.T) {
 	require.Equal(t, uint64(250), lock.TTL)
 }
 
+func TestTxnHeartBeatExtensionSurvivesRestart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "db")
+	db, err := NoKV.Open(testOptionsForDir(dir))
+	require.NoError(t, err)
+	latches := latch.NewManager(16)
+	key := []byte("hb-restart-primary")
+	startTs := uint64(100)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      100,
+	}))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	originalStart := lock.StartTime
+
+	hb := TxnHeartBeat(db, latches, &kvrpcpb.TxnHeartBeatRequest{
+		PrimaryKey:   key,
+		StartVersion: startTs,
+		TtlExtension: 500,
+		CurrentTime:  originalStart + 50,
+	})
+	require.Nil(t, hb.GetError())
+	require.Equal(t, kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended, hb.GetAction())
+	require.Equal(t, uint64(550), hb.GetLockTtl())
+	require.NoError(t, db.Close())
+
+	db, err = NoKV.Open(testOptionsForDir(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	latches = latch.NewManager(16)
+	reader = NewReader(db)
+	lock, err = reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, originalStart, lock.StartTime)
+	require.Equal(t, uint64(550), lock.TTL)
+
+	status := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         key,
+		LockTs:             startTs,
+		CurrentTs:          startTs + 1_000_000,
+		RollbackIfNotExist: true,
+		CurrentTime:        originalStart + 500,
+	})
+	require.Nil(t, status.GetError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction, status.GetAction())
+}
+
 func TestTxnHeartBeatDoesNotResurrectExpiredPrimary(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)

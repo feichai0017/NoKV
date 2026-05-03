@@ -32,6 +32,7 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	peerpkg "github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 
@@ -72,7 +73,7 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 
 func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
-	storage, err := db.RaftLog().Open(groupID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)
 	return storage
 }
@@ -578,8 +579,8 @@ func openDBAt(t *testing.T, dir string) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
-	opt.RaftLagWarnSegments = 1
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.ControlLogLagWarnSegments = 1
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta

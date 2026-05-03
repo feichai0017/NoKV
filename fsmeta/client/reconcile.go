@@ -32,7 +32,7 @@ func ReadDirPlusAll(ctx context.Context, cli interface {
 	ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 }, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
 	if cli == nil {
-		return nil, errors.New("fsmeta/client: directory reader is required")
+		return nil, errDirectoryReaderRequired
 	}
 	limit := req.Limit
 	if limit == 0 {
@@ -66,7 +66,7 @@ func ReadDirPlusAll(ctx context.Context, cli interface {
 // the new base state and apply subsequent events idempotently.
 func WatchDirectoryWithReconcile(ctx context.Context, cli DirectoryWatchClient, watchReq fsmeta.WatchRequest, readReq fsmeta.ReadDirRequest) (WatchReconcileResult, error) {
 	if cli == nil {
-		return WatchReconcileResult{}, errors.New("fsmeta/client: watch client is required")
+		return WatchReconcileResult{}, errWatchClientRequired
 	}
 	if len(watchReq.KeyPrefix) != 0 || watchReq.DescendRecursively || watchReq.Mount != readReq.Mount || watchReq.RootInode != readReq.Parent {
 		return WatchReconcileResult{}, fmt.Errorf("%w: watch/read directory mismatch", fsmeta.ErrInvalidRequest)

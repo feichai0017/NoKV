@@ -3,8 +3,8 @@ package server
 import (
 	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // planStoreOperations builds lightweight scheduling hints for the heartbeat
@@ -77,7 +77,7 @@ func chooseLeaderTransferOperation(regions []pdview.RegionInfo, srcStoreID, dstS
 	return nil, false
 }
 
-func buildLeaderTransfer(desc descriptor.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*coordpb.SchedulerOperation, bool) {
+func buildLeaderTransfer(desc topology.Descriptor, srcStoreID, dstStoreID uint64, requireFirstPeerSrc bool) (*coordpb.SchedulerOperation, bool) {
 	if desc.RegionID == 0 || len(desc.Peers) == 0 {
 		return nil, false
 	}

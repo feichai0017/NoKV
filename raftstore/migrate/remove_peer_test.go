@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/dbcore/mode"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
-	"github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/stretchr/testify/require"
 )
 

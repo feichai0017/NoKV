@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 )
 
 const MaintenanceTaskName = "mvcc-maintenance"
@@ -58,7 +58,7 @@ type MaintenanceSnapshot struct {
 type MaintenanceWorker struct {
 	cfg MaintenanceWorkerConfig
 
-	periodic *dbruntime.PeriodicTask
+	periodic *dbcore.PeriodicTask
 
 	mu       sync.RWMutex
 	snapshot MaintenanceSnapshot
@@ -81,7 +81,7 @@ func NewMaintenanceWorker(cfg MaintenanceWorkerConfig) (*MaintenanceWorker, bool
 			Enabled: true,
 		},
 	}
-	worker.periodic = dbruntime.NewPeriodicTask(dbruntime.PeriodicTaskConfig{
+	worker.periodic = dbcore.NewPeriodicTask(dbcore.PeriodicTaskConfig{
 		Name:     MaintenanceTaskName,
 		Interval: cfg.Interval,
 		Run:      worker.RunOnce,

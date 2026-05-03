@@ -12,11 +12,11 @@ repairing them.
 2. Run `manifest.Verify` and `wal.VerifyDir`.
 3. Open LSM tables from manifest state.
 4. Replay retained LSM WAL records that are not already covered by flushed SSTs.
-5. Open raft WAL shards and raftstore local metadata.
+5. Open replicated control-log WAL shards and raftstore local metadata.
 6. Rebuild runtime views from local metadata and rooted coordinator state.
 
-Values are inline in LSM records. The removed value-log path is not replayed or
-reconciled; legacy pointer records return `ErrUnsupportedValueLog`.
+Values are inline in LSM records. The current recovery path has no value-log
+replay or pointer reconciliation branch.
 
 ---
 
@@ -28,7 +28,6 @@ reconciled; legacy pointer records return `ErrUnsupportedValueLog`.
 | Corrupt SST referenced by manifest | Startup fails and leaves manifest intact |
 | Torn WAL tail | Replay stops at the last complete record |
 | Partial `CURRENT.tmp` rewrite | Previous `CURRENT` remains authoritative |
-| Legacy value pointer | Read/materialization fails with `ErrUnsupportedValueLog` |
 
 ---
 

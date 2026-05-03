@@ -10,10 +10,11 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/dbcore/stats"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
-	"github.com/feichai0017/NoKV/runtime/stats"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 )
 
 func runStatsCmd(w io.Writer, args []string) error {
@@ -248,12 +249,12 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 	defer func() { _ = metaStore.Close() }()
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
-	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
-	opts.AllowedModes = []raftmode.Mode{
-		raftmode.ModeStandalone,
-		raftmode.ModePreparing,
-		raftmode.ModeSeeded,
-		raftmode.ModeCluster,
+	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(metaStore.RaftPointerSnapshot)
+	opts.AllowedModes = []workdirmode.Mode{
+		workdirmode.ModeStandalone,
+		workdirmode.ModePreparing,
+		workdirmode.ModeSeeded,
+		workdirmode.ModeCluster,
 	}
 	db, err := NoKV.Open(opts)
 	if err != nil {

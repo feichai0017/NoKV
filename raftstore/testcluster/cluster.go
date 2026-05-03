@@ -24,14 +24,17 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 )
 
 type Node struct {
@@ -43,9 +46,9 @@ type Node struct {
 }
 
 type NodeConfig struct {
-	AllowedModes      []raftmode.Mode
+	AllowedModes      []workdirmode.Mode
 	StartPeers        bool
-	Scheduler         storepkg.SchedulerClient
+	Scheduler         scheduler.Client
 	HeartbeatInterval time.Duration
 }
 
@@ -70,7 +73,7 @@ func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoK
 	return db
 }
 
-func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmode.Mode, startPeers bool) *Node {
+func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []workdirmode.Mode, startPeers bool) *Node {
 	tb.Helper()
 	return StartNodeWithConfig(tb, storeID, dir, NodeConfig{
 		AllowedModes: allowedModes,
@@ -86,7 +89,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	}
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}
@@ -96,7 +99,11 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 		tb.Fatalf("open node db: %v", err)
 	}
 	srv, err := serverpkg.NewNode(serverpkg.Config{
-		Storage: serverpkg.Storage{MVCC: db, Raft: db.RaftLog()},
+		Storage: serverpkg.Storage{
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
+		},
 		Store: storepkg.Config{
 			StoreID:           storeID,
 			LocalMeta:         localMeta,
@@ -194,7 +201,7 @@ func (c *Coordinator) RetireStore(tb testing.TB, storeID uint64) {
 	c.PublishRootEvent(tb, rootevent.StoreRetired(storeID))
 }
 
-func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storepkg.SchedulerClient {
+func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) scheduler.Client {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -230,7 +237,7 @@ func StartPeers(tb testing.TB, node *Node) {
 		if peerID == 0 {
 			continue
 		}
-		storage, err := node.DB.RaftLog().Open(meta.ID, node.LocalMeta)
+		storage, err := raftlog.NewDBLog(node.DB).Open(meta.ID, node.LocalMeta)
 		if err != nil {
 			tb.Fatalf("open peer storage: %v", err)
 		}
@@ -269,7 +276,7 @@ func (n *Node) UnblockPeer(peerID uint64) {
 	n.Server.Transport().UnblockPeer(peerID)
 }
 
-func (n *Node) Restart(tb testing.TB, allowedModes []raftmode.Mode, startPeers bool) {
+func (n *Node) Restart(tb testing.TB, allowedModes []workdirmode.Mode, startPeers bool) {
 	tb.Helper()
 	workDir := n.WorkDir
 	storeID := n.StoreID
@@ -395,33 +402,13 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 }
 
 func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage raftlog.PeerStorage) *peer.Config {
-	var snapshotExport peer.SnapshotExportFunc
-	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
-		snapshotExport = snapshotBridge.ExportSnapshot
-		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
-			result, err := snapshotBridge.ImportSnapshot(payload)
-			if err != nil {
-				return localmeta.RegionMeta{}, err
-			}
-			return result.Meta.Region, nil
+	snapshotStore := snapshotpkg.NewDBStore(node.DB)
+	snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
+		result, err := snapshotStore.ImportSnapshot(payload)
+		if err != nil {
+			return localmeta.RegionMeta{}, err
 		}
-		return &peer.Config{
-			RaftConfig: myraft.Config{
-				ID:              peerID,
-				ElectionTick:    5,
-				HeartbeatTick:   1,
-				MaxSizePerMsg:   1 << 20,
-				MaxInflightMsgs: 256,
-				PreVote:         true,
-			},
-			Transport:      node.Server.Transport(),
-			Apply:          raftkv.NewEntryApplier(node.DB),
-			SnapshotExport: snapshotExport,
-			SnapshotApply:  snapshotApply,
-			Storage:        storage,
-			GroupID:        meta.ID,
-			Region:         localmeta.CloneRegionMetaPtr(&meta),
-		}
+		return result.Meta.Region, nil
 	}
 	return &peer.Config{
 		RaftConfig: myraft.Config{
@@ -432,11 +419,13 @@ func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage ra
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		},
-		Transport: node.Server.Transport(),
-		Apply:     raftkv.NewEntryApplier(node.DB),
-		Storage:   storage,
-		GroupID:   meta.ID,
-		Region:    localmeta.CloneRegionMetaPtr(&meta),
+		Transport:      node.Server.Transport(),
+		Apply:          raftkv.NewEntryApplier(node.DB),
+		SnapshotExport: snapshotStore.ExportSnapshot,
+		SnapshotApply:  snapshotApply,
+		Storage:        storage,
+		GroupID:        meta.ID,
+		Region:         localmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 
@@ -458,7 +447,7 @@ func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*N
 	return fmt.Sprint(parts)
 }
 
-func WaitForSchedulerMode(tb testing.TB, node *Node, mode storepkg.SchedulerMode, degraded bool) {
+func WaitForSchedulerMode(tb testing.TB, node *Node, mode scheduler.Mode, degraded bool) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

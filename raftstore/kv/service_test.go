@@ -17,6 +17,7 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -33,7 +34,7 @@ func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -43,7 +44,7 @@ func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 
 func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
-	storage, err := db.RaftLog().Open(groupID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)
 	return storage
 }

@@ -5,16 +5,16 @@ import (
 	"sync"
 	"time"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 )
 
 const GCPlanTaskName = "mvcc-gc.plan"
 
 // GCPlanSnapshot exposes the last read-only background MVCC GC plan.
 type GCPlanSnapshot struct {
-	dbruntime.PeriodicTaskSnapshot
+	dbcore.PeriodicTaskSnapshot
 	SkippedRuns  uint64
 	LastTxnFloor TxnFloor
 	LastPlan     PlanStats
@@ -44,9 +44,9 @@ type GCPlanner struct {
 	plan     PlanStats
 }
 
-func NewGCPlanTask(cfg GCPlanConfig) (dbruntime.PeriodicTaskConfig, *GCPlanner, bool) {
+func NewGCPlanTask(cfg GCPlanConfig) (dbcore.PeriodicTaskConfig, *GCPlanner, bool) {
 	if cfg.MVCCStore == nil || cfg.Interval <= 0 || cfg.SafePoint == nil {
-		return dbruntime.PeriodicTaskConfig{}, nil, false
+		return dbcore.PeriodicTaskConfig{}, nil, false
 	}
 	planner := &GCPlanner{
 		store:     cfg.MVCCStore,
@@ -54,7 +54,7 @@ func NewGCPlanTask(cfg GCPlanConfig) (dbruntime.PeriodicTaskConfig, *GCPlanner, 
 		retention: cfg.Retention,
 		mount:     cfg.Mount,
 	}
-	return dbruntime.PeriodicTaskConfig{
+	return dbcore.PeriodicTaskConfig{
 		Name:     GCPlanTaskName,
 		Interval: cfg.Interval,
 		Run:      planner.run,
@@ -86,7 +86,7 @@ func (s *GCPlanner) run(ctx context.Context) error {
 	return err
 }
 
-func (s *GCPlanner) Snapshot(task dbruntime.PeriodicTaskSnapshot) GCPlanSnapshot {
+func (s *GCPlanner) Snapshot(task dbcore.PeriodicTaskSnapshot) GCPlanSnapshot {
 	if s == nil {
 		return GCPlanSnapshot{}
 	}

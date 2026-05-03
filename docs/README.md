@@ -27,7 +27,7 @@
 
 NoKV is the open-source counterpart of the **"stateless schema layer + transactional KV"** pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`**, a namespace metadata API for distributed filesystems / object storage / AI dataset metadata.
 
-The interesting part isn't the feature list. The interesting part is that **layer separation is enforced in code**: the fsmeta executor consumes a narrow `TxnRunner`; the default `OpenWithRaftstore` adapter owns raftstore wiring; `meta/root` keeps only lifecycle / authority truth; the storage engine never learns that a namespace exists.
+The interesting part isn't the feature list. The interesting part is that **layer separation is enforced in code**: the fsmeta executor consumes a narrow `TxnRunner`; the default `fsmeta/runtime/raftstore` adapter owns raftstore wiring; `meta/root` keeps only lifecycle / authority truth; the storage engine never learns that a namespace exists.
 
 > This site is the **technical docs hub**. For the project landing page, headline benchmarks, and the `Why NoKV vs X?` matrix, see the [root README](../README.md).
 
@@ -188,7 +188,7 @@ nokv quota set --coordinator-addr 127.0.0.1:2379 \
   --mount default --limit-bytes 10737418240 --limit-inodes 10000000
 
 # 5. Use fsmeta from any gRPC client (Go typed client at fsmeta/client/)
-#    or embedded Go: see fsmetaexec.OpenWithRaftstore in the root README
+#    or embedded Go: see fsmeta/runtime/raftstore.Open in the root README
 
 # 6. Inspect runtime state
 curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount'

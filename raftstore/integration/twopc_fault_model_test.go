@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -16,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -96,7 +96,7 @@ func openTwoStoreSplitRuntime(t *testing.T, ctx context.Context) *twopcFaultRunt
 		return err
 	}())
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	t.Cleanup(func() {
 		seed.Close(t)

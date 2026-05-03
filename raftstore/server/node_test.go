@@ -26,7 +26,10 @@ import (
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -40,8 +43,9 @@ func TestNodeStartsKVService(t *testing.T) {
 	db, _ := openTestDB(t)
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID: 1,
@@ -74,8 +78,9 @@ func TestNodePreservesConfiguredAdvertiseAddrs(t *testing.T) {
 	scheduler := &captureScheduler{}
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID:           1,
@@ -106,8 +111,9 @@ func TestNodeAutoStartsMVCCMaintenanceWorker(t *testing.T) {
 
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID:   1,
@@ -162,7 +168,7 @@ func TestNodeAutoStartsMVCCMaintenanceWorker(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-func TestNodeRequiresSnapshotBridge(t *testing.T) {
+func TestNodeRequiresSnapshotStorage(t *testing.T) {
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
 			MVCC: fakeMVCCStore{},
@@ -175,7 +181,7 @@ func TestNodeRequiresSnapshotBridge(t *testing.T) {
 	})
 	require.Nil(t, node)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "snapshot bridge")
+	require.Contains(t, err.Error(), "snapshot storage")
 }
 
 func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64, value string) {
@@ -190,7 +196,7 @@ func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, 
 
 type captureScheduler struct {
 	mu    sync.Mutex
-	stats storepkg.StoreStats
+	stats scheduler.StoreStats
 	seen  bool
 }
 
@@ -200,7 +206,7 @@ func (s *captureScheduler) PublishRootEvent(context.Context, rootevent.Event) er
 	return nil
 }
 
-func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storepkg.StoreStats) []storepkg.Operation {
+func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	s.mu.Lock()
 	s.stats = stats
 	s.seen = true
@@ -208,15 +214,15 @@ func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storepkg.Stor
 	return nil
 }
 
-func (s *captureScheduler) Status() storepkg.SchedulerStatus {
-	return storepkg.SchedulerStatus{}
+func (s *captureScheduler) Status() scheduler.Status {
+	return scheduler.Status{}
 }
 
 func (s *captureScheduler) Close() error {
 	return nil
 }
 
-func (s *captureScheduler) latestStore() (storepkg.StoreStats, bool) {
+func (s *captureScheduler) latestStore() (scheduler.StoreStats, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats, s.seen
@@ -226,8 +232,9 @@ func TestNodeStartsRaftAdminService(t *testing.T) {
 	db, localMeta := openTestDB(t)
 	node, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID:   1,
@@ -335,7 +342,7 @@ func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 		opt.WorkDir = workDir
 		localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 		require.NoError(t, err)
-		opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+		opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 		db, err := NoKV.Open(opt)
 		require.NoError(t, err)
 		nodes[i].db = db
@@ -343,8 +350,9 @@ func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 
 		node, err := serverpkg.NewNode(serverpkg.Config{
 			Storage: serverpkg.Storage{
-				MVCC: db,
-				Raft: db.RaftLog(),
+				MVCC:     db,
+				Raft:     raftlog.NewDBLog(db),
+				Snapshot: snapshotpkg.NewDBStore(db),
 			},
 			Store: storepkg.Config{
 				StoreID:   nodes[i].storeID,
@@ -450,7 +458,7 @@ func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -512,7 +520,7 @@ func (r *staticRegionResolver) Close() error { return nil }
 
 func startRegionPeer(t *testing.T, n testNode) {
 	store := n.node.Store()
-	peerStorage, err := n.db.RaftLog().Open(n.region.ID, n.localMeta)
+	peerStorage, err := raftlog.NewDBLog(n.db).Open(n.region.ID, n.localMeta)
 	require.NoError(t, err)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{

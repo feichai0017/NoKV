@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -30,7 +29,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -213,7 +212,7 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 type followerStorage struct{}
 
 func (f *followerStorage) Load() (rootview.Snapshot, error) {
-	return rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+	return rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, nil
 }
 func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) error { return nil }
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
@@ -719,44 +718,6 @@ func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	require.Contains(t, err.Error(), "sealed_floor=2")
 }
 
-func TestGRPCClientAblationDisableClientVerifyAcceptsStaleEra(t *testing.T) {
-	servers := map[string]*scriptedCoordinatorServer{
-		"fresh": {
-			allocResponses: []*coordpb.AllocIDResponse{
-				{
-					FirstId:          100,
-					Count:            1,
-					Era:              2,
-					ConsumedFrontier: 100,
-				},
-			},
-		},
-		"stale": {
-			allocResponses: []*coordpb.AllocIDResponse{
-				{
-					FirstId:          50,
-					Count:            1,
-					Era:              1,
-					ConsumedFrontier: 50,
-				},
-			},
-		},
-	}
-	cli := newScriptedCoordinatorClient(t, []string{"fresh", "stale"}, servers)
-	require.NoError(t, cli.ConfigureAblation(coordablation.Config{DisableClientVerify: true}))
-
-	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, uint64(100), resp.GetFirstId())
-
-	cli.markPreferred("passthrough:///stale")
-
-	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, uint64(50), resp.GetFirstId())
-	require.Equal(t, uint64(1), resp.GetEra())
-}
-
 type scriptedCoordinatorServer struct {
 	coordpb.UnimplementedCoordinatorServer
 
@@ -1046,8 +1007,8 @@ func TestClientHelperFunctions(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

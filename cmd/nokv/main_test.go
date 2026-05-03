@@ -15,14 +15,14 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/dbcore/stats"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,8 +100,8 @@ func TestRunStatsCmd(t *testing.T) {
 
 func TestLocalStatsSnapshotAllowsSeededWorkdir(t *testing.T) {
 	dir := prepareDBWorkdir(t)
-	require.NoError(t, raftmode.Write(dir, raftmode.State{
-		Mode:     raftmode.ModeSeeded,
+	require.NoError(t, workdirmode.Write(dir, workdirmode.State{
+		Mode:     workdirmode.ModeSeeded,
 		StoreID:  1,
 		RegionID: 2,
 		PeerID:   3,
@@ -785,7 +785,7 @@ func TestRunMigratePlanCmdBlocksNonEmptyCatalog(t *testing.T) {
 func TestRunMigratePlanCmdBlocksModeFile(t *testing.T) {
 	dir := prepareDBWorkdir(t)
 	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, migratepkg.ModeFileName),
+		filepath.Join(dir, workdirmode.FileName),
 		[]byte(`{"mode":"seeded","store_id":1,"region_id":1,"peer_id":10}`),
 		0o644,
 	))
@@ -824,7 +824,7 @@ func TestRunMigrateStatusCmdStandalone(t *testing.T) {
 func TestRunMigrateStatusCmdSeeded(t *testing.T) {
 	dir := prepareDBWorkdir(t)
 	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, migratepkg.ModeFileName),
+		filepath.Join(dir, workdirmode.FileName),
 		[]byte(`{"mode":"seeded","store_id":1,"region_id":2,"peer_id":3}`),
 		0o644,
 	))
@@ -863,7 +863,7 @@ func TestRunMigrateInitCmd(t *testing.T) {
 
 	status, err := migratepkg.ReadStatus(dir)
 	require.NoError(t, err)
-	require.Equal(t, migratepkg.ModeSeeded, status.Mode)
+	require.Equal(t, workdirmode.ModeSeeded, status.Mode)
 	require.Equal(t, 1, status.LocalCatalogRegions)
 	require.True(t, status.SeedSnapshotPresent)
 	require.Contains(t, status.Next, "nokv serve")
@@ -975,7 +975,7 @@ func TestRunMigrateStatusCmdPassesRemoteViewFlags(t *testing.T) {
 		require.Equal(t, 2*time.Second, cfg.Timeout)
 		return migratepkg.StatusResult{
 			WorkDir: "/tmp/store-1",
-			Mode:    migratepkg.ModeCluster,
+			Mode:    workdirmode.ModeCluster,
 			Runtime: &migratepkg.RuntimeStatus{
 				Addr:            cfg.AdminAddr,
 				RegionID:        cfg.RegionID,
@@ -1013,7 +1013,7 @@ func TestRunMigrateReportCmdPassesRemoteViewFlags(t *testing.T) {
 		require.Equal(t, 2*time.Second, cfg.Timeout)
 		return migratepkg.ReportResult{
 			WorkDir:       cfg.WorkDir,
-			Mode:          migratepkg.ModeCluster,
+			Mode:          workdirmode.ModeCluster,
 			Stage:         "cluster-active",
 			Summary:       "cluster is active",
 			ReadyForInit:  false,
@@ -1021,7 +1021,7 @@ func TestRunMigrateReportCmdPassesRemoteViewFlags(t *testing.T) {
 			NextSteps:     []string{"nokv migrate expand"},
 			Status: migratepkg.StatusResult{
 				WorkDir: cfg.WorkDir,
-				Mode:    migratepkg.ModeCluster,
+				Mode:    workdirmode.ModeCluster,
 				Runtime: &migratepkg.RuntimeStatus{
 					Addr:            cfg.AdminAddr,
 					RegionID:        cfg.RegionID,

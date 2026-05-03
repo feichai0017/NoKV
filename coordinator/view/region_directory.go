@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"sort"
 	"sync"
 	"time"
@@ -12,8 +12,8 @@ import (
 
 // RegionInfo captures region metadata with heartbeat timestamp.
 type RegionInfo struct {
-	Descriptor    descriptor.Descriptor `json:"descriptor"`
-	LastHeartbeat time.Time             `json:"last_heartbeat"`
+	Descriptor    topology.Descriptor `json:"descriptor"`
+	LastHeartbeat time.Time           `json:"last_heartbeat"`
 	// LeaderStoreID is the store that most recently reported itself as the
 	// raft leader of this region via StoreHeartbeat. Zero means no store
 	// has claimed leadership yet (or all claims are stale).
@@ -36,7 +36,7 @@ type regionLeader struct {
 // route lookup and operator inspection.
 type RegionDirectoryView struct {
 	mu            sync.RWMutex
-	regions       map[uint64]descriptor.Descriptor
+	regions       map[uint64]topology.Descriptor
 	regionLastHB  map[uint64]time.Time
 	regionLeaders map[uint64]regionLeader
 	regionIndex   []regionIndexEntry
@@ -44,17 +44,17 @@ type RegionDirectoryView struct {
 
 func NewRegionDirectoryView() *RegionDirectoryView {
 	return &RegionDirectoryView{
-		regions:       make(map[uint64]descriptor.Descriptor),
+		regions:       make(map[uint64]topology.Descriptor),
 		regionLastHB:  make(map[uint64]time.Time),
 		regionLeaders: make(map[uint64]regionLeader),
 	}
 }
 
-func (v *RegionDirectoryView) Upsert(desc descriptor.Descriptor) error {
+func (v *RegionDirectoryView) Upsert(desc topology.Descriptor) error {
 	return v.UpsertAt(desc, time.Now())
 }
 
-func (v *RegionDirectoryView) UpsertAt(desc descriptor.Descriptor, now time.Time) error {
+func (v *RegionDirectoryView) UpsertAt(desc topology.Descriptor, now time.Time) error {
 	if v == nil {
 		return nil
 	}
@@ -102,7 +102,7 @@ func (v *RegionDirectoryView) UpsertAt(desc descriptor.Descriptor, now time.Time
 
 // Validate checks whether desc can be inserted into the current directory view
 // without mutating tracked regions or index state.
-func (v *RegionDirectoryView) Validate(desc descriptor.Descriptor) error {
+func (v *RegionDirectoryView) Validate(desc topology.Descriptor) error {
 	if v == nil {
 		return nil
 	}
@@ -192,24 +192,24 @@ func (v *RegionDirectoryView) ClearLeadersFromStore(storeID uint64, keep map[uin
 	}
 }
 
-func (v *RegionDirectoryView) DescriptorsSnapshot() map[uint64]descriptor.Descriptor {
+func (v *RegionDirectoryView) DescriptorsSnapshot() map[uint64]topology.Descriptor {
 	if v == nil {
-		return make(map[uint64]descriptor.Descriptor)
+		return make(map[uint64]topology.Descriptor)
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	out := make(map[uint64]descriptor.Descriptor, len(v.regions))
+	out := make(map[uint64]topology.Descriptor, len(v.regions))
 	for id, desc := range v.regions {
 		out[id] = desc.Clone()
 	}
 	return out
 }
 
-func (v *RegionDirectoryView) Replace(descriptors map[uint64]descriptor.Descriptor) {
+func (v *RegionDirectoryView) Replace(descriptors map[uint64]topology.Descriptor) {
 	if v == nil {
 		return
 	}
-	regions := make(map[uint64]descriptor.Descriptor, len(descriptors))
+	regions := make(map[uint64]topology.Descriptor, len(descriptors))
 	heartbeats := make(map[uint64]time.Time, len(descriptors))
 	now := time.Now()
 	for id, desc := range descriptors {
@@ -233,44 +233,44 @@ func (v *RegionDirectoryView) Replace(descriptors map[uint64]descriptor.Descript
 	v.mu.Unlock()
 }
 
-func (v *RegionDirectoryView) LookupDescriptor(key []byte) (descriptor.Descriptor, bool) {
+func (v *RegionDirectoryView) LookupDescriptor(key []byte) (topology.Descriptor, bool) {
 	if v == nil {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if len(v.regionIndex) == 0 {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	idx := sort.Search(len(v.regionIndex), func(i int) bool {
 		return bytes.Compare(v.regionIndex[i].start, key) > 0
 	})
 	if idx == 0 {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	entry := v.regionIndex[idx-1]
 	if bytes.Compare(key, entry.start) < 0 {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	if len(entry.end) > 0 && bytes.Compare(key, entry.end) >= 0 {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	desc, ok := v.regions[entry.id]
 	if !ok {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	return desc.Clone(), true
 }
 
-func (v *RegionDirectoryView) Descriptor(regionID uint64) (descriptor.Descriptor, bool) {
+func (v *RegionDirectoryView) Descriptor(regionID uint64) (topology.Descriptor, bool) {
 	if v == nil || regionID == 0 {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	v.mu.RLock()
 	desc, ok := v.regions[regionID]
 	v.mu.RUnlock()
 	if !ok {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	return desc.Clone(), true
 }
@@ -357,7 +357,7 @@ func isEpochStale(incoming, current metaregion.Epoch) bool {
 	return false
 }
 
-func buildRegionIndex(regions map[uint64]descriptor.Descriptor) []regionIndexEntry {
+func buildRegionIndex(regions map[uint64]topology.Descriptor) []regionIndexEntry {
 	index := make([]regionIndexEntry, 0, len(regions))
 	for id, desc := range regions {
 		index = append(index, regionIndexEntry{

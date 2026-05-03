@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 type RangeChangeLifecycleDecision uint8
@@ -89,7 +89,7 @@ func PendingRangeChangeMatchesEvent(change PendingRangeChange, event rootevent.E
 	}
 }
 
-func RangeChangeStateMatches(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
+func RangeChangeStateMatches(descriptors map[uint64]topology.Descriptor, event rootevent.Event) bool {
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted, rootevent.KindRegionSplitCancelled:
 		if event.RangeSplit == nil {
@@ -122,7 +122,7 @@ func (c RangeChangeCompletion) NeedsEpochAdvance(planned bool) bool {
 	return planned || c.Open()
 }
 
-func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) bool {
+func rangeChangeSuperseded(descriptors map[uint64]topology.Descriptor, event rootevent.Event) bool {
 	switch event.Kind {
 	case rootevent.KindRegionSplitPlanned, rootevent.KindRegionSplitCommitted:
 		if event.RangeSplit == nil {
@@ -158,7 +158,7 @@ func rangeChangeSuperseded(descriptors map[uint64]descriptor.Descriptor, event r
 	return false
 }
 
-func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeCompletion {
+func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]topology.Descriptor, event rootevent.Event) RangeChangeCompletion {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
 		return RangeChangeCompletion{State: RangeChangeCompletionOpen}
@@ -182,7 +182,7 @@ func ObserveRangeChangeCompletion(pendingRangeChanges map[uint64]PendingRangeCha
 	}
 }
 
-func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) RangeChangeLifecycle {
+func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]topology.Descriptor, event rootevent.Event) RangeChangeLifecycle {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
 		return RangeChangeLifecycle{
@@ -319,7 +319,7 @@ func ObserveRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChan
 	}
 }
 
-func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) (RangeChangeLifecycleDecision, error) {
+func EvaluateRangeChangeLifecycle(pendingRangeChanges map[uint64]PendingRangeChange, descriptors map[uint64]topology.Descriptor, event rootevent.Event) (RangeChangeLifecycleDecision, error) {
 	key, _, ok := PendingRangeChangeFromEvent(event)
 	if !ok {
 		return RangeChangeLifecycleApply, nil
@@ -370,7 +370,7 @@ func rangeCompletionReason(completion RangeChangeCompletion) TransitionReason {
 	}
 }
 
-func splitStateMatches(descriptors map[uint64]descriptor.Descriptor, parentRegionID uint64, left, right descriptor.Descriptor) bool {
+func splitStateMatches(descriptors map[uint64]topology.Descriptor, parentRegionID uint64, left, right topology.Descriptor) bool {
 	if parentRegionID != left.RegionID {
 		if _, ok := descriptors[parentRegionID]; ok {
 			return false
@@ -384,7 +384,7 @@ func splitStateMatches(descriptors map[uint64]descriptor.Descriptor, parentRegio
 	return ok && gotRight.Equal(right)
 }
 
-func mergeStateMatches(descriptors map[uint64]descriptor.Descriptor, leftRegionID, rightRegionID uint64, merged descriptor.Descriptor) bool {
+func mergeStateMatches(descriptors map[uint64]topology.Descriptor, leftRegionID, rightRegionID uint64, merged topology.Descriptor) bool {
 	if _, ok := descriptors[leftRegionID]; ok {
 		return false
 	}

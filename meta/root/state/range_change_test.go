@@ -5,7 +5,7 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,7 +56,7 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
 
-	descriptors := map[uint64]descriptor.Descriptor{
+	descriptors := map[uint64]topology.Descriptor{
 		left.RegionID:  left,
 		right.RegionID: right,
 	}
@@ -88,7 +88,7 @@ func TestEvaluateRangeChangeLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rootstate.RangeChangeLifecycleApply, decision)
 
-	mergeDescriptors := map[uint64]descriptor.Descriptor{
+	mergeDescriptors := map[uint64]topology.Descriptor{
 		merged.RegionID: merged,
 	}
 	decision, err = rootstate.EvaluateRangeChangeLifecycle(nil, mergeDescriptors, mergeCommitted)
@@ -123,7 +123,7 @@ func TestObserveRangeChangeCompletion(t *testing.T) {
 
 	completion = rootstate.ObserveRangeChangeCompletion(
 		nil,
-		map[uint64]descriptor.Descriptor{
+		map[uint64]topology.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
@@ -163,7 +163,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 
 	outcome = rootstate.ObserveRangeChangeLifecycle(
 		nil,
-		map[uint64]descriptor.Descriptor{
+		map[uint64]topology.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
@@ -179,7 +179,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 	newerLeft.EnsureHash()
 	outcome = rootstate.ObserveRangeChangeLifecycle(
 		nil,
-		map[uint64]descriptor.Descriptor{newerLeft.RegionID: newerLeft},
+		map[uint64]topology.Descriptor{newerLeft.RegionID: newerLeft},
 		splitPlanned,
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
@@ -187,7 +187,7 @@ func TestObserveRangeChangeLifecycle(t *testing.T) {
 
 	outcome = rootstate.ObserveRangeChangeLifecycle(
 		nil,
-		map[uint64]descriptor.Descriptor{newerLeft.RegionID: newerLeft},
+		map[uint64]topology.Descriptor{newerLeft.RegionID: newerLeft},
 		splitCommitted,
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)
@@ -216,7 +216,7 @@ func TestObserveRangeChangeCancelLifecycle(t *testing.T) {
 
 	outcome := rootstate.ObserveRangeChangeLifecycle(
 		map[uint64]rootstate.PendingRangeChange{key: pending},
-		map[uint64]descriptor.Descriptor{
+		map[uint64]topology.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
@@ -227,7 +227,7 @@ func TestObserveRangeChangeCancelLifecycle(t *testing.T) {
 
 	outcome = rootstate.ObserveRangeChangeLifecycle(
 		nil,
-		map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+		map[uint64]topology.Descriptor{parent.RegionID: parent},
 		rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent),
 	)
 	require.Equal(t, rootstate.RangeChangeLifecycleSkip, outcome.Decision)

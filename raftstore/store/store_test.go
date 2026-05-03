@@ -15,14 +15,16 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,7 +220,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 			if info.Descriptor.RegionID == childMeta.ID {
 				return len(info.Descriptor.Lineage) == 1 &&
 					info.Descriptor.Lineage[0].RegionID == parentMeta.ID &&
-					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindSplitParent
+					info.Descriptor.Lineage[0].Kind == topology.LineageKindSplitParent
 			}
 		}
 		return false
@@ -305,7 +307,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 			if info.Descriptor.RegionID == parentMeta.ID {
 				return len(info.Descriptor.Lineage) == 1 &&
 					info.Descriptor.Lineage[0].RegionID == sourceMeta.ID &&
-					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindMergeSource
+					info.Descriptor.Lineage[0].Kind == topology.LineageKindMergeSource
 			}
 		}
 		return false
@@ -548,7 +550,7 @@ func (noopTransport) Send(context.Context, myraft.Message) {}
 type testSchedulerSink struct {
 	mu      sync.RWMutex
 	regions map[uint64]regionHeartbeat
-	stores  map[uint64]StoreStats
+	stores  map[uint64]scheduler.StoreStats
 	history []schedulerEvent
 }
 
@@ -559,11 +561,11 @@ type slowSchedulerSink struct {
 
 type degradedSchedulerSink struct {
 	testSchedulerSink
-	status SchedulerStatus
+	status scheduler.Status
 }
 
 type regionHeartbeat struct {
-	Descriptor    descriptor.Descriptor
+	Descriptor    topology.Descriptor
 	LastHeartbeat time.Time
 }
 
@@ -576,7 +578,7 @@ type schedulerEvent struct {
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
-		stores:  make(map[uint64]StoreStats),
+		stores:  make(map[uint64]scheduler.StoreStats),
 	}
 }
 
@@ -601,7 +603,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 		return nil
 	}
 	s.mu.Lock()
-	descriptors := make(map[uint64]descriptor.Descriptor, len(s.regions))
+	descriptors := make(map[uint64]topology.Descriptor, len(s.regions))
 	for id, info := range s.regions {
 		descriptors[id] = info.Descriptor.Clone()
 	}
@@ -619,7 +621,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 	return nil
 }
 
-func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) []Operation {
+func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	if s == nil || stats.StoreID == 0 {
 		return nil
 	}
@@ -630,8 +632,8 @@ func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats StoreStats) 
 	return nil
 }
 
-func (s *testSchedulerSink) Status() SchedulerStatus {
-	return SchedulerStatus{}
+func (s *testSchedulerSink) Status() scheduler.Status {
+	return scheduler.Status{}
 }
 
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
@@ -650,12 +652,12 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	return out
 }
 
-func (s *testSchedulerSink) StoreSnapshot() []StoreStats {
+func (s *testSchedulerSink) StoreSnapshot() []scheduler.StoreStats {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]StoreStats, 0, len(s.stores))
+	out := make([]scheduler.StoreStats, 0, len(s.stores))
 	for _, st := range s.stores {
 		out = append(out, st)
 	}
@@ -699,7 +701,7 @@ func (s *testSchedulerSink) Close() error {
 	return nil
 }
 
-func (s *degradedSchedulerSink) Status() SchedulerStatus {
+func (s *degradedSchedulerSink) Status() scheduler.Status {
 	return s.status
 }
 
@@ -778,7 +780,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -790,7 +792,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 
 func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
-	storage, err := db.RaftLog().Open(groupID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)
 	return storage
 }

@@ -5,7 +5,7 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +16,7 @@ func TestObserveRootEventLifecycle(t *testing.T) {
 	require.True(t, ok)
 
 	lifecycle := rootstate.ObserveRootEventLifecycle(rootstate.Snapshot{
-		Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+		Descriptors:        map[uint64]topology.Descriptor{target.RegionID: target},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
 	}, planned)
 	require.Equal(t, rootstate.TransitionKindPeerChange, lifecycle.Kind)
@@ -33,7 +33,7 @@ func TestEvaluateRootEventLifecycle(t *testing.T) {
 	change, ok := rootstate.PendingPeerChangeFromEvent(peerPlanned)
 	require.True(t, ok)
 	snapshot := rootstate.Snapshot{
-		Descriptors:        map[uint64]descriptor.Descriptor{target.RegionID: target},
+		Descriptors:        map[uint64]topology.Descriptor{target.RegionID: target},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
 	}
 

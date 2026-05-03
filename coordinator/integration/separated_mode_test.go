@@ -16,9 +16,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -148,8 +148,8 @@ func TestSeparatedModeRoutingServesAcrossMultipleCoordinatorsWhileAllocatorStays
 	require.Contains(t, err.Error(), "coordinator lease not held")
 }
 
-func separatedModeDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func separatedModeDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

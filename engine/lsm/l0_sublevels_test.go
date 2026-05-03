@@ -263,7 +263,7 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 		"trivial move must refuse a partial L0 group whose range overlaps untouched L0 tables")
 }
 
-// BenchmarkL0SelectTablesForKeyLinear measures the cost of the legacy linear
+// BenchmarkL0SelectTablesForKeyLinear measures the cost of the linear
 // scan over L0 tables. We force the sublevel index to nil so selectTablesForKey
 // falls back to getTablesForKeyLinear.
 func BenchmarkL0SelectTablesForKeyLinear(b *testing.B) {
@@ -279,7 +279,7 @@ func BenchmarkL0SelectTablesForKeyLinear(b *testing.B) {
 		l0.add(tbl)
 	}
 	l0.Sort()
-	l0.l0Sublevels = nil // force legacy linear scan path
+	l0.l0Sublevels = nil // force linear scan path
 
 	target := []byte(kv.InternalKey(kv.CFDefault, []byte("k00031"), 0))
 	b.ResetTimer()

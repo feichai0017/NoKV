@@ -3,12 +3,12 @@ package state_test
 import (
 	"testing"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,7 +155,7 @@ func TestCursorHelpers(t *testing.T) {
 }
 
 func TestCloneDescriptorsDetachesMapAndValues(t *testing.T) {
-	in := map[uint64]descriptor.Descriptor{
+	in := map[uint64]topology.Descriptor{
 		7: testDescriptor(7, []byte("m"), []byte("z")),
 	}
 	out := rootstate.CloneDescriptors(in)
@@ -179,7 +179,7 @@ func TestCloneSnapshotDetachesAuthorityMapsAndPendingChanges(t *testing.T) {
 		Quotas: map[string]rootstate.QuotaFence{
 			"vol/0": {SubjectID: "vol/0", Mount: "vol", Era: 1},
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{7: base},
+		Descriptors: map[uint64]topology.Descriptor{7: base},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			7: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 20, Base: base, Target: target},
 		},
@@ -222,7 +222,7 @@ func TestCloneEmptyMapsAndDescriptorRevision(t *testing.T) {
 	low.RootEpoch = 3
 	high := testDescriptor(2, []byte("m"), []byte("z"))
 	high.RootEpoch = 9
-	require.Equal(t, uint64(9), rootstate.MaxDescriptorRevision(map[uint64]descriptor.Descriptor{
+	require.Equal(t, uint64(9), rootstate.MaxDescriptorRevision(map[uint64]topology.Descriptor{
 		low.RegionID:  low,
 		high.RegionID: high,
 	}))
@@ -359,8 +359,8 @@ func TestSnapshotRetentionIndexTracksMountFloors(t *testing.T) {
 	require.Zero(t, floor)
 }
 
-func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

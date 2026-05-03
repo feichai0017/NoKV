@@ -3,16 +3,18 @@ package client
 import (
 	"context"
 	"errors"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	errorpb "github.com/feichai0017/NoKV/pb/error"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	nokverrors "github.com/feichai0017/NoKV/errors"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -21,8 +23,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 type clusterValue struct {
@@ -869,9 +871,9 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), resolved)
 
-	errStr := (&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
-	require.Contains(t, errStr, "client: transaction key errors")
-	conflict, ok := AsTxnKeyError(&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}})
+	keyErr := nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{Abort: "boom"})
+	require.Contains(t, keyErr.Error(), "nokv: transaction key errors")
+	conflict, ok := nokverrors.AsTxnKeyError(keyErr)
 	require.True(t, ok)
 	require.Len(t, conflict.Errors, 1)
 }
@@ -1677,7 +1679,7 @@ func statusInvalidArgument(msg string) error {
 }
 
 func TestContainsKeyAndCompare(t *testing.T) {
-	require.False(t, containsKey(descriptor.Descriptor{}, []byte("a")))
+	require.False(t, containsKey(topology.Descriptor{}, []byte("a")))
 
 	meta := &metapb.RegionDescriptor{
 		RegionId: 1,
@@ -1743,7 +1745,7 @@ func TestNormalizeRPCError(t *testing.T) {
 }
 
 func TestDefaultLeaderStoreID(t *testing.T) {
-	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
+	require.Equal(t, uint64(0), defaultLeaderStoreID(topology.Descriptor{}))
 	require.Equal(t, uint64(0), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{})))
 	require.Equal(t, uint64(9), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
 		RegionId: 1,

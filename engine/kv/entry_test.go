@@ -180,11 +180,6 @@ func TestEntryDecrRefUnderflowPanics(t *testing.T) {
 }
 
 func TestValueHelpers(t *testing.T) {
-	entry := &Entry{Meta: BitValuePointer}
-	if !IsValuePtr(entry) {
-		t.Fatalf("expected IsValuePtr to be true")
-	}
-
 	u32 := uint32(0xAABBCCDD)
 	if got := BytesToU32(U32ToBytes(u32)); got != u32 {
 		t.Fatalf("expected round-trip u32, got %x", got)
@@ -228,7 +223,7 @@ func TestValueHelpers(t *testing.T) {
 func TestNewValueStructEntry(t *testing.T) {
 	key := InternalKey(CFWrite, []byte("user-key"), 42)
 	vs := ValueStruct{
-		Meta:      BitValuePointer,
+		Meta:      BitRangeDelete,
 		Value:     []byte("value"),
 		ExpiresAt: 123,
 	}

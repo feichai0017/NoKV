@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -12,13 +13,13 @@ import (
 
 // PlanResult is the read-only migration preflight result for one workdir.
 type PlanResult struct {
-	WorkDir             string   `json:"workdir"`
-	Mode                Mode     `json:"mode"`
-	Eligible            bool     `json:"eligible"`
-	Blockers            []string `json:"blockers,omitempty"`
-	Warnings            []string `json:"warnings,omitempty"`
-	Next                string   `json:"next,omitempty"`
-	LocalCatalogRegions int      `json:"local_catalog_regions"`
+	WorkDir             string           `json:"workdir"`
+	Mode                workdirmode.Mode `json:"mode"`
+	Eligible            bool             `json:"eligible"`
+	Blockers            []string         `json:"blockers,omitempty"`
+	Warnings            []string         `json:"warnings,omitempty"`
+	Next                string           `json:"next,omitempty"`
+	LocalCatalogRegions int              `json:"local_catalog_regions"`
 }
 
 // BuildPlan inspects one standalone workdir and reports whether it is eligible
@@ -31,7 +32,7 @@ func BuildPlan(workDir string) (PlanResult, error) {
 
 	result := PlanResult{
 		WorkDir:  workDir,
-		Mode:     ModeStandalone,
+		Mode:     workdirmode.ModeStandalone,
 		Eligible: true,
 		Next:     "nokv migrate init",
 	}
@@ -42,7 +43,7 @@ func BuildPlan(workDir string) (PlanResult, error) {
 	} else {
 		result.Mode = mode
 	}
-	if result.Mode != ModeStandalone {
+	if result.Mode != workdirmode.ModeStandalone {
 		addBlocker(&result, fmt.Sprintf("workdir is already in %q mode", result.Mode))
 	}
 

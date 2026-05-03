@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRaftstoreRunnerFSMetaConcurrentHistoryOnSplitCluster(t *testing.T) {
+func TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster(t *testing.T) {
 	seeds := envInt("NOKV_RAFTSTORE_HISTORY_SEEDS", 1)
 	steps := envInt("NOKV_RAFTSTORE_HISTORY_STEPS", 24)
 	batchSize := envInt("NOKV_RAFTSTORE_HISTORY_BATCH", 3)

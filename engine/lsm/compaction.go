@@ -265,7 +265,7 @@ func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
 }
 
 const (
-	// PolicyLeveled keeps the legacy leveled-style execution ordering.
+	// PolicyLeveled keeps the default leveled-style execution ordering.
 	PolicyLeveled = "leveled"
 	// PolicyTiered prioritizes landing-buffer convergence before regular compaction.
 	PolicyTiered = "tiered"
@@ -365,7 +365,7 @@ func (p *SchedulerPolicy) Observe(event FeedbackEvent) {
 	}
 }
 
-// arrangeLeveled preserves legacy behavior.
+// arrangeLeveled applies the default leveled ordering.
 //
 // Design:
 // - Worker 0 keeps L0 relief first to reduce write stalls quickly.

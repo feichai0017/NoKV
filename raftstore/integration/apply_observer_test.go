@@ -6,11 +6,11 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
@@ -37,7 +37,7 @@ func TestApplyObserverReceivesCommittedKeysFromRealRaftApply(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 121, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	defer seed.Close(t)
 	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 121, 101)
 

@@ -2,16 +2,19 @@ package migrate
 
 import (
 	"fmt"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"os"
 	"path/filepath"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -27,12 +30,12 @@ type InitConfig struct {
 
 // InitResult describes the initialized seed directory.
 type InitResult struct {
-	WorkDir     string `json:"workdir"`
-	Mode        Mode   `json:"mode"`
-	StoreID     uint64 `json:"store_id"`
-	RegionID    uint64 `json:"region_id"`
-	PeerID      uint64 `json:"peer_id"`
-	SnapshotDir string `json:"snapshot_dir"`
+	WorkDir     string           `json:"workdir"`
+	Mode        workdirmode.Mode `json:"mode"`
+	StoreID     uint64           `json:"store_id"`
+	RegionID    uint64           `json:"region_id"`
+	PeerID      uint64           `json:"peer_id"`
+	SnapshotDir string           `json:"snapshot_dir"`
 }
 
 // Init converts a standalone workdir into a single-store seeded cluster
@@ -59,9 +62,9 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, err
 	}
 	switch state.Mode {
-	case ModeStandalone:
-		if err := writeState(cfg.WorkDir, stateFile{
-			Mode:     ModePreparing,
+	case workdirmode.ModeStandalone:
+		if err := writeState(cfg.WorkDir, workdirmode.State{
+			Mode:     workdirmode.ModePreparing,
 			StoreID:  cfg.StoreID,
 			RegionID: cfg.RegionID,
 			PeerID:   cfg.PeerID,
@@ -79,7 +82,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 		if failpoints.ShouldFailAfterInitModePreparing() {
 			return InitResult{}, fmt.Errorf("migrate: failpoint after init mode preparing")
 		}
-	case ModePreparing:
+	case workdirmode.ModePreparing:
 		if state.StoreID != 0 && state.StoreID != cfg.StoreID {
 			return InitResult{}, fmt.Errorf("migrate: preparing state store mismatch want=%d got=%d", cfg.StoreID, state.StoreID)
 		}
@@ -89,11 +92,11 @@ func Init(cfg InitConfig) (InitResult, error) {
 		if state.PeerID != 0 && state.PeerID != cfg.PeerID {
 			return InitResult{}, fmt.Errorf("migrate: preparing state peer mismatch want=%d got=%d", cfg.PeerID, state.PeerID)
 		}
-	case ModeSeeded:
+	case workdirmode.ModeSeeded:
 		if state.StoreID == cfg.StoreID && state.RegionID == cfg.RegionID && state.PeerID == cfg.PeerID {
 			return InitResult{
 				WorkDir:     cfg.WorkDir,
-				Mode:        ModeSeeded,
+				Mode:        workdirmode.ModeSeeded,
 				StoreID:     cfg.StoreID,
 				RegionID:    cfg.RegionID,
 				PeerID:      cfg.PeerID,
@@ -101,7 +104,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 			}, nil
 		}
 		return InitResult{}, fmt.Errorf("migrate: workdir already seeded for store=%d region=%d peer=%d", state.StoreID, state.RegionID, state.PeerID)
-	case ModeCluster:
+	case workdirmode.ModeCluster:
 		return InitResult{}, fmt.Errorf("migrate: workdir already in cluster mode")
 	default:
 		return InitResult{}, fmt.Errorf("migrate: unsupported mode %q", state.Mode)
@@ -151,8 +154,8 @@ func Init(cfg InitConfig) (InitResult, error) {
 
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
-	opts.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	opts.AllowedModes = []raftmode.Mode{raftmode.ModePreparing}
+	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opts.AllowedModes = []workdirmode.Mode{workdirmode.ModePreparing}
 	db, err := NoKV.Open(opts)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open db: %w", err)
@@ -168,7 +171,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := db.ExportSnapshotDir(snapshotDir, region); err != nil {
+	if _, err := snapshotpkg.NewDBStore(db).ExportSnapshotDir(snapshotDir, region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
 	}
 	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
@@ -183,7 +186,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init seed snapshot")
 	}
 
-	storage, err := db.RaftLog().Open(cfg.RegionID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(cfg.RegionID, localMeta)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open raft storage: %w", err)
 	}
@@ -213,8 +216,8 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}); err != nil {
 		return InitResult{}, err
 	}
-	if err := writeState(cfg.WorkDir, stateFile{
-		Mode:     ModeSeeded,
+	if err := writeState(cfg.WorkDir, workdirmode.State{
+		Mode:     workdirmode.ModeSeeded,
 		StoreID:  cfg.StoreID,
 		RegionID: cfg.RegionID,
 		PeerID:   cfg.PeerID,
@@ -234,7 +237,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	}
 	return InitResult{
 		WorkDir:     cfg.WorkDir,
-		Mode:        ModeSeeded,
+		Mode:        workdirmode.ModeSeeded,
 		StoreID:     cfg.StoreID,
 		RegionID:    cfg.RegionID,
 		PeerID:      cfg.PeerID,

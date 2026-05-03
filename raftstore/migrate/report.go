@@ -1,6 +1,10 @@
 package migrate
 
-import "fmt"
+import (
+	"fmt"
+
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+)
 
 type MembershipPeerSummary struct {
 	StoreID uint64 `json:"store_id"`
@@ -33,17 +37,17 @@ type modeReport struct {
 // ReportResult combines migration preflight and local state into one operator
 // facing report for a single workdir.
 type ReportResult struct {
-	WorkDir       string          `json:"workdir"`
-	Mode          Mode            `json:"mode"`
-	Stage         string          `json:"stage"`
-	Summary       string          `json:"summary"`
-	ReadyForInit  bool            `json:"ready_for_init"`
-	ReadyForServe bool            `json:"ready_for_serve"`
-	NextSteps     []string        `json:"next_steps,omitempty"`
-	ResumeHint    string          `json:"resume_hint,omitempty"`
-	Plan          PlanResult      `json:"plan"`
-	Status        StatusResult    `json:"status"`
-	Cluster       *ClusterSummary `json:"cluster,omitempty"`
+	WorkDir       string           `json:"workdir"`
+	Mode          workdirmode.Mode `json:"mode"`
+	Stage         string           `json:"stage"`
+	Summary       string           `json:"summary"`
+	ReadyForInit  bool             `json:"ready_for_init"`
+	ReadyForServe bool             `json:"ready_for_serve"`
+	NextSteps     []string         `json:"next_steps,omitempty"`
+	ResumeHint    string           `json:"resume_hint,omitempty"`
+	Plan          PlanResult       `json:"plan"`
+	Status        StatusResult     `json:"status"`
+	Cluster       *ClusterSummary  `json:"cluster,omitempty"`
 }
 
 // BuildReport returns one consolidated migration report for a local workdir.
@@ -68,7 +72,7 @@ func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {
 		Mode:          status.Mode,
 		Plan:          plan,
 		Status:        status,
-		ReadyForInit:  status.Mode == ModeStandalone && plan.Eligible,
+		ReadyForInit:  status.Mode == workdirmode.ModeStandalone && plan.Eligible,
 		ReadyForServe: readyForServe(status),
 		ResumeHint:    status.ResumeHint,
 	}
@@ -86,7 +90,7 @@ func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {
 
 func describeMode(status StatusResult, plan PlanResult) modeReport {
 	switch status.Mode {
-	case ModeStandalone:
+	case workdirmode.ModeStandalone:
 		if plan.Eligible {
 			return modeReport{
 				Stage:   "standalone-ready",
@@ -103,7 +107,7 @@ func describeMode(status StatusResult, plan PlanResult) modeReport {
 			Next:      "nokv migrate plan",
 			NextSteps: []string{"fix blockers reported by nokv migrate plan before running migrate init"},
 		}
-	case ModePreparing:
+	case workdirmode.ModePreparing:
 		return modeReport{
 			Stage:   "seed-preparing",
 			Summary: "workdir is mid-promotion; inspect local catalog and seed snapshot before retrying init",
@@ -113,7 +117,7 @@ func describeMode(status StatusResult, plan PlanResult) modeReport {
 				"retry nokv migrate init once partial state looks consistent",
 			},
 		}
-	case ModeSeeded:
+	case workdirmode.ModeSeeded:
 		return modeReport{
 			Stage:   "seed-ready",
 			Summary: "workdir has been promoted into a seed and is ready to boot in distributed mode",
@@ -123,7 +127,7 @@ func describeMode(status StatusResult, plan PlanResult) modeReport {
 				"after boot, use nokv migrate expand to add more peers",
 			},
 		}
-	case ModeCluster:
+	case workdirmode.ModeCluster:
 		return modeReport{
 			Stage:   "cluster-active",
 			Summary: "workdir is already running in cluster mode; operate on membership and leadership instead of reinitializing",
@@ -143,7 +147,7 @@ func describeMode(status StatusResult, plan PlanResult) modeReport {
 }
 
 func readyForServe(status StatusResult) bool {
-	return status.Mode == ModeSeeded &&
+	return status.Mode == workdirmode.ModeSeeded &&
 		status.StoreID != 0 &&
 		status.SeedSnapshotPresent &&
 		status.LocalCatalogRegions > 0

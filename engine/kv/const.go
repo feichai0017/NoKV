@@ -8,10 +8,8 @@ import (
 const (
 	// BitDelete marks an entry as a deletion tombstone.
 	BitDelete byte = 1 << 0
-	// BitValuePointer marks a legacy value-log pointer. New writes must not set it.
-	BitValuePointer byte = 1 << 1
 	// BitRangeDelete marks an entry as a range tombstone.
-	BitRangeDelete byte = 1 << 2
+	BitRangeDelete byte = 1 << 1
 
 	// MaxEntryHeaderSize defines the maximum number of bytes required to encode an EntryHeader.
 	MaxEntryHeaderSize int = 4 * binary.MaxVarintLen64

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -33,7 +34,7 @@ func TestInitFailpointAfterModePreparing(t *testing.T) {
 
 	status, err := ReadStatus(dir)
 	require.NoError(t, err)
-	require.Equal(t, ModePreparing, status.Mode)
+	require.Equal(t, workdirmode.ModePreparing, status.Mode)
 	require.NotNil(t, status.Checkpoint)
 	require.Equal(t, CheckpointPreparingWritten, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "re-run nokv migrate init")
@@ -55,7 +56,7 @@ func TestInitFailpointAfterCatalogPersist(t *testing.T) {
 
 	status, err := ReadStatus(dir)
 	require.NoError(t, err)
-	require.Equal(t, ModePreparing, status.Mode)
+	require.Equal(t, workdirmode.ModePreparing, status.Mode)
 	require.NotNil(t, status.Checkpoint)
 	require.Equal(t, CheckpointCatalogPersisted, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "catalog persistence")
@@ -81,7 +82,7 @@ func TestInitFailpointAfterSeedSnapshot(t *testing.T) {
 
 	status, err := ReadStatus(dir)
 	require.NoError(t, err)
-	require.Equal(t, ModePreparing, status.Mode)
+	require.Equal(t, workdirmode.ModePreparing, status.Mode)
 	require.NotNil(t, status.Checkpoint)
 	require.Equal(t, CheckpointSeedExported, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "seed snapshot export")
@@ -108,7 +109,7 @@ func TestInitWritesFinalCheckpoint(t *testing.T) {
 
 	status, err := ReadStatus(dir)
 	require.NoError(t, err)
-	require.Equal(t, ModeSeeded, status.Mode)
+	require.Equal(t, workdirmode.ModeSeeded, status.Mode)
 	require.NotNil(t, status.Checkpoint)
 	require.Equal(t, CheckpointSeededFinalized, status.Checkpoint.Stage)
 	require.Contains(t, status.ResumeHint, "promotion already completed")

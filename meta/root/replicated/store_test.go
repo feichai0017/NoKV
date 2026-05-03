@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,7 +119,7 @@ func TestReplicatedStoreInstallBootstrapReplacesState(t *testing.T) {
 			IDFence:       123,
 			TSOFence:      456,
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			99: testDescriptor(99, []byte("m"), []byte("z")),
 		},
 	}
@@ -456,8 +456,8 @@ func TestReplicatedStoreReleaseTenure(t *testing.T) {
 	require.True(t, errors.Is(err, rootstate.ErrPrimacy))
 }
 
-func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

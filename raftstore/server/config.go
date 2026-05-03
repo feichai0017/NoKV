@@ -3,11 +3,13 @@ package server
 import (
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
@@ -35,8 +37,22 @@ type Config struct {
 	// MVCCMaintenance enables replicated MVCC maintenance for cluster-mode
 	// stores. A zero Interval disables the worker.
 	MVCCMaintenance MVCCMaintenanceConfig
+	// MVCCGCPlan enables the read-only MVCC GC planner for raftstore runtimes.
+	// The planner records deletion candidates for stats; destructive cleanup is
+	// owned by MVCCMaintenance.
+	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
+}
+
+// MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore
+// server assembly.
+type MVCCGCPlanConfig struct {
+	Interval time.Duration
+
+	SafePoint func() uint64
+	Retention func() rootstate.SnapshotRetentionIndex
+	Mount     storemvcc.MountResolver
 }
 
 // MVCCMaintenanceConfig describes replicated MVCC maintenance owned by the
@@ -61,8 +77,13 @@ type MVCCMaintenanceConfig struct {
 
 // Storage captures the engine capabilities raftstore needs.
 type Storage struct {
-	MVCC txnstore.Store
-	Raft NoKV.RaftLog
+	MVCC     txnstore.Store
+	Raft     RaftLog
+	Snapshot snapshotpkg.SnapshotStore
+}
+
+type RaftLog interface {
+	Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 }
 
 const defaultRaftTickInterval = 100 * time.Millisecond

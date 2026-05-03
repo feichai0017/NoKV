@@ -36,7 +36,7 @@ Key option groups (see `options.go` for the full list):
   - `WALAutoGCMinRemovable`, `WALAutoGCMaxBatch`
   - `WALTypedRecordWarnRatio`, `WALTypedRecordWarnSegments`
 - **Raft lag warnings (stats only)**
-  - `RaftLagWarnSegments`
+  - `ControlLogLagWarnSegments`
 
 Example:
 

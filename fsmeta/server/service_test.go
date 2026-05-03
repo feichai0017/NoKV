@@ -351,6 +351,10 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 		{name: "exists", err: fsmeta.ErrExists, code: codes.AlreadyExists},
 		{name: "not found", err: fsmeta.ErrNotFound, code: codes.NotFound},
 		{name: "invalid", err: fsmeta.ErrInvalidName, code: codes.InvalidArgument},
+		{name: "quota exceeded", err: fsmeta.ErrQuotaExceeded, code: codes.ResourceExhausted},
+		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted},
+		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange},
+		{name: "mount retired", err: fsmeta.ErrMountRetired, code: codes.FailedPrecondition},
 		{name: "internal", err: errors.New("boom"), code: codes.Internal},
 	}
 	for _, tt := range tests {

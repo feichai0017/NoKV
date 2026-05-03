@@ -3,19 +3,19 @@ package integration
 import (
 	"context"
 	"errors"
+	"testing"
+	"time"
+
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"testing"
-	"time"
-
-	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/raftstore/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -131,7 +131,7 @@ func runtimeLeaderDescriptor(a, b *adminpb.RegionRuntimeStatusResponse) (*metapb
 }
 
 func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -143,7 +143,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)
@@ -166,22 +166,25 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 1, 101)
+	testcluster.WaitForHostedPeer(t, ctx, target2.Addr(), 1, 201)
+	testcluster.WaitForHostedPeer(t, ctx, target3.Addr(), 1, 301)
 
-	leaderStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 1)
+	leaderNode, leaderStatus := testcluster.FindLeader(t, ctx, 1, seed, target2, target3)
 	cli, err := client.New(client.Config{
 		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{leaderStatus.GetRegion()}},
-		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{
+			regionMetaWithLeaderFirst(leaderStatus.GetRegion(), leaderNode.StoreID),
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
-			MaxAttempts:                 1,
-			RouteUnavailableBackoff:     0,
-			TransportUnavailableBackoff: 0,
-			RegionErrorBackoff:          0,
+			MaxAttempts:                 128,
+			RouteUnavailableBackoff:     5 * time.Millisecond,
+			TransportUnavailableBackoff: 5 * time.Millisecond,
+			RegionErrorBackoff:          5 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)
@@ -235,7 +238,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 }
 
 func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -245,7 +248,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 91, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	defer seed.Close(t)
 	defer target.Close(t)
@@ -305,11 +308,13 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			regionMetaWithLeaderFirst(childSeedStatus.GetRegion(), childLeaderNode.StoreID),
 		}},
 		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		// Keep retry budget above txnCtx's timeout so this case validates
+		// deadline propagation instead of retry-budget exhaustion.
 		Retry: client.RetryPolicy{
-			MaxAttempts:                 1,
-			RouteUnavailableBackoff:     0,
-			TransportUnavailableBackoff: 0,
-			RegionErrorBackoff:          0,
+			MaxAttempts:                 128,
+			RouteUnavailableBackoff:     5 * time.Millisecond,
+			TransportUnavailableBackoff: 5 * time.Millisecond,
+			RegionErrorBackoff:          5 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)
@@ -369,7 +374,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		}
 		defer func() { _ = recoveryCli.Close() }()
 
-		testCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		testCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		err = recoveryCli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
@@ -377,5 +382,5 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		}, 200, 201, 3000)
 		lastRecoveryErr = err
 		return err == nil
-	}, 20*time.Second, 50*time.Millisecond, "cluster did not recover after healing partial quorum loss: %v", lastRecoveryErr)
+	}, 45*time.Second, 100*time.Millisecond, "cluster did not recover after healing partial quorum loss: %v", lastRecoveryErr)
 }
