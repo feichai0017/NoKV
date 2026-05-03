@@ -42,7 +42,8 @@ Core implementation units:
 - `coordinator/rootview`: persistence abstraction (`Store`) backed by the metadata root.
 - `coordinator/server`: gRPC service + RPC validation/error mapping.
 - `coordinator/client`: client wrapper used by store/gateway.
-- `coordinator/adapter`: scheduler sink that forwards heartbeats into Coordinator.
+- `scheduler/coordinator`: coordinator-backed scheduler client that forwards
+  store heartbeats into Coordinator.
 
 For the next-stage protocol direction on both the control plane and the paired
 execution plane, see `docs/control_and_execution_protocols.md`.

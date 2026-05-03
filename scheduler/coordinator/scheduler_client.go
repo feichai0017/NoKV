@@ -1,32 +1,32 @@
-package adapter
+package coordinator
 
 import (
 	"context"
 	"fmt"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	metawire "github.com/feichai0017/NoKV/meta/wire"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"log/slog"
 	"sync"
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/meta/topology"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"github.com/feichai0017/NoKV/scheduler"
 )
 
 const defaultRPCTimeout = 2 * time.Second
 
-// SchedulerClientConfig defines how a coordinator-backed scheduler client behaves.
-type SchedulerClientConfig struct {
+// Config defines how a coordinator-backed scheduler client behaves.
+type Config struct {
 	Coordinator coordclient.Client
 	Timeout     time.Duration
 	OnError     func(op string, err error)
 }
 
-// SchedulerClient forwards store-facing scheduler traffic to the coordinator and returns
+// Client forwards store-facing scheduler traffic to the coordinator and returns
 // the scheduling operations the coordinator wants the store to apply.
-type SchedulerClient struct {
+type Client struct {
 	coordinator coordclient.Client
 	timeout     time.Duration
 	onError     func(op string, err error)
@@ -34,8 +34,8 @@ type SchedulerClient struct {
 	status      scheduler.Status
 }
 
-// NewSchedulerClient constructs a coordinator-backed scheduler client.
-func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
+// NewClient constructs a coordinator-backed scheduler client.
+func NewClient(cfg Config) *Client {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultRPCTimeout
@@ -43,10 +43,10 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 	onErr := cfg.OnError
 	if onErr == nil {
 		onErr = func(op string, err error) {
-			slog.Default().Warn("coordinator adapter operation failed", "op", op, "err", err)
+			slog.Default().Warn("coordinator scheduler operation failed", "op", op, "err", err)
 		}
 	}
-	return &SchedulerClient{
+	return &Client{
 		coordinator: cfg.Coordinator,
 		timeout:     timeout,
 		onError:     onErr,
@@ -54,7 +54,7 @@ func NewSchedulerClient(cfg SchedulerClientConfig) *SchedulerClient {
 }
 
 // ReportRegionHeartbeat forwards one runtime region-liveness heartbeat to coordinator.
-func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
+func (s *Client) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
 	if s == nil || regionID == 0 || s.coordinator == nil {
 		return
 	}
@@ -71,7 +71,7 @@ func (s *SchedulerClient) ReportRegionHeartbeat(ctx context.Context, regionID ui
 }
 
 // PublishRootEvent publishes one explicit rooted truth event to coordinator.
-func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
+func (s *Client) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
 	if s == nil || event.Kind == rootevent.KindUnknown || s.coordinator == nil {
 		return nil
 	}
@@ -96,7 +96,7 @@ func (s *SchedulerClient) PublishRootEvent(ctx context.Context, event rootevent.
 
 // StoreHeartbeat publishes store stats to the coordinator and returns any operations the coordinator
 // wants the store to apply.
-func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats scheduler.StoreStats) []scheduler.Operation {
+func (s *Client) StoreHeartbeat(ctx context.Context, stats scheduler.StoreStats) []scheduler.Operation {
 	if s == nil || stats.StoreID == 0 || s.coordinator == nil {
 		return nil
 	}
@@ -122,7 +122,7 @@ func (s *SchedulerClient) StoreHeartbeat(ctx context.Context, stats scheduler.St
 }
 
 // Status returns the current control-plane health view for this scheduler client.
-func (s *SchedulerClient) Status() scheduler.Status {
+func (s *Client) Status() scheduler.Status {
 	if s == nil {
 		return scheduler.Status{}
 	}
@@ -168,14 +168,14 @@ func fromPBOperation(op *coordpb.SchedulerOperation) (scheduler.Operation, bool)
 }
 
 // Close closes the coordinator client if present.
-func (s *SchedulerClient) Close() error {
+func (s *Client) Close() error {
 	if s == nil || s.coordinator == nil {
 		return nil
 	}
 	return s.coordinator.Close()
 }
 
-func (s *SchedulerClient) recordError(op string, err error) {
+func (s *Client) recordError(op string, err error) {
 	if s == nil {
 		return
 	}
@@ -190,7 +190,7 @@ func (s *SchedulerClient) recordError(op string, err error) {
 	s.onError(op, err)
 }
 
-func (s *SchedulerClient) markHealthy() {
+func (s *Client) markHealthy() {
 	if s == nil {
 		return
 	}
@@ -222,7 +222,7 @@ func prepareRootEventRequest(event rootevent.Event) (uint64, rootevent.Event, er
 			return nil
 		}
 		if expected != epoch {
-			return fmt.Errorf("coordinator adapter: conflicting root epochs in one root event (%d vs %d)", expected, epoch)
+			return fmt.Errorf("coordinator scheduler: conflicting root epochs in one root event (%d vs %d)", expected, epoch)
 		}
 		return nil
 	}

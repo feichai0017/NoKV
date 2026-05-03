@@ -11,12 +11,12 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
-	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
@@ -26,15 +26,14 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/scheduler"
+	schedulercoord "github.com/feichai0017/NoKV/scheduler/coordinator"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 )
 
 type Node struct {
@@ -209,7 +208,7 @@ func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) schedu
 	if err != nil {
 		tb.Fatalf("dial coordinator client %s: %v", coordAddr, err)
 	}
-	return coordadapter.NewSchedulerClient(coordadapter.SchedulerClientConfig{
+	return schedulercoord.NewClient(schedulercoord.Config{
 		Coordinator: cli,
 		Timeout:     timeout,
 	})

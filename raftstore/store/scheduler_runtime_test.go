@@ -5,7 +5,7 @@ import (
 	"time"
 
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
