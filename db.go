@@ -609,7 +609,7 @@ func (db *DB) SetWithTTL(key, value []byte, ttl time.Duration) error {
 func (db *DB) nextNonTxnVersion() uint64 {
 	next := db.nonTxnVersion.Add(1)
 	if next == 0 {
-		panic("NoKV: non-transactional version overflow (legacy max-sentinel data requires migration)")
+		panic("NoKV: non-transactional version overflow")
 	}
 	return next
 }
@@ -669,8 +669,7 @@ func (db *DB) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (
 
 // MaterializeInternalEntry converts a borrowed internal entry into a detached
 // internal entry suitable for export or replay. The returned entry preserves
-// canonical internal-key layout. Legacy value-log pointers are rejected because
-// new storage records keep values inline.
+// canonical internal-key layout and inline value payloads.
 func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db is nil")
@@ -678,34 +677,22 @@ func (db *DB) MaterializeInternalEntry(src *kv.Entry) (*kv.Entry, error) {
 	if src == nil {
 		return nil, utils.ErrKeyNotFound
 	}
-	value, meta, err := db.resolveDetachedValue(src)
-	if err != nil {
-		return nil, err
-	}
-	buf := make([]byte, len(src.Key)+len(value))
+	buf := make([]byte, len(src.Key)+len(src.Value))
 	keyCopy := buf[:len(src.Key)]
 	copy(keyCopy, src.Key)
 	valueCopy := buf[len(src.Key):]
-	copy(valueCopy, value)
+	copy(valueCopy, src.Value)
 	return &kv.Entry{
 		Key:          keyCopy,
 		Value:        valueCopy,
 		ExpiresAt:    src.ExpiresAt,
 		CF:           src.CF,
-		Meta:         meta,
+		Meta:         src.Meta,
 		Version:      src.Version,
 		Offset:       src.Offset,
 		Hlen:         src.Hlen,
 		ValThreshold: src.ValThreshold,
 	}, nil
-}
-
-func (db *DB) resolveDetachedValue(src *kv.Entry) ([]byte, byte, error) {
-	meta := src.Meta
-	if !kv.IsValuePtr(src) {
-		return src.Value, meta, nil
-	}
-	return nil, meta, utils.ErrUnsupportedValueLog
 }
 
 // Get reads the latest visible value for key from the default column family.
@@ -743,21 +730,17 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 	if ts != 0 {
 		version = ts
 	}
-	value, meta, err := db.resolveDetachedValue(entry)
-	if err != nil {
-		return nil, err
-	}
-	buf := make([]byte, len(userKey)+len(value))
+	buf := make([]byte, len(userKey)+len(entry.Value))
 	keyCopy := buf[:len(userKey)]
 	copy(keyCopy, userKey)
 	valueCopy := buf[len(userKey):]
-	copy(valueCopy, value)
+	copy(valueCopy, entry.Value)
 	return &kv.Entry{
 		Key:          keyCopy,
 		Value:        valueCopy,
 		ExpiresAt:    entry.ExpiresAt,
 		CF:           cf,
-		Meta:         meta,
+		Meta:         entry.Meta,
 		Version:      version,
 		Offset:       entry.Offset,
 		Hlen:         entry.Hlen,
@@ -773,8 +756,7 @@ func (db *DB) Get(key []byte) (*kv.Entry, error) {
 //
 // Error behavior:
 //   - Returns ErrKeyNotFound when no record exists.
-//   - If a legacy value-log pointer is encountered, this function releases the
-//     borrowed entry and returns ErrUnsupportedValueLog.
+//   - Returns ErrInvalidRequest when the loaded key is not in internal-key form.
 func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 	entry, err := db.lsm.Get(internalKey)
 	if err != nil {
@@ -790,15 +772,11 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 
 	// Range tombstone coverage is checked in lsm.Get() while memtables are pinned.
 
-	if !kv.IsValuePtr(entry) {
-		if !entry.PopulateInternalMeta() {
-			entry.DecrRef()
-			return nil, utils.ErrInvalidRequest
-		}
-		return entry, nil
+	if !entry.PopulateInternalMeta() {
+		entry.DecrRef()
+		return nil, utils.ErrInvalidRequest
 	}
-	entry.DecrRef()
-	return nil, utils.ErrUnsupportedValueLog
+	return entry, nil
 }
 
 // NewIterator creates a DB-level iterator over user keys in the default

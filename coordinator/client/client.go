@@ -3,14 +3,13 @@ package client
 import (
 	"context"
 	"fmt"
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
-	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"strings"
 	"sync"
 	"time"
 
+	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -52,7 +51,6 @@ type GRPCClient struct {
 	tsoGen           witnessEraFloor
 	metadataGen      witnessEraFloor
 	metadataAttached metadataAttachedFloor
-	ablation         coordablation.Config
 }
 
 type grpcEndpoint struct {
@@ -108,19 +106,6 @@ func (c *GRPCClient) Close() error {
 		}
 	}
 	return firstErr
-}
-
-// ConfigureAblation installs first-cut client-side ablation switches for
-// verifier experiments. It should be set once during benchmark/test setup.
-func (c *GRPCClient) ConfigureAblation(cfg coordablation.Config) error {
-	if c == nil {
-		return nil
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	c.ablation = cfg
-	return nil
 }
 
 // StoreHeartbeat fans one heartbeat out to every known coordinator endpoint.
@@ -405,9 +390,6 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 	var zero T
 	if c == nil {
 		return zero, errNoReachableAddress
-	}
-	if c.ablation.DisableClientVerify {
-		validate = nil
 	}
 	endpoints := c.orderedEndpoints()
 	if len(endpoints) == 0 {

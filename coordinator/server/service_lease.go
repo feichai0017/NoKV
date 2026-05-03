@@ -148,9 +148,6 @@ func (s *Service) sealTenure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
-	if s.ablation.DisableSeal {
-		return nil
-	}
 	if !s.storage.IsLeader() {
 		return nil
 	}
@@ -209,9 +206,6 @@ func (s *Service) ReattachHandover() error {
 
 func (s *Service) reattachHandover(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
-		return nil
-	}
-	if s.ablation.DisableReattach {
 		return nil
 	}
 	if !s.storage.IsLeader() {

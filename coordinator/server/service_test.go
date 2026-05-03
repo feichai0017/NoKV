@@ -3,7 +3,11 @@ package server
 import (
 	"context"
 	"errors"
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -14,11 +18,6 @@ import (
 	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -2195,47 +2194,6 @@ func TestServiceSealTenurePreActionGateRejectsStaleHolder(t *testing.T) {
 	require.Equal(t, 0, store.sealCalls)
 }
 
-func TestServiceSealTenureAblationNoop(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Era:             2,
-				Mandate:         rootproto.MandateDefault,
-			},
-		},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableSeal: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	require.NoError(t, svc.SealTenure())
-	require.Equal(t, 0, store.sealCalls)
-	require.Equal(t, rootstate.Legacy{}, store.snapshot.Legacy)
-}
-
-func TestServiceAblationDisableBudgetUsesLargeRunway(t *testing.T) {
-	store := &fakeStorage{}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.idWindowSize = 1
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableBudget: true}))
-
-	first, err := svc.reserveIDs(context.Background(), 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(10), first)
-	require.Equal(t, 1, store.saveCalls)
-
-	first, err = svc.reserveIDs(context.Background(), 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(11), first)
-	require.Equal(t, 1, store.saveCalls)
-	require.Greater(t, store.lastID, uint64(100))
-}
-
 func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
@@ -2263,68 +2221,6 @@ func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), errTenurePrefix)
-}
-
-func TestServiceAblationDisableReplyEvidenceMarksWitnessSuppressed(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
-				Era:             2,
-				Mandate:         rootproto.MandateDefault,
-			},
-			Descriptors: map[uint64]topology.Descriptor{
-				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
-			},
-		},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReplyEvidence: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, allocResp.GetEra())
-	require.Zero(t, allocResp.GetConsumedFrontier())
-
-	tsoResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, tsoResp.GetEra())
-	require.Zero(t, tsoResp.GetConsumedFrontier())
-
-	getResp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.NoError(t, err)
-	require.Equal(t, rootproto.MandateWitnessEraSuppressed, getResp.GetEra())
-}
-
-func TestServiceAblationFailStopOnRootUnreachRejectsBestEffortMetadata(t *testing.T) {
-	storage := &fakeStorage{
-		leader:   true,
-		snapshot: rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)},
-	}
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
-	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{FailStopOnRootUnreach: true}))
-	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
-	require.NoError(t, err)
-	storage.loadCalls = 0
-	storage.loadErr = errors.New("root unavailable")
-
-	time.Sleep(20 * time.Millisecond)
-	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		return storage.loadCalls >= 1
-	}, time.Second, 10*time.Millisecond)
-
-	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errRootUnavailable)
 }
 
 func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
@@ -2474,44 +2370,6 @@ func TestServiceReattachHandover(t *testing.T) {
 	require.Equal(t, uint64(2), store.snapshot.Handover.LegacyEra)
 	require.Equal(t, "seal-digest", store.snapshot.Handover.LegacyDigest)
 	require.Equal(t, rootproto.HandoverStageReattached, store.snapshot.Handover.Stage)
-}
-
-func TestServiceAblationDisableReattachNoop(t *testing.T) {
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
-				Era:             3,
-				Mandate:         rootproto.MandateDefault,
-			},
-			Legacy: rootstate.Legacy{
-				HolderID:  "c1",
-				Era:       2,
-				Mandate:   rootproto.MandateDefault,
-				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-			},
-			Handover: rootstate.Handover{
-				HolderID:     "c1",
-				LegacyEra:    2,
-				SuccessorEra: 3,
-				LegacyDigest: "seal-digest",
-				Stage:        rootproto.HandoverStageClosed,
-			},
-		},
-	}
-	store.snapshot.Tenure.LineageDigest = "seal-digest"
-
-	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
-	require.NoError(t, svc.ConfigureAblation(coordablation.Config{DisableReattach: true}))
-	svc.now = func() time.Time { return time.Unix(0, 200) }
-	require.NoError(t, svc.ReloadFromStorage())
-
-	require.NoError(t, svc.ReattachHandover())
-	require.Equal(t, 0, store.reattachCalls)
-	require.Equal(t, rootproto.HandoverStageClosed, store.snapshot.Handover.Stage)
 }
 
 func TestServiceReattachHandoverRejectsLineageMismatch(t *testing.T) {

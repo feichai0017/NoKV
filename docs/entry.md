@@ -29,10 +29,9 @@ Values are stored inline. The encoded value payload contains:
 Meta | ExpiresAt | Value bytes
 ```
 
-`BitDelete` and expiry timestamps participate in visibility filtering. The
-legacy `BitValuePointer` bit is still recognized only so reads can return
-`ErrUnsupportedValueLog` instead of silently interpreting stale value-log data.
-New writes never create pointer values.
+`BitDelete`, `BitRangeDelete`, and expiry timestamps participate in visibility
+filtering. NoKV stores user values inline; there is no value-log pointer format
+in the current entry model.
 
 ---
 
@@ -59,9 +58,7 @@ flowchart TD
   A["Get / iterator materialize"] --> B["LSM lookup"]
   B --> C{"delete / expired?"}
   C -- yes --> D["skip / not found"]
-  C -- no --> E{"BitValuePointer?"}
-  E -- yes --> F["ErrUnsupportedValueLog"]
-  E -- no --> G["return inline value"]
+  C -- no --> E["return inline value"]
 ```
 
 Borrowed internal entries must be released with `DecrRef`. Public `Get` results

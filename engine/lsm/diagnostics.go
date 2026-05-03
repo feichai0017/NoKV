@@ -34,8 +34,8 @@ type Diagnostics struct {
 	Flush       metrics.FlushMetrics
 	Compaction  CompactionDiagnostics
 	RangeFilter RangeFilterDiagnostics
-	Levels      []LevelMetrics
-	Cache       CacheMetrics
+	Levels      []metrics.LevelMetrics
+	Cache       metrics.CacheSnapshot
 	MaxVersion  uint64
 }
 

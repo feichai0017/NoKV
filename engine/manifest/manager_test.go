@@ -130,7 +130,7 @@ func TestManifestVerifyTruncatesPartialEdit(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 }
 
-func TestManagerRejectsLegacyValueLogManifestEdit(t *testing.T) {
+func TestManagerRejectsUnsupportedManifestEdit(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := manifest.Open(dir, nil)
 	require.NoError(t, err)
@@ -149,7 +149,8 @@ func TestManagerRejectsLegacyValueLogManifestEdit(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	_, err = manifest.Open(dir, nil)
-	require.ErrorIs(t, err, manifest.ErrUnsupportedValueLogManifest)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported manifest edit type: 2")
 }
 
 func TestManagerRewrite(t *testing.T) {

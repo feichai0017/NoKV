@@ -526,7 +526,7 @@ func TestGetEntryIsDetached(t *testing.T) {
 			entry, err := db.Get(key)
 			require.NoError(t, err)
 			require.Equal(t, tc.value, entry.Value)
-			require.Zero(t, entry.Meta&kv.BitValuePointer)
+			require.Zero(t, entry.Meta&(kv.BitDelete|kv.BitRangeDelete))
 
 			entry.Value[0] ^= 0x1
 			again, err := db.Get(key)
@@ -570,7 +570,7 @@ func TestDBIteratorSeekAndValueCopy(t *testing.T) {
 		it.Seek([]byte("k"))
 		require.True(t, it.Valid())
 		item := it.Item()
-		require.False(t, kv.IsValuePtr(item.Entry()))
+		require.Zero(t, item.Entry().Meta&(kv.BitDelete|kv.BitRangeDelete))
 		val, err := item.(*iterpkg.Item).ValueCopy(nil)
 		require.NoError(t, err)
 		require.Equal(t, value, val)

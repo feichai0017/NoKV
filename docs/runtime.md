@@ -1,8 +1,7 @@
 # Runtime Call Chains
 
-This page documents the runtime paths after the value-log removal. Metadata
-values are stored inline in WAL, memtable, and SST records. Legacy records with
-`BitValuePointer` fail fast with `ErrUnsupportedValueLog`.
+This page documents the current runtime paths. Metadata values are stored inline
+in WAL, memtable, and SST records.
 
 ---
 
@@ -48,22 +47,18 @@ followed by memtable apply failure is treated as unrecoverable and panics.
 
 1. `DB.Get` builds `InternalKey(CFDefault, userKey, nonTxnMaxVersion)`.
 2. `loadBorrowedEntry` asks `lsm.Get` for the newest visible internal record.
-3. If the record carries `BitValuePointer`, the read returns
-   `ErrUnsupportedValueLog`.
-4. `PopulateInternalMeta` aligns the decoded entry metadata with its internal
+3. `PopulateInternalMeta` aligns the decoded entry metadata with its internal
    key.
-5. `DB.Get` returns a detached public entry with copied user key/value bytes.
-6. `DB.GetInternalEntry` returns a borrowed internal entry; the caller must
+4. `DB.Get` returns a detached public entry with copied user key/value bytes.
+5. `DB.GetInternalEntry` returns a borrowed internal entry; the caller must
    call `DecrRef`.
 
 ```mermaid
 flowchart TD
   A["DB.Get(userKey)"] --> B["InternalKey(CFDefault, userKey, maxVersion)"]
   B --> C["lsm.Get(internalKey)"]
-  C --> D{"BitValuePointer?"}
-  D -- yes --> E["ErrUnsupportedValueLog"]
-  D -- no --> F["PopulateInternalMeta"]
-  F --> G["cloneEntry -> detached user key/value"]
+  C --> D["PopulateInternalMeta"]
+  D --> E["cloneEntry -> detached user key/value"]
 ```
 
 ---
@@ -76,8 +71,7 @@ materializes public entries on demand:
 1. Convert user seek key to internal seek key.
 2. Split internal keys with `kv.SplitInternalKey`.
 3. Apply user-key bounds and delete/expiry filtering.
-4. Reject legacy `BitValuePointer` values.
-5. Expose user-key entries.
+4. Expose user-key entries.
 
 `DB.NewInternalIterator` bypasses user-key rewrite and returns internal records
 directly.

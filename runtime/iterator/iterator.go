@@ -8,7 +8,6 @@ package iterator
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -86,9 +85,6 @@ func (it *Item) ValueCopy(dst []byte) ([]byte, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 	val := it.e.Value
-	if kv.IsValuePtr(it.e) {
-		return nil, utils.ErrUnsupportedValueLog
-	}
 	if len(val) == 0 {
 		return dst[:0], nil
 	}
@@ -502,15 +498,11 @@ func (iter *DBIterator) materializeDecoded(src *kv.Entry, cf kv.ColumnFamily, us
 	if ts != 0 {
 		iter.entry.Version = ts
 	}
-	if kv.IsValuePtr(src) {
-		return false, fmt.Errorf("%w for key %q", utils.ErrUnsupportedValueLog, userKey)
-	} else {
-		if src.Value == nil {
-			return false, nil
-		}
-		iter.entry.Value = src.Value
-		iter.item.valueBuf = iter.entry.Value
+	if src.Value == nil {
+		return false, nil
 	}
+	iter.entry.Value = src.Value
+	iter.item.valueBuf = iter.entry.Value
 	iter.item.e = &iter.entry
 	return true, nil
 }

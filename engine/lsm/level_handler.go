@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -143,13 +144,13 @@ func (lh *levelHandler) mainValueBytes() int64 {
 	return lh.totalValueSize
 }
 
-func (lh *levelHandler) metricsSnapshot() LevelMetrics {
+func (lh *levelHandler) metricsSnapshot() metrics.LevelMetrics {
 	if lh == nil {
-		return LevelMetrics{}
+		return metrics.LevelMetrics{}
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	return LevelMetrics{
+	return metrics.LevelMetrics{
 		Level:                  lh.levelNum,
 		TableCount:             len(lh.tables),
 		SizeBytes:              lh.totalSize,

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -717,44 +716,6 @@ func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, IsStaleWitnessEra(err))
 	require.Contains(t, err.Error(), "sealed_floor=2")
-}
-
-func TestGRPCClientAblationDisableClientVerifyAcceptsStaleEra(t *testing.T) {
-	servers := map[string]*scriptedCoordinatorServer{
-		"fresh": {
-			allocResponses: []*coordpb.AllocIDResponse{
-				{
-					FirstId:          100,
-					Count:            1,
-					Era:              2,
-					ConsumedFrontier: 100,
-				},
-			},
-		},
-		"stale": {
-			allocResponses: []*coordpb.AllocIDResponse{
-				{
-					FirstId:          50,
-					Count:            1,
-					Era:              1,
-					ConsumedFrontier: 50,
-				},
-			},
-		},
-	}
-	cli := newScriptedCoordinatorClient(t, []string{"fresh", "stale"}, servers)
-	require.NoError(t, cli.ConfigureAblation(coordablation.Config{DisableClientVerify: true}))
-
-	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, uint64(100), resp.GetFirstId())
-
-	cli.markPreferred("passthrough:///stale")
-
-	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
-	require.Equal(t, uint64(50), resp.GetFirstId())
-	require.Equal(t, uint64(1), resp.GetEra())
 }
 
 type scriptedCoordinatorServer struct {

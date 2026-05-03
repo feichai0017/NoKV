@@ -8,7 +8,7 @@
 // statistics with no allocation in the hot path.
 //
 // Consumers: stats reporting (expvar), write-path admission (via
-// ErrHotKeyWriteThrottle), and benchmarking ablations. The decision of
+// ErrHotKeyWriteThrottle), and benchmarks. The decision of
 // what to do with a detected hot key (throttle / reject / reroute) is
 // a caller-side policy, not something this package imposes.
 //

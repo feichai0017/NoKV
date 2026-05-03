@@ -16,9 +16,8 @@ import (
 //	| 1B   | varint(u64) | raw payload |
 //	+------+-------------+-------------+
 //
-// Meta bits include deletion and legacy value-pointer flags. New writes must
-// store user data inline; BitValuePointer is recognized only so old data can
-// fail explicitly.
+// Meta bits include deletion and range tombstone flags. User data is stored
+// inline in the value payload.
 type ValueStruct struct {
 	Meta      byte
 	Value     []byte
@@ -57,12 +56,6 @@ func sizeVarint(x uint64) (n int) {
 		}
 	}
 	return n
-}
-
-// IsValuePtr reports whether an entry carries the removed value-log pointer
-// bit. Callers should reject such entries with ErrUnsupportedValueLog.
-func IsValuePtr(e *Entry) bool {
-	return e.Meta&BitValuePointer > 0
 }
 
 // BytesToU32 converts the given byte slice to uint32

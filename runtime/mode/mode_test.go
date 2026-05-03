@@ -51,7 +51,7 @@ func TestWriteReadModeRoundTrip(t *testing.T) {
 
 func TestReadRejectsUnknownMode(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"mode":"legacy-cluster"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"mode":"unknown-cluster"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

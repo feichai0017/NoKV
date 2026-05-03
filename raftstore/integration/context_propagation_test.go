@@ -3,15 +3,15 @@ package integration
 import (
 	"context"
 	"errors"
+	"testing"
+	"time"
+
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"testing"
-	"time"
-
-	metawire "github.com/feichai0017/NoKV/meta/wire"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
@@ -131,7 +131,7 @@ func runtimeLeaderDescriptor(a, b *adminpb.RegionRuntimeStatusResponse) (*metapb
 }
 
 func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -166,22 +166,25 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 1, 101)
+	testcluster.WaitForHostedPeer(t, ctx, target2.Addr(), 1, 201)
+	testcluster.WaitForHostedPeer(t, ctx, target3.Addr(), 1, 301)
 
-	leaderStatus := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 1)
+	leaderNode, leaderStatus := testcluster.FindLeader(t, ctx, 1, seed, target2, target3)
 	cli, err := client.New(client.Config{
 		StoreResolver: staticStoreResolver{
 			{StoreID: 1, Addr: seed.Addr()},
 			{StoreID: 2, Addr: target2.Addr()},
 			{StoreID: 3, Addr: target3.Addr()},
 		},
-		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{leaderStatus.GetRegion()}},
-		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		RegionResolver: &staticResolver{regions: []*metapb.RegionDescriptor{
+			regionMetaWithLeaderFirst(leaderStatus.GetRegion(), leaderNode.StoreID),
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 		Retry: client.RetryPolicy{
-			MaxAttempts:                 1,
-			RouteUnavailableBackoff:     0,
-			TransportUnavailableBackoff: 0,
-			RegionErrorBackoff:          0,
+			MaxAttempts:                 128,
+			RouteUnavailableBackoff:     5 * time.Millisecond,
+			TransportUnavailableBackoff: 5 * time.Millisecond,
+			RegionErrorBackoff:          5 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)

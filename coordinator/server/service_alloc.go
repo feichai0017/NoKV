@@ -153,9 +153,6 @@ func (s *Service) reserveTSO(ctx context.Context, count uint64) (uint64, uint64,
 }
 
 func (s *Service) effectiveIDWindowSize() uint64 {
-	if s != nil && s.ablation.DisableBudget {
-		return ablationUnlimitedWindowSize
-	}
 	if s == nil || s.idWindowSize == 0 {
 		return defaultAllocatorWindowSize
 	}
@@ -163,9 +160,6 @@ func (s *Service) effectiveIDWindowSize() uint64 {
 }
 
 func (s *Service) effectiveTSOWindowSize() uint64 {
-	if s != nil && s.ablation.DisableBudget {
-		return ablationUnlimitedWindowSize
-	}
 	if s == nil || s.tsoWindowSize == 0 {
 		return defaultAllocatorWindowSize
 	}
@@ -310,15 +304,9 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 }
 
 func (s *Service) monotoneReplyEvidence(mandate uint32, lease rootstate.Tenure, consumedFrontier uint64) rootproto.MandateWitness {
-	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootproto.NewSuppressedMandateWitness(mandate)
-	}
 	return rootproto.NewMandateWitness(mandate, lease.Era, consumedFrontier)
 }
 
 func (s *Service) metadataReplyEra(era uint64) uint64 {
-	if s != nil && s.ablation.DisableReplyEvidence {
-		return rootproto.MandateWitnessEraSuppressed
-	}
 	return era
 }

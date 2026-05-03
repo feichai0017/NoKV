@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	coordablation "github.com/feichai0017/NoKV/coordinator/ablation"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
@@ -69,7 +68,6 @@ type Service struct {
 	lastRootReload    int64
 	lastRootError     string
 	eunomiaMetrics    eunomiaMetrics
-	ablation          coordablation.Config
 }
 
 type coordinatorLeaseView struct {
@@ -120,7 +118,6 @@ func (v coordinatorLeaseView) Handover() rootstate.Handover {
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
-const ablationUnlimitedWindowSize uint64 = 1 << 20
 const defaultTenureTTL = 10 * time.Second
 const defaultTenureRenewIn = 3 * time.Second
 const defaultTenureClockSkew = 500 * time.Millisecond
@@ -223,19 +220,6 @@ func (s *Service) ConfigureStoreHeartbeatTTL(ttl time.Duration) {
 		ttl = defaultStoreHeartbeatTTL
 	}
 	s.storeHeartbeatTTL.Store(int64(ttl))
-}
-
-// ConfigureAblation installs first-cut experimental switches used by the
-// control-plane ablation runner.
-func (s *Service) ConfigureAblation(cfg coordablation.Config) error {
-	if s == nil {
-		return nil
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	s.ablation = cfg
-	return nil
 }
 
 // ConfigureRootSnapshotRefresh controls how long GetRegionByKey keeps one
