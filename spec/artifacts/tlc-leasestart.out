@@ -1,0 +1,48 @@
+# Recorded TLC output
+spec=spec/LeaseStartOnly.tla
+status=failure
+
+Error: Invariant NoWriteBehindServedRead is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ successorLeaseStart = 4
+/\ successorIssued = FALSE
+/\ deliveredWrite = [key |-> 0, ts |-> 0, valid |-> FALSE]
+/\ predecessorLeaseStart = 0
+/\ predecessorActive = TRUE
+/\ servedReads = {}
+/\ sealed = FALSE
+State 2: <ServeRead line 52, col 5 to line 57, col 73 of module LeaseStartOnly>
+/\ successorLeaseStart = 4
+/\ successorIssued = FALSE
+/\ deliveredWrite = [key |-> 0, ts |-> 0, valid |-> FALSE]
+/\ predecessorLeaseStart = 0
+/\ predecessorActive = TRUE
+/\ servedReads = {[key |-> 0, ts |-> 1]}
+/\ sealed = FALSE
+State 3: <Seal line 60, col 5 to line 64, col 56 of module LeaseStartOnly>
+/\ successorLeaseStart = 4
+/\ successorIssued = FALSE
+/\ deliveredWrite = [key |-> 0, ts |-> 0, valid |-> FALSE]
+/\ predecessorLeaseStart = 0
+/\ predecessorActive = FALSE
+/\ servedReads = {[key |-> 0, ts |-> 1]}
+/\ sealed = TRUE
+State 4: <IssueSuccessor line 67, col 5 to line 73, col 43 of module LeaseStartOnly>
+/\ successorLeaseStart = 0
+/\ successorIssued = TRUE
+/\ deliveredWrite = [key |-> 0, ts |-> 0, valid |-> FALSE]
+/\ predecessorLeaseStart = 0
+/\ predecessorActive = FALSE
+/\ servedReads = {[key |-> 0, ts |-> 1]}
+/\ sealed = TRUE
+State 5: <AcceptWrite line 76, col 5 to line 82, col 65 of module LeaseStartOnly>
+/\ successorLeaseStart = 0
+/\ successorIssued = TRUE
+/\ deliveredWrite = [key |-> 0, ts |-> 0, valid |-> TRUE]
+/\ predecessorLeaseStart = 0
+/\ predecessorActive = FALSE
+/\ servedReads = {[key |-> 0, ts |-> 1]}
+/\ sealed = TRUE
+354 states generated, 165 distinct states found, 115 states left on queue.
+The depth of the complete state graph search is 5.

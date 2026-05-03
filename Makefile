@@ -1,8 +1,14 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke lint fmt clean docker-up docker-dev-up docker-down bench install-tools
+.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench
+.PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke
+.PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
+.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish tlc-root-replay-watch tlc-fsmeta-namespace
+.PHONY: tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample tlc-contrast-models
+.PHONY: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-percolator2pc record-tlc-mvccgc record-tlc-raftstore-apply-publish record-tlc-root-replay-watch record-tlc-fsmeta-namespace
+.PHONY: record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-formal-artifacts
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
 BUF_VERSION ?= 1.66.0
@@ -35,6 +41,10 @@ help:
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
 	@echo "  make install-tools      - Install development tools"
+	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
+	@echo "  make test-tla-smoke     - Run bounded TLA protocol model checks"
+	@echo "  make test-tla-nightly   - Run full TLA positive and contrast model matrix"
+	@echo "  make record-formal-artifacts - Record sanitized TLC outputs under spec/artifacts/"
 	@echo "  make docker-up          - Start Docker Compose cluster"
 	@echo "  make docker-dev-up      - Build local image and start Docker Compose cluster"
 	@echo "  make docker-down        - Stop Docker Compose cluster"
@@ -200,6 +210,251 @@ install-tools:
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
 	@echo "✓ Tools installed"
+
+install-tla-tools:
+	@echo "Installing pinned TLA+ tools locally..."
+	./scripts/tla/setup.sh
+
+test-tla-smoke: tlc-eunomia tlc-mountlifecycle tlc-subtreeauthority \
+	tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish \
+	tlc-root-replay-watch tlc-fsmeta-namespace
+
+test-tla-nightly: test-tla-smoke tlc-eunomiamultidim tlc-contrast-models
+
+tlc-eunomia:
+	@echo "Running TLC on spec/Eunomia.tla..."
+	./scripts/tla/tlc.sh spec/Eunomia.tla
+
+tlc-eunomiamultidim:
+	@echo "Running TLC on spec/EunomiaMultiDim.tla..."
+	./scripts/tla/tlc.sh spec/EunomiaMultiDim.tla
+
+tlc-mountlifecycle:
+	@echo "Running TLC on spec/MountLifecycle.tla..."
+	./scripts/tla/tlc.sh spec/MountLifecycle.tla
+
+tlc-subtreeauthority:
+	@echo "Running TLC on spec/SubtreeAuthority.tla..."
+	./scripts/tla/tlc.sh spec/SubtreeAuthority.tla
+
+tlc-percolator2pc:
+	@echo "Running TLC on spec/Percolator2PC.tla..."
+	./scripts/tla/tlc.sh spec/Percolator2PC.tla
+
+tlc-mvccgc:
+	@echo "Running TLC on spec/MVCCGC.tla..."
+	./scripts/tla/tlc.sh spec/MVCCGC.tla
+
+tlc-raftstore-apply-publish:
+	@echo "Running TLC on spec/RaftstoreApplyPublish.tla..."
+	./scripts/tla/tlc.sh spec/RaftstoreApplyPublish.tla
+
+tlc-root-replay-watch:
+	@echo "Running TLC on spec/RootReplayWatch.tla..."
+	./scripts/tla/tlc.sh spec/RootReplayWatch.tla
+
+tlc-fsmeta-namespace:
+	@echo "Running TLC on spec/FSMetaNamespace.tla..."
+	./scripts/tla/tlc.sh spec/FSMetaNamespace.tla
+
+tlc-leaseonly-counterexample:
+	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/LeaseOnly.tla; then \
+		echo "expected TLC to find a counterexample for LeaseOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for LeaseOnly"; \
+	fi
+
+tlc-leasestart-counterexample:
+	@echo "Running TLC on spec/LeaseStartOnly.tla (expecting counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/LeaseStartOnly.tla; then \
+		echo "expected TLC to find a counterexample for LeaseStartOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for LeaseStartOnly"; \
+	fi
+
+tlc-chubbyfenced-counterexample:
+	@echo "Running TLC on spec/ChubbyFencedLease.tla (expecting coverage counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/ChubbyFencedLease.tla; then \
+		echo "expected TLC to find a counterexample for ChubbyFencedLease, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for ChubbyFencedLease"; \
+	fi
+
+tlc-tokenonly-counterexample:
+	@echo "Running TLC on spec/TokenOnly.tla (expecting stale-delivery counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/TokenOnly.tla; then \
+		echo "expected TLC to find a counterexample for TokenOnly, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for TokenOnly"; \
+	fi
+
+tlc-subtreewithoutfrontiercoverage-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutFrontierCoverage.tla (expecting inheritance counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutFrontierCoverage.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutFrontierCoverage, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
+
+tlc-subtreewithoutseal-counterexample:
+	@echo "Running TLC on spec/SubtreeWithoutSeal.tla (expecting primacy counterexample)..."
+	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutSeal.tla; then \
+		echo "expected TLC to find a counterexample for SubtreeWithoutSeal, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ TLC found the expected counterexample for SubtreeWithoutSeal"; \
+	fi
+
+tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
+
+record-tlc-eunomia:
+	@echo "Recording TLC output for Eunomia..."
+	@if ./scripts/tla/record_tlc.sh spec/Eunomia.tla spec/artifacts/tlc-eunomia.out; then \
+		echo "✓ Recorded TLC output for Eunomia"; \
+	else \
+		echo "expected Eunomia to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-eunomiamultidim:
+	@echo "Recording TLC output for EunomiaMultiDim..."
+	@if ./scripts/tla/record_tlc.sh spec/EunomiaMultiDim.tla spec/artifacts/tlc-eunomiamultidim.out; then \
+		echo "✓ Recorded TLC output for EunomiaMultiDim"; \
+	else \
+		echo "expected EunomiaMultiDim to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-mountlifecycle:
+	@echo "Recording TLC output for MountLifecycle..."
+	@if ./scripts/tla/record_tlc.sh spec/MountLifecycle.tla spec/artifacts/tlc-mountlifecycle.out; then \
+		echo "✓ Recorded TLC output for MountLifecycle"; \
+	else \
+		echo "expected MountLifecycle to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-subtreeauthority:
+	@echo "Recording TLC output for SubtreeAuthority..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeAuthority.tla spec/artifacts/tlc-subtreeauthority.out; then \
+		echo "✓ Recorded TLC output for SubtreeAuthority"; \
+	else \
+		echo "expected SubtreeAuthority to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-percolator2pc:
+	@echo "Recording TLC output for Percolator2PC..."
+	@if ./scripts/tla/record_tlc.sh spec/Percolator2PC.tla spec/artifacts/tlc-percolator2pc.out; then \
+		echo "✓ Recorded TLC output for Percolator2PC"; \
+	else \
+		echo "expected Percolator2PC to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-mvccgc:
+	@echo "Recording TLC output for MVCCGC..."
+	@if ./scripts/tla/record_tlc.sh spec/MVCCGC.tla spec/artifacts/tlc-mvccgc.out; then \
+		echo "✓ Recorded TLC output for MVCCGC"; \
+	else \
+		echo "expected MVCCGC to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-raftstore-apply-publish:
+	@echo "Recording TLC output for RaftstoreApplyPublish..."
+	@if ./scripts/tla/record_tlc.sh spec/RaftstoreApplyPublish.tla spec/artifacts/tlc-raftstore-apply-publish.out; then \
+		echo "✓ Recorded TLC output for RaftstoreApplyPublish"; \
+	else \
+		echo "expected RaftstoreApplyPublish to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-root-replay-watch:
+	@echo "Recording TLC output for RootReplayWatch..."
+	@if ./scripts/tla/record_tlc.sh spec/RootReplayWatch.tla spec/artifacts/tlc-root-replay-watch.out; then \
+		echo "✓ Recorded TLC output for RootReplayWatch"; \
+	else \
+		echo "expected RootReplayWatch to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-fsmeta-namespace:
+	@echo "Recording TLC output for FSMetaNamespace..."
+	@if ./scripts/tla/record_tlc.sh spec/FSMetaNamespace.tla spec/artifacts/tlc-fsmeta-namespace.out; then \
+		echo "✓ Recorded TLC output for FSMetaNamespace"; \
+	else \
+		echo "expected FSMetaNamespace to succeed under TLC, but recording failed"; \
+		exit 1; \
+	fi
+
+record-tlc-leaseonly:
+	@echo "Recording TLC counterexample for LeaseOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/LeaseOnly.tla spec/artifacts/tlc-leaseonly.out; then \
+		echo "expected LeaseOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for LeaseOnly"; \
+	fi
+
+record-tlc-tokenonly:
+	@echo "Recording TLC counterexample for TokenOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/TokenOnly.tla spec/artifacts/tlc-tokenonly.out; then \
+		echo "expected TokenOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for TokenOnly"; \
+	fi
+
+record-tlc-chubbyfenced:
+	@echo "Recording TLC counterexample for ChubbyFencedLease..."
+	@if ./scripts/tla/record_tlc.sh spec/ChubbyFencedLease.tla spec/artifacts/tlc-chubbyfenced.out; then \
+		echo "expected ChubbyFencedLease recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for ChubbyFencedLease"; \
+	fi
+
+record-tlc-leasestart:
+	@echo "Recording TLC counterexample for LeaseStartOnly..."
+	@if ./scripts/tla/record_tlc.sh spec/LeaseStartOnly.tla spec/artifacts/tlc-leasestart.out; then \
+		echo "expected LeaseStartOnly recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
+	fi
+
+record-tlc-subtreewithoutfrontiercoverage:
+	@echo "Recording TLC counterexample for SubtreeWithoutFrontierCoverage..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutFrontierCoverage.tla spec/artifacts/tlc-subtreewithoutfrontiercoverage.out; then \
+		echo "expected SubtreeWithoutFrontierCoverage recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutFrontierCoverage"; \
+	fi
+
+record-tlc-subtreewithoutseal:
+	@echo "Recording TLC counterexample for SubtreeWithoutSeal..."
+	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutSeal.tla spec/artifacts/tlc-subtreewithoutseal.out; then \
+		echo "expected SubtreeWithoutSeal recording to fail with counterexample, but it succeeded"; \
+		exit 1; \
+	else \
+		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
+	fi
+
+record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim \
+	record-tlc-mountlifecycle record-tlc-subtreeauthority \
+	record-tlc-percolator2pc record-tlc-mvccgc \
+	record-tlc-raftstore-apply-publish record-tlc-root-replay-watch \
+	record-tlc-fsmeta-namespace record-tlc-leaseonly record-tlc-tokenonly \
+	record-tlc-chubbyfenced record-tlc-leasestart \
+	record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal
 
 # Start Docker Compose cluster
 docker-up:

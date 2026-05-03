@@ -1,0 +1,7 @@
+# Recorded TLC output
+spec=spec/EunomiaMultiDim.tla
+status=success
+
+Model checking completed. No error has been found.
+1149 states generated, 326 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 8.
