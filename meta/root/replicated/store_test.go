@@ -410,6 +410,8 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 
 	initialIssued := lease.IssuedAt
 
+	drivers[leaderID].PauseTicks()
+	defer drivers[leaderID].ResumeTicks()
 	require.NoError(t, drivers[followerID].Campaign())
 	require.Eventually(t, func() bool {
 		return drivers[followerID].IsLeader()
