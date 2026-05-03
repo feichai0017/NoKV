@@ -15,8 +15,8 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -305,11 +305,13 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 			regionMetaWithLeaderFirst(childSeedStatus.GetRegion(), childLeaderNode.StoreID),
 		}},
 		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		// Keep retry budget above txnCtx's timeout so this case validates
+		// deadline propagation instead of retry-budget exhaustion.
 		Retry: client.RetryPolicy{
-			MaxAttempts:                 1,
-			RouteUnavailableBackoff:     0,
-			TransportUnavailableBackoff: 0,
-			RegionErrorBackoff:          0,
+			MaxAttempts:                 128,
+			RouteUnavailableBackoff:     5 * time.Millisecond,
+			TransportUnavailableBackoff: 5 * time.Millisecond,
+			RegionErrorBackoff:          5 * time.Millisecond,
 		},
 	})
 	require.NoError(t, err)
