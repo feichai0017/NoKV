@@ -48,7 +48,8 @@ Issue ==
         /\ issued' = issued \cup {e}
         /\ activeEra' = e
         /\ delivered' = NoDelivered
-        /\ UNCHANGED <<frontier, inflight, observedMaxEra>>
+        /\ observedMaxEra' = e
+        /\ UNCHANGED <<frontier, inflight>>
 
 CurrentReply ==
     /\ \E f \in Frontiers:

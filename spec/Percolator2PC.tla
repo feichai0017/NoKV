@@ -132,15 +132,6 @@ RollbackPrimaryExpired ==
                    secondaryRollbackMarker, now, expireAt,
                    primaryCommitClock, primaryCommitExpireAt, gcSafepoint>>
 
-ResolveSecondaryCommit ==
-    /\ secondary = "Prewritten"
-    /\ primary = "Committed"
-    /\ secondary' = "Committed"
-    /\ secondaryCommitTs' = primaryCommitTs
-    /\ UNCHANGED <<primary, primaryCommitTs, primaryRollbackMarker,
-                   secondaryRollbackMarker, now, expireAt,
-                   primaryCommitClock, primaryCommitExpireAt, gcSafepoint>>
-
 ResolveSecondaryRollback ==
     /\ secondary = "Prewritten"
     /\ primary = "RolledBack"
@@ -170,7 +161,6 @@ Next ==
     \/ CommitPrimary
     \/ CommitSecondary
     \/ RollbackPrimaryExpired
-    \/ ResolveSecondaryCommit
     \/ ResolveSecondaryRollback
     \/ AdvanceSafepoint
     \/ Stutter

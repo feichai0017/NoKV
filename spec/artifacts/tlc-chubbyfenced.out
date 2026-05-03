@@ -11,16 +11,16 @@ State 1: <Initial predicate>
 /\ activeEra = 0
 /\ issued = {0}
 /\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
-State 2: <CurrentReply line 54, col 5 to line 59, col 54 of module ChubbyFencedLease>
+State 2: <CurrentReply line 55, col 5 to line 60, col 54 of module ChubbyFencedLease>
 /\ inflight = {[era |-> 0, frontier |-> 1]}
 /\ observedMaxEra = 0
 /\ frontier = (0 :> 1 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
 /\ activeEra = 0
 /\ issued = {0}
 /\ delivered = [era |-> 0, frontier |-> 0, valid |-> FALSE]
-State 3: <Issue line 46, col 9 to line 51, col 59 of module ChubbyFencedLease>
+State 3: <Issue line 46, col 9 to line 52, col 43 of module ChubbyFencedLease>
 /\ inflight = {[era |-> 0, frontier |-> 1]}
-/\ observedMaxEra = 0
+/\ observedMaxEra = 1
 /\ frontier = (0 :> 1 @@ 1 :> 0 @@ 2 :> 0 @@ 3 :> 0)
 /\ activeEra = 1
 /\ issued = {0, 1}

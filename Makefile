@@ -221,232 +221,82 @@ test-tla-smoke: tlc-eunomia tlc-mountlifecycle tlc-subtreeauthority \
 
 test-tla-nightly: test-tla-smoke tlc-eunomiamultidim tlc-contrast-models
 
-tlc-eunomia:
-	@echo "Running TLC on spec/Eunomia.tla..."
-	./scripts/tla/tlc.sh spec/Eunomia.tla
+define TLC_SPEC_TARGET
+$(1):
+	@echo "Running TLC on spec/$(2).tla..."
+	./scripts/tla/tlc.sh spec/$(2).tla
+endef
 
-tlc-eunomiamultidim:
-	@echo "Running TLC on spec/EunomiaMultiDim.tla..."
-	./scripts/tla/tlc.sh spec/EunomiaMultiDim.tla
+define TLC_COUNTEREXAMPLE_TARGET
+$(1):
+	@echo "Running TLC on spec/$(2).tla ($(3))..."
+	@./scripts/tla/expect_counterexample.sh spec/$(2).tla
+	@echo "✓ TLC found the expected counterexample for $(2)"
+endef
 
-tlc-mountlifecycle:
-	@echo "Running TLC on spec/MountLifecycle.tla..."
-	./scripts/tla/tlc.sh spec/MountLifecycle.tla
+$(eval $(call TLC_SPEC_TARGET,tlc-eunomia,Eunomia))
+$(eval $(call TLC_SPEC_TARGET,tlc-eunomiamultidim,EunomiaMultiDim))
+$(eval $(call TLC_SPEC_TARGET,tlc-mountlifecycle,MountLifecycle))
+$(eval $(call TLC_SPEC_TARGET,tlc-subtreeauthority,SubtreeAuthority))
+$(eval $(call TLC_SPEC_TARGET,tlc-percolator2pc,Percolator2PC))
+$(eval $(call TLC_SPEC_TARGET,tlc-mvccgc,MVCCGC))
+$(eval $(call TLC_SPEC_TARGET,tlc-raftstore-apply-publish,RaftstoreApplyPublish))
+$(eval $(call TLC_SPEC_TARGET,tlc-root-replay-watch,RootReplayWatch))
+$(eval $(call TLC_SPEC_TARGET,tlc-fsmeta-namespace,FSMetaNamespace))
 
-tlc-subtreeauthority:
-	@echo "Running TLC on spec/SubtreeAuthority.tla..."
-	./scripts/tla/tlc.sh spec/SubtreeAuthority.tla
-
-tlc-percolator2pc:
-	@echo "Running TLC on spec/Percolator2PC.tla..."
-	./scripts/tla/tlc.sh spec/Percolator2PC.tla
-
-tlc-mvccgc:
-	@echo "Running TLC on spec/MVCCGC.tla..."
-	./scripts/tla/tlc.sh spec/MVCCGC.tla
-
-tlc-raftstore-apply-publish:
-	@echo "Running TLC on spec/RaftstoreApplyPublish.tla..."
-	./scripts/tla/tlc.sh spec/RaftstoreApplyPublish.tla
-
-tlc-root-replay-watch:
-	@echo "Running TLC on spec/RootReplayWatch.tla..."
-	./scripts/tla/tlc.sh spec/RootReplayWatch.tla
-
-tlc-fsmeta-namespace:
-	@echo "Running TLC on spec/FSMetaNamespace.tla..."
-	./scripts/tla/tlc.sh spec/FSMetaNamespace.tla
-
-tlc-leaseonly-counterexample:
-	@echo "Running TLC on spec/LeaseOnly.tla (expecting counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/LeaseOnly.tla; then \
-		echo "expected TLC to find a counterexample for LeaseOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for LeaseOnly"; \
-	fi
-
-tlc-leasestart-counterexample:
-	@echo "Running TLC on spec/LeaseStartOnly.tla (expecting counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/LeaseStartOnly.tla; then \
-		echo "expected TLC to find a counterexample for LeaseStartOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for LeaseStartOnly"; \
-	fi
-
-tlc-chubbyfenced-counterexample:
-	@echo "Running TLC on spec/ChubbyFencedLease.tla (expecting coverage counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/ChubbyFencedLease.tla; then \
-		echo "expected TLC to find a counterexample for ChubbyFencedLease, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for ChubbyFencedLease"; \
-	fi
-
-tlc-tokenonly-counterexample:
-	@echo "Running TLC on spec/TokenOnly.tla (expecting stale-delivery counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/TokenOnly.tla; then \
-		echo "expected TLC to find a counterexample for TokenOnly, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for TokenOnly"; \
-	fi
-
-tlc-subtreewithoutfrontiercoverage-counterexample:
-	@echo "Running TLC on spec/SubtreeWithoutFrontierCoverage.tla (expecting inheritance counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutFrontierCoverage.tla; then \
-		echo "expected TLC to find a counterexample for SubtreeWithoutFrontierCoverage, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for SubtreeWithoutFrontierCoverage"; \
-	fi
-
-tlc-subtreewithoutseal-counterexample:
-	@echo "Running TLC on spec/SubtreeWithoutSeal.tla (expecting primacy counterexample)..."
-	@if ./scripts/tla/tlc.sh spec/SubtreeWithoutSeal.tla; then \
-		echo "expected TLC to find a counterexample for SubtreeWithoutSeal, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ TLC found the expected counterexample for SubtreeWithoutSeal"; \
-	fi
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leaseonly-counterexample,LeaseOnly,expecting stale reply counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leasestart-counterexample,LeaseStartOnly,expecting lease-start coverage counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-chubbyfenced-counterexample,ChubbyFencedLease,expecting coverage counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-tokenonly-counterexample,TokenOnly,expecting stale-delivery counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-subtreewithoutfrontiercoverage-counterexample,SubtreeWithoutFrontierCoverage,expecting inheritance counterexample))
+$(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-subtreewithoutseal-counterexample,SubtreeWithoutSeal,expecting primacy counterexample))
 
 tlc-contrast-models: tlc-leaseonly-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-leasestart-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample
 
-record-tlc-eunomia:
-	@echo "Recording TLC output for Eunomia..."
-	@if ./scripts/tla/record_tlc.sh spec/Eunomia.tla spec/artifacts/tlc-eunomia.out; then \
-		echo "✓ Recorded TLC output for Eunomia"; \
+define RECORD_TLC_SUCCESS_TARGET
+$(1):
+	@echo "Recording TLC output for $(2)..."
+	@if ./scripts/tla/record_tlc.sh spec/$(2).tla spec/artifacts/$(3).out; then \
+		echo "✓ Recorded TLC output for $(2)"; \
 	else \
-		echo "expected Eunomia to succeed under TLC, but recording failed"; \
+		echo "expected $(2) to succeed under TLC, but recording failed"; \
 		exit 1; \
 	fi
+endef
 
-record-tlc-eunomiamultidim:
-	@echo "Recording TLC output for EunomiaMultiDim..."
-	@if ./scripts/tla/record_tlc.sh spec/EunomiaMultiDim.tla spec/artifacts/tlc-eunomiamultidim.out; then \
-		echo "✓ Recorded TLC output for EunomiaMultiDim"; \
-	else \
-		echo "expected EunomiaMultiDim to succeed under TLC, but recording failed"; \
+define RECORD_TLC_COUNTEREXAMPLE_TARGET
+$(1):
+	@echo "Recording TLC counterexample for $(2)..."
+	@if ./scripts/tla/record_tlc.sh spec/$(2).tla spec/artifacts/$(3).out; then \
+		echo "expected $(2) recording to fail with counterexample, but it succeeded"; \
 		exit 1; \
+	else \
+		if grep -Eiq 'counterexample|Invariant .* is violated|The behavior up to this point is' spec/artifacts/$(3).out; then \
+			echo "✓ Recorded TLC counterexample for $(2)"; \
+		else \
+			cat spec/artifacts/$(3).out; \
+			echo "TLC failed without an invariant counterexample for $(2)"; \
+			exit 1; \
+		fi; \
 	fi
+endef
 
-record-tlc-mountlifecycle:
-	@echo "Recording TLC output for MountLifecycle..."
-	@if ./scripts/tla/record_tlc.sh spec/MountLifecycle.tla spec/artifacts/tlc-mountlifecycle.out; then \
-		echo "✓ Recorded TLC output for MountLifecycle"; \
-	else \
-		echo "expected MountLifecycle to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-eunomia,Eunomia,tlc-eunomia))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-eunomiamultidim,EunomiaMultiDim,tlc-eunomiamultidim))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-mountlifecycle,MountLifecycle,tlc-mountlifecycle))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-subtreeauthority,SubtreeAuthority,tlc-subtreeauthority))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-percolator2pc,Percolator2PC,tlc-percolator2pc))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-mvccgc,MVCCGC,tlc-mvccgc))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-raftstore-apply-publish,RaftstoreApplyPublish,tlc-raftstore-apply-publish))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-root-replay-watch,RootReplayWatch,tlc-root-replay-watch))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-fsmeta-namespace,FSMetaNamespace,tlc-fsmeta-namespace))
 
-record-tlc-subtreeauthority:
-	@echo "Recording TLC output for SubtreeAuthority..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeAuthority.tla spec/artifacts/tlc-subtreeauthority.out; then \
-		echo "✓ Recorded TLC output for SubtreeAuthority"; \
-	else \
-		echo "expected SubtreeAuthority to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-percolator2pc:
-	@echo "Recording TLC output for Percolator2PC..."
-	@if ./scripts/tla/record_tlc.sh spec/Percolator2PC.tla spec/artifacts/tlc-percolator2pc.out; then \
-		echo "✓ Recorded TLC output for Percolator2PC"; \
-	else \
-		echo "expected Percolator2PC to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-mvccgc:
-	@echo "Recording TLC output for MVCCGC..."
-	@if ./scripts/tla/record_tlc.sh spec/MVCCGC.tla spec/artifacts/tlc-mvccgc.out; then \
-		echo "✓ Recorded TLC output for MVCCGC"; \
-	else \
-		echo "expected MVCCGC to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-raftstore-apply-publish:
-	@echo "Recording TLC output for RaftstoreApplyPublish..."
-	@if ./scripts/tla/record_tlc.sh spec/RaftstoreApplyPublish.tla spec/artifacts/tlc-raftstore-apply-publish.out; then \
-		echo "✓ Recorded TLC output for RaftstoreApplyPublish"; \
-	else \
-		echo "expected RaftstoreApplyPublish to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-root-replay-watch:
-	@echo "Recording TLC output for RootReplayWatch..."
-	@if ./scripts/tla/record_tlc.sh spec/RootReplayWatch.tla spec/artifacts/tlc-root-replay-watch.out; then \
-		echo "✓ Recorded TLC output for RootReplayWatch"; \
-	else \
-		echo "expected RootReplayWatch to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-fsmeta-namespace:
-	@echo "Recording TLC output for FSMetaNamespace..."
-	@if ./scripts/tla/record_tlc.sh spec/FSMetaNamespace.tla spec/artifacts/tlc-fsmeta-namespace.out; then \
-		echo "✓ Recorded TLC output for FSMetaNamespace"; \
-	else \
-		echo "expected FSMetaNamespace to succeed under TLC, but recording failed"; \
-		exit 1; \
-	fi
-
-record-tlc-leaseonly:
-	@echo "Recording TLC counterexample for LeaseOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/LeaseOnly.tla spec/artifacts/tlc-leaseonly.out; then \
-		echo "expected LeaseOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for LeaseOnly"; \
-	fi
-
-record-tlc-tokenonly:
-	@echo "Recording TLC counterexample for TokenOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/TokenOnly.tla spec/artifacts/tlc-tokenonly.out; then \
-		echo "expected TokenOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for TokenOnly"; \
-	fi
-
-record-tlc-chubbyfenced:
-	@echo "Recording TLC counterexample for ChubbyFencedLease..."
-	@if ./scripts/tla/record_tlc.sh spec/ChubbyFencedLease.tla spec/artifacts/tlc-chubbyfenced.out; then \
-		echo "expected ChubbyFencedLease recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for ChubbyFencedLease"; \
-	fi
-
-record-tlc-leasestart:
-	@echo "Recording TLC counterexample for LeaseStartOnly..."
-	@if ./scripts/tla/record_tlc.sh spec/LeaseStartOnly.tla spec/artifacts/tlc-leasestart.out; then \
-		echo "expected LeaseStartOnly recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for LeaseStartOnly"; \
-	fi
-
-record-tlc-subtreewithoutfrontiercoverage:
-	@echo "Recording TLC counterexample for SubtreeWithoutFrontierCoverage..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutFrontierCoverage.tla spec/artifacts/tlc-subtreewithoutfrontiercoverage.out; then \
-		echo "expected SubtreeWithoutFrontierCoverage recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for SubtreeWithoutFrontierCoverage"; \
-	fi
-
-record-tlc-subtreewithoutseal:
-	@echo "Recording TLC counterexample for SubtreeWithoutSeal..."
-	@if ./scripts/tla/record_tlc.sh spec/SubtreeWithoutSeal.tla spec/artifacts/tlc-subtreewithoutseal.out; then \
-		echo "expected SubtreeWithoutSeal recording to fail with counterexample, but it succeeded"; \
-		exit 1; \
-	else \
-		echo "✓ Recorded TLC counterexample for SubtreeWithoutSeal"; \
-	fi
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-leaseonly,LeaseOnly,tlc-leaseonly))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-tokenonly,TokenOnly,tlc-tokenonly))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-chubbyfenced,ChubbyFencedLease,tlc-chubbyfenced))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-leasestart,LeaseStartOnly,tlc-leasestart))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-subtreewithoutfrontiercoverage,SubtreeWithoutFrontierCoverage,tlc-subtreewithoutfrontiercoverage))
+$(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-subtreewithoutseal,SubtreeWithoutSeal,tlc-subtreewithoutseal))
 
 record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim \
 	record-tlc-mountlifecycle record-tlc-subtreeauthority \

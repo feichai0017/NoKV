@@ -20,6 +20,10 @@ Schemas  == 1..MaxSchemaVersion
 NoRoot   == 0
 NoSchema == 0
 
+ASSUME /\ MaxMount >= 0
+       /\ MaxRootInode >= 1
+       /\ MaxSchemaVersion >= 1
+
 VARIABLES
     \* @type: Set(Int);
     everRegistered,
