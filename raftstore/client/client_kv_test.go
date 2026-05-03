@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -140,6 +142,109 @@ func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 	require.Len(t, txnErr.Errors, 1)
 	require.NotNil(t, txnErr.Errors[0].GetCommitTsExpired())
 	require.Equal(t, uint64(30), txnErr.Errors[0].GetCommitTsExpired().GetMinCommitTs())
+}
+
+func TestClientTwoPhaseCommitPrewriteRetryBudgetExhaustion(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var prewriteCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		prewriteFn: func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+			prewriteCalls++
+			return &kvrpcpb.KvPrewriteResponse{
+				RegionError: &errorpb.RegionError{
+					NotLeader: &errorpb.NotLeader{RegionId: 1},
+				},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:        1,
+			RegionErrorBackoff: 10 * time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = cli.TwoPhaseCommit(ctx, []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 10, 11, 3000)
+
+	require.Error(t, err)
+	require.True(t, IsRetryExhausted(err), "expected retry budget exhaustion, got %v", err)
+	require.False(t, errors.Is(err, context.DeadlineExceeded))
+	require.Equal(t, 1, prewriteCalls)
+}
+
+func TestClientTwoPhaseCommitPrewriteDeadlineDuringRetryBackoff(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var prewriteCalls int
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		prewriteFn: func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+			prewriteCalls++
+			return &kvrpcpb.KvPrewriteResponse{
+				RegionError: &errorpb.RegionError{
+					NotLeader: &errorpb.NotLeader{RegionId: 1},
+				},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:        2,
+			RegionErrorBackoff: time.Second,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err = cli.TwoPhaseCommit(ctx, []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 10, 11, 3000)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.False(t, IsRetryExhausted(err), "deadline should not be flattened into retry exhaustion")
+	require.Equal(t, 1, prewriteCalls)
 }
 
 func TestClientGetResolvesCommittedLockAndRetries(t *testing.T) {
