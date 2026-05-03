@@ -27,6 +27,27 @@ func TestApplyOrphanDefaultsDeletesUnownedDefaultRecord(t *testing.T) {
 	require.NotZero(t, payload.Meta&entrykv.BitDelete)
 }
 
+func TestApplyOrphanDefaultsReplaySkipsAppliedDefaultTombstone(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("orphan-replay")
+	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, 10, []byte("value"), 0, 0)
+
+	first, err := storemvcc.ApplyOrphanDefaultsReplicated(context.Background(), db, &testMaintenanceProposer{db: db}, storemvcc.OrphanDefaultOptions{BatchEntries: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.AppliedDefaultDeletes)
+
+	second, err := storemvcc.ApplyOrphanDefaultsReplicated(context.Background(), db, &testMaintenanceProposer{db: db}, storemvcc.OrphanDefaultOptions{BatchEntries: 1})
+	require.NoError(t, err)
+	require.Zero(t, second.OrphanDefaults)
+	require.Zero(t, second.AppliedDefaultDeletes)
+	require.Equal(t, uint64(1), second.DeletedDefaultMarkers)
+
+	payload, err := db.GetInternalEntry(entrykv.CFDefault, key, 10)
+	require.NoError(t, err)
+	defer payload.DecrRef()
+	require.NotZero(t, payload.Meta&entrykv.BitDelete)
+}
+
 func TestApplyOrphanDefaultsReplicatedUsesMaintenanceProposer(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("orphan")

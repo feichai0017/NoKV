@@ -162,6 +162,48 @@ func TestApplyMVCCGCDeletesDroppableWriteAndDefault(t *testing.T) {
 	require.Equal(t, []byte("anchor"), anchorDefault.Value)
 }
 
+func TestApplyMVCCGCReplaySkipsAlreadyAppliedTombstones(t *testing.T) {
+	db := openMVCCGCPlanTestDB(t)
+	key := []byte("vol/replay")
+	applyMVCCGCPutVersion(t, db, key, 150, 140, "new")
+	applyMVCCGCPutVersion(t, db, key, 90, 80, "anchor")
+	applyMVCCGCPutVersion(t, db, key, 40, 30, "old")
+
+	first, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&testMaintenanceProposer{db: db},
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.AppliedWriteDeletes)
+	require.Equal(t, uint64(1), first.AppliedDefaultDeletes)
+
+	second, err := storemvcc.ApplyReplicated(
+		context.Background(),
+		db,
+		&testMaintenanceProposer{db: db},
+		storemvcc.SafePointPolicy{RequestedSafePoint: 100},
+		storemvcc.ApplyOptions{},
+	)
+	require.NoError(t, err)
+	require.Zero(t, second.AppliedWriteDeletes)
+	require.Zero(t, second.AppliedDefaultDeletes)
+	require.Zero(t, second.DroppableWrites)
+	require.Equal(t, uint64(1), second.DeletedWriteMarkers)
+
+	droppedWrite, err := db.GetInternalEntry(entrykv.CFWrite, key, 40)
+	require.NoError(t, err)
+	defer droppedWrite.DecrRef()
+	require.NotZero(t, droppedWrite.Meta&entrykv.BitDelete)
+
+	droppedDefault, err := db.GetInternalEntry(entrykv.CFDefault, key, 30)
+	require.NoError(t, err)
+	defer droppedDefault.DecrRef()
+	require.NotZero(t, droppedDefault.Meta&entrykv.BitDelete)
+}
+
 func TestApplyMVCCGCReplicatedUsesMaintenanceProposer(t *testing.T) {
 	db := openMVCCGCPlanTestDB(t)
 	key := []byte("vol/key")
