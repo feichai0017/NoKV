@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -70,6 +71,10 @@ func IsRetryExhausted(err error) bool {
 	return errors.As(err, &target)
 }
 
+func (e *RetryExhaustedError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindRetryExhausted
+}
+
 // ProtocolError records local transaction/client contract violations.
 type ProtocolError struct {
 	Operation string
@@ -89,6 +94,10 @@ func (e *ProtocolError) Error() string {
 func IsProtocolError(err error) bool {
 	var target *ProtocolError
 	return errors.As(err, &target)
+}
+
+func (e *ProtocolError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindProtocolViolation
 }
 
 // RegionRoutingError records stable region-cache and RegionError failures.
@@ -135,6 +144,10 @@ func IsRegionRoutingError(err error) bool {
 	return errors.As(err, &target)
 }
 
+func (e *RegionRoutingError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindRegionRouting
+}
+
 // TxnKeyError represents transaction key errors surfaced by raftstore.
 // Callers can inspect KeyErrors to resolve locks or retry timestamp-expired commits.
 type TxnKeyError struct {
@@ -152,6 +165,13 @@ func (e *TxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 		return nil
 	}
 	return e.Errors
+}
+
+func (e *TxnKeyError) ErrorKind() nokverrors.Kind {
+	if e == nil {
+		return nokverrors.KindUnknown
+	}
+	return nokverrors.KindOfTxnKeyErrors(e.Errors)
 }
 
 // AsTxnKeyError extracts a TxnKeyError from err.
@@ -203,6 +223,10 @@ func IsRouteUnavailable(err error) bool {
 	return errors.As(err, &target)
 }
 
+func (e *RouteUnavailableError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindRouteUnavailable
+}
+
 // AsRouteUnavailable extracts a RouteUnavailableError from err.
 func AsRouteUnavailable(err error) (*RouteUnavailableError, bool) {
 	var target *RouteUnavailableError
@@ -228,6 +252,10 @@ func (e *RegionNotFoundError) Error() string {
 func IsRegionNotFound(err error) bool {
 	var target *RegionNotFoundError
 	return errors.As(err, &target)
+}
+
+func (e *RegionNotFoundError) ErrorKind() nokverrors.Kind {
+	return nokverrors.KindNotFound
 }
 
 // AsRegionNotFound extracts a RegionNotFoundError from err.

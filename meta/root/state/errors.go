@@ -1,19 +1,19 @@
 package state
 
-import "errors"
+import nokverrors "github.com/feichai0017/NoKV/errors"
 
 var (
 	// ErrPrimacy indicates a primacy violation: another active holder already owns the current tenure.
-	ErrPrimacy = errors.New("meta/root/state: primacy violated")
+	ErrPrimacy = nokverrors.New(nokverrors.KindConflict, "meta/root/state: primacy violated")
 	// ErrInvalidTenure indicates malformed or impossible lease parameters.
-	ErrInvalidTenure = errors.New("meta/root/state: invalid tenure")
+	ErrInvalidTenure = nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid tenure")
 	// ErrInheritance indicates an inheritance violation: the successor did not cover or acknowledge the sealed legacy.
-	ErrInheritance = errors.New("meta/root/state: inheritance violated")
+	ErrInheritance = nokverrors.New(nokverrors.KindProtocolViolation, "meta/root/state: inheritance violated")
 	// ErrMandate indicates that the current rooted lease does not
 	// admit one requested coordinator mandate.
-	ErrMandate = errors.New("meta/root/state: mandate mismatch")
+	ErrMandate = nokverrors.New(nokverrors.KindProtocolViolation, "meta/root/state: mandate mismatch")
 	// ErrSilence indicates that a sealed predecessor era was still admitted on a live path.
-	ErrSilence = errors.New("meta/root/state: silence violated")
+	ErrSilence = nokverrors.New(nokverrors.KindProtocolViolation, "meta/root/state: silence violated")
 	// ErrFinality indicates that rooted handover was not yet complete for the requested operation.
-	ErrFinality = errors.New("meta/root/state: finality violated")
+	ErrFinality = nokverrors.New(nokverrors.KindConflict, "meta/root/state: finality violated")
 )

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
@@ -76,4 +77,18 @@ func TestClientTypedErrors(t *testing.T) {
 	require.EqualError(t, routing.Unwrap(), "resolver failed")
 	require.True(t, IsRegionRoutingError(routing))
 	require.False(t, IsRegionRoutingError(errors.New("other")))
+}
+
+func TestClientTypedErrorsExposeStableKinds(t *testing.T) {
+	require.Equal(t, nokverrors.KindRetryExhausted, nokverrors.KindOf(&RetryExhaustedError{Operation: "scan"}))
+	require.Equal(t, nokverrors.KindProtocolViolation, nokverrors.KindOf(&ProtocolError{Operation: "commit"}))
+	require.Equal(t, nokverrors.KindRegionRouting, nokverrors.KindOf(&RegionRoutingError{Operation: "route"}))
+	require.Equal(t, nokverrors.KindRouteUnavailable, nokverrors.KindOf(&RouteUnavailableError{Key: []byte("k")}))
+	require.Equal(t, nokverrors.KindNotFound, nokverrors.KindOf(&RegionNotFoundError{Key: []byte("k")}))
+	require.Equal(t, nokverrors.KindLockConflict, nokverrors.KindOf(&TxnKeyError{
+		Errors: []*kvrpcpb.KeyError{{Locked: &kvrpcpb.Locked{Key: []byte("k")}}},
+	}))
+	require.True(t, nokverrors.Retryable(&RegionRoutingError{Operation: "route"}))
+	require.True(t, nokverrors.Retryable(&RouteUnavailableError{Key: []byte("k")}))
+	require.False(t, nokverrors.Retryable(&RetryExhaustedError{Operation: "scan"}))
 }

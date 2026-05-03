@@ -11,6 +11,7 @@ import (
 
 	xxhash "github.com/cespare/xxhash/v2"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
@@ -35,10 +36,6 @@ type TxnRunner interface {
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
-}
-
-type keyErrorCarrier interface {
-	KeyErrors() []*kvrpcpb.KeyError
 }
 
 // MountAdmission is the executor's mount-admission view.
@@ -1328,32 +1325,12 @@ func translateMutateError(err error) error {
 	if errors.Is(err, fsmeta.ErrExists) {
 		return err
 	}
-	var keyErrs keyErrorCarrier
-	if errors.As(err, &keyErrs) {
-		for _, keyErr := range keyErrs.KeyErrors() {
-			if keyErr != nil && keyErr.GetAlreadyExists() != nil {
-				return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
-			}
-		}
+	if nokverrors.HasKeyErrorKind(err, nokverrors.KindAlreadyExists) {
+		return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
 	}
 	return err
 }
 
 func isRetryableTxnContention(err error) bool {
-	var keyErrs keyErrorCarrier
-	if !errors.As(err, &keyErrs) {
-		return false
-	}
-	retryable := false
-	for _, keyErr := range keyErrs.KeyErrors() {
-		if keyErr == nil {
-			continue
-		}
-		if keyErr.GetCommitTsExpired() != nil || keyErr.GetLocked() != nil {
-			retryable = true
-			continue
-		}
-		return false
-	}
-	return retryable
+	return nokverrors.IsTxnContention(err)
 }

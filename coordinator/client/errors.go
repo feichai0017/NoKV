@@ -5,23 +5,24 @@ import (
 	"strconv"
 	"strings"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 var (
 	// errEmptyAddress indicates that no coordinator endpoint was provided.
-	errEmptyAddress = errors.New("coordinator client: empty address")
+	errEmptyAddress = nokverrors.New(nokverrors.KindInvalidArgument, "coordinator client: empty address")
 	// errNoReachableAddress indicates that the client could not reach any configured endpoint.
-	errNoReachableAddress = errors.New("coordinator client: no reachable address")
+	errNoReachableAddress = nokverrors.New(nokverrors.KindUnavailable, "coordinator client: no reachable address")
 	// errConnectionShutdown indicates that the underlying gRPC connection shut down before becoming ready.
-	errConnectionShutdown = errors.New("coordinator client: grpc connection shutdown")
+	errConnectionShutdown = nokverrors.New(nokverrors.KindUnavailable, "coordinator client: grpc connection shutdown")
 	// errStaleWitnessEra indicates that a reply was self-consistent but
 	// carried a era older than one already accepted by this client.
-	errStaleWitnessEra = errors.New("coordinator client: stale witness era")
+	errStaleWitnessEra = nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")
 	// errInvalidWitness indicates that a reply carried malformed monotone-duty
 	// witness fields and cannot be admitted as a legal continuation reply.
-	errInvalidWitness = errors.New("coordinator client: invalid witness")
+	errInvalidWitness = nokverrors.New(nokverrors.KindProtocolViolation, "coordinator client: invalid witness")
 )
 
 const errNotLeaderPrefix = "coordinator not leader"

@@ -1,10 +1,10 @@
 package view
 
-import "errors"
+import nokverrors "github.com/feichai0017/NoKV/errors"
 
 var (
-	ErrInvalidStoreID       = errors.New("coordinator/view: invalid store id")
-	ErrInvalidRegionID      = errors.New("coordinator/view: invalid region id")
-	ErrRegionHeartbeatStale = errors.New("coordinator/view: stale region heartbeat epoch")
-	ErrRegionRangeOverlap   = errors.New("coordinator/view: region range overlap")
+	ErrInvalidStoreID       = nokverrors.New(nokverrors.KindInvalidArgument, "coordinator/view: invalid store id")
+	ErrInvalidRegionID      = nokverrors.New(nokverrors.KindInvalidArgument, "coordinator/view: invalid region id")
+	ErrRegionHeartbeatStale = nokverrors.New(nokverrors.KindStaleEpoch, "coordinator/view: stale region heartbeat epoch")
+	ErrRegionRangeOverlap   = nokverrors.New(nokverrors.KindConflict, "coordinator/view: region range overlap")
 )
