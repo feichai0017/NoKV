@@ -23,7 +23,7 @@ func TestDBLogRequiresOpenDB(t *testing.T) {
 	require.ErrorContains(t, err, "closed db")
 }
 
-func TestDBLogUsesDedicatedRaftWAL(t *testing.T) {
+func TestDBLogUsesDedicatedControlWAL(t *testing.T) {
 	db, localMeta := openDBLogTestDB(t)
 	defer func() { _ = db.Close() }()
 
@@ -34,7 +34,7 @@ func TestDBLogUsesDedicatedRaftWAL(t *testing.T) {
 	for _, mgr := range db.LSMWALs() {
 		require.Equal(t, uint64(0), mgr.Metrics().RecordCounts.RaftEntries)
 	}
-	matches, err := filepath.Glob(filepath.Join(db.WorkDir(), "raft-wal-*", "*.wal"))
+	matches, err := filepath.Glob(filepath.Join(db.WorkDir(), "control-wal-*", "*.wal"))
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
 }
@@ -49,7 +49,7 @@ func openDBLogTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.EnableWALWatchdog = false
-	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta

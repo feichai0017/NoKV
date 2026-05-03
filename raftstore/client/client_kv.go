@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
@@ -523,7 +524,7 @@ func (c *Client) prewriteMutationsByRoute(ctx context.Context, primary []byte, s
 				break
 			}
 			if resp != nil && len(resp.GetErrors()) > 0 {
-				return prewritten, &TxnKeyError{Errors: resp.GetErrors()}
+				return prewritten, nokverrors.NewTxnKeyError(resp.GetErrors()...)
 			}
 			prewritten[group.region.desc.RegionID] = append(prewritten[group.region.desc.RegionID], collectKeys(group.mutations)...)
 			pending = removeMutationSet(pending, group.mutations)
@@ -556,7 +557,7 @@ func (c *Client) resolveCommittedSecondaries(ctx context.Context, keys [][]byte,
 }
 
 func shouldRollbackAfterPrimaryCommitFailure(err error) bool {
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	if !ok {
 		return false
 	}

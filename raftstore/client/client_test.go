@@ -3,16 +3,18 @@ package client
 import (
 	"context"
 	"errors"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	errorpb "github.com/feichai0017/NoKV/pb/error"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	nokverrors "github.com/feichai0017/NoKV/errors"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -869,9 +871,9 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), resolved)
 
-	errStr := (&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}}).Error()
-	require.Contains(t, errStr, "client: transaction key errors")
-	conflict, ok := AsTxnKeyError(&TxnKeyError{Errors: []*kvrpcpb.KeyError{{Abort: "boom"}}})
+	keyErr := nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{Abort: "boom"})
+	require.Contains(t, keyErr.Error(), "nokv: transaction key errors")
+	conflict, ok := nokverrors.AsTxnKeyError(keyErr)
 	require.True(t, ok)
 	require.Len(t, conflict.Errors, 1)
 }

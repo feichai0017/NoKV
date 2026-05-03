@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -14,7 +15,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
-	workdirmode "github.com/feichai0017/NoKV/runtime/mode"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -154,7 +154,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
-	opts.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{workdirmode.ModePreparing}
 	db, err := NoKV.Open(opts)
 	if err != nil {

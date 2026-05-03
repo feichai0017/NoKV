@@ -373,46 +373,6 @@ func (s *Service) requireWatcher() error {
 	return nil
 }
 
-func rpcError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if _, ok := status.FromError(err); ok {
-		return err
-	}
-	switch {
-	case errors.Is(err, fsmeta.ErrWatchOverflow):
-		return status.Error(codes.ResourceExhausted, err.Error())
-	case errors.Is(err, fsmeta.ErrWatchCursorExpired):
-		return status.Error(codes.OutOfRange, err.Error())
-	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, err.Error())
-	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, err.Error())
-	case errors.Is(err, fsmeta.ErrExists):
-		return status.Error(codes.AlreadyExists, err.Error())
-	case errors.Is(err, fsmeta.ErrNotFound):
-		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, fsmeta.ErrMountNotRegistered), errors.Is(err, fsmeta.ErrMountRetired):
-		return status.Error(codes.FailedPrecondition, err.Error())
-	case errors.Is(err, fsmeta.ErrQuotaExceeded):
-		return status.Error(codes.ResourceExhausted, err.Error())
-	case errors.Is(err, fsmeta.ErrInvalidMountID),
-		errors.Is(err, fsmeta.ErrInvalidInodeID),
-		errors.Is(err, fsmeta.ErrInvalidName),
-		errors.Is(err, fsmeta.ErrInvalidSession),
-		errors.Is(err, fsmeta.ErrInvalidRequest),
-		errors.Is(err, fsmeta.ErrInvalidKey),
-		errors.Is(err, fsmeta.ErrInvalidKeyKind),
-		errors.Is(err, fsmeta.ErrInvalidValue),
-		errors.Is(err, fsmeta.ErrInvalidValueKind),
-		errors.Is(err, fsmeta.ErrInvalidPageSize):
-		return status.Error(codes.InvalidArgument, err.Error())
-	default:
-		return status.Error(codes.Internal, err.Error())
-	}
-}
-
 func rpcStreamError(err error) error {
 	if err == nil || errors.Is(err, io.EOF) {
 		return nil

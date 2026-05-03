@@ -2,7 +2,6 @@ package raftstore
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -86,10 +85,10 @@ func (r *Runtime) Close() error {
 // for tests and custom wiring.
 func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.CoordinatorAddr == "" {
-		return nil, errors.New("fsmeta/runtime/raftstore: coordinator addr is required")
+		return nil, errCoordinatorAddrRequired
 	}
 	if opts.SessionCleanupLimit > fsmeta.MaxSessionExpireLimit {
-		return nil, errors.New("fsmeta/runtime/raftstore: session cleanup limit exceeds maximum")
+		return nil, errSessionCleanupLimitExceeded
 	}
 	if ctx == nil {
 		ctx = context.Background()

@@ -6,10 +6,10 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	coord.JoinStore(t, 1)
 	coord.JoinStore(t, 2)
 	seed := testcluster.StartNodeWithConfig(t, 1, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
+		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
 		StartPeers:        true,
 		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,

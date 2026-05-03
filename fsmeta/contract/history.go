@@ -33,10 +33,10 @@ type observedOperation struct {
 // the regular PR path into a large model checker.
 func RunConcurrentBatches(ctx context.Context, exec Executor, model *Model, ops []Operation, batchSize int) error {
 	if exec == nil {
-		return fmt.Errorf("fsmeta/contract: executor is required")
+		return errExecutorRequired
 	}
 	if model == nil {
-		return fmt.Errorf("fsmeta/contract: model is required")
+		return errModelRequired
 	}
 	if batchSize <= 1 {
 		return Run(ctx, exec, model, ops)

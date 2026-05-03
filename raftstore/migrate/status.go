@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	workdirmode "github.com/feichai0017/NoKV/runtime/mode"
 )
 
 const defaultStatusDialTimeout = 3 * time.Second

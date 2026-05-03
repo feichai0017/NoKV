@@ -1,23 +1,23 @@
 package commit
 
 // Queue + batch + sync envelope types owned by the commit pipeline.
-// Request (the underlying write envelope) lives in runtime — see
-// runtime/request.go.
+// Request (the underlying write envelope) lives in dbcore — see
+// dbcore/request.go.
 
 import (
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/runtime"
+	"github.com/feichai0017/NoKV/dbcore"
 	"github.com/feichai0017/NoKV/utils"
 )
 
 // CommitRequest is the queue element used by the commit Pipeline. It
-// wraps a runtime.Request with the queue-side accounting (entry count,
+// wraps a dbcore.Request with the queue-side accounting (entry count,
 // payload size) the dispatcher needs.
 type CommitRequest struct {
-	Req        *runtime.Request
+	Req        *dbcore.Request
 	EntryCount int
 	Size       int64
 }
@@ -126,7 +126,7 @@ func (cq *CommitQueue) AddPending(entries int64, bytes int64) {
 type CommitBatch struct {
 	Reqs       []*CommitRequest
 	Pool       *[]*CommitRequest
-	Requests   []*runtime.Request
+	Requests   []*dbcore.Request
 	ShardID    int
 	BatchStart time.Time
 }
@@ -136,7 +136,7 @@ type CommitBatch struct {
 type SyncBatch struct {
 	Reqs      []*CommitRequest
 	Pool      *[]*CommitRequest
-	Requests  []*runtime.Request
+	Requests  []*dbcore.Request
 	ShardID   int
 	FailedAt  int
 	ApplyDone time.Time

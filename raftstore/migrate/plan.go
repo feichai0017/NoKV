@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	workdirmode "github.com/feichai0017/NoKV/runtime/mode"
 )
 
 // PlanResult is the read-only migration preflight result for one workdir.

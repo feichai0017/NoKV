@@ -15,6 +15,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	pdserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -22,7 +23,6 @@ import (
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -199,9 +199,9 @@ func TestRunServeCmdNoRegions(t *testing.T) {
 		require.Contains(t, buf.String(), "Serve lifecycle: bootstrap-wait")
 		require.Contains(t, buf.String(), "Serve metrics endpoint listening on http://")
 		require.Contains(t, buf.String(), "Serve mode: cluster (coordinator enabled, addr="+coordAddr+")")
-		state, err := raftmode.Read(dir)
+		state, err := workdirmode.Read(dir)
 		require.NoError(t, err)
-		require.Equal(t, raftmode.ModeCluster, state.Mode)
+		require.Equal(t, workdirmode.ModeCluster, state.Mode)
 		require.Equal(t, uint64(1), state.StoreID)
 	})
 }
@@ -246,9 +246,9 @@ func TestRunServeCmdWithRegions(t *testing.T) {
 		require.Contains(t, out, "Configured store address overrides:")
 		require.Contains(t, out, "Serve mode: cluster (coordinator enabled, addr="+coordAddr+")")
 		require.Contains(t, out, "coordinator heartbeat sink enabled: "+coordAddr)
-		state, err := raftmode.Read(dir)
+		state, err := workdirmode.Read(dir)
 		require.NoError(t, err)
-		require.Equal(t, raftmode.ModeCluster, state.Mode)
+		require.Equal(t, workdirmode.ModeCluster, state.Mode)
 		require.Equal(t, uint64(1), state.StoreID)
 	})
 }
@@ -359,8 +359,8 @@ func TestResolveStoreAdvertiseAddrFromConfig(t *testing.T) {
 
 func TestValidateServeModeRejectsStoreMismatch(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, raftmode.Write(dir, raftmode.State{
-		Mode:    raftmode.ModeCluster,
+	require.NoError(t, workdirmode.Write(dir, workdirmode.State{
+		Mode:    workdirmode.ModeCluster,
 		StoreID: 2,
 	}))
 	_, err := validateServeMode(dir, 1)
@@ -369,16 +369,16 @@ func TestValidateServeModeRejectsStoreMismatch(t *testing.T) {
 
 func TestPromoteClusterModeClearsBootstrapIdentity(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, raftmode.Write(dir, raftmode.State{
-		Mode:     raftmode.ModeSeeded,
+	require.NoError(t, workdirmode.Write(dir, workdirmode.State{
+		Mode:     workdirmode.ModeSeeded,
 		StoreID:  1,
 		RegionID: 9,
 		PeerID:   19,
 	}))
 	require.NoError(t, promoteClusterMode(dir, 1))
-	state, err := raftmode.Read(dir)
+	state, err := workdirmode.Read(dir)
 	require.NoError(t, err)
-	require.Equal(t, raftmode.ModeCluster, state.Mode)
+	require.Equal(t, workdirmode.ModeCluster, state.Mode)
 	require.Equal(t, uint64(1), state.StoreID)
 	require.Zero(t, state.RegionID)
 	require.Zero(t, state.PeerID)

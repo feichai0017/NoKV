@@ -780,7 +780,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() {

@@ -1,4 +1,4 @@
-package runtime
+package dbcore
 
 import (
 	stderrors "errors"
@@ -9,7 +9,7 @@ import (
 )
 
 // StatsCollector is the narrow observer surface required by background
-// DB services. The concrete implementation lives in runtime/stats while
+// DB services. The concrete implementation lives in dbcore/stats while
 // the lifecycle orchestration lives here.
 type StatsCollector interface {
 	StartStats()

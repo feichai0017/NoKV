@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
+	dbcorestats "github.com/feichai0017/NoKV/dbcore/stats"
 	"github.com/feichai0017/NoKV/metrics"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -17,8 +19,6 @@ import (
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
-	runtimestats "github.com/feichai0017/NoKV/runtime/stats"
 	"google.golang.org/grpc"
 )
 
@@ -40,14 +40,14 @@ type Node struct {
 	transport       *transport.GRPCTransport
 	mvccMaintenance *storemvcc.MaintenanceWorker
 	mvccGCPlan      *storemvcc.GCPlanner
-	mvccGCPlanTask  *dbruntime.PeriodicTask
+	mvccGCPlanTask  *dbcore.PeriodicTask
 	tickStop        chan struct{}
 	tickWG          sync.WaitGroup
 	tickEvery       time.Duration
 }
 
 type mvccGCStatsSink interface {
-	SetMVCCGCStatsSnapshotSource(func() runtimestats.MVCCGCStatsSnapshot)
+	SetMVCCGCStatsSnapshotSource(func() dbcorestats.MVCCGCStatsSnapshot)
 }
 
 type transportMetricsSink interface {
@@ -136,7 +136,7 @@ func NewNode(cfg Config) (*Node, error) {
 		Mount:     cfg.MVCCGCPlan.Mount,
 	}); ok {
 		node.mvccGCPlan = planner
-		node.mvccGCPlanTask = dbruntime.NewPeriodicTask(taskCfg)
+		node.mvccGCPlanTask = dbcore.NewPeriodicTask(taskCfg)
 		node.mvccGCPlanTask.Start()
 	}
 	if worker, ok := newMVCCMaintenanceWorker(cfg.MVCCMaintenance, cfg.Storage.MVCC, st); ok {
@@ -187,9 +187,9 @@ func (n *Node) MVCCMaintenanceSnapshot() storemvcc.MaintenanceSnapshot {
 }
 
 // MVCCGCStatsSnapshot returns the runtime stats view of raftstore MVCC GC state.
-func (n *Node) MVCCGCStatsSnapshot() runtimestats.MVCCGCStatsSnapshot {
+func (n *Node) MVCCGCStatsSnapshot() dbcorestats.MVCCGCStatsSnapshot {
 	if n == nil {
-		return runtimestats.MVCCGCStatsSnapshot{}
+		return dbcorestats.MVCCGCStatsSnapshot{}
 	}
 	var plan storemvcc.GCPlanSnapshot
 	if n.mvccGCPlan != nil && n.mvccGCPlanTask != nil {

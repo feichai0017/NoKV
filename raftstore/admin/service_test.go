@@ -95,7 +95,7 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options
 	require.NoError(t, err)
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if tweak != nil {
 		tweak(opt)
 	}

@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -16,8 +15,6 @@ import (
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Backend is the metadata-root authority surface exported over gRPC.
@@ -69,7 +66,7 @@ func (s *Service) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest)
 	}
 	snapshot, err := s.backend.Snapshot()
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	return &metapb.MetadataRootSnapshotResponse{Checkpoint: metawire.RootSnapshotToProto(snapshot, 0)}, nil
 }
@@ -85,13 +82,13 @@ func (s *Service) Append(ctx context.Context, req *metapb.MetadataRootAppendRequ
 	for _, pbEvent := range req.GetEvents() {
 		event := metawire.RootEventFromProto(pbEvent)
 		if event.Kind == rootevent.KindUnknown {
-			return nil, status.Error(codes.InvalidArgument, "metadata root append requires known event kind")
+			return nil, statusInvalidArgument("metadata root append requires known event kind")
 		}
 		events = append(events, event)
 	}
 	commit, err := s.backend.Append(ctx, events...)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	return &metapb.MetadataRootAppendResponse{
 		Cursor: metawire.RootCursorToProto(commit.Cursor),
@@ -108,11 +105,11 @@ func (s *Service) FenceAllocator(ctx context.Context, req *metapb.MetadataRootFe
 	}
 	kind, ok := metawire.RootAllocatorKindFromProto(req.GetKind())
 	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "metadata root allocator kind is required")
+		return nil, statusInvalidArgument("metadata root allocator kind is required")
 	}
 	current, err := s.backend.FenceAllocator(ctx, kind, req.GetMinimum())
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	return &metapb.MetadataRootFenceAllocatorResponse{Current: current}, nil
 }
@@ -173,7 +170,7 @@ func (s *Service) ApplyHandover(ctx context.Context, req *metapb.MetadataRootApp
 func (s *Service) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest) (*metapb.MetadataRootObserveCommittedResponse, error) {
 	observed, err := s.observeCommitted()
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	checkpoint, tail := metawire.RootObservedToProto(observed)
 	return &metapb.MetadataRootObserveCommittedResponse{Checkpoint: checkpoint, Tail: tail}, nil
@@ -183,7 +180,7 @@ func (s *Service) ObserveTail(_ context.Context, req *metapb.MetadataRootObserve
 	after := metawire.RootTailTokenFromProto(req.GetAfter())
 	advance, err := s.observeTail(after)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	pbAfter, token, checkpoint, tail := metawire.RootTailAdvanceToObservedResponse(advance)
 	return &metapb.MetadataRootObserveTailResponse{
@@ -199,7 +196,7 @@ func (s *Service) WaitTail(_ context.Context, req *metapb.MetadataRootWaitTailRe
 	timeout := time.Duration(req.GetTimeoutMillis()) * time.Millisecond
 	advance, err := s.waitTail(after, timeout)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcError(err)
 	}
 	pbAfter, token, checkpoint, tail := metawire.RootTailAdvanceToObservedResponse(advance)
 	return &metapb.MetadataRootWaitTailResponse{
@@ -258,10 +255,7 @@ func (s *Service) requireLeader() error {
 		return nil
 	}
 	leaderID := leader.LeaderID()
-	if leaderID == 0 {
-		return status.Error(codes.FailedPrecondition, "metadata root not leader")
-	}
-	return status.Error(codes.FailedPrecondition, fmt.Sprintf("metadata root not leader (leader_id=%d)", leaderID))
+	return statusNotLeader(leaderID)
 }
 
 func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
@@ -270,7 +264,7 @@ func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
 	}
 	backend, ok := s.backend.(leaseBackend)
 	if !ok {
-		return nil, status.Error(codes.Unimplemented, "metadata root coordinator protocol is not supported")
+		return nil, statusUnimplemented("metadata root coordinator protocol is not supported")
 	}
 	return backend, nil
 }
@@ -280,46 +274,46 @@ func coordinatorLeaseApplyRPCError(kind rootproto.TenureAct, err error) error {
 	case rootproto.TenureActIssue:
 		switch {
 		case errors.Is(err, rootstate.ErrInvalidTenure):
-			return status.Error(codes.InvalidArgument, err.Error())
+			return statusInvalidArgument(err.Error())
 		case errors.Is(err, rootstate.ErrInheritance):
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return rpcError(err)
 		}
 	case rootproto.TenureActRelease:
 		switch {
 		case errors.Is(err, rootstate.ErrPrimacy),
 			errors.Is(err, rootstate.ErrInvalidTenure):
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return statusFailedPrecondition(err)
 		}
 	}
-	return status.Error(codes.Internal, err.Error())
+	return rpcError(err)
 }
 
 func coordinatorHandoverApplyRPCError(kind rootproto.HandoverAct, err error) error {
 	if errors.Is(err, rootstate.ErrInvalidTenure) {
-		return status.Error(codes.InvalidArgument, err.Error())
+		return statusInvalidArgument(err.Error())
 	}
 	switch kind {
 	case rootproto.HandoverActSeal:
 		if errors.Is(err, rootstate.ErrPrimacy) {
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return rpcError(err)
 		}
 	case rootproto.HandoverActConfirm:
 		if errors.Is(err, rootstate.ErrFinality) {
-			return status.Error(codes.InvalidArgument, err.Error())
+			return statusInvalidArgument(err.Error())
 		}
 		if errors.Is(err, rootstate.ErrPrimacy) {
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return rpcError(err)
 		}
 	case rootproto.HandoverActClose:
 		if errors.Is(err, rootstate.ErrPrimacy) ||
 			errors.Is(err, rootstate.ErrFinality) {
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return rpcError(err)
 		}
 	case rootproto.HandoverActReattach:
 		if errors.Is(err, rootstate.ErrPrimacy) ||
 			errors.Is(err, rootstate.ErrFinality) {
-			return status.Error(codes.FailedPrecondition, err.Error())
+			return rpcError(err)
 		}
 	}
-	return status.Error(codes.Internal, err.Error())
+	return rpcError(err)
 }

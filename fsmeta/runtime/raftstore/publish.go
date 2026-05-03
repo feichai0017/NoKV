@@ -2,7 +2,6 @@ package raftstore
 
 import (
 	"context"
-	"errors"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -35,7 +34,7 @@ func (p rootPublisher) CompleteSubtreeHandoff(ctx context.Context, mount fsmeta.
 
 func (p rootPublisher) send(ctx context.Context, event rootevent.Event) error {
 	if p.coord == nil {
-		return errors.New("root publisher is not configured")
+		return errRootPublisherNotConfigured
 	}
 	resp, err := p.coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(event),
@@ -44,7 +43,7 @@ func (p rootPublisher) send(ctx context.Context, event rootevent.Event) error {
 		return err
 	}
 	if resp == nil || !resp.GetAccepted() {
-		return errors.New("root event was not accepted")
+		return errRootEventNotAccepted
 	}
 	return nil
 }

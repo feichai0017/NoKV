@@ -29,10 +29,10 @@ type Executor interface {
 // model, comparing every externally visible result.
 func Run(ctx context.Context, exec Executor, model *Model, ops []Operation) error {
 	if exec == nil {
-		return fmt.Errorf("fsmeta/contract: executor is required")
+		return errExecutorRequired
 	}
 	if model == nil {
-		return fmt.Errorf("fsmeta/contract: model is required")
+		return errModelRequired
 	}
 	history := make([]string, 0, len(ops))
 	for i, op := range ops {

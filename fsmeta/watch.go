@@ -1,12 +1,6 @@
 package fsmeta
 
-import (
-	"context"
-	"errors"
-)
-
-var ErrWatchOverflow = errors.New("fsmeta: watch backlog overflow")
-var ErrWatchCursorExpired = errors.New("fsmeta: watch cursor expired")
+import "context"
 
 // WatchEventSource identifies the raftstore command source that made a key
 // visible to MVCC readers.

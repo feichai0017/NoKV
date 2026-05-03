@@ -10,23 +10,23 @@ import (
 
 var (
 	// errMissingRegionResolver indicates that the distributed client cannot route requests without a resolver.
-	errMissingRegionResolver = errors.New("client: region resolver required")
+	errMissingRegionResolver = nokverrors.New(nokverrors.KindInvalidArgument, "client: region resolver required")
 	// errMissingStoreResolver indicates that the distributed client cannot dial stores without a resolver.
-	errMissingStoreResolver = errors.New("client: store resolver required")
+	errMissingStoreResolver = nokverrors.New(nokverrors.KindInvalidArgument, "client: store resolver required")
 	// errStoreIDNotSet indicates that a request tried to use an empty store id.
-	errStoreIDNotSet = errors.New("client: store id not set")
+	errStoreIDNotSet = nokverrors.New(nokverrors.KindInvalidArgument, "client: store id not set")
 	// errStoreUnavailable indicates that Coordinator knows the store but marks its heartbeat stale.
-	errStoreUnavailable = errors.New("client: store unavailable")
+	errStoreUnavailable = nokverrors.New(nokverrors.KindUnavailable, "client: store unavailable")
 	// errResolvedRegionIDMissing indicates that routing returned a descriptor without a region id.
-	errResolvedRegionIDMissing = errors.New("client: resolved region id missing")
+	errResolvedRegionIDMissing = nokverrors.New(nokverrors.KindProtocolViolation, "client: resolved region id missing")
 	// errRegionMetaMissing indicates that a routed region snapshot had no metadata.
-	errRegionMetaMissing = errors.New("client: region meta missing")
+	errRegionMetaMissing = nokverrors.New(nokverrors.KindProtocolViolation, "client: region meta missing")
 	// errLeaderUnknown indicates that a region has no known leader store.
-	errLeaderUnknown = errors.New("client: leader unknown")
+	errLeaderUnknown = nokverrors.New(nokverrors.KindRouteUnavailable, "client: leader unknown")
 	// errInvalidScanLimit indicates that scan was called with limit == 0.
-	errInvalidScanLimit = errors.New("client: scan limit must be > 0")
+	errInvalidScanLimit = nokverrors.New(nokverrors.KindInvalidArgument, "client: scan limit must be > 0")
 	// errReadLockStillLive indicates that a read lock is valid and should be retried within the caller budget.
-	errReadLockStillLive = errors.New("client: read lock still live")
+	errReadLockStillLive = nokverrors.New(nokverrors.KindRetryable, "client: read lock still live")
 )
 
 func IsMissingRegionResolver(err error) bool { return errors.Is(err, errMissingRegionResolver) }
@@ -148,52 +148,8 @@ func (e *RegionRoutingError) ErrorKind() nokverrors.Kind {
 	return nokverrors.KindRegionRouting
 }
 
-// TxnKeyError represents transaction key errors surfaced by raftstore.
-// Callers can inspect KeyErrors to resolve locks or retry timestamp-expired commits.
-type TxnKeyError struct {
-	Errors []*kvrpcpb.KeyError
-}
-
-func (e *TxnKeyError) Error() string {
-	return fmt.Sprintf("client: transaction key errors: %+v", e.Errors)
-}
-
-// KeyErrors exposes the raw per-key errors without forcing callers to
-// depend on this package's concrete error type.
-func (e *TxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
-	if e == nil {
-		return nil
-	}
-	return e.Errors
-}
-
-func (e *TxnKeyError) ErrorKind() nokverrors.Kind {
-	if e == nil {
-		return nokverrors.KindUnknown
-	}
-	return nokverrors.KindOfTxnKeyErrors(e.Errors)
-}
-
-// AsTxnKeyError extracts a TxnKeyError from err.
-func AsTxnKeyError(err error) (*TxnKeyError, bool) {
-	var target *TxnKeyError
-	if !errors.As(err, &target) {
-		return nil, false
-	}
-	return target, true
-}
-
 func txnKeyError(errs ...*kvrpcpb.KeyError) error {
-	filtered := make([]*kvrpcpb.KeyError, 0, len(errs))
-	for _, err := range errs {
-		if err != nil {
-			filtered = append(filtered, err)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-	return &TxnKeyError{Errors: filtered}
+	return nokverrors.NewTxnKeyError(errs...)
 }
 
 // RouteUnavailableError indicates that the client could not resolve a route

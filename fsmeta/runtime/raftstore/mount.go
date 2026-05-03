@@ -2,7 +2,6 @@ package raftstore
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,7 +41,7 @@ type mountEntry struct {
 
 func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fsmetaexec.MountAdmission, error) {
 	if c.coord == nil {
-		return fsmetaexec.MountAdmission{}, errors.New("mount cache is not configured")
+		return fsmetaexec.MountAdmission{}, errMountCacheNotConfigured
 	}
 	now := c.clock()
 	if record, err, ok := c.lookup(mount, now); ok {

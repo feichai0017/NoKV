@@ -3,14 +3,14 @@ package stats
 import (
 	"testing"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 )
 
 func TestMVCCGCAdaptsPlanAndMaintenanceSnapshots(t *testing.T) {
 	plan := storemvcc.GCPlanSnapshot{
-		PeriodicTaskSnapshot: dbruntime.PeriodicTaskSnapshot{
+		PeriodicTaskSnapshot: dbcore.PeriodicTaskSnapshot{
 			Enabled:        true,
 			Runs:           3,
 			LastUnix:       1710000100,
@@ -112,12 +112,12 @@ func TestMVCCGCAdaptsPlanAndMaintenanceSnapshots(t *testing.T) {
 	}
 }
 
-func TestRaftLogPointersAdaptsDetachedMap(t *testing.T) {
+func TestControlLogPointersAdaptsDetachedMap(t *testing.T) {
 	source := map[uint64]localmeta.RaftLogPointer{
 		1: {Segment: 10, SegmentIndex: 100, AppliedIndex: 1},
 		2: {Segment: 20, SegmentIndex: 200, AppliedIndex: 2},
 	}
-	fn := RaftLogPointers(func() map[uint64]localmeta.RaftLogPointer {
+	fn := ControlLogPointers(func() map[uint64]localmeta.RaftLogPointer {
 		return source
 	})
 	if fn == nil {
@@ -143,11 +143,11 @@ func TestRaftLogPointersAdaptsDetachedMap(t *testing.T) {
 	}
 }
 
-func TestRaftLogPointersNilSources(t *testing.T) {
-	if RaftLogPointers(nil) != nil {
+func TestControlLogPointersNilSources(t *testing.T) {
+	if ControlLogPointers(nil) != nil {
 		t.Fatal("nil source should return nil adapter")
 	}
-	fn := RaftLogPointers(func() map[uint64]localmeta.RaftLogPointer {
+	fn := ControlLogPointers(func() map[uint64]localmeta.RaftLogPointer {
 		return nil
 	})
 	if fn == nil {

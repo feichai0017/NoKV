@@ -50,7 +50,7 @@ type PrepareStagedFunc func(context.Context, fsmeta.CreateRequest) error
 //     the caller can inspect or retry without losing prepared external state.
 func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, req StagedPublishRequest, prepare PrepareStagedFunc) error {
 	if cli == nil {
-		return errors.New("fsmeta/client: staged publish client is required")
+		return errStagedPublishClientRequired
 	}
 	create := req.createRequest()
 	if _, err := fsmeta.PlanCreate(create); err != nil {

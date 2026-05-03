@@ -1,14 +1,14 @@
 package stats
 
 import (
+	dbcorestats "github.com/feichai0017/NoKV/dbcore/stats"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
-	runtimestats "github.com/feichai0017/NoKV/runtime/stats"
 )
 
 // MVCCGC returns the runtime stats view of the raftstore MVCC GC state.
-func MVCCGC(plan storemvcc.GCPlanSnapshot, maintenance storemvcc.MaintenanceSnapshot) runtimestats.MVCCGCStatsSnapshot {
-	snap := runtimestats.MVCCGCStatsSnapshot{
+func MVCCGC(plan storemvcc.GCPlanSnapshot, maintenance storemvcc.MaintenanceSnapshot) dbcorestats.MVCCGCStatsSnapshot {
+	snap := dbcorestats.MVCCGCStatsSnapshot{
 		Enabled:               plan.Enabled,
 		Runs:                  plan.Runs,
 		SkippedRuns:           plan.SkippedRuns,
@@ -35,7 +35,7 @@ func MVCCGC(plan storemvcc.GCPlanSnapshot, maintenance storemvcc.MaintenanceSnap
 	return snap
 }
 
-func addMaintenance(s *runtimestats.MVCCGCStatsSnapshot, maintenance storemvcc.MaintenanceSnapshot) {
+func addMaintenance(s *dbcorestats.MVCCGCStatsSnapshot, maintenance storemvcc.MaintenanceSnapshot) {
 	if s == nil {
 		return
 	}
@@ -60,19 +60,19 @@ func addMaintenance(s *runtimestats.MVCCGCStatsSnapshot, maintenance storemvcc.M
 	s.AppliedOrphanDefaults = maintenance.LastOrphanDefaults.AppliedDefaultDeletes
 }
 
-// RaftLogPointers adapts store-local raft checkpoints to the root runtime stats view.
-func RaftLogPointers(source func() map[uint64]localmeta.RaftLogPointer) func() map[uint64]runtimestats.RaftLogPointer {
+// ControlLogPointers adapts store-local raft checkpoints to the root DB control-log stats view.
+func ControlLogPointers(source func() map[uint64]localmeta.RaftLogPointer) func() map[uint64]dbcorestats.ControlLogPointer {
 	if source == nil {
 		return nil
 	}
-	return func() map[uint64]runtimestats.RaftLogPointer {
+	return func() map[uint64]dbcorestats.ControlLogPointer {
 		ptrs := source()
 		if ptrs == nil {
 			return nil
 		}
-		out := make(map[uint64]runtimestats.RaftLogPointer, len(ptrs))
+		out := make(map[uint64]dbcorestats.ControlLogPointer, len(ptrs))
 		for groupID, ptr := range ptrs {
-			out[groupID] = runtimestats.RaftLogPointer{
+			out[groupID] = dbcorestats.ControlLogPointer{
 				Segment:      ptr.Segment,
 				SegmentIndex: ptr.SegmentIndex,
 			}

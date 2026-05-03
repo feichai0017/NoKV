@@ -8,7 +8,7 @@ This architecture is also meant to support NoKV as a **maintainable and extensib
 
 At a high level, the codebase is organized around four long-lived layers:
 
-- **Root facade and runtime surface** – the top-level `DB` APIs and thin system entrypoints.
+- **Root DB facade and dbcore surface** – the top-level `DB` APIs plus shared single-node runtime helpers.
 - **Single-node engine substrate** – `engine/*` owns WAL, LSM, manifest, slab sidecars, file, and VFS mechanics.
 - **Distributed execution and control plane** – `raftstore/*`, `meta/*`, and `coordinator/*` host replicated execution, rooted metadata, and cluster control logic.
 - **Experiment and evidence layer** – `benchmark/*`, scripts, and docs keep evaluation and design claims attached to the implementation.

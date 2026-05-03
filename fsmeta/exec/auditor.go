@@ -65,7 +65,7 @@ func (r AuditReport) OK() bool {
 // invariants that must hold after every committed fsmeta mutation.
 func (e *Executor) AuditMount(ctx context.Context, mount fsmeta.MountID, readVersion uint64, opt AuditOptions) (AuditReport, error) {
 	if e == nil || e.runner == nil {
-		return AuditReport{}, fmt.Errorf("fsmeta/exec: auditor runner required")
+		return AuditReport{}, errAuditorRunnerRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()

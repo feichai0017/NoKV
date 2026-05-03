@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 )
 
 type Node struct {
@@ -46,7 +46,7 @@ type Node struct {
 }
 
 type NodeConfig struct {
-	AllowedModes      []raftmode.Mode
+	AllowedModes      []workdirmode.Mode
 	StartPeers        bool
 	Scheduler         scheduler.Client
 	HeartbeatInterval time.Duration
@@ -73,7 +73,7 @@ func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoK
 	return db
 }
 
-func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []raftmode.Mode, startPeers bool) *Node {
+func StartNode(tb testing.TB, storeID uint64, dir string, allowedModes []workdirmode.Mode, startPeers bool) *Node {
 	tb.Helper()
 	return StartNodeWithConfig(tb, storeID, dir, NodeConfig{
 		AllowedModes: allowedModes,
@@ -89,7 +89,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	}
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}
@@ -276,7 +276,7 @@ func (n *Node) UnblockPeer(peerID uint64) {
 	n.Server.Transport().UnblockPeer(peerID)
 }
 
-func (n *Node) Restart(tb testing.TB, allowedModes []raftmode.Mode, startPeers bool) {
+func (n *Node) Restart(tb testing.TB, allowedModes []workdirmode.Mode, startPeers bool) {
 	tb.Helper()
 	workDir := n.WorkDir
 	storeID := n.StoreID

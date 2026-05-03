@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -38,7 +38,7 @@ func TestPartitionedFollowerCatchesUpAfterRecovery(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 81, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)
@@ -118,7 +118,7 @@ func TestTransferLeaderRecoversAfterPartitionedTargetReturns(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 82, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)
@@ -187,7 +187,7 @@ func TestRepeatedLinkFlapConvergesDuringMembershipChanges(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 83, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)

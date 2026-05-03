@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
+	"github.com/feichai0017/NoKV/dbcore/commit"
+	iterpkg "github.com/feichai0017/NoKV/dbcore/iterator"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
@@ -21,10 +25,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
-	"github.com/feichai0017/NoKV/runtime/commit"
-	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -687,11 +687,11 @@ func TestDBIteratorCloseIdempotentAcrossMemtableEngines(t *testing.T) {
 }
 
 func TestRequestLoadEntriesCopiesSlice(t *testing.T) {
-	req := dbruntime.RequestPool.Get().(*dbruntime.Request)
+	req := dbcore.RequestPool.Get().(*dbcore.Request)
 	req.Reset()
 	defer func() {
 		req.Entries = nil
-		dbruntime.RequestPool.Put(req)
+		dbcore.RequestPool.Put(req)
 	}()
 
 	e1 := &kv.Entry{Key: []byte("a")}
@@ -736,8 +736,8 @@ func TestOpenRejectsSeededWorkdirByDefault(t *testing.T) {
 	opt := newTestOptions(t)
 	db := openTestDB(t, opt)
 	require.NoError(t, db.Close())
-	require.NoError(t, raftmode.Write(opt.WorkDir, raftmode.State{
-		Mode:     raftmode.ModeSeeded,
+	require.NoError(t, workdirmode.Write(opt.WorkDir, workdirmode.State{
+		Mode:     workdirmode.ModeSeeded,
 		StoreID:  1,
 		RegionID: 2,
 		PeerID:   3,
@@ -752,14 +752,14 @@ func TestOpenAllowsSeededWorkdirWhenExplicitlyRequested(t *testing.T) {
 	opt := newTestOptions(t)
 	db := openTestDB(t, opt)
 	require.NoError(t, db.Close())
-	require.NoError(t, raftmode.Write(opt.WorkDir, raftmode.State{
-		Mode:     raftmode.ModeSeeded,
+	require.NoError(t, workdirmode.Write(opt.WorkDir, workdirmode.State{
+		Mode:     workdirmode.ModeSeeded,
 		StoreID:  1,
 		RegionID: 2,
 		PeerID:   3,
 	}))
 
-	opt.AllowedModes = []raftmode.Mode{raftmode.ModeSeeded}
+	opt.AllowedModes = []workdirmode.Mode{workdirmode.ModeSeeded}
 	db, err := Open(opt)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
@@ -1006,12 +1006,12 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	localMeta, err := localmeta.OpenLocalStore(root, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
-	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
 
-	walMgr, err := db.raftWALFor(1)
+	walMgr, err := db.controlWALFor(1)
 	require.NoError(t, err)
 
 	appendRaft := func(data string) {
@@ -1110,7 +1110,7 @@ func TestApplyRequestsFailureIndex(t *testing.T) {
 	defer good.DecrRef()
 	defer bad.DecrRef()
 
-	reqs := []*dbruntime.Request{
+	reqs := []*dbcore.Request{
 		{
 			Entries: []*kv.Entry{good},
 		},
@@ -1141,7 +1141,7 @@ func TestApplyRequestsInlineRequestWithoutPtrs(t *testing.T) {
 	entry := kv.NewInternalEntry(kv.CFDefault, []byte("inline-fast-path"), nonTxnMaxVersion, []byte("v1"), 0, 0)
 	defer entry.DecrRef()
 
-	reqs := []*dbruntime.Request{
+	reqs := []*dbcore.Request{
 		{
 			Entries: []*kv.Entry{entry},
 		},
@@ -1171,7 +1171,7 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 	defer first.DecrRef()
 	defer second.DecrRef()
 
-	reqs := []*dbruntime.Request{
+	reqs := []*dbcore.Request{
 		{Entries: []*kv.Entry{first}},
 		{Entries: []*kv.Entry{second}},
 	}
@@ -1203,8 +1203,8 @@ func TestApplyRequestsCoalescesCommitBatchIntoOneLSMRecord(t *testing.T) {
 }
 
 func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
-	req1 := &dbruntime.Request{}
-	req2 := &dbruntime.Request{}
+	req1 := &dbcore.Request{}
+	req2 := &dbcore.Request{}
 	req1.WG.Add(1)
 	req2.WG.Add(1)
 	reqErr := errors.New("request failed")
@@ -1213,7 +1213,7 @@ func TestFinishCommitRequestsPerRequestErrors(t *testing.T) {
 		{Req: req1},
 		{Req: req2},
 	}
-	perReq := map[*dbruntime.Request]error{
+	perReq := map[*dbcore.Request]error{
 		req2: reqErr,
 	}
 
@@ -2223,7 +2223,7 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 	_, err = db.ImportExternalSST([]string{"x.sst"})
 	require.ErrorContains(t, err, "snapshot bridge requires open db")
 	require.ErrorContains(t, db.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
-	_, err = db.OpenRaftWAL(1)
+	_, err = db.OpenControlWAL(1)
 	require.ErrorContains(t, err, "closed db")
 }
 
@@ -2276,7 +2276,7 @@ func TestDecodeWalEntryReleasesEntries(t *testing.T) {
 // worker's WAL.Sync fails on one shard, only requests pinned to that
 // shard inherit the error — sibling shards keep returning success.
 func TestPipelineSyncWorkerShardErrorIsolation(t *testing.T) {
-	if defaultRaftWALShards <= 1 {
+	if defaultControlWALShards <= 1 {
 		t.Skip("requires at least 2 LSM shards to exercise isolation")
 	}
 	dir := t.TempDir()

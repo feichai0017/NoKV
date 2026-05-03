@@ -4,11 +4,11 @@ import (
 	"encoding/binary"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/dbcore/stats"
 	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
-	"github.com/feichai0017/NoKV/runtime/stats"
 )
 
 const (
@@ -33,7 +33,7 @@ type Options struct {
 	// AllowedModes limits which migration workdir modes Open accepts. An empty
 	// allow-list means standalone-only. Cluster runtime and offline diagnostics
 	// must opt into seeded/cluster directories explicitly.
-	AllowedModes []raftmode.Mode
+	AllowedModes []workdirmode.Mode
 
 	WorkDir        string
 	MemTableSize   int64
@@ -126,10 +126,10 @@ type Options struct {
 	// BlockCompression controls SST data-block compression.
 	BlockCompression lsmpkg.BlockCompression
 
-	// RaftLagWarnSegments determines how many WAL segments a follower can lag
-	// behind the active segment before stats surfaces a warning. Zero disables
-	// the alert.
-	RaftLagWarnSegments int64
+	// ControlLogLagWarnSegments determines how many WAL segments one replicated
+	// control-log consumer can lag behind the active segment before stats
+	// surfaces a warning. Zero disables the alert.
+	ControlLogLagWarnSegments int64
 
 	// EnableWALWatchdog enables the background WAL backlog watchdog which
 	// surfaces typed-record warnings and optionally runs automated segment GC.
@@ -156,10 +156,10 @@ type Options struct {
 	// of WAL segments containing raft records exceeds this threshold. Zero
 	// disables segment-count warnings.
 	WALTypedRecordWarnSegments int64
-	// RaftPointerSnapshot returns store-local raft WAL checkpoints used by WAL
+	// ControlLogPointerSnapshot returns control-log checkpoints used by WAL
 	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
-	// Nil disables raft-specific backlog accounting.
-	RaftPointerSnapshot func() map[uint64]stats.RaftLogPointer
+	// Nil disables control-log backlog accounting.
+	ControlLogPointerSnapshot func() map[uint64]stats.ControlLogPointer
 
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.
@@ -296,7 +296,7 @@ func NewDefaultOptions() *Options {
 		WriteBatchWait:                200 * time.Microsecond,
 		WriteThrottleMinRate:          lsmpkg.DefaultWriteThrottleMinRate,
 		WriteThrottleMaxRate:          lsmpkg.DefaultWriteThrottleMaxRate,
-		RaftLagWarnSegments:           8,
+		ControlLogLagWarnSegments:     8,
 		EnableWALWatchdog:             true,
 		WALBufferSize:                 wal.DefaultBufferSize,
 		WALAutoGCInterval:             15 * time.Second,

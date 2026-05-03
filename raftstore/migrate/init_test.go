@@ -4,10 +4,10 @@ import (
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
-	workdirmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 )
 

@@ -233,6 +233,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`percolator/`](./percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
+| [`dbcore/`](./dbcore) | DB-scoped runtime helpers: commit pipeline, iterator pools, workdir mode, stats, background services | [Runtime](docs/runtime.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |
 | [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/vfs.md) |

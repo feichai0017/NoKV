@@ -74,7 +74,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 | Subsystem | Interaction |
 | --- | --- |
-| Distributed 2PC | `kv.Apply` + `percolator` write committed MVCC versions through the same WAL/memtable pipeline in raft mode. |
+| Distributed 2PC | `kv.Apply` + `percolator` write committed MVCC versions through the same WAL/memtable pipeline in distributed mode. |
 | Manifest | Flush completion logs SST metadata plus `LogSeg` coverage so restart can skip WAL segments already persisted into SSTs. |
 | Stats | `Stats.Snapshot` pulls `FlushPending/Active/Queue` counters via [`lsm.FlushMetrics`](../engine/lsm/lsm.go#L120-L128), exposing how many immutables are waiting. |
 

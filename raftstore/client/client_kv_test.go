@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -137,7 +138,7 @@ func TestClientCommitRegionReturnsKeyError(t *testing.T) {
 	cli.mu.Unlock()
 
 	err = cli.commitRegion(context.Background(), 1, [][]byte{[]byte("alfa")}, 11, 22)
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	require.True(t, ok)
 	require.Len(t, txnErr.Errors, 1)
 	require.NotNil(t, txnErr.Errors[0].GetCommitTsExpired())
@@ -378,7 +379,7 @@ func TestClientGetReturnsLiveLockAfterRetryBudget(t *testing.T) {
 
 	resp, err := cli.Get(context.Background(), []byte("alfa"), 20)
 	require.Nil(t, resp)
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	require.True(t, ok)
 	require.Len(t, txnErr.Errors, 1)
 	require.NotNil(t, txnErr.Errors[0].GetLocked())
@@ -509,7 +510,7 @@ func TestClientScanReturnsNonLockKeyError(t *testing.T) {
 
 	kvs, err := cli.Scan(context.Background(), []byte("alfa"), 1, 20)
 	require.Nil(t, kvs)
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	require.True(t, ok)
 	require.Len(t, txnErr.Errors, 1)
 	require.Equal(t, "scan failed", txnErr.Errors[0].GetAbort())
@@ -820,7 +821,7 @@ func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	_, err = cli.ResolveLocks(context.Background(), 10, 11, [][]byte{[]byte("alfa")})
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	require.True(t, ok)
 	require.Len(t, txnErr.Errors, 1)
 	require.Equal(t, "resolve failed", txnErr.Errors[0].GetAbort())
@@ -970,7 +971,7 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterPrimaryCommitTsExpired(t *te
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v2")},
 	}, 50, 51, 3000)
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	require.True(t, ok)
 	require.Len(t, txnErr.Errors, 1)
 	require.NotNil(t, txnErr.Errors[0].GetCommitTsExpired())

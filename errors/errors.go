@@ -1,10 +1,14 @@
 package errors
 
 import (
+	"context"
 	stderrors "errors"
 	"fmt"
+	"strings"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Kind is the stable, cross-package error class used by retry, routing,
@@ -22,6 +26,7 @@ const (
 	KindLockConflict
 	KindCommitTsExpired
 	KindRetryable
+	KindResourceExhausted
 	KindUnavailable
 	KindRouteUnavailable
 	KindRegionRouting
@@ -51,6 +56,8 @@ func (k Kind) String() string {
 		return "commit_ts_expired"
 	case KindRetryable:
 		return "retryable"
+	case KindResourceExhausted:
+		return "resource_exhausted"
 	case KindUnavailable:
 		return "unavailable"
 	case KindRouteUnavailable:
@@ -71,6 +78,49 @@ func (k Kind) String() string {
 		return "aborted"
 	default:
 		return "unknown"
+	}
+}
+
+func ParseKind(s string) Kind {
+	switch s {
+	case "invalid_argument":
+		return KindInvalidArgument
+	case "not_found":
+		return KindNotFound
+	case "already_exists":
+		return KindAlreadyExists
+	case "conflict":
+		return KindConflict
+	case "write_conflict":
+		return KindWriteConflict
+	case "lock_conflict":
+		return KindLockConflict
+	case "commit_ts_expired":
+		return KindCommitTsExpired
+	case "retryable":
+		return KindRetryable
+	case "resource_exhausted":
+		return KindResourceExhausted
+	case "unavailable":
+		return KindUnavailable
+	case "route_unavailable":
+		return KindRouteUnavailable
+	case "region_routing":
+		return KindRegionRouting
+	case "stale_epoch":
+		return KindStaleEpoch
+	case "not_leader":
+		return KindNotLeader
+	case "retry_exhausted":
+		return KindRetryExhausted
+	case "protocol_violation":
+		return KindProtocolViolation
+	case "corruption":
+		return KindCorruption
+	case "aborted":
+		return KindAborted
+	default:
+		return KindUnknown
 	}
 }
 
@@ -135,6 +185,12 @@ func KindOf(err error) Kind {
 			return kind
 		}
 	}
+	if kind := KindOfContext(err); kind != KindUnknown {
+		return kind
+	}
+	if kind := KindOfGRPCStatus(err); kind != KindUnknown {
+		return kind
+	}
 	if kind := KindOfTxnKeyError(err); kind != KindUnknown {
 		return kind
 	}
@@ -145,11 +201,7 @@ func IsKind(err error, kind Kind) bool {
 	if kind == KindUnknown {
 		return err == nil || KindOf(err) == KindUnknown
 	}
-	var carrier KindCarrier
-	if stderrors.As(err, &carrier) && carrier.ErrorKind() == kind {
-		return true
-	}
-	return HasKeyErrorKind(err, kind)
+	return KindOf(err) == kind || HasKeyErrorKind(err, kind)
 }
 
 func Retryable(err error) bool {
@@ -167,10 +219,130 @@ func Retryable(err error) bool {
 	}
 }
 
+func KindOfContext(err error) Kind {
+	switch {
+	case err == nil:
+		return KindUnknown
+	case stderrors.Is(err, context.Canceled):
+		return KindAborted
+	case stderrors.Is(err, context.DeadlineExceeded):
+		return KindUnavailable
+	default:
+		return KindUnknown
+	}
+}
+
+func KindOfGRPCStatus(err error) Kind {
+	if err == nil {
+		return KindUnknown
+	}
+	code := status.Code(err)
+	if code == codes.OK || code == codes.Unknown {
+		return KindUnknown
+	}
+	message := status.Convert(err).Message()
+	if kind := kindFromMessage(message); kind != KindUnknown {
+		return kind
+	}
+	if strings.Contains(message, "not leader") || strings.Contains(message, "lease not held") {
+		return KindNotLeader
+	}
+	if strings.Contains(message, "root unavailable") {
+		return KindUnavailable
+	}
+	if strings.Contains(message, "root lag") ||
+		strings.Contains(message, "required rooted token") ||
+		strings.Contains(message, "required descriptor") {
+		return KindStaleEpoch
+	}
+	switch code {
+	case codes.InvalidArgument, codes.OutOfRange:
+		return KindInvalidArgument
+	case codes.NotFound:
+		return KindNotFound
+	case codes.AlreadyExists:
+		return KindAlreadyExists
+	case codes.Canceled, codes.Aborted:
+		return KindAborted
+	case codes.ResourceExhausted:
+		return KindResourceExhausted
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return KindUnavailable
+	case codes.FailedPrecondition:
+		return KindProtocolViolation
+	case codes.DataLoss:
+		return KindCorruption
+	default:
+		return KindUnknown
+	}
+}
+
+func kindFromMessage(message string) Kind {
+	const prefix = "nokv: "
+	if !strings.HasPrefix(message, prefix) {
+		return KindUnknown
+	}
+	rest := strings.TrimPrefix(message, prefix)
+	token, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return KindUnknown
+	}
+	return ParseKind(token)
+}
+
 // KeyErrorCarrier is the common surface for Percolator key errors carried
 // through raftstore and higher-level runtimes.
 type KeyErrorCarrier interface {
 	KeyErrors() []*kvrpcpb.KeyError
+}
+
+// TxnKeyError carries Percolator key errors without flattening their semantic
+// class into text. It is the common error boundary for transaction retries and
+// conflict reporting.
+type TxnKeyError struct {
+	Errors []*kvrpcpb.KeyError
+}
+
+func NewTxnKeyError(errs ...*kvrpcpb.KeyError) error {
+	filtered := make([]*kvrpcpb.KeyError, 0, len(errs))
+	for _, err := range errs {
+		if err != nil {
+			filtered = append(filtered, err)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &TxnKeyError{Errors: filtered}
+}
+
+func (e *TxnKeyError) Error() string {
+	if e == nil {
+		return "nokv: transaction key errors"
+	}
+	return fmt.Sprintf("nokv: transaction key errors: %+v", e.Errors)
+}
+
+func (e *TxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
+	if e == nil {
+		return nil
+	}
+	return e.Errors
+}
+
+func (e *TxnKeyError) ErrorKind() Kind {
+	if e == nil {
+		return KindUnknown
+	}
+	return KindOfTxnKeyErrors(e.Errors)
+}
+
+func AsTxnKeyError(err error) (*TxnKeyError, bool) {
+	var target *TxnKeyError
+	if !stderrors.As(err, &target) {
+		return nil, false
+	}
+	return target, true
 }
 
 func KindOfTxnKeyError(err error) Kind {

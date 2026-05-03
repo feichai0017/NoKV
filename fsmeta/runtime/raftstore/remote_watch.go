@@ -54,10 +54,10 @@ type remoteStoreWatch struct {
 // StartRemoteSource starts apply-watch streams for all UP stores in lister.
 func StartRemoteSource(ctx context.Context, lister StoreLister, router *fsmetawatch.Router, opts ...grpc.DialOption) (*RemoteSource, error) {
 	if lister == nil {
-		return nil, fmt.Errorf("fsmeta/runtime/raftstore: store lister is required")
+		return nil, errStoreListerRequired
 	}
 	if router == nil {
-		return nil, fmt.Errorf("fsmeta/runtime/raftstore: router is required")
+		return nil, errWatchRouterRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()

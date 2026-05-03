@@ -24,6 +24,8 @@ Examples:
 2. Match via `errors.Is`, not string compare.
 3. Keep stable sentinel values for retryable / control-flow decisions.
 4. Add context in upper layers; do not lose original cause.
+5. Cross-process, cross-runtime, and public API boundaries should classify errors
+   with `errors.Kind`; message text is diagnostic only.
 
 ---
 
@@ -39,19 +41,25 @@ Examples:
 
 ### Shared runtime sentinels
 
-- `utils/error.go`: common cross-package sentinels such as invalid request,
+- `utils/errors.go`: common cross-package sentinels such as invalid request,
   key/value validation errors, throttling, and lifecycle guards.
+- `errors/errors.go`: stable cross-boundary `Kind`, typed transaction key
+  errors, gRPC status classification, and retry classification.
+- `dbcore/errkind/engine.go`: embedded-engine sentinel to `errors.Kind`
+  mapping for DB, RPC, and future `fsmeta/runtime/local` boundaries.
 
 ### Domain-specific sentinels
 
-- `engine/kv/entry_codec.go`: `ErrBadChecksum`, `ErrPartialEntry`
+- `engine/kv/errors.go`: checksum and partial-entry decode sentinels
 - `engine/vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
 - `engine/lsm/compaction.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
 - `percolator/errors.go`: transaction protocol key-error builders and
   Percolator protocol sentinels
-- `raftstore/client/errors.go`: transaction client typed errors, route errors,
-  retry-budget exhaustion, and protocol-contract violations
+- `errors/errors.go`: transaction key-error carrier used by transaction retry
+  logic
+- `raftstore/client/errors.go`: route errors, retry-budget exhaustion, and
+  protocol-contract violations
 - `raftstore/store/errors.go`: raftstore lifecycle sentinels plus typed
   transaction-maintenance region routing and protocol errors
 - `raftstore/mvcc/errors.go`: replicated MVCC maintenance and lock-resolution
@@ -74,3 +82,31 @@ Examples:
 3. Recovery/replay path (WAL/Vlog/Manifest):
    - partial/corrupt records return domain sentinels and are handled by truncation or
      restart logic in upper layers.
+
+---
+
+## 6. Embedded Engine Boundary Map
+
+The single-node engine packages (`engine/*`, `utils`) must not import the root
+`errors` package. `dbcore/*` follows the same rule except for the explicit
+`dbcore/errkind` boundary mapper. The root error package owns gRPC and
+distributed transaction adaptation, so importing it from the embedded engine
+would invert the architecture.
+
+Use `errkind.FromEngine(err)` from `dbcore/errkind` at DB facade, RPC, or
+local fsmeta runtime boundaries. Current mapping:
+
+| Local error family | Boundary kind |
+| --- | --- |
+| `utils.ErrKeyNotFound` | `KindNotFound` |
+| `utils.ErrEmptyKey`, `utils.ErrNilValue`, `utils.ErrInvalidRequest` | `KindInvalidArgument` |
+| invalid LSM options / WAL manager wiring | `KindInvalidArgument` |
+| unsupported required VFS capability | `KindInvalidArgument` |
+| `utils.ErrTxnTooBig` | `KindResourceExhausted` |
+| blocked writes, hot-key throttle, WAL backpressure, retained WAL segment, LSM fill-table pressure | `KindRetryable` |
+| `utils.ErrDBClosed`, closed LSM/flush runtime | `KindAborted` |
+| KV checksum/partial-entry and WAL partial/empty-record errors | `KindCorruption` |
+| nil LSM/flush runtime/memtable wiring | `KindProtocolViolation` |
+
+Pure package-local control-flow sentinels, such as `utils.ErrStop`, stay local
+and map to `KindUnknown` if accidentally observed outside their package.

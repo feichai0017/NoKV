@@ -34,9 +34,9 @@ type Host interface {
 	// Storage subsystems.
 	LSM() LSMSource
 	LSMWALs() []*wal.Manager
-	// RaftWALsLocked invokes fn while holding the host's raft-WAL mutex.
+	// ControlWALsLocked invokes fn while holding the host's control-WAL mutex.
 	// Stats only iterates the slice while the lock is held.
-	RaftWALsLocked(fn func(wals []*wal.Manager))
+	ControlWALsLocked(fn func(wals []*wal.Manager))
 	BackgroundWatchdogs() []*wal.Watchdog
 	HotWrite() *thermos.RotatingThermos
 	IteratorReused() uint64
@@ -48,11 +48,11 @@ type Host interface {
 	HotWriteLimited() uint64
 
 	// Options-snapshot accessors.
-	RaftLagWarnSegments() int64
+	ControlLogLagWarnSegments() int64
 	WALTypedRecordWarnRatio() float64
 	WALTypedRecordWarnSegments() int64
 	ThermosTopK() int
-	RaftPointerSnapshot() func() map[uint64]RaftLogPointer
+	ControlLogPointerSnapshot() func() map[uint64]ControlLogPointer
 	MVCCGCStatsSnapshot() MVCCGCStatsSnapshot
 	TransportMetrics() metrics.GRPCTransportMetrics
 }
@@ -78,8 +78,8 @@ type HotKeyStat struct {
 	Count int32  `json:"count"`
 }
 
-// RaftLogPointer is the runtime stats view of a raft WAL checkpoint.
-type RaftLogPointer struct {
+// ControlLogPointer is the dbcore stats view of a replicated control-log checkpoint.
+type ControlLogPointer struct {
 	Segment      uint32
 	SegmentIndex uint64
 }
@@ -396,7 +396,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		return snap
 	}
 
-	if thresh := s.host.RaftLagWarnSegments(); thresh > 0 {
+	if thresh := s.host.ControlLogLagWarnSegments(); thresh > 0 {
 		snap.Raft.LagWarnThreshold = thresh
 	}
 
@@ -561,7 +561,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 	var (
 		wstats         *wal.Metrics
 		segmentMetrics map[uint32]wal.RecordMetrics
-		ptrs           map[uint64]RaftLogPointer
+		ptrs           map[uint64]ControlLogPointer
 	)
 	// Aggregate metrics across every LSM data-plane WAL shard. Each
 	// shard owns its own fd / fsync worker, so we sum SegmentCount /
@@ -605,7 +605,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.WAL.SegmentCount = int64(aggregated.SegmentCount)
 		snap.WAL.SegmentsRemoved = aggregated.RemovedSegments
 	}
-	if ptrFn := s.host.RaftPointerSnapshot(); ptrFn != nil {
+	if ptrFn := s.host.ControlLogPointerSnapshot(); ptrFn != nil {
 		ptrs = ptrFn()
 		snap.Raft.GroupCount = len(ptrs)
 	}
@@ -619,7 +619,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 			removableRaftSegments++
 		}
 	}
-	s.host.RaftWALsLocked(func(wals []*wal.Manager) {
+	s.host.ControlWALsLocked(func(wals []*wal.Manager) {
 		for _, mgr := range wals {
 			if mgr == nil {
 				continue
@@ -688,7 +688,7 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Raft.MaxLagSegments = maxLag
 		snap.Raft.LaggingGroups = lagging
 	}
-	threshold := max(s.host.RaftLagWarnSegments(), 0)
+	threshold := max(s.host.ControlLogLagWarnSegments(), 0)
 	snap.Raft.LagWarnThreshold = threshold
 	if threshold > 0 && snap.Raft.MaxLagSegments >= threshold && snap.Raft.LaggingGroups > 0 {
 		snap.Raft.LagWarning = true

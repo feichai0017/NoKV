@@ -1,6 +1,6 @@
 package migrate
 
-import workdirmode "github.com/feichai0017/NoKV/runtime/mode"
+import workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 
 func readState(workDir string) (workdirmode.State, error) {
 	return workdirmode.Read(workDir)

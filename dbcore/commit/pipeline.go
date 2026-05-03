@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/dbcore"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/utils"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -135,7 +135,7 @@ func (p *Pipeline) Close() {
 // in-flight Request the caller can block on with Wait. waitOnThrottle
 // controls whether the call blocks while writes are stopped (true) or
 // returns ErrBlockedWrites immediately (false).
-func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Request, error) {
+func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*dbcore.Request, error) {
 	var size int64
 	count := int64(len(entries))
 	for _, e := range entries {
@@ -147,7 +147,7 @@ func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Requ
 	}
 	if p.host.SlowWritesActive() {
 		if lsmSrc := p.host.CommitLSM(); lsmSrc != nil {
-			if d := runtime.SlowdownDelay(size, lsmSrc.ThrottleRateBytesPerSec()); d > 0 {
+			if d := dbcore.SlowdownDelay(size, lsmSrc.ThrottleRateBytesPerSec()); d > 0 {
 				time.Sleep(d)
 			}
 		}
@@ -170,7 +170,7 @@ func (p *Pipeline) Send(entries []*kv.Entry, waitOnThrottle bool) (*runtime.Requ
 		}
 	}
 
-	req := runtime.RequestPool.Get().(*runtime.Request)
+	req := dbcore.RequestPool.Get().(*dbcore.Request)
 	req.Reset()
 	req.Entries = entries
 	if p.host.WriteMetrics() != nil {
@@ -411,7 +411,7 @@ func (p *Pipeline) runBurst(walMgr *wal.Manager, shardID int, burst []*CommitBat
 	// Per-batch metadata + flattened request list. boundaries[i] is the
 	// start index of batch i's requests in mergedRequests.
 	boundaries := make([]int, len(burst)+1)
-	var mergedRequests []*runtime.Request
+	var mergedRequests []*dbcore.Request
 	for i, batch := range burst {
 		batch.BatchStart = burstStart
 		requests, totalEntries, totalSize, waitSum := collectCommitRequests(batch.Reqs, burstStart)
@@ -598,9 +598,9 @@ func (p *Pipeline) syncWorker() {
 	}
 }
 
-func (p *Pipeline) ackBatch(reqs []*CommitRequest, pool *[]*CommitRequest, requests []*runtime.Request, failedAt int, defaultErr error) {
+func (p *Pipeline) ackBatch(reqs []*CommitRequest, pool *[]*CommitRequest, requests []*dbcore.Request, failedAt int, defaultErr error) {
 	if defaultErr != nil && failedAt >= 0 && failedAt < len(requests) {
-		perReqErr := make(map[*runtime.Request]error, len(requests)-failedAt)
+		perReqErr := make(map[*dbcore.Request]error, len(requests)-failedAt)
 		for i := failedAt; i < len(requests); i++ {
 			if requests[i] != nil {
 				perReqErr[requests[i]] = defaultErr
@@ -619,8 +619,8 @@ func (p *Pipeline) ackBatch(reqs []*CommitRequest, pool *[]*CommitRequest, reque
 	}
 }
 
-func collectCommitRequests(reqs []*CommitRequest, now time.Time) ([]*runtime.Request, int, int64, int64) {
-	requests := make([]*runtime.Request, 0, len(reqs))
+func collectCommitRequests(reqs []*CommitRequest, now time.Time) ([]*dbcore.Request, int, int64, int64) {
+	requests := make([]*dbcore.Request, 0, len(reqs))
 	var (
 		totalEntries int
 		totalSize    int64
@@ -659,11 +659,11 @@ func (p *Pipeline) releaseBatch(batch *CommitBatch) {
 // ApplyRequests writes reqs into LSM shard shardID. Exported so root-package
 // integration tests can drive the apply path directly without going through
 // the queue.
-func (p *Pipeline) ApplyRequests(reqs []*runtime.Request, shardID int) (int, error) {
+func (p *Pipeline) ApplyRequests(reqs []*dbcore.Request, shardID int) (int, error) {
 	return p.applyRequests(reqs, shardID)
 }
 
-func (p *Pipeline) applyRequests(reqs []*runtime.Request, shardID int) (int, error) {
+func (p *Pipeline) applyRequests(reqs []*dbcore.Request, shardID int) (int, error) {
 	failedAt, err := p.writeRequestsToLSM(reqs, shardID)
 	if err != nil {
 		return failedAt, pkgerrors.Wrap(err, "writeRequests")
@@ -673,11 +673,11 @@ func (p *Pipeline) applyRequests(reqs []*runtime.Request, shardID int) (int, err
 
 // FinishCommitRequests acks each pending request with either defaultErr
 // or perReqErr[req] (when present). Exported for root-package tests.
-func FinishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
+func FinishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*dbcore.Request]error) {
 	finishCommitRequests(reqs, defaultErr, perReqErr)
 }
 
-func finishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*runtime.Request]error) {
+func finishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map[*dbcore.Request]error) {
 	for _, cr := range reqs {
 		if cr == nil || cr.Req == nil {
 			continue
@@ -699,7 +699,7 @@ func finishCommitRequests(reqs []*CommitRequest, defaultErr error, perReqErr map
 	}
 }
 
-func (p *Pipeline) writeRequestsToLSM(reqs []*runtime.Request, shardID int) (int, error) {
+func (p *Pipeline) writeRequestsToLSM(reqs []*dbcore.Request, shardID int) (int, error) {
 	groups := make([][]*kv.Entry, 0, len(reqs))
 	groupToReq := make([]int, 0, len(reqs))
 	for i, r := range reqs {
@@ -726,6 +726,6 @@ func (p *Pipeline) writeRequestsToLSM(reqs []*runtime.Request, shardID int) (int
 	return -1, nil
 }
 
-func prepareLSMRequest(b *runtime.Request) error {
+func prepareLSMRequest(b *dbcore.Request) error {
 	return nil
 }

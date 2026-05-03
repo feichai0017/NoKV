@@ -8,13 +8,12 @@ import (
 	"time"
 
 	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -417,15 +416,23 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 }
 
 func retryableRead(err error) bool {
-	code := status.Code(err)
-	return code == codes.Unavailable || code == codes.DeadlineExceeded || IsStaleWitnessEra(err)
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable,
+		nokverrors.KindRouteUnavailable,
+		nokverrors.KindRegionRouting,
+		nokverrors.KindStaleEpoch,
+		nokverrors.KindRetryable:
+		return true
+	default:
+		return false
+	}
 }
 
 func retryableWrite(err error) bool {
 	if retryableRead(err) {
 		return true
 	}
-	return IsNotLeader(err) || IsLeaseNotHeld(err)
+	return nokverrors.IsKind(err, nokverrors.KindNotLeader)
 }
 
 type witnessEraFloor struct {

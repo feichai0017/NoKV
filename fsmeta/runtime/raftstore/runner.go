@@ -2,8 +2,6 @@ package raftstore
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -36,10 +34,10 @@ type Runner struct {
 // KV data path.
 func NewRunner(kv KVClient, tso TSOClient) (*Runner, error) {
 	if kv == nil {
-		return nil, errors.New("fsmeta/runtime/raftstore: raftstore kv client required")
+		return nil, errKVClientRequired
 	}
 	if tso == nil {
-		return nil, errors.New("fsmeta/runtime/raftstore: tso client required")
+		return nil, errTSOClientRequired
 	}
 	return &Runner{kv: kv, tso: tso}, nil
 }
@@ -47,20 +45,20 @@ func NewRunner(kv KVClient, tso TSOClient) (*Runner, error) {
 // ReserveTimestamp reserves count consecutive timestamps from coordinator TSO.
 func (r *Runner) ReserveTimestamp(ctx context.Context, count uint64) (uint64, error) {
 	if count == 0 {
-		return 0, errors.New("fsmeta/runtime/raftstore: timestamp count must be > 0")
+		return 0, errTimestampCountRequired
 	}
 	resp, err := r.tso.Tso(ctx, &coordpb.TsoRequest{Count: count})
 	if err != nil {
 		return 0, err
 	}
 	if resp == nil {
-		return 0, errors.New("fsmeta/runtime/raftstore: nil tso response")
+		return 0, errNilTSOResponse
 	}
 	if resp.GetCount() != count {
-		return 0, fmt.Errorf("fsmeta/runtime/raftstore: tso count=%d requested=%d", resp.GetCount(), count)
+		return 0, errTSOCountMismatch(resp.GetCount(), count)
 	}
 	if resp.GetTimestamp() == 0 {
-		return 0, errors.New("fsmeta/runtime/raftstore: zero tso timestamp")
+		return 0, errZeroTSOTimestamp
 	}
 	return resp.GetTimestamp(), nil
 }
@@ -75,7 +73,7 @@ func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, b
 		return nil, false, nil
 	}
 	if keyErr := resp.GetError(); keyErr != nil {
-		return nil, false, fmt.Errorf("fsmeta/runtime/raftstore: kv get key error: %v", keyErr)
+		return nil, false, runnerKeyError("kv get", keyErr)
 	}
 	return append([]byte(nil), resp.GetValue()...), true, nil
 }
@@ -92,7 +90,7 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			continue
 		}
 		if keyErr := resp.GetError(); keyErr != nil {
-			return nil, fmt.Errorf("fsmeta/runtime/raftstore: kv batch get key error: %v", keyErr)
+			return nil, runnerKeyError("kv batch get", keyErr)
 		}
 		out[keyID] = append([]byte(nil), resp.GetValue()...)
 	}

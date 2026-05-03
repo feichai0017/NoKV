@@ -13,6 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	dbcore "github.com/feichai0017/NoKV/dbcore"
+	"github.com/feichai0017/NoKV/dbcore/commit"
+	iterpkg "github.com/feichai0017/NoKV/dbcore/iterator"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/dbcore/stats"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
@@ -20,11 +25,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
-	"github.com/feichai0017/NoKV/runtime/commit"
-	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
-	"github.com/feichai0017/NoKV/runtime/stats"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -33,16 +33,16 @@ import (
 // Non-transactional writes use monotonic versions <= this sentinel.
 const nonTxnMaxVersion = kv.MaxVersion
 
-// defaultRaftWALShards controls the number of WAL Manager instances that
-// back the raft control-plane fan-out. Each shard is one fd + one fsync
+// defaultControlWALShards controls the number of WAL Manager instances that
+// back replicated control-log fan-out. Each shard is one fd + one fsync
 // worker + one bufio.Writer, so the count is a tradeoff between fd cost
-// and per-Manager.mu contention. Must be a power of two — raftWALShard
+// and per-Manager.mu contention. Must be a power of two — controlWALShard
 // uses `& (N-1)` for placement.
 //
 // Total Manager budget under the LSM data-plane sharding plan:
-// 4 raft + 4 LSM data = 8 Managers. There is no separate control-plane
+// 4 control-log + 4 LSM data = 8 Managers. There is no separate control-plane
 // Manager — db.wal is dissolved into the LSM shards.
-const defaultRaftWALShards = 4
+const defaultControlWALShards = 4
 
 type (
 	// BatchSetItem represents one non-transactional write in the default CF.
@@ -68,31 +68,31 @@ type (
 		// number of entries is db.opt.LSMShardCount (resolved at Open).
 		// Each Manager has its own fd, fsync worker, and bufio.Writer so
 		// commit workers do not contend on a single Manager.mu.
-		lsmWALs       []*wal.Manager
-		lsmWatchdogs  []*wal.Watchdog
-		raftWALMu     sync.Mutex
-		raftWALs      [defaultRaftWALShards]*wal.Manager
-		raftWatchdogs [defaultRaftWALShards]*wal.Watchdog
-		nonTxnVersion atomic.Uint64
-		blockWrites   atomic.Int32
-		slowWrites    atomic.Int32
-		isClosed      atomic.Uint32
-		closeOnce     sync.Once
-		closeErr      error
-		throttleMu    sync.Mutex
-		throttleCh    chan struct{}
-		hotWrite      *thermos.RotatingThermos
-		writeMetrics  *metrics.WriteMetrics
+		lsmWALs          []*wal.Manager
+		lsmWatchdogs     []*wal.Watchdog
+		controlWALMu     sync.Mutex
+		controlWALs      [defaultControlWALShards]*wal.Manager
+		controlWatchdogs [defaultControlWALShards]*wal.Watchdog
+		nonTxnVersion    atomic.Uint64
+		blockWrites      atomic.Int32
+		slowWrites       atomic.Int32
+		isClosed         atomic.Uint32
+		closeOnce        sync.Once
+		closeErr         error
+		throttleMu       sync.Mutex
+		throttleCh       chan struct{}
+		hotWrite         *thermos.RotatingThermos
+		writeMetrics     *metrics.WriteMetrics
 		// pipeline owns the commit queue, per-shard dispatch channels,
-		// processors, and the optional sync worker. See runtime/commit.
+		// processors, and the optional sync worker. See dbcore/commit.
 		pipeline        *commit.Pipeline
 		iterPool        *iterpkg.IteratorPool
-		raftMode        raftmode.Mode
+		workdirMode     workdirmode.Mode
 		mvccGCStats     atomic.Value
 		transportStats  atomic.Value
 		hotWriteLimited atomic.Uint64
-		background      dbruntime.BackgroundServices
-		runtimeModules  dbruntime.Registry
+		background      dbcore.BackgroundServices
+		runtimeModules  dbcore.Registry
 	}
 )
 
@@ -104,7 +104,7 @@ func newDB(opt *Options) *DB {
 	db := &DB{opt: cfg, writeMetrics: metrics.NewWriteMetrics()}
 	db.fs = vfs.Ensure(cfg.FS)
 	db.throttleCh = make(chan struct{})
-	db.hotWrite = dbruntime.NewHotWriteRing(dbruntime.HotWriteConfig{
+	db.hotWrite = dbcore.NewHotWriteRing(dbcore.HotWriteConfig{
 		Enabled:          cfg.ThermosEnabled && cfg.WriteHotKeyLimit > 0,
 		Bits:             cfg.ThermosBits,
 		WindowSlots:      cfg.ThermosWindowSlots,
@@ -160,7 +160,7 @@ func (db *DB) lsmWALDir(shard int) string {
 	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("lsm-wal-%02d", shard))
 }
 
-func raftRetentionMark(ptrs map[uint64]stats.RaftLogPointer) wal.RetentionMark {
+func controlRetentionMark(ptrs map[uint64]stats.ControlLogPointer) wal.RetentionMark {
 	var first uint32
 	for _, ptr := range ptrs {
 		if ptr.Segment > 0 && (first == 0 || ptr.Segment < first) {
@@ -180,12 +180,12 @@ func (db *DB) checkWorkDirMode() error {
 	if db == nil || db.opt == nil {
 		return fmt.Errorf("open db: options not initialized")
 	}
-	mode, err := raftmode.ReadOnlyMode(db.opt.WorkDir)
+	mode, err := workdirmode.ReadOnlyMode(db.opt.WorkDir)
 	if err != nil {
 		return fmt.Errorf("open db: read workdir mode: %w", err)
 	}
-	if raftmode.Allowed(db.opt.AllowedModes, mode) {
-		db.raftMode = mode
+	if workdirmode.Allowed(db.opt.AllowedModes, mode) {
+		db.workdirMode = mode
 		return nil
 	}
 	if len(db.opt.AllowedModes) == 0 {
@@ -263,30 +263,30 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 	return cfg
 }
 
-func (db *DB) raftWALFor(groupID uint64) (*wal.Manager, error) {
+func (db *DB) controlWALFor(groupID uint64) (*wal.Manager, error) {
 	if db == nil || db.opt == nil {
-		return nil, fmt.Errorf("db raft wal: nil db")
+		return nil, fmt.Errorf("db control wal: nil db")
 	}
 	if db.IsClosed() {
-		return nil, fmt.Errorf("db raft wal: closed db")
+		return nil, fmt.Errorf("db control wal: closed db")
 	}
-	shard := raftWALShard(groupID)
-	db.raftWALMu.Lock()
-	defer db.raftWALMu.Unlock()
-	if mgr := db.raftWALs[shard]; mgr != nil {
+	shard := controlWALShard(groupID)
+	db.controlWALMu.Lock()
+	defer db.controlWALMu.Unlock()
+	if mgr := db.controlWALs[shard]; mgr != nil {
 		return mgr, nil
 	}
 	mgr, err := wal.Open(wal.Config{
-		Dir:        db.raftWALDir(shard),
+		Dir:        db.controlWALDir(shard),
 		BufferSize: db.opt.WALBufferSize,
 		FS:         db.fs,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if db.opt.RaftPointerSnapshot != nil {
-		if err := mgr.RegisterRetention("raft", func() wal.RetentionMark {
-			return raftRetentionMarkForShard(db.opt.RaftPointerSnapshot(), shard)
+	if db.opt.ControlLogPointerSnapshot != nil {
+		if err := mgr.RegisterRetention("control-log", func() wal.RetentionMark {
+			return controlRetentionMarkForShard(db.opt.ControlLogPointerSnapshot(), shard)
 		}); err != nil {
 			_ = mgr.Close()
 			return nil, err
@@ -303,43 +303,45 @@ func (db *DB) raftWALFor(groupID uint64) (*wal.Manager, error) {
 		})
 		if wd != nil {
 			wd.Start()
-			db.raftWatchdogs[shard] = wd
+			db.controlWatchdogs[shard] = wd
 		}
 	}
-	db.raftWALs[shard] = mgr
+	db.controlWALs[shard] = mgr
 	return mgr, nil
 }
 
-// OpenRaftWAL returns the sharded WAL manager used by raftstore adapters.
-func (db *DB) OpenRaftWAL(groupID uint64) (*wal.Manager, error) {
-	return db.raftWALFor(groupID)
+// OpenControlWAL returns one sharded WAL manager for replicated control-log
+// adapters. The DB owns durability and retention; callers define the log
+// semantics above this storage boundary.
+func (db *DB) OpenControlWAL(groupID uint64) (*wal.Manager, error) {
+	return db.controlWALFor(groupID)
 }
 
-func (db *DB) raftWALDir(shard int) string {
-	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard))
+func (db *DB) controlWALDir(shard int) string {
+	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("control-wal-%02d", shard))
 }
 
-func raftWALShard(groupID uint64) int {
+func controlWALShard(groupID uint64) int {
 	const mix = 11400714819323198485
-	return int((groupID * mix) & (defaultRaftWALShards - 1))
+	return int((groupID * mix) & (defaultControlWALShards - 1))
 }
 
-func raftRetentionMarkForShard(ptrs map[uint64]stats.RaftLogPointer, shard int) wal.RetentionMark {
-	filtered := make(map[uint64]stats.RaftLogPointer)
+func controlRetentionMarkForShard(ptrs map[uint64]stats.ControlLogPointer, shard int) wal.RetentionMark {
+	filtered := make(map[uint64]stats.ControlLogPointer)
 	for groupID, ptr := range ptrs {
-		if raftWALShard(groupID) == shard {
+		if controlWALShard(groupID) == shard {
 			filtered[groupID] = ptr
 		}
 	}
-	return raftRetentionMark(filtered)
+	return controlRetentionMark(filtered)
 }
 
-// RaftMode returns the persisted lifecycle mode observed when the DB was opened.
-func (db *DB) RaftMode() raftmode.Mode {
+// WorkdirMode returns the persisted lifecycle mode observed when the DB was opened.
+func (db *DB) WorkdirMode() workdirmode.Mode {
 	if db == nil {
 		return ""
 	}
-	return db.raftMode
+	return db.workdirMode
 }
 
 // Open constructs the database and returns initialization errors instead of panicking.
@@ -379,7 +381,7 @@ func Open(opt *Options) (_ *DB, err error) {
 			WarnSegments: db.opt.WALTypedRecordWarnSegments,
 		})
 	}
-	db.background.Start(dbruntime.BackgroundConfig{
+	db.background.Start(dbcore.BackgroundConfig{
 		StartCompacter:     db.lsm.StartCompacter,
 		EnableWALWatchdog:  db.opt.EnableWALWatchdog,
 		WALWatchdogConfigs: watchdogConfigs,
@@ -399,8 +401,8 @@ func (db *DB) runRecoveryChecks() error {
 	if err := wal.VerifyDir(db.opt.WorkDir, db.fs); err != nil {
 		return err
 	}
-	for shard := range defaultRaftWALShards {
-		if err := wal.VerifyDir(filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard)), db.fs); err != nil {
+	for shard := range defaultControlWALShards {
+		if err := wal.VerifyDir(db.controlWALDir(shard), db.fs); err != nil {
 			return err
 		}
 	}
@@ -450,7 +452,7 @@ func (db *DB) closeInternal() error {
 		db.lsm = nil
 	}
 
-	if err := db.closeRaftWALs(); err != nil {
+	if err := db.closeControlWALs(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -485,24 +487,24 @@ func (db *DB) closeInternal() error {
 	return nil
 }
 
-func (db *DB) closeRaftWALs() error {
-	db.raftWALMu.Lock()
-	defer db.raftWALMu.Unlock()
+func (db *DB) closeControlWALs() error {
+	db.controlWALMu.Lock()
+	defer db.controlWALMu.Unlock()
 	var errs []error
-	for shard, wd := range db.raftWatchdogs {
+	for shard, wd := range db.controlWatchdogs {
 		if wd != nil {
 			wd.Stop()
-			db.raftWatchdogs[shard] = nil
+			db.controlWatchdogs[shard] = nil
 		}
 	}
-	for shard, mgr := range db.raftWALs {
+	for shard, mgr := range db.controlWALs {
 		if mgr == nil {
 			continue
 		}
 		if err := mgr.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("raft wal shard %d close: %w", shard, err))
+			errs = append(errs, fmt.Errorf("control wal shard %d close: %w", shard, err))
 		}
-		db.raftWALs[shard] = nil
+		db.controlWALs[shard] = nil
 	}
 	return stderrors.Join(errs...)
 }
@@ -781,7 +783,7 @@ func (db *DB) loadBorrowedEntry(internalKey []byte) (*kv.Entry, error) {
 
 // NewIterator creates a DB-level iterator over user keys in the default
 // column family. The state machine + Item materialization live in
-// runtime/iterator; this method wires DB internals (lsm, iterPool)
+// dbcore/iterator; this method wires DB internals (lsm, iterPool)
 // into iterpkg.New as a thin facade.
 func (db *DB) NewIterator(opt *index.Options) index.Iterator {
 	return iterpkg.New(iterpkg.Deps{
@@ -808,7 +810,7 @@ func (db *DB) Info() *stats.Stats {
 
 // stats.Host implementation: read-only accessors the stats subsystem
 // uses to assemble a StatsSnapshot. They are intentionally a thin lift
-// over DB struct fields so the snapshot logic can live in runtime/stats
+// over DB struct fields so the snapshot logic can live in dbcore/stats
 // without importing the root NoKV package.
 
 func (db *DB) LSM() stats.LSMSource                 { return db.lsm }
@@ -842,16 +844,16 @@ func (db *DB) WriteMetrics() *metrics.WriteMetrics { return db.writeMetrics }
 func (db *DB) BlockWritesActive() bool             { return db.blockWrites.Load() == 1 }
 func (db *DB) SlowWritesActive() bool              { return db.slowWrites.Load() == 1 }
 func (db *DB) HotWriteLimited() uint64             { return db.hotWriteLimited.Load() }
-func (db *DB) RaftLagWarnSegments() int64          { return db.opt.RaftLagWarnSegments }
+func (db *DB) ControlLogLagWarnSegments() int64    { return db.opt.ControlLogLagWarnSegments }
 func (db *DB) WALTypedRecordWarnRatio() float64    { return db.opt.WALTypedRecordWarnRatio }
 func (db *DB) WALTypedRecordWarnSegments() int64   { return db.opt.WALTypedRecordWarnSegments }
 func (db *DB) ThermosTopK() int                    { return db.opt.ThermosTopK }
 
-func (db *DB) RaftPointerSnapshot() func() map[uint64]stats.RaftLogPointer {
+func (db *DB) ControlLogPointerSnapshot() func() map[uint64]stats.ControlLogPointer {
 	if db == nil || db.opt == nil {
 		return nil
 	}
-	return db.opt.RaftPointerSnapshot
+	return db.opt.ControlLogPointerSnapshot
 }
 
 func (db *DB) SetTransportMetricsSource(source func() metrics.GRPCTransportMetrics) {
@@ -876,10 +878,10 @@ func (db *DB) TransportMetrics() metrics.GRPCTransportMetrics {
 	return source()
 }
 
-func (db *DB) RaftWALsLocked(fn func(wals []*wal.Manager)) {
-	db.raftWALMu.Lock()
-	defer db.raftWALMu.Unlock()
-	fn(db.raftWALs[:])
+func (db *DB) ControlWALsLocked(fn func(wals []*wal.Manager)) {
+	db.controlWALMu.Lock()
+	defer db.controlWALMu.Unlock()
+	fn(db.controlWALs[:])
 }
 
 // commit.Host implementation: read-only accessors the commit Pipeline uses
@@ -946,7 +948,7 @@ func (db *DB) IsClosed() bool {
 }
 
 func (db *DB) ApplyThrottle(state lsm.WriteThrottleState) {
-	state = dbruntime.NormalizeWriteThrottleState(state)
+	state = dbcore.NormalizeWriteThrottleState(state)
 	stop := int32(0)
 	slow := int32(0)
 	switch state {
@@ -977,8 +979,8 @@ func (db *DB) ApplyThrottle(state lsm.WriteThrottleState) {
 
 // sendToWriteCh delegates to the commit Pipeline. Kept as a thin facade
 // so internal batch helpers (batchSet) keep their current names without
-// reaching into runtime/commit directly.
-func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbruntime.Request, error) {
+// reaching into dbcore/commit directly.
+func (db *DB) sendToWriteCh(entries []*kv.Entry, waitOnThrottle bool) (*dbcore.Request, error) {
 	return db.pipeline.Send(entries, waitOnThrottle)
 }
 
@@ -986,7 +988,7 @@ func (db *DB) maybeThrottleWrite(cf kv.ColumnFamily, key []byte) error {
 	if db == nil || db.opt == nil {
 		return nil
 	}
-	if !dbruntime.ShouldThrottleHotWrite(db.hotWrite, db.opt.WriteHotKeyLimit, cf, key) {
+	if !dbcore.ShouldThrottleHotWrite(db.hotWrite, db.opt.WriteHotKeyLimit, cf, key) {
 		return nil
 	}
 	db.hotWriteLimited.Add(1)

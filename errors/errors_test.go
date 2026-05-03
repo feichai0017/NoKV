@@ -1,11 +1,14 @@
 package errors
 
 import (
+	"context"
 	stderrors "errors"
 	"testing"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestKindWrapPreservesCauseAndKind(t *testing.T) {
@@ -19,28 +22,40 @@ func TestKindWrapPreservesCauseAndKind(t *testing.T) {
 }
 
 func TestTxnContentionRequiresOnlyLockOrCommitTsExpired(t *testing.T) {
-	err := fakeKeyErrors{errs: []*kvrpcpb.KeyError{
-		{Locked: &kvrpcpb.Locked{Key: []byte("a")}},
-		{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("b"), CommitTs: 2, MinCommitTs: 3}},
-	}}
+	err := NewTxnKeyError(
+		&kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{Key: []byte("a")}},
+		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("b"), CommitTs: 2, MinCommitTs: 3}},
+	)
 
 	require.True(t, IsTxnContention(err))
 	require.True(t, Retryable(err))
 	require.True(t, HasKeyErrorKind(err, KindLockConflict))
 	require.True(t, HasKeyErrorKind(err, KindCommitTsExpired))
 	require.Equal(t, KindConflict, KindOf(err))
+
+	txnErr, ok := AsTxnKeyError(err)
+	require.True(t, ok)
+	require.Len(t, txnErr.Errors, 2)
 }
 
 func TestTxnContentionRejectsMixedSemanticFailure(t *testing.T) {
-	err := fakeKeyErrors{errs: []*kvrpcpb.KeyError{
-		{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("a"), CommitTs: 2, MinCommitTs: 3}},
-		{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("b")}},
-	}}
+	err := NewTxnKeyError(
+		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("a"), CommitTs: 2, MinCommitTs: 3}},
+		&kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("b")}},
+	)
 
 	require.False(t, IsTxnContention(err))
 	require.False(t, Retryable(err))
 	require.True(t, HasKeyErrorKind(err, KindAlreadyExists))
 	require.Equal(t, KindConflict, KindOf(err))
+}
+
+func TestNewTxnKeyErrorFiltersNilInputs(t *testing.T) {
+	require.NoError(t, NewTxnKeyError(nil, nil))
+	err := NewTxnKeyError(nil, &kvrpcpb.KeyError{Retryable: "temporary"})
+	require.Error(t, err)
+	require.Equal(t, KindRetryable, KindOf(err))
+	require.True(t, Retryable(err))
 }
 
 func TestKeyErrorKindPriority(t *testing.T) {
@@ -52,14 +67,25 @@ func TestKeyErrorKindPriority(t *testing.T) {
 	require.Equal(t, KindAborted, KindOfKeyError(&kvrpcpb.KeyError{Abort: "abort"}))
 }
 
-type fakeKeyErrors struct {
-	errs []*kvrpcpb.KeyError
-}
+func TestContextAndGRPCStatusKinds(t *testing.T) {
+	require.Equal(t, KindAborted, KindOf(context.Canceled))
+	require.Equal(t, KindUnavailable, KindOf(context.DeadlineExceeded))
 
-func (e fakeKeyErrors) Error() string {
-	return "fake key errors"
-}
+	require.Equal(t, KindInvalidArgument, KindOf(status.Error(codes.InvalidArgument, "bad request")))
+	require.Equal(t, KindNotFound, KindOf(status.Error(codes.NotFound, "missing")))
+	require.Equal(t, KindAlreadyExists, KindOf(status.Error(codes.AlreadyExists, "exists")))
+	require.Equal(t, KindAborted, KindOf(status.Error(codes.Canceled, "client canceled")))
+	require.Equal(t, KindResourceExhausted, KindOf(status.Error(codes.ResourceExhausted, "quota")))
+	require.Equal(t, KindUnavailable, KindOf(status.Error(codes.Unavailable, "down")))
+	require.Equal(t, KindUnavailable, KindOf(status.Error(codes.FailedPrecondition, "coordinator root unavailable")))
+	require.Equal(t, KindStaleEpoch, KindOf(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
+	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator not leader (leader_id=2)")))
+	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator lease not held")))
+	require.Equal(t, KindProtocolViolation, KindOf(status.Error(codes.FailedPrecondition, "invalid protocol state")))
+	require.Equal(t, KindAborted, KindOf(status.Error(codes.FailedPrecondition, New(KindAborted, "fsmeta: mount is retired").Error())))
+	require.Equal(t, KindResourceExhausted, KindOf(status.Error(codes.ResourceExhausted, New(KindResourceExhausted, "fsmeta: quota exceeded").Error())))
 
-func (e fakeKeyErrors) KeyErrors() []*kvrpcpb.KeyError {
-	return e.errs
+	require.True(t, Retryable(status.Error(codes.FailedPrecondition, "coordinator not leader (leader_id=2)")))
+	require.True(t, Retryable(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
+	require.False(t, Retryable(status.Error(codes.ResourceExhausted, "quota")))
 }

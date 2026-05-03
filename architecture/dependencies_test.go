@@ -54,23 +54,42 @@ func TestCheckImportRulesCatchesForbiddenBoundaries(t *testing.T) {
 			ImportPath: modulePath + "/meta/root/server",
 			Imports:    []string{modulePath + "/coordinator/client"},
 		},
+		{
+			ImportPath: modulePath + "/engine/lsm",
+			Imports:    []string{modulePath + "/errors"},
+		},
+		{
+			ImportPath: modulePath + "/dbcore/commit",
+			Imports:    []string{modulePath + "/errors"},
+		},
+		{
+			ImportPath: modulePath + "/dbcore/stats",
+			Imports:    []string{modulePath + "/raftstore/stats"},
+		},
 	}
 
 	violations := CheckImportRules(packages)
 	assertViolation(t, violations, "root package stays free of distributed assembly", modulePath, modulePath+"/raftstore/mvcc")
 	assertViolation(t, violations, "fsmeta executor stays runtime-neutral", modulePath+"/fsmeta/exec", modulePath+"/raftstore/client")
 	assertViolation(t, violations, "meta root does not depend on coordinator service layer", modulePath+"/meta/root/server", modulePath+"/coordinator/client")
+	assertViolation(t, violations, "embedded engine stays free of global error taxonomy", modulePath+"/engine/lsm", modulePath+"/errors")
+	assertViolation(t, violations, "dbcore stays free of global error taxonomy", modulePath+"/dbcore/commit", modulePath+"/errors")
+	assertViolation(t, violations, "dbcore stays free of distributed assembly", modulePath+"/dbcore/stats", modulePath+"/raftstore/stats")
 }
 
 func TestCheckImportRulesHonorsExactAndPrefixScopes(t *testing.T) {
 	packages := []GoPackage{
 		{
-			ImportPath: modulePath + "/runtime",
+			ImportPath: modulePath + "/cmd/nokv",
 			Imports:    []string{modulePath + "/raftstore/mvcc"},
 		},
 		{
 			ImportPath: modulePath + "/fsmeta/client",
 			Imports:    []string{modulePath + "/raftstore/client"},
+		},
+		{
+			ImportPath: modulePath + "/dbcore/errkind",
+			Imports:    []string{modulePath + "/errors"},
 		},
 	}
 
@@ -114,6 +133,7 @@ func TestCheckCombinedImportRulesAllowsOnlyDistributedAssembly(t *testing.T) {
 func TestCheckRemovedPathRules(t *testing.T) {
 	root := t.TempDir()
 	for _, path := range []string{
+		"runtime",
 		"raftstore/mode",
 		"coordinator/protocol/eunomia",
 	} {
@@ -129,7 +149,8 @@ func TestCheckRemovedPathRules(t *testing.T) {
 	}
 
 	violations := CheckRemovedPathRules(root)
-	assertViolation(t, violations, "raftstore mode package stays moved to runtime/mode", "raftstore/mode", "")
+	assertViolation(t, violations, "db runtime package stays moved to dbcore", "runtime", "")
+	assertViolation(t, violations, "raftstore mode package stays moved to dbcore/mode", "raftstore/mode", "")
 	assertViolation(t, violations, "coordinator eunomia package stays removed", "coordinator/protocol/eunomia", "")
 	assertViolation(t, violations, "raftstore migrate mode alias stays removed", "raftstore/migrate/mode.go", "")
 }

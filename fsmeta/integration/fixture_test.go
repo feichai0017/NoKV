@@ -7,6 +7,7 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
@@ -18,7 +19,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
@@ -65,7 +65,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
+		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
 		StartPeers:        true,
 		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,
@@ -128,7 +128,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster},
+		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
 		StartPeers:        true,
 		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval: 50 * time.Millisecond,

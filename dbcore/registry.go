@@ -1,8 +1,8 @@
-package runtime
+package dbcore
 
 import "sync"
 
-// Module is the minimum lifecycle hook a runtime or research module
+// Module is the minimum lifecycle hook a dbcore or research module
 // must implement before it can be attached to the DB composition root.
 //
 // The interface is intentionally tiny: attached modules own their own
@@ -11,7 +11,7 @@ type Module interface {
 	Close()
 }
 
-// Registry tracks optional runtime or research modules attached to one
+// Registry tracks optional dbcore or research modules attached to one
 // DB instance without baking module-specific fields into DB itself.
 //
 // This is a platform boundary, not a plugin framework. It exists to

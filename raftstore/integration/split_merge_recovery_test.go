@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +26,7 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 71, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	defer seed.Close(t)
 	defer target.Close(t)
@@ -69,7 +69,7 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, testcluster.DumpStatus(t, ctx, 72, seed, target))
 	_, _ = testcluster.FindLeader(t, ctx, 72, seed, target)
 
-	seed.Restart(t, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed.Restart(t, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target.Restart(t, nil, true)
 	wireAll()
 	require.Eventually(t, func() bool {
@@ -86,7 +86,7 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 			!testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 72).GetKnown()
 	}, 5*time.Second, 20*time.Millisecond)
 
-	seed.Restart(t, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed.Restart(t, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target.Restart(t, nil, true)
 	wireAll()
 	require.Eventually(t, func() bool {

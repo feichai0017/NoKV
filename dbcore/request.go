@@ -1,7 +1,7 @@
-// Package runtime holds the shared write-envelope (Request) plus the
+// Package dbcore holds the shared write-envelope (Request) plus the
 // generic lifecycle/policy helpers consumed by the commit pipeline
-// (runtime/commit) and the DB facade (root NoKV).
-package runtime
+// (dbcore/commit) and the DB facade (root NoKV).
+package dbcore
 
 import (
 	"sync"
@@ -11,12 +11,12 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-// Request is the runtime write-envelope used by the DB write pipeline
+// Request is the dbcore write-envelope used by the DB write pipeline
 // It is intentionally internal to the repository: callers should interact with
 // DB APIs instead of constructing write-pipeline requests.
 //
 // All higher-level commit-pipeline types — CommitRequest, CommitQueue,
-// CommitBatch, SyncBatch — live in runtime/commit alongside the
+// CommitBatch, SyncBatch — live in dbcore/commit alongside the
 // Pipeline that owns them.
 type Request struct {
 	Entries []*kv.Entry

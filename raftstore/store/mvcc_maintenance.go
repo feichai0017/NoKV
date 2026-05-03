@@ -133,7 +133,7 @@ func (s *Store) proposeMVCCMaintenanceBatch(ctx context.Context, batch maintenan
 	}
 	out := responses[0].GetMvccMaintenance()
 	if keyErr := out.GetError(); keyErr != nil {
-		return 0, fmt.Errorf("raftstore: MVCC maintenance region %d key error: %v", batch.meta.ID, keyErr)
+		return 0, errRegionKeyError("MVCC maintenance", batch.meta.ID, keyErr)
 	}
 	return out.GetAppliedEntries(), nil
 }

@@ -59,6 +59,40 @@ var importRules = []ImportRule{
 		},
 	},
 	{
+		Name:          "embedded engine stays free of global error taxonomy",
+		PackagePrefix: modulePath + "/engine",
+		Forbidden: []string{
+			modulePath + "/errors",
+		},
+	},
+	{
+		Name:          "utils stays free of global error taxonomy",
+		PackagePrefix: modulePath + "/utils",
+		Forbidden: []string{
+			modulePath + "/errors",
+		},
+	},
+	{
+		Name:          "dbcore stays free of distributed assembly",
+		PackagePrefix: modulePath + "/dbcore",
+		Forbidden: []string{
+			modulePath + "/fsmeta",
+			modulePath + "/coordinator",
+			modulePath + "/meta/root",
+			modulePath + "/raftstore",
+		},
+	},
+	{
+		Name:          "dbcore stays free of global error taxonomy",
+		PackagePrefix: modulePath + "/dbcore",
+		Forbidden: []string{
+			modulePath + "/errors",
+		},
+		Exempt: []string{
+			modulePath + "/dbcore/errkind",
+		},
+	},
+	{
 		Name:          "fsmeta executor stays runtime-neutral",
 		PackagePrefix: modulePath + "/fsmeta/exec",
 		Forbidden: []string{
@@ -100,7 +134,8 @@ var combinedImportRules = []CombinedImportRule{
 var removedPathRules = []RemovedPathRule{
 	{Name: "raftstore descriptor package stays removed", Path: "raftstore/descriptor"},
 	{Name: "coordinator eunomia package stays removed", Path: "coordinator/protocol/eunomia"},
-	{Name: "raftstore mode package stays moved to runtime/mode", Path: "raftstore/mode"},
+	{Name: "db runtime package stays moved to dbcore", Path: "runtime"},
+	{Name: "raftstore mode package stays moved to dbcore/mode", Path: "raftstore/mode"},
 	{Name: "raftstore migrate mode alias stays removed", Path: "raftstore/migrate/mode.go"},
 }
 

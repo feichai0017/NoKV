@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
@@ -16,7 +17,6 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -143,7 +143,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
 	defer seed.Close(t)
@@ -248,7 +248,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 91, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []raftmode.Mode{raftmode.ModeSeeded, raftmode.ModeCluster}, true)
+	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
 	defer seed.Close(t)
 	defer target.Close(t)

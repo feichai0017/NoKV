@@ -7,18 +7,18 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	dbcore "github.com/feichai0017/NoKV/dbcore"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
-	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/stretchr/testify/require"
 )
 
 type mvccGCPlannerHarness struct {
-	task    *dbruntime.PeriodicTask
+	task    *dbcore.PeriodicTask
 	planner *storemvcc.GCPlanner
 }
 
@@ -64,7 +64,7 @@ func startMVCCGCPlannerHarness(t *testing.T, cfg storemvcc.GCPlanConfig) *mvccGC
 	t.Helper()
 	taskCfg, planner, ok := storemvcc.NewGCPlanTask(cfg)
 	require.True(t, ok)
-	task := dbruntime.NewPeriodicTask(taskCfg)
+	task := dbcore.NewPeriodicTask(taskCfg)
 	require.NotNil(t, task)
 	task.Start()
 	return &mvccGCPlannerHarness{task: task, planner: planner}

@@ -166,7 +166,7 @@ func WithSubtreeHandoffPublisher(publisher SubtreeHandoffPublisher) Option {
 // New constructs an fsmeta executor.
 func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	if runner == nil {
-		return nil, errors.New("fsmeta/exec: runner required")
+		return nil, errRunnerRequired
 	}
 	executor := &Executor{
 		runner:  runner,
@@ -1059,7 +1059,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		return err
 	}
 	if handoffStarted && committedAt == 0 {
-		return fmt.Errorf("subtree handoff started without committed frontier")
+		return errSubtreeHandoffWithoutFrontier
 	}
 	// RenameSubtree (v0) only moves the subtree root dentry; ReadKeys[0]
 	// is the source dentry (now gone) and MutateKeys carry the destination

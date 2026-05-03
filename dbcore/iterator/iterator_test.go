@@ -10,8 +10,8 @@ import (
 	"time"
 
 	NoKV "github.com/feichai0017/NoKV"
+	iterpkg "github.com/feichai0017/NoKV/dbcore/iterator"
 	"github.com/feichai0017/NoKV/engine/index"
-	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
 	"github.com/stretchr/testify/require"
 )
 
