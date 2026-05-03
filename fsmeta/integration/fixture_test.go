@@ -9,6 +9,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -86,7 +87,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
 	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
 	executorOpts = append(executorOpts, opts...)
@@ -179,7 +180,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.Close() })
 
-	runner, err := fsmetaexec.NewRaftstoreRunner(kv, coordRPC)
+	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
 	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
 	executorOpts = append(executorOpts, opts...)

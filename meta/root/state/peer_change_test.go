@@ -6,7 +6,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
 	applied := rootevent.PeerAdded(target.RegionID, 2, 201, target)
 
-	decision, err := rootstate.EvaluatePeerChangeLifecycle(nil, descriptor.Descriptor{}, false, planned)
+	decision, err := rootstate.EvaluatePeerChangeLifecycle(nil, topology.Descriptor{}, false, planned)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
 
@@ -34,16 +34,16 @@ func TestEvaluatePeerChangeLifecycle(t *testing.T) {
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
 	}
 
-	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, planned)
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, topology.Descriptor{}, false, planned)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleSkip, decision)
 
-	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, applied)
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, topology.Descriptor{}, false, applied)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
 
 	conflicting := rootevent.PeerRemoved(target.RegionID, 3, 301, target)
-	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, descriptor.Descriptor{}, false, conflicting)
+	decision, err = rootstate.EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, topology.Descriptor{}, false, conflicting)
 	require.Error(t, err)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, decision)
 
@@ -67,7 +67,7 @@ func TestObservePeerChangeCompletion(t *testing.T) {
 	target := testDescriptor(16, []byte("a"), []byte("z"))
 	planned := rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)
 
-	completion := rootstate.ObservePeerChangeCompletion(nil, descriptor.Descriptor{}, false, planned)
+	completion := rootstate.ObservePeerChangeCompletion(nil, topology.Descriptor{}, false, planned)
 	require.Equal(t, rootstate.PeerChangeCompletionOpen, completion.State)
 	require.True(t, completion.Open())
 
@@ -75,7 +75,7 @@ func TestObservePeerChangeCompletion(t *testing.T) {
 	require.True(t, ok)
 	completion = rootstate.ObservePeerChangeCompletion(
 		map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
-		descriptor.Descriptor{},
+		topology.Descriptor{},
 		false,
 		planned,
 	)
@@ -94,7 +94,7 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	applied := rootevent.PeerAdded(target.RegionID, 2, 201, target)
 	conflicting := rootevent.PeerRemoved(target.RegionID, 3, 301, target)
 
-	outcome := rootstate.ObservePeerChangeLifecycle(nil, descriptor.Descriptor{}, false, planned)
+	outcome := rootstate.ObservePeerChangeLifecycle(nil, topology.Descriptor{}, false, planned)
 	require.Equal(t, rootstate.PeerChangeLifecycleApply, outcome.Decision)
 	require.True(t, outcome.Completion.Open())
 	require.Equal(t, rootstate.TransitionStatusOpen, outcome.Status)
@@ -104,7 +104,7 @@ func TestObservePeerChangeLifecycle(t *testing.T) {
 	require.True(t, ok)
 	outcome = rootstate.ObservePeerChangeLifecycle(
 		map[uint64]rootstate.PendingPeerChange{target.RegionID: change},
-		descriptor.Descriptor{},
+		topology.Descriptor{},
 		false,
 		conflicting,
 	)

@@ -4,11 +4,11 @@ import (
 	"testing"
 
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +42,7 @@ func TestBuildReport(t *testing.T) {
 			LegacyDigest: legacyDigest,
 			Stage:        rootproto.HandoverStageReattached,
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			1: {RegionID: 1, RootEpoch: 7},
 		},
 	}
@@ -80,7 +80,7 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 			LineageDigest:   legacyDigest,
 		},
 		Legacy: seal,
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			1: {RegionID: 1, RootEpoch: 9},
 		},
 	}

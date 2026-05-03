@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRaftstoreRunnerExecutorContractOnRealCluster(t *testing.T) {
+func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
@@ -82,7 +82,7 @@ func TestRaftstoreRunnerExecutorContractOnRealCluster(t *testing.T) {
 	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
 }
 
-func TestRaftstoreRunnerRenameAcrossRegionsOnRealCluster(t *testing.T) {
+func TestRaftstoreRuntimeRenameAcrossRegionsOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 

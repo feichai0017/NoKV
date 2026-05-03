@@ -5,7 +5,7 @@ import (
 	"errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 	"time"
@@ -217,8 +217,8 @@ func TestTransitionOutcomeCommittedSplitAndMergeEvents(t *testing.T) {
 	require.Equal(t, uint64(71), merge.RangeMerge.RightRegionID)
 }
 
-func descriptorForOutcome(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func descriptorForOutcome(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

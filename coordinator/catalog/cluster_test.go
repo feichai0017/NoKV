@@ -6,7 +6,7 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -265,7 +265,7 @@ func TestClusterReplaceRegionSnapshot(t *testing.T) {
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 	require.NoError(t, c.PublishRegionDescriptor(testDescriptor(2, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})))
 
-	c.ReplaceRegionSnapshot(map[uint64]descriptor.Descriptor{
+	c.ReplaceRegionSnapshot(map[uint64]topology.Descriptor{
 		3: testDescriptor(3, []byte(""), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}),
 	})
 
@@ -293,7 +293,7 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	transitions := c.TransitionSnapshot()
 	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
 	entries := rootstate.BuildTransitionEntries(rootstate.Snapshot{
-		Descriptors:         map[uint64]descriptor.Descriptor{target.RegionID: current},
+		Descriptors:         map[uint64]topology.Descriptor{target.RegionID: current},
 		PendingPeerChanges:  transitions.PendingPeerChanges,
 		PendingRangeChanges: transitions.PendingRangeChanges,
 	})
@@ -322,7 +322,7 @@ func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *tes
 
 	c.ReplaceRootSnapshot(rootstate.Snapshot{
 		Stores:      map[uint64]rootstate.StoreMembership{9: {StoreID: 9, State: rootstate.StoreMembershipActive}},
-		Descriptors: map[uint64]descriptor.Descriptor{base.RegionID: base},
+		Descriptors: map[uint64]topology.Descriptor{base.RegionID: base},
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			base.RegionID: {
 				Kind:    rootstate.PendingPeerChangeAddition,
@@ -365,7 +365,7 @@ func TestClusterPublishRootEventCoversTopologyLifecycleBranches(t *testing.T) {
 		c := NewCluster()
 		desc := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
 		require.NoError(t, c.PublishRegionDescriptor(desc))
-		require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionCancelled(desc.RegionID, 2, 201, desc, descriptor.Descriptor{})))
+		require.NoError(t, c.PublishRootEvent(rootevent.PeerAdditionCancelled(desc.RegionID, 2, 201, desc, topology.Descriptor{})))
 		require.False(t, c.HasRegion(desc.RegionID))
 	})
 
@@ -465,7 +465,7 @@ func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
 
 	merged := testDescriptor(72, []byte(""), []byte(""), metaregion.Epoch{Version: 3, ConfVersion: 1})
 	c.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{merged.RegionID: merged},
+		Descriptors: map[uint64]topology.Descriptor{merged.RegionID: merged},
 		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
 			merged.RegionID: {
 				Kind:          rootstate.PendingRangeChangeMerge,
@@ -483,8 +483,8 @@ func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
 	require.False(t, ok)
 }
 
-func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

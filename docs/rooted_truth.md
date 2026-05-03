@@ -66,7 +66,7 @@ type State struct {
 ```go
 type Snapshot struct {
     State               State
-    Descriptors         map[uint64]descriptor.Descriptor
+    Descriptors         map[uint64]topology.Descriptor
     PendingPeerChanges  map[uint64]PendingPeerChange
     PendingRangeChanges map[uint64]PendingRangeChange
 }

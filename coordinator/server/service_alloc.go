@@ -9,8 +9,8 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -51,7 +51,7 @@ func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, er
 	return out, nil
 }
 
-func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (descriptor.Descriptor, error) {
+func (s *Service) normalizeDescriptorRootEpoch(desc topology.Descriptor) (topology.Descriptor, error) {
 	if desc.RootEpoch != 0 {
 		return desc, nil
 	}
@@ -67,7 +67,7 @@ func (s *Service) normalizeDescriptorRootEpoch(desc descriptor.Descriptor) (desc
 	}
 	nextEpoch, err := s.nextRootEpoch()
 	if err != nil {
-		return descriptor.Descriptor{}, err
+		return topology.Descriptor{}, err
 	}
 	desc.RootEpoch = nextEpoch
 	return desc, nil

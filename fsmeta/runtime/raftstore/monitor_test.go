@@ -1,4 +1,4 @@
-package exec
+package raftstore
 
 import (
 	"context"
@@ -47,6 +47,27 @@ type fakeRetireRouter struct {
 func (r *fakeRetireRouter) RetireMount(m fsmeta.MountID) int {
 	r.retired = append(r.retired, m)
 	return 1
+}
+
+type subtreePublishCall struct {
+	mount    fsmeta.MountID
+	root     fsmeta.InodeID
+	frontier uint64
+}
+
+type fakeSubtreePublisher struct {
+	starts    []subtreePublishCall
+	completes []subtreePublishCall
+}
+
+func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	p.starts = append(p.starts, subtreePublishCall{mount: mount, root: root, frontier: frontier})
+	return nil
+}
+
+func (p *fakeSubtreePublisher) CompleteSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
+	p.completes = append(p.completes, subtreePublishCall{mount: mount, root: root, frontier: frontier})
+	return nil
 }
 
 func TestMonitorRetiresWatchersAndCache(t *testing.T) {

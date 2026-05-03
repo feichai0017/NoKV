@@ -12,8 +12,8 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/meta/topology"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"google.golang.org/grpc/codes"
@@ -52,7 +52,7 @@ type publishRuntime struct {
 	regionSignal chan struct{}
 
 	mu            sync.Mutex
-	descriptors   map[uint64]descriptor.Descriptor
+	descriptors   map[uint64]topology.Descriptor
 	regionUpdates map[uint64]regionEvent
 	nextRegionSeq uint64
 
@@ -285,7 +285,7 @@ func (s *Store) enqueueRegionEvent(ev regionEvent) {
 	}
 	s.sched.publish.mu.Lock()
 	if s.sched.publish.descriptors == nil {
-		s.sched.publish.descriptors = make(map[uint64]descriptor.Descriptor)
+		s.sched.publish.descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if s.sched.publish.regionUpdates == nil {
 		s.sched.publish.regionUpdates = make(map[uint64]regionEvent)
@@ -555,7 +555,7 @@ func (s *Store) enqueueRecoveredPendingRegionEvents(events []localmeta.PendingRo
 	}
 	s.sched.publish.mu.Lock()
 	if s.sched.publish.descriptors == nil {
-		s.sched.publish.descriptors = make(map[uint64]descriptor.Descriptor)
+		s.sched.publish.descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if s.sched.publish.regionUpdates == nil {
 		s.sched.publish.regionUpdates = make(map[uint64]regionEvent)

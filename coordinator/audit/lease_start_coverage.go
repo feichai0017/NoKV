@@ -1,6 +1,6 @@
 package audit
 
-import eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
+import eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 
 // LeaseStartCoverageReport is the minimal audit bridge for lease-start
 // coverage diagnostics. It intentionally stays outside rooted persisted

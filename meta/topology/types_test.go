@@ -1,4 +1,4 @@
-package descriptor
+package topology
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"

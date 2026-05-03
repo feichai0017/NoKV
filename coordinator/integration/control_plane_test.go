@@ -10,9 +10,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -122,15 +122,15 @@ func TestControlPlaneLeaderOnlyAllocatorsRejectFollowerWrites(t *testing.T) {
 	require.Contains(t, status.Convert(err).Message(), "coordinator not leader")
 }
 
-func publishControlPlaneDescriptorEvent(svc *coordserver.Service, desc descriptor.Descriptor) error {
+func publishControlPlaneDescriptorEvent(svc *coordserver.Service, desc topology.Descriptor) error {
 	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(desc)),
 	})
 	return err
 }
 
-func controlPlaneDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func controlPlaneDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

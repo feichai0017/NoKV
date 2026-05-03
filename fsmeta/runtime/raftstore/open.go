@@ -1,4 +1,4 @@
-package exec
+package raftstore
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
@@ -56,11 +57,11 @@ type Options struct {
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
 // every client and goroutine it creates; Close releases all of them.
 type Runtime struct {
-	Executor          *Executor
+	Executor          *fsmetaexec.Executor
 	Watcher           fsmeta.Watcher
 	SnapshotPublisher fsmeta.SnapshotPublisher
-	MountResolver     MountResolver
-	QuotaResolver     QuotaResolver
+	MountResolver     fsmetaexec.MountResolver
+	QuotaResolver     fsmetaexec.QuotaResolver
 	SessionCleaner    interface{ Stats() map[string]any }
 
 	close func() error
@@ -80,15 +81,15 @@ func (r *Runtime) Close() error {
 	return err
 }
 
-// OpenWithRaftstore builds an fsmeta runtime backed by NoKV's raftstore and
-// coordinator. It is the embedded-user entry point; lower-level
-// NewRaftstoreRunner remains available for tests and custom wiring.
-func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
+// Open builds an fsmeta runtime backed by NoKV's raftstore and coordinator.
+// It is the embedded-user entry point; lower-level NewRunner remains available
+// for tests and custom wiring.
+func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.CoordinatorAddr == "" {
-		return nil, errors.New("fsmeta/exec: coordinator addr is required")
+		return nil, errors.New("fsmeta/runtime/raftstore: coordinator addr is required")
 	}
 	if opts.SessionCleanupLimit > fsmeta.MaxSessionExpireLimit {
-		return nil, errors.New("fsmeta/exec: session cleanup limit exceeds maximum")
+		return nil, errors.New("fsmeta/runtime/raftstore: session cleanup limit exceeds maximum")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -115,7 +116,7 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = coord.Close()
 		return nil, fmt.Errorf("dial raftstore: %w", err)
 	}
-	runner, err := NewRaftstoreRunner(kv, coord)
+	runner, err := NewRunner(kv, coord)
 	if err != nil {
 		_ = kv.Close()
 		_ = coord.Close()
@@ -133,7 +134,11 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
 	pub := rootPublisher{coord: coord}
-	execOpts := []Option{WithMountResolver(mounts), WithQuotaResolver(quotas), WithSubtreeHandoffPublisher(pub)}
+	execOpts := []fsmetaexec.Option{
+		fsmetaexec.WithMountResolver(mounts),
+		fsmetaexec.WithQuotaResolver(quotas),
+		fsmetaexec.WithSubtreeHandoffPublisher(pub),
+	}
 	var negPersist *negativecache.Persistence
 	if opts.NegativeCacheDir != "" {
 		neg, persist, err := negativecache.OpenWithPersistence(
@@ -150,7 +155,7 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 			return nil, fmt.Errorf("init negative cache: %w", err)
 		}
 		negPersist = persist
-		execOpts = append(execOpts, WithNegativeCache(neg))
+		execOpts = append(execOpts, fsmetaexec.WithNegativeCache(neg))
 	}
 	var dirPages *dirpage.Cache
 	if opts.DirPageCacheDir != "" {
@@ -162,9 +167,9 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 			_ = coord.Close()
 			return nil, fmt.Errorf("init dirpage cache: %w", err)
 		}
-		execOpts = append(execOpts, WithDirPageCache(dirPages))
+		execOpts = append(execOpts, fsmetaexec.WithDirPageCache(dirPages))
 	}
-	exec, err := New(runner, execOpts...)
+	exec, err := fsmetaexec.New(runner, execOpts...)
 	if err != nil {
 		if dirPages != nil {
 			_ = dirPages.Close()
@@ -175,7 +180,7 @@ func OpenWithRaftstore(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	router := fsmetawatch.NewRouter()
-	source, err := fsmetawatch.StartRemoteSource(ctx, coord, router, dialOpts...)
+	source, err := StartRemoteSource(ctx, coord, router, dialOpts...)
 	if err != nil {
 		if dirPages != nil {
 			_ = dirPages.Close()

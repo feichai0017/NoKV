@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-var ErrLeaseStartCoverage = errors.New("coordinator/protocol/eunomia: successor lease_start does not cover predecessor served summary")
+var ErrLeaseStartCoverage = errors.New("meta/root/protocol/eunomia: successor lease_start does not cover predecessor served summary")
 
 type LeaseAcquisitionKind uint8
 

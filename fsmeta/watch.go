@@ -17,6 +17,18 @@ const (
 	WatchEventSourceResolveLock
 )
 
+// ApplyEvent is the fsmeta watch router's input event. Runtime adapters convert
+// their storage-engine apply notifications into this neutral shape before
+// publishing through fsmeta/exec/watch.Router.
+type ApplyEvent struct {
+	RegionID      uint64
+	Term          uint64
+	Index         uint64
+	Source        WatchEventSource
+	CommitVersion uint64
+	Keys          [][]byte
+}
+
 // WatchCursor is a per-region raft apply cursor. It is the watch resume key.
 type WatchCursor struct {
 	RegionID uint64

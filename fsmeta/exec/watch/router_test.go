@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +68,7 @@ func TestRouterClosesSlowSubscriberOnOverflow(t *testing.T) {
 	require.GreaterOrEqual(t, router.Dropped(), uint64(1))
 }
 
-func TestRouterConsumesRaftstoreApplyEvents(t *testing.T) {
+func TestRouterConsumesApplyEvents(t *testing.T) {
 	router := NewRouter()
 	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
 		KeyPrefix: []byte("dentry/"),
@@ -77,11 +76,11 @@ func TestRouterConsumesRaftstoreApplyEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Close()
 
-	router.OnApply(storepkg.ApplyEvent{
+	router.OnApply(fsmeta.ApplyEvent{
 		RegionID:      7,
 		Term:          3,
 		Index:         9,
-		Source:        storepkg.ApplyEventSourceResolveLock,
+		Source:        fsmeta.WatchEventSourceResolveLock,
 		CommitVersion: 44,
 		Keys:          [][]byte{[]byte("dentry/a"), []byte("inode/1")},
 	})

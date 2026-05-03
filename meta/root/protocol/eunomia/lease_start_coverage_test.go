@@ -3,7 +3,7 @@ package eunomia_test
 import (
 	"testing"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	"github.com/stretchr/testify/require"
 )
 

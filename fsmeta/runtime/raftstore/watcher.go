@@ -1,9 +1,10 @@
-package exec
+package raftstore
 
 import (
 	"context"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 )
 
@@ -12,8 +13,8 @@ import (
 // for expvar exposure.
 type watcher struct {
 	*fsmetawatch.Router
-	source *fsmetawatch.RemoteSource
-	mounts MountResolver
+	source *RemoteSource
+	mounts fsmetaexec.MountResolver
 }
 
 func (w watcher) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {

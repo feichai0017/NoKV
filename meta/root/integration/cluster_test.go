@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	roottestcluster "github.com/feichai0017/NoKV/meta/root/testcluster"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,8 +160,8 @@ func sealLease(store interface {
 	return state.Legacy, err
 }
 
-func testDescriptor(id uint64, start, end []byte, rootEpoch uint64) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, rootEpoch uint64) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

@@ -1,4 +1,4 @@
-package watch
+package raftstore
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -31,7 +32,7 @@ func TestRemoteSourceHelpers(t *testing.T) {
 }
 
 func TestPublishApplyWatchEvent(t *testing.T) {
-	router := NewRouter()
+	router := fsmetawatch.NewRouter()
 	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{KeyPrefix: []byte("k/")})
 	require.NoError(t, err)
 	defer sub.Close()

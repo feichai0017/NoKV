@@ -11,9 +11,9 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -542,7 +542,7 @@ func TestCoordinatorApplyErrorMappings(t *testing.T) {
 }
 
 func testServerSnapshot() rootstate.Snapshot {
-	desc := descriptor.Descriptor{
+	desc := topology.Descriptor{
 		RegionID:  1,
 		StartKey:  []byte("a"),
 		EndKey:    []byte("m"),
@@ -560,7 +560,7 @@ func testServerSnapshot() rootstate.Snapshot {
 			IDFence:         10,
 			TSOFence:        20,
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			desc.RegionID: desc,
 		},
 		PendingPeerChanges:  map[uint64]rootstate.PendingPeerChange{},

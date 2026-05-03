@@ -1,9 +1,9 @@
 package audit
 
 import (
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 

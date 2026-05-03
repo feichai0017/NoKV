@@ -7,12 +7,12 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSnapshotDescriptorEventsSorted(t *testing.T) {
-	events := rootmaterialize.SnapshotDescriptorEvents(map[uint64]descriptor.Descriptor{
+	events := rootmaterialize.SnapshotDescriptorEvents(map[uint64]topology.Descriptor{
 		7: testDescriptor(7, []byte("m"), []byte("z")),
 		3: testDescriptor(3, []byte("a"), []byte("m")),
 	})
@@ -35,7 +35,7 @@ func TestApplyEventToSnapshotTracksPeerChangeStage(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
+		Descriptors: map[uint64]topology.Descriptor{current.RegionID: current},
 	}
 
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target))
@@ -60,7 +60,7 @@ func TestApplyEventToSnapshotTracksPendingSplitLifecycle(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+		Descriptors: map[uint64]topology.Descriptor{parent.RegionID: parent},
 	}
 
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right))
@@ -85,7 +85,7 @@ func TestApplyEventToSnapshotTracksPendingMergeLifecycle(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State: rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			left.RegionID:  left,
 			right.RegionID: right,
 		},
@@ -108,7 +108,7 @@ func TestApplyEventToDescriptorsRestoresCancelledPeerChange(t *testing.T) {
 	target.RootEpoch++
 	target.EnsureHash()
 
-	descriptors := map[uint64]descriptor.Descriptor{target.RegionID: target}
+	descriptors := map[uint64]topology.Descriptor{target.RegionID: target}
 	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current))
 	require.Equal(t, current, descriptors[current.RegionID])
 }
@@ -117,7 +117,7 @@ func TestApplyEventToDescriptorsRestoresCancelledSplit(t *testing.T) {
 	parent := testDescriptor(90, []byte("a"), []byte("z"))
 	left := testDescriptor(90, []byte("a"), []byte("m"))
 	right := testDescriptor(91, []byte("m"), []byte("z"))
-	descriptors := map[uint64]descriptor.Descriptor{
+	descriptors := map[uint64]topology.Descriptor{
 		left.RegionID:  left,
 		right.RegionID: right,
 	}
@@ -131,7 +131,7 @@ func TestApplyEventToDescriptorsRestoresCancelledMerge(t *testing.T) {
 	baseLeft := testDescriptor(98, []byte("a"), []byte("m"))
 	baseRight := testDescriptor(99, []byte("m"), []byte("z"))
 	merged := testDescriptor(100, []byte("a"), []byte("z"))
-	descriptors := map[uint64]descriptor.Descriptor{
+	descriptors := map[uint64]topology.Descriptor{
 		merged.RegionID: merged,
 	}
 
@@ -141,8 +141,8 @@ func TestApplyEventToDescriptorsRestoresCancelledMerge(t *testing.T) {
 	require.NotContains(t, descriptors, merged.RegionID)
 }
 
-func testDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

@@ -9,7 +9,7 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 type PendingSnapshot struct {
@@ -222,7 +222,7 @@ func (c *Cluster) QuotaFenceSnapshot() map[string]rootstate.QuotaFence {
 
 // PublishRegionDescriptor applies one rooted region descriptor into the runtime
 // Coordinator route view.
-func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
+func (c *Cluster) PublishRegionDescriptor(desc topology.Descriptor) error {
 	if c == nil {
 		return nil
 	}
@@ -231,7 +231,7 @@ func (c *Cluster) PublishRegionDescriptor(desc descriptor.Descriptor) error {
 
 // ValidateRegionDescriptor checks whether one rooted descriptor can be applied
 // to the current runtime view without mutating in-memory state.
-func (c *Cluster) ValidateRegionDescriptor(desc descriptor.Descriptor) error {
+func (c *Cluster) ValidateRegionDescriptor(desc topology.Descriptor) error {
 	if c == nil {
 		return nil
 	}
@@ -345,9 +345,9 @@ func (c *Cluster) HasRegion(regionID uint64) bool {
 }
 
 // GetRegionDescriptor returns the rooted descriptor tracked for regionID.
-func (c *Cluster) GetRegionDescriptor(regionID uint64) (descriptor.Descriptor, bool) {
+func (c *Cluster) GetRegionDescriptor(regionID uint64) (topology.Descriptor, bool) {
 	if c == nil {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	return c.regions.Descriptor(regionID)
 }
@@ -400,7 +400,7 @@ func (c *Cluster) MaxDescriptorRevision() uint64 {
 
 // ReplaceRegionSnapshot replaces the region directory view from one rooted
 // snapshot while preserving store-health runtime observations.
-func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]descriptor.Descriptor) {
+func (c *Cluster) ReplaceRegionSnapshot(descriptors map[uint64]topology.Descriptor) {
 	c.ReplaceRootSnapshot(rootstate.Snapshot{Descriptors: descriptors}, rootstorage.TailToken{})
 }
 
@@ -457,13 +457,13 @@ func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) rootstate.Tra
 
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
 // ([start, end)).
-func (c *Cluster) GetRegionDescriptorByKey(key []byte) (descriptor.Descriptor, bool) {
+func (c *Cluster) GetRegionDescriptorByKey(key []byte) (topology.Descriptor, bool) {
 	if c == nil {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	desc, ok := c.regions.LookupDescriptor(key)
 	if !ok {
-		return descriptor.Descriptor{}, false
+		return topology.Descriptor{}, false
 	}
 	return desc, true
 }
@@ -741,7 +741,7 @@ func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 			Mounts:              make(map[string]rootstate.MountRecord),
 			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
 			Quotas:              make(map[string]rootstate.QuotaFence),
-			Descriptors:         make(map[uint64]descriptor.Descriptor),
+			Descriptors:         make(map[uint64]topology.Descriptor),
 			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
 			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
 		}

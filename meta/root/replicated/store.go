@@ -6,14 +6,14 @@ import (
 	"sync"
 	"time"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 const defaultRetainedRecords = 64
@@ -39,7 +39,7 @@ type Store struct {
 	mounts             map[string]rootstate.MountRecord
 	subtrees           map[string]rootstate.SubtreeAuthority
 	quotas             map[string]rootstate.QuotaFence
-	descs              map[uint64]descriptor.Descriptor
+	descs              map[uint64]topology.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
 	pendingRange       map[uint64]rootstate.PendingRangeChange
 	records            []rootstorage.CommittedEvent
@@ -185,7 +185,7 @@ func (s *Store) Current() (rootstate.State, error) {
 
 func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	if s == nil {
-		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+		return rootstate.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()

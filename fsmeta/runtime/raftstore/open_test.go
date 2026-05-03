@@ -1,4 +1,4 @@
-package exec
+package raftstore
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenWithRaftstoreRejectsInvalidSessionCleanupLimit(t *testing.T) {
-	_, err := OpenWithRaftstore(context.Background(), Options{
+func TestOpenRejectsInvalidSessionCleanupLimit(t *testing.T) {
+	_, err := Open(context.Background(), Options{
 		CoordinatorAddr:     "127.0.0.1:1",
 		SessionCleanupLimit: fsmeta.MaxSessionExpireLimit + 1,
 	})

@@ -10,9 +10,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -115,7 +115,7 @@ func TestLocalStorePersistsPendingRootEvents(t *testing.T) {
 	store, err := OpenLocalStore(dir, nil)
 	require.NoError(t, err)
 
-	event := rootevent.PeerAdded(11, 2, 22, descriptor.Descriptor{
+	event := rootevent.PeerAdded(11, 2, 22, topology.Descriptor{
 		RegionID: 11,
 		StartKey: []byte("a"),
 		EndKey:   []byte("m"),

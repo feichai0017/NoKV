@@ -4,11 +4,11 @@ import (
 	"slices"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // ApplyEventToDescriptors applies one rooted topology event into a materialized descriptor catalog.
-func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event rootevent.Event) {
+func ApplyEventToDescriptors(descriptors map[uint64]topology.Descriptor, event rootevent.Event) {
 	if descriptors == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func ApplyEventToDescriptors(descriptors map[uint64]descriptor.Descriptor, event
 }
 
 // SnapshotDescriptorEvents materializes descriptor truth into a stable event sequence for bootstrap/recovery callers.
-func SnapshotDescriptorEvents(descs map[uint64]descriptor.Descriptor) []rootevent.Event {
+func SnapshotDescriptorEvents(descs map[uint64]topology.Descriptor) []rootevent.Event {
 	if len(descs) == 0 {
 		return nil
 	}

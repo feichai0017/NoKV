@@ -1,4 +1,4 @@
-package watch
+package raftstore
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"google.golang.org/grpc"
@@ -35,7 +36,7 @@ type RemoteSource struct {
 	wg     sync.WaitGroup
 
 	lister StoreLister
-	router *Router
+	router *fsmetawatch.Router
 	opts   []grpc.DialOption
 
 	mu     sync.Mutex
@@ -51,12 +52,12 @@ type remoteStoreWatch struct {
 }
 
 // StartRemoteSource starts apply-watch streams for all UP stores in lister.
-func StartRemoteSource(ctx context.Context, lister StoreLister, router *Router, opts ...grpc.DialOption) (*RemoteSource, error) {
+func StartRemoteSource(ctx context.Context, lister StoreLister, router *fsmetawatch.Router, opts ...grpc.DialOption) (*RemoteSource, error) {
 	if lister == nil {
-		return nil, fmt.Errorf("fsmeta/watch: store lister is required")
+		return nil, fmt.Errorf("fsmeta/runtime/raftstore: store lister is required")
 	}
 	if router == nil {
-		return nil, fmt.Errorf("fsmeta/watch: router is required")
+		return nil, fmt.Errorf("fsmeta/runtime/raftstore: router is required")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -136,7 +137,7 @@ func (s *RemoteSource) ensureStore(ctx context.Context, storeID uint64, addr str
 
 	conn, err := grpc.NewClient(addr, s.opts...)
 	if err != nil {
-		return fmt.Errorf("fsmeta/watch: dial store %d: %w", storeID, err)
+		return fmt.Errorf("fsmeta/runtime/raftstore: dial store %d: %w", storeID, err)
 	}
 	storeCtx, cancel := context.WithCancel(ctx)
 	watch := &remoteStoreWatch{addr: addr, cancel: cancel, conn: conn}
@@ -171,10 +172,10 @@ func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.
 				return
 			}
 			if isPermanentWatchError(err) {
-				log.Printf("fsmeta/watch: store %d apply-watch stream rejected: %v", storeID, err)
+				log.Printf("fsmeta/runtime/raftstore: store %d apply-watch stream rejected: %v", storeID, err)
 				return
 			}
-			log.Printf("fsmeta/watch: store %d apply-watch connect failed: %v; retrying in %s", storeID, err, backoff)
+			log.Printf("fsmeta/runtime/raftstore: store %d apply-watch connect failed: %v; retrying in %s", storeID, err, backoff)
 			if !sleepBackoff(ctx, backoff) {
 				return
 			}
@@ -190,10 +191,10 @@ func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.
 					return
 				}
 				if isPermanentWatchError(err) {
-					log.Printf("fsmeta/watch: store %d apply-watch stream closed permanently: %v", storeID, err)
+					log.Printf("fsmeta/runtime/raftstore: store %d apply-watch stream closed permanently: %v", storeID, err)
 					return
 				}
-				log.Printf("fsmeta/watch: store %d apply-watch stream failed: %v; retrying in %s", storeID, err, backoff)
+				log.Printf("fsmeta/runtime/raftstore: store %d apply-watch stream failed: %v; retrying in %s", storeID, err, backoff)
 				if !sleepBackoff(ctx, backoff) {
 					return
 				}
@@ -277,7 +278,7 @@ func stopRemoteStore(watch *remoteStoreWatch) error {
 	return nil
 }
 
-func publishApplyWatchEvent(router *Router, evt *kvrpcpb.ApplyWatchEvent) {
+func publishApplyWatchEvent(router *fsmetawatch.Router, evt *kvrpcpb.ApplyWatchEvent) {
 	if router == nil || evt == nil {
 		return
 	}

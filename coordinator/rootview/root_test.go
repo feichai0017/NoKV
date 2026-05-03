@@ -12,7 +12,7 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,7 +219,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			},
 		},
 		Mounts: map[string]rootstate.MountRecord{},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			desc2.RegionID: desc2,
 			desc1.RegionID: desc1,
 		},
@@ -283,13 +283,13 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 	require.Equal(t, ^uint64(0), tsStart)
 
 	var applied []uint64
-	loaded, err := RestoreDescriptors(func(desc descriptor.Descriptor) error {
+	loaded, err := RestoreDescriptors(func(desc topology.Descriptor) error {
 		applied = append(applied, desc.RegionID)
 		if desc.RegionID == desc2.RegionID {
 			return errors.New("stop")
 		}
 		return nil
-	}, map[uint64]descriptor.Descriptor{
+	}, map[uint64]topology.Descriptor{
 		0: desc1,
 		2: desc2,
 		1: desc1,
@@ -300,7 +300,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 	require.Equal(t, 0, mustRestoreDescriptorsNil(t))
 
 	store := fakeLoadStore{snapshot: snapshot}
-	info, err := Bootstrap(store, func(desc descriptor.Descriptor) error {
+	info, err := Bootstrap(store, func(desc topology.Descriptor) error {
 		applied = append(applied, desc.RegionID)
 		return nil
 	}, 5, 6)
@@ -356,7 +356,7 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			IDFence:       10,
 			TSOFence:      20,
 		},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			desc.RegionID: desc,
 		},
 	}
@@ -467,7 +467,7 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	store, err := OpenRootStore(fakeBasicRoot{
-		snapshot: rootstate.Snapshot{Descriptors: map[uint64]descriptor.Descriptor{}},
+		snapshot: rootstate.Snapshot{Descriptors: map[uint64]topology.Descriptor{}},
 	})
 	require.NoError(t, err)
 
@@ -494,8 +494,8 @@ func mustWaitTail(store *RootStore) rootstorage.TailAdvance {
 	return advance
 }
 
-func testRootviewDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testRootviewDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRaftstoreRunnerFSMetaContractOnSplitCluster(t *testing.T) {
+func TestRaftstoreRuntimeFSMetaContractOnSplitCluster(t *testing.T) {
 	seeds := envInt("NOKV_RAFTSTORE_CONTRACT_SEEDS", 2)
 	steps := envInt("NOKV_RAFTSTORE_CONTRACT_STEPS", 40)
 	for seed := int64(1); seed <= int64(seeds); seed++ {

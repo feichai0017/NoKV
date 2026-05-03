@@ -10,7 +10,7 @@ import (
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,7 +50,7 @@ func TestBootstrapFromObservedReplaysTail(t *testing.T) {
 	right := testMaterializeDescriptor(2, []byte("f"), []byte("m"))
 	checkpoint := rootstate.Snapshot{
 		State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 1, Index: 1}},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			base.RegionID: base,
 		},
 	}
@@ -88,7 +88,7 @@ func TestLoadBootstrapAndCloneCommittedEvents(t *testing.T) {
 		checkpoint: rootstorage.Checkpoint{
 			Snapshot: rootstate.Snapshot{
 				State:       rootstate.State{LastCommitted: rootstate.Cursor{Term: 2, Index: 3}},
-				Descriptors: map[uint64]descriptor.Descriptor{},
+				Descriptors: map[uint64]topology.Descriptor{},
 			},
 			TailOffset: 11,
 		},
@@ -125,8 +125,8 @@ func TestLoadBootstrapPropagatesReadErrors(t *testing.T) {
 	require.ErrorContains(t, err, "read failed")
 }
 
-func testMaterializeDescriptor(id uint64, start, end []byte) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testMaterializeDescriptor(id uint64, start, end []byte) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

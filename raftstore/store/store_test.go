@@ -15,11 +15,11 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -218,7 +218,7 @@ func TestStoreProposeSplitApplies(t *testing.T) {
 			if info.Descriptor.RegionID == childMeta.ID {
 				return len(info.Descriptor.Lineage) == 1 &&
 					info.Descriptor.Lineage[0].RegionID == parentMeta.ID &&
-					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindSplitParent
+					info.Descriptor.Lineage[0].Kind == topology.LineageKindSplitParent
 			}
 		}
 		return false
@@ -305,7 +305,7 @@ func TestStoreProposeMergeApplies(t *testing.T) {
 			if info.Descriptor.RegionID == parentMeta.ID {
 				return len(info.Descriptor.Lineage) == 1 &&
 					info.Descriptor.Lineage[0].RegionID == sourceMeta.ID &&
-					info.Descriptor.Lineage[0].Kind == descriptor.LineageKindMergeSource
+					info.Descriptor.Lineage[0].Kind == topology.LineageKindMergeSource
 			}
 		}
 		return false
@@ -563,7 +563,7 @@ type degradedSchedulerSink struct {
 }
 
 type regionHeartbeat struct {
-	Descriptor    descriptor.Descriptor
+	Descriptor    topology.Descriptor
 	LastHeartbeat time.Time
 }
 
@@ -601,7 +601,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 		return nil
 	}
 	s.mu.Lock()
-	descriptors := make(map[uint64]descriptor.Descriptor, len(s.regions))
+	descriptors := make(map[uint64]topology.Descriptor, len(s.regions))
 	for id, info := range s.regions {
 		descriptors[id] = info.Descriptor.Clone()
 	}

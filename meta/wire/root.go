@@ -4,8 +4,8 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 func RootCursorToProto(cursor rootproto.Cursor) *metapb.RootCursor {
@@ -578,11 +578,11 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 
 func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snapshot, uint64) {
 	if pbCheckpoint == nil {
-		return rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, 0
+		return rootstate.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, 0
 	}
 	snapshot := rootstate.Snapshot{
 		State:               RootStateFromProto(pbCheckpoint.State),
-		Descriptors:         make(map[uint64]descriptor.Descriptor, len(pbCheckpoint.Descriptors)),
+		Descriptors:         make(map[uint64]topology.Descriptor, len(pbCheckpoint.Descriptors)),
 		PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
 		PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange, len(pbCheckpoint.PendingRangeChanges)),
 	}

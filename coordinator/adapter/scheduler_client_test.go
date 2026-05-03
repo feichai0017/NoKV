@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"google.golang.org/grpc"
 )
@@ -282,8 +282,8 @@ func TestFromPBOperationValidation(t *testing.T) {
 	require.Equal(t, storepkg.OperationLeaderTransfer, op.Type)
 }
 
-func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

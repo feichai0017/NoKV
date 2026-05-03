@@ -11,8 +11,8 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 
+	"github.com/feichai0017/NoKV/meta/topology"
 	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -21,14 +21,14 @@ type splitPlan struct {
 	originalParent localmeta.RegionMeta
 	parent         localmeta.RegionMeta
 	child          localmeta.RegionMeta
-	parentDesc     descriptor.Descriptor
-	childDesc      descriptor.Descriptor
+	parentDesc     topology.Descriptor
+	childDesc      topology.Descriptor
 }
 
 type mergePlan struct {
 	target     localmeta.RegionMeta
 	source     localmeta.RegionMeta
-	mergedDesc descriptor.Descriptor
+	mergedDesc topology.Descriptor
 	leftID     uint64
 	rightID    uint64
 }
@@ -96,15 +96,15 @@ func (s *Store) buildSplitPlan(parentID uint64, childMeta localmeta.RegionMeta, 
 	}
 	parentDesc := localmeta.Descriptor(newParent, 0)
 	childDesc := localmeta.Descriptor(childMeta, 0)
-	parentDesc.Lineage = append(parentDesc.Lineage, descriptor.LineageRef{
+	parentDesc.Lineage = append(parentDesc.Lineage, topology.LineageRef{
 		RegionID: originalParent.ID,
 		Epoch:    originalParent.Epoch,
-		Kind:     descriptor.LineageKindSplitParent,
+		Kind:     topology.LineageKindSplitParent,
 	})
-	childDesc.Lineage = append(childDesc.Lineage, descriptor.LineageRef{
+	childDesc.Lineage = append(childDesc.Lineage, topology.LineageRef{
 		RegionID: originalParent.ID,
 		Epoch:    originalParent.Epoch,
-		Kind:     descriptor.LineageKindSplitParent,
+		Kind:     topology.LineageKindSplitParent,
 	})
 	return splitPlan{
 		originalParent: originalParent,
@@ -136,10 +136,10 @@ func (s *Store) buildMergePlan(targetRegionID, sourceRegionID uint64) (mergePlan
 		updated.EndKey = append([]byte(nil), sourceMeta.EndKey...)
 	}
 	mergedDesc := localmeta.Descriptor(updated, 0)
-	mergedDesc.Lineage = append(mergedDesc.Lineage, descriptor.LineageRef{
+	mergedDesc.Lineage = append(mergedDesc.Lineage, topology.LineageRef{
 		RegionID: sourceMeta.ID,
 		Epoch:    sourceMeta.Epoch,
-		Kind:     descriptor.LineageKindMergeSource,
+		Kind:     topology.LineageKindMergeSource,
 	})
 	leftID, rightID := mergedDesc.RegionID, sourceMeta.ID
 	if bytes.Compare(sourceMeta.StartKey, mergedDesc.StartKey) < 0 {

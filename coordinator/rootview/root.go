@@ -16,7 +16,7 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 var (
@@ -221,7 +221,7 @@ type RootStore struct {
 // Load returns the last reconstructed snapshot.
 func (s *RootStore) Load() (Snapshot, error) {
 	if s == nil {
-		return Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+		return Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -2,7 +2,7 @@ package view
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"testing"
 	"time"
 
@@ -41,7 +41,7 @@ func TestRegionDirectoryViewReplaceTouchAndRemove(t *testing.T) {
 
 	require.NoError(t, v.UpsertAt(testViewDescriptor(1, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}), first))
 	v.RecordLeader(1, 2, first)
-	v.Replace(map[uint64]descriptor.Descriptor{
+	v.Replace(map[uint64]topology.Descriptor{
 		2: testViewDescriptor(2, []byte("m"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}),
 	})
 
@@ -87,7 +87,7 @@ func TestRegionDirectoryViewLeaderClaimsTrackRemovalAndReplace(t *testing.T) {
 	require.Equal(t, uint64(2), snap[0].Descriptor.RegionID)
 	require.Equal(t, uint64(4), snap[0].LeaderStoreID)
 
-	v.Replace(map[uint64]descriptor.Descriptor{
+	v.Replace(map[uint64]topology.Descriptor{
 		3: testViewDescriptor(3, []byte(""), []byte(""), metaregion.Epoch{Version: 2, ConfVersion: 1}),
 	})
 	snap = v.Snapshot()
@@ -98,7 +98,7 @@ func TestRegionDirectoryViewLeaderClaimsTrackRemovalAndReplace(t *testing.T) {
 
 func TestRegionDirectoryViewRejectsInvalidRegionID(t *testing.T) {
 	v := NewRegionDirectoryView()
-	err := v.UpsertAt(descriptor.Descriptor{}, time.Unix(400, 0))
+	err := v.UpsertAt(topology.Descriptor{}, time.Unix(400, 0))
 	require.ErrorIs(t, err, ErrInvalidRegionID)
 }
 
@@ -132,8 +132,8 @@ func TestRegionDirectoryViewValidateDescriptorsSnapshotAndLeaderCleanup(t *testi
 	require.Equal(t, uint64(3), snap[1].LeaderStoreID)
 }
 
-func testViewDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testViewDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID: id,
 		StartKey: append([]byte(nil), start...),
 		EndKey:   append([]byte(nil), end...),

@@ -16,9 +16,9 @@ import (
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,10 +186,10 @@ func (m *rootScheduleModel) randomMount() string {
 	return m.activeMounts[m.rng.Intn(len(m.activeMounts))]
 }
 
-func rootModelDescriptor(regionID uint64) descriptor.Descriptor {
+func rootModelDescriptor(regionID uint64) topology.Descriptor {
 	start := fmt.Appendf(nil, "rk%06d", regionID)
 	end := fmt.Appendf(nil, "rk%06d", regionID+1)
-	desc := descriptor.Descriptor{
+	desc := topology.Descriptor{
 		RegionID: regionID,
 		StartKey: start,
 		EndKey:   end,
@@ -290,7 +290,7 @@ func normalizeRootSnapshot(snapshot rootstate.Snapshot) rootstate.Snapshot {
 		out.Quotas = make(map[string]rootstate.QuotaFence)
 	}
 	if out.Descriptors == nil {
-		out.Descriptors = make(map[uint64]descriptor.Descriptor)
+		out.Descriptors = make(map[uint64]topology.Descriptor)
 	}
 	if out.PendingPeerChanges == nil {
 		out.PendingPeerChanges = make(map[uint64]rootstate.PendingPeerChange)

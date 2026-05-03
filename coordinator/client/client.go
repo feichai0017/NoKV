@@ -523,7 +523,7 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 		return fmt.Errorf("%w: missing region descriptor on non-not-found reply", errInvalidWitness)
 	}
 	if resp.GetDescriptorRevision() != resp.GetRegionDescriptor().GetRootEpoch() {
-		return fmt.Errorf("%w: descriptor_revision=%d descriptor.root_epoch=%d", errInvalidWitness, resp.GetDescriptorRevision(), resp.GetRegionDescriptor().GetRootEpoch())
+		return fmt.Errorf("%w: descriptor_revision=%d topology.root_epoch=%d", errInvalidWitness, resp.GetDescriptorRevision(), resp.GetRegionDescriptor().GetRootEpoch())
 	}
 	if resp.GetDescriptorRevision() < expectation.requiredDescriptorRevision {
 		return fmt.Errorf("%w: descriptor_revision=%d required=%d", errInvalidWitness, resp.GetDescriptorRevision(), expectation.requiredDescriptorRevision)

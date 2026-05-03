@@ -1,4 +1,4 @@
-package exec
+package raftstore
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -35,14 +36,14 @@ type monitor struct {
 	router   retireRouter
 	cache    *mountCache
 	quotas   *quotaCache
-	subtrees SubtreeHandoffPublisher
+	subtrees fsmetaexec.SubtreeHandoffPublisher
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees SubtreeHandoffPublisher, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}

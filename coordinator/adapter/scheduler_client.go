@@ -11,7 +11,7 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 )
 
@@ -226,7 +226,7 @@ func prepareRootEventRequest(event rootevent.Event) (uint64, rootevent.Event, er
 		}
 		return nil
 	}
-	zero := func(desc descriptor.Descriptor) descriptor.Descriptor {
+	zero := func(desc topology.Descriptor) topology.Descriptor {
 		desc = desc.Clone()
 		desc.RootEpoch = 0
 		return desc

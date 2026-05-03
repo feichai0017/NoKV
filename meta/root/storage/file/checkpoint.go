@@ -8,9 +8,9 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -30,14 +30,14 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return rootstorage.Checkpoint{
-				Snapshot: rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+				Snapshot: rootstate.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)},
 			}, nil
 		}
 		return rootstorage.Checkpoint{}, err
 	}
 	if len(data) == 0 {
 		return rootstorage.Checkpoint{
-			Snapshot: rootstate.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)},
+			Snapshot: rootstate.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)},
 		}, nil
 	}
 	var pbCheckpoint metapb.RootCheckpoint
@@ -49,7 +49,7 @@ func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	}
 	snapshot, tailOffset := metawire.RootSnapshotFromProto(&pbCheckpoint)
 	if snapshot.Descriptors == nil {
-		snapshot.Descriptors = make(map[uint64]descriptor.Descriptor)
+		snapshot.Descriptors = make(map[uint64]topology.Descriptor)
 	}
 	return rootstorage.Checkpoint{Snapshot: snapshot, TailOffset: int64(tailOffset)}, nil
 }

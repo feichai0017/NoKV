@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
 	"google.golang.org/grpc"
@@ -22,7 +22,7 @@ var (
 	exit         = os.Exit
 	listen       = net.Listen
 	signalNotify = signal.Notify
-	openRuntime  = fsmetaexec.OpenWithRaftstore
+	openRuntime  = fsmetaraftstore.Open
 )
 
 func fatalf(format string, args ...any) {
@@ -49,7 +49,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rt, err := openRuntime(ctx, fsmetaexec.Options{
+	rt, err := openRuntime(ctx, fsmetaraftstore.Options{
 		CoordinatorAddr:        *coordAddr,
 		NegativeCacheDir:       *negCacheDir,
 		DirPageCacheDir:        *dirPageDir,

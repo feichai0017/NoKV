@@ -2,13 +2,13 @@ package wire
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 // DescriptorToProto lifts one runtime descriptor into the shared metadata
 // protobuf shape.
-func DescriptorToProto(d descriptor.Descriptor) *metapb.RegionDescriptor {
+func DescriptorToProto(d topology.Descriptor) *metapb.RegionDescriptor {
 	pbDesc := &metapb.RegionDescriptor{
 		RegionId:  d.RegionID,
 		StartKey:  append([]byte(nil), d.StartKey...),
@@ -46,12 +46,12 @@ func DescriptorToProto(d descriptor.Descriptor) *metapb.RegionDescriptor {
 }
 
 // DescriptorFromProto converts the shared metadata protobuf shape into one
-// runtime descriptor.
-func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor {
+// runtime topology.
+func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) topology.Descriptor {
 	if pbDesc == nil {
-		return descriptor.Descriptor{}
+		return topology.Descriptor{}
 	}
-	out := descriptor.Descriptor{
+	out := topology.Descriptor{
 		RegionID:  pbDesc.RegionId,
 		StartKey:  append([]byte(nil), pbDesc.StartKey...),
 		EndKey:    append([]byte(nil), pbDesc.EndKey...),
@@ -73,15 +73,15 @@ func DescriptorFromProto(pbDesc *metapb.RegionDescriptor) descriptor.Descriptor 
 		}
 	}
 	if len(pbDesc.Lineage) > 0 {
-		out.Lineage = make([]descriptor.LineageRef, 0, len(pbDesc.Lineage))
+		out.Lineage = make([]topology.LineageRef, 0, len(pbDesc.Lineage))
 		for _, ref := range pbDesc.Lineage {
 			if ref == nil {
 				continue
 			}
-			lineage := descriptor.LineageRef{
+			lineage := topology.LineageRef{
 				RegionID: ref.RegionId,
 				Hash:     append([]byte(nil), ref.Hash...),
-				Kind:     descriptor.LineageKind(ref.Kind),
+				Kind:     topology.LineageKind(ref.Kind),
 			}
 			if ref.Epoch != nil {
 				lineage.Epoch.Version = ref.Epoch.Version

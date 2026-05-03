@@ -5,7 +5,7 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +23,7 @@ func TestBuildTransitionEntries(t *testing.T) {
 	require.True(t, ok)
 
 	entries := rootstate.BuildTransitionEntries(rootstate.Snapshot{
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			peerTarget.RegionID: peerTarget,
 			left.RegionID:       left,
 			right.RegionID:      right,

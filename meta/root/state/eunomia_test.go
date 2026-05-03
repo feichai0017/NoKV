@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	eunomia "github.com/feichai0017/NoKV/coordinator/protocol/eunomia"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 

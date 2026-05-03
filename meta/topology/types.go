@@ -1,9 +1,10 @@
-package descriptor
+package topology
 
 import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 )
 
@@ -18,7 +19,7 @@ const (
 )
 
 // LineageRef points at one predecessor descriptor used to derive the current
-// descriptor.
+// topology.
 type LineageRef struct {
 	RegionID uint64
 	Epoch    metaregion.Epoch
@@ -69,7 +70,7 @@ func (d *Descriptor) EnsureHash() {
 	d.Hash = sum.Sum(nil)
 }
 
-// Clone returns a detached copy of the descriptor.
+// Clone returns a detached copy of the topology.
 func (d Descriptor) Clone() Descriptor {
 	cp := d
 	if d.StartKey != nil {

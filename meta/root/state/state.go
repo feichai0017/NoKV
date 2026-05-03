@@ -17,7 +17,7 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 type Cursor = rootproto.Cursor
@@ -187,8 +187,8 @@ type PendingPeerChange struct {
 	Kind    PendingPeerChangeKind
 	StoreID uint64
 	PeerID  uint64
-	Base    descriptor.Descriptor
-	Target  descriptor.Descriptor
+	Base    topology.Descriptor
+	Target  topology.Descriptor
 }
 
 type PendingRangeChangeKind uint8
@@ -204,12 +204,12 @@ type PendingRangeChange struct {
 	ParentRegionID uint64
 	LeftRegionID   uint64
 	RightRegionID  uint64
-	BaseParent     descriptor.Descriptor
-	BaseLeft       descriptor.Descriptor
-	BaseRight      descriptor.Descriptor
-	Left           descriptor.Descriptor
-	Right          descriptor.Descriptor
-	Merged         descriptor.Descriptor
+	BaseParent     topology.Descriptor
+	BaseLeft       topology.Descriptor
+	BaseRight      topology.Descriptor
+	Left           topology.Descriptor
+	Right          topology.Descriptor
+	Merged         topology.Descriptor
 }
 
 // Snapshot is the compact materialized rooted metadata state used for bounded bootstrap and recovery.
@@ -220,7 +220,7 @@ type Snapshot struct {
 	Mounts              map[string]MountRecord
 	Subtrees            map[string]SubtreeAuthority
 	Quotas              map[string]QuotaFence
-	Descriptors         map[uint64]descriptor.Descriptor
+	Descriptors         map[uint64]topology.Descriptor
 	PendingPeerChanges  map[uint64]PendingPeerChange
 	PendingRangeChanges map[uint64]PendingRangeChange
 }
@@ -369,18 +369,18 @@ func CloneStoreMemberships(in map[uint64]StoreMembership) map[uint64]StoreMember
 	return out
 }
 
-func CloneDescriptors(in map[uint64]descriptor.Descriptor) map[uint64]descriptor.Descriptor {
+func CloneDescriptors(in map[uint64]topology.Descriptor) map[uint64]topology.Descriptor {
 	if len(in) == 0 {
-		return make(map[uint64]descriptor.Descriptor)
+		return make(map[uint64]topology.Descriptor)
 	}
-	out := make(map[uint64]descriptor.Descriptor, len(in))
+	out := make(map[uint64]topology.Descriptor, len(in))
 	for id, desc := range in {
 		out[id] = desc.Clone()
 	}
 	return out
 }
 
-func MaxDescriptorRevision(descriptors map[uint64]descriptor.Descriptor) uint64 {
+func MaxDescriptorRevision(descriptors map[uint64]topology.Descriptor) uint64 {
 	var maxEpoch uint64
 	for _, desc := range descriptors {
 		if desc.RootEpoch > maxEpoch {

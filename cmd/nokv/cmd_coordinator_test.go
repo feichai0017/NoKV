@@ -14,7 +14,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -250,8 +250,8 @@ func TestMainCoordinatorCommand(t *testing.T) {
 	require.Equal(t, 0, code)
 }
 
-func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) descriptor.Descriptor {
-	desc := descriptor.Descriptor{
+func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) topology.Descriptor {
+	desc := topology.Descriptor{
 		RegionID:  id,
 		StartKey:  append([]byte(nil), start...),
 		EndKey:    append([]byte(nil), end...),

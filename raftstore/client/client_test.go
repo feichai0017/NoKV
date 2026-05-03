@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
 )
 
 type clusterValue struct {
@@ -1677,7 +1677,7 @@ func statusInvalidArgument(msg string) error {
 }
 
 func TestContainsKeyAndCompare(t *testing.T) {
-	require.False(t, containsKey(descriptor.Descriptor{}, []byte("a")))
+	require.False(t, containsKey(topology.Descriptor{}, []byte("a")))
 
 	meta := &metapb.RegionDescriptor{
 		RegionId: 1,
@@ -1743,7 +1743,7 @@ func TestNormalizeRPCError(t *testing.T) {
 }
 
 func TestDefaultLeaderStoreID(t *testing.T) {
-	require.Equal(t, uint64(0), defaultLeaderStoreID(descriptor.Descriptor{}))
+	require.Equal(t, uint64(0), defaultLeaderStoreID(topology.Descriptor{}))
 	require.Equal(t, uint64(0), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{})))
 	require.Equal(t, uint64(9), defaultLeaderStoreID(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
 		RegionId: 1,

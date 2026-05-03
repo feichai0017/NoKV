@@ -1,4 +1,4 @@
-package exec
+package raftstore
 
 import (
 	"context"
@@ -6,10 +6,43 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeTxnRunner struct {
+	data map[string][]byte
+}
+
+func newFakeTxnRunner() *fakeTxnRunner {
+	return &fakeTxnRunner{data: make(map[string][]byte)}
+}
+
+func (r *fakeTxnRunner) ReserveTimestamp(context.Context, uint64) (uint64, error) {
+	return 1, nil
+}
+
+func (r *fakeTxnRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool, error) {
+	value, ok := r.data[string(key)]
+	if !ok {
+		return nil, false, nil
+	}
+	return append([]byte(nil), value...), true, nil
+}
+
+func (r *fakeTxnRunner) BatchGet(context.Context, [][]byte, uint64) (map[string][]byte, error) {
+	return nil, nil
+}
+
+func (r *fakeTxnRunner) Scan(context.Context, []byte, uint32, uint64) ([]fsmetaexec.KV, error) {
+	return nil, nil
+}
+
+func (r *fakeTxnRunner) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) error {
+	return nil
+}
 
 type fakeQuotaLookup struct {
 	fences map[quotaSubject]*coordpb.QuotaFenceInfo
@@ -27,14 +60,14 @@ func (f *fakeQuotaLookup) GetQuotaFence(_ context.Context, req *coordpb.GetQuota
 }
 
 func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
-	runner := newFakeRunner()
+	runner := newFakeTxnRunner()
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
 		{mount: "vol"}:           {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 8192, LimitInodes: 10, Era: 1},
 		{mount: "vol", scope: 7}: {Subject: &coordpb.QuotaSubject{MountId: "vol", SubtreeRoot: 7}, LimitBytes: 4096, LimitInodes: 2, Era: 1},
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	mutations, err := cache.ReserveQuota(context.Background(), runner, []QuotaChange{{Mount: "vol", Scope: 7, Bytes: 1024, Inodes: 1}}, 1)
+	mutations, err := cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", Scope: 7, Bytes: 1024, Inodes: 1}}, 1)
 	require.NoError(t, err)
 	require.Len(t, mutations, 2)
 
@@ -47,7 +80,7 @@ func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
 }
 
 func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
-	runner := newFakeRunner()
+	runner := newFakeTxnRunner()
 	key, err := fsmeta.EncodeUsageKey("vol", 0)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeUsageValue(fsmeta.UsageRecord{Bytes: 900, Inodes: 1})
@@ -58,12 +91,12 @@ func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	_, err = cache.ReserveQuota(context.Background(), runner, []QuotaChange{{Mount: "vol", Scope: 7, Bytes: 200, Inodes: 1}}, 1)
+	_, err = cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", Scope: 7, Bytes: 200, Inodes: 1}}, 1)
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 }
 
 func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
-	runner := newFakeRunner()
+	runner := newFakeTxnRunner()
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
 		{mount: "vol"}:           {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
 		{mount: "vol", scope: 7}: {Subject: &coordpb.QuotaSubject{MountId: "vol", SubtreeRoot: 7}, LimitBytes: 1000, LimitInodes: 10, Era: 1},
@@ -71,7 +104,7 @@ func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	mutations, err := cache.ReserveQuota(context.Background(), runner, []QuotaChange{
+	mutations, err := cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{
 		{Mount: "vol", Scope: 7, Bytes: -100, Inodes: -1},
 		{Mount: "vol", Scope: 8, Bytes: 100, Inodes: 1},
 	}, 1)

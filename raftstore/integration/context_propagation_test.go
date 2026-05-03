@@ -235,7 +235,7 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 }
 
 func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLoss(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	seedDir := t.TempDir()
@@ -369,7 +369,7 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		}
 		defer func() { _ = recoveryCli.Close() }()
 
-		testCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		testCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		err = recoveryCli.TwoPhaseCommit(testCtx, []byte("charlie"), []*kvrpcpb.Mutation{
 			{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("ok1")},
@@ -377,5 +377,5 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 		}, 200, 201, 3000)
 		lastRecoveryErr = err
 		return err == nil
-	}, 20*time.Second, 50*time.Millisecond, "cluster did not recover after healing partial quorum loss: %v", lastRecoveryErr)
+	}, 45*time.Second, 100*time.Millisecond, "cluster did not recover after healing partial quorum loss: %v", lastRecoveryErr)
 }

@@ -5,12 +5,12 @@ import (
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 func (s *Service) reloadRootedView(refresh bool) (rootview.Snapshot, error) {
 	if s == nil || s.storage == nil {
-		return rootview.Snapshot{Descriptors: make(map[uint64]descriptor.Descriptor)}, nil
+		return rootview.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, nil
 	}
 	if refresh {
 		if err := s.storage.Refresh(); err != nil {

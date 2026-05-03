@@ -6,7 +6,7 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +17,7 @@ func TestApplyRangeChangeToSnapshot(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{},
+		Descriptors: map[uint64]topology.Descriptor{},
 	}
 	snapshot.Descriptors[parent.RegionID] = parent
 
@@ -34,7 +34,7 @@ func TestApplyRangeChangeToSnapshot(t *testing.T) {
 	rightMerge := testDescriptor(49, []byte("m"), []byte("z"))
 	mergeSnapshot := rootstate.Snapshot{
 		State: rootstate.State{ClusterEpoch: 7},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			leftMerge.RegionID:  leftMerge,
 			rightMerge.RegionID: rightMerge,
 		},
@@ -177,7 +177,7 @@ func TestApplyRangeChangeCancelToSnapshot(t *testing.T) {
 
 	splitSnapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 10},
-		Descriptors: map[uint64]descriptor.Descriptor{parent.RegionID: parent},
+		Descriptors: map[uint64]topology.Descriptor{parent.RegionID: parent},
 	}
 	require.True(t, rootstate.ApplyRangeChangeToSnapshot(&splitSnapshot, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right)))
 	require.Equal(t, parent, splitSnapshot.PendingRangeChanges[parent.RegionID].BaseParent)
@@ -197,7 +197,7 @@ func TestApplyRangeChangeCancelToSnapshot(t *testing.T) {
 	merged.EnsureHash()
 	mergeSnapshot := rootstate.Snapshot{
 		State: rootstate.State{ClusterEpoch: 20},
-		Descriptors: map[uint64]descriptor.Descriptor{
+		Descriptors: map[uint64]topology.Descriptor{
 			baseLeft.RegionID:  baseLeft,
 			baseRight.RegionID: baseRight,
 		},
@@ -222,7 +222,7 @@ func TestApplyPeerChangeToSnapshot(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
+		Descriptors: map[uint64]topology.Descriptor{current.RegionID: current},
 	}
 
 	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
@@ -245,7 +245,7 @@ func TestApplyPeerChangeCancelToSnapshot(t *testing.T) {
 
 	snapshot := rootstate.Snapshot{
 		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]descriptor.Descriptor{current.RegionID: current},
+		Descriptors: map[uint64]topology.Descriptor{current.RegionID: current},
 	}
 	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionPlanned(target.RegionID, 2, 201, target)))
 	require.True(t, rootstate.ApplyPeerChangeToSnapshot(&snapshot, rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current)))

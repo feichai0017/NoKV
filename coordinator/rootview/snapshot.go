@@ -6,7 +6,7 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/raftstore/descriptor"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // AllocatorState captures persisted counters for ID and TSO allocators.
@@ -51,7 +51,7 @@ type Snapshot struct {
 	Mounts              map[string]rootstate.MountRecord
 	Subtrees            map[string]rootstate.SubtreeAuthority
 	Quotas              map[string]rootstate.QuotaFence
-	Descriptors         map[uint64]descriptor.Descriptor
+	Descriptors         map[uint64]topology.Descriptor
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 	Allocator           AllocatorState
@@ -169,7 +169,7 @@ func ResolveAllocatorStarts(idStart, tsStart uint64, state AllocatorState) (uint
 }
 
 // RestoreDescriptors replays a rooted descriptor catalog into one runtime cluster view.
-func RestoreDescriptors(apply func(descriptor.Descriptor) error, descriptors map[uint64]descriptor.Descriptor) (int, error) {
+func RestoreDescriptors(apply func(topology.Descriptor) error, descriptors map[uint64]topology.Descriptor) (int, error) {
 	if apply == nil || len(descriptors) == 0 {
 		return 0, nil
 	}
@@ -198,7 +198,7 @@ func RestoreDescriptors(apply func(descriptor.Descriptor) error, descriptors map
 
 // Bootstrap reconstructs one Coordinator runtime view from rooted durable metadata and
 // resolves allocator starts against persisted fences.
-func Bootstrap(store RootStorage, apply func(descriptor.Descriptor) error, idStart, tsStart uint64) (BootstrapInfo, error) {
+func Bootstrap(store RootStorage, apply func(topology.Descriptor) error, idStart, tsStart uint64) (BootstrapInfo, error) {
 	if store == nil {
 		return BootstrapInfo{IDStart: idStart, TSStart: tsStart}, nil
 	}
