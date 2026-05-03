@@ -7,8 +7,8 @@ import (
 	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftmode "github.com/feichai0017/NoKV/runtime/mode"
+	"github.com/feichai0017/NoKV/runtime/stats"
 )
 
 const (
@@ -159,7 +159,7 @@ type Options struct {
 	// RaftPointerSnapshot returns store-local raft WAL checkpoints used by WAL
 	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
 	// Nil disables raft-specific backlog accounting.
-	RaftPointerSnapshot func() map[uint64]localmeta.RaftLogPointer
+	RaftPointerSnapshot func() map[uint64]stats.RaftLogPointer
 
 	// NumCompactors controls how many background compaction workers are spawned.
 	// Zero uses an auto value derived from the host CPU count.

@@ -40,7 +40,7 @@ func TestExportDir(t *testing.T) {
 		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.sst.snapshot")
-	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	result, err := snapshot.NewDBStore(srcDB).ExportSnapshotDir(snapshotDir, region)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), result.Meta.EntryCount)
 	require.Equal(t, uint64(1), result.Meta.TableCount)
@@ -98,7 +98,7 @@ func TestExportDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
 		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.multi.snapshot")
-	result, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	result, err := snapshot.NewDBStore(srcDB).ExportSnapshotDir(snapshotDir, region)
 	require.NoError(t, err)
 	require.Greater(t, result.Meta.TableCount, uint64(1))
 	require.Len(t, result.Meta.Tables, int(result.Meta.TableCount))
@@ -128,7 +128,7 @@ func TestExportPayloadRoundTrip(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    localmeta.RegionStateRunning,
 	}
-	payload, err := srcDB.ExportSnapshot(region)
+	payload, err := snapshot.NewDBStore(srcDB).ExportSnapshot(region)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 
@@ -174,7 +174,7 @@ func TestExportPayloadToAndImportPayloadFromRoundTrip(t *testing.T) {
 	}
 
 	var payload bytes.Buffer
-	meta, err := srcDB.ExportSnapshotTo(&payload, region)
+	meta, err := snapshot.NewDBStore(srcDB).ExportSnapshotTo(&payload, region)
 	require.NoError(t, err)
 	require.Equal(t, region.ID, meta.Region.ID)
 
@@ -218,7 +218,7 @@ func TestImportPayloadRollback(t *testing.T) {
 		EndKey:   []byte("z"),
 		State:    localmeta.RegionStateRunning,
 	}
-	payload, err := srcDB.ExportSnapshot(region)
+	payload, err := snapshot.NewDBStore(srcDB).ExportSnapshot(region)
 	require.NoError(t, err)
 
 	dstLSM := openSnapshotLSM(t)
@@ -399,11 +399,11 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 	}
 	require.NoError(t, db.Close())
 
-	_, err := db.ExportSnapshot(region)
+	_, err := snapshot.NewDBStore(db).ExportSnapshot(region)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires open db")
 
-	_, err = db.ImportSnapshot([]byte("not-a-real-payload"))
+	_, err = snapshot.NewDBStore(db).ImportSnapshot([]byte("not-a-real-payload"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires open db")
 }
@@ -425,7 +425,7 @@ func TestImportDirRejectsIncompatibleTableFormat(t *testing.T) {
 		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.incompatible.snapshot")
-	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	_, err := snapshot.NewDBStore(srcDB).ExportSnapshotDir(snapshotDir, region)
 	require.NoError(t, err)
 
 	dstLSM := openSnapshotLSMWithTweak(t, func(opt *lsm.Options) {
@@ -455,7 +455,7 @@ func TestImportDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
 		State:    localmeta.RegionStateRunning,
 	}
 	snapshotDir := filepath.Join(t.TempDir(), "region.bloom.incompatible.snapshot")
-	_, err := srcDB.ExportSnapshotDir(snapshotDir, region)
+	_, err := snapshot.NewDBStore(srcDB).ExportSnapshotDir(snapshotDir, region)
 	require.NoError(t, err)
 
 	dstLSM := openSnapshotLSMWithTweak(t, func(opt *lsm.Options) {

@@ -14,7 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
@@ -60,9 +59,8 @@ func NewNode(cfg Config) (*Node, error) {
 	if cfg.Storage.MVCC == nil {
 		return nil, fmt.Errorf("raftstore/server: MVCC storage is required")
 	}
-	snapshotBridge, ok := cfg.Storage.MVCC.(snapshotpkg.SnapshotStore)
-	if !ok {
-		return nil, fmt.Errorf("raftstore/server: MVCC storage must provide snapshot bridge")
+	if cfg.Storage.Snapshot == nil {
+		return nil, fmt.Errorf("raftstore/server: snapshot storage is required")
 	}
 	if cfg.Store.StoreID == 0 {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
@@ -98,7 +96,7 @@ func NewNode(cfg Config) (*Node, error) {
 
 	st := store.NewStore(storeCfg)
 	kvService := kv.NewService(st)
-	adminService := admin.NewServiceWithSnapshot(st, snapshotBridge)
+	adminService := admin.NewServiceWithSnapshot(st, cfg.Storage.Snapshot)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		kvrpcpb.RegisterNoKVServer(reg, kvService)
 		adminpb.RegisterRaftAdminServer(reg, adminService)

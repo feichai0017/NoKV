@@ -11,6 +11,9 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	workdirmode "github.com/feichai0017/NoKV/runtime/mode"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -151,7 +154,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
-	opts.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opts.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{workdirmode.ModePreparing}
 	db, err := NoKV.Open(opts)
 	if err != nil {
@@ -168,7 +171,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return InitResult{}, fmt.Errorf("migrate: stat seed snapshot dir %s: %w", snapshotDir, err)
 	}
-	if _, err := db.ExportSnapshotDir(snapshotDir, region); err != nil {
+	if _, err := snapshotpkg.NewDBStore(db).ExportSnapshotDir(snapshotDir, region); err != nil {
 		return InitResult{}, fmt.Errorf("migrate: export seed snapshot: %w", err)
 	}
 	if err := writeCheckpoint(cfg.WorkDir, Checkpoint{
@@ -183,7 +186,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init seed snapshot")
 	}
 
-	storage, err := db.RaftLog().Open(cfg.RegionID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(cfg.RegionID, localMeta)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open raft storage: %w", err)
 	}

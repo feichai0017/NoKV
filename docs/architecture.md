@@ -182,7 +182,11 @@ If you want to inspect the distributed side first, start here:
 
 ```go
 srv, err := server.NewNode(server.Config{
-    Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
+    Storage: server.Storage{
+        MVCC:     db,
+        Raft:     raftlog.NewDBLog(db),
+        Snapshot: snapshot.NewDBStore(db),
+    },
     Store: store.Config{StoreID: 1},
     Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
     TransportAddr: "127.0.0.1:20160",

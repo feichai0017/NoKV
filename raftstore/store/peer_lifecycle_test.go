@@ -9,6 +9,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -16,7 +17,7 @@ import (
 func testSSTApply(t *testing.T, db *NoKV.DB) peer.SnapshotApplyFunc {
 	t.Helper()
 	return func(payload []byte) (localmeta.RegionMeta, error) {
-		result, err := db.ImportSnapshot(payload)
+		result, err := snapshotpkg.NewDBStore(db).ImportSnapshot(payload)
 		if err != nil {
 			return localmeta.RegionMeta{}, err
 		}
@@ -41,7 +42,7 @@ func TestStoreStepBootstrapsPeerFromSnapshotPayload(t *testing.T) {
 		},
 		State: metaregion.ReplicaStateRunning,
 	}
-	payload, err := sourceDB.ExportSnapshot(region)
+	payload, err := snapshotpkg.NewDBStore(sourceDB).ExportSnapshot(region)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)
@@ -118,7 +119,7 @@ func TestStoreInstallRegionSnapshotBootstrapsPeer(t *testing.T) {
 		},
 		State: metaregion.ReplicaStateRunning,
 	}
-	payload, err := sourceDB.ExportSnapshot(region)
+	payload, err := snapshotpkg.NewDBStore(sourceDB).ExportSnapshot(region)
 	require.NoError(t, err)
 
 	targetDB, targetMeta := openStoreDB(t)

@@ -19,17 +19,15 @@ import (
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
-	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/runtime/commit"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
-	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 func TestAPI(t *testing.T) {
@@ -964,81 +962,6 @@ func TestRecoveryManifestRewriteCrash(t *testing.T) {
 	})
 }
 
-func TestRecoverySnapshotExportRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	walDir := filepath.Join(dir, "wal")
-	manifestDir := filepath.Join(dir, "manifest")
-
-	walMgr, err := wal.Open(wal.Config{Dir: walDir})
-	require.NoError(t, err)
-	defer func() { _ = walMgr.Close() }()
-
-	localMeta, err := localmeta.OpenLocalStore(manifestDir, nil)
-	require.NoError(t, err)
-	defer func() { _ = localMeta.Close() }()
-
-	ws, err := raftlog.OpenWALStorage(raftlog.WALStorageConfig{
-		GroupID:   1,
-		WAL:       walMgr,
-		LocalMeta: localMeta,
-	})
-	require.NoError(t, err)
-
-	snapshot := myraft.Snapshot{
-		Metadata: raftpb.SnapshotMetadata{
-			Index:     7,
-			Term:      2,
-			ConfState: raftpb.ConfState{Voters: []uint64{1}},
-		},
-		Data: []byte("raft-recovery-snapshot"),
-	}
-	require.NoError(t, ws.ApplySnapshot(snapshot))
-
-	exportPath := filepath.Join(dir, "raft.snapshot")
-	require.NoError(t, raftlog.ExportSnapshot(ws, exportPath, nil))
-	logRecoveryMetric(t, "raft_snapshot_export", map[string]any{
-		"group_id":        1,
-		"snapshot_index":  snapshot.Metadata.Index,
-		"snapshot_term":   snapshot.Metadata.Term,
-		"export_path":     exportPath,
-		"manifest_dir":    manifestDir,
-		"wal_dir":         walDir,
-		"snapshot_length": len(snapshot.Data),
-	})
-
-	restoreWalDir := filepath.Join(dir, "restore", "wal")
-	restoreManifestDir := filepath.Join(dir, "restore", "manifest")
-	walMgrRestore, err := wal.Open(wal.Config{Dir: restoreWalDir})
-	require.NoError(t, err)
-	defer func() { _ = walMgrRestore.Close() }()
-
-	localMetaRestore, err := localmeta.OpenLocalStore(restoreManifestDir, nil)
-	require.NoError(t, err)
-	defer func() { _ = localMetaRestore.Close() }()
-
-	wsRestore, err := raftlog.OpenWALStorage(raftlog.WALStorageConfig{
-		GroupID:   1,
-		WAL:       walMgrRestore,
-		LocalMeta: localMetaRestore,
-	})
-	require.NoError(t, err)
-
-	require.NoError(t, raftlog.ImportSnapshot(wsRestore, exportPath, nil))
-
-	ptr, ok := localMetaRestore.RaftPointer(1)
-	require.True(t, ok)
-	require.Equal(t, snapshot.Metadata.Index, ptr.SnapshotIndex)
-	require.Equal(t, snapshot.Metadata.Term, ptr.SnapshotTerm)
-
-	logRecoveryMetric(t, "raft_snapshot_import", map[string]any{
-		"group_id":       1,
-		"snapshot_index": ptr.SnapshotIndex,
-		"snapshot_term":  ptr.SnapshotTerm,
-		"manifest_dir":   restoreManifestDir,
-		"wal_dir":        restoreWalDir,
-	})
-}
-
 func TestRecoveryWALReplayRestoresData(t *testing.T) {
 	dir := t.TempDir()
 	opt := &Options{
@@ -1083,7 +1006,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	localMeta, err := localmeta.OpenLocalStore(root, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()
@@ -2279,20 +2202,7 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 	_, err := nilDB.ImportExternalSST([]string{"x.sst"})
 	require.ErrorContains(t, err, "snapshot bridge requires open db")
 	require.ErrorContains(t, nilDB.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
-	_, err = nilDB.ExportSnapshotDir(t.TempDir(), localmeta.RegionMeta{})
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-	_, err = nilDB.ImportSnapshotDir(t.TempDir())
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-	_, err = nilDB.ExportSnapshot(localmeta.RegionMeta{})
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-	_, err = nilDB.ExportSnapshotTo(bytes.NewBuffer(nil), localmeta.RegionMeta{})
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-	_, err = nilDB.ImportSnapshot([]byte("payload"))
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-	_, err = nilDB.ImportSnapshotFrom(bytes.NewReader(nil))
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
 
-	require.Nil(t, nilDB.RaftLog())
 	require.ErrorContains(t, nilDB.SyncWAL(), "wal is unavailable")
 	require.ErrorContains(t, nilDB.ReplayWAL(nil), "wal is unavailable")
 
@@ -2304,7 +2214,6 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	require.NotNil(t, db.ExternalSSTOptions())
-	require.NotNil(t, db.RaftLog())
 
 	_, err = db.MaterializeInternalEntry(nil)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
@@ -2314,34 +2223,8 @@ func TestDBWrapperNilAndOpenGuards(t *testing.T) {
 	_, err = db.ImportExternalSST([]string{"x.sst"})
 	require.ErrorContains(t, err, "snapshot bridge requires open db")
 	require.ErrorContains(t, db.RollbackExternalSST([]uint64{1}), "snapshot bridge requires open db")
-	_, err = db.ExportSnapshot(localmeta.RegionMeta{})
-	require.ErrorContains(t, err, "snapshot bridge requires open db")
-}
-
-func TestRaftLogUsesShardedWAL(t *testing.T) {
-	dir := t.TempDir()
-	localMeta, err := localmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
-	require.NoError(t, err)
-	defer func() { _ = localMeta.Close() }()
-
-	opt := NewDefaultOptions()
-	opt.WorkDir = dir
-	opt.EnableWALWatchdog = false
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
-	db := openTestDB(t, opt)
-	defer func() { _ = db.Close() }()
-
-	storage, err := db.RaftLog().Open(9, localMeta)
-	require.NoError(t, err)
-	require.NoError(t, storage.Append([]myraft.Entry{{Index: 1, Term: 1, Data: []byte("raft")}}))
-
-	for _, mgr := range db.lsmWALs {
-		require.Equal(t, uint64(0), mgr.Metrics().RecordCounts.RaftEntries)
-	}
-	shard := raftWALShard(9)
-	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("raft-wal-%02d", shard), "*.wal"))
-	require.NoError(t, err)
-	require.NotEmpty(t, matches)
+	_, err = db.OpenRaftWAL(1)
+	require.ErrorContains(t, err, "closed db")
 }
 
 // opt is the shared test-fixture Options used by db_test.go fast-path tests.

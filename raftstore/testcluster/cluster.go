@@ -24,15 +24,17 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftkv "github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 )
 
 type Node struct {
@@ -87,7 +89,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	}
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}
@@ -97,7 +99,11 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 		tb.Fatalf("open node db: %v", err)
 	}
 	srv, err := serverpkg.NewNode(serverpkg.Config{
-		Storage: serverpkg.Storage{MVCC: db, Raft: db.RaftLog()},
+		Storage: serverpkg.Storage{
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
+		},
 		Store: storepkg.Config{
 			StoreID:           storeID,
 			LocalMeta:         localMeta,
@@ -231,7 +237,7 @@ func StartPeers(tb testing.TB, node *Node) {
 		if peerID == 0 {
 			continue
 		}
-		storage, err := node.DB.RaftLog().Open(meta.ID, node.LocalMeta)
+		storage, err := raftlog.NewDBLog(node.DB).Open(meta.ID, node.LocalMeta)
 		if err != nil {
 			tb.Fatalf("open peer storage: %v", err)
 		}
@@ -396,33 +402,13 @@ func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
 }
 
 func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage raftlog.PeerStorage) *peer.Config {
-	var snapshotExport peer.SnapshotExportFunc
-	if snapshotBridge, ok := any(node.DB).(snapshotpkg.SnapshotStore); ok {
-		snapshotExport = snapshotBridge.ExportSnapshot
-		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
-			result, err := snapshotBridge.ImportSnapshot(payload)
-			if err != nil {
-				return localmeta.RegionMeta{}, err
-			}
-			return result.Meta.Region, nil
+	snapshotStore := snapshotpkg.NewDBStore(node.DB)
+	snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
+		result, err := snapshotStore.ImportSnapshot(payload)
+		if err != nil {
+			return localmeta.RegionMeta{}, err
 		}
-		return &peer.Config{
-			RaftConfig: myraft.Config{
-				ID:              peerID,
-				ElectionTick:    5,
-				HeartbeatTick:   1,
-				MaxSizePerMsg:   1 << 20,
-				MaxInflightMsgs: 256,
-				PreVote:         true,
-			},
-			Transport:      node.Server.Transport(),
-			Apply:          raftkv.NewEntryApplier(node.DB),
-			SnapshotExport: snapshotExport,
-			SnapshotApply:  snapshotApply,
-			Storage:        storage,
-			GroupID:        meta.ID,
-			Region:         localmeta.CloneRegionMetaPtr(&meta),
-		}
+		return result.Meta.Region, nil
 	}
 	return &peer.Config{
 		RaftConfig: myraft.Config{
@@ -433,11 +419,13 @@ func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage ra
 			MaxInflightMsgs: 256,
 			PreVote:         true,
 		},
-		Transport: node.Server.Transport(),
-		Apply:     raftkv.NewEntryApplier(node.DB),
-		Storage:   storage,
-		GroupID:   meta.ID,
-		Region:    localmeta.CloneRegionMetaPtr(&meta),
+		Transport:      node.Server.Transport(),
+		Apply:          raftkv.NewEntryApplier(node.DB),
+		SnapshotExport: snapshotStore.ExportSnapshot,
+		SnapshotApply:  snapshotApply,
+		Storage:        storage,
+		GroupID:        meta.ID,
+		Region:         localmeta.CloneRegionMetaPtr(&meta),
 	}
 }
 

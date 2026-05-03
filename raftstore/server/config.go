@@ -3,11 +3,13 @@ package server
 import (
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 )
@@ -75,8 +77,13 @@ type MVCCMaintenanceConfig struct {
 
 // Storage captures the engine capabilities raftstore needs.
 type Storage struct {
-	MVCC txnstore.Store
-	Raft NoKV.RaftLog
+	MVCC     txnstore.Store
+	Raft     RaftLog
+	Snapshot snapshotpkg.SnapshotStore
+}
+
+type RaftLog interface {
+	Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 }
 
 const defaultRaftTickInterval = 100 * time.Millisecond

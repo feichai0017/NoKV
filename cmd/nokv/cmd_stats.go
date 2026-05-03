@@ -12,6 +12,7 @@ import (
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/feichai0017/NoKV/runtime/stats"
 )
@@ -248,7 +249,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 	defer func() { _ = metaStore.Close() }()
 	opts := NoKV.NewDefaultOptions()
 	opts.WorkDir = workDir
-	opts.RaftPointerSnapshot = metaStore.RaftPointerSnapshot
+	opts.RaftPointerSnapshot = raftstorestats.RaftLogPointers(metaStore.RaftPointerSnapshot)
 	opts.AllowedModes = []raftmode.Mode{
 		raftmode.ModeStandalone,
 		raftmode.ModePreparing,

@@ -20,9 +20,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/raftstore/raftlog"
-	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	dbruntime "github.com/feichai0017/NoKV/runtime"
 	"github.com/feichai0017/NoKV/runtime/commit"
 	iterpkg "github.com/feichai0017/NoKV/runtime/iterator"
@@ -55,11 +52,6 @@ type (
 	BatchSetItem struct {
 		Key   []byte
 		Value []byte
-	}
-
-	// RaftLog opens raft peer storage without exposing the underlying raft WAL shards.
-	RaftLog interface {
-		Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error)
 	}
 
 	mvccGCStatsSnapshotSource func() stats.MVCCGCStatsSnapshot
@@ -103,10 +95,6 @@ type (
 		runtimeModules  dbruntime.Registry
 	}
 )
-
-type dbRaftLog struct {
-	db *DB
-}
 
 func newDB(opt *Options) *DB {
 	cfg := opt
@@ -172,7 +160,7 @@ func (db *DB) lsmWALDir(shard int) string {
 	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("lsm-wal-%02d", shard))
 }
 
-func raftRetentionMark(ptrs map[uint64]localmeta.RaftLogPointer) wal.RetentionMark {
+func raftRetentionMark(ptrs map[uint64]stats.RaftLogPointer) wal.RetentionMark {
 	var first uint32
 	for _, ptr := range ptrs {
 		if ptr.Segment > 0 && (first == 0 || ptr.Segment < first) {
@@ -275,21 +263,12 @@ func (db *DB) runtimeLSMOptions() *lsm.Options {
 	return cfg
 }
 
-func (l dbRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStorage, error) {
-	walMgr, err := l.db.raftWALFor(groupID)
-	if err != nil {
-		return nil, err
-	}
-	return raftlog.OpenWALStorage(raftlog.WALStorageConfig{
-		GroupID:   groupID,
-		WAL:       walMgr,
-		LocalMeta: meta,
-	})
-}
-
 func (db *DB) raftWALFor(groupID uint64) (*wal.Manager, error) {
 	if db == nil || db.opt == nil {
 		return nil, fmt.Errorf("db raft wal: nil db")
+	}
+	if db.IsClosed() {
+		return nil, fmt.Errorf("db raft wal: closed db")
 	}
 	shard := raftWALShard(groupID)
 	db.raftWALMu.Lock()
@@ -331,6 +310,11 @@ func (db *DB) raftWALFor(groupID uint64) (*wal.Manager, error) {
 	return mgr, nil
 }
 
+// OpenRaftWAL returns the sharded WAL manager used by raftstore adapters.
+func (db *DB) OpenRaftWAL(groupID uint64) (*wal.Manager, error) {
+	return db.raftWALFor(groupID)
+}
+
 func (db *DB) raftWALDir(shard int) string {
 	return filepath.Join(db.opt.WorkDir, fmt.Sprintf("raft-wal-%02d", shard))
 }
@@ -340,22 +324,14 @@ func raftWALShard(groupID uint64) int {
 	return int((groupID * mix) & (defaultRaftWALShards - 1))
 }
 
-func raftRetentionMarkForShard(ptrs map[uint64]localmeta.RaftLogPointer, shard int) wal.RetentionMark {
-	filtered := make(map[uint64]localmeta.RaftLogPointer)
+func raftRetentionMarkForShard(ptrs map[uint64]stats.RaftLogPointer, shard int) wal.RetentionMark {
+	filtered := make(map[uint64]stats.RaftLogPointer)
 	for groupID, ptr := range ptrs {
 		if raftWALShard(groupID) == shard {
 			filtered[groupID] = ptr
 		}
 	}
 	return raftRetentionMark(filtered)
-}
-
-// RaftLog returns the raft peer-storage capability backed by sharded raft WALs.
-func (db *DB) RaftLog() RaftLog {
-	if db == nil || len(db.lsmWALs) == 0 {
-		return nil
-	}
-	return dbRaftLog{db: db}
 }
 
 // RaftMode returns the persisted lifecycle mode observed when the DB was opened.
@@ -897,24 +873,7 @@ func (db *DB) RaftPointerSnapshot() func() map[uint64]stats.RaftLogPointer {
 	if db == nil || db.opt == nil {
 		return nil
 	}
-	source := db.opt.RaftPointerSnapshot
-	if source == nil {
-		return nil
-	}
-	return func() map[uint64]stats.RaftLogPointer {
-		ptrs := source()
-		if ptrs == nil {
-			return nil
-		}
-		out := make(map[uint64]stats.RaftLogPointer, len(ptrs))
-		for groupID, ptr := range ptrs {
-			out[groupID] = stats.RaftLogPointer{
-				Segment:      ptr.Segment,
-				SegmentIndex: ptr.SegmentIndex,
-			}
-		}
-		return out
-	}
+	return db.opt.RaftPointerSnapshot
 }
 
 func (db *DB) SetTransportMetricsSource(source func() metrics.GRPCTransportMetrics) {
@@ -1100,45 +1059,9 @@ func (db *DB) RollbackExternalSST(fileIDs []uint64) error {
 	return lsmCore.RollbackExternalSST(fileIDs)
 }
 
-func (db *DB) ExportSnapshotDir(dir string, region localmeta.RegionMeta) (*snapshotpkg.ExportResult, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return nil, err
+func (db *DB) WorkDir() string {
+	if db == nil || db.opt == nil {
+		return ""
 	}
-	return snapshotpkg.ExportDir(db, dir, region, nil)
-}
-
-func (db *DB) ImportSnapshotDir(dir string) (*snapshotpkg.ImportResult, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return nil, err
-	}
-	return snapshotpkg.ImportDir(db, dir, nil)
-}
-
-func (db *DB) ExportSnapshot(region localmeta.RegionMeta) ([]byte, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return nil, err
-	}
-	payload, _, err := snapshotpkg.ExportPayload(db, db.opt.WorkDir, region, nil)
-	return payload, err
-}
-
-func (db *DB) ExportSnapshotTo(w io.Writer, region localmeta.RegionMeta) (snapshotpkg.Meta, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return snapshotpkg.Meta{}, err
-	}
-	return snapshotpkg.ExportPayloadTo(w, db, db.opt.WorkDir, region, nil)
-}
-
-func (db *DB) ImportSnapshot(payload []byte) (*snapshotpkg.ImportResult, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return nil, err
-	}
-	return snapshotpkg.ImportPayload(db, db.opt.WorkDir, payload, nil)
-}
-
-func (db *DB) ImportSnapshotFrom(r io.Reader) (*snapshotpkg.ImportResult, error) {
-	if _, err := db.requireOpenLSM(); err != nil {
-		return nil, err
-	}
-	return snapshotpkg.ImportPayloadFrom(db, db.opt.WorkDir, r, nil)
+	return db.opt.WorkDir
 }

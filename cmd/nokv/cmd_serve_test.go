@@ -18,7 +18,9 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 	"github.com/stretchr/testify/require"
@@ -30,8 +32,9 @@ func testStorage(db *NoKV.DB) serverpkg.Storage {
 		return serverpkg.Storage{}
 	}
 	return serverpkg.Storage{
-		MVCC: db,
-		Raft: db.RaftLog(),
+		MVCC:     db,
+		Raft:     raftlog.NewDBLog(db),
+		Snapshot: snapshotpkg.NewDBStore(db),
 	}
 }
 
@@ -430,8 +433,9 @@ func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta 
 	t.Helper()
 	server, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID:   storeID,

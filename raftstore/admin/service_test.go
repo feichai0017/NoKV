@@ -18,8 +18,10 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -93,7 +95,7 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options
 	require.NoError(t, err)
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 	if tweak != nil {
 		tweak(opt)
 	}
@@ -104,13 +106,13 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options
 
 func testSSTExport(db *NoKV.DB) peer.SnapshotExportFunc {
 	return func(region localmeta.RegionMeta) ([]byte, error) {
-		return db.ExportSnapshot(region)
+		return snapshotpkg.NewDBStore(db).ExportSnapshot(region)
 	}
 }
 
 func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
 	return func(payload []byte) (localmeta.RegionMeta, error) {
-		result, err := db.ImportSnapshot(payload)
+		result, err := snapshotpkg.NewDBStore(db).ImportSnapshot(payload)
 		if err != nil {
 			return localmeta.RegionMeta{}, err
 		}
@@ -143,7 +145,7 @@ func TestServiceAddPeerPublishesPlannedTarget(t *testing.T) {
 		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 		State:    metaregion.ReplicaStateRunning,
 	}
-	storage, err := db.RaftLog().Open(region.ID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(region.ID, localMeta)
 	require.NoError(t, err)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -207,7 +209,7 @@ func TestServiceExecutionStatusReportsProtocolState(t *testing.T) {
 		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}},
 		State:    metaregion.ReplicaStateRunning,
 	}
-	storage, err := db.RaftLog().Open(region.ID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(region.ID, localMeta)
 	require.NoError(t, err)
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -415,7 +417,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
-	sourceStorage, err := sourceDB.RaftLog().Open(region.ID, sourceMeta)
+	sourceStorage, err := raftlog.NewDBLog(sourceDB).Open(region.ID, sourceMeta)
 	require.NoError(t, err)
 	require.NoError(t, sourceStorage.ApplySnapshot(myraft.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -489,7 +491,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 		StoreID:   2,
 		LocalMeta: targetMeta,
 		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
-			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
+			storage, err := raftlog.NewDBLog(targetDB).Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
 				RaftConfig: myraft.Config{
@@ -511,8 +513,8 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
-	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
+	sourceSvc := NewServiceWithSnapshot(sourceStore, snapshotpkg.NewDBStore(sourceDB))
+	targetSvc := NewServiceWithSnapshot(targetStore, snapshotpkg.NewDBStore(targetDB))
 
 	exported, err := sourceSvc.ExportRegionSnapshot(context.Background(), &adminpb.ExportRegionSnapshotRequest{
 		RegionId: region.ID,
@@ -680,7 +682,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
-	sourceStorage, err := sourceDB.RaftLog().Open(region.ID, sourceMeta)
+	sourceStorage, err := raftlog.NewDBLog(sourceDB).Open(region.ID, sourceMeta)
 	require.NoError(t, err)
 	require.NoError(t, sourceStorage.ApplySnapshot(myraft.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -754,7 +756,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 		StoreID:   2,
 		LocalMeta: targetMeta,
 		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
-			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
+			storage, err := raftlog.NewDBLog(targetDB).Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
 				RaftConfig: myraft.Config{
@@ -776,8 +778,8 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
-	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
+	sourceSvc := NewServiceWithSnapshot(sourceStore, snapshotpkg.NewDBStore(sourceDB))
+	targetSvc := NewServiceWithSnapshot(targetStore, snapshotpkg.NewDBStore(targetDB))
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
 	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{
@@ -838,7 +840,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	}
 	require.NoError(t, sourceMeta.SaveRegion(region))
 
-	sourceStorage, err := sourceDB.RaftLog().Open(region.ID, sourceMeta)
+	sourceStorage, err := raftlog.NewDBLog(sourceDB).Open(region.ID, sourceMeta)
 	require.NoError(t, err)
 	require.NoError(t, sourceStorage.ApplySnapshot(myraft.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -912,7 +914,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 		StoreID:   2,
 		LocalMeta: targetMeta,
 		PeerBuilder: func(meta localmeta.RegionMeta) (*peer.Config, error) {
-			storage, err := targetDB.RaftLog().Open(meta.ID, targetMeta)
+			storage, err := raftlog.NewDBLog(targetDB).Open(meta.ID, targetMeta)
 			require.NoError(t, err)
 			return &peer.Config{
 				RaftConfig: myraft.Config{
@@ -934,8 +936,8 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	})
 	defer targetStore.Close()
 
-	sourceSvc := NewServiceWithSnapshot(sourceStore, sourceDB)
-	targetSvc := NewServiceWithSnapshot(targetStore, targetDB)
+	sourceSvc := NewServiceWithSnapshot(sourceStore, snapshotpkg.NewDBStore(sourceDB))
+	targetSvc := NewServiceWithSnapshot(targetStore, snapshotpkg.NewDBStore(targetDB))
 
 	exportStream := &exportRegionSnapshotStreamCapture{ctx: context.Background()}
 	require.NoError(t, sourceSvc.ExportRegionSnapshotStream(&adminpb.ExportRegionSnapshotStreamRequest{

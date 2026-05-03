@@ -51,6 +51,9 @@ var importRules = []ImportRule{
 		PackageExact:  true,
 		Forbidden: []string{
 			modulePath + "/fsmeta",
+			modulePath + "/raftstore/localmeta",
+			modulePath + "/raftstore/raftlog",
+			modulePath + "/raftstore/snapshot",
 			modulePath + "/raftstore/mvcc",
 			modulePath + "/raftstore/mode",
 		},

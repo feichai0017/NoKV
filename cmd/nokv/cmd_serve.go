@@ -25,7 +25,10 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	serverpkg "github.com/feichai0017/NoKV/raftstore/server"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	raftmode "github.com/feichai0017/NoKV/runtime/mode"
 )
@@ -196,7 +199,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = NoKV.MemTableEngineART
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 	opt.AllowedModes = []raftmode.Mode{
 		raftmode.ModeStandalone,
 		raftmode.ModeSeeded,
@@ -217,8 +220,9 @@ func runServeCmd(w io.Writer, args []string) error {
 
 	server, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{
-			MVCC: db,
-			Raft: db.RaftLog(),
+			MVCC:     db,
+			Raft:     raftlog.NewDBLog(db),
+			Snapshot: snapshotpkg.NewDBStore(db),
 		},
 		Store: storepkg.Config{
 			StoreID:    *storeID,
@@ -323,7 +327,11 @@ func runServeCmd(w io.Writer, args []string) error {
 		transport.SetPeer(peerID, addr)
 	}
 
-	startedRegions, totalRegions, err := startStorePeers(server, serverpkg.Storage{MVCC: db, Raft: db.RaftLog()}, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
+	startedRegions, totalRegions, err := startStorePeers(server, serverpkg.Storage{
+		MVCC:     db,
+		Raft:     raftlog.NewDBLog(db),
+		Snapshot: snapshotpkg.NewDBStore(db),
+	}, localMeta, *storeID, *electionTick, *heartbeatTick, *maxMsgBytes, *maxInflight)
 	if err != nil {
 		return err
 	}
@@ -452,7 +460,7 @@ func promoteClusterMode(workDir string, storeID uint64) error {
 }
 
 func startStorePeers(server *serverpkg.Node, storage serverpkg.Storage, localMeta *localmeta.Store, storeID uint64, electionTick, heartbeatTick, maxMsgBytes, maxInflight int) ([]localmeta.RegionMeta, int, error) {
-	if server == nil || storage.MVCC == nil || storage.Raft == nil || localMeta == nil {
+	if server == nil || storage.MVCC == nil || storage.Raft == nil || storage.Snapshot == nil || localMeta == nil {
 		return nil, 0, fmt.Errorf("raftstore: server, storage, or local metadata is nil")
 	}
 	snapshot := localMeta.Snapshot()
@@ -488,6 +496,13 @@ func startStorePeers(server *serverpkg.Node, storage serverpkg.Storage, localMet
 		if err != nil {
 			return nil, total, fmt.Errorf("raftstore: open peer storage for region %d: %w", meta.ID, err)
 		}
+		snapshotApply := func(payload []byte) (localmeta.RegionMeta, error) {
+			result, err := storage.Snapshot.ImportSnapshot(payload)
+			if err != nil {
+				return localmeta.RegionMeta{}, err
+			}
+			return result.Meta.Region, nil
+		}
 		cfg := &peer.Config{
 			RaftConfig: myraft.Config{
 				ID:              peerID,
@@ -497,11 +512,13 @@ func startStorePeers(server *serverpkg.Node, storage serverpkg.Storage, localMet
 				MaxInflightMsgs: maxInflight,
 				PreVote:         true,
 			},
-			Transport: transport,
-			Apply:     kv.NewEntryApplier(storage.MVCC),
-			Storage:   peerStorage,
-			GroupID:   meta.ID,
-			Region:    localmeta.CloneRegionMetaPtr(&meta),
+			Transport:      transport,
+			Apply:          kv.NewEntryApplier(storage.MVCC),
+			SnapshotExport: storage.Snapshot.ExportSnapshot,
+			SnapshotApply:  snapshotApply,
+			Storage:        peerStorage,
+			GroupID:        meta.ID,
+			Region:         localmeta.CloneRegionMetaPtr(&meta),
 		}
 		var bootstrapPeers []myraft.Peer
 		for _, p := range meta.Peers {

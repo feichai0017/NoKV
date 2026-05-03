@@ -58,7 +58,11 @@ flowchart TD
 1. **Construct Server**
    ```go
    srv, _ := server.NewNode(server.Config{
-       Storage: server.Storage{MVCC: db, Raft: db.RaftLog()},
+       Storage: server.Storage{
+           MVCC:     db,
+           Raft:     raftlog.NewDBLog(db),
+           Snapshot: snapshot.NewDBStore(db),
+       },
        Store: store.Config{StoreID: 1},
        Raft: myraft.Config{ElectionTick: 10, HeartbeatTick: 2, PreVote: true},
        TransportAddr: "127.0.0.1:20160",

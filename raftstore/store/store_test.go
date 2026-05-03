@@ -24,6 +24,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/stretchr/testify/require"
 )
 
@@ -779,7 +780,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.RaftPointerSnapshot = localMeta.RaftPointerSnapshot
+	opt.RaftPointerSnapshot = raftstorestats.RaftLogPointers(localMeta.RaftPointerSnapshot)
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -791,7 +792,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 
 func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
-	storage, err := db.RaftLog().Open(groupID, localMeta)
+	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)
 	return storage
 }

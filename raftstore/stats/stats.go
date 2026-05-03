@@ -1,6 +1,7 @@
 package stats
 
 import (
+	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	runtimestats "github.com/feichai0017/NoKV/runtime/stats"
 )
@@ -57,4 +58,25 @@ func addMaintenance(s *runtimestats.MVCCGCStatsSnapshot, maintenance storemvcc.M
 	s.AppliedDefaultDeletes = maintenance.LastApply.AppliedDefaultDeletes
 	s.OrphanDefaults = maintenance.LastOrphanDefaults.OrphanDefaults
 	s.AppliedOrphanDefaults = maintenance.LastOrphanDefaults.AppliedDefaultDeletes
+}
+
+// RaftLogPointers adapts store-local raft checkpoints to the root runtime stats view.
+func RaftLogPointers(source func() map[uint64]localmeta.RaftLogPointer) func() map[uint64]runtimestats.RaftLogPointer {
+	if source == nil {
+		return nil
+	}
+	return func() map[uint64]runtimestats.RaftLogPointer {
+		ptrs := source()
+		if ptrs == nil {
+			return nil
+		}
+		out := make(map[uint64]runtimestats.RaftLogPointer, len(ptrs))
+		for groupID, ptr := range ptrs {
+			out[groupID] = runtimestats.RaftLogPointer{
+				Segment:      ptr.Segment,
+				SegmentIndex: ptr.SegmentIndex,
+			}
+		}
+		return out
+	}
 }
