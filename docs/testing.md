@@ -10,6 +10,9 @@ This document inventories NoKV's automated coverage and provides guidance for ex
 # All unit + integration tests, matching CI's package-serial default
 make test
 
+# Package dependency boundary guards
+make test-architecture
+
 # Same full sweep with local module caches
 GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test -p 1 ./...
 
@@ -108,6 +111,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `cluster.sh`. |
 | Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, deterministic split-region simulation schedules, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
 | Benchmark | `benchmark/ycsb/ycsb_test.go`, `benchmark/ycsb/ycsb_runner.go` | YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting. | Automate multi-node deployments and add longer-running, multi-GB stability baselines. |
+| Architecture Boundaries | `architecture/dependencies_test.go` | CI guard for fsmeta executor neutrality, meta-root/coordinator separation, removed package paths, and the single raftstore-backed fsmeta runtime adapter. | Add new rules whenever a module boundary becomes a correctness contract. |
 
 ---
 
@@ -201,7 +205,7 @@ without manual timing assumptions or known flaky behaviour.
 | fsmeta snapshot retention | SnapshotSubtree publish/retire, read-version use, MVCC retention floor | active snapshot epochs retain required MVCC history until explicit retire | `fsmeta/exec/runner_test.go`, `fsmeta/server/service_test.go`, `fsmeta/integration/e2e_test.go`, `raftstore/mvcc/policy_test.go` | Covered |
 | fsmeta session lifecycle | writer crash / heartbeat expiry / directory rejection / cleaner errors | stale writer sessions are expired by server time; directories cannot take file writer leases | `fsmeta/exec/runner_test.go`, `fsmeta/exec/session_cleaner_test.go` | Covered |
 | fsmeta operation contract | mixed namespace mutations, snapshot reads, hardlinks, writer sessions, time advance, split-region raftstore routing, bounded concurrent histories | executor-visible results match the reference model; overlapped API calls admit a legal serial order; stale owner cleanup cannot delete a reused live session | `fsmeta/contract/*_test.go`, `fsmeta/integration/contract_test.go`, `fsmeta/integration/history_contract_test.go`, `fsmeta/exec/runner_test.go::TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession` | Covered |
-| fsmeta namespace chaos | gateway restart, mixed mutations, subtree rename handoff | namespace operations remain transactionally visible and rooted handoff state converges after restart | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/integration/raftstore_runner_test.go` | Covered |
+| fsmeta namespace chaos | gateway restart, mixed mutations, subtree rename handoff | namespace operations remain transactionally visible and rooted handoff state converges after restart | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/integration/raftstore_runtime_test.go` | Covered |
 | Percolator history model | generated Put/Delete/rollback transaction histories | reads match a timestamp-ordered serial history; committed and rolled-back records do not leave visible stale locks or hide older values | `percolator/txn_model_test.go`, `percolator/txn_test.go` | Covered |
 | Percolator crash matrix | primary committed with secondary unresolved, primary rollback with secondary unresolved, restart between commit/rollback retries | secondary resolution follows primary authority; repeated commit/rollback after restart is idempotent and does not change visibility | `percolator/crash_matrix_test.go` | Covered |
 | Raft Ready advance/send boundary | fail after Ready has been handled and raft node advanced but before outbound messages are sent | the peer can process later Ready batches and still serve linearizable reads after the failpoint is cleared | `raftstore/peer/peer_test.go::TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks` | Covered |

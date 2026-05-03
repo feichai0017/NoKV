@@ -1,7 +1,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage lint fmt clean docker-up docker-dev-up docker-down bench
+.PHONY: help build test test-short test-race test-coverage test-architecture lint fmt clean docker-up docker-dev-up docker-down bench
 .PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke
 .PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
@@ -24,6 +24,7 @@ help:
 	@echo "  make test-short         - Run tests in short mode"
 	@echo "  make test-race          - Run tests with race detector"
 	@echo "  make test-coverage      - Run tests with coverage report"
+	@echo "  make test-architecture  - Run package dependency boundary guards"
 	@echo "  make test-contract-smoke - Run seeded fsmeta contract model smoke tests"
 	@echo "  make test-raftstore-contract-smoke - Run seeded fsmeta contract tests on real raftstore"
 	@echo "  make test-history-smoke - Run bounded concurrent fsmeta history checks"
@@ -82,6 +83,10 @@ test-coverage:
 	@echo "✓ Coverage report generated: coverage.out"
 	@echo "  View with: go tool cover -html=coverage.out"
 
+test-architecture:
+	@echo "Running architecture dependency checks..."
+	go test ./architecture -count=1 -v
+
 # Run seeded contract tests against the fsmeta executor model.
 test-contract-smoke:
 	@echo "Running fsmeta contract smoke tests..."
@@ -90,14 +95,14 @@ test-contract-smoke:
 # Run seeded contract scripts against the real raftstore-backed fsmeta runner.
 test-raftstore-contract-smoke:
 	@echo "Running raftstore-backed fsmeta contract smoke tests..."
-	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-2} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-40} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaContractOnSplitCluster -count=1 -v
+	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-2} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-40} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaContractOnSplitCluster -count=1 -v
 
 # Run bounded concurrent fsmeta histories through the model runner and the real
 # split-region raftstore path.
 test-history-smoke:
 	@echo "Running concurrent fsmeta history smoke tests..."
 	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-8} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-48} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
-	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-1} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-24} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
+	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-1} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-24} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
 
 # Run bounded generated model/fault schedules across transaction, data-plane,
 # and rooted control-plane surfaces.
@@ -130,9 +135,9 @@ test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke test-h
 test-correctness-nightly:
 	@echo "Running nightly correctness matrix..."
 	NOKV_CONTRACT_SEEDS=$${NOKV_CONTRACT_SEEDS:-256} NOKV_CONTRACT_STEPS=$${NOKV_CONTRACT_STEPS:-500} go test ./fsmeta/contract -run TestFSMetaExecutorModelContract -count=1 -v
-	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-8} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-120} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaContractOnSplitCluster -count=1 -v
+	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-8} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-120} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaContractOnSplitCluster -count=1 -v
 	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-64} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-240} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
-	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-4} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-80} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRunnerFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
+	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-4} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-80} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
 	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-64} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-256} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
 	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-4} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-18} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
 	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-16} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-128} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
