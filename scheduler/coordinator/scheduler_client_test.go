@@ -1,22 +1,22 @@
-package adapter
+package coordinator
 
 import (
 	"context"
 	"errors"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	metawire "github.com/feichai0017/NoKV/meta/wire"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/meta/topology"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
-	"google.golang.org/grpc"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"github.com/feichai0017/NoKV/scheduler"
 )
 
-type fakePDClient struct {
+type fakeCoordinatorClient struct {
 	storeReqs    []*coordpb.StoreHeartbeatRequest
 	livenessReqs []*coordpb.RegionLivenessRequest
 	rootEventReq []*coordpb.PublishRootEventRequest
@@ -29,7 +29,7 @@ type fakePDClient struct {
 	closed       bool
 }
 
-func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+func (f *fakeCoordinatorClient) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
 	f.storeReqs = append(f.storeReqs, req)
 	if f.storeErr != nil {
 		return nil, f.storeErr
@@ -40,7 +40,7 @@ func (f *fakePDClient) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeart
 	return &coordpb.StoreHeartbeatResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
+func (f *fakeCoordinatorClient) RegionLiveness(_ context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
 	f.livenessReqs = append(f.livenessReqs, req)
 	if f.livenessErr != nil {
 		return nil, f.livenessErr
@@ -48,7 +48,7 @@ func (f *fakePDClient) RegionLiveness(_ context.Context, req *coordpb.RegionLive
 	return &coordpb.RegionLivenessResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+func (f *fakeCoordinatorClient) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
 	f.rootEventReq = append(f.rootEventReq, req)
 	if f.rootErr != nil {
 		return nil, f.rootErr
@@ -56,15 +56,15 @@ func (f *fakePDClient) PublishRootEvent(_ context.Context, req *coordpb.PublishR
 	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
-func (f *fakePDClient) ListTransitions(context.Context, *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
+func (f *fakeCoordinatorClient) ListTransitions(context.Context, *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
 	return &coordpb.ListTransitionsResponse{}, nil
 }
 
-func (f *fakePDClient) AssessRootEvent(context.Context, *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
+func (f *fakeCoordinatorClient) AssessRootEvent(context.Context, *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
 	return &coordpb.AssessRootEventResponse{}, nil
 }
 
-func (f *fakePDClient) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
+func (f *fakeCoordinatorClient) RemoveRegion(_ context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
 	f.removeReqs = append(f.removeReqs, req)
 	if f.removeErr != nil {
 		return nil, f.removeErr
@@ -72,58 +72,58 @@ func (f *fakePDClient) RemoveRegion(_ context.Context, req *coordpb.RemoveRegion
 	return &coordpb.RemoveRegionResponse{Removed: true}, nil
 }
 
-func (f *fakePDClient) GetRegionByKey(context.Context, *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+func (f *fakeCoordinatorClient) GetRegionByKey(context.Context, *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	return &coordpb.GetRegionByKeyResponse{}, nil
 }
 
-func (f *fakePDClient) GetStore(context.Context, *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+func (f *fakeCoordinatorClient) GetStore(context.Context, *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
 	return &coordpb.GetStoreResponse{}, nil
 }
 
-func (f *fakePDClient) ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
+func (f *fakeCoordinatorClient) ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
 	return &coordpb.ListStoresResponse{}, nil
 }
 
-func (f *fakePDClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+func (f *fakeCoordinatorClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
 	return &coordpb.GetMountResponse{}, nil
 }
 
-func (f *fakePDClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
+func (f *fakeCoordinatorClient) ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
 	return &coordpb.ListMountsResponse{}, nil
 }
 
-func (f *fakePDClient) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+func (f *fakeCoordinatorClient) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
 	return &coordpb.ListSubtreeAuthoritiesResponse{}, nil
 }
 
-func (f *fakePDClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
+func (f *fakeCoordinatorClient) GetQuotaFence(context.Context, *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
 	return &coordpb.GetQuotaFenceResponse{}, nil
 }
 
-func (f *fakePDClient) ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
+func (f *fakeCoordinatorClient) ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
 	return &coordpb.ListQuotaFencesResponse{}, nil
 }
 
-func (f *fakePDClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+func (f *fakeCoordinatorClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
 	return nil, nil
 }
 
-func (f *fakePDClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+func (f *fakeCoordinatorClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	return &coordpb.AllocIDResponse{}, nil
 }
 
-func (f *fakePDClient) Tso(context.Context, *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+func (f *fakeCoordinatorClient) Tso(context.Context, *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
 	return &coordpb.TsoResponse{}, nil
 }
 
-func (f *fakePDClient) Close() error {
+func (f *fakeCoordinatorClient) Close() error {
 	f.closed = true
 	return nil
 }
 
-func TestSchedulerClientPublishRootEvent(t *testing.T) {
-	pd := &fakePDClient{}
-	sink := NewSchedulerClient(SchedulerClientConfig{Coordinator: pd})
+func TestClientPublishRootEvent(t *testing.T) {
+	coord := &fakeCoordinatorClient{}
+	sink := NewClient(Config{Coordinator: coord})
 
 	event := rootevent.PeerAdded(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{
 		Version:     1,
@@ -131,9 +131,9 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 	}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}))
 	require.NoError(t, sink.PublishRootEvent(context.Background(), event))
 
-	require.Len(t, pd.rootEventReq, 1)
-	require.Equal(t, uint64(1), pd.rootEventReq[0].GetExpectedClusterEpoch())
-	got := metawire.RootEventFromProto(pd.rootEventReq[0].GetEvent())
+	require.Len(t, coord.rootEventReq, 1)
+	require.Equal(t, uint64(1), coord.rootEventReq[0].GetExpectedClusterEpoch())
+	got := metawire.RootEventFromProto(coord.rootEventReq[0].GetEvent())
 	require.Equal(t, rootevent.KindPeerAdded, got.Kind)
 	require.NotNil(t, got.PeerChange)
 	require.Equal(t, uint64(10), got.PeerChange.RegionID)
@@ -141,8 +141,17 @@ func TestSchedulerClientPublishRootEvent(t *testing.T) {
 	require.False(t, sink.Status().Degraded)
 }
 
-func TestSchedulerClientForwardsAndPlans(t *testing.T) {
-	pd := &fakePDClient{
+func TestClientInitialStatusIsHealthy(t *testing.T) {
+	sink := NewClient(Config{})
+
+	status := sink.Status()
+	require.Equal(t, scheduler.ModeHealthy, status.Mode)
+	require.False(t, status.Degraded)
+	require.Empty(t, status.LastError)
+}
+
+func TestClientForwardsAndPlans(t *testing.T) {
+	coord := &fakeCoordinatorClient{
 		storeResp: &coordpb.StoreHeartbeatResponse{
 			Accepted: true,
 			Operations: []*coordpb.SchedulerOperation{
@@ -155,8 +164,8 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 			},
 		},
 	}
-	sink := NewSchedulerClient(SchedulerClientConfig{
-		Coordinator: pd,
+	sink := NewClient(Config{
+		Coordinator: coord,
 	})
 
 	sink.ReportRegionHeartbeat(context.Background(), 10)
@@ -170,12 +179,12 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 		LeaderRegionIDs:   []uint64{10, 12},
 	})
 
-	require.Len(t, pd.livenessReqs, 1)
-	require.Equal(t, uint64(10), pd.livenessReqs[0].GetRegionId())
-	require.Len(t, pd.storeReqs, 1)
-	require.Equal(t, uint64(1), pd.storeReqs[0].GetStoreId())
-	require.Equal(t, uint64(7), pd.storeReqs[0].GetDroppedOperations())
-	require.Equal(t, []uint64{10, 12}, pd.storeReqs[0].GetLeaderRegionIds())
+	require.Len(t, coord.livenessReqs, 1)
+	require.Equal(t, uint64(10), coord.livenessReqs[0].GetRegionId())
+	require.Len(t, coord.storeReqs, 1)
+	require.Equal(t, uint64(1), coord.storeReqs[0].GetStoreId())
+	require.Equal(t, uint64(7), coord.storeReqs[0].GetDroppedOperations())
+	require.Equal(t, []uint64{10, 12}, coord.storeReqs[0].GetLeaderRegionIds())
 
 	require.Len(t, ops, 1)
 	require.Equal(t, scheduler.OperationLeaderTransfer, ops[0].Type)
@@ -185,16 +194,16 @@ func TestSchedulerClientForwardsAndPlans(t *testing.T) {
 	require.False(t, sink.Status().Degraded)
 }
 
-func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
+func TestClientErrorCallbackAndClose(t *testing.T) {
 	storeErr := errors.New("store heartbeat failed")
 	rootErr := errors.New("publish root event failed")
-	pd := &fakePDClient{
+	coord := &fakeCoordinatorClient{
 		storeErr: storeErr,
 		rootErr:  rootErr,
 	}
 	var got []string
-	sink := NewSchedulerClient(SchedulerClientConfig{
-		Coordinator: pd,
+	sink := NewClient(Config{
+		Coordinator: coord,
 		OnError: func(op string, err error) {
 			got = append(got, op+": "+err.Error())
 		},
@@ -211,25 +220,25 @@ func TestSchedulerClientErrorCallbackAndClose(t *testing.T) {
 	require.Contains(t, status.LastError, "PublishRootEvent")
 	require.False(t, status.LastErrorAt.IsZero())
 	require.NoError(t, sink.Close())
-	require.True(t, pd.closed)
+	require.True(t, coord.closed)
 }
 
-func TestSchedulerClientNoopOnZeroIDs(t *testing.T) {
-	pd := &fakePDClient{}
-	sink := NewSchedulerClient(SchedulerClientConfig{Coordinator: pd})
+func TestClientNoopOnZeroIDs(t *testing.T) {
+	coord := &fakeCoordinatorClient{}
+	sink := NewClient(Config{Coordinator: coord})
 	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 0})
 	sink.ReportRegionHeartbeat(context.Background(), 0)
 	require.NoError(t, sink.PublishRootEvent(context.Background(), rootevent.Event{}))
-	require.Empty(t, pd.storeReqs)
-	require.Empty(t, pd.livenessReqs)
-	require.Empty(t, pd.rootEventReq)
+	require.Empty(t, coord.storeReqs)
+	require.Empty(t, coord.livenessReqs)
+	require.Empty(t, coord.rootEventReq)
 }
 
-func TestSchedulerClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
-	pd := &fakePDClient{}
+func TestClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
+	coord := &fakeCoordinatorClient{}
 	var got []string
-	sink := NewSchedulerClient(SchedulerClientConfig{
-		Coordinator: pd,
+	sink := NewClient(Config{
+		Coordinator: coord,
 		OnError: func(op string, err error) {
 			got = append(got, op+": "+err.Error())
 		},
@@ -243,20 +252,20 @@ func TestSchedulerClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
 	right.EnsureHash()
 
 	require.Error(t, sink.PublishRootEvent(context.Background(), rootevent.RegionSplitCommitted(41, []byte("m"), left, right)))
-	require.Empty(t, pd.rootEventReq)
+	require.Empty(t, coord.rootEventReq)
 	require.Len(t, got, 1)
 	require.Contains(t, got[0], "conflicting root epochs")
 	require.True(t, sink.Status().Degraded)
 }
 
-func TestSchedulerClientStatusRecoversAfterSuccess(t *testing.T) {
-	pd := &fakePDClient{storeErr: errors.New("heartbeat failed")}
-	sink := NewSchedulerClient(SchedulerClientConfig{Coordinator: pd})
+func TestClientStatusRecoversAfterSuccess(t *testing.T) {
+	coord := &fakeCoordinatorClient{storeErr: errors.New("heartbeat failed")}
+	sink := NewClient(Config{Coordinator: coord})
 
 	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 7})
 	require.True(t, sink.Status().Degraded)
 
-	pd.storeErr = nil
+	coord.storeErr = nil
 	sink.StoreHeartbeat(context.Background(), scheduler.StoreStats{StoreID: 7})
 	status := sink.Status()
 	require.False(t, status.Degraded)

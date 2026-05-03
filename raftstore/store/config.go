@@ -1,12 +1,12 @@
 package store
 
 import (
-	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"time"
 
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
+	"github.com/feichai0017/NoKV/scheduler"
 )
 
 // PeerBuilder constructs peer configuration for the provided region metadata.

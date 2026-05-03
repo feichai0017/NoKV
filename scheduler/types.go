@@ -1,5 +1,5 @@
-// Package scheduler defines the neutral scheduling protocol shared by
-// raftstore stores and control-plane adapters.
+// Package scheduler defines the neutral scheduling protocol shared by store
+// runtimes and control-plane scheduler implementations.
 package scheduler
 
 import (

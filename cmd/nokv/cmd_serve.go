@@ -15,7 +15,6 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/config"
-	coordadapter "github.com/feichai0017/NoKV/coordinator/adapter"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -31,6 +30,7 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	schedulercoord "github.com/feichai0017/NoKV/scheduler/coordinator"
 )
 
 var notifyContext = signal.NotifyContext
@@ -213,7 +213,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	coordScheduler := coordadapter.NewSchedulerClient(coordadapter.SchedulerClientConfig{
+	coordScheduler := schedulercoord.NewClient(schedulercoord.Config{
 		Coordinator: coordCli,
 		Timeout:     *coordTimeout,
 	})

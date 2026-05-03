@@ -23,8 +23,8 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
-	"github.com/feichai0017/NoKV/raftstore/scheduler"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
+	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 )
 

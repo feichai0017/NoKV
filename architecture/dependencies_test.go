@@ -66,6 +66,10 @@ func TestCheckImportRulesCatchesForbiddenBoundaries(t *testing.T) {
 			ImportPath: modulePath + "/dbcore/stats",
 			Imports:    []string{modulePath + "/raftstore/stats"},
 		},
+		{
+			ImportPath: modulePath + "/coordinator/balancer",
+			Imports:    []string{modulePath + "/raftstore/store"},
+		},
 	}
 
 	violations := CheckImportRules(packages)
@@ -75,6 +79,7 @@ func TestCheckImportRulesCatchesForbiddenBoundaries(t *testing.T) {
 	assertViolation(t, violations, "embedded engine stays free of global error taxonomy", modulePath+"/engine/lsm", modulePath+"/errors")
 	assertViolation(t, violations, "dbcore stays free of global error taxonomy", modulePath+"/dbcore/commit", modulePath+"/errors")
 	assertViolation(t, violations, "dbcore stays free of distributed assembly", modulePath+"/dbcore/stats", modulePath+"/raftstore/stats")
+	assertViolation(t, violations, "coordinator stays free of raftstore execution packages", modulePath+"/coordinator/balancer", modulePath+"/raftstore/store")
 }
 
 func TestCheckImportRulesHonorsExactAndPrefixScopes(t *testing.T) {
@@ -90,6 +95,13 @@ func TestCheckImportRulesHonorsExactAndPrefixScopes(t *testing.T) {
 		{
 			ImportPath: modulePath + "/dbcore/errkind",
 			Imports:    []string{modulePath + "/errors"},
+		},
+		{
+			ImportPath: modulePath + "/scheduler/coordinator",
+			Imports: []string{
+				modulePath + "/coordinator/client",
+				modulePath + "/scheduler",
+			},
 		},
 	}
 
@@ -135,6 +147,8 @@ func TestCheckRemovedPathRules(t *testing.T) {
 	for _, path := range []string{
 		"runtime",
 		"raftstore/mode",
+		"raftstore/scheduler",
+		"coordinator/adapter",
 		"coordinator/protocol/eunomia",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, path), 0o755); err != nil {
@@ -151,6 +165,8 @@ func TestCheckRemovedPathRules(t *testing.T) {
 	violations := CheckRemovedPathRules(root)
 	assertViolation(t, violations, "db runtime package stays moved to dbcore", "runtime", "")
 	assertViolation(t, violations, "raftstore mode package stays moved to dbcore/mode", "raftstore/mode", "")
+	assertViolation(t, violations, "raftstore scheduler package stays moved to scheduler", "raftstore/scheduler", "")
+	assertViolation(t, violations, "coordinator adapter package stays moved to scheduler/coordinator", "coordinator/adapter", "")
 	assertViolation(t, violations, "coordinator eunomia package stays removed", "coordinator/protocol/eunomia", "")
 	assertViolation(t, violations, "raftstore migrate mode alias stays removed", "raftstore/migrate/mode.go", "")
 }

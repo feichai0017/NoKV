@@ -115,6 +115,13 @@ var importRules = []ImportRule{
 			modulePath + "/coordinator",
 		},
 	},
+	{
+		Name:          "coordinator stays free of raftstore execution packages",
+		PackagePrefix: modulePath + "/coordinator",
+		Forbidden: []string{
+			modulePath + "/raftstore",
+		},
+	},
 }
 
 var combinedImportRules = []CombinedImportRule{
@@ -133,6 +140,8 @@ var combinedImportRules = []CombinedImportRule{
 
 var removedPathRules = []RemovedPathRule{
 	{Name: "raftstore descriptor package stays removed", Path: "raftstore/descriptor"},
+	{Name: "raftstore scheduler package stays moved to scheduler", Path: "raftstore/scheduler"},
+	{Name: "coordinator adapter package stays moved to scheduler/coordinator", Path: "coordinator/adapter"},
 	{Name: "coordinator eunomia package stays removed", Path: "coordinator/protocol/eunomia"},
 	{Name: "db runtime package stays moved to dbcore", Path: "runtime"},
 	{Name: "raftstore mode package stays moved to dbcore/mode", Path: "raftstore/mode"},
