@@ -89,8 +89,9 @@ func (r *versionedRunner) ReserveTimestamp(_ context.Context, count uint64) (uin
 	defer r.mu.Unlock()
 	first := r.nextTS
 	r.nextTS += count
-	if first > r.latestObservedTS {
-		r.latestObservedTS = first
+	last := first + count - 1
+	if last > r.latestObservedTS {
+		r.latestObservedTS = last
 	}
 	return first, nil
 }
@@ -298,6 +299,7 @@ func TestVersionedRunnerRejectsStaleConcurrentMutation(t *testing.T) {
 		KeyErrors() []*kvrpcpb.KeyError
 	}
 	require.ErrorAs(t, err, &carrier)
+	require.NotEmpty(t, carrier.KeyErrors())
 	require.NotNil(t, carrier.KeyErrors()[0].GetCommitTsExpired())
 }
 
