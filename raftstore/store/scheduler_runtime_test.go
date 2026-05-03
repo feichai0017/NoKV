@@ -135,7 +135,8 @@ func TestStoreDropsDurableSchedulerOperationAfterAttemptLimit(t *testing.T) {
 	defer st.Close()
 
 	require.Eventually(t, func() bool {
-		return len(localMeta.PendingSchedulerOperations()) == 0
+		return len(localMeta.PendingSchedulerOperations()) == 0 &&
+			st.SchedulerStatus().DroppedOperations == 1
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(1), st.SchedulerStatus().DroppedOperations)
 }
