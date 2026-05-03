@@ -50,15 +50,28 @@ func envInt(name string, fallback int) int {
 }
 
 type versionedRunner struct {
-	mu     sync.Mutex
-	nextTS uint64
-	data   map[string][]versionedValue
+	mu               sync.Mutex
+	nextTS           uint64
+	latestObservedTS uint64
+	data             map[string][]versionedValue
 }
 
 type versionedValue struct {
 	version uint64
 	value   []byte
 	deleted bool
+}
+
+type versionedTxnError struct {
+	errors []*kvrpcpb.KeyError
+}
+
+func (e versionedTxnError) Error() string {
+	return "fsmeta/contract: transaction contention"
+}
+
+func (e versionedTxnError) KeyErrors() []*kvrpcpb.KeyError {
+	return e.errors
 }
 
 func newVersionedRunner() *versionedRunner {
@@ -76,6 +89,10 @@ func (r *versionedRunner) ReserveTimestamp(_ context.Context, count uint64) (uin
 	defer r.mu.Unlock()
 	first := r.nextTS
 	r.nextTS += count
+	last := first + count - 1
+	if last > r.latestObservedTS {
+		r.latestObservedTS = last
+	}
 	return first, nil
 }
 
@@ -129,7 +146,26 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The contract fake has no lock table, so it models Percolator's
+	// min-commit push by placing late commits after any timestamp that was
+	// allocated while the transaction was in flight.
+	effectiveCommitVersion := commitVersion
+	if r.latestObservedTS >= effectiveCommitVersion {
+		effectiveCommitVersion = r.latestObservedTS + 1
+		if r.nextTS <= effectiveCommitVersion {
+			r.nextTS = effectiveCommitVersion + 1
+		}
+	}
 	for _, mut := range mutations {
+		if latest, ok := r.latestVersionLocked(mut.GetKey()); ok && latest > startVersion {
+			return versionedTxnError{errors: []*kvrpcpb.KeyError{{
+				CommitTsExpired: &kvrpcpb.CommitTsExpired{
+					Key:         append([]byte(nil), mut.GetKey()...),
+					CommitTs:    commitVersion,
+					MinCommitTs: latest + 1,
+				},
+			}}}
+		}
 		if mut.GetAssertionNotExist() {
 			if _, ok := r.visibleLocked(mut.GetKey(), startVersion); ok {
 				return fsmeta.ErrExists
@@ -149,12 +185,12 @@ func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []
 		switch mut.GetOp() {
 		case kvrpcpb.Mutation_Put:
 			r.data[key] = append(r.data[key], versionedValue{
-				version: commitVersion,
+				version: effectiveCommitVersion,
 				value:   append([]byte(nil), mut.GetValue()...),
 			})
 		case kvrpcpb.Mutation_Delete:
 			r.data[key] = append(r.data[key], versionedValue{
-				version: commitVersion,
+				version: effectiveCommitVersion,
 				deleted: true,
 			})
 		default:
@@ -164,8 +200,122 @@ func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []
 	return nil
 }
 
+func TestVersionedRunnerDelaysPreallocatedCommitPastConcurrentRead(t *testing.T) {
+	ctx := context.Background()
+	runner := newVersionedRunner()
+
+	epsilonKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "epsilon")
+	require.NoError(t, err)
+	etaKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "eta")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey("vol", 10)
+	require.NoError(t, err)
+	epsilonValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: fsmeta.RootInode,
+		Name:   "epsilon",
+		Inode:  10,
+		Type:   fsmeta.InodeTypeFile,
+	})
+	require.NoError(t, err)
+	etaValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: fsmeta.RootInode,
+		Name:   "eta",
+		Inode:  10,
+		Type:   fsmeta.InodeTypeFile,
+	})
+	require.NoError(t, err)
+	inodeValueOneLink, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{
+		Inode:     10,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	require.NoError(t, err)
+	inodeValueTwoLinks, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{
+		Inode:     10,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 2,
+	})
+	require.NoError(t, err)
+
+	seedStart, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	require.NoError(t, runner.Mutate(ctx, epsilonKey, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: epsilonKey, Value: epsilonValue},
+		{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValueOneLink},
+	}, seedStart, seedStart+1, 0))
+
+	linkStart, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	readVersion, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, runner.Mutate(ctx, etaKey, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: etaKey, Value: etaValue, AssertionNotExist: true},
+		{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValueTwoLinks},
+	}, linkStart, linkStart+1, 0))
+
+	_, ok, err := runner.Get(ctx, etaKey, readVersion)
+	require.NoError(t, err)
+	require.False(t, ok)
+	values, err := runner.BatchGet(ctx, [][]byte{inodeKey}, readVersion)
+	require.NoError(t, err)
+	inode, err := fsmeta.DecodeInodeValue(values[string(inodeKey)])
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), inode.LinkCount)
+
+	afterVersion, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	_, ok, err = runner.Get(ctx, etaKey, afterVersion)
+	require.NoError(t, err)
+	require.True(t, ok)
+	values, err = runner.BatchGet(ctx, [][]byte{inodeKey}, afterVersion)
+	require.NoError(t, err)
+	inode, err = fsmeta.DecodeInodeValue(values[string(inodeKey)])
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), inode.LinkCount)
+}
+
+func TestVersionedRunnerRejectsStaleConcurrentMutation(t *testing.T) {
+	ctx := context.Background()
+	runner := newVersionedRunner()
+	key := []byte("owner-key")
+
+	firstStart, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	staleStart, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	require.NoError(t, runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   key,
+		Value: []byte("first"),
+	}}, firstStart, firstStart+1, 0))
+
+	err = runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   key,
+		Value: []byte("stale"),
+	}}, staleStart, staleStart+1, 0)
+	require.Error(t, err)
+	var carrier interface {
+		KeyErrors() []*kvrpcpb.KeyError
+	}
+	require.ErrorAs(t, err, &carrier)
+	require.NotEmpty(t, carrier.KeyErrors())
+	require.NotNil(t, carrier.KeyErrors()[0].GetCommitTsExpired())
+}
+
 func (r *versionedRunner) visibleLatestLocked(key []byte) ([]byte, bool) {
 	return r.visibleLocked(key, ^uint64(0))
+}
+
+func (r *versionedRunner) latestVersionLocked(key []byte) (uint64, bool) {
+	versions := r.data[string(key)]
+	var latest uint64
+	for _, candidate := range versions {
+		if candidate.version > latest {
+			latest = candidate.version
+		}
+	}
+	return latest, latest != 0
 }
 
 func (r *versionedRunner) visibleLocked(key []byte, version uint64) ([]byte, bool) {
