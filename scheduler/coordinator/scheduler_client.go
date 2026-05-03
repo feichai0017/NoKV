@@ -50,6 +50,9 @@ func NewClient(cfg Config) *Client {
 		coordinator: cfg.Coordinator,
 		timeout:     timeout,
 		onError:     onErr,
+		status: scheduler.Status{
+			Mode: scheduler.ModeHealthy,
+		},
 	}
 }
 

@@ -141,6 +141,15 @@ func TestClientPublishRootEvent(t *testing.T) {
 	require.False(t, sink.Status().Degraded)
 }
 
+func TestClientInitialStatusIsHealthy(t *testing.T) {
+	sink := NewClient(Config{})
+
+	status := sink.Status()
+	require.Equal(t, scheduler.ModeHealthy, status.Mode)
+	require.False(t, status.Degraded)
+	require.Empty(t, status.LastError)
+}
+
 func TestClientForwardsAndPlans(t *testing.T) {
 	coord := &fakeCoordinatorClient{
 		storeResp: &coordpb.StoreHeartbeatResponse{
