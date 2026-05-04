@@ -890,7 +890,7 @@ func (s *scriptedCoordinatorServer) AllocID(_ context.Context, _ *coordpb.AllocI
 		return nil, err
 	}
 	if len(s.allocResponses) == 0 {
-		return nil, nil
+		return nil, status.Error(codes.Internal, "scripted coordinator AllocID response queue is empty")
 	}
 	resp := s.allocResponses[0]
 	s.allocResponses = s.allocResponses[1:]
@@ -910,7 +910,7 @@ func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest
 		return nil, err
 	}
 	if len(s.tsoResponses) == 0 {
-		return nil, nil
+		return nil, status.Error(codes.Internal, "scripted coordinator Tso response queue is empty")
 	}
 	resp := s.tsoResponses[0]
 	s.tsoResponses = s.tsoResponses[1:]

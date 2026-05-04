@@ -83,6 +83,22 @@ func TestTranslateTenureErrorsAsLeaseNotHeld(t *testing.T) {
 	}
 }
 
+func TestTranslateTenureContextErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{name: "canceled", err: translateTenureError(context.Canceled), code: codes.Canceled},
+		{name: "deadline", err: translateTenureError(context.DeadlineExceeded), code: codes.DeadlineExceeded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.code, status.Code(tc.err))
+		})
+	}
+}
+
 func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
 		Tenure:   f.snapshot.Tenure,

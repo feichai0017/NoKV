@@ -347,6 +347,7 @@ func WaitForLeaderPeer(tb testing.TB, ctx context.Context, addr string, regionID
 			continue
 		}
 		lastStatus = status
+		lastErr = nil
 		if status.GetKnown() && status.GetLeader() && status.GetLeaderPeerId() == peerID {
 			return
 		}
@@ -368,6 +369,7 @@ func WaitForHostedPeer(tb testing.TB, ctx context.Context, addr string, regionID
 			continue
 		}
 		lastStatus = status
+		lastErr = nil
 		if status.GetKnown() && status.GetHosted() && status.GetLocalPeerId() == peerID && status.GetAppliedIndex() > 0 {
 			return
 		}
@@ -389,6 +391,7 @@ func WaitForNotHosted(tb testing.TB, ctx context.Context, addr string, regionID 
 			continue
 		}
 		lastStatus = status
+		lastErr = nil
 		if !status.GetHosted() {
 			return
 		}

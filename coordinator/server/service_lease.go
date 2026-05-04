@@ -258,14 +258,14 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
-	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
+	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
+	nowUnixNano, _, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
@@ -273,7 +273,7 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	s.allocMu.Lock()
 	inheritedFrontiers := eunomia.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
-	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
@@ -412,6 +412,12 @@ func (s *Service) leaseCampaignBounds() (nowUnixNano, expiresUnixNano int64, hol
 func translateTenureError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, err.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, err.Error())
 	}
 	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) {
 		return statusTenure(err)
