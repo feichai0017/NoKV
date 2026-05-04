@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/feichai0017/NoKV/dbcore/commit"
 	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/lsm"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
+func applyVersionedEntryForApplyTest(t *testing.T, db *local.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
 	t.Helper()
 	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, expiresAt)
 	defer entry.DecrRef()
@@ -28,9 +28,9 @@ func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.Colum
 }
 
 func TestNewEntryApplierAppliesEntries(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -53,9 +53,9 @@ func TestNewEntryApplierAppliesEntries(t *testing.T) {
 }
 
 func TestNewEntryApplierRejectsLegacyPayload(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -99,9 +99,9 @@ func TestLockedErrorMapping(t *testing.T) {
 }
 
 func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -141,10 +141,10 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 }
 
 func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.LSMShardCount = 1
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -183,10 +183,10 @@ func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {
 func TestApplyTryAtomicMutateCommandFallsBackForCrossShardBatch(t *testing.T) {
 	const shardCount = 4
 
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.LSMShardCount = shardCount
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -230,7 +230,7 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 	keysByShard := make([][]byte, shardCount)
 	for i := range 10000 {
 		key := fmt.Appendf(nil, "apply-atomic-%d", i)
-		shardID := commit.ShardForInternalKey(entrykv.InternalKey(entrykv.CFDefault, key, version), shardCount)
+		shardID := lsm.ShardForInternalKey(entrykv.InternalKey(entrykv.CFDefault, key, version), shardCount)
 		if shardID >= 0 && shardID < shardCount && keysByShard[shardID] == nil {
 			keysByShard[shardID] = key
 		}
@@ -247,9 +247,9 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -314,9 +314,9 @@ func (s *failingMaintenanceStore) NewInternalIterator(*index.Options) index.Iter
 }
 
 func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -347,9 +347,9 @@ func TestHandleScanShortValueCarriesExpiresAt(t *testing.T) {
 }
 
 func TestHandleScanCommittedLockDoesNotHideVisiblePut(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -379,9 +379,9 @@ func TestHandleScanCommittedLockDoesNotHideVisiblePut(t *testing.T) {
 }
 
 func TestHandleScanCommittedLockDoesNotCreateVisibleKey(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -404,9 +404,9 @@ func TestHandleScanCommittedLockDoesNotCreateVisibleKey(t *testing.T) {
 }
 
 func TestHandleScanRollbackMarkerDoesNotHideVisiblePut(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -436,9 +436,9 @@ func TestHandleScanRollbackMarkerDoesNotHideVisiblePut(t *testing.T) {
 }
 
 func TestHandleScanSkipsExpiredShortValue(t *testing.T) {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

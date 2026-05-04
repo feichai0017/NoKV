@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
@@ -14,30 +14,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func openMVCCGCPlanTestDB(t *testing.T) *NoKV.DB {
+func openMVCCGCPlanTestDB(t *testing.T) *local.DB {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-func applyVersionedEntryForApplyTest(t *testing.T, db *NoKV.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
+func applyVersionedEntryForApplyTest(t *testing.T, db *local.DB, cf entrykv.ColumnFamily, key []byte, version uint64, value []byte, meta byte, expiresAt uint64) {
 	t.Helper()
 	entry := entrykv.NewInternalEntry(cf, key, version, entrykv.SafeCopy(nil, value), meta, expiresAt)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
-func applyMVCCGCWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
+func applyMVCCGCWrite(t *testing.T, db *local.DB, key []byte, commitTs, startTs uint64) {
 	t.Helper()
 	write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFWrite, key, commitTs, write, 0, 0)
 }
 
-func applyMVCCGCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64, value string) {
+func applyMVCCGCPutVersion(t *testing.T, db *local.DB, key []byte, commitTs, startTs uint64, value string) {
 	t.Helper()
 	applyVersionedEntryForApplyTest(t, db, entrykv.CFDefault, key, startTs, []byte(value), 0, 0)
 	applyMVCCGCWrite(t, db, key, commitTs, startTs)
@@ -361,7 +361,7 @@ func TestApplyMVCCGCStopsAtMaxKeys(t *testing.T) {
 }
 
 type testMaintenanceProposer struct {
-	db      *NoKV.DB
+	db      *local.DB
 	calls   int
 	applied uint64
 }

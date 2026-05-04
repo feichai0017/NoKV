@@ -8,7 +8,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	badgeropts "github.com/dgraph-io/badger/v4/options"
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,9 +86,9 @@ func TestBuildNoKVBenchmarkOptions(t *testing.T) {
 		SSTableMB:            512,
 		SyncWrites:           false,
 		NoKVCompactionPolicy: "leveled",
-	}, NoKV.MemTableEngineART)
+	}, local.MemTableEngineART)
 
-	require.Equal(t, NoKV.MemTableEngineART, opts.MemTableEngine)
+	require.Equal(t, local.MemTableEngineART, opts.MemTableEngine)
 	require.False(t, opts.ThermosEnabled)
 	require.Zero(t, opts.WriteBatchWait)
 	require.Zero(t, opts.WriteHotKeyLimit)
@@ -107,7 +107,7 @@ func TestBuildNoKVBenchmarkOptionsExplicitCacheOverrides(t *testing.T) {
 		SSTableMB:            512,
 		SyncWrites:           false,
 		NoKVCompactionPolicy: "leveled",
-	}, NoKV.MemTableEngineART)
+	}, local.MemTableEngineART)
 
 	require.Equal(t, int64(448)<<20, opts.BlockCacheBytes)
 	require.Equal(t, int64(64)<<20, opts.IndexCacheBytes)

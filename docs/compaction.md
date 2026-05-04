@@ -82,8 +82,8 @@ When adding new compaction heuristics or cache behaviour, extend these tests (or
 ## 6. Practical Tips
 
 - Tune `Options.LandingCompactBatchSize` when landing queues build up; increasing it lets a single move cover more tables.
-- Observe `NoKV.Stats.cache.*` and `NoKV.Stats.compaction.*` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
+- Observe `NoKV.Local.Stats.cache.*` and `NoKV.Local.Stats.compaction.*` via the CLI (`nokv stats`) to decide whether you need more compaction workers or bigger caches.
 - For workloads dominated by range scans, consider increasing `Options.BlockCacheBytes` if you want to keep more L0/L1 blocks in the user-space cache; cold data relies on the OS page cache.
-- Keep an eye on `NoKV.Stats.compaction.*` and `NoKV.Stats.wal.*`; if compaction backlog rises while WAL retention does not advance, a flush, raft-retention, or manifest-install boundary is holding old segments.
+- Keep an eye on `NoKV.Local.Stats.compaction.*` and `NoKV.Local.Stats.wal.*`; if compaction backlog rises while WAL retention does not advance, a flush, raft-retention, or manifest-install boundary is holding old segments.
 
 With these mechanisms, NoKV stays resilient under bursty writes while keeping the code path small and discoverable—ideal for learning or embedding.  Dive into the source files referenced above for deeper implementation details.

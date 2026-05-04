@@ -42,8 +42,9 @@ Core implementation units:
 - `coordinator/rootview`: persistence abstraction (`Store`) backed by the metadata root.
 - `coordinator/server`: gRPC service + RPC validation/error mapping.
 - `coordinator/client`: client wrapper used by store/gateway.
-- `scheduler/coordinator`: coordinator-backed scheduler client that forwards
-  store heartbeats into Coordinator.
+- `coordinator/scheduling`: cluster scheduling policy over Coordinator views.
+- `coordinator/storecontrol`: store-to-Coordinator control channel for
+  heartbeats, rooted event publication, and downlink operations.
 
 For the next-stage protocol direction on both the control plane and the paired
 execution plane, see `docs/control_and_execution_protocols.md`.
@@ -136,7 +137,7 @@ plane deployment; it simply has no control plane.
 Keep the same logical split inside every deployment:
 
 - `meta/root/*`: durable rooted truth (replicated + gRPC service)
-- `coordinator/view` + `coordinator/catalog`: rebuildable routing/scheduling state
+- `coordinator/catalog`: rebuildable routing/scheduling state
 - `coordinator/rootview`: remote view of meta-root consumed by coordinator/server
 - `coordinator/server`: gRPC API surface
 

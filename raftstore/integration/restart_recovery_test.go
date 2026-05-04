@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -77,7 +77,7 @@ func TestExpandedPeerRestartPreservesRegionAndData(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *local.Options) {
 	})
 	key := []byte("restart-key")
 	value := make([]byte, 2048)
@@ -122,7 +122,7 @@ func TestExpandedPeerRestartPreservesRegionAndDataWithSST(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *local.Options) {
 	})
 	key := []byte("restart-sst-key")
 	value := make([]byte, 2048)

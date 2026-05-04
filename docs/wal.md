@@ -79,9 +79,9 @@ and replay log; it is not paired with a separate blob layer.
 ## 5. Metrics & Observability
 
 `Stats.collect` reads the manager metrics and exposes them as:
-- `NoKV.Stats.wal.active_segment`
-- `NoKV.Stats.wal.segment_count`
-- `NoKV.Stats.wal.segments_removed`
+- `NoKV.Local.Stats.wal.active_segment`
+- `NoKV.Local.Stats.wal.segment_count`
+- `NoKV.Local.Stats.wal.segments_removed`
 
 The CLI command `nokv stats --workdir <dir>` prints these alongside backlog, making WAL health visible without manual inspection. In high-throughput scenarios the active segment ID mirrors RocksDB's `LOG` number growth.
 

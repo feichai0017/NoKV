@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/config"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	pdserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func testStorage(db *NoKV.DB) serverpkg.Storage {
+func testStorage(db *local.DB) serverpkg.Storage {
 	if db == nil {
 		return serverpkg.Storage{}
 	}
@@ -109,7 +109,7 @@ func TestStartStorePeersManifestMissing(t *testing.T) {
 		_ = realDB.Close()
 	}()
 
-	_, _, err := startStorePeers(server, testStorage(&NoKV.DB{}), nil, 1, 10, 1, 1, 1)
+	_, _, err := startStorePeers(server, testStorage(&local.DB{}), nil, 1, 10, 1, 1, 1)
 	require.Error(t, err)
 }
 
@@ -403,16 +403,16 @@ func withNotifyContext(t *testing.T, cancelImmediately bool, fn func()) {
 	fn()
 }
 
-func newTestDB(t *testing.T) *NoKV.DB {
+func newTestDB(t *testing.T) *local.DB {
 	t.Helper()
 	return newTestDBWithDir(t, t.TempDir())
 }
 
-func newTestDBWithDir(t *testing.T, dir string) *NoKV.DB {
+func newTestDBWithDir(t *testing.T, dir string) *local.DB {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db
 }
@@ -425,11 +425,11 @@ func openLocalMetaStore(t *testing.T, dir string) *localmeta.Store {
 	return store
 }
 
-func newTestServer(t *testing.T, db *NoKV.DB, storeID uint64) *serverpkg.Node {
+func newTestServer(t *testing.T, db *local.DB, storeID uint64) *serverpkg.Node {
 	return newTestServerWithMeta(t, db, storeID, nil)
 }
 
-func newTestServerWithMeta(t *testing.T, db *NoKV.DB, storeID uint64, localMeta *localmeta.Store) *serverpkg.Node {
+func newTestServerWithMeta(t *testing.T, db *local.DB, storeID uint64, localMeta *localmeta.Store) *serverpkg.Node {
 	t.Helper()
 	server, err := serverpkg.NewNode(serverpkg.Config{
 		Storage: serverpkg.Storage{

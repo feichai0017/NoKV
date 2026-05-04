@@ -60,7 +60,7 @@ func printUsage(w io.Writer) {
 	  manifest  Inspect manifest state and levels
 	  regions   Show the local peer catalog used for store recovery
 	  migrate   Inspect or convert a standalone workdir for distributed mode
-	  serve     Start NoKV gRPC service backed by a local raftstore
+	  serve     Start StoreKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
 	  meta-root Start metadata root gRPC service
 	  mount     Register, retire, or list rooted fsmeta mounts

@@ -23,7 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -71,14 +71,14 @@ func mustEncodePutCommand(t *testing.T, key, value []byte, startVersion uint64) 
 	return payload
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
+func mustPeerStorage(t *testing.T, db *local.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
 	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)
 	return storage
 }
 
-func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
+func requireVisibleValue(t *testing.T, db *local.DB, key, value []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
 	val, _, err := reader.GetValue(key, math.MaxUint64)
@@ -86,7 +86,7 @@ func requireVisibleValue(t *testing.T, db *NoKV.DB, key, value []byte) {
 	require.Equal(t, value, val)
 }
 
-func requireMissingValue(t *testing.T, db *NoKV.DB, key []byte) {
+func requireMissingValue(t *testing.T, db *local.DB, key []byte) {
 	t.Helper()
 	reader := percolator.NewReader(db)
 	_, _, err := reader.GetValue(key, math.MaxUint64)
@@ -384,7 +384,7 @@ type grpcTestCluster struct {
 
 type grpcTestNode struct {
 	id        uint64
-	db        *NoKV.DB
+	db        *local.DB
 	localMeta *localmeta.Store
 	peer      *peerpkg.Peer
 	transport *transportpkg.GRPCTransport
@@ -518,7 +518,7 @@ func (c *grpcTestCluster) unblockLink(from, to uint64) {
 	}
 }
 
-func (c *grpcTestCluster) db(id uint64) *NoKV.DB {
+func (c *grpcTestCluster) db(id uint64) *local.DB {
 	return c.nodes[id].db
 }
 
@@ -568,25 +568,25 @@ func buildTestCredentials(t *testing.T) (credentials.TransportCredentials, crede
 	return serverCreds, clientCreds
 }
 
-func openDBAt(t *testing.T, dir string) (*NoKV.DB, *localmeta.Store) {
+func openDBAt(t *testing.T, dir string) (*local.DB, *localmeta.Store) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
 	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
 	opt.ControlLogLagWarnSegments = 1
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta
 }
 
-func applyToDB(db *NoKV.DB) peerpkg.ApplyFunc {
+func applyToDB(db *local.DB) peerpkg.ApplyFunc {
 	return func(entries []myraft.Entry) error {
 		for _, entry := range entries {
 			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {

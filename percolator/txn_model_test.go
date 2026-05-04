@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
@@ -100,19 +100,19 @@ func TestTxnModelConcurrentHistoryIsSerializable(t *testing.T) {
 	}
 }
 
-func openPercolatorModelDB(t *testing.T) *NoKV.DB {
+func openPercolatorModelDB(t *testing.T) *local.DB {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = filepath.Join(t.TempDir(), "db")
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-func runGeneratedTxnSchedule(t *testing.T, db *NoKV.DB, latches *latch.Manager, model *txnModel, seed int64, steps int) []txnModelTxn {
+func runGeneratedTxnSchedule(t *testing.T, db *local.DB, latches *latch.Manager, model *txnModel, seed int64, steps int) []txnModelTxn {
 	t.Helper()
 	rng := rand.New(rand.NewSource(seed))
 	reader := percolator.NewReader(db)
@@ -172,7 +172,7 @@ func runGeneratedTxnSchedule(t *testing.T, db *NoKV.DB, latches *latch.Manager, 
 	return history
 }
 
-func runConcurrentTxnHistory(t *testing.T, db *NoKV.DB, latches *latch.Manager, seed int64, waves, batch int) []txnModelTxn {
+func runConcurrentTxnHistory(t *testing.T, db *local.DB, latches *latch.Manager, seed int64, waves, batch int) []txnModelTxn {
 	t.Helper()
 	if batch < 2 {
 		batch = 2
@@ -211,7 +211,7 @@ func runConcurrentTxnHistory(t *testing.T, db *NoKV.DB, latches *latch.Manager, 
 
 func runConcurrentTxnAttempt(
 	t *testing.T,
-	db *NoKV.DB,
+	db *local.DB,
 	latches *latch.Manager,
 	ts *atomic.Uint64,
 	step int,

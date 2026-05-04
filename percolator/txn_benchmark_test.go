@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
 )
 
-func openBenchmarkDB(b *testing.B) *NoKV.DB {
+func openBenchmarkDB(b *testing.B) *local.DB {
 	b.Helper()
-	db, err := NoKV.Open(testOptionsForDir(filepath.Join(b.TempDir(), "db")))
+	db, err := local.Open(testOptionsForDir(filepath.Join(b.TempDir(), "db")))
 	if err != nil {
 		b.Fatal(err)
 	}

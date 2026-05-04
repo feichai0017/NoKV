@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
-	"github.com/feichai0017/NoKV/dbcore/stats"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
+	local "github.com/feichai0017/NoKV/local"
+	"github.com/feichai0017/NoKV/local/stats"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	migratepkg "github.com/feichai0017/NoKV/raftstore/migrate"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -28,9 +28,9 @@ import (
 
 func TestRunManifestCmd(t *testing.T) {
 	dir := t.TempDir()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-manifest"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
@@ -62,9 +62,9 @@ func TestRunManifestCmd(t *testing.T) {
 
 func TestRunStatsCmd(t *testing.T) {
 	dir := t.TempDir()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-stats"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
@@ -160,9 +160,9 @@ func TestRunManifestCmdPlain(t *testing.T) {
 
 func TestRunRegionsCmd(t *testing.T) {
 	dir := t.TempDir()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	if err := db.Set([]byte("cli-region"), []byte("value")); err != nil {
 		t.Fatalf("set: %v", err)
@@ -190,7 +190,7 @@ func TestFetchExpvarSnapshot(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
-			"NoKV.Stats": map[string]any{
+			"NoKV.Local.Stats": map[string]any{
 				"entries": float64(12),
 				"hot": map[string]any{
 					"write_keys": []any{
@@ -223,7 +223,7 @@ func TestFetchExpvarSnapshotWithPath(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"NoKV.Stats": map[string]any{"entries": float64(2)},
+			"NoKV.Local.Stats": map[string]any{"entries": float64(2)},
 		})
 	})
 	server := httptest.NewServer(handler)
@@ -249,7 +249,7 @@ func TestParseExpvarSnapshotHotKeysList(t *testing.T) {
 
 func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
-		"NoKV.Stats": map[string]any{
+		"NoKV.Local.Stats": map[string]any{
 			"hot": map[string]any{
 				"write_keys": []any{
 					map[string]any{"key": "k3", "count": float64(7)},
@@ -264,7 +264,7 @@ func TestParseExpvarSnapshotHotKeysMap(t *testing.T) {
 
 func TestParseExpvarSnapshotHotKeysMapFloat(t *testing.T) {
 	snap := parseExpvarSnapshot(map[string]any{
-		"NoKV.Stats": map[string]any{
+		"NoKV.Local.Stats": map[string]any{
 			"hot": map[string]any{
 				"write_keys": []any{
 					map[string]any{"key": "k4", "count": float64(3)},
@@ -460,7 +460,7 @@ func TestRunStatsCmdExpvarPlain(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
-			"NoKV.Stats": map[string]any{
+			"NoKV.Local.Stats": map[string]any{
 				"entries": float64(9),
 			},
 		}
@@ -503,7 +503,7 @@ func TestFetchExpvarSnapshotTrailingSlash(t *testing.T) {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/debug/vars", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"NoKV.Stats": map[string]any{"entries": float64(1)},
+			"NoKV.Local.Stats": map[string]any{"entries": float64(1)},
 		})
 	})
 	server := httptest.NewServer(handler)
@@ -517,7 +517,7 @@ func TestFetchExpvarSnapshotTrailingSlash(t *testing.T) {
 
 func TestParseExpvarSnapshotFull(t *testing.T) {
 	data := map[string]any{
-		"NoKV.Stats": map[string]any{
+		"NoKV.Local.Stats": map[string]any{
 			"entries": float64(11),
 			"flush": map[string]any{
 				"pending": float64(2),
@@ -1331,9 +1331,9 @@ func withStoreRegistry(t *testing.T, fn func()) {
 func prepareDBWorkdir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	require.NoError(t, db.Set([]byte("seed"), []byte("value")))
 	require.NoError(t, db.Close())

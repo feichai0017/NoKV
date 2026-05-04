@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coordfailpoints "github.com/feichai0017/NoKV/coordinator/failpoints"
+	"github.com/feichai0017/NoKV/coordinator/scheduling"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -32,7 +33,7 @@ func (s *Service) requireLeaderForWrite() error {
 
 func (s *Service) leaseScopedStoreOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || !s.coordinatorLeaseEnabled() {
-		return s.planStoreOperations(storeID)
+		return s.storeControlOperations(storeID)
 	}
 	if s.storage != nil && !s.storage.IsLeader() {
 		return nil
@@ -40,7 +41,14 @@ func (s *Service) leaseScopedStoreOperations(ctx context.Context, storeID uint64
 	if err := s.ensureTenure(ctx); err != nil {
 		return nil
 	}
-	return s.planStoreOperations(storeID)
+	return s.storeControlOperations(storeID)
+}
+
+func (s *Service) storeControlOperations(storeID uint64) []*coordpb.SchedulerOperation {
+	if s == nil || s.cluster == nil || storeID == 0 {
+		return nil
+	}
+	return scheduling.PlanStoreOperations(storeID, s.cluster.Snapshot())
 }
 
 func (s *Service) requireDutyAdmission(ctx context.Context, mandate uint32) error {

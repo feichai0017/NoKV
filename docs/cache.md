@@ -97,7 +97,7 @@ The only remaining Thermos integration is optional write throttling.
 | --- | --- | --- | --- |
 | Block cache policy | Configurable multiple caches | Single cache | Ristretto for L0/L1 + OS page cache for deeper levels |
 | Bloom filter storage | Per table | Per table | Embedded in decoded table indexes |
-| Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Stats.cache.*` hit rates |
+| Metrics | Block cache stats via `GetAggregatedIntProperty` | Limited | `NoKV.Local.Stats.cache.*` hit rates |
 
 ---
 

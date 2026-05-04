@@ -7,10 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/dbcore/commit"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/utils"
@@ -69,8 +69,8 @@ func TestPercolatorCrashMatrixAtomicMutateCrossShardFallsBackBeforeFault(t *test
 	startTs := uint64(300)
 	commitTs := uint64(320)
 	dentryKey, inodeKey := keysWithAscendingCommitShards(t, shardCount)
-	dentryShard := commit.ShardForInternalKey(kv.InternalKey(kv.CFDefault, dentryKey, startTs), shardCount)
-	inodeShard := commit.ShardForInternalKey(kv.InternalKey(kv.CFDefault, inodeKey, startTs), shardCount)
+	dentryShard := lsm.ShardForInternalKey(kv.InternalKey(kv.CFDefault, dentryKey, startTs), shardCount)
+	inodeShard := lsm.ShardForInternalKey(kv.InternalKey(kv.CFDefault, inodeKey, startTs), shardCount)
 	require.NotEqual(t, dentryShard, inodeShard)
 
 	injected := errors.New("atomic mutate cross-shard wal write injected")
@@ -88,7 +88,7 @@ func TestPercolatorCrashMatrixAtomicMutateCrossShardFallsBackBeforeFault(t *test
 	opt := testOptionsForDir(workDir)
 	opt.LSMShardCount = shardCount
 	opt.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 
 	latches := latch.NewManager(32)
@@ -106,7 +106,7 @@ func TestPercolatorCrashMatrixAtomicMutateCrossShardFallsBackBeforeFault(t *test
 
 	reopenedOpt := testOptionsForDir(workDir)
 	reopenedOpt.LSMShardCount = shardCount
-	db, err = NoKV.Open(reopenedOpt)
+	db, err = local.Open(reopenedOpt)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -155,7 +155,7 @@ func TestPercolatorCrashMatrixAtomicMutateSameShardFailureDoesNotPublishPartialC
 	opt := testOptionsForDir(workDir)
 	opt.LSMShardCount = shardCount
 	opt.FS = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, policy)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 
 	latches := latch.NewManager(32)
@@ -173,7 +173,7 @@ func TestPercolatorCrashMatrixAtomicMutateSameShardFailureDoesNotPublishPartialC
 
 	reopenedOpt := testOptionsForDir(workDir)
 	reopenedOpt.LSMShardCount = shardCount
-	db, err = NoKV.Open(reopenedOpt)
+	db, err = local.Open(reopenedOpt)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -334,7 +334,7 @@ func TestPercolatorCrashMatrixPrimaryRollbackSecondaryRecovered(t *testing.T) {
 
 func TestPercolatorCrashMatrixCommitAndRollbackIdempotentAfterRestart(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
-	db, err := NoKV.Open(testOptionsForDir(dir))
+	db, err := local.Open(testOptionsForDir(dir))
 	require.NoError(t, err)
 	latches := latch.NewManager(32)
 
@@ -368,7 +368,7 @@ func TestPercolatorCrashMatrixCommitAndRollbackIdempotentAfterRestart(t *testing
 	}))
 	require.NoError(t, db.Close())
 
-	db, err = NoKV.Open(testOptionsForDir(dir))
+	db, err = local.Open(testOptionsForDir(dir))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

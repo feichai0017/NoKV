@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"io"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // DBStore adapts the embedded DB external-SST hooks into raftstore snapshots.
 type DBStore struct {
-	db *NoKV.DB
+	db *local.DB
 }
 
-func NewDBStore(db *NoKV.DB) DBStore {
+func NewDBStore(db *local.DB) DBStore {
 	return DBStore{db: db}
 }
 
-func (s DBStore) requireDB() (*NoKV.DB, error) {
+func (s DBStore) requireDB() (*local.DB, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("raftstore/snapshot: db requires open db")
 	}

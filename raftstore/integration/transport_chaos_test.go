@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"

@@ -4,14 +4,14 @@ import (
 	"context"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
 )
 
-func applyMVCCGCLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint64) {
+func applyMVCCGCLock(t *testing.T, db *local.DB, key []byte, startTs uint64) {
 	t.Helper()
 	lock := txnmvcc.EncodeLock(txnmvcc.Lock{
 		Primary: key,

@@ -1,9 +1,10 @@
 package metrics
 
 import (
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"testing"
 	"time"
+
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 )
 
 func TestWriteMetricsSnapshot(t *testing.T) {
@@ -57,9 +58,9 @@ func TestCacheCountersSnapshot(t *testing.T) {
 
 func TestRegionMetrics(t *testing.T) {
 	rm := NewRegionMetrics()
-	rm.RecordUpdate(localmeta.RegionMeta{ID: 1, State: localmeta.RegionStateRunning})
-	rm.RecordUpdate(localmeta.RegionMeta{ID: 2, State: localmeta.RegionStateRemoving})
-	rm.RecordUpdate(localmeta.RegionMeta{ID: 1, State: localmeta.RegionStateTombstone})
+	rm.RecordState(1, metaregion.ReplicaStateRunning)
+	rm.RecordState(2, metaregion.ReplicaStateRemoving)
+	rm.RecordState(1, metaregion.ReplicaStateTombstone)
 
 	snap := rm.Snapshot()
 	if snap.Total != 2 {

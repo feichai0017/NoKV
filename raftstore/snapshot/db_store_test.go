@@ -3,14 +3,14 @@ package snapshot_test
 import (
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDBStoreRequiresOpenDB(t *testing.T) {
-	var nilDB *NoKV.DB
+	var nilDB *local.DB
 	_, err := snapshot.NewDBStore(nilDB).ExportSnapshot(localmeta.RegionMeta{})
 	require.ErrorContains(t, err, "requires open db")
 

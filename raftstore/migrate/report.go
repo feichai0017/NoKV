@@ -3,7 +3,7 @@ package migrate
 import (
 	"fmt"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 )
 
 type MembershipPeerSummary struct {

@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
@@ -21,7 +22,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -514,7 +514,7 @@ func applyTestLockRecord(t *testing.T, db txnstore.Store, key []byte, startTs, t
 	require.NoError(t, db.ApplyInternalEntries([]*entrykv.Entry{entry}))
 }
 
-func mvccTestPeerBuilder(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, storeID uint64) PeerBuilder {
+func mvccTestPeerBuilder(t *testing.T, db *local.DB, localMeta *localmeta.Store, storeID uint64) PeerBuilder {
 	t.Helper()
 	return func(meta localmeta.RegionMeta) (*peer.Config, error) {
 		var peerID uint64
@@ -765,8 +765,8 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 	db, localMeta := openStoreDB(t)
 	coord := &degradedSchedulerSink{
 		testSchedulerSink: *newTestSchedulerSink(),
-		status: scheduler.Status{
-			Mode:      scheduler.ModeUnavailable,
+		status: storecontrol.Status{
+			Mode:      storecontrol.ModeUnavailable,
 			Degraded:  true,
 			LastError: "coordinator unavailable",
 		},
@@ -818,7 +818,7 @@ func TestStoreProposeCommandSurvivesSchedulerUnavailable(t *testing.T) {
 
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
-	require.Equal(t, scheduler.ModeUnavailable, status.Mode)
+	require.Equal(t, storecontrol.ModeUnavailable, status.Mode)
 	require.Contains(t, status.LastError, "coordinator unavailable")
 
 	reader := percolator.NewReader(db)

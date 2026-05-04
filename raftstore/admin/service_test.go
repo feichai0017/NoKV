@@ -13,8 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -22,7 +23,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -65,11 +65,11 @@ func (c *captureSchedulerClient) PublishRootEvent(_ context.Context, event roote
 	return nil
 }
 
-func (c *captureSchedulerClient) StoreHeartbeat(context.Context, scheduler.StoreStats) []scheduler.Operation {
+func (c *captureSchedulerClient) StoreHeartbeat(context.Context, storecontrol.StoreStats) []storecontrol.Operation {
 	return nil
 }
 
-func (c *captureSchedulerClient) Status() scheduler.Status { return scheduler.Status{} }
+func (c *captureSchedulerClient) Status() storecontrol.Status { return storecontrol.Status{} }
 
 func (c *captureSchedulerClient) Close() error { return nil }
 
@@ -89,28 +89,28 @@ func (c *captureSchedulerClient) Reset() {
 	c.mu.Unlock()
 }
 
-func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*NoKV.Options)) (*NoKV.DB, *localmeta.Store) {
+func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*local.Options)) (*local.DB, *localmeta.Store) {
 	t.Helper()
 	localMeta, err := localmeta.OpenLocalStore(dir, nil)
 	require.NoError(t, err)
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if tweak != nil {
 		tweak(opt)
 	}
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta
 }
 
-func testSSTExport(db *NoKV.DB) peer.SnapshotExportFunc {
+func testSSTExport(db *local.DB) peer.SnapshotExportFunc {
 	return func(region localmeta.RegionMeta) ([]byte, error) {
 		return snapshotpkg.NewDBStore(db).ExportSnapshot(region)
 	}
 }
 
-func testSSTApply(db *NoKV.DB) peer.SnapshotApplyFunc {
+func testSSTApply(db *local.DB) peer.SnapshotApplyFunc {
 	return func(payload []byte) (localmeta.RegionMeta, error) {
 		result, err := snapshotpkg.NewDBStore(db).ImportSnapshot(payload)
 		if err != nil {
@@ -392,7 +392,7 @@ func TestServiceValidationAndHelperMappings(t *testing.T) {
 
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	sourceDir := t.TempDir()
-	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
+	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -481,7 +481,7 @@ func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {
 	}, 2_000_000_000, 20_000_000)
 
 	targetDir := t.TempDir()
-	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
+	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())
@@ -657,7 +657,7 @@ func TestServiceImportRegionSnapshotStreamRejectsRepeatedHeader(t *testing.T) {
 
 func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	sourceDir := t.TempDir()
-	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
+	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -746,7 +746,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 	}, 2_000_000_000, 20_000_000)
 
 	targetDir := t.TempDir()
-	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
+	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())
@@ -815,7 +815,7 @@ func TestServiceExportsAndImportsRegionSnapshotStream(t *testing.T) {
 
 func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing.T) {
 	sourceDir := t.TempDir()
-	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *NoKV.Options) {
+	sourceDB, sourceMeta := openAdminTestDBWithTweak(t, sourceDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, sourceDB.Close())
@@ -904,7 +904,7 @@ func TestServiceImportRegionSnapshotStreamRejectsMismatchedRegionMeta(t *testing
 	}, 2_000_000_000, 20_000_000)
 
 	targetDir := t.TempDir()
-	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *NoKV.Options) {
+	targetDB, targetMeta := openAdminTestDBWithTweak(t, targetDir, func(opt *local.Options) {
 	})
 	defer func() {
 		require.NoError(t, targetDB.Close())

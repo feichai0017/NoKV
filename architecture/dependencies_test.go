@@ -51,6 +51,18 @@ func TestCheckImportRulesCatchesForbiddenBoundaries(t *testing.T) {
 			Imports:    []string{modulePath + "/raftstore/client"},
 		},
 		{
+			ImportPath: modulePath + "/local",
+			Imports:    []string{modulePath + "/raftstore/client"},
+		},
+		{
+			ImportPath: modulePath + "/local/stats",
+			Imports:    []string{modulePath + "/raftstore/stats"},
+		},
+		{
+			ImportPath: modulePath + "/local/internal/commit",
+			Imports:    []string{modulePath + "/errors"},
+		},
+		{
 			ImportPath: modulePath + "/meta/root/server",
 			Imports:    []string{modulePath + "/coordinator/client"},
 		},
@@ -59,27 +71,30 @@ func TestCheckImportRulesCatchesForbiddenBoundaries(t *testing.T) {
 			Imports:    []string{modulePath + "/errors"},
 		},
 		{
-			ImportPath: modulePath + "/dbcore/commit",
-			Imports:    []string{modulePath + "/errors"},
-		},
-		{
-			ImportPath: modulePath + "/dbcore/stats",
-			Imports:    []string{modulePath + "/raftstore/stats"},
-		},
-		{
 			ImportPath: modulePath + "/coordinator/balancer",
 			Imports:    []string{modulePath + "/raftstore/store"},
+		},
+		{
+			ImportPath: modulePath + "/coordinator/scheduling",
+			Imports:    []string{modulePath + "/coordinator/server"},
+		},
+		{
+			ImportPath: modulePath + "/coordinator/storecontrol",
+			Imports:    []string{modulePath + "/coordinator/scheduling"},
 		},
 	}
 
 	violations := CheckImportRules(packages)
 	assertViolation(t, violations, "root package stays free of distributed assembly", modulePath, modulePath+"/raftstore/mvcc")
 	assertViolation(t, violations, "fsmeta executor stays runtime-neutral", modulePath+"/fsmeta/exec", modulePath+"/raftstore/client")
+	assertViolation(t, violations, "local db stays free of distributed assembly", modulePath+"/local", modulePath+"/raftstore/client")
+	assertViolation(t, violations, "local db stays free of distributed assembly", modulePath+"/local/stats", modulePath+"/raftstore/stats")
+	assertViolation(t, violations, "local runtime stays free of global error taxonomy", modulePath+"/local/internal/commit", modulePath+"/errors")
 	assertViolation(t, violations, "meta root does not depend on coordinator service layer", modulePath+"/meta/root/server", modulePath+"/coordinator/client")
 	assertViolation(t, violations, "embedded engine stays free of global error taxonomy", modulePath+"/engine/lsm", modulePath+"/errors")
-	assertViolation(t, violations, "dbcore stays free of global error taxonomy", modulePath+"/dbcore/commit", modulePath+"/errors")
-	assertViolation(t, violations, "dbcore stays free of distributed assembly", modulePath+"/dbcore/stats", modulePath+"/raftstore/stats")
 	assertViolation(t, violations, "coordinator stays free of raftstore execution packages", modulePath+"/coordinator/balancer", modulePath+"/raftstore/store")
+	assertViolation(t, violations, "coordinator scheduling stays policy-only", modulePath+"/coordinator/scheduling", modulePath+"/coordinator/server")
+	assertViolation(t, violations, "coordinator storecontrol stays out of scheduling and service", modulePath+"/coordinator/storecontrol", modulePath+"/coordinator/scheduling")
 }
 
 func TestCheckImportRulesHonorsExactAndPrefixScopes(t *testing.T) {
@@ -93,14 +108,13 @@ func TestCheckImportRulesHonorsExactAndPrefixScopes(t *testing.T) {
 			Imports:    []string{modulePath + "/raftstore/client"},
 		},
 		{
-			ImportPath: modulePath + "/dbcore/errkind",
+			ImportPath: modulePath + "/local/errkind",
 			Imports:    []string{modulePath + "/errors"},
 		},
 		{
-			ImportPath: modulePath + "/scheduler/coordinator",
+			ImportPath: modulePath + "/coordinator/storecontrol",
 			Imports: []string{
 				modulePath + "/coordinator/client",
-				modulePath + "/scheduler",
 			},
 		},
 	}
@@ -146,10 +160,14 @@ func TestCheckRemovedPathRules(t *testing.T) {
 	root := t.TempDir()
 	for _, path := range []string{
 		"runtime",
+		"scheduler",
+		"local/internal/background",
 		"raftstore/mode",
 		"raftstore/scheduler",
 		"coordinator/adapter",
+		"coordinator/view",
 		"coordinator/protocol/eunomia",
+		"dbcore",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, path), 0o755); err != nil {
 			t.Fatal(err)
@@ -163,11 +181,15 @@ func TestCheckRemovedPathRules(t *testing.T) {
 	}
 
 	violations := CheckRemovedPathRules(root)
-	assertViolation(t, violations, "db runtime package stays moved to dbcore", "runtime", "")
-	assertViolation(t, violations, "raftstore mode package stays moved to dbcore/mode", "raftstore/mode", "")
-	assertViolation(t, violations, "raftstore scheduler package stays moved to scheduler", "raftstore/scheduler", "")
-	assertViolation(t, violations, "coordinator adapter package stays moved to scheduler/coordinator", "coordinator/adapter", "")
+	assertViolation(t, violations, "old db runtime package stays removed", "runtime", "")
+	assertViolation(t, violations, "local background package stays folded into local", "local/internal/background", "")
+	assertViolation(t, violations, "top-level scheduler package stays folded into coordinator/storecontrol", "scheduler", "")
+	assertViolation(t, violations, "raftstore mode package stays moved to local/workdir", "raftstore/mode", "")
+	assertViolation(t, violations, "raftstore scheduler package stays moved to coordinator/storecontrol", "raftstore/scheduler", "")
+	assertViolation(t, violations, "coordinator adapter package stays folded into coordinator/storecontrol", "coordinator/adapter", "")
+	assertViolation(t, violations, "coordinator view package stays folded into coordinator/catalog", "coordinator/view", "")
 	assertViolation(t, violations, "coordinator eunomia package stays removed", "coordinator/protocol/eunomia", "")
+	assertViolation(t, violations, "dbcore package stays folded into local/internal and utils", "dbcore", "")
 	assertViolation(t, violations, "raftstore migrate mode alias stays removed", "raftstore/migrate/mode.go", "")
 }
 

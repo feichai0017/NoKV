@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -31,7 +31,7 @@ func TestApplyObserverReceivesCommittedKeysFromRealRaftApply(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *local.Options) {
 	})
 	require.NoError(t, standalone.Close())
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 121, PeerID: 101})

@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
@@ -24,7 +25,6 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -550,7 +550,7 @@ func (noopTransport) Send(context.Context, myraft.Message) {}
 type testSchedulerSink struct {
 	mu      sync.RWMutex
 	regions map[uint64]regionHeartbeat
-	stores  map[uint64]scheduler.StoreStats
+	stores  map[uint64]storecontrol.StoreStats
 	history []schedulerEvent
 }
 
@@ -561,7 +561,7 @@ type slowSchedulerSink struct {
 
 type degradedSchedulerSink struct {
 	testSchedulerSink
-	status scheduler.Status
+	status storecontrol.Status
 }
 
 type regionHeartbeat struct {
@@ -578,7 +578,7 @@ type schedulerEvent struct {
 func newTestSchedulerSink() *testSchedulerSink {
 	return &testSchedulerSink{
 		regions: make(map[uint64]regionHeartbeat),
-		stores:  make(map[uint64]scheduler.StoreStats),
+		stores:  make(map[uint64]storecontrol.StoreStats),
 	}
 }
 
@@ -621,7 +621,7 @@ func (s *testSchedulerSink) PublishRootEvent(_ context.Context, event rootevent.
 	return nil
 }
 
-func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
+func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats storecontrol.StoreStats) []storecontrol.Operation {
 	if s == nil || stats.StoreID == 0 {
 		return nil
 	}
@@ -632,8 +632,8 @@ func (s *testSchedulerSink) StoreHeartbeat(_ context.Context, stats scheduler.St
 	return nil
 }
 
-func (s *testSchedulerSink) Status() scheduler.Status {
-	return scheduler.Status{}
+func (s *testSchedulerSink) Status() storecontrol.Status {
+	return storecontrol.Status{}
 }
 
 func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
@@ -652,12 +652,12 @@ func (s *testSchedulerSink) RegionSnapshot() []regionHeartbeat {
 	return out
 }
 
-func (s *testSchedulerSink) StoreSnapshot() []scheduler.StoreStats {
+func (s *testSchedulerSink) StoreSnapshot() []storecontrol.StoreStats {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
-	out := make([]scheduler.StoreStats, 0, len(s.stores))
+	out := make([]storecontrol.StoreStats, 0, len(s.stores))
 	for _, st := range s.stores {
 		out = append(out, st)
 	}
@@ -701,7 +701,7 @@ func (s *testSchedulerSink) Close() error {
 	return nil
 }
 
-func (s *degradedSchedulerSink) Status() scheduler.Status {
+func (s *degradedSchedulerSink) Status() storecontrol.Status {
 	return s.status
 }
 
@@ -774,14 +774,14 @@ func testPeerBuilder(storeID uint64) PeerBuilder {
 	}
 }
 
-func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
+func openStoreDB(t *testing.T) (*local.DB, *localmeta.Store) {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Close()
@@ -790,7 +790,7 @@ func openStoreDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
 	return db, localMeta
 }
 
-func mustPeerStorage(t *testing.T, db *NoKV.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
+func mustPeerStorage(t *testing.T, db *local.DB, localMeta *localmeta.Store, groupID uint64) raftlog.PeerStorage {
 	t.Helper()
 	storage, err := raftlog.NewDBLog(db).Open(groupID, localMeta)
 	require.NoError(t, err)

@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
@@ -152,11 +152,11 @@ func Init(cfg InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("migrate: failpoint after init catalog persist")
 	}
 
-	opts := NoKV.NewDefaultOptions()
+	opts := local.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
 	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{workdirmode.ModePreparing}
-	db, err := NoKV.Open(opts)
+	db, err := local.Open(opts)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("migrate: open db: %w", err)
 	}

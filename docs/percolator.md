@@ -10,7 +10,7 @@ The scope here is the current code path:
 - `ResolveLock`
 - `CheckTxnStatus`
 - `TxnHeartBeat`
-- MVCC read visibility (`KvGet`/`KvScan` through `percolator.Reader`)
+- MVCC read visibility (`Get`/`Scan` StoreKV RPCs through `percolator.Reader`)
 
 ---
 
@@ -18,7 +18,7 @@ The scope here is the current code path:
 
 Percolator logic is executed on the Raft apply path:
 
-1. Client sends NoKV RPC (`KvPrewrite`, `KvCommit`, ...).
+1. Client sends StoreKV RPC (`Prewrite`, `Commit`, ...).
 2. `raftstore/kv/service.go` wraps it into a `RaftCmdRequest`.
 3. Store proposes command through Raft.
 4. On apply, `raftstore/kv/apply.go` dispatches to `percolator.*`.
@@ -31,13 +31,13 @@ sequenceDiagram
     participant A as kv.Apply
     participant P as percolator
     participant DB as NoKV DB
-    C->>S: KvPrewrite/KvCommit...
+    C->>S: Prewrite/Commit...
     S->>R: ProposeCommand(RaftCmdRequest)
     R->>A: Apply committed log
     A->>P: percolator.Prewrite/Commit...
     P->>DB: CFDefault/CFLock/CFWrite reads+writes
     A-->>S: RaftCmdResponse
-    S-->>C: NoKV RPC response
+    S-->>C: StoreKV RPC response
 ```
 
 Key files:
@@ -51,16 +51,16 @@ Key files:
 
 ### 1.1 RPC to Percolator Function Mapping
 
-| NoKV RPC | `kv.Apply` branch | Percolator function |
+| StoreKV RPC | `kv.Apply` branch | Percolator function |
 | --- | --- | --- |
-| `KvPrewrite` | `CMD_PREWRITE` | `Prewrite` |
-| `KvCommit` | `CMD_COMMIT` | `Commit` |
-| `KvBatchRollback` | `CMD_BATCH_ROLLBACK` | `BatchRollback` |
-| `KvResolveLock` | `CMD_RESOLVE_LOCK` | `ResolveLock` |
-| `KvCheckTxnStatus` | `CMD_CHECK_TXN_STATUS` | `CheckTxnStatus` |
-| `KvTxnHeartBeat` | `CMD_TXN_HEART_BEAT` | `TxnHeartBeat` |
-| `KvGet` | `CMD_GET` | `Reader.GetLock` + `Reader.GetValue` |
-| `KvScan` | `CMD_SCAN` | `Reader.GetLock` + CFWrite iteration + `GetInternalEntry` |
+| `Prewrite` | `CMD_PREWRITE` | `Prewrite` |
+| `Commit` | `CMD_COMMIT` | `Commit` |
+| `BatchRollback` | `CMD_BATCH_ROLLBACK` | `BatchRollback` |
+| `ResolveLock` | `CMD_RESOLVE_LOCK` | `ResolveLock` |
+| `CheckTxnStatus` | `CMD_CHECK_TXN_STATUS` | `CheckTxnStatus` |
+| `TxnHeartBeat` | `CMD_TXN_HEART_BEAT` | `TxnHeartBeat` |
+| `Get` | `CMD_GET` | `Reader.GetLock` + `Reader.GetValue` |
+| `Scan` | `CMD_SCAN` | `Reader.GetLock` + CFWrite iteration + `GetInternalEntry` |
 
 ---
 
@@ -228,7 +228,7 @@ Decision order:
 
 ## 7. Read Path Semantics (MVCC Visibility)
 
-`KvGet` and `KvScan` read through `percolator.Reader`:
+`Get` and `Scan` StoreKV RPCs read through `percolator.Reader`:
 
 1. Check lock first:
    - if lock exists and `read_ts >= lock.ts`, return locked error
@@ -240,7 +240,7 @@ Decision order:
 
 Notes:
 
-- `KvScan` currently rejects reverse scan.
+- StoreKV `Scan` currently rejects reverse scan.
 - `scanWrites` uses internal iterator over `CFWrite`.
 
 ---
@@ -259,7 +259,7 @@ Notes:
 
 ## 9. Current Operational Boundaries
 
-- Percolator execution is tied to NoKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.
+- Percolator execution is tied to StoreKV RPC + Raft apply path, with the command shape still following the TinyKV/TiKV MVCC model.
 - Latch scope is process-local when one store shares a single `latch.Manager`;
   region correctness still comes from Raft ordering.
 - `Write.ShortValue` and `Write.ExpiresAt` are codec fields; current commit path

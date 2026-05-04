@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
@@ -248,7 +248,7 @@ func TestMaintenanceWorkerRestartConvergesAfterPartialPass(t *testing.T) {
 	assertWriteTombstoned(t, db, keyB, 40)
 }
 
-func assertWriteTombstoned(t *testing.T, db *NoKV.DB, key []byte, commitTs uint64) {
+func assertWriteTombstoned(t *testing.T, db *local.DB, key []byte, commitTs uint64) {
 	t.Helper()
 	entry, err := db.GetInternalEntry(entrykv.CFWrite, key, commitTs)
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func (p *failingLockResolver) CheckTxnStatus(context.Context, []byte, uint64, ui
 }
 
 type sequencedMaintenanceProposer struct {
-	db    *NoKV.DB
+	db    *local.DB
 	mu    sync.Mutex
 	calls int
 	errs  []error

@@ -1,13 +1,13 @@
 package catalog
 
 import (
-	pdview "github.com/feichai0017/NoKV/coordinator/view"
+	"testing"
+
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/meta/topology"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 )
@@ -16,8 +16,8 @@ func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(1)))
 	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(2)))
-	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 1, RegionNum: 3}))
-	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 2, RegionNum: 5}))
+	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 1, RegionNum: 3}))
+	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 2, RegionNum: 5}))
 
 	snap := c.StoreSnapshot()
 	require.Len(t, snap, 2)
@@ -33,18 +33,18 @@ func TestClusterStoreHeartbeatAndSnapshot(t *testing.T) {
 
 func TestClusterStoreHeartbeatRequiresActiveMembership(t *testing.T) {
 	c := NewCluster()
-	err := c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7})
+	err := c.UpsertStoreHeartbeat(StoreStats{StoreID: 7})
 	require.ErrorIs(t, err, ErrStoreNotJoined)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(7)))
-	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7}))
+	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 7}))
 	info, ok := c.StoreInfoByID(7)
 	require.True(t, ok)
 	require.Equal(t, rootstate.StoreMembershipActive, info.Membership.State)
 	require.True(t, info.HasRuntime)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.StoreRetired(7)))
-	err = c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 7})
+	err = c.UpsertStoreHeartbeat(StoreStats{StoreID: 7})
 	require.ErrorIs(t, err, ErrStoreRetired)
 	info, ok = c.StoreInfoByID(7)
 	require.True(t, ok)
@@ -312,7 +312,7 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 func TestClusterReplaceRootSnapshotPreservesStoreStateAndRefreshesRuntime(t *testing.T) {
 	c := NewCluster()
 	require.NoError(t, c.PublishRootEvent(rootevent.StoreJoined(9)))
-	require.NoError(t, c.UpsertStoreHeartbeat(pdview.StoreStats{StoreID: 9, RegionNum: 2}))
+	require.NoError(t, c.UpsertStoreHeartbeat(StoreStats{StoreID: 9, RegionNum: 2}))
 
 	base := testDescriptor(30, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
 	target := base.Clone()

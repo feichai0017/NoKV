@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/client"

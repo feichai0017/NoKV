@@ -13,11 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/config"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/fsmeta"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
@@ -30,7 +31,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	schedulercoord "github.com/feichai0017/NoKV/scheduler/coordinator"
 )
 
 var notifyContext = signal.NotifyContext
@@ -196,16 +196,16 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = localMeta.Close()
 	}()
 
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = *workDir
-	opt.MemTableEngine = NoKV.MemTableEngineART
+	opt.MemTableEngine = local.MemTableEngineART
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	opt.AllowedModes = []workdirmode.Mode{
 		workdirmode.ModeStandalone,
 		workdirmode.ModeSeeded,
 		workdirmode.ModeCluster,
 	}
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
@@ -213,7 +213,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	coordScheduler := schedulercoord.NewClient(schedulercoord.Config{
+	coordScheduler := storecontrol.NewClient(storecontrol.Config{
 		Coordinator: coordCli,
 		Timeout:     *coordTimeout,
 	})
@@ -359,7 +359,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		}
 	}
 
-	_, _ = fmt.Fprintf(w, "NoKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	_, _ = fmt.Fprintf(w, "StoreKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
 	}

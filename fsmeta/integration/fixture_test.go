@@ -7,10 +7,11 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -20,7 +21,6 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -73,7 +73,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), regionID, peerID)
-	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, storecontrol.ModeHealthy, false)
 
 	coordRPC, err := coordclient.NewGRPCClient(ctx, coord.Addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	t.Cleanup(func() { node.Close(t) })
 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), parentRegionID, parentPeerID)
-	testcluster.WaitForSchedulerMode(t, node, scheduler.ModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, node, storecontrol.ModeHealthy, false)
 
 	splitKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "m")
 	require.NoError(t, err)

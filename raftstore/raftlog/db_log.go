@@ -3,17 +3,17 @@ package raftlog
 import (
 	"fmt"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
 // DBLog adapts the embedded DB's replicated control-log WAL shards into
 // raftstore peer storage.
 type DBLog struct {
-	db *NoKV.DB
+	db *local.DB
 }
 
-func NewDBLog(db *NoKV.DB) DBLog {
+func NewDBLog(db *local.DB) DBLog {
 	return DBLog{db: db}
 }
 

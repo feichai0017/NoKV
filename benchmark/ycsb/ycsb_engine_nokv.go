@@ -8,18 +8,18 @@ import (
 	"sync"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/index"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/utils"
 )
 
 func newNoKVEngine(opts ycsbEngineOptions) ycsbEngine {
-	return newNoKVEngineWithMemtable(opts, "nokv", "NoKV", NoKV.MemTableEngineART)
+	return newNoKVEngineWithMemtable(opts, "nokv", "NoKV", local.MemTableEngineART)
 }
 
 type nokvEngine struct {
 	opts           ycsbEngineOptions
-	db             *NoKV.DB
+	db             *local.DB
 	valuePool      sync.Pool
 	valueSize      int
 	valueCap       int
@@ -27,10 +27,10 @@ type nokvEngine struct {
 	statsWG        sync.WaitGroup
 	engineID       string
 	name           string
-	memtableEngine NoKV.MemTableEngine
+	memtableEngine local.MemTableEngine
 }
 
-func newNoKVEngineWithMemtable(opts ycsbEngineOptions, engineID, name string, memtable NoKV.MemTableEngine) ycsbEngine {
+func newNoKVEngineWithMemtable(opts ycsbEngineOptions, engineID, name string, memtable local.MemTableEngine) ycsbEngine {
 	return &nokvEngine{
 		opts:           opts,
 		engineID:       engineID,
@@ -63,7 +63,7 @@ func (e *nokvEngine) Open(clean bool) error {
 		return fmt.Errorf("nokv: mkdir: %w", err)
 	}
 	opt := buildNoKVBenchmarkOptions(dir, e.opts, e.memtableEngine)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	if err != nil {
 		return fmt.Errorf("nokv: open db: %w", err)
 	}
