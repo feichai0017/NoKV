@@ -259,6 +259,84 @@ func TestGRPCClientRetriesWriteOnLeaseNotHeld(t *testing.T) {
 	require.False(t, IsNotLeader(err))
 }
 
+func TestGRPCClientRetriesTSOAcrossLeaseNotHeldEndpoint(t *testing.T) {
+	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	servers := map[string]*scriptedCoordinatorServer{
+		"standby": {
+			tsoErrors: []error{leaseErr},
+		},
+		"holder": {
+			tsoResponses: []*coordpb.TsoResponse{{
+				Timestamp:        100,
+				Count:            2,
+				Era:              1,
+				ConsumedFrontier: 101,
+			}},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"standby", "holder"}, servers)
+
+	resp, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), resp.GetTimestamp())
+	require.Equal(t, uint64(2), resp.GetCount())
+	require.Equal(t, 1, servers["standby"].tsoCalls)
+	require.Equal(t, 1, servers["holder"].tsoCalls)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+}
+
+func TestGRPCClientRetriesAllocIDAcrossLeaseNotHeldEndpoint(t *testing.T) {
+	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	servers := map[string]*scriptedCoordinatorServer{
+		"standby": {
+			allocErrors: []error{leaseErr},
+		},
+		"holder": {
+			allocResponses: []*coordpb.AllocIDResponse{{
+				FirstId:          200,
+				Count:            3,
+				Era:              1,
+				ConsumedFrontier: 202,
+			}},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"standby", "holder"}, servers)
+
+	resp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 3})
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), resp.GetFirstId())
+	require.Equal(t, uint64(3), resp.GetCount())
+	require.Equal(t, 1, servers["standby"].allocCalls)
+	require.Equal(t, 1, servers["holder"].allocCalls)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+}
+
+func TestGRPCClientRetriesTSOAfterFullLeaseMissRound(t *testing.T) {
+	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	servers := map[string]*scriptedCoordinatorServer{
+		"standby": {
+			tsoErrors: []error{leaseErr, leaseErr},
+		},
+		"holder": {
+			tsoErrors: []error{leaseErr},
+			tsoResponses: []*coordpb.TsoResponse{{
+				Timestamp:        300,
+				Count:            1,
+				Era:              2,
+				ConsumedFrontier: 300,
+			}},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"standby", "holder"}, servers)
+
+	resp, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(300), resp.GetTimestamp())
+	require.Equal(t, 2, servers["standby"].tsoCalls)
+	require.Equal(t, 2, servers["holder"].tsoCalls)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+}
+
 func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"alloc-invalid"}, map[string]*scriptedCoordinatorServer{
 		"alloc-invalid": {
@@ -808,12 +886,15 @@ func (s *scriptedCoordinatorServer) AllocID(_ context.Context, _ *coordpb.AllocI
 		err = s.allocErrors[0]
 		s.allocErrors = s.allocErrors[1:]
 	}
-	if len(s.allocResponses) == 0 {
+	if err != nil {
 		return nil, err
+	}
+	if len(s.allocResponses) == 0 {
+		return nil, nil
 	}
 	resp := s.allocResponses[0]
 	s.allocResponses = s.allocResponses[1:]
-	return resp, err
+	return resp, nil
 }
 
 func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
@@ -825,12 +906,15 @@ func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest
 		err = s.tsoErrors[0]
 		s.tsoErrors = s.tsoErrors[1:]
 	}
-	if len(s.tsoResponses) == 0 {
+	if err != nil {
 		return nil, err
+	}
+	if len(s.tsoResponses) == 0 {
+		return nil, nil
 	}
 	resp := s.tsoResponses[0]
 	s.tsoResponses = s.tsoResponses[1:]
-	return resp, err
+	return resp, nil
 }
 
 func (s *scriptedCoordinatorServer) GetRegionByKey(_ context.Context, _ *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {

@@ -27,6 +27,13 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
 	state, err := s.currentReadState()
+	renewed, renewErr := s.renewMetadataTenureIfNeeded(ctx, state, err)
+	if renewErr != nil {
+		return nil, renewErr
+	}
+	if renewed {
+		state, err = s.currentReadState()
+	}
 	admission, err := s.admitMetadataAnswerability(req, state, err)
 	if err != nil {
 		return nil, err
@@ -73,6 +80,8 @@ type readState struct {
 	leaseActive    bool
 	leaseSealed    bool
 	leaseMandate   uint32
+	leaseHolderID  string
+	leaseExpiresAt int64
 }
 
 type metadataAnswerability struct {
@@ -191,6 +200,8 @@ func (s *Service) currentReadState() (readState, error) {
 		state.leaseActive = snapshot.Tenure.ActiveAt(nowUnixNano)
 		state.leaseSealed = rootstate.TenureSealed(snapshot.Tenure, snapshot.Legacy)
 		state.leaseMandate = snapshot.Tenure.Mandate
+		state.leaseHolderID = snapshot.Tenure.HolderID
+		state.leaseExpiresAt = snapshot.Tenure.ExpiresUnixNano
 	}
 	if snapshot.Legacy.Present() {
 		state.legacyEra = snapshot.Legacy.Era
@@ -217,6 +228,33 @@ func (s *Service) currentReadState() (readState, error) {
 		state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_LAGGING
 	}
 	return state, nil
+}
+
+func (s *Service) renewMetadataTenureIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
+	if loadErr != nil || s == nil || !s.coordinatorLeaseEnabled() || !state.leasePresent {
+		return false, nil
+	}
+	s.leaseMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	renewIn := s.leaseRenewIn
+	clockSkew := s.leaseClockSkew
+	s.leaseMu.RUnlock()
+	if holderID == "" || strings.TrimSpace(state.leaseHolderID) != holderID {
+		return false, nil
+	}
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+	if state.leaseExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
+		state.leaseExpiresAt > nowUnixNano+clockSkew.Nanoseconds() {
+		return false, nil
+	}
+	if err := s.ensureTenure(ctx); err != nil {
+		return false, translateTenureError(err)
+	}
+	return true, nil
 }
 
 func (s *Service) notLeaderError() error {

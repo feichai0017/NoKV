@@ -58,6 +58,8 @@ type grpcEndpoint struct {
 	coord coordpb.CoordinatorClient
 }
 
+const maxAuthorityMissRetryRounds = 3
+
 // NewGRPCClient dials a Coordinator endpoint and returns a ready client.
 func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
 	addrs, err := splitAddresses(addr)
@@ -165,37 +167,37 @@ func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeart
 
 // RegionLiveness forwards region liveness heartbeat RPC.
 func (c *GRPCClient) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
-	return invokeRPC(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.RegionLivenessResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.RegionLivenessResponse, error) {
 		return coord.RegionLiveness(ctx, req)
-	})
+	}, nil)
 }
 
 // PublishRootEvent forwards explicit rooted event RPC.
 func (c *GRPCClient) PublishRootEvent(ctx context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
-	return invokeRPC(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.PublishRootEventResponse, error) {
+	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.PublishRootEventResponse, error) {
 		return coord.PublishRootEvent(ctx, req)
-	})
+	}, nil)
 }
 
 // ListTransitions returns the rooted pending transition view.
 func (c *GRPCClient) ListTransitions(ctx context.Context, req *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
-	return invokeRPC(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListTransitionsResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListTransitionsResponse, error) {
 		return coord.ListTransitions(ctx, req)
-	})
+	}, nil)
 }
 
 // AssessRootEvent evaluates one rooted transition event without mutating truth.
 func (c *GRPCClient) AssessRootEvent(ctx context.Context, req *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
-	return invokeRPC(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.AssessRootEventResponse, error) {
+	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.AssessRootEventResponse, error) {
 		return coord.AssessRootEvent(ctx, req)
-	})
+	}, nil)
 }
 
 // RemoveRegion forwards region removal RPC.
 func (c *GRPCClient) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
-	return invokeRPC(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.RemoveRegionResponse, error) {
+	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.RemoveRegionResponse, error) {
 		return coord.RemoveRegion(ctx, req)
-	})
+	}, nil)
 }
 
 // GetRegionByKey forwards region lookup RPC.
@@ -381,32 +383,40 @@ func (c *GRPCClient) markPreferred(addr string) {
 	}
 }
 
-func invokeRPC[T any](c *GRPCClient, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error)) (T, error) {
-	return invokeRPCValidated(c, retryable, call, nil)
-}
-
 func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
 	var zero T
 	if c == nil {
 		return zero, errNoReachableAddress
 	}
-	endpoints := c.orderedEndpoints()
-	if len(endpoints) == 0 {
-		return zero, errNoReachableAddress
-	}
 	var lastErr error
-	for i, endpoint := range endpoints {
-		resp, err := call(endpoint.coord)
-		if err == nil && validate != nil {
-			err = validate(resp)
+	for round := 0; round < maxAuthorityMissRetryRounds; round++ {
+		endpoints := c.orderedEndpoints()
+		if len(endpoints) == 0 {
+			return zero, errNoReachableAddress
 		}
-		if err == nil {
-			c.markPreferred(endpoint.addr)
-			return resp, nil
+		allAuthorityMiss := true
+		for i, endpoint := range endpoints {
+			resp, err := call(endpoint.coord)
+			if err == nil && validate != nil {
+				err = validate(resp)
+			}
+			if err == nil {
+				c.markPreferred(endpoint.addr)
+				return resp, nil
+			}
+			lastErr = err
+			if !isAuthorityMiss(err) {
+				allAuthorityMiss = false
+			}
+			if i == len(endpoints)-1 || !retryable(err) {
+				if allAuthorityMiss && retryable(err) && round+1 < maxAuthorityMissRetryRounds {
+					break
+				}
+				return zero, err
+			}
 		}
-		lastErr = err
-		if i == len(endpoints)-1 || !retryable(err) {
-			return zero, err
+		if !allAuthorityMiss {
+			return zero, lastErr
 		}
 	}
 	if lastErr == nil {
@@ -432,6 +442,10 @@ func retryableWrite(err error) bool {
 	if retryableRead(err) {
 		return true
 	}
+	return nokverrors.IsKind(err, nokverrors.KindNotLeader)
+}
+
+func isAuthorityMiss(err error) bool {
 	return nokverrors.IsKind(err, nokverrors.KindNotLeader)
 }
 

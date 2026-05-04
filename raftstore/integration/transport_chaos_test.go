@@ -159,7 +159,10 @@ func TestTransferLeaderRecoversAfterPartitionedTargetReturns(t *testing.T) {
 	target2.UnblockPeer(101)
 
 	require.Eventually(t, func() bool {
-		currentLeader, currentStatus := testcluster.FindLeader(t, ctx, 82, seed, target2, target3)
+		currentLeader, currentStatus, err := testcluster.TryFindLeader(ctx, 82, seed, target2, target3)
+		if err != nil {
+			return false
+		}
 		if currentStatus.GetLeaderPeerId() == 201 {
 			return currentLeader.Addr() == target2.Addr() && currentStatus.GetLeader()
 		}

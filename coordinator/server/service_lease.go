@@ -265,6 +265,7 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
@@ -272,6 +273,10 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	s.allocMu.Lock()
 	inheritedFrontiers := eunomia.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
+	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+		return nil
+	}
 	current, seal := s.currentTenureView()
 	lineageDigest := rootstate.ResolveLineageDigest(current, seal, holderID, nowUnixNano)
 
@@ -408,7 +413,7 @@ func translateTenureError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) || errors.Is(err, rootstate.ErrInheritance) {
+	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) {
 		return statusTenure(err)
 	}
 	return status.Error(codes.Internal, "campaign coordinator lease: "+err.Error())

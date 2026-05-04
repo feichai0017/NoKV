@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -53,6 +54,33 @@ type fakeStorage struct {
 	leaderID      uint64
 	lastEvent     rootevent.Event
 	snapshot      rootview.Snapshot
+}
+
+func TestTranslateTenureErrorsAsLeaseNotHeld(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		contains string
+	}{
+		{
+			name:     "primacy",
+			err:      translateTenureError(rootstate.ErrPrimacy),
+			contains: rootstate.ErrPrimacy.Error(),
+		},
+		{
+			name:     "expired",
+			err:      statusTenure(fmt.Errorf("%w: rooted lease expired era=7", rootstate.ErrInvalidTenure)),
+			contains: "rooted lease expired era=7",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, codes.FailedPrecondition, status.Code(tc.err))
+			message := status.Convert(tc.err).Message()
+			require.Contains(t, message, errTenurePrefix)
+			require.Contains(t, message, tc.contains)
+		})
+	}
 }
 
 func (f *fakeStorage) protocolState() rootstate.EunomiaState {
@@ -609,6 +637,77 @@ func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), errNotLeaderPrefix)
+}
+
+func TestServiceGetRegionByKeyRenewsSelfHeldExpiredTenure(t *testing.T) {
+	cluster := catalog.NewCluster()
+	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	desc.RootEpoch = 5
+	token := rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5}
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+	}, token)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			RootToken:   token,
+			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+			Tenure: rootstate.Tenure{
+				HolderID:        "c1",
+				ExpiresUnixNano: 100,
+				Era:             1,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	svc.ConfigureTenure("c1", time.Second, 300*time.Millisecond)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.False(t, resp.GetNotFound())
+	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, 1, storage.campaignCalls)
+	require.Equal(t, "c1", storage.snapshot.Tenure.HolderID)
+	require.Equal(t, uint64(2), storage.snapshot.Tenure.Era)
+	require.Equal(t, uint64(2), resp.GetEra())
+	require.True(t, storage.snapshot.Tenure.ActiveAt(200))
+}
+
+func TestServiceGetRegionByKeyDoesNotStealOtherActiveTenure(t *testing.T) {
+	cluster := catalog.NewCluster()
+	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	desc.RootEpoch = 5
+	token := rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5}
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+	}, token)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			RootToken:   token,
+			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: 10_000,
+				Era:             4,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	svc.ConfigureTenure("c1", time.Second, 300*time.Millisecond)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.False(t, resp.GetNotFound())
+	require.Equal(t, 0, storage.campaignCalls)
+	require.Equal(t, "c2", storage.snapshot.Tenure.HolderID)
+	require.Equal(t, uint64(4), resp.GetEra())
 }
 
 func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {

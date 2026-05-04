@@ -25,4 +25,8 @@ func TestCoordinatorClientErrorsExposeStableKinds(t *testing.T) {
 	leaseNotHeld := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix)
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(leaseNotHeld))
 	require.True(t, nokverrors.Retryable(leaseNotHeld))
+
+	leaseExpired := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid tenure: rooted lease expired era=7").Error())
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(leaseExpired))
+	require.True(t, nokverrors.Retryable(leaseExpired))
 }
