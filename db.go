@@ -616,11 +616,16 @@ func (db *DB) nextNonTxnVersion() uint64 {
 	return next
 }
 
-// ApplyInternalEntries writes pre-built internal-key entries through the regular write
-// pipeline.
+// ApplyInternalEntries writes pre-built internal-key entries through the
+// regular write pipeline.
 //
 // The caller must provide entries with internal keys. The entry slices must not
 // be mutated until this call returns.
+//
+// Multi-key internal batches are regrouped by the same key-affinity router used
+// by the commit pipeline before they reach the sharded LSM. That keeps every
+// write/delete for one user key on one shard, which is required for
+// same-version MVCC tombstones such as Percolator lock removal.
 func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
@@ -646,7 +651,7 @@ func (db *DB) ApplyInternalEntries(entries []*kv.Entry) error {
 	for _, entry := range entries {
 		entry.IncrRef()
 	}
-	return db.batchSet(entries)
+	return db.batchSetInternalEntries(entries)
 }
 
 // GetInternalEntry retrieves one internal-key record for the provided version.
@@ -1006,6 +1011,64 @@ func (db *DB) batchSet(entries []*kv.Entry) error {
 		return err
 	}
 	return req.Wait()
+}
+
+func (db *DB) batchSetInternalEntries(entries []*kv.Entry) error {
+	groups := db.groupInternalEntriesByShard(entries)
+	for i, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		if err := db.batchSet(group); err != nil {
+			// Entries for later shard groups were ref-counted by
+			// ApplyInternalEntries but have not been handed to the commit
+			// pipeline yet. The failing group is cleaned up by batchSet on
+			// enqueue failure, or owned by the pipeline if it reached apply.
+			releaseEntryGroups(groups[i+1:])
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) groupInternalEntriesByShard(entries []*kv.Entry) [][]*kv.Entry {
+	if len(entries) <= 1 {
+		return [][]*kv.Entry{entries}
+	}
+	shardCount := 1
+	if db != nil && db.opt != nil && db.opt.LSMShardCount > 1 {
+		shardCount = db.opt.LSMShardCount
+	}
+	if shardCount <= 1 {
+		return [][]*kv.Entry{entries}
+	}
+	buckets := make([][]*kv.Entry, shardCount)
+	order := make([]int, 0, shardCount)
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		shardID := commit.ShardForInternalKey(entry.Key, shardCount)
+		if len(buckets[shardID]) == 0 {
+			order = append(order, shardID)
+		}
+		buckets[shardID] = append(buckets[shardID], entry)
+	}
+	groups := make([][]*kv.Entry, 0, len(order))
+	for _, shardID := range order {
+		groups = append(groups, buckets[shardID])
+	}
+	return groups
+}
+
+func releaseEntryGroups(groups [][]*kv.Entry) {
+	for _, group := range groups {
+		for _, entry := range group {
+			if entry != nil {
+				entry.DecrRef()
+			}
+		}
+	}
 }
 
 func (db *DB) requireOpenLSM() (*lsm.LSM, error) {

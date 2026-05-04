@@ -2,6 +2,7 @@ package percolator
 
 import (
 	"errors"
+	"fmt"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/dbcore/commit"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/percolator/latch"
@@ -98,6 +100,41 @@ func (s rollbackTestStore) NewInternalIterator(opt *index.Options) index.Iterato
 		return s.newInternalIterator(opt)
 	}
 	return &testIterator{}
+}
+
+type countingStore struct {
+	base               *NoKV.DB
+	applyCalls         int
+	appliedEntryCounts []int
+	failApplyErr       error
+	failApplyRemaining int
+}
+
+func newCountingStore(base *NoKV.DB) *countingStore {
+	return &countingStore{base: base}
+}
+
+func (s *countingStore) ApplyInternalEntries(entries []*kv.Entry) error {
+	s.applyCalls++
+	s.appliedEntryCounts = append(s.appliedEntryCounts, len(entries))
+	if s.failApplyRemaining > 0 {
+		s.failApplyRemaining--
+		return s.failApplyErr
+	}
+	return s.base.ApplyInternalEntries(entries)
+}
+
+func (s *countingStore) GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error) {
+	return s.base.GetInternalEntry(cf, key, version)
+}
+
+func (s *countingStore) NewInternalIterator(opt *index.Options) index.Iterator {
+	return s.base.NewInternalIterator(opt)
+}
+
+func (s *countingStore) failNextApply(err error) {
+	s.failApplyErr = err
+	s.failApplyRemaining = 1
 }
 
 type testIterator struct {
@@ -401,6 +438,75 @@ func TestPrewriteConflictingLock(t *testing.T) {
 	require.NotNil(t, errs[0].GetLocked())
 }
 
+func TestPrewriteBatchConflictDoesNotApplyPartialLocks(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	conflictKey := []byte("batch-prewrite-conflict")
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   conflictKey,
+			Value: []byte("existing"),
+		}},
+		PrimaryLock:  conflictKey,
+		StartVersion: 5,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	keys := [][]byte{[]byte("batch-prewrite-a"), []byte("batch-prewrite-b"), conflictKey}
+	errs := Prewrite(store, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 8,
+		LockTtl:      1000,
+	})
+	require.Len(t, errs, 1)
+	require.NotNil(t, errs[0].GetLocked())
+	require.Zero(t, store.applyCalls)
+
+	reader := NewReader(db)
+	for _, key := range keys[:2] {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.Nil(t, lock, "key=%s", key)
+		_, err = db.GetInternalEntry(kv.CFDefault, key, 8)
+		require.ErrorIs(t, err, utils.ErrKeyNotFound, "key=%s", key)
+	}
+}
+
+func TestPrewriteBatchAppliesAllMutationsOnce(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(32)
+	keys := [][]byte{[]byte("batch-prewrite-ok-a"), []byte("batch-prewrite-ok-b"), []byte("batch-prewrite-ok-c")}
+
+	require.Empty(t, Prewrite(store, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 8,
+		LockTtl:      1000,
+	}))
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{9}, store.appliedEntryCounts)
+
+	reader := NewReader(db)
+	for _, key := range keys {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.NotNil(t, lock, "key=%s", key)
+		require.Equal(t, uint64(8), lock.Ts)
+	}
+}
+
 func TestCommitMissingLock(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
@@ -588,6 +694,131 @@ func TestCommitRemovesAllLocks(t *testing.T) {
 	}
 }
 
+func TestCommitBatchAppliesAllKeysOnce(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("commit-once-a"), []byte("commit-once-b"), []byte("commit-once-c")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 18,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	require.Nil(t, Commit(store, latches, &kvrpcpb.CommitRequest{
+		Keys:          keys,
+		StartVersion:  18,
+		CommitVersion: 25,
+	}))
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+}
+
+func TestCommitAfterBatchPrewritePreservesShardAffinityAcrossRestart(t *testing.T) {
+	const shardCount = 4
+
+	dir := filepath.Join(t.TempDir(), "db")
+	opt := testOptionsForDir(dir)
+	opt.LSMShardCount = shardCount
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+
+	first, second := keysWithAscendingCommitShards(t, shardCount)
+	latches := latch.NewManager(32)
+	errs := Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: first, Value: []byte("first")},
+			{Op: kvrpcpb.Mutation_Put, Key: second, Value: []byte("second")},
+		},
+		PrimaryLock:  first,
+		StartVersion: 10,
+		LockTtl:      3000,
+	})
+	require.Empty(t, errs)
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{second},
+		StartVersion:  10,
+		CommitVersion: 20,
+	}))
+	require.NoError(t, db.Close())
+
+	db, err = NoKV.Open(opt)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// This reproduces the sharded-LSM failure mode behind the review comment:
+	// if a batch prewrite routes every key by the first key's shard, then a
+	// later single-key commit can put the second key's lock tombstone on its
+	// real shard while the stale lock remains on the first shard. After restart
+	// shard hints are cold, so equal-version lock records are resolved by shard
+	// scan order and the stale lock can become visible again.
+	lock, err := NewReader(db).GetLock(second)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+}
+
+func keysWithAscendingCommitShards(t *testing.T, shardCount int) ([]byte, []byte) {
+	t.Helper()
+	keysByShard := make([][]byte, shardCount)
+	for i := range 10000 {
+		key := fmt.Appendf(nil, "affinity-%d", i)
+		shardID := commit.ShardForInternalKey(kv.InternalKey(kv.CFLock, key, lockColumnTs), shardCount)
+		if shardID >= 0 && shardID < shardCount && keysByShard[shardID] == nil {
+			keysByShard[shardID] = key
+		}
+	}
+	for low := range shardCount {
+		for high := low + 1; high < shardCount; high++ {
+			if keysByShard[low] != nil && keysByShard[high] != nil {
+				return keysByShard[low], keysByShard[high]
+			}
+		}
+	}
+	t.Fatalf("could not find keys on ascending shards for shardCount=%d", shardCount)
+	return nil, nil
+}
+
+func TestCommitBatchCommitTsExpiredDoesNotApplyPartialCommits(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("commit-expired-a"), []byte("commit-expired-b")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 18,
+		LockTtl:      1000,
+		MinCommitTs:  30,
+	}))
+
+	store := newCountingStore(db)
+	err := Commit(store, latches, &kvrpcpb.CommitRequest{
+		Keys:          keys,
+		StartVersion:  18,
+		CommitVersion: 25,
+	})
+	require.NotNil(t, err)
+	require.NotNil(t, err.GetCommitTsExpired())
+	require.Zero(t, store.applyCalls)
+
+	reader := NewReader(db)
+	for _, key := range keys {
+		write, _, readErr := reader.GetWriteByStartTs(key, 18)
+		require.NoError(t, readErr)
+		require.Nil(t, write, "key=%s", key)
+		lock, readErr := reader.GetLock(key)
+		require.NoError(t, readErr)
+		require.NotNil(t, lock, "key=%s", key)
+	}
+}
+
 // TestCommitReturnsLockedOnDifferentTransactionLock rejects foreign locks.
 func TestCommitReturnsLockedOnDifferentTransactionLock(t *testing.T) {
 	db := openTestDB(t)
@@ -685,6 +916,30 @@ func TestBatchRollbackRemovesAllLocks(t *testing.T) {
 		require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind, "key=%s", key)
 		require.Equal(t, uint64(18), commitTs, "key=%s", key)
 	}
+}
+
+func TestBatchRollbackAppliesAllKeysOnce(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("rollback-once-a"), []byte("rollback-once-b"), []byte("rollback-once-c")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Delete, Key: keys[1]},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[2], Value: []byte("vc")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 18,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	require.Nil(t, BatchRollback(store, latches, &kvrpcpb.BatchRollbackRequest{
+		Keys:         keys,
+		StartVersion: 18,
+	}))
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{9}, store.appliedEntryCounts)
 }
 
 func TestBatchRollbackDoesNotDeleteOtherTransactionLock(t *testing.T) {
@@ -799,6 +1054,32 @@ func TestResolveLockCommit(t *testing.T) {
 	val, _, err := reader.GetValue([]byte("res"), 60)
 	require.NoError(t, err)
 	require.Equal(t, []byte("val"), val)
+}
+
+func TestResolveLockCommitAppliesAllLocksOnce(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	keys := [][]byte{[]byte("resolve-once-a"), []byte("resolve-once-b")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 40,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	count, keyErr := ResolveLock(store, latches, &kvrpcpb.ResolveLockRequest{
+		Keys:          [][]byte{keys[0], keys[1], keys[1]},
+		StartVersion:  40,
+		CommitVersion: 50,
+	})
+	require.Nil(t, keyErr)
+	require.Equal(t, uint64(2), count)
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{4}, store.appliedEntryCounts)
 }
 
 func TestResolveLockCommitsSecondaryAfterPrimaryCommitCrashWindow(t *testing.T) {
