@@ -616,14 +616,16 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		return nil, utils.ErrKeyNotFound
 	}
 
-	if shardID, ok := lsm.lookupShardHint(key); ok && !hasRangeTombstones {
-		tables, release := lsm.getMemTablesForShard(shardID)
-		best := bestMemtableEntry(key, tables)
-		if release != nil {
-			release()
-		}
-		if best != nil {
-			return best, nil
+	if kv.Timestamp(key) == kv.MaxVersion {
+		if shardID, ok := lsm.lookupShardHint(key); ok && !hasRangeTombstones {
+			tables, release := lsm.getMemTablesForShard(shardID)
+			best := bestMemtableEntry(key, tables)
+			if release != nil {
+				release()
+			}
+			if best != nil {
+				return best, nil
+			}
 		}
 	}
 
@@ -650,29 +652,37 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 	// Walk every memtable and keep the highest-version hit so MVCC reads
 	// see the most recent write regardless of which shard accepted it.
 	best := bestMemtableEntry(key, tables)
-	if best != nil {
-		if isCovered(best) {
-			best.DecrRef()
-			return nil, utils.ErrKeyNotFound
-		}
-		return best, nil
+	if best != nil && isCovered(best) {
+		best.DecrRef()
+		best = nil
 	}
 	// query from the levels runtime
 	entry, err := lsm.levels.Get(key)
-	if err != nil || entry == nil {
-		if !hasRangeTombstones && (err == utils.ErrKeyNotFound || (err == nil && entry == nil)) {
-			lsm.rememberNegative(key)
+	if err != nil && err != utils.ErrKeyNotFound {
+		if best != nil {
+			best.DecrRef()
 		}
-		return entry, err
+		return nil, err
 	}
-	if isCovered(entry) {
-		entry.DecrRef()
+	if entry != nil {
+		if isCovered(entry) {
+			entry.DecrRef()
+		} else if best == nil || entry.Version > best.Version {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+		} else {
+			entry.DecrRef()
+		}
+	}
+	if best == nil {
 		if !hasRangeTombstones {
 			lsm.rememberNegative(key)
 		}
 		return nil, utils.ErrKeyNotFound
 	}
-	return entry, nil
+	return best, nil
 }
 
 func (lsm *LSM) negativeHit(key []byte) bool {

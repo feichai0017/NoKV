@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -207,7 +208,7 @@ func TestExecutorGetQuotaUsageReturnsZeroForMissingCounter(t *testing.T) {
 	require.Equal(t, fsmeta.UsageRecord{}, usage)
 }
 
-func (r *fakeRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
+func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
 	if len(r.mutateErrs) > 0 {
 		err := r.mutateErrs[0]
 		r.mutateErrs = r.mutateErrs[1:]
@@ -219,13 +220,20 @@ func (r *fakeRunner) Mutate(_ context.Context, _ []byte, mutations []*kvrpcpb.Mu
 		return r.mutateErr
 	}
 	cloned := make([]*kvrpcpb.Mutation, 0, len(mutations))
+	hasPrimary := len(mutations) == 0
 	for _, mut := range mutations {
 		if mut.GetAssertionNotExist() {
 			if _, ok := r.data[string(mut.GetKey())]; ok {
 				return fsmeta.ErrExists
 			}
 		}
+		if bytes.Equal(mut.GetKey(), primary) {
+			hasPrimary = true
+		}
 		cloned = append(cloned, cloneMutation(mut))
+	}
+	if !hasPrimary {
+		return fmt.Errorf("primary key %q not present in mutations", primary)
 	}
 	for _, mut := range cloned {
 		switch mut.GetOp() {

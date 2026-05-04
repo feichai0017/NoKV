@@ -80,6 +80,51 @@ func TestShardHintFallsBackWhenHintMissesMemtable(t *testing.T) {
 	got.DecrRef()
 }
 
+func TestShardHintDoesNotShortCircuitHistoricalRead(t *testing.T) {
+	lsm, wals := openShardHintTestLSM(t, 4)
+	defer closeShardHintTestLSM(t, lsm, wals)
+
+	userKey := []byte("historical-key")
+	v20 := kv.NewInternalEntry(kv.CFDefault, userKey, 20, []byte("v20"), 0, 0)
+	v10 := kv.NewInternalEntry(kv.CFDefault, userKey, 10, []byte("v10"), 0, 0)
+	v30 := kv.NewInternalEntry(kv.CFDefault, userKey, 30, []byte("v30"), 0, 0)
+	_, err := lsm.SetBatchGroup(1, [][]*kv.Entry{{v20}})
+	require.NoError(t, err)
+	_, err = lsm.SetBatchGroup(2, [][]*kv.Entry{{v10}})
+	require.NoError(t, err)
+	_, err = lsm.SetBatchGroup(2, [][]*kv.Entry{{v30}})
+	require.NoError(t, err)
+
+	query := kv.InternalKey(kv.CFDefault, userKey, 25)
+	got, err := lsm.Get(query)
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), got.Version)
+	require.Equal(t, []byte("v20"), got.Value)
+	got.DecrRef()
+}
+
+func TestGetChoosesHighestVisibleVersionAcrossMemtablesAndLevels(t *testing.T) {
+	lsm, wals := openShardHintTestLSM(t, 4)
+	defer closeShardHintTestLSM(t, lsm, wals)
+
+	userKey := []byte("mem-level-history")
+	levelPut := kv.NewInternalEntry(kv.CFDefault, userKey, 396, []byte("v396"), 0, 0)
+	memDelete := kv.NewInternalEntry(kv.CFDefault, userKey, 393, nil, kv.BitDelete, 0)
+	t1 := buildTableWithEntries(t, lsm, 91, levelPut)
+	lsm.levels.levels[1].tables = []*table{t1}
+	lsm.levels.levels[1].Sort()
+	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{{memDelete}})
+	require.NoError(t, err)
+
+	got, err := lsm.Get(kv.InternalKey(kv.CFDefault, userKey, 396))
+	require.NoError(t, err)
+	require.Equal(t, uint64(396), got.Version)
+	require.Equal(t, []byte("v396"), got.Value)
+	got.DecrRef()
+
+	require.NoError(t, t1.DecrRef())
+}
+
 func TestShardHintDoesNotBypassRangeTombstones(t *testing.T) {
 	lsm, wals := openShardHintTestLSM(t, 4)
 	defer closeShardHintTestLSM(t, lsm, wals)

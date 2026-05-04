@@ -42,6 +42,13 @@ func (r *Reader) GetLock(key []byte) (*mvcc.Lock, error) {
 	if err != nil {
 		return nil, err
 	}
+	write, _, err := r.GetWriteByStartTs(key, lock.Ts)
+	if err != nil {
+		return nil, err
+	}
+	if write != nil {
+		return nil, nil
+	}
 	return &lock, nil
 }
 

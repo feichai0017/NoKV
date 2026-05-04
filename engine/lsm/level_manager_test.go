@@ -34,6 +34,34 @@ func TestL0ReplaceTablesOrdering(t *testing.T) {
 	require.NoError(t, t4.DecrRef())
 }
 
+func TestLevelManagerGetChoosesHighestVisibleVersionAcrossLevels(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() {
+		require.NoError(t, lsm.Close())
+		require.NoError(t, os.RemoveAll(lsm.option.WorkDir))
+	}()
+
+	key := []byte("mvcc-cross-level")
+	l0Delete := kv.NewInternalEntry(kv.CFDefault, key, 393, nil, kv.BitDelete, 0)
+	l1Put := kv.NewInternalEntry(kv.CFDefault, key, 396, []byte("v396"), 0, 0)
+	t0 := buildTableWithEntries(t, lsm, 11, l0Delete)
+	t1 := buildTableWithEntries(t, lsm, 12, l1Put)
+	lsm.levels.levels[0].tables = []*table{t0}
+	lsm.levels.levels[0].Sort()
+	lsm.levels.levels[1].tables = []*table{t1}
+	lsm.levels.levels[1].Sort()
+
+	got, err := lsm.levels.Get(kv.InternalKey(kv.CFDefault, key, 396))
+	require.NoError(t, err)
+	require.Equal(t, uint64(396), got.Version)
+	require.Equal(t, []byte("v396"), got.Value)
+	got.DecrRef()
+
+	require.NoError(t, t0.DecrRef())
+	require.NoError(t, t1.DecrRef())
+}
+
 func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
