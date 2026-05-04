@@ -210,6 +210,51 @@ func TestLocalStorePersistsFirstCommittedRaftPointerBoundary(t *testing.T) {
 	require.NoError(t, reopened.Close())
 }
 
+func TestLocalStoreRetriesFailedRaftPointerCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+
+	first := RaftLogPointer{
+		GroupID:      9,
+		Segment:      2,
+		Offset:       128,
+		AppliedIndex: 11,
+		AppliedTerm:  2,
+	}
+	require.NoError(t, store.SaveRaftPointer(first))
+
+	injected := errors.New("progress checkpoint failed")
+	store.fs = vfs.NewFaultFSWithPolicy(vfs.OSFS{}, vfs.NewFaultPolicy(
+		vfs.FailOnceRule(vfs.OpOpenFile, filepath.Join(dir, RaftProgressFileName)+".tmp", injected),
+	))
+	nextSegment := first
+	nextSegment.Segment = 3
+	nextSegment.Offset = 64
+	nextSegment.AppliedIndex = 12
+	require.ErrorIs(t, store.SaveRaftPointer(nextSegment), injected)
+
+	got, ok := store.RaftPointer(first.GroupID)
+	require.True(t, ok)
+	require.Equal(t, nextSegment, got)
+
+	reopened, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	disk, ok := reopened.RaftPointer(first.GroupID)
+	require.True(t, ok)
+	require.Equal(t, first, disk)
+	require.NoError(t, reopened.Close())
+
+	require.NoError(t, store.SaveRaftPointer(nextSegment))
+	reopened, err = OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	disk, ok = reopened.RaftPointer(first.GroupID)
+	require.True(t, ok)
+	require.Equal(t, nextSegment, disk)
+	require.NoError(t, reopened.Close())
+}
+
 func TestLocalStorePersistsPendingRootEvents(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenLocalStore(dir, nil)
@@ -350,6 +395,28 @@ func TestLocalStoreMovesPendingRootEventToBlocked(t *testing.T) {
 	require.Equal(t, "permanent reject", blocked[0].LastError)
 	require.Equal(t, rootstate.TransitionIDFromEvent(event), blocked[0].TransitionID)
 	require.FileExists(t, filepath.Join(dir, BlockedRootEventsFileName))
+}
+
+func TestLocalStoreRejectsMismatchedBlockedRootEventSequence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+
+	event := rootevent.RegionTombstoned(23)
+	require.NoError(t, store.SavePendingRootEvent(PendingRootEvent{
+		Sequence: 4,
+		Event:    event,
+	}))
+	err = store.MovePendingRootEventToBlocked(4, BlockedRootEvent{
+		Sequence:     5,
+		Event:        event,
+		TransitionID: rootstate.TransitionIDFromEvent(event),
+		LastError:    "permanent reject",
+	})
+	require.ErrorContains(t, err, "sequence mismatch")
+	require.Len(t, store.PendingRootEvents(), 1)
+	require.Empty(t, store.BlockedRootEvents())
 }
 
 func TestLocalStoreHelpersAndSnapshots(t *testing.T) {

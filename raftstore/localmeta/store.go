@@ -70,6 +70,12 @@ type Store struct {
 
 	mu    sync.RWMutex
 	state diskState
+
+	// persistedRaftPointers mirrors the last successfully written raft-progress
+	// catalog. SaveRaftPointer may keep fresher in-memory progress for runtime
+	// retention, so checkpoint decisions must use this durable baseline to make a
+	// failed checkpoint retryable.
+	persistedRaftPointers map[uint64]RaftLogPointer
 }
 
 // WorkDir returns the local metadata directory backing this store.
@@ -95,9 +101,10 @@ func OpenLocalStore(workdir string, fs vfs.FS) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		fs:      fs,
-		workdir: workdir,
-		state:   state,
+		fs:                    fs,
+		workdir:               workdir,
+		state:                 state,
+		persistedRaftPointers: CloneRaftPointers(state.RaftPointers),
 	}, nil
 }
 
@@ -111,7 +118,7 @@ func (s *Store) Snapshot() map[uint64]RegionMeta {
 	return CloneRegionMetas(s.state.Regions)
 }
 
-// RaftPointer returns the last persisted local WAL pointer for one raft group.
+// RaftPointer returns the latest locally recorded WAL pointer for one raft group.
 func (s *Store) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
 	if s == nil || groupID == 0 {
 		return RaftLogPointer{}, false
@@ -122,7 +129,7 @@ func (s *Store) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
 	return ptr, ok
 }
 
-// RaftPointerSnapshot returns a copy of all persisted local WAL pointers.
+// RaftPointerSnapshot returns a copy of all locally recorded WAL pointers.
 func (s *Store) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 	if s == nil {
 		return nil
@@ -247,12 +254,16 @@ func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	if s.state.RaftPointers == nil {
 		s.state.RaftPointers = make(map[uint64]RaftLogPointer)
 	}
-	prev, existed := s.state.RaftPointers[ptr.GroupID]
+	prev, existed := s.persistedRaftPointers[ptr.GroupID]
 	s.state.RaftPointers[ptr.GroupID] = ptr
 	if !raftPointerCheckpointRequired(prev, ptr, existed) {
 		return nil
 	}
-	return s.persistRaftProgressCatalogLocked()
+	if err := s.persistRaftProgressCatalogLocked(); err != nil {
+		return err
+	}
+	s.persistedRaftPointers = CloneRaftPointers(s.state.RaftPointers)
+	return nil
 }
 
 // SavePendingRootEvent persists one locally applied rooted event until
@@ -339,6 +350,9 @@ func (s *Store) MovePendingRootEventToBlocked(sequence uint64, blocked BlockedRo
 	}
 	if sequence == 0 || blocked.Sequence == 0 {
 		return fmt.Errorf("raftstore/localmeta: blocked rooted event sequence is zero")
+	}
+	if blocked.Sequence != sequence {
+		return fmt.Errorf("raftstore/localmeta: blocked rooted event sequence mismatch (pending=%d blocked=%d)", sequence, blocked.Sequence)
 	}
 	if blocked.Event.Kind == 0 {
 		return fmt.Errorf("raftstore/localmeta: blocked rooted event kind is unknown")
