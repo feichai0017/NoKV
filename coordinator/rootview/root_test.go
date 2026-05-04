@@ -153,7 +153,7 @@ func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
 
 func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureCommand) (rootstate.EunomiaState, error) {
 	if f.applyLeaseErr != nil {
-		return rootstate.EunomiaState{}, f.applyLeaseErr
+		return f.applyLeaseResult, f.applyLeaseErr
 	}
 	f.snapshot.State.Tenure = f.applyLeaseResult.Tenure
 	f.snapshot.State.Legacy = f.applyLeaseResult.Legacy
@@ -463,6 +463,46 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 
 	require.NoError(t, store.Close())
 	require.True(t, fake.closeCalled)
+}
+
+func TestRootStoreMergesTenureStateFromHeldRejection(t *testing.T) {
+	initial := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
+			Tenure: rootstate.Tenure{
+				HolderID:        "stale",
+				Era:             1,
+				ExpiresUnixNano: 100,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	authoritative := rootstate.EunomiaState{
+		Tenure: rootstate.Tenure{
+			HolderID:        "coord-1",
+			Era:             2,
+			ExpiresUnixNano: 1_000,
+			Mandate:         rootproto.MandateDefault,
+		},
+	}
+	fake := &fakeRootBackend{
+		snapshot:         initial,
+		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: initial}},
+		useObserved:      true,
+		isLeader:         true,
+		applyLeaseErr:    rootstate.ErrPrimacy,
+		applyLeaseResult: authoritative,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{Kind: rootproto.TenureActIssue})
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
+	require.Equal(t, authoritative, state)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "coord-1", loaded.Tenure.HolderID)
+	require.Equal(t, uint64(2), loaded.Tenure.Era)
 }
 
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {

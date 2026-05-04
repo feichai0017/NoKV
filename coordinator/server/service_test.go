@@ -2163,6 +2163,29 @@ func TestServiceTenureLoopSkipsFollower(t *testing.T) {
 	require.Equal(t, 0, store.campaignCalls)
 }
 
+func TestServiceTenureLoopDoesNotCampaignOverActiveOtherHolder(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+				Era:             1,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	ctx := t.Context()
+	go svc.RunTenureLoop(ctx)
+
+	time.Sleep(80 * time.Millisecond)
+	require.Equal(t, 0, store.campaignCalls)
+}
+
 func TestServiceTenureLoopReleasesOnContextCancel(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2336,6 +2359,51 @@ func TestServiceMonotoneDutyFailsWhenEraSealedAndCannotRenew(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, err.Error(), errTenurePrefix)
+}
+
+func TestServiceDutyAdmissionDoesNotCampaignOverActiveOtherHolder(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+				Era:             1,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), errTenurePrefix)
+	require.Equal(t, 0, store.campaignCalls)
+}
+
+func TestServiceDutyAdmissionDoesNotCampaignOverActiveOtherHolderWithoutEra(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), errTenurePrefix)
+	require.Equal(t, 0, store.campaignCalls)
 }
 
 func TestServiceMetadataAnswerFailsWhenEraSealedAndCannotRenew(t *testing.T) {
