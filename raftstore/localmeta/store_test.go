@@ -182,6 +182,34 @@ func TestLocalStoreCoalescesRaftPointerWithinSegment(t *testing.T) {
 	require.NoError(t, reopened.Close())
 }
 
+func TestLocalStorePersistsFirstCommittedRaftPointerBoundary(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+
+	snapshotPtr := RaftLogPointer{
+		GroupID:       9,
+		Segment:       2,
+		Offset:        128,
+		SnapshotIndex: 1,
+		SnapshotTerm:  1,
+	}
+	require.NoError(t, store.SaveRaftPointer(snapshotPtr))
+
+	committedPtr := snapshotPtr
+	committedPtr.Offset = 256
+	committedPtr.Committed = 1
+	require.NoError(t, store.SaveRaftPointer(committedPtr))
+
+	reopened, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	disk, ok := reopened.RaftPointer(snapshotPtr.GroupID)
+	require.True(t, ok)
+	require.Equal(t, committedPtr, disk)
+	require.NoError(t, reopened.Close())
+}
+
 func TestLocalStorePersistsPendingRootEvents(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenLocalStore(dir, nil)

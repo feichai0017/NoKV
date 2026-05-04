@@ -233,7 +233,8 @@ func (s *Store) DeleteRegion(regionID uint64) error {
 // latest raft progress. The on-disk checkpoint is only forced when it advances a
 // restart or retention boundary; same-segment offset/index churn is replayable
 // from the raft WAL after a crash and must not add a metadata fsync to every
-// raft append.
+// raft append. The first committed index is a boundary because seeded peers use
+// it as durable restart evidence before normal raft replay has run.
 func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	if s == nil {
 		return nil
@@ -430,6 +431,9 @@ func raftPointerCheckpointRequired(prev, next RaftLogPointer, existed bool) bool
 		return true
 	}
 	if next.Offset < prev.Offset {
+		return true
+	}
+	if prev.Committed == 0 && next.Committed != 0 {
 		return true
 	}
 	if prev.SnapshotIndex != next.SnapshotIndex || prev.SnapshotTerm != next.SnapshotTerm {
