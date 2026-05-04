@@ -311,7 +311,9 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 
 func (s *Service) activeOtherTenureError(holderID string, nowUnixNano int64) error {
 	current, seal := s.currentTenureView()
-	if !current.Present() || current.HolderID == holderID || !current.ActiveAt(nowUnixNano) {
+	currentHolder := strings.TrimSpace(current.HolderID)
+	localHolder := strings.TrimSpace(holderID)
+	if currentHolder == "" || currentHolder == localHolder || !current.ActiveAt(nowUnixNano) {
 		return nil
 	}
 	if rootstate.TenureSealed(current, seal) {
@@ -320,7 +322,7 @@ func (s *Service) activeOtherTenureError(holderID string, nowUnixNano int64) err
 	// A live rooted holder is the authority. Standby coordinators must not
 	// campaign over it just because their local tenure loop or a client request
 	// arrived; clients should fail over to the current holder until expiry.
-	return fmt.Errorf("%w: rooted holder=%s local_holder=%s expires_unix_nano=%d", rootstate.ErrPrimacy, current.HolderID, holderID, current.ExpiresUnixNano)
+	return fmt.Errorf("%w: rooted holder=%s local_holder=%s expires_unix_nano=%d", rootstate.ErrPrimacy, currentHolder, localHolder, current.ExpiresUnixNano)
 }
 
 func (s *Service) coordinatorLeaseStillValid(holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {

@@ -2179,8 +2179,7 @@ func TestServiceTenureLoopDoesNotCampaignOverActiveOtherHolder(t *testing.T) {
 	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
 	require.NoError(t, svc.ReloadFromStorage())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go svc.RunTenureLoop(ctx)
 
 	time.Sleep(80 * time.Millisecond)
@@ -2370,6 +2369,28 @@ func TestServiceDutyAdmissionDoesNotCampaignOverActiveOtherHolder(t *testing.T) 
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 				Era:             1,
+				Mandate:         rootproto.MandateDefault,
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), errTenurePrefix)
+	require.Equal(t, 0, store.campaignCalls)
+}
+
+func TestServiceDutyAdmissionDoesNotCampaignOverActiveOtherHolderWithoutEra(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 				Mandate:         rootproto.MandateDefault,
 			},
 		},
