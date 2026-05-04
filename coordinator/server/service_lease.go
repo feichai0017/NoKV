@@ -258,13 +258,18 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
-	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
+	// Fast path: avoid serializing read traffic behind the campaign lock while
+	// the current tenure is still outside the renew and clock-skew windows.
+	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	// Another request or the background renew loop may have refreshed tenure
+	// while this caller waited for writeMu.
+	nowUnixNano, _, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
@@ -272,6 +277,12 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	s.allocMu.Lock()
 	inheritedFrontiers := eunomia.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
+	// Recompute time and expiry after sampling allocator fences so the tenure
+	// command carries fresh bounds and does not campaign unnecessarily.
+	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
+	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+		return nil
+	}
 	current, seal := s.currentTenureView()
 	lineageDigest := rootstate.ResolveLineageDigest(current, seal, holderID, nowUnixNano)
 
@@ -408,7 +419,13 @@ func translateTenureError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) || errors.Is(err, rootstate.ErrInheritance) {
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, err.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	}
+	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) {
 		return statusTenure(err)
 	}
 	return status.Error(codes.Internal, "campaign coordinator lease: "+err.Error())

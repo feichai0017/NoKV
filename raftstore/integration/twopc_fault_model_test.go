@@ -132,8 +132,11 @@ func openTwoStoreSplitRuntime(t *testing.T, ctx context.Context) *twopcFaultRunt
 	}
 	require.NoError(t, parentLeader.Server.Store().ProposeSplit(501, childMeta, childMeta.StartKey))
 	require.Eventually(t, func() bool {
-		a := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 502)
-		b := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 502)
+		a, errA := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 502)
+		b, errB := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 502)
+		if errA != nil || errB != nil {
+			return false
+		}
 		return a.GetKnown() && a.GetHosted() && b.GetKnown() && b.GetHosted()
 	}, 5*time.Second, 20*time.Millisecond, testcluster.DumpStatus(t, ctx, 502, seed, target))
 

@@ -70,6 +70,12 @@ type Store struct {
 
 	mu    sync.RWMutex
 	state diskState
+
+	// persistedRaftPointers mirrors the last successfully written raft-progress
+	// catalog. SaveRaftPointer may keep fresher in-memory progress for runtime
+	// retention, so checkpoint decisions must use this durable baseline to make a
+	// failed checkpoint retryable.
+	persistedRaftPointers map[uint64]RaftLogPointer
 }
 
 // WorkDir returns the local metadata directory backing this store.
@@ -95,9 +101,10 @@ func OpenLocalStore(workdir string, fs vfs.FS) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		fs:      fs,
-		workdir: workdir,
-		state:   state,
+		fs:                    fs,
+		workdir:               workdir,
+		state:                 state,
+		persistedRaftPointers: CloneRaftPointers(state.RaftPointers),
 	}, nil
 }
 
@@ -111,7 +118,7 @@ func (s *Store) Snapshot() map[uint64]RegionMeta {
 	return CloneRegionMetas(s.state.Regions)
 }
 
-// RaftPointer returns the last persisted local WAL pointer for one raft group.
+// RaftPointer returns the latest locally recorded WAL pointer for one raft group.
 func (s *Store) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
 	if s == nil || groupID == 0 {
 		return RaftLogPointer{}, false
@@ -122,7 +129,7 @@ func (s *Store) RaftPointer(groupID uint64) (RaftLogPointer, bool) {
 	return ptr, ok
 }
 
-// RaftPointerSnapshot returns a copy of all persisted local WAL pointers.
+// RaftPointerSnapshot returns a copy of all locally recorded WAL pointers.
 func (s *Store) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 	if s == nil {
 		return nil
@@ -213,7 +220,7 @@ func (s *Store) SaveRegion(meta RegionMeta) error {
 		s.state.Regions = make(map[uint64]RegionMeta)
 	}
 	s.state.Regions[meta.ID] = CloneRegionMeta(meta)
-	return s.persistLocked()
+	return s.persistReplicaCatalogLocked()
 }
 
 // DeleteRegion removes one region metadata entry from the local catalog.
@@ -224,10 +231,17 @@ func (s *Store) DeleteRegion(regionID uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.state.Regions, regionID)
-	return s.persistLocked()
+	return s.persistReplicaCatalogLocked()
 }
 
-// SaveRaftPointer persists the local WAL checkpoint for one raft group.
+// SaveRaftPointer records the local WAL pointer for one raft group.
+//
+// The in-memory pointer is always current so runtime WAL retention can see the
+// latest raft progress. The on-disk checkpoint is only forced when it advances a
+// restart or retention boundary; same-segment offset/index churn is replayable
+// from the raft WAL after a crash and must not add a metadata fsync to every
+// raft append. The first committed index is a boundary because seeded peers use
+// it as durable restart evidence before normal raft replay has run.
 func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	if s == nil {
 		return nil
@@ -240,8 +254,16 @@ func (s *Store) SaveRaftPointer(ptr RaftLogPointer) error {
 	if s.state.RaftPointers == nil {
 		s.state.RaftPointers = make(map[uint64]RaftLogPointer)
 	}
+	prev, existed := s.persistedRaftPointers[ptr.GroupID]
 	s.state.RaftPointers[ptr.GroupID] = ptr
-	return s.persistLocked()
+	if !raftPointerCheckpointRequired(prev, ptr, existed) {
+		return nil
+	}
+	if err := s.persistRaftProgressCatalogLocked(); err != nil {
+		return err
+	}
+	s.persistedRaftPointers = CloneRaftPointers(s.state.RaftPointers)
+	return nil
 }
 
 // SavePendingRootEvent persists one locally applied rooted event until
@@ -267,7 +289,7 @@ func (s *Store) SavePendingRootEvent(event PendingRootEvent) error {
 		return fmt.Errorf("raftstore/localmeta: pending rooted event limit exceeded (max=%d)", maxPendingRootEvents)
 	}
 	s.state.PendingRootEvents[event.Sequence] = ClonePendingRootEvent(event)
-	return s.persistLocked()
+	return s.persistPendingRootEventCatalogLocked()
 }
 
 // DeletePendingRootEvent removes one publish-acknowledged rooted event from the
@@ -280,7 +302,7 @@ func (s *Store) DeletePendingRootEvent(sequence uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.state.PendingRootEvents, sequence)
-	return s.persistLocked()
+	return s.persistPendingRootEventCatalogLocked()
 }
 
 // SavePendingSchedulerOperation persists one scheduler decision until local
@@ -305,7 +327,7 @@ func (s *Store) SavePendingSchedulerOperation(op PendingSchedulerOperation) erro
 		return fmt.Errorf("raftstore/localmeta: pending scheduler operation limit exceeded (max=%d)", maxPendingSchedulerOperations)
 	}
 	s.state.PendingSchedulerOperations[key] = ClonePendingSchedulerOperation(op)
-	return s.persistLocked()
+	return s.persistPendingSchedulerOperationCatalogLocked()
 }
 
 // DeletePendingSchedulerOperation removes one scheduler decision after local
@@ -317,17 +339,20 @@ func (s *Store) DeletePendingSchedulerOperation(kind PendingSchedulerOperationKi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.state.PendingSchedulerOperations, pendingSchedulerOperationKey(kind, regionID))
-	return s.persistLocked()
+	return s.persistPendingSchedulerOperationCatalogLocked()
 }
 
-// MovePendingRootEventToBlocked atomically removes one retryable rooted event
-// from the pending catalog and records it as a blocked reconciliation item.
+// MovePendingRootEventToBlocked removes one retryable rooted event from the
+// pending catalog and records it as a blocked reconciliation item.
 func (s *Store) MovePendingRootEventToBlocked(sequence uint64, blocked BlockedRootEvent) error {
 	if s == nil {
 		return nil
 	}
 	if sequence == 0 || blocked.Sequence == 0 {
 		return fmt.Errorf("raftstore/localmeta: blocked rooted event sequence is zero")
+	}
+	if blocked.Sequence != sequence {
+		return fmt.Errorf("raftstore/localmeta: blocked rooted event sequence mismatch (pending=%d blocked=%d)", sequence, blocked.Sequence)
 	}
 	if blocked.Event.Kind == 0 {
 		return fmt.Errorf("raftstore/localmeta: blocked rooted event kind is unknown")
@@ -342,7 +367,7 @@ func (s *Store) MovePendingRootEventToBlocked(sequence uint64, blocked BlockedRo
 		return fmt.Errorf("raftstore/localmeta: blocked rooted event limit exceeded (max=%d)", maxBlockedRootEvents)
 	}
 	s.state.BlockedRootEvents[blocked.Sequence] = CloneBlockedRootEvent(blocked)
-	return s.persistLocked()
+	return s.persistRootEventCatalogsLocked()
 }
 
 // Close releases resources associated with the metadata store.
@@ -380,23 +405,61 @@ func loadState(fs vfs.FS, workdir string) (diskState, error) {
 	}, nil
 }
 
-func (s *Store) persistLocked() error {
-	if err := persistReplicaCatalog(s.fs, s.workdir, s.state.Regions); err != nil {
-		return err
-	}
-	if err := persistRaftProgressCatalog(s.fs, s.workdir, s.state.RaftPointers); err != nil {
-		return err
-	}
-	if err := persistPendingRootEventCatalog(s.fs, s.workdir, s.state.PendingRootEvents); err != nil {
-		return err
-	}
-	if err := persistPendingSchedulerOperationCatalog(s.fs, s.workdir, s.state.PendingSchedulerOperations); err != nil {
-		return err
-	}
+func (s *Store) persistReplicaCatalogLocked() error {
+	return persistReplicaCatalog(s.fs, s.workdir, s.state.Regions)
+}
+
+func (s *Store) persistRaftProgressCatalogLocked() error {
+	return persistRaftProgressCatalog(s.fs, s.workdir, s.state.RaftPointers)
+}
+
+func (s *Store) persistPendingRootEventCatalogLocked() error {
+	return persistPendingRootEventCatalog(s.fs, s.workdir, s.state.PendingRootEvents)
+}
+
+func (s *Store) persistPendingSchedulerOperationCatalogLocked() error {
+	return persistPendingSchedulerOperationCatalog(s.fs, s.workdir, s.state.PendingSchedulerOperations)
+}
+
+func (s *Store) persistRootEventCatalogsLocked() error {
+	// Permanent publish rejection must not disappear behind a successful pending
+	// deletion. Persist the blocked catalog first so an interrupted move leaves
+	// repair evidence on disk even if the pending catalog still needs cleanup.
 	if err := persistBlockedRootEventCatalog(s.fs, s.workdir, s.state.BlockedRootEvents); err != nil {
 		return err
 	}
-	return nil
+	return persistPendingRootEventCatalog(s.fs, s.workdir, s.state.PendingRootEvents)
+}
+
+func raftPointerCheckpointRequired(prev, next RaftLogPointer, existed bool) bool {
+	if !existed {
+		return true
+	}
+	if prev == next {
+		return false
+	}
+	if prev.Segment == 0 || next.Segment == 0 {
+		return true
+	}
+	if prev.Segment != next.Segment {
+		return true
+	}
+	if next.Offset < prev.Offset {
+		return true
+	}
+	if prev.Committed == 0 && next.Committed != 0 {
+		return true
+	}
+	if prev.SnapshotIndex != next.SnapshotIndex || prev.SnapshotTerm != next.SnapshotTerm {
+		return true
+	}
+	if prev.TruncatedIndex != next.TruncatedIndex || prev.TruncatedTerm != next.TruncatedTerm {
+		return true
+	}
+	if prev.SegmentIndex != next.SegmentIndex || prev.TruncatedOffset != next.TruncatedOffset {
+		return true
+	}
+	return false
 }
 
 func loadReplicaCatalog(fs vfs.FS, workdir string) (map[uint64]RegionMeta, error) {

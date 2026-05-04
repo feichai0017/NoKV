@@ -287,8 +287,11 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 	}
 	require.NoError(t, parentLeader.Server.Store().ProposeSplit(91, childMeta, childMeta.StartKey))
 	require.Eventually(t, func() bool {
-		a := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
-		b := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 92)
+		a, errA := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 92)
+		b, errB := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 92)
+		if errA != nil || errB != nil {
+			return false
+		}
 		return a.GetKnown() && a.GetHosted() && b.GetKnown() && b.GetHosted()
 	}, 5*time.Second, 20*time.Millisecond, testcluster.DumpStatus(t, ctx, 92, seed, target))
 
@@ -341,10 +344,14 @@ func TestClientTwoPhaseCommitHonorsContextAcrossSplitRegionsUnderPartialQuorumLo
 
 	var lastRecoveryErr error
 	require.Eventuallyf(t, func() bool {
-		parentA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 91)
-		parentB := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 91)
-		childA := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 92)
-		childB := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 92)
+		parentA, errParentA := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 91)
+		parentB, errParentB := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 91)
+		childA, errChildA := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 92)
+		childB, errChildB := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 92)
+		if errParentA != nil || errParentB != nil || errChildA != nil || errChildB != nil {
+			lastRecoveryErr = errors.Join(errParentA, errParentB, errChildA, errChildB)
+			return false
+		}
 		parentMeta, parentLeaderStoreID, parentReady := runtimeLeaderDescriptor(parentA, parentB)
 		childMeta, childLeaderStoreID, childReady := runtimeLeaderDescriptor(childA, childB)
 		if !parentReady || !childReady {
