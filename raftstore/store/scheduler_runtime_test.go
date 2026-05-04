@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +27,7 @@ func TestStoreOperationCooldown(t *testing.T) {
 	go st.runOperationLoop()
 	defer st.stopOperationLoop()
 
-	op := scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 9, Source: 1, Target: 2}
+	op := storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 9, Source: 1, Target: 2}
 	key := operationKey{region: op.Region, typeID: op.Type}
 
 	st.enqueueOperation(op)
@@ -64,22 +64,22 @@ func TestStoreSchedulerStatusTracksQueueDrop(t *testing.T) {
 			},
 		},
 	}
-	st.sched.operation.input <- scheduledOp{op: scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}}
+	st.sched.operation.input <- scheduledOp{op: storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 1, Source: 1, Target: 2}}
 
-	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
+	st.enqueueOperation(storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 2, Source: 3, Target: 4})
 
 	status := st.SchedulerStatus()
 	require.True(t, status.Degraded)
-	require.Equal(t, scheduler.ModeDegraded, status.Mode)
+	require.Equal(t, storecontrol.ModeDegraded, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 	require.Contains(t, status.LastError, "scheduler queue full")
 
 	<-st.sched.operation.input
-	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
+	st.enqueueOperation(storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 3, Source: 5, Target: 6})
 
 	status = st.SchedulerStatus()
 	require.False(t, status.Degraded)
-	require.Equal(t, scheduler.ModeHealthy, status.Mode)
+	require.Equal(t, storecontrol.ModeHealthy, status.Mode)
 	require.Equal(t, uint64(1), status.DroppedOperations)
 }
 
@@ -93,7 +93,7 @@ func TestStoreCloseReportsDroppedOperationsToScheduler(t *testing.T) {
 		OperationInterval:  time.Hour,
 	})
 
-	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	st.enqueueOperation(storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
 	st.Close()
 
 	stores := sink.StoreSnapshot()
@@ -110,7 +110,7 @@ func TestStoreCloseKeepsDurableSchedulerOperations(t *testing.T) {
 		OperationInterval:  time.Hour,
 	})
 
-	st.enqueueOperation(scheduler.Operation{Type: scheduler.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
+	st.enqueueOperation(storecontrol.Operation{Type: storecontrol.OperationLeaderTransfer, Region: 11, Source: 1, Target: 2})
 	require.Eventually(t, func() bool {
 		return len(localMeta.PendingSchedulerOperations()) == 1
 	}, time.Second, 10*time.Millisecond)

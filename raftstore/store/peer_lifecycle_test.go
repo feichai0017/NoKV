@@ -4,8 +4,8 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -14,7 +14,7 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-func testSSTApply(t *testing.T, db *NoKV.DB) peer.SnapshotApplyFunc {
+func testSSTApply(t *testing.T, db *local.DB) peer.SnapshotApplyFunc {
 	t.Helper()
 	return func(payload []byte) (localmeta.RegionMeta, error) {
 		result, err := snapshotpkg.NewDBStore(db).ImportSnapshot(payload)

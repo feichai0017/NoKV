@@ -3,8 +3,8 @@ package migrate
 import (
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
@@ -14,9 +14,9 @@ import (
 func prepareStandaloneWorkdir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	opts := NoKV.NewDefaultOptions()
+	opts := local.NewDefaultOptions()
 	opts.WorkDir = dir
-	db, err := NoKV.Open(opts)
+	db, err := local.Open(opts)
 	require.NoError(t, err)
 	require.NoError(t, db.Set([]byte("alpha"), []byte("value")))
 	require.NoError(t, db.Close())

@@ -56,7 +56,7 @@ func (o *applyWatchObserver) OnApply(evt storepkg.ApplyEvent) {
 	}
 }
 
-func (s *Service) KvWatchApply(req *kvrpcpb.ApplyWatchRequest, stream kvrpcpb.NoKV_KvWatchApplyServer) error {
+func (s *Service) WatchApply(req *kvrpcpb.ApplyWatchRequest, stream kvrpcpb.StoreKV_WatchApplyServer) error {
 	if s == nil || s.store == nil {
 		return status.Error(codes.FailedPrecondition, "raftstore kv service is not initialized")
 	}

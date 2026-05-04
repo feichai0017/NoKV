@@ -6,52 +6,52 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	dbcore "github.com/feichai0017/NoKV/dbcore"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
+	local "github.com/feichai0017/NoKV/local"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
 type mvccGCPlannerHarness struct {
-	task    *dbcore.PeriodicTask
+	task    *utils.PeriodicTask
 	planner *storemvcc.GCPlanner
 }
 
-func newMVCCGCPlannerTestOptions(t *testing.T) *NoKV.Options {
+func newMVCCGCPlannerTestOptions(t *testing.T) *local.Options {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
 	return opt
 }
 
-func openMVCCGCPlannerTestDB(t *testing.T, opt *NoKV.Options) *NoKV.DB {
+func openMVCCGCPlannerTestDB(t *testing.T, opt *local.Options) *local.DB {
 	t.Helper()
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db
 }
 
-func applyMVCCGCPlannerEntry(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+func applyMVCCGCPlannerEntry(t *testing.T, db *local.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
 	t.Helper()
 	entry := kv.NewInternalEntry(cf, key, version, kv.SafeCopy(nil, value), meta, 0)
 	defer entry.DecrRef()
 	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
 }
 
-func applyMVCCGCPlannerWrite(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64) {
+func applyMVCCGCPlannerWrite(t *testing.T, db *local.DB, key []byte, commitTs, startTs uint64) {
 	t.Helper()
 	write := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startTs})
 	applyMVCCGCPlannerEntry(t, db, kv.CFWrite, key, commitTs, write, 0)
 }
 
-func applyMVCCGCPlannerLock(t *testing.T, db *NoKV.DB, key []byte, startTs uint64) {
+func applyMVCCGCPlannerLock(t *testing.T, db *local.DB, key []byte, startTs uint64) {
 	t.Helper()
 	lock := mvcc.EncodeLock(mvcc.Lock{
 		Primary: key,
@@ -64,7 +64,7 @@ func startMVCCGCPlannerHarness(t *testing.T, cfg storemvcc.GCPlanConfig) *mvccGC
 	t.Helper()
 	taskCfg, planner, ok := storemvcc.NewGCPlanTask(cfg)
 	require.True(t, ok)
-	task := dbcore.NewPeriodicTask(taskCfg)
+	task := utils.NewPeriodicTask(taskCfg)
 	require.NotNil(t, task)
 	task.Start()
 	return &mvccGCPlannerHarness{task: task, planner: planner}

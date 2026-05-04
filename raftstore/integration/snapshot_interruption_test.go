@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
@@ -18,7 +18,7 @@ func TestExpandSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *local.Options) {
 	})
 	key := []byte("snapshot-interrupt-key")
 	value := make([]byte, 2048)
@@ -84,7 +84,7 @@ func TestExpandSSTSnapshotInstallInterruptedBeforePublish(t *testing.T) {
 	defer cancel()
 
 	seedDir := t.TempDir()
-	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *NoKV.Options) {
+	standalone := testcluster.OpenStandaloneDB(t, seedDir, func(opt *local.Options) {
 	})
 	key := []byte("sst-snapshot-interrupt-key")
 	value := make([]byte, 2048)

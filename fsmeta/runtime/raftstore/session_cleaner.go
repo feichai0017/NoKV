@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	dbcore "github.com/feichai0017/NoKV/dbcore"
 	"github.com/feichai0017/NoKV/fsmeta"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 const defaultSessionCleanupInterval = 30 * time.Second
@@ -31,7 +31,7 @@ type sessionCleaner struct {
 	interval time.Duration
 	limit    uint32
 
-	periodic *dbcore.PeriodicTask
+	periodic *utils.PeriodicTask
 
 	mu    sync.RWMutex
 	stats sessionCleanerStats
@@ -64,7 +64,7 @@ func startSessionCleaner(ctx context.Context, mounts sessionMountLister, exec se
 			Enabled: true,
 		},
 	}
-	c.periodic = dbcore.NewPeriodicTask(dbcore.PeriodicTaskConfig{
+	c.periodic = utils.NewPeriodicTask(utils.PeriodicTaskConfig{
 		Name:     "fsmeta-session-cleaner",
 		Interval: interval,
 		Run:      c.runOnce,

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -16,7 +17,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/scheduler"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,7 +28,7 @@ const maxSchedulerOperationRetryBackoff = 5 * time.Second
 const maxSchedulerOperationAttempts = 8
 
 type schedulerRuntime struct {
-	client scheduler.Client
+	client storecontrol.Client
 
 	operation operationRuntime
 	publish   publishRuntime
@@ -75,7 +75,7 @@ type schedulerHealth struct {
 
 type operationKey struct {
 	region uint64
-	typeID scheduler.OperationType
+	typeID storecontrol.OperationType
 }
 
 type regionEvent struct {
@@ -85,12 +85,12 @@ type regionEvent struct {
 }
 
 type scheduledOp struct {
-	op       scheduler.Operation
+	op       storecontrol.Operation
 	ready    time.Time
 	attempts uint32
 }
 
-func (s *Store) schedulerClient() scheduler.Client {
+func (s *Store) schedulerClient() storecontrol.Client {
 	if s == nil || s.sched == nil {
 		return nil
 	}
@@ -99,18 +99,18 @@ func (s *Store) schedulerClient() scheduler.Client {
 
 // SchedulerStatus returns the current scheduler health view by combining the
 // local queue state with the control-plane client status.
-func (s *Store) SchedulerStatus() scheduler.Status {
+func (s *Store) SchedulerStatus() storecontrol.Status {
 	if s == nil {
-		return scheduler.Status{}
+		return storecontrol.Status{}
 	}
-	status := scheduler.Status{Mode: scheduler.ModeHealthy}
+	status := storecontrol.Status{Mode: storecontrol.ModeHealthy}
 	if s.schedulerClient() != nil {
 		status = s.schedulerClient().Status()
 		if status.Mode == "" {
 			if status.Degraded {
-				status.Mode = scheduler.ModeUnavailable
+				status.Mode = storecontrol.ModeUnavailable
 			} else {
-				status.Mode = scheduler.ModeHealthy
+				status.Mode = storecontrol.ModeHealthy
 			}
 		}
 	}
@@ -124,8 +124,8 @@ func (s *Store) SchedulerStatus() scheduler.Status {
 	defer s.sched.health.mu.Unlock()
 	if s.sched.health.degraded {
 		status.Degraded = true
-		if status.Mode != scheduler.ModeUnavailable {
-			status.Mode = scheduler.ModeDegraded
+		if status.Mode != storecontrol.ModeUnavailable {
+			status.Mode = storecontrol.ModeDegraded
 		}
 		if status.LastErrorAt.Before(s.sched.health.lastErrorAt) || status.LastError == "" {
 			status.LastError = s.sched.health.lastError
@@ -135,12 +135,12 @@ func (s *Store) SchedulerStatus() scheduler.Status {
 	return status
 }
 
-func (s *Store) applyOperation(op scheduler.Operation) bool {
+func (s *Store) applyOperation(op storecontrol.Operation) bool {
 	if s == nil {
 		return false
 	}
 	switch op.Type {
-	case scheduler.OperationLeaderTransfer:
+	case storecontrol.OperationLeaderTransfer:
 		if op.Source == 0 || op.Target == 0 {
 			return false
 		}
@@ -154,11 +154,11 @@ func (s *Store) applyOperation(op scheduler.Operation) bool {
 	return false
 }
 
-func (s *Store) enqueueOperation(op scheduler.Operation) {
+func (s *Store) enqueueOperation(op storecontrol.Operation) {
 	if s == nil {
 		return
 	}
-	if op.Type == scheduler.OperationNone || op.Region == 0 {
+	if op.Type == storecontrol.OperationNone || op.Region == 0 {
 		return
 	}
 	if s.sched == nil || s.sched.operation.input == nil {
@@ -184,7 +184,7 @@ func (s *Store) enqueueOperation(op scheduler.Operation) {
 		return
 	}
 	if err := s.persistPendingSchedulerOperation(item); err != nil {
-		s.dropQueuedOperations([]scheduler.Operation{op}, fmt.Sprintf("persist failed: %v", err))
+		s.dropQueuedOperations([]storecontrol.Operation{op}, fmt.Sprintf("persist failed: %v", err))
 		return
 	}
 	if s.dispatchPendingSchedulerOperation(item) {
@@ -258,7 +258,7 @@ func (s *Store) sendHeartbeats() {
 	}
 }
 
-func (s *Store) reportStoreHeartbeat() []scheduler.Operation {
+func (s *Store) reportStoreHeartbeat() []storecontrol.Operation {
 	if s == nil || s.schedulerClient() == nil || s.storeID == 0 {
 		return nil
 	}
@@ -483,7 +483,7 @@ func (s *Store) persistPendingSchedulerOperation(item scheduledOp) error {
 	return nil
 }
 
-func (s *Store) deletePendingSchedulerOperation(op scheduler.Operation) error {
+func (s *Store) deletePendingSchedulerOperation(op storecontrol.Operation) error {
 	if s == nil {
 		return nil
 	}
@@ -499,7 +499,7 @@ func (s *Store) deletePendingSchedulerOperation(op scheduler.Operation) error {
 
 func localmetaSchedulerOperation(item scheduledOp) (localmeta.PendingSchedulerOperation, bool) {
 	switch item.op.Type {
-	case scheduler.OperationLeaderTransfer:
+	case storecontrol.OperationLeaderTransfer:
 		return localmeta.PendingSchedulerOperation{
 			Kind:         localmeta.PendingSchedulerOperationLeaderTransfer,
 			RegionID:     item.op.Region,
@@ -512,17 +512,17 @@ func localmetaSchedulerOperation(item scheduledOp) (localmeta.PendingSchedulerOp
 	}
 }
 
-func storeOperationFromLocalMeta(op localmeta.PendingSchedulerOperation) (scheduler.Operation, bool) {
+func storeOperationFromLocalMeta(op localmeta.PendingSchedulerOperation) (storecontrol.Operation, bool) {
 	switch op.Kind {
 	case localmeta.PendingSchedulerOperationLeaderTransfer:
-		return scheduler.Operation{
-			Type:   scheduler.OperationLeaderTransfer,
+		return storecontrol.Operation{
+			Type:   storecontrol.OperationLeaderTransfer,
 			Region: op.RegionID,
 			Source: op.SourcePeerID,
 			Target: op.TargetPeerID,
 		}, true
 	default:
-		return scheduler.Operation{}, false
+		return storecontrol.Operation{}, false
 	}
 }
 
@@ -700,7 +700,7 @@ func (s *Store) runOperationLoop() {
 	}
 }
 
-func (s *Store) nextOperationReadyTime(op scheduler.Operation) time.Time {
+func (s *Store) nextOperationReadyTime(op storecontrol.Operation) time.Time {
 	if s == nil || s.sched == nil || s.sched.operation.cooldown <= 0 {
 		return time.Time{}
 	}
@@ -731,7 +731,7 @@ func (s *Store) nextOperationRetryDelay(attempts uint32) time.Duration {
 	return delay
 }
 
-func (s *Store) markOperationApplied(op scheduler.Operation, ts time.Time) bool {
+func (s *Store) markOperationApplied(op storecontrol.Operation, ts time.Time) bool {
 	if s == nil {
 		return false
 	}
@@ -769,11 +769,11 @@ func (s *Store) clearLocalSchedulerDegraded() {
 	s.sched.health.mu.Unlock()
 }
 
-func (s *Store) recordLocalSchedulerDrop(op scheduler.Operation) {
-	s.dropQueuedOperations([]scheduler.Operation{op}, "queue full")
+func (s *Store) recordLocalSchedulerDrop(op storecontrol.Operation) {
+	s.dropQueuedOperations([]storecontrol.Operation{op}, "queue full")
 }
 
-func (s *Store) recordLocalSchedulerBacklog(op scheduler.Operation, reason string) {
+func (s *Store) recordLocalSchedulerBacklog(op storecontrol.Operation, reason string) {
 	if s == nil || s.sched == nil {
 		return
 	}
@@ -791,10 +791,10 @@ func (s *Store) abandonScheduledOperation(item scheduledOp, reason string) {
 		return
 	}
 	_ = s.deletePendingSchedulerOperation(item.op)
-	s.dropQueuedOperations([]scheduler.Operation{item.op}, reason)
+	s.dropQueuedOperations([]storecontrol.Operation{item.op}, reason)
 }
 
-func (s *Store) dropQueuedOperations(ops []scheduler.Operation, reason string) {
+func (s *Store) dropQueuedOperations(ops []storecontrol.Operation, reason string) {
 	if s == nil || s.sched == nil {
 		return
 	}
@@ -852,16 +852,16 @@ func isPermanentSchedulerPublishError(err error) bool {
 	}
 }
 
-func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
+func (s *Store) storeStatsSnapshot() storecontrol.StoreStats {
 	if s == nil {
-		return scheduler.StoreStats{}
+		return storecontrol.StoreStats{}
 	}
 	leaderRegions := s.leaderRegionIDs()
 	s.addressMu.RLock()
 	clientAddr := s.clientAddr
 	raftAddr := s.raftAddr
 	s.addressMu.RUnlock()
-	stats := scheduler.StoreStats{
+	stats := storecontrol.StoreStats{
 		StoreID:         s.storeID,
 		ClientAddr:      clientAddr,
 		RaftAddr:        raftAddr,
@@ -881,22 +881,22 @@ func (s *Store) storeStatsSnapshot() scheduler.StoreStats {
 	return stats
 }
 
-func flattenScheduledOps(pending []scheduledOp) []scheduler.Operation {
+func flattenScheduledOps(pending []scheduledOp) []storecontrol.Operation {
 	if len(pending) == 0 {
 		return nil
 	}
-	out := make([]scheduler.Operation, 0, len(pending))
+	out := make([]storecontrol.Operation, 0, len(pending))
 	for _, item := range pending {
 		out = append(out, item.op)
 	}
 	return out
 }
 
-func (s *Store) drainBufferedOperations() []scheduler.Operation {
+func (s *Store) drainBufferedOperations() []storecontrol.Operation {
 	if s == nil || s.sched == nil || s.sched.operation.input == nil {
 		return nil
 	}
-	var drained []scheduler.Operation
+	var drained []storecontrol.Operation
 	for {
 		select {
 		case item := <-s.sched.operation.input:

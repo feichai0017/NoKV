@@ -12,9 +12,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/scheduler"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -112,13 +112,13 @@ func (s *errorSchedulerSink) PublishRootEvent(_ context.Context, _ rootevent.Eve
 	return s.err
 }
 
-func (*errorSchedulerSink) StoreHeartbeat(context.Context, scheduler.StoreStats) []scheduler.Operation {
+func (*errorSchedulerSink) StoreHeartbeat(context.Context, storecontrol.StoreStats) []storecontrol.Operation {
 	return nil
 }
-func (*errorSchedulerSink) Status() scheduler.Status { return scheduler.Status{} }
-func (*errorSchedulerSink) Close() error             { return nil }
+func (*errorSchedulerSink) Status() storecontrol.Status { return storecontrol.Status{} }
+func (*errorSchedulerSink) Close() error                { return nil }
 
-func startTransitionExecutorStore(t *testing.T, sched scheduler.Client, campaign bool) (*Store, *peer.Peer, localmeta.RegionMeta) {
+func startTransitionExecutorStore(t *testing.T, sched storecontrol.Client, campaign bool) (*Store, *peer.Peer, localmeta.RegionMeta) {
 	t.Helper()
 	db, localMeta := openStoreDB(t)
 	region := localmeta.RegionMeta{

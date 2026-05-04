@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"

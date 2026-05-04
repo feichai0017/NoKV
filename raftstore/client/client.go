@@ -24,7 +24,7 @@ type StoreResolver interface {
 	GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error)
 }
 
-// Config configures the NoKV distributed client.
+// Config configures the StoreKV distributed client.
 type Config struct {
 	Context            context.Context
 	RegionResolver     RegionResolver
@@ -47,7 +47,7 @@ type RetryPolicy struct {
 	LockResolveBackoff          time.Duration
 }
 
-// Client provides Region-aware helpers for NoKV RPCs, including 2PC.
+// Client provides Region-aware helpers for StoreKV RPCs, including 2PC.
 type Client struct {
 	mu                 sync.RWMutex
 	stores             map[uint64]*storeConn

@@ -3,10 +3,10 @@ package store
 import (
 	"time"
 
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	"github.com/feichai0017/NoKV/scheduler"
 )
 
 // PeerBuilder constructs peer configuration for the provided region metadata.
@@ -21,7 +21,7 @@ type Config struct {
 	PeerBuilder        PeerBuilder
 	LocalMeta          *localmeta.Store
 	WorkDir            string
-	Scheduler          scheduler.Client
+	Scheduler          storecontrol.Client
 	HeartbeatInterval  time.Duration
 	HeartbeatTimeout   time.Duration
 	PublishTimeout     time.Duration

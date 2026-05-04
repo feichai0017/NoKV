@@ -356,18 +356,18 @@ message ApplyWatchResponse {
   uint64 dropped_events = 2;
 }
 
-service NoKV {
-  rpc KvGet(KvGetRequest) returns (KvGetResponse);
-  rpc KvBatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
-  rpc KvScan(KvScanRequest) returns (KvScanResponse);
-  rpc KvPrewrite(KvPrewriteRequest) returns (KvPrewriteResponse);
-  rpc KvCommit(KvCommitRequest) returns (KvCommitResponse);
-  rpc KvBatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
-  rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
-  rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
-  rpc KvTxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
-  rpc KvTryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
-  rpc KvWatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
+service StoreKV {
+  rpc Get(KvGetRequest) returns (KvGetResponse);
+  rpc BatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
+  rpc Scan(KvScanRequest) returns (KvScanResponse);
+  rpc Prewrite(KvPrewriteRequest) returns (KvPrewriteResponse);
+  rpc Commit(KvCommitRequest) returns (KvCommitResponse);
+  rpc BatchRollback(KvBatchRollbackRequest) returns (KvBatchRollbackResponse);
+  rpc ResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
+  rpc CheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
+  rpc TxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
+  rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
+  rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
 }
 
 message KeyError {

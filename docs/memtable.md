@@ -95,7 +95,7 @@ Badger follows the same pattern, while RocksDB often uses skiplist-backed arenas
 
 * Tuning `Options.MemTableSize` affects WAL segment count and flush latency. Larger memtables reduce flush churn but increase crash recovery time.
 * ART currently uses noticeably more memindex arena memory than skiplist because it stores both route keys and original internal keys in leaves; in local measurements the ART memindex is roughly `2x` the skiplist memindex footprint for the same key/value set.
-* Monitor `NoKV.Stats.flush.*` fields to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.
+* Monitor `NoKV.Local.Stats.flush.*` fields to catch stalled immutables—an ever-growing queue often indicates slow SST builds or manifest contention.
 * Because memtables carry WAL segment IDs, deleting WAL files manually can lead to recovery failures; always rely on the engine's manifest-driven cleanup.
 
 See [`docs/flush.md`](flush.md) for the end-to-end flush scheduler and `[docs/architecture.md](architecture.md#3-end-to-end-write-flow)` for where memtables sit in the write pipeline.

@@ -501,13 +501,13 @@ func (mc *mockCluster) scan(storeID uint64, req *kvrpcpb.KvScanRequest) (*kvrpcp
 }
 
 type mockService struct {
-	kvrpcpb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedStoreKVServer
 	storeID uint64
 	cluster *mockCluster
 }
 
 type blockingService struct {
-	kvrpcpb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedStoreKVServer
 	started chan struct{}
 }
 
@@ -536,11 +536,11 @@ func (s *regionBlockingService) signal() {
 	}
 }
 
-func (s *mockService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *mockService) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	return s.cluster.get(s.storeID, req)
 }
 
-func (s *mockService) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+func (s *mockService) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
@@ -577,11 +577,11 @@ func (s *mockService) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetReq
 	}, nil
 }
 
-func (s *mockService) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+func (s *mockService) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	return s.cluster.scan(s.storeID, req)
 }
 
-func (s *mockService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+func (s *mockService) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
@@ -592,7 +592,7 @@ func (s *mockService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteReq
 	}, nil
 }
 
-func (s *mockService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+func (s *mockService) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
@@ -603,7 +603,7 @@ func (s *mockService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest
 	}, nil
 }
 
-func (s *mockService) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+func (s *mockService) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
@@ -614,7 +614,7 @@ func (s *mockService) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchR
 	}, nil
 }
 
-func (s *mockService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+func (s *mockService) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	if req == nil || req.GetContext() == nil {
 		return nil, statusInvalidArgument("context required")
 	}
@@ -625,55 +625,55 @@ func (s *mockService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveL
 	}, nil
 }
 
-func (s *mockService) KvCheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+func (s *mockService) CheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
 	return &kvrpcpb.KvCheckTxnStatusResponse{}, nil
 }
 
-func (s *mockService) KvTxnHeartBeat(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+func (s *mockService) TxnHeartBeat(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
 	return &kvrpcpb.KvTxnHeartBeatResponse{}, nil
 }
 
-func (s *blockingService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *blockingService) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *blockingService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+func (s *blockingService) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *blockingService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+func (s *blockingService) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	s.signal()
 	<-ctx.Done()
 	return nil, status.Error(codes.Canceled, ctx.Err().Error())
 }
 
-func (s *regionBlockingService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+func (s *regionBlockingService) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockPrewriteOn {
 		s.signal()
 		<-ctx.Done()
 		return nil, status.Error(codes.Canceled, ctx.Err().Error())
 	}
-	return s.mockService.KvPrewrite(ctx, req)
+	return s.mockService.Prewrite(ctx, req)
 }
 
-func (s *regionBlockingService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+func (s *regionBlockingService) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	if req != nil && req.GetContext() != nil && req.GetContext().GetRegionId() == s.blockResolveLockOn {
 		s.signal()
 		<-ctx.Done()
 		return nil, status.Error(codes.Canceled, ctx.Err().Error())
 	}
-	return s.mockService.KvResolveLock(ctx, req)
+	return s.mockService.ResolveLock(ctx, req)
 }
 
 func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
 	service := &mockService{storeID: storeID, cluster: cluster}
-	kvrpcpb.RegisterNoKVServer(srv, service)
+	kvrpcpb.RegisterStoreKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -685,10 +685,10 @@ func startMockStore(t *testing.T, cluster *mockCluster, storeID uint64) (string,
 	}
 }
 
-func startBlockingStore(t *testing.T, service kvrpcpb.NoKVServer) (string, func()) {
+func startBlockingStore(t *testing.T, service kvrpcpb.StoreKVServer) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	kvrpcpb.RegisterNoKVServer(srv, service)
+	kvrpcpb.RegisterStoreKVServer(srv, service)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -959,17 +959,17 @@ func TestClientRegionResolverLookupAndCache(t *testing.T) {
 }
 
 type errorService struct {
-	kvrpcpb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedStoreKVServer
 }
 
-func (s *errorService) KvGet(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *errorService) Get(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	return nil, status.Error(codes.Unavailable, "boom")
 }
 
 func startErrorStore(t *testing.T) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	kvrpcpb.RegisterNoKVServer(srv, &errorService{})
+	kvrpcpb.RegisterStoreKVServer(srv, &errorService{})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -982,13 +982,13 @@ func startErrorStore(t *testing.T) (string, func()) {
 }
 
 type flakyGetService struct {
-	kvrpcpb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedStoreKVServer
 	mu       sync.Mutex
 	failures int
 	resp     *kvrpcpb.KvGetResponse
 }
 
-func (s *flakyGetService) KvGet(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *flakyGetService) Get(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failures > 0 {
@@ -1001,7 +1001,7 @@ func (s *flakyGetService) KvGet(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcp
 func startFlakyGetStore(t *testing.T, failures int, resp *kvrpcpb.KvGetResponse) (string, func()) {
 	t.Helper()
 	srv := grpc.NewServer()
-	kvrpcpb.RegisterNoKVServer(srv, &flakyGetService{failures: failures, resp: resp})
+	kvrpcpb.RegisterStoreKVServer(srv, &flakyGetService{failures: failures, resp: resp})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {

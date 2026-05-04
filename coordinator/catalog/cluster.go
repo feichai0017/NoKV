@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -17,14 +16,22 @@ type PendingSnapshot struct {
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 }
 
+// ClusterSnapshot is the read-only input shape consumed by coordinator
+// scheduling policy. It keeps scheduling independent from Cluster's internal
+// store and region indexes.
+type ClusterSnapshot struct {
+	Stores  []StoreStats
+	Regions []RegionInfo
+}
+
 // Cluster stores in-memory Coordinator metadata and provides route lookups.
 //
 // NOTE: Cluster intentionally keeps only the in-memory metadata/state model.
 // Coordinator RPC wiring and persistence are handled by higher layers
 // (coordinator/server and coordinator/rootview).
 type Cluster struct {
-	stores              *pdview.StoreHealthView
-	regions             *pdview.RegionDirectoryView
+	stores              *StoreHealthView
+	regions             *RegionDirectoryView
 	storeMembershipMu   sync.RWMutex
 	storeMemberships    map[uint64]rootstate.StoreMembership
 	mountMu             sync.RWMutex
@@ -43,8 +50,8 @@ type Cluster struct {
 // NewCluster creates an empty in-memory cluster metadata view.
 func NewCluster() *Cluster {
 	return &Cluster{
-		stores:              pdview.NewStoreHealthView(),
-		regions:             pdview.NewRegionDirectoryView(),
+		stores:              NewStoreHealthView(),
+		regions:             NewRegionDirectoryView(),
 		storeMemberships:    make(map[uint64]rootstate.StoreMembership),
 		mounts:              make(map[string]rootstate.MountRecord),
 		subtrees:            make(map[string]rootstate.SubtreeAuthority),
@@ -55,7 +62,7 @@ func NewCluster() *Cluster {
 }
 
 // UpsertStoreHeartbeat updates store metadata from a store heartbeat.
-func (c *Cluster) UpsertStoreHeartbeat(stats pdview.StoreStats) error {
+func (c *Cluster) UpsertStoreHeartbeat(stats StoreStats) error {
 	if c == nil {
 		return nil
 	}
@@ -78,7 +85,7 @@ func (c *Cluster) RemoveStore(storeID uint64) {
 }
 
 // StoreSnapshot returns a stable copy of tracked store metadata.
-func (c *Cluster) StoreSnapshot() []pdview.StoreStats {
+func (c *Cluster) StoreSnapshot() []StoreStats {
 	if c == nil {
 		return nil
 	}
@@ -87,16 +94,16 @@ func (c *Cluster) StoreSnapshot() []pdview.StoreStats {
 
 // StoreByID returns the latest runtime store registry entry. The lookup is O(1)
 // via StoreHealthView.Get and does not allocate or sort.
-func (c *Cluster) StoreByID(storeID uint64) (pdview.StoreStats, bool) {
+func (c *Cluster) StoreByID(storeID uint64) (StoreStats, bool) {
 	if c == nil || storeID == 0 {
-		return pdview.StoreStats{}, false
+		return StoreStats{}, false
 	}
 	return c.stores.Get(storeID)
 }
 
 type StoreInfo struct {
 	Membership rootstate.StoreMembership
-	Stats      pdview.StoreStats
+	Stats      StoreStats
 	HasRuntime bool
 }
 
@@ -263,7 +270,7 @@ func (c *Cluster) applyRootEventToRegions(event rootevent.Event) error {
 	return applyRootEventToRegionView(c.regions, event)
 }
 
-func applyRootEventToRegionView(regions *pdview.RegionDirectoryView, event rootevent.Event) error {
+func applyRootEventToRegionView(regions *RegionDirectoryView, event rootevent.Event) error {
 	if regions == nil {
 		return nil
 	}
@@ -382,11 +389,22 @@ func (c *Cluster) RecordRegionLeaders(storeID uint64, regionIDs []uint64) {
 }
 
 // RegionSnapshot returns a stable copy of tracked region metadata.
-func (c *Cluster) RegionSnapshot() []pdview.RegionInfo {
+func (c *Cluster) RegionSnapshot() []RegionInfo {
 	if c == nil {
 		return nil
 	}
 	return c.regions.Snapshot()
+}
+
+// Snapshot returns the stable scheduling-facing view of cluster runtime state.
+func (c *Cluster) Snapshot() ClusterSnapshot {
+	if c == nil {
+		return ClusterSnapshot{}
+	}
+	return ClusterSnapshot{
+		Stores:  c.StoreSnapshot(),
+		Regions: c.RegionSnapshot(),
+	}
 }
 
 // MaxDescriptorRevision returns the highest rooted descriptor publication epoch
@@ -770,7 +788,7 @@ func (c *Cluster) validateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, 
 	if err := validateQuotaFenceEvent(snapshot, event); err != nil {
 		return err
 	}
-	regions := pdview.NewRegionDirectoryView()
+	regions := NewRegionDirectoryView()
 	regions.Replace(snapshot.Descriptors)
 	return applyRootEventToRegionView(regions, event)
 }

@@ -3982,21 +3982,20 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x83\a\n" +
-	"\x04NoKV\x12<\n" +
-	"\x05KvGet\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12K\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xf0\x06\n" +
+	"\aStoreKV\x12:\n" +
+	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
+	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
+	"\x04Scan\x12\x19.nokv.kv.v1.KvScanRequest\x1a\x1a.nokv.kv.v1.KvScanResponse\x12I\n" +
+	"\bPrewrite\x12\x1d.nokv.kv.v1.KvPrewriteRequest\x1a\x1e.nokv.kv.v1.KvPrewriteResponse\x12C\n" +
+	"\x06Commit\x12\x1b.nokv.kv.v1.KvCommitRequest\x1a\x1c.nokv.kv.v1.KvCommitResponse\x12X\n" +
+	"\rBatchRollback\x12\".nokv.kv.v1.KvBatchRollbackRequest\x1a#.nokv.kv.v1.KvBatchRollbackResponse\x12R\n" +
+	"\vResolveLock\x12 .nokv.kv.v1.KvResolveLockRequest\x1a!.nokv.kv.v1.KvResolveLockResponse\x12[\n" +
+	"\x0eCheckTxnStatus\x12#.nokv.kv.v1.KvCheckTxnStatusRequest\x1a$.nokv.kv.v1.KvCheckTxnStatusResponse\x12U\n" +
+	"\fTxnHeartBeat\x12!.nokv.kv.v1.KvTxnHeartBeatRequest\x1a\".nokv.kv.v1.KvTxnHeartBeatResponse\x12^\n" +
+	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12M\n" +
 	"\n" +
-	"KvBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12?\n" +
-	"\x06KvScan\x12\x19.nokv.kv.v1.KvScanRequest\x1a\x1a.nokv.kv.v1.KvScanResponse\x12K\n" +
-	"\n" +
-	"KvPrewrite\x12\x1d.nokv.kv.v1.KvPrewriteRequest\x1a\x1e.nokv.kv.v1.KvPrewriteResponse\x12E\n" +
-	"\bKvCommit\x12\x1b.nokv.kv.v1.KvCommitRequest\x1a\x1c.nokv.kv.v1.KvCommitResponse\x12Z\n" +
-	"\x0fKvBatchRollback\x12\".nokv.kv.v1.KvBatchRollbackRequest\x1a#.nokv.kv.v1.KvBatchRollbackResponse\x12T\n" +
-	"\rKvResolveLock\x12 .nokv.kv.v1.KvResolveLockRequest\x1a!.nokv.kv.v1.KvResolveLockResponse\x12]\n" +
-	"\x10KvCheckTxnStatus\x12#.nokv.kv.v1.KvCheckTxnStatusRequest\x1a$.nokv.kv.v1.KvCheckTxnStatusResponse\x12W\n" +
-	"\x0eKvTxnHeartBeat\x12!.nokv.kv.v1.KvTxnHeartBeatRequest\x1a\".nokv.kv.v1.KvTxnHeartBeatResponse\x12`\n" +
-	"\x11KvTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12O\n" +
-	"\fKvWatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01B+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
+	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01B+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
 	file_kv_kv_proto_rawDescOnce sync.Once
@@ -4156,28 +4155,28 @@ var file_kv_kv_proto_depIdxs = []int32{
 	62, // 71: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
 	63, // 72: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
 	6,  // 73: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
-	36, // 74: nokv.kv.v1.NoKV.KvGet:input_type -> nokv.kv.v1.KvGetRequest
-	38, // 75: nokv.kv.v1.NoKV.KvBatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
-	40, // 76: nokv.kv.v1.NoKV.KvScan:input_type -> nokv.kv.v1.KvScanRequest
-	42, // 77: nokv.kv.v1.NoKV.KvPrewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
-	44, // 78: nokv.kv.v1.NoKV.KvCommit:input_type -> nokv.kv.v1.KvCommitRequest
-	46, // 79: nokv.kv.v1.NoKV.KvBatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
-	48, // 80: nokv.kv.v1.NoKV.KvResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
-	50, // 81: nokv.kv.v1.NoKV.KvCheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
-	52, // 82: nokv.kv.v1.NoKV.KvTxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
-	54, // 83: nokv.kv.v1.NoKV.KvTryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
-	56, // 84: nokv.kv.v1.NoKV.KvWatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	37, // 85: nokv.kv.v1.NoKV.KvGet:output_type -> nokv.kv.v1.KvGetResponse
-	39, // 86: nokv.kv.v1.NoKV.KvBatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
-	41, // 87: nokv.kv.v1.NoKV.KvScan:output_type -> nokv.kv.v1.KvScanResponse
-	43, // 88: nokv.kv.v1.NoKV.KvPrewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
-	45, // 89: nokv.kv.v1.NoKV.KvCommit:output_type -> nokv.kv.v1.KvCommitResponse
-	47, // 90: nokv.kv.v1.NoKV.KvBatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
-	49, // 91: nokv.kv.v1.NoKV.KvResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
-	51, // 92: nokv.kv.v1.NoKV.KvCheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
-	53, // 93: nokv.kv.v1.NoKV.KvTxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
-	55, // 94: nokv.kv.v1.NoKV.KvTryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
-	58, // 95: nokv.kv.v1.NoKV.KvWatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
+	36, // 74: nokv.kv.v1.StoreKV.Get:input_type -> nokv.kv.v1.KvGetRequest
+	38, // 75: nokv.kv.v1.StoreKV.BatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
+	40, // 76: nokv.kv.v1.StoreKV.Scan:input_type -> nokv.kv.v1.KvScanRequest
+	42, // 77: nokv.kv.v1.StoreKV.Prewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
+	44, // 78: nokv.kv.v1.StoreKV.Commit:input_type -> nokv.kv.v1.KvCommitRequest
+	46, // 79: nokv.kv.v1.StoreKV.BatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
+	48, // 80: nokv.kv.v1.StoreKV.ResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
+	50, // 81: nokv.kv.v1.StoreKV.CheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
+	52, // 82: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
+	54, // 83: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
+	56, // 84: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
+	37, // 85: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
+	39, // 86: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
+	41, // 87: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
+	43, // 88: nokv.kv.v1.StoreKV.Prewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
+	45, // 89: nokv.kv.v1.StoreKV.Commit:output_type -> nokv.kv.v1.KvCommitResponse
+	47, // 90: nokv.kv.v1.StoreKV.BatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
+	49, // 91: nokv.kv.v1.StoreKV.ResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
+	51, // 92: nokv.kv.v1.StoreKV.CheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
+	53, // 93: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
+	55, // 94: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
+	58, // 95: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
 	85, // [85:96] is the sub-list for method output_type
 	74, // [74:85] is the sub-list for method input_type
 	74, // [74:74] is the sub-list for extension type_name

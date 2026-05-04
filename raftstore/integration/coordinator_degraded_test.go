@@ -6,12 +6,12 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -49,8 +49,8 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	seed.WirePeers(map[uint64]string{201: target.Addr()})
 	target.WirePeers(map[uint64]string{101: seed.Addr()})
 	testcluster.WaitForLeaderPeer(t, ctx, seed.Addr(), 61, 101)
-	testcluster.WaitForSchedulerMode(t, seed, scheduler.ModeHealthy, false)
-	testcluster.WaitForSchedulerMode(t, target, scheduler.ModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, seed, storecontrol.ModeHealthy, false)
+	testcluster.WaitForSchedulerMode(t, target, storecontrol.ModeHealthy, false)
 
 	_, err = migrate.Expand(ctx, migrate.ExpandConfig{
 		Addr:         seed.Addr(),
@@ -79,8 +79,8 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	require.Equal(t, value, getResp.GetValue())
 
 	coord.Close(t)
-	testcluster.WaitForSchedulerMode(t, seed, scheduler.ModeUnavailable, true)
-	testcluster.WaitForSchedulerMode(t, target, scheduler.ModeUnavailable, true)
+	testcluster.WaitForSchedulerMode(t, seed, storecontrol.ModeUnavailable, true)
+	testcluster.WaitForSchedulerMode(t, target, storecontrol.ModeUnavailable, true)
 
 	updated := []byte("coordinator-outage-updated")
 	require.NoError(t, cli.Put(ctx, key, updated, 20, 21, 3000))

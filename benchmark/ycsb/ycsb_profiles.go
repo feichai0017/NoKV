@@ -8,8 +8,8 @@ import (
 	"github.com/cockroachdb/pebble"
 	badger "github.com/dgraph-io/badger/v4"
 	badgeropts "github.com/dgraph-io/badger/v4/options"
-	NoKV "github.com/feichai0017/NoKV"
 	nokvlsm "github.com/feichai0017/NoKV/engine/lsm"
+	local "github.com/feichai0017/NoKV/local"
 )
 
 const (
@@ -78,20 +78,20 @@ func defaultBadgerCacheBudgetMB(totalMB int) (blockMB, indexMB int) {
 	return blockMB, indexMB
 }
 
-// buildNoKVBenchmarkOptions starts from NoKV.NewDefaultOptions() and
+// buildNoKVBenchmarkOptions starts from local.NewDefaultOptions() and
 // overrides only the workload-specific sizing plus the background helpers
 // (WAL watchdog, batch coalescing wait, hot-key throttle) that
 // would otherwise muddy benchmark numbers. The shape is intentionally
 // production-like so that perf changes in NewDefaultOptions are picked
 // up by YCSB on the next run without manual re-sync.
-func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable NoKV.MemTableEngine) *NoKV.Options {
-	cfg := NoKV.NewDefaultOptions()
+func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable local.MemTableEngine) *local.Options {
+	cfg := local.NewDefaultOptions()
 	cfg.WorkDir = dir
 	if memtable != "" {
 		cfg.MemTableEngine = memtable
 	}
 	if opts.NoKVCompactionPolicy != "" {
-		cfg.CompactionPolicy = NoKV.CompactionPolicy(opts.NoKVCompactionPolicy)
+		cfg.CompactionPolicy = local.CompactionPolicy(opts.NoKVCompactionPolicy)
 	}
 
 	cfg.MemTableSize = int64(opts.MemtableMB) << 20

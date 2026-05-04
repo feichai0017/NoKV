@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -30,7 +31,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/scheduler"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -63,10 +63,10 @@ func TestNodeStartsKVService(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	client := kvrpcpb.NewNoKVClient(conn)
+	client := kvrpcpb.NewStoreKVClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = client.KvGet(ctx, &kvrpcpb.KvGetRequest{})
+	_, err = client.Get(ctx, &kvrpcpb.KvGetRequest{})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
@@ -184,7 +184,7 @@ func TestNodeRequiresSnapshotStorage(t *testing.T) {
 	require.Contains(t, err.Error(), "snapshot storage")
 }
 
-func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, startTs uint64, value string) {
+func applyServerMVCCPutVersion(t *testing.T, db *local.DB, key []byte, commitTs, startTs uint64, value string) {
 	t.Helper()
 	defaultEntry := entrykv.NewInternalEntry(entrykv.CFDefault, key, startTs, []byte(value), 0, 0)
 	defer defaultEntry.DecrRef()
@@ -196,7 +196,7 @@ func applyServerMVCCPutVersion(t *testing.T, db *NoKV.DB, key []byte, commitTs, 
 
 type captureScheduler struct {
 	mu    sync.Mutex
-	stats scheduler.StoreStats
+	stats storecontrol.StoreStats
 	seen  bool
 }
 
@@ -206,7 +206,7 @@ func (s *captureScheduler) PublishRootEvent(context.Context, rootevent.Event) er
 	return nil
 }
 
-func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats scheduler.StoreStats) []scheduler.Operation {
+func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats storecontrol.StoreStats) []storecontrol.Operation {
 	s.mu.Lock()
 	s.stats = stats
 	s.seen = true
@@ -214,15 +214,15 @@ func (s *captureScheduler) StoreHeartbeat(_ context.Context, stats scheduler.Sto
 	return nil
 }
 
-func (s *captureScheduler) Status() scheduler.Status {
-	return scheduler.Status{}
+func (s *captureScheduler) Status() storecontrol.Status {
+	return storecontrol.Status{}
 }
 
 func (s *captureScheduler) Close() error {
 	return nil
 }
 
-func (s *captureScheduler) latestStore() (scheduler.StoreStats, bool) {
+func (s *captureScheduler) latestStore() (storecontrol.StoreStats, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats, s.seen
@@ -338,12 +338,12 @@ func TestNodeWithClientTwoPhaseCommit(t *testing.T) {
 
 	for i := range nodes {
 		workDir := t.TempDir()
-		opt := NoKV.NewDefaultOptions()
+		opt := local.NewDefaultOptions()
 		opt.WorkDir = workDir
 		localMeta, err := localmeta.OpenLocalStore(workDir, nil)
 		require.NoError(t, err)
 		opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
-		db, err := NoKV.Open(opt)
+		db, err := local.Open(opt)
 		require.NoError(t, err)
 		nodes[i].db = db
 		nodes[i].localMeta = localMeta
@@ -452,14 +452,14 @@ func (fakeRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.PeerStor
 	return nil, nil
 }
 
-func openTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
+func openTestDB(t *testing.T) (*local.DB, *localmeta.Store) {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	t.Cleanup(func() { _ = localMeta.Close() })
@@ -470,7 +470,7 @@ type testNode struct {
 	storeID   uint64
 	peerID    uint64
 	region    localmeta.RegionMeta
-	db        *NoKV.DB
+	db        *local.DB
 	localMeta *localmeta.Store
 	node      *serverpkg.Node
 	addr      string

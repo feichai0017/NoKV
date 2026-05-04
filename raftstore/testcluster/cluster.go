@@ -10,13 +10,14 @@ import (
 	"testing"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
+	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
+	local "github.com/feichai0017/NoKV/local"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
@@ -30,8 +31,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"github.com/feichai0017/NoKV/scheduler"
-	schedulercoord "github.com/feichai0017/NoKV/scheduler/coordinator"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -39,7 +38,7 @@ import (
 type Node struct {
 	StoreID   uint64
 	WorkDir   string
-	DB        *NoKV.DB
+	DB        *local.DB
 	LocalMeta *localmeta.Store
 	Server    *serverpkg.Node
 }
@@ -47,7 +46,7 @@ type Node struct {
 type NodeConfig struct {
 	AllowedModes      []workdirmode.Mode
 	StartPeers        bool
-	Scheduler         scheduler.Client
+	Scheduler         storecontrol.Client
 	HeartbeatInterval time.Duration
 }
 
@@ -58,14 +57,14 @@ type Coordinator struct {
 	service *coordserver.Service
 }
 
-func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*NoKV.Options)) *NoKV.DB {
+func OpenStandaloneDB(tb testing.TB, dir string, tweak func(*local.Options)) *local.DB {
 	tb.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	if tweak != nil {
 		tweak(opt)
 	}
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	if err != nil {
 		tb.Fatalf("open standalone db: %v", err)
 	}
@@ -86,13 +85,13 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	if err != nil {
 		tb.Fatalf("open local meta: %v", err)
 	}
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	if err != nil {
 		_ = localMeta.Close()
 		tb.Fatalf("open node db: %v", err)
@@ -200,7 +199,7 @@ func (c *Coordinator) RetireStore(tb testing.TB, storeID uint64) {
 	c.PublishRootEvent(tb, rootevent.StoreRetired(storeID))
 }
 
-func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) scheduler.Client {
+func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storecontrol.Client {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -208,7 +207,7 @@ func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) schedu
 	if err != nil {
 		tb.Fatalf("dial coordinator client %s: %v", coordAddr, err)
 	}
-	return schedulercoord.NewClient(schedulercoord.Config{
+	return storecontrol.NewClient(storecontrol.Config{
 		Coordinator: cli,
 		Timeout:     timeout,
 	})
@@ -455,7 +454,7 @@ func formatRuntimeStatus(status *adminpb.RegionRuntimeStatusResponse) string {
 	return fmt.Sprintf("known=%v hosted=%v local=%d leader=%v leaderPeer=%d applied=%d", status.GetKnown(), status.GetHosted(), status.GetLocalPeerId(), status.GetLeader(), status.GetLeaderPeerId(), status.GetAppliedIndex())
 }
 
-func AssertValue(tb testing.TB, db *NoKV.DB, key, value []byte) {
+func AssertValue(tb testing.TB, db *local.DB, key, value []byte) {
 	tb.Helper()
 	entry, err := db.Get(key)
 	if err != nil {
@@ -516,7 +515,7 @@ func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*N
 	return fmt.Sprint(parts)
 }
 
-func WaitForSchedulerMode(tb testing.TB, node *Node, mode scheduler.Mode, degraded bool) {
+func WaitForSchedulerMode(tb testing.TB, node *Node, mode storecontrol.Mode, degraded bool) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

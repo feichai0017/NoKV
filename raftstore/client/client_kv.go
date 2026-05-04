@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Get issues a KvGet for the provided key/version. It retries on region errors.
+// Get issues a StoreKV Get RPC for the provided key/version. It retries on region errors.
 func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.GetResponse, error) {
 	var lastErr error
 	var lastKeyErr *kvrpcpb.KeyError
@@ -73,7 +73,7 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.
 }
 
 // BatchGet fetches multiple keys using the same snapshot version. Keys are
-// grouped by region so that each group shares a single KvBatchGet round-trip
+// grouped by region so that each group shares a single BatchGet round-trip
 // and read index.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error) {
 	results := make(map[string]*kvrpcpb.GetResponse, len(keys))
@@ -192,7 +192,7 @@ func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := cl.KvGet(ctx, &kvrpcpb.KvGetRequest{
+	resp, err := cl.Get(ctx, &kvrpcpb.KvGetRequest{
 		Context: header,
 		Request: &kvrpcpb.GetRequest{
 			Key:     append([]byte(nil), key...),
@@ -224,7 +224,7 @@ func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [
 			Version: version,
 		})
 	}
-	resp, err := cl.KvBatchGet(ctx, &kvrpcpb.KvBatchGetRequest{Context: header, Request: request})
+	resp, err := cl.BatchGet(ctx, &kvrpcpb.KvBatchGetRequest{Context: header, Request: request})
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -235,7 +235,7 @@ func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [
 	return out, resp.GetRegionError(), nil
 }
 
-// Scan issues a forward KvScan starting at startKey, reading up to limit keys.
+// Scan issues a forward StoreKV Scan RPC starting at startKey, reading up to limit keys.
 func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*kvrpcpb.KV, error) {
 	if limit == 0 {
 		return nil, errInvalidScanLimit
@@ -365,7 +365,7 @@ func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey [
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := cl.KvScan(ctx, &kvrpcpb.KvScanRequest{
+	resp, err := cl.Scan(ctx, &kvrpcpb.KvScanRequest{
 		Context: header,
 		Request: &kvrpcpb.ScanRequest{
 			StartKey:     append([]byte(nil), startKey...),
@@ -497,7 +497,7 @@ func (c *Client) tryAtomicMutateRegionOnce(ctx context.Context, region regionSna
 			CommitVersion: commitVersion,
 		},
 	}
-	resp, err := cl.KvTryAtomicMutate(ctx, req)
+	resp, err := cl.TryAtomicMutate(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -689,7 +689,7 @@ func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, 
 			LockTtl:      ttl,
 		},
 	}
-	resp, err := cl.KvPrewrite(ctx, req)
+	resp, err := cl.Prewrite(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -808,7 +808,7 @@ func (c *Client) commitRegionOnce(ctx context.Context, region regionSnapshot, ke
 			CommitVersion: commitVersion,
 		},
 	}
-	resp, err := cl.KvCommit(ctx, req)
+	resp, err := cl.Commit(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -884,7 +884,7 @@ func (c *Client) batchRollbackRegionOnce(ctx context.Context, region regionSnaps
 			StartVersion: startVersion,
 		},
 	}
-	resp, err := cl.KvBatchRollback(ctx, req)
+	resp, err := cl.BatchRollback(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -926,7 +926,7 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 				CurrentTime:        currentTime,
 			},
 		}
-		resp, err := cl.KvCheckTxnStatus(ctx, req)
+		resp, err := cl.CheckTxnStatus(ctx, req)
 		if err != nil {
 			return nil, normalizeRPCError(err)
 		}
@@ -987,7 +987,7 @@ func (c *Client) txnHeartBeatAt(ctx context.Context, primary []byte, startVersio
 				CurrentTime:  currentTime,
 			},
 		}
-		resp, err := cl.KvTxnHeartBeat(ctx, req)
+		resp, err := cl.TxnHeartBeat(ctx, req)
 		if err != nil {
 			return nil, normalizeRPCError(err)
 		}
@@ -1092,7 +1092,7 @@ func (c *Client) resolveRegionLocksOnce(ctx context.Context, region regionSnapsh
 			Keys:          cloneKeys(keys),
 		},
 	}
-	resp, err := cl.KvResolveLock(ctx, req)
+	resp, err := cl.ResolveLock(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}

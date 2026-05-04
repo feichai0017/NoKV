@@ -14,13 +14,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Service exposes NoKV gRPC handlers backed by a raftstore Store.
+// Service exposes StoreKV gRPC handlers backed by a raftstore Store.
 type Service struct {
-	kvrpcpb.UnimplementedNoKVServer
+	kvrpcpb.UnimplementedStoreKVServer
 	store *store.Store
 }
 
-// NewService constructs a NoKV service bound to the provided store.
+// NewService constructs a StoreKV service bound to the provided store.
 func NewService(st *store.Store) *Service {
 	return &Service{store: st}
 }
@@ -57,7 +57,7 @@ func txnHeartBeatRequestWithServiceTime(req *kvrpcpb.TxnHeartBeatRequest) *kvrpc
 	}
 }
 
-func (s *Service) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *Service) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -84,7 +84,7 @@ func (s *Service) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcp
 	return resp, nil
 }
 
-func (s *Service) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+func (s *Service) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -139,7 +139,7 @@ func (s *Service) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest
 	return resp, nil
 }
 
-func (s *Service) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+func (s *Service) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -149,7 +149,7 @@ func (s *Service) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrp
 		return nil, status.Error(codes.InvalidArgument, "scan request missing payload")
 	}
 	if scanReq.GetReverse() {
-		return nil, status.Error(codes.Unimplemented, "KvScan reverse scans are not supported yet")
+		return nil, status.Error(codes.Unimplemented, "StoreKV Scan reverse scans are not supported yet")
 	}
 	cmd := &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -169,7 +169,7 @@ func (s *Service) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrp
 	return resp, nil
 }
 
-func (s *Service) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+func (s *Service) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -194,7 +194,7 @@ func (s *Service) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest
 	return out, nil
 }
 
-func (s *Service) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+func (s *Service) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -219,7 +219,7 @@ func (s *Service) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*
 	return out, nil
 }
 
-func (s *Service) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+func (s *Service) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -244,7 +244,7 @@ func (s *Service) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollb
 	return out, nil
 }
 
-func (s *Service) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+func (s *Service) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -269,7 +269,7 @@ func (s *Service) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockR
 	return out, nil
 }
 
-func (s *Service) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+func (s *Service) CheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -295,7 +295,7 @@ func (s *Service) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnS
 	return out, nil
 }
 
-func (s *Service) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+func (s *Service) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -321,7 +321,7 @@ func (s *Service) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBea
 	return out, nil
 }
 
-func (s *Service) KvTryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
+func (s *Service) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)

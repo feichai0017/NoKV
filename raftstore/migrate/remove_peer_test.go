@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/dbcore/mode"
+	mode "github.com/feichai0017/NoKV/local/workdir"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/stretchr/testify/require"
 )

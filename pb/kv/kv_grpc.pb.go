@@ -21,147 +21,147 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NoKV_KvGet_FullMethodName             = "/nokv.kv.v1.NoKV/KvGet"
-	NoKV_KvBatchGet_FullMethodName        = "/nokv.kv.v1.NoKV/KvBatchGet"
-	NoKV_KvScan_FullMethodName            = "/nokv.kv.v1.NoKV/KvScan"
-	NoKV_KvPrewrite_FullMethodName        = "/nokv.kv.v1.NoKV/KvPrewrite"
-	NoKV_KvCommit_FullMethodName          = "/nokv.kv.v1.NoKV/KvCommit"
-	NoKV_KvBatchRollback_FullMethodName   = "/nokv.kv.v1.NoKV/KvBatchRollback"
-	NoKV_KvResolveLock_FullMethodName     = "/nokv.kv.v1.NoKV/KvResolveLock"
-	NoKV_KvCheckTxnStatus_FullMethodName  = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
-	NoKV_KvTxnHeartBeat_FullMethodName    = "/nokv.kv.v1.NoKV/KvTxnHeartBeat"
-	NoKV_KvTryAtomicMutate_FullMethodName = "/nokv.kv.v1.NoKV/KvTryAtomicMutate"
-	NoKV_KvWatchApply_FullMethodName      = "/nokv.kv.v1.NoKV/KvWatchApply"
+	StoreKV_Get_FullMethodName             = "/nokv.kv.v1.StoreKV/Get"
+	StoreKV_BatchGet_FullMethodName        = "/nokv.kv.v1.StoreKV/BatchGet"
+	StoreKV_Scan_FullMethodName            = "/nokv.kv.v1.StoreKV/Scan"
+	StoreKV_Prewrite_FullMethodName        = "/nokv.kv.v1.StoreKV/Prewrite"
+	StoreKV_Commit_FullMethodName          = "/nokv.kv.v1.StoreKV/Commit"
+	StoreKV_BatchRollback_FullMethodName   = "/nokv.kv.v1.StoreKV/BatchRollback"
+	StoreKV_ResolveLock_FullMethodName     = "/nokv.kv.v1.StoreKV/ResolveLock"
+	StoreKV_CheckTxnStatus_FullMethodName  = "/nokv.kv.v1.StoreKV/CheckTxnStatus"
+	StoreKV_TxnHeartBeat_FullMethodName    = "/nokv.kv.v1.StoreKV/TxnHeartBeat"
+	StoreKV_TryAtomicMutate_FullMethodName = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
+	StoreKV_WatchApply_FullMethodName      = "/nokv.kv.v1.StoreKV/WatchApply"
 )
 
-// NoKVClient is the client API for NoKV service.
+// StoreKVClient is the client API for StoreKV service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type NoKVClient interface {
-	KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error)
-	KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error)
-	KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error)
-	KvPrewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error)
-	KvCommit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error)
-	KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error)
-	KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error)
-	KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
-	KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
-	KvTryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
-	KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
+type StoreKVClient interface {
+	Get(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error)
+	BatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error)
+	Scan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error)
+	Prewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error)
+	Commit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error)
+	BatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error)
+	ResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error)
+	CheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
+	TxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
+	TryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
+	WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
 }
 
-type noKVClient struct {
+type storeKVClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewNoKVClient(cc grpc.ClientConnInterface) NoKVClient {
-	return &noKVClient{cc}
+func NewStoreKVClient(cc grpc.ClientConnInterface) StoreKVClient {
+	return &storeKVClient{cc}
 }
 
-func (c *noKVClient) KvGet(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error) {
+func (c *storeKVClient) Get(ctx context.Context, in *KvGetRequest, opts ...grpc.CallOption) (*KvGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvGetResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvGet_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_Get_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvBatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error) {
+func (c *storeKVClient) BatchGet(ctx context.Context, in *KvBatchGetRequest, opts ...grpc.CallOption) (*KvBatchGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvBatchGetResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvBatchGet_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_BatchGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvScan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error) {
+func (c *storeKVClient) Scan(ctx context.Context, in *KvScanRequest, opts ...grpc.CallOption) (*KvScanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvScanResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvScan_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_Scan_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvPrewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error) {
+func (c *storeKVClient) Prewrite(ctx context.Context, in *KvPrewriteRequest, opts ...grpc.CallOption) (*KvPrewriteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvPrewriteResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvPrewrite_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_Prewrite_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvCommit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error) {
+func (c *storeKVClient) Commit(ctx context.Context, in *KvCommitRequest, opts ...grpc.CallOption) (*KvCommitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvCommitResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvCommit_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_Commit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvBatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error) {
+func (c *storeKVClient) BatchRollback(ctx context.Context, in *KvBatchRollbackRequest, opts ...grpc.CallOption) (*KvBatchRollbackResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvBatchRollbackResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvBatchRollback_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_BatchRollback_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error) {
+func (c *storeKVClient) ResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvResolveLockResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvResolveLock_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_ResolveLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error) {
+func (c *storeKVClient) CheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvCheckTxnStatusResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvCheckTxnStatus_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_CheckTxnStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error) {
+func (c *storeKVClient) TxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvTxnHeartBeatResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvTxnHeartBeat_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_TxnHeartBeat_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvTryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error) {
+func (c *storeKVClient) TryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(KvTryAtomicMutateResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvTryAtomicMutate_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StoreKV_TryAtomicMutate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *noKVClient) KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error) {
+func (c *storeKVClient) WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &NoKV_ServiceDesc.Streams[0], NoKV_KvWatchApply_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &StoreKV_ServiceDesc.Streams[0], StoreKV_WatchApply_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,328 +176,328 @@ func (c *noKVClient) KvWatchApply(ctx context.Context, in *ApplyWatchRequest, op
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NoKV_KvWatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
+type StoreKV_WatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
 
-// NoKVServer is the server API for NoKV service.
-// All implementations should embed UnimplementedNoKVServer
+// StoreKVServer is the server API for StoreKV service.
+// All implementations should embed UnimplementedStoreKVServer
 // for forward compatibility.
-type NoKVServer interface {
-	KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error)
-	KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error)
-	KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error)
-	KvPrewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error)
-	KvCommit(context.Context, *KvCommitRequest) (*KvCommitResponse, error)
-	KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error)
-	KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error)
-	KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
-	KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
-	KvTryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
-	KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
+type StoreKVServer interface {
+	Get(context.Context, *KvGetRequest) (*KvGetResponse, error)
+	BatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error)
+	Scan(context.Context, *KvScanRequest) (*KvScanResponse, error)
+	Prewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error)
+	Commit(context.Context, *KvCommitRequest) (*KvCommitResponse, error)
+	BatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error)
+	ResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error)
+	CheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
+	TxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
+	TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
+	WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
 }
 
-// UnimplementedNoKVServer should be embedded to have
+// UnimplementedStoreKVServer should be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedNoKVServer struct{}
+type UnimplementedStoreKVServer struct{}
 
-func (UnimplementedNoKVServer) KvGet(context.Context, *KvGetRequest) (*KvGetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvGet not implemented")
+func (UnimplementedStoreKVServer) Get(context.Context, *KvGetRequest) (*KvGetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
 }
-func (UnimplementedNoKVServer) KvBatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvBatchGet not implemented")
+func (UnimplementedStoreKVServer) BatchGet(context.Context, *KvBatchGetRequest) (*KvBatchGetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchGet not implemented")
 }
-func (UnimplementedNoKVServer) KvScan(context.Context, *KvScanRequest) (*KvScanResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvScan not implemented")
+func (UnimplementedStoreKVServer) Scan(context.Context, *KvScanRequest) (*KvScanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Scan not implemented")
 }
-func (UnimplementedNoKVServer) KvPrewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvPrewrite not implemented")
+func (UnimplementedStoreKVServer) Prewrite(context.Context, *KvPrewriteRequest) (*KvPrewriteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Prewrite not implemented")
 }
-func (UnimplementedNoKVServer) KvCommit(context.Context, *KvCommitRequest) (*KvCommitResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvCommit not implemented")
+func (UnimplementedStoreKVServer) Commit(context.Context, *KvCommitRequest) (*KvCommitResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
 }
-func (UnimplementedNoKVServer) KvBatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvBatchRollback not implemented")
+func (UnimplementedStoreKVServer) BatchRollback(context.Context, *KvBatchRollbackRequest) (*KvBatchRollbackResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchRollback not implemented")
 }
-func (UnimplementedNoKVServer) KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvResolveLock not implemented")
+func (UnimplementedStoreKVServer) ResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveLock not implemented")
 }
-func (UnimplementedNoKVServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvCheckTxnStatus not implemented")
+func (UnimplementedStoreKVServer) CheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckTxnStatus not implemented")
 }
-func (UnimplementedNoKVServer) KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvTxnHeartBeat not implemented")
+func (UnimplementedStoreKVServer) TxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TxnHeartBeat not implemented")
 }
-func (UnimplementedNoKVServer) KvTryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvTryAtomicMutate not implemented")
+func (UnimplementedStoreKVServer) TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TryAtomicMutate not implemented")
 }
-func (UnimplementedNoKVServer) KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
-	return status.Error(codes.Unimplemented, "method KvWatchApply not implemented")
+func (UnimplementedStoreKVServer) WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
+	return status.Error(codes.Unimplemented, "method WatchApply not implemented")
 }
-func (UnimplementedNoKVServer) testEmbeddedByValue() {}
+func (UnimplementedStoreKVServer) testEmbeddedByValue() {}
 
-// UnsafeNoKVServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to NoKVServer will
+// UnsafeStoreKVServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to StoreKVServer will
 // result in compilation errors.
-type UnsafeNoKVServer interface {
-	mustEmbedUnimplementedNoKVServer()
+type UnsafeStoreKVServer interface {
+	mustEmbedUnimplementedStoreKVServer()
 }
 
-func RegisterNoKVServer(s grpc.ServiceRegistrar, srv NoKVServer) {
-	// If the following call panics, it indicates UnimplementedNoKVServer was
+func RegisterStoreKVServer(s grpc.ServiceRegistrar, srv StoreKVServer) {
+	// If the following call panics, it indicates UnimplementedStoreKVServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&NoKV_ServiceDesc, srv)
+	s.RegisterService(&StoreKV_ServiceDesc, srv)
 }
 
-func _NoKV_KvGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvGet(ctx, in)
+		return srv.(StoreKVServer).Get(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvGet_FullMethodName,
+		FullMethod: StoreKV_Get_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvGet(ctx, req.(*KvGetRequest))
+		return srv.(StoreKVServer).Get(ctx, req.(*KvGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvBatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_BatchGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvBatchGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvBatchGet(ctx, in)
+		return srv.(StoreKVServer).BatchGet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvBatchGet_FullMethodName,
+		FullMethod: StoreKV_BatchGet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvBatchGet(ctx, req.(*KvBatchGetRequest))
+		return srv.(StoreKVServer).BatchGet(ctx, req.(*KvBatchGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_Scan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvScanRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvScan(ctx, in)
+		return srv.(StoreKVServer).Scan(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvScan_FullMethodName,
+		FullMethod: StoreKV_Scan_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvScan(ctx, req.(*KvScanRequest))
+		return srv.(StoreKVServer).Scan(ctx, req.(*KvScanRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvPrewrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_Prewrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvPrewriteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvPrewrite(ctx, in)
+		return srv.(StoreKVServer).Prewrite(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvPrewrite_FullMethodName,
+		FullMethod: StoreKV_Prewrite_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvPrewrite(ctx, req.(*KvPrewriteRequest))
+		return srv.(StoreKVServer).Prewrite(ctx, req.(*KvPrewriteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvCommitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvCommit(ctx, in)
+		return srv.(StoreKVServer).Commit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvCommit_FullMethodName,
+		FullMethod: StoreKV_Commit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvCommit(ctx, req.(*KvCommitRequest))
+		return srv.(StoreKVServer).Commit(ctx, req.(*KvCommitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvBatchRollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_BatchRollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvBatchRollbackRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvBatchRollback(ctx, in)
+		return srv.(StoreKVServer).BatchRollback(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvBatchRollback_FullMethodName,
+		FullMethod: StoreKV_BatchRollback_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvBatchRollback(ctx, req.(*KvBatchRollbackRequest))
+		return srv.(StoreKVServer).BatchRollback(ctx, req.(*KvBatchRollbackRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvResolveLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_ResolveLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvResolveLockRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvResolveLock(ctx, in)
+		return srv.(StoreKVServer).ResolveLock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvResolveLock_FullMethodName,
+		FullMethod: StoreKV_ResolveLock_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvResolveLock(ctx, req.(*KvResolveLockRequest))
+		return srv.(StoreKVServer).ResolveLock(ctx, req.(*KvResolveLockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvCheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_CheckTxnStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvCheckTxnStatusRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvCheckTxnStatus(ctx, in)
+		return srv.(StoreKVServer).CheckTxnStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvCheckTxnStatus_FullMethodName,
+		FullMethod: StoreKV_CheckTxnStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvCheckTxnStatus(ctx, req.(*KvCheckTxnStatusRequest))
+		return srv.(StoreKVServer).CheckTxnStatus(ctx, req.(*KvCheckTxnStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvTxnHeartBeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_TxnHeartBeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvTxnHeartBeatRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvTxnHeartBeat(ctx, in)
+		return srv.(StoreKVServer).TxnHeartBeat(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvTxnHeartBeat_FullMethodName,
+		FullMethod: StoreKV_TxnHeartBeat_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvTxnHeartBeat(ctx, req.(*KvTxnHeartBeatRequest))
+		return srv.(StoreKVServer).TxnHeartBeat(ctx, req.(*KvTxnHeartBeatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvTryAtomicMutate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StoreKV_TryAtomicMutate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KvTryAtomicMutateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvTryAtomicMutate(ctx, in)
+		return srv.(StoreKVServer).TryAtomicMutate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvTryAtomicMutate_FullMethodName,
+		FullMethod: StoreKV_TryAtomicMutate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvTryAtomicMutate(ctx, req.(*KvTryAtomicMutateRequest))
+		return srv.(StoreKVServer).TryAtomicMutate(ctx, req.(*KvTryAtomicMutateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvWatchApply_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _StoreKV_WatchApply_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ApplyWatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(NoKVServer).KvWatchApply(m, &grpc.GenericServerStream[ApplyWatchRequest, ApplyWatchResponse]{ServerStream: stream})
+	return srv.(StoreKVServer).WatchApply(m, &grpc.GenericServerStream[ApplyWatchRequest, ApplyWatchResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NoKV_KvWatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
+type StoreKV_WatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
 
-// NoKV_ServiceDesc is the grpc.ServiceDesc for NoKV service.
+// StoreKV_ServiceDesc is the grpc.ServiceDesc for StoreKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var NoKV_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "nokv.kv.v1.NoKV",
-	HandlerType: (*NoKVServer)(nil),
+var StoreKV_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "nokv.kv.v1.StoreKV",
+	HandlerType: (*StoreKVServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "KvGet",
-			Handler:    _NoKV_KvGet_Handler,
+			MethodName: "Get",
+			Handler:    _StoreKV_Get_Handler,
 		},
 		{
-			MethodName: "KvBatchGet",
-			Handler:    _NoKV_KvBatchGet_Handler,
+			MethodName: "BatchGet",
+			Handler:    _StoreKV_BatchGet_Handler,
 		},
 		{
-			MethodName: "KvScan",
-			Handler:    _NoKV_KvScan_Handler,
+			MethodName: "Scan",
+			Handler:    _StoreKV_Scan_Handler,
 		},
 		{
-			MethodName: "KvPrewrite",
-			Handler:    _NoKV_KvPrewrite_Handler,
+			MethodName: "Prewrite",
+			Handler:    _StoreKV_Prewrite_Handler,
 		},
 		{
-			MethodName: "KvCommit",
-			Handler:    _NoKV_KvCommit_Handler,
+			MethodName: "Commit",
+			Handler:    _StoreKV_Commit_Handler,
 		},
 		{
-			MethodName: "KvBatchRollback",
-			Handler:    _NoKV_KvBatchRollback_Handler,
+			MethodName: "BatchRollback",
+			Handler:    _StoreKV_BatchRollback_Handler,
 		},
 		{
-			MethodName: "KvResolveLock",
-			Handler:    _NoKV_KvResolveLock_Handler,
+			MethodName: "ResolveLock",
+			Handler:    _StoreKV_ResolveLock_Handler,
 		},
 		{
-			MethodName: "KvCheckTxnStatus",
-			Handler:    _NoKV_KvCheckTxnStatus_Handler,
+			MethodName: "CheckTxnStatus",
+			Handler:    _StoreKV_CheckTxnStatus_Handler,
 		},
 		{
-			MethodName: "KvTxnHeartBeat",
-			Handler:    _NoKV_KvTxnHeartBeat_Handler,
+			MethodName: "TxnHeartBeat",
+			Handler:    _StoreKV_TxnHeartBeat_Handler,
 		},
 		{
-			MethodName: "KvTryAtomicMutate",
-			Handler:    _NoKV_KvTryAtomicMutate_Handler,
+			MethodName: "TryAtomicMutate",
+			Handler:    _StoreKV_TryAtomicMutate_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "KvWatchApply",
-			Handler:       _NoKV_KvWatchApply_Handler,
+			StreamName:    "WatchApply",
+			Handler:       _StoreKV_WatchApply_Handler,
 			ServerStreams: true,
 		},
 	},

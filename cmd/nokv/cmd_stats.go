@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
-	"github.com/feichai0017/NoKV/dbcore/stats"
+	local "github.com/feichai0017/NoKV/local"
+	"github.com/feichai0017/NoKV/local/stats"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	"github.com/feichai0017/NoKV/metrics"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
@@ -247,7 +247,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 		return stats.StatsSnapshot{}, err
 	}
 	defer func() { _ = metaStore.Close() }()
-	opts := NoKV.NewDefaultOptions()
+	opts := local.NewDefaultOptions()
 	opts.WorkDir = workDir
 	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(metaStore.RaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{
@@ -256,7 +256,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 		workdirmode.ModeSeeded,
 		workdirmode.ModeCluster,
 	}
-	db, err := NoKV.Open(opts)
+	db, err := local.Open(opts)
 	if err != nil {
 		return stats.StatsSnapshot{}, fmt.Errorf("open db for offline stats: %w", err)
 	}
@@ -299,7 +299,7 @@ func fetchExpvarSnapshot(url string) (stats.StatsSnapshot, error) {
 
 func parseExpvarSnapshot(data map[string]any) stats.StatsSnapshot {
 	var snap stats.StatsSnapshot
-	if raw, ok := data["NoKV.Stats"]; ok {
+	if raw, ok := data["NoKV.Local.Stats"]; ok {
 		if blob, err := json.Marshal(raw); err == nil {
 			if err := json.Unmarshal(blob, &snap); err == nil {
 				return snap

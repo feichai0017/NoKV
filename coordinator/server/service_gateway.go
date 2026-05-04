@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
-	pdview "github.com/feichai0017/NoKV/coordinator/view"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -30,7 +29,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
 	}
-	err := s.cluster.UpsertStoreHeartbeat(pdview.StoreStats{
+	err := s.cluster.UpsertStoreHeartbeat(catalog.StoreStats{
 		StoreID:           req.GetStoreId(),
 		ClientAddr:        req.GetClientAddr(),
 		RaftAddr:          req.GetRaftAddr(),

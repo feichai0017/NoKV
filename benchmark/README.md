@@ -48,7 +48,7 @@ Key components:
   `nokv-skiplist` / `nokv-art` for memtable-only comparisons).
 - Engine profiles: each engine is constructed from an explicit benchmark
   profile in `benchmark/ycsb/ycsb_profiles.go`; the harness does not inherit
-  `NoKV.NewDefaultOptions()` or `badger.DefaultOptions()` implicitly, which
+  `local.NewDefaultOptions()` or `badger.DefaultOptions()` implicitly, which
   keeps benchmark semantics stable across runtime default changes. The default
   profile uses a 512MB total cache budget and splits it explicitly per engine:
   Pebble uses a single 512MB cache, Badger defaults to 256MB block + 256MB

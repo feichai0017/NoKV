@@ -10,32 +10,32 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	NoKV "github.com/feichai0017/NoKV"
-	"github.com/feichai0017/NoKV/dbcore/commit"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm"
+	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/percolator/latch"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 )
 
-func testOptionsForDir(dir string) *NoKV.Options {
-	opt := NoKV.NewDefaultOptions()
+func testOptionsForDir(dir string) *local.Options {
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.MemTableSize = 1 << 12
 	opt.SSTableMaxSz = 1 << 20
 	return opt
 }
 
-func openTestDB(t *testing.T) *NoKV.DB {
+func openTestDB(t *testing.T) *local.DB {
 	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
+func applyVersionedEntryForTxnTest(t *testing.T, db *local.DB, cf kv.ColumnFamily, key []byte, version uint64, value []byte, meta byte) {
 	t.Helper()
 	entry := kv.NewInternalEntry(cf, key, version, kv.SafeCopy(nil, value), meta, 0)
 	defer entry.DecrRef()
@@ -118,14 +118,14 @@ func (s rollbackTestStore) NewInternalIterator(opt *index.Options) index.Iterato
 }
 
 type countingStore struct {
-	base               *NoKV.DB
+	base               *local.DB
 	applyCalls         int
 	appliedEntryCounts []int
 	failApplyErr       error
 	failApplyRemaining int
 }
 
-func newCountingStore(base *NoKV.DB) *countingStore {
+func newCountingStore(base *local.DB) *countingStore {
 	return &countingStore{base: base}
 }
 
@@ -232,7 +232,7 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 func TestApplyAtomicMutateMaterializesCommittedKeys(t *testing.T) {
 	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
 	opt.LSMShardCount = 1
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	latches := latch.NewManager(16)
@@ -288,7 +288,7 @@ func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
 func TestApplyAtomicMutateRejectsLockedPredicate(t *testing.T) {
 	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
 	opt.LSMShardCount = 1
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	latches := latch.NewManager(16)
@@ -838,7 +838,7 @@ func TestCommitAfterBatchPrewritePreservesShardAffinityAcrossRestart(t *testing.
 	dir := filepath.Join(t.TempDir(), "db")
 	opt := testOptionsForDir(dir)
 	opt.LSMShardCount = shardCount
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 
 	first, second := keysWithAscendingCommitShards(t, shardCount)
@@ -860,7 +860,7 @@ func TestCommitAfterBatchPrewritePreservesShardAffinityAcrossRestart(t *testing.
 	}))
 	require.NoError(t, db.Close())
 
-	db, err = NoKV.Open(opt)
+	db, err = local.Open(opt)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -880,7 +880,7 @@ func keysWithAscendingCommitShards(t *testing.T, shardCount int) ([]byte, []byte
 	keysByShard := make([][]byte, shardCount)
 	for i := range 10000 {
 		key := fmt.Appendf(nil, "affinity-%d", i)
-		shardID := commit.ShardForInternalKey(kv.InternalKey(kv.CFLock, key, lockColumnTs), shardCount)
+		shardID := lsm.ShardForInternalKey(kv.InternalKey(kv.CFLock, key, lockColumnTs), shardCount)
 		if shardID >= 0 && shardID < shardCount && keysByShard[shardID] == nil {
 			keysByShard[shardID] = key
 		}
@@ -901,7 +901,7 @@ func keysWithSameCommitShard(t *testing.T, shardCount int) ([]byte, []byte, int)
 	keysByShard := make([][]byte, shardCount)
 	for i := range 10000 {
 		key := fmt.Appendf(nil, "same-affinity-%d", i)
-		shardID := commit.ShardForInternalKey(kv.InternalKey(kv.CFDefault, key, 1), shardCount)
+		shardID := lsm.ShardForInternalKey(kv.InternalKey(kv.CFDefault, key, 1), shardCount)
 		if keysByShard[shardID] != nil {
 			return keysByShard[shardID], key, shardID
 		}
@@ -1469,7 +1469,7 @@ func TestResolveLockCommitTsExpired(t *testing.T) {
 
 func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "db")
-	db, err := NoKV.Open(testOptionsForDir(workDir))
+	db, err := local.Open(testOptionsForDir(workDir))
 	require.NoError(t, err)
 	latches := latch.NewManager(16)
 	key := []byte("prewrite-corrupt")
@@ -1492,7 +1492,7 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 	walPath := latestWALPath(t, workDir)
 	truncateTail(t, walPath, 2)
 
-	db2, err := NoKV.Open(testOptionsForDir(workDir))
+	db2, err := local.Open(testOptionsForDir(workDir))
 	require.NoError(t, err)
 	defer func() { _ = db2.Close() }()
 	reader := NewReader(db2)
@@ -1507,7 +1507,7 @@ func TestPrewriteRecoveryDropsCorruptedBatch(t *testing.T) {
 
 func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "db")
-	db, err := NoKV.Open(testOptionsForDir(workDir))
+	db, err := local.Open(testOptionsForDir(workDir))
 	require.NoError(t, err)
 	latches := latch.NewManager(16)
 	key := []byte("commit-corrupt")
@@ -1538,7 +1538,7 @@ func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	walPath := latestWALPath(t, workDir)
 	truncateTail(t, walPath, 2)
 
-	db2, err := NoKV.Open(testOptionsForDir(workDir))
+	db2, err := local.Open(testOptionsForDir(workDir))
 	require.NoError(t, err)
 	defer func() { _ = db2.Close() }()
 	reader := NewReader(db2)
@@ -1712,7 +1712,7 @@ func TestTxnHeartBeatExtendsPrimaryLockTTL(t *testing.T) {
 
 func TestTxnHeartBeatExtensionSurvivesRestart(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
-	db, err := NoKV.Open(testOptionsForDir(dir))
+	db, err := local.Open(testOptionsForDir(dir))
 	require.NoError(t, err)
 	latches := latch.NewManager(16)
 	key := []byte("hb-restart-primary")
@@ -1745,7 +1745,7 @@ func TestTxnHeartBeatExtensionSurvivesRestart(t *testing.T) {
 	require.Equal(t, uint64(550), hb.GetLockTtl())
 	require.NoError(t, db.Close())
 
-	db, err = NoKV.Open(testOptionsForDir(dir))
+	db, err = local.Open(testOptionsForDir(dir))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	latches = latch.NewManager(16)

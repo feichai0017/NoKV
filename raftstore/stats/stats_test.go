@@ -3,14 +3,14 @@ package stats
 import (
 	"testing"
 
-	dbcore "github.com/feichai0017/NoKV/dbcore"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 func TestMVCCGCAdaptsPlanAndMaintenanceSnapshots(t *testing.T) {
 	plan := storemvcc.GCPlanSnapshot{
-		PeriodicTaskSnapshot: dbcore.PeriodicTaskSnapshot{
+		PeriodicTaskSnapshot: utils.PeriodicTaskSnapshot{
 			Enabled:        true,
 			Runs:           3,
 			LastUnix:       1710000100,

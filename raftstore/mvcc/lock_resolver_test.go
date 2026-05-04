@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/latch"
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func applyMVCCGCLockRecord(t *testing.T, db *NoKV.DB, key, primary []byte, startTs, ttl uint64, kind kvrpcpb.Mutation_Op) {
+func applyMVCCGCLockRecord(t *testing.T, db *local.DB, key, primary []byte, startTs, ttl uint64, kind kvrpcpb.Mutation_Op) {
 	t.Helper()
 	lock := txnmvcc.EncodeLock(txnmvcc.Lock{
 		Primary:   primary,
@@ -269,7 +269,7 @@ func TestResolveExpiredLocksStopsAtMaxLocks(t *testing.T) {
 }
 
 type testLockResolver struct {
-	db          *NoKV.DB
+	db          *local.DB
 	calls       int
 	statusCalls int
 }

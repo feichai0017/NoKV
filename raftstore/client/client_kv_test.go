@@ -31,67 +31,67 @@ type scriptedKVService struct {
 	txnHeartBeatFn   func(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error)
 }
 
-func (s *scriptedKVService) KvGet(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+func (s *scriptedKVService) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	if s.getFn != nil {
 		return s.getFn(ctx, req)
 	}
-	return s.mockService.KvGet(ctx, req)
+	return s.mockService.Get(ctx, req)
 }
 
-func (s *scriptedKVService) KvBatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
+func (s *scriptedKVService) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
 	if s.batchGetFn != nil {
 		return s.batchGetFn(ctx, req)
 	}
-	return s.mockService.KvBatchGet(ctx, req)
+	return s.mockService.BatchGet(ctx, req)
 }
 
-func (s *scriptedKVService) KvScan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+func (s *scriptedKVService) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	if s.scanFn != nil {
 		return s.scanFn(ctx, req)
 	}
-	return s.mockService.KvScan(ctx, req)
+	return s.mockService.Scan(ctx, req)
 }
 
-func (s *scriptedKVService) KvPrewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+func (s *scriptedKVService) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	if s.prewriteFn != nil {
 		return s.prewriteFn(ctx, req)
 	}
-	return s.mockService.KvPrewrite(ctx, req)
+	return s.mockService.Prewrite(ctx, req)
 }
 
-func (s *scriptedKVService) KvCommit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+func (s *scriptedKVService) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	if s.commitFn != nil {
 		return s.commitFn(ctx, req)
 	}
-	return s.mockService.KvCommit(ctx, req)
+	return s.mockService.Commit(ctx, req)
 }
 
-func (s *scriptedKVService) KvBatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
+func (s *scriptedKVService) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
 	if s.rollbackFn != nil {
 		return s.rollbackFn(ctx, req)
 	}
-	return s.mockService.KvBatchRollback(ctx, req)
+	return s.mockService.BatchRollback(ctx, req)
 }
 
-func (s *scriptedKVService) KvResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
+func (s *scriptedKVService) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	if s.resolveLockFn != nil {
 		return s.resolveLockFn(ctx, req)
 	}
-	return s.mockService.KvResolveLock(ctx, req)
+	return s.mockService.ResolveLock(ctx, req)
 }
 
-func (s *scriptedKVService) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
+func (s *scriptedKVService) CheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
 	if s.checkTxnStatusFn != nil {
 		return s.checkTxnStatusFn(ctx, req)
 	}
-	return s.mockService.KvCheckTxnStatus(ctx, req)
+	return s.mockService.CheckTxnStatus(ctx, req)
 }
 
-func (s *scriptedKVService) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+func (s *scriptedKVService) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
 	if s.txnHeartBeatFn != nil {
 		return s.txnHeartBeatFn(ctx, req)
 	}
-	return s.mockService.KvTxnHeartBeat(ctx, req)
+	return s.mockService.TxnHeartBeat(ctx, req)
 }
 
 func TestClientCommitRegionReturnsKeyError(t *testing.T) {
@@ -904,7 +904,7 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *
 				},
 			}, nil
 		}
-		return svc.mockService.KvPrewrite(ctx, req)
+		return svc.mockService.Prewrite(ctx, req)
 	}
 	addr, stop := startBlockingStore(t, svc)
 	defer stop()
@@ -1016,7 +1016,7 @@ func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *t
 				},
 			}, nil
 		}
-		return svc.mockService.KvCommit(ctx, req)
+		return svc.mockService.Commit(ctx, req)
 	}
 	addr, stop := startBlockingStore(t, svc)
 	defer stop()
@@ -1080,7 +1080,7 @@ func TestClientTwoPhaseCommitReportsSecondaryCommitAndResolveFailures(t *testing
 				},
 			}, nil
 		}
-		return svc.mockService.KvCommit(ctx, req)
+		return svc.mockService.Commit(ctx, req)
 	}
 	svc.resolveLockFn = func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 		return &kvrpcpb.KvResolveLockResponse{
@@ -1130,7 +1130,7 @@ func TestClientTwoPhaseCommitReroutesAfterPrewriteEpochMismatch(t *testing.T) {
 			regionErr := installSplitRegionsForTest(cluster)
 			return &kvrpcpb.KvPrewriteResponse{RegionError: regionErr}, nil
 		}
-		return svc.mockService.KvPrewrite(ctx, req)
+		return svc.mockService.Prewrite(ctx, req)
 	}
 	addr, stop := startBlockingStore(t, svc)
 	defer stop()
@@ -1195,7 +1195,7 @@ func TestClientTwoPhaseCommitReroutesSecondaryCommitAfterEpochMismatch(t *testin
 			regionErr := replaceSecondaryRegionForTest(cluster)
 			return &kvrpcpb.KvCommitResponse{RegionError: regionErr}, nil
 		}
-		return svc.mockService.KvCommit(ctx, req)
+		return svc.mockService.Commit(ctx, req)
 	}
 	addr, stop := startBlockingStore(t, svc)
 	defer stop()

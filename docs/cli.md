@@ -133,7 +133,7 @@ nokv execution --addr 127.0.0.1:20161 --json
 
 ### `nokv serve`
 
-- Starts NoKV gRPC service backed by local `raftstore`
+- Starts StoreKV gRPC service backed by local `raftstore`
 - Requires `--store-id`
 - Also requires enough address metadata to reach the Coordinator and all remote
   raft peers:

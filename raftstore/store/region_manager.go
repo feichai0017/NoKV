@@ -56,7 +56,7 @@ func (rm *regionManager) loadBootstrapSnapshot(snapshot map[uint64]localmeta.Reg
 		metaCopy := localmeta.CloneRegionMeta(meta)
 		rm.metaByID[id] = metaCopy
 		if rm.regionMetrics != nil {
-			rm.regionMetrics.RecordUpdate(metaCopy)
+			rm.regionMetrics.RecordState(metaCopy.ID, metaCopy.State)
 		}
 	}
 	rm.rebuildRangeIndexLocked()
@@ -174,7 +174,7 @@ func (rm *regionManager) applyRegionMeta(meta localmeta.RegionMeta, publish bool
 
 	rm.syncPeerMirror(p, metaCopy)
 	if rm.regionMetrics != nil {
-		rm.regionMetrics.RecordUpdate(metaCopy)
+		rm.regionMetrics.RecordState(metaCopy.ID, metaCopy.State)
 	}
 	if publish && rm.notify != nil {
 		rm.notify(regionEvent{

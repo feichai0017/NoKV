@@ -2,7 +2,6 @@ package metrics
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"sync"
 )
 
@@ -58,25 +57,27 @@ func (rm *RegionMetrics) Snapshot() RegionMetricsSnapshot {
 	return snap
 }
 
-// RecordUpdate updates the metrics snapshot for a region metadata change.
-func (rm *RegionMetrics) RecordUpdate(meta localmeta.RegionMeta) {
-	if rm == nil || meta.ID == 0 {
+// RecordState updates the metrics snapshot for one region lifecycle state.
+// Callers pass plain identity and state so metrics does not depend on
+// raftstore-local catalog structs.
+func (rm *RegionMetrics) RecordState(regionID uint64, state metaregion.ReplicaState) {
+	if rm == nil || regionID == 0 {
 		return
 	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	prev, exists := rm.stateByID[meta.ID]
+	prev, exists := rm.stateByID[regionID]
 	if exists {
-		if prev == meta.State {
+		if prev == state {
 			return
 		}
 		rm.decrement(prev)
 	} else {
 		rm.total++
 	}
-	rm.increment(meta.State)
-	rm.stateByID[meta.ID] = meta.State
+	rm.increment(state)
+	rm.stateByID[regionID] = state
 }
 
 // RecordRemove updates the metrics snapshot for a region removal.

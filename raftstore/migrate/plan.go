@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/wal"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 

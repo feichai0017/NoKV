@@ -25,8 +25,8 @@ admission, transition execution, publish boundaries, and restart state, read
 | [`peer`](../raftstore/peer) | Wraps etcd/raft `RawNode`, drives Ready processing (persist to WAL, send messages, apply entries), tracks snapshot resend/backlog. |
 | [`raftlog`](../raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata. |
 | [`meta`](../raftstore/localmeta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
-| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (NoKV). |
-| [`kv`](../raftstore/kv) | NoKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
+| [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (StoreKV). |
+| [`kv`](../raftstore/kv) | StoreKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
 | [`server`](../raftstore/server) | `Config` + `NewNode` that bind storage, Store, transport, and the shared KV/admin RPC surfaces into a reusable node primitive. |
 
 ### Runtime ownership sketch
@@ -68,7 +68,7 @@ flowchart TD
        TransportAddr: "127.0.0.1:20160",
    })
    ```
-   - A gRPC transport is created, the NoKV service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
+   - A gRPC transport is created, the StoreKV service is registered, and `transport.SetHandler(store.Step)` wires raft Step handling.
    - `store.Store` loads the local peer catalog from `raftstore/localmeta` to rebuild the Region catalog (router + metrics).
 
 2. **Start local peers**
@@ -93,7 +93,7 @@ flowchart TD
 ## 3. Command Execution
 
 ### Read (strong leader read)
-1. `kv.Service.KvGet` builds `pb.RaftCmdRequest` and invokes `Store.ReadCommand`.
+1. `kv.Service.Get` builds `pb.RaftCmdRequest` and invokes `Store.ReadCommand`.
 2. `validateCommand` ensures the region exists, epoch matches, and the local peer is leader; a RegionError is returned otherwise.
 3. `peer.LinearizableRead` obtains a safe read index, then `peer.WaitApplied` waits until local apply index reaches it.
 4. `commandApplier` (i.e. `kv.Apply`) runs GET/SCAN against the DB using MVCC readers to honor locks and version visibility.
@@ -108,7 +108,7 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant C as NoKV Client
+    participant C as StoreKV Client
     participant SVC as kv.Service
     participant ST as store.Store
     participant PR as peer.Peer
@@ -117,7 +117,7 @@ sequenceDiagram
     participant DB as NoKV DB
 
     rect rgb(237, 247, 255)
-      C->>SVC: KvGet/KvScan
+      C->>SVC: Get/Scan
       SVC->>ST: ReadCommand
       ST->>PR: LinearizableRead + WaitApplied
       ST->>AP: commandApplier(req)
@@ -126,7 +126,7 @@ sequenceDiagram
     end
 
     rect rgb(241, 253, 244)
-      C->>SVC: KvPrewrite/KvCommit/...
+      C->>SVC: Prewrite/Commit/...
       SVC->>ST: ProposeCommand
       ST->>RF: route + replicate
       RF->>AP: apply committed entry
@@ -139,7 +139,7 @@ sequenceDiagram
 
 ## 4. Transport
 
-- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and NoKV RPC.
+- gRPC transport listens on `TransportAddr`, serving both raft Step RPC and StoreKV RPC.
 - `SetPeer` updates the mapping of remote store IDs to addresses; `BlockPeer` can be used by tests or chaos tooling.
 - Configurable retry/backoff/timeout options mirror production requirements. Tests cover message loss, blocked peers, and partitions.
 
@@ -153,12 +153,12 @@ sequenceDiagram
 
 ---
 
-## 6. NoKV RPC Integration
+## 6. StoreKV RPC Integration
 
 | RPC | Execution Path | Notes |
 | --- | --- | --- |
-| `KvGet` / `KvScan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
-| `KvPrewrite` / `KvCommit` / `KvBatchRollback` / `KvResolveLock` / `KvCheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
+| `Get` / `Scan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
+| `Prewrite` / `Commit` / `BatchRollback` / `ResolveLock` / `CheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
 
 The `cmd/nokv serve` command uses `server.Node` internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.
 
@@ -296,7 +296,7 @@ rather than risking an unsafe safe point.
 
 - Reads served through `ReadCommand` are leader-strong and pass a Raft
   linearizability barrier (`LinearizableRead` + `WaitApplied`).
-- Mutating NoKV RPC commands are serialized through Raft log replication and apply.
+- Mutating StoreKV RPC commands are serialized through Raft log replication and apply.
 - Command payload format on apply path is strict `RaftCmdRequest` encoding.
 - Region metadata (range/epoch/peers) is validated before both read and write
   command execution.

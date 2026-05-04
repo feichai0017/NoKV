@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
+	local "github.com/feichai0017/NoKV/local"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/utils"
@@ -71,7 +71,7 @@ func TestExportDir(t *testing.T) {
 }
 
 func TestExportDirSplitsLargeSnapshotIntoMultipleTables(t *testing.T) {
-	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *local.Options) {
 		opt.SSTableMaxSz = 512
 	})
 	defer func() { _ = srcDB.Close() }()
@@ -409,7 +409,7 @@ func TestClosedDBSnapshotCallsReturnError(t *testing.T) {
 }
 
 func TestImportDirRejectsIncompatibleTableFormat(t *testing.T) {
-	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *local.Options) {
 		opt.SSTableMaxSz = 1 << 20
 	})
 	defer func() { _ = srcDB.Close() }()
@@ -439,7 +439,7 @@ func TestImportDirRejectsIncompatibleTableFormat(t *testing.T) {
 }
 
 func TestImportDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
-	srcDB := openSnapshotDBWithTweak(t, func(opt *NoKV.Options) {
+	srcDB := openSnapshotDBWithTweak(t, func(opt *local.Options) {
 		opt.SSTableMaxSz = 1 << 20
 	})
 	defer func() { _ = srcDB.Close() }()
@@ -468,20 +468,20 @@ func TestImportDirRejectsIncompatibleBloomFalsePositive(t *testing.T) {
 	require.Contains(t, err.Error(), "incompatible bloom false positive")
 }
 
-func openSnapshotDB(t testing.TB) *NoKV.DB {
+func openSnapshotDB(t testing.TB) *local.DB {
 	t.Helper()
 	return openSnapshotDBWithTweak(t, nil)
 }
 
-func openSnapshotDBWithTweak(t testing.TB, tweak func(*NoKV.Options)) *NoKV.DB {
+func openSnapshotDBWithTweak(t testing.TB, tweak func(*local.Options)) *local.DB {
 	t.Helper()
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.SyncWrites = false
 	if tweak != nil {
 		tweak(opt)
 	}
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db
 }

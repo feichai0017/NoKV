@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -13,7 +13,7 @@ import (
 )
 
 func TestDBLogRequiresOpenDB(t *testing.T) {
-	var nilDB *NoKV.DB
+	var nilDB *local.DB
 	_, err := raftlog.NewDBLog(nilDB).Open(1, nil)
 	require.ErrorContains(t, err, "db is required")
 
@@ -39,18 +39,18 @@ func TestDBLogUsesDedicatedControlWAL(t *testing.T) {
 	require.NotEmpty(t, matches)
 }
 
-func openDBLogTestDB(t *testing.T) (*NoKV.DB, *localmeta.Store) {
+func openDBLogTestDB(t *testing.T) (*local.DB, *localmeta.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(filepath.Join(dir, "raftmeta"), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = localMeta.Close() })
 
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.EnableWALWatchdog = false
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta
 }

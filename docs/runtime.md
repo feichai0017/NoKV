@@ -98,7 +98,7 @@ sequenceDiagram
     participant RF as Raft replicate/apply
     participant TXN as percolator.txn
     participant DB as DB.ApplyInternalEntries
-    CL->>SVC: KvPrewrite / KvCommit / ...
+    CL->>SVC: Prewrite / Commit / ...
     SVC->>ST: ProposeCommand
     ST->>RF: replicate and apply
     RF->>TXN: execute MVCC mutation

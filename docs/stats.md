@@ -71,11 +71,11 @@ Representative fields:
 
 `Stats.collect` exports a single structured object:
 
-- `NoKV.Stats`
+- `NoKV.Local.Stats`
 
 All domains (`flush`, `compaction`, `wal`, `raft`, `write`, `region`, `hot`, `cache`, `lsm`, `transport`) are nested under this object.
 
-Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Stats` directly.
+Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Local.Stats` directly.
 
 ---
 

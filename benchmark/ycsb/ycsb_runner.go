@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	NoKV "github.com/feichai0017/NoKV"
+	local "github.com/feichai0017/NoKV/local"
 )
 
 type ycsbWorkload struct {
@@ -359,9 +359,9 @@ func newYCSBEngine(engineName string, opts ycsbEngineOptions) (ycsbEngine, error
 	case "nokv":
 		return newNoKVEngine(opts), nil
 	case "nokv-skiplist":
-		return newNoKVEngineWithMemtable(opts, "nokv-skiplist", "NoKV-skiplist", NoKV.MemTableEngineSkiplist), nil
+		return newNoKVEngineWithMemtable(opts, "nokv-skiplist", "NoKV-skiplist", local.MemTableEngineSkiplist), nil
 	case "nokv-art":
-		return newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", NoKV.MemTableEngineART), nil
+		return newNoKVEngineWithMemtable(opts, "nokv-art", "NoKV-art", local.MemTableEngineART), nil
 	case "badger":
 		return newBadgerEngine(opts), nil
 	case "pebble":
@@ -740,8 +740,8 @@ func formatYCSBKey(id int64, width int) []byte {
 var (
 	valueBufPool = &valuePool{
 		pool:     sync.Pool{},
-		gets:     expvar.NewInt("NoKV.Benchmark.ValuePool.Gets"),
-		releases: expvar.NewInt("NoKV.Benchmark.ValuePool.Releases"),
+		gets:     expvar.NewInt("local.Benchmark.ValuePool.Gets"),
+		releases: expvar.NewInt("local.Benchmark.ValuePool.Releases"),
 	}
 )
 

@@ -45,7 +45,7 @@ Examples:
   key/value validation errors, throttling, and lifecycle guards.
 - `errors/errors.go`: stable cross-boundary `Kind`, typed transaction key
   errors, gRPC status classification, and retry classification.
-- `dbcore/errkind/engine.go`: embedded-engine sentinel to `errors.Kind`
+- `local/errkind/classify.go`: embedded-engine sentinel to `errors.Kind`
   mapping for DB, RPC, and future `fsmeta/runtime/local` boundaries.
 
 ### Domain-specific sentinels
@@ -88,12 +88,12 @@ Examples:
 ## 6. Embedded Engine Boundary Map
 
 The single-node engine packages (`engine/*`, `utils`) must not import the root
-`errors` package. `dbcore/*` follows the same rule except for the explicit
-`dbcore/errkind` boundary mapper. The root error package owns gRPC and
-distributed transaction adaptation, so importing it from the embedded engine
-would invert the architecture.
+`errors` package. The `local/errkind` mapper is the explicit DB boundary where
+engine sentinels become the stable cross-boundary error taxonomy. The root
+error package owns gRPC and distributed transaction adaptation, so importing it
+from the embedded engine would invert the architecture.
 
-Use `errkind.FromEngine(err)` from `dbcore/errkind` at DB facade, RPC, or
+Use `errkind.Classify(err)` from `local/errkind` at DB facade, RPC, or
 local fsmeta runtime boundaries. Current mapping:
 
 | Local error family | Boundary kind |

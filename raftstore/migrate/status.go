@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	workdirmode "github.com/feichai0017/NoKV/dbcore/mode"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"

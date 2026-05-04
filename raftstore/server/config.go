@@ -25,7 +25,7 @@ type Config struct {
 	// Raft provides the base raft configuration used when bootstrapping peers.
 	// The Peer ID is populated per Region automatically.
 	Raft myraft.Config
-	// TransportAddr selects the listen address for the shared raft/NoKV gRPC
+	// TransportAddr selects the listen address for the shared raft/StoreKV gRPC
 	// server. An empty string defaults to 127.0.0.1:0.
 	TransportAddr string
 	// TransportOptions allows callers to override transport settings (TLS,

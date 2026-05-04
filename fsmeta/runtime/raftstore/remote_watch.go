@@ -166,7 +166,7 @@ func (s *RemoteSource) runStore(ctx context.Context, storeID uint64, conn *grpc.
 	defer s.removeStore(storeID, conn)
 	backoff := remoteWatchMinBackoff
 	for ctx.Err() == nil {
-		stream, err := kvrpcpb.NewNoKVClient(conn).KvWatchApply(ctx, &kvrpcpb.ApplyWatchRequest{})
+		stream, err := kvrpcpb.NewStoreKVClient(conn).WatchApply(ctx, &kvrpcpb.ApplyWatchRequest{})
 		if err != nil {
 			if ctx.Err() != nil {
 				return

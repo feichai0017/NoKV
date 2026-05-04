@@ -23,7 +23,7 @@ type storeConn struct {
 
 	mu     sync.Mutex
 	conn   *grpc.ClientConn
-	client kvrpcpb.NoKVClient
+	client kvrpcpb.StoreKVClient
 }
 
 type retryKind uint8
@@ -53,7 +53,7 @@ func dialStore(ctx context.Context, target string, opts ...grpc.DialOption) (*gr
 	}
 }
 
-func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.NoKVClient, error) {
+func (c *Client) storeClient(ctx context.Context, storeID uint64) (kvrpcpb.StoreKVClient, error) {
 	if storeID == 0 {
 		return nil, errStoreIDNotSet
 	}
@@ -260,7 +260,7 @@ func normalizeRPCError(err error) error {
 	return err
 }
 
-func (st *storeConn) clientFor(ctx context.Context) (kvrpcpb.NoKVClient, error) {
+func (st *storeConn) clientFor(ctx context.Context) (kvrpcpb.StoreKVClient, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.client != nil && st.conn != nil && st.conn.GetState() != connectivity.Shutdown {
@@ -278,7 +278,7 @@ func (st *storeConn) clientFor(ctx context.Context) (kvrpcpb.NoKVClient, error) 
 		return nil, fmt.Errorf("client: dial %s: %w", st.addr, err)
 	}
 	st.conn = conn
-	st.client = kvrpcpb.NewNoKVClient(conn)
+	st.client = kvrpcpb.NewStoreKVClient(conn)
 	return st.client, nil
 }
 

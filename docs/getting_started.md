@@ -87,14 +87,14 @@ import (
 	"fmt"
 	"log"
 
-	NoKV "github.com/feichai0017/NoKV"
+	"github.com/feichai0017/NoKV/local"
 )
 
 func main() {
-	opt := NoKV.NewDefaultOptions()
+	opt := local.NewDefaultOptions()
 	opt.WorkDir = "./workdir-demo"
 
-	db, err := NoKV.Open(opt)
+	db, err := local.Open(opt)
 	if err != nil {
 		log.Fatalf("open failed: %v", err)
 	}

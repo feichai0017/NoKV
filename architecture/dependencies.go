@@ -59,6 +59,27 @@ var importRules = []ImportRule{
 		},
 	},
 	{
+		Name:          "local db stays free of distributed assembly",
+		PackagePrefix: modulePath + "/local",
+		Forbidden: []string{
+			modulePath + "/fsmeta",
+			modulePath + "/coordinator",
+			modulePath + "/meta/root",
+			modulePath + "/raftstore",
+			modulePath + "/percolator",
+		},
+	},
+	{
+		Name:          "local runtime stays free of global error taxonomy",
+		PackagePrefix: modulePath + "/local",
+		Forbidden: []string{
+			modulePath + "/errors",
+		},
+		Exempt: []string{
+			modulePath + "/local/errkind",
+		},
+	},
+	{
 		Name:          "embedded engine stays free of global error taxonomy",
 		PackagePrefix: modulePath + "/engine",
 		Forbidden: []string{
@@ -70,26 +91,6 @@ var importRules = []ImportRule{
 		PackagePrefix: modulePath + "/utils",
 		Forbidden: []string{
 			modulePath + "/errors",
-		},
-	},
-	{
-		Name:          "dbcore stays free of distributed assembly",
-		PackagePrefix: modulePath + "/dbcore",
-		Forbidden: []string{
-			modulePath + "/fsmeta",
-			modulePath + "/coordinator",
-			modulePath + "/meta/root",
-			modulePath + "/raftstore",
-		},
-	},
-	{
-		Name:          "dbcore stays free of global error taxonomy",
-		PackagePrefix: modulePath + "/dbcore",
-		Forbidden: []string{
-			modulePath + "/errors",
-		},
-		Exempt: []string{
-			modulePath + "/dbcore/errkind",
 		},
 	},
 	{
@@ -122,6 +123,23 @@ var importRules = []ImportRule{
 			modulePath + "/raftstore",
 		},
 	},
+	{
+		Name:          "coordinator scheduling stays policy-only",
+		PackagePrefix: modulePath + "/coordinator/scheduling",
+		Forbidden: []string{
+			modulePath + "/coordinator/client",
+			modulePath + "/coordinator/server",
+			modulePath + "/coordinator/storecontrol",
+		},
+	},
+	{
+		Name:          "coordinator storecontrol stays out of scheduling and service",
+		PackagePrefix: modulePath + "/coordinator/storecontrol",
+		Forbidden: []string{
+			modulePath + "/coordinator/scheduling",
+			modulePath + "/coordinator/server",
+		},
+	},
 }
 
 var combinedImportRules = []CombinedImportRule{
@@ -140,11 +158,15 @@ var combinedImportRules = []CombinedImportRule{
 
 var removedPathRules = []RemovedPathRule{
 	{Name: "raftstore descriptor package stays removed", Path: "raftstore/descriptor"},
-	{Name: "raftstore scheduler package stays moved to scheduler", Path: "raftstore/scheduler"},
-	{Name: "coordinator adapter package stays moved to scheduler/coordinator", Path: "coordinator/adapter"},
+	{Name: "top-level scheduler package stays folded into coordinator/storecontrol", Path: "scheduler"},
+	{Name: "raftstore scheduler package stays moved to coordinator/storecontrol", Path: "raftstore/scheduler"},
+	{Name: "coordinator adapter package stays folded into coordinator/storecontrol", Path: "coordinator/adapter"},
+	{Name: "coordinator view package stays folded into coordinator/catalog", Path: "coordinator/view"},
 	{Name: "coordinator eunomia package stays removed", Path: "coordinator/protocol/eunomia"},
-	{Name: "db runtime package stays moved to dbcore", Path: "runtime"},
-	{Name: "raftstore mode package stays moved to dbcore/mode", Path: "raftstore/mode"},
+	{Name: "old db runtime package stays removed", Path: "runtime"},
+	{Name: "dbcore package stays folded into local/internal and utils", Path: "dbcore"},
+	{Name: "local background package stays folded into local", Path: "local/internal/background"},
+	{Name: "raftstore mode package stays moved to local/workdir", Path: "raftstore/mode"},
 	{Name: "raftstore migrate mode alias stays removed", Path: "raftstore/migrate/mode.go"},
 }
 
