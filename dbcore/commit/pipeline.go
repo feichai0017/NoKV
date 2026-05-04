@@ -331,7 +331,7 @@ func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 				if !ok || len(userKey) == 0 {
 					continue
 				}
-				return int(fnv1a32(userKey)) & (n - 1)
+				return ShardForUserKey(userKey, n)
 			}
 		}
 	}
@@ -341,6 +341,28 @@ func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 		*rr = 0
 	}
 	return id
+}
+
+// ShardForInternalKey returns the commit-pipeline shard for an internal key.
+// Callers that pre-group multi-key internal batches must use this exact router;
+// otherwise a same-version delete/write pair for one user key can land on
+// different LSM shards and lose last-write-wins semantics during reads.
+func ShardForInternalKey(internalKey []byte, shardCount int) int {
+	_, userKey, _, ok := kv.SplitInternalKey(internalKey)
+	if !ok {
+		return 0
+	}
+	return ShardForUserKey(userKey, shardCount)
+}
+
+// ShardForUserKey hashes a user key into a commit-pipeline shard. shardCount
+// is expected to be a positive power of two; DB.Open normalizes the configured
+// LSMShardCount before the pipeline is started.
+func ShardForUserKey(userKey []byte, shardCount int) int {
+	if shardCount <= 1 || len(userKey) == 0 {
+		return 0
+	}
+	return int(fnv1a32(userKey)) & (shardCount - 1)
 }
 
 // fnv1a32 is the inline FNV-1a 32-bit hash used by shard routing. It
