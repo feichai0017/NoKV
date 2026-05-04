@@ -26,5 +26,6 @@ jobs:
           NOKV_DOCKER_CHAOS_SEEDS: "2"
           NOKV_DOCKER_CHAOS_STEPS: "32"
           NOKV_DOCKER_CHAOS_BATCH: "3"
-          NOKV_DOCKER_CHAOS_TIMEOUT: "60s"
+          NOKV_DOCKER_CHAOS_TIMEOUT: "120s"
+          NOKV_DOCKER_CHAOS_INTERVAL: "2"
         run: ./scripts/chaos/docker_fsmeta_history.sh

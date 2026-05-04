@@ -136,24 +136,33 @@ func (lm *levelManager) iterators(opt *index.Options) []index.Iterator {
 	return itrs
 }
 
-// Get searches levels from L0 to Ln and returns the newest visible entry for key.
+// Get searches every level and returns the highest visible version for key.
 func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
-	var (
-		entry *kv.Entry
-		err   error
-	)
-	// L0 layer query
-	if entry, err = lm.levels[0].Get(key); entry != nil {
-		return entry, err
-	}
-	// L1-7 layer query
-	for level := 1; level < lm.opt.MaxLevelNum; level++ {
-		ld := lm.levels[level]
-		if entry, err = ld.Get(key); entry != nil {
-			return entry, err
+	var best *kv.Entry
+	for level := 0; level < lm.opt.MaxLevelNum; level++ {
+		entry, err := lm.levels[level].Get(key)
+		if err != nil && err != utils.ErrKeyNotFound {
+			if best != nil {
+				best.DecrRef()
+			}
+			return nil, err
 		}
+		if entry == nil {
+			continue
+		}
+		if best == nil || entry.Version > best.Version {
+			if best != nil {
+				best.DecrRef()
+			}
+			best = entry
+			continue
+		}
+		entry.DecrRef()
 	}
-	return entry, utils.ErrKeyNotFound
+	if best != nil {
+		return best, nil
+	}
+	return nil, utils.ErrKeyNotFound
 }
 
 func (lm *levelManager) loadManifest() (err error) {

@@ -2,7 +2,7 @@
 # Provides standardized commands for development workflow
 
 .PHONY: help build test test-short test-race test-coverage test-architecture lint fmt clean docker-up docker-dev-up docker-down bench
-.PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke
+.PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke test-soak-24h test-soak-72h
 .PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
 .PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish tlc-root-replay-watch tlc-fsmeta-namespace
@@ -35,6 +35,8 @@ help:
 	@echo "  make test-correctness-nightly - Run longer seeded correctness and failpoint matrix"
 	@echo "  make test-docker-chaos  - Run Docker fsmeta history checker under process chaos"
 	@echo "  make test-soak-smoke    - Run short Docker fsmeta soak smoke"
+	@echo "  make test-soak-24h      - Run release-hardening fsmeta soak for 24 hours"
+	@echo "  make test-soak-72h      - Run release-hardening fsmeta soak for 72 hours"
 	@echo "  make lint               - Run golangci-lint (requires installation)"
 	@echo "  make fmt                - Run go fix, format code with gofmt, and tidy modules"
 	@echo "  make proto              - Format .proto files and regenerate protobuf Go code"
@@ -55,10 +57,12 @@ help:
 # Build all binaries
 build:
 	@echo "Building NoKV binaries..."
+	mkdir -p build
 	go build -v ./...
 	go build -o build/nokv ./cmd/nokv
 	go build -o build/nokv-config ./cmd/nokv-config
 	go build -o build/nokv-fsmeta ./cmd/nokv-fsmeta
+	go build -o build/nokv-fsmeta-scrub ./cmd/nokv-fsmeta-scrub
 	@echo "✓ Build complete: binaries in build/"
 
 # Run all tests
@@ -109,6 +113,7 @@ test-history-smoke:
 test-model-smoke:
 	@echo "Running distributed model smoke tests..."
 	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-8} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-64} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-2} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-4} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
 	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-1} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-6} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
 	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-2} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-24} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
 
@@ -123,7 +128,7 @@ test-crash-matrix-smoke:
 # raftstore runtimes.
 test-deterministic-simulation-smoke:
 	@echo "Running deterministic fault simulation smoke tests..."
-	NOKV_SIMULATION_SEEDS=$${NOKV_SIMULATION_SEEDS:-1} NOKV_SIMULATION_STEPS=$${NOKV_SIMULATION_STEPS:-6} go test ./raftstore/integration -run TestDeterministicFaultSimulationAcrossSplitCluster -count=1 -v
+	NOKV_SIMULATION_SEEDS=$${NOKV_SIMULATION_SEEDS:-1} NOKV_SIMULATION_STEPS=$${NOKV_SIMULATION_STEPS:-8} go test ./raftstore/integration -run TestDeterministicFaultSimulationAcrossSplitCluster -count=1 -v
 
 # Run the highest-signal distributed correctness suites before the full package sweep.
 test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke
@@ -139,6 +144,7 @@ test-correctness-nightly:
 	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-64} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-240} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
 	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-4} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-80} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
 	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-64} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-256} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-16} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-24} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
 	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-4} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-18} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
 	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-16} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-128} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
 	go test ./percolator -run TestPercolatorCrashMatrix -count=3 -v
@@ -158,6 +164,14 @@ test-docker-chaos:
 test-soak-smoke:
 	@echo "Running short Docker fsmeta soak..."
 	NOKV_SOAK_DURATION=$${NOKV_SOAK_DURATION:-30s} NOKV_SOAK_ROLLING_RESTARTS=$${NOKV_SOAK_ROLLING_RESTARTS:-0} ./scripts/soak/fsmeta_soak.sh
+
+test-soak-24h:
+	@echo "Running 24h Docker fsmeta soak..."
+	NOKV_SOAK_DURATION=24h NOKV_SOAK_ROLLING_RESTARTS=1 NOKV_SOAK_STEPS=$${NOKV_SOAK_STEPS:-120} NOKV_SOAK_BATCH=$${NOKV_SOAK_BATCH:-4} ./scripts/soak/fsmeta_soak.sh
+
+test-soak-72h:
+	@echo "Running 72h Docker fsmeta soak..."
+	NOKV_SOAK_DURATION=72h NOKV_SOAK_ROLLING_RESTARTS=1 NOKV_SOAK_STEPS=$${NOKV_SOAK_STEPS:-160} NOKV_SOAK_BATCH=$${NOKV_SOAK_BATCH:-4} ./scripts/soak/fsmeta_soak.sh
 
 # Run linter (requires golangci-lint to be installed)
 lint:
