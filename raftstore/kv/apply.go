@@ -62,6 +62,13 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
 			result := percolator.TxnHeartBeat(db, latches, r.GetTxnHeartBeat())
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TxnHeartBeat{TxnHeartBeat: result}})
+		case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+			result := percolator.ApplyAtomicMutate(db, latches, r.GetTryAtomicMutate())
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{
+				Error:                    result.Error,
+				AppliedKeys:              result.AppliedKeys,
+				FallbackToTwoPhaseCommit: result.Fallback,
+			}}})
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 			result, err := applyMVCCMaintenance(db, r.GetMvccMaintenance())
 			if err != nil {

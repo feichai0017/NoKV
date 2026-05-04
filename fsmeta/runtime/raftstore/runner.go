@@ -16,6 +16,10 @@ type KVClient interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
+type atomicMutateFastPath interface {
+	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
+}
+
 // TSOClient is the coordinator timestamp surface required by Runner.
 type TSOClient interface {
 	Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error)
@@ -119,4 +123,15 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 // Mutate delegates to raftstore's two-phase commit path.
 func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
 	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
+}
+
+// TryAtomicMutate delegates to the region-local 1PC fast path when the
+// underlying KV client supports it. handled=false means callers should keep
+// the regular Percolator 2PC path.
+func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	fast, ok := r.kv.(atomicMutateFastPath)
+	if !ok {
+		return false, nil
+	}
+	return fast.TryAtomicMutate(ctx, primary, predicates, mutations, startVersion, commitVersion)
 }

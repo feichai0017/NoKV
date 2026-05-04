@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -229,6 +230,22 @@ func applyEventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, r
 				CommitVersion: resolve.GetCommitVersion(),
 				Keys:          cloneApplyKeys(resolve.GetKeys()),
 			})
+		case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+			atomicMutate := request.GetTryAtomicMutate()
+			if atomicMutate == nil || atomicMutate.GetCommitVersion() == 0 || len(atomicMutate.GetMutations()) == 0 || response == nil || response.GetTryAtomicMutate() == nil {
+				continue
+			}
+			if response.GetTryAtomicMutate().GetError() != nil || response.GetTryAtomicMutate().GetFallbackToTwoPhaseCommit() {
+				continue
+			}
+			out = append(out, ApplyEvent{
+				RegionID:      regionID,
+				Term:          entry.Term,
+				Index:         entry.Index,
+				Source:        ApplyEventSourceCommit,
+				CommitVersion: atomicMutate.GetCommitVersion(),
+				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
+			})
 		}
 	}
 	return out
@@ -245,6 +262,20 @@ func cloneApplyKeys(keys [][]byte) [][]byte {
 			continue
 		}
 		out = append(out, kv.SafeCopy(nil, key))
+	}
+	return out
+}
+
+func cloneMutationKeys(mutations []*kvrpcpb.Mutation) [][]byte {
+	if len(mutations) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(mutations))
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		out = append(out, kv.SafeCopy(nil, mut.GetKey()))
 	}
 	return out
 }

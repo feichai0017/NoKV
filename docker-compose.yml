@@ -125,6 +125,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-1"
+      - "--lease-ttl=30s"
+      - "--lease-renew-before=10s"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
@@ -147,6 +149,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-2"
+      - "--lease-ttl=30s"
+      - "--lease-renew-before=10s"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
@@ -169,6 +173,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-3"
+      - "--lease-ttl=30s"
+      - "--lease-renew-before=10s"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
@@ -287,6 +293,7 @@ services:
     command:
       - "--addr=0.0.0.0:8090"
       - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
+      - "--dirpage-cache-dir=/var/lib/nokv/dirpage-cache"
       - "--metrics-addr=0.0.0.0:9400"
     ports:
       - "8090:8090"   # FSMetadata gRPC

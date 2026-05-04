@@ -1031,6 +1031,25 @@ func (db *DB) batchSetInternalEntries(entries []*kv.Entry) error {
 	return nil
 }
 
+// CanApplyInternalEntriesAtomically reports whether ApplyInternalEntries will
+// persist entries as one local LSM apply group. The check intentionally uses
+// the same shard grouping path as ApplyInternalEntries; callers must not
+// duplicate this routing logic outside the DB boundary.
+func (db *DB) CanApplyInternalEntriesAtomically(entries []*kv.Entry) bool {
+	groups := db.groupInternalEntriesByShard(entries)
+	nonEmpty := 0
+	for _, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		nonEmpty++
+		if nonEmpty > 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func (db *DB) groupInternalEntriesByShard(entries []*kv.Entry) [][]*kv.Entry {
 	if len(entries) <= 1 {
 		return [][]*kv.Entry{entries}

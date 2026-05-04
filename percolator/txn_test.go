@@ -42,6 +42,21 @@ func applyVersionedEntryForTxnTest(t *testing.T, db *NoKV.DB, cf kv.ColumnFamily
 	require.NoError(t, db.ApplyInternalEntries([]*kv.Entry{entry}))
 }
 
+func atomicPutIfAbsentRequest(startVersion, commitVersion uint64, firstKey, firstValue, secondKey, secondValue []byte) *kvrpcpb.TryAtomicMutateRequest {
+	return &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  startVersion,
+		CommitVersion: commitVersion,
+		Predicates: []*kvrpcpb.AtomicPredicate{
+			{Key: kv.SafeCopy(nil, firstKey), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+			{Key: kv.SafeCopy(nil, secondKey), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+		},
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: kv.SafeCopy(nil, firstKey), Value: kv.SafeCopy(nil, firstValue), AssertionNotExist: true},
+			{Op: kvrpcpb.Mutation_Put, Key: kv.SafeCopy(nil, secondKey), Value: kv.SafeCopy(nil, secondValue), AssertionNotExist: true},
+		},
+	}
+}
+
 func latestWALPath(t *testing.T, dir string) string {
 	t.Helper()
 	// LSM data plane is sharded into <dir>/lsm-wal-XX/. Per-key affinity
@@ -212,6 +227,104 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	lock, err = reader.GetLock([]byte("k1"))
 	require.NoError(t, err)
 	require.Nil(t, lock)
+}
+
+func TestApplyAtomicMutateMaterializesCommittedKeys(t *testing.T) {
+	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
+	opt.LSMShardCount = 1
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	latches := latch.NewManager(16)
+	req := atomicPutIfAbsentRequest(10, 11, []byte("dentry"), []byte("ino=42"), []byte("inode"), []byte("attrs"))
+
+	result := ApplyAtomicMutate(db, latches, req)
+	require.Nil(t, result.Error)
+	require.False(t, result.Fallback)
+	require.Equal(t, uint64(2), result.AppliedKeys)
+
+	reader := NewReader(db)
+	for _, mut := range req.GetMutations() {
+		value, _, err := reader.GetValue(mut.GetKey(), req.GetCommitVersion())
+		require.NoError(t, err)
+		require.Equal(t, mut.GetValue(), value)
+		lock, err := reader.GetLock(mut.GetKey())
+		require.NoError(t, err)
+		require.Nil(t, lock)
+	}
+	_, _, err = reader.GetValue([]byte("dentry"), req.GetStartVersion())
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	result = ApplyAtomicMutate(db, latches, req)
+	require.Nil(t, result.Error)
+	require.False(t, result.Fallback)
+	require.Equal(t, uint64(2), result.AppliedKeys)
+}
+
+func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		StartVersion: 1,
+		PrimaryLock:  []byte("dentry"),
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("dentry"),
+			Value: []byte("old"),
+		}},
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{[]byte("dentry")},
+		StartVersion:  1,
+		CommitVersion: 5,
+	}))
+
+	result := ApplyAtomicMutate(db, latches, atomicPutIfAbsentRequest(6, 7, []byte("dentry"), []byte("new"), []byte("inode"), []byte("attrs")))
+	keyErr := result.Error
+	require.NotNil(t, keyErr.GetAlreadyExists())
+	require.Equal(t, []byte("dentry"), keyErr.GetAlreadyExists().GetKey())
+}
+
+func TestApplyAtomicMutateRejectsLockedPredicate(t *testing.T) {
+	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
+	opt.LSMShardCount = 1
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	latches := latch.NewManager(16)
+	predicateKey := []byte("atomic-predicate-lock")
+	targetKey := []byte("atomic-target")
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		StartVersion: 1,
+		PrimaryLock:  predicateKey,
+		LockTtl:      3000,
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   predicateKey,
+			Value: []byte("pending"),
+		}},
+	}))
+
+	result := ApplyAtomicMutate(db, latches, &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  10,
+		CommitVersion: 11,
+		Predicates: []*kvrpcpb.AtomicPredicate{{
+			Key:  predicateKey,
+			Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		}},
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   targetKey,
+			Value: []byte("value"),
+		}},
+	})
+	require.NotNil(t, result.Error)
+	require.NotNil(t, result.Error.GetLocked())
+	require.Equal(t, predicateKey, result.Error.GetLocked().GetKey())
+
+	_, _, err = NewReader(db).GetValue(targetKey, 11)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestCommittedLockDoesNotHideVisiblePut(t *testing.T) {
@@ -781,6 +894,21 @@ func keysWithAscendingCommitShards(t *testing.T, shardCount int) ([]byte, []byte
 	}
 	t.Fatalf("could not find keys on ascending shards for shardCount=%d", shardCount)
 	return nil, nil
+}
+
+func keysWithSameCommitShard(t *testing.T, shardCount int) ([]byte, []byte, int) {
+	t.Helper()
+	keysByShard := make([][]byte, shardCount)
+	for i := range 10000 {
+		key := fmt.Appendf(nil, "same-affinity-%d", i)
+		shardID := commit.ShardForInternalKey(kv.InternalKey(kv.CFDefault, key, 1), shardCount)
+		if keysByShard[shardID] != nil {
+			return keysByShard[shardID], key, shardID
+		}
+		keysByShard[shardID] = key
+	}
+	t.Fatalf("could not find same-shard keys for shardCount=%d", shardCount)
+	return nil, nil, 0
 }
 
 func TestCommitBatchCommitTsExpiredDoesNotApplyPartialCommits(t *testing.T) {
