@@ -88,7 +88,10 @@ if [[ -n "$WORKDIR" ]]; then
   cmd+=(--workdir "$WORKDIR")
 fi
 
-cmd+=("${EXTRA_ARGS[@]}")
+if ((${#EXTRA_ARGS[@]})); then
+  cmd+=("${EXTRA_ARGS[@]}")
+fi
+
 
 child=""
 cleanup() {
