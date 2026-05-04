@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	NoKV "github.com/feichai0017/NoKV"
@@ -65,6 +67,35 @@ func TestTxnModelGeneratedScheduleIsSerializable(t *testing.T) {
 			for _, key := range txnModelKeys() {
 				assertReaderMatchesTxnModel(t, reader, model, key, uint64(steps*20+10_000))
 			}
+		})
+	}
+}
+
+func TestTxnModelConcurrentHistoryIsSerializable(t *testing.T) {
+	seeds := percolatorModelEnvInt("NOKV_PERCOLATOR_CONCURRENT_SEEDS", 4)
+	waves := percolatorModelEnvInt("NOKV_PERCOLATOR_CONCURRENT_WAVES", 8)
+	batch := percolatorModelEnvInt("NOKV_PERCOLATOR_CONCURRENT_BATCH", 4)
+	for seed := int64(1); seed <= int64(seeds); seed++ {
+		t.Run(fmt.Sprintf("seed_%03d", seed), func(t *testing.T) {
+			db := openPercolatorModelDB(t)
+			latches := latch.NewManager(64)
+			history := runConcurrentTxnHistory(t, db, latches, seed, waves, batch)
+			require.NoError(t, checkSerializableByTimestamp(history))
+
+			model := newTxnModel()
+			committed := append([]txnModelTxn(nil), history...)
+			sort.Slice(committed, func(i, j int) bool {
+				if committed[i].commitTs != committed[j].commitTs {
+					return committed[i].commitTs < committed[j].commitTs
+				}
+				return committed[i].id < committed[j].id
+			})
+			for _, txn := range committed {
+				if txn.committed {
+					model.apply(txn)
+				}
+			}
+			assertAllKeysMatchTxnModel(t, percolator.NewReader(db), model, uint64(1<<62))
 		})
 	}
 }
@@ -139,6 +170,103 @@ func runGeneratedTxnSchedule(t *testing.T, db *NoKV.DB, latches *latch.Manager, 
 		assertAllKeysMatchTxnModel(t, reader, model, commitTs+1)
 	}
 	return history
+}
+
+func runConcurrentTxnHistory(t *testing.T, db *NoKV.DB, latches *latch.Manager, seed int64, waves, batch int) []txnModelTxn {
+	t.Helper()
+	if batch < 2 {
+		batch = 2
+	}
+	rng := rand.New(rand.NewSource(seed))
+	var ts atomic.Uint64
+	ts.Store(10)
+	history := make([]txnModelTxn, 0, waves*batch)
+	for wave := range waves {
+		results := make([]txnModelTxn, batch)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		prewriteDone := make(chan struct{}, batch)
+		commitStart := make(chan struct{})
+		for slot := range batch {
+			step := wave*batch + slot
+			mutations := generatedTxnMutations(rng, step)
+			rollback := rng.Intn(100) < 25
+			wg.Add(1)
+			go func(slot int, step int, mutations []*kvrpcpb.Mutation, rollback bool) {
+				defer wg.Done()
+				<-start
+				results[slot] = runConcurrentTxnAttempt(t, db, latches, &ts, step, mutations, rollback, prewriteDone, commitStart)
+			}(slot, step, mutations, rollback)
+		}
+		close(start)
+		for range batch {
+			<-prewriteDone
+		}
+		close(commitStart)
+		wg.Wait()
+		history = append(history, results...)
+	}
+	return history
+}
+
+func runConcurrentTxnAttempt(
+	t *testing.T,
+	db *NoKV.DB,
+	latches *latch.Manager,
+	ts *atomic.Uint64,
+	step int,
+	mutations []*kvrpcpb.Mutation,
+	rollback bool,
+	prewriteDone chan<- struct{},
+	commitStart <-chan struct{},
+) txnModelTxn {
+	t.Helper()
+	startTs := ts.Add(2)
+	txn := txnModelTxn{
+		id:      step,
+		startTs: startTs,
+		reads:   readTxnSnapshot(t, percolator.NewReader(db), mutations, startTs),
+		writes:  writesFromMutations(mutations),
+	}
+	errs := percolator.Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations:    mutations,
+		PrimaryLock:  mutations[0].GetKey(),
+		StartVersion: startTs,
+		LockTtl:      3000,
+	})
+	prewriteDone <- struct{}{}
+	if len(errs) != 0 {
+		<-commitStart
+		require.Nil(t, percolator.BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+			Keys:         mutationKeys(mutations),
+			StartVersion: startTs,
+		}))
+		return txn
+	}
+	<-commitStart
+	if rollback {
+		require.Nil(t, percolator.BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+			Keys:         mutationKeys(mutations),
+			StartVersion: startTs,
+		}))
+		return txn
+	}
+	commitTs := ts.Add(2)
+	txn.commitTs = commitTs
+	keyErr := percolator.Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          mutationKeys(mutations),
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	if keyErr != nil {
+		require.Nil(t, percolator.BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+			Keys:         mutationKeys(mutations),
+			StartVersion: startTs,
+		}))
+		return txn
+	}
+	txn.committed = true
+	return txn
 }
 
 func generatedTxnMutations(rng *rand.Rand, step int) []*kvrpcpb.Mutation {

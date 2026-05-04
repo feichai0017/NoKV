@@ -16,21 +16,39 @@ READY_TIMEOUT="${NOKV_SOAK_READY_TIMEOUT:-180}"
 TOOLS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-soak.XXXXXX")"
 chaos_pid=""
 
-cleanup() {
+dump_cluster_state() {
+  if [[ "${NOKV_SOAK_DUMP_LOGS:-1}" != "1" ]]; then
+    return
+  fi
+  docker compose ps || true
+  docker compose logs --no-color --tail="${NOKV_SOAK_LOG_TAIL:-200}" || true
+}
+
+stop_chaos() {
   if [[ -n "$chaos_pid" ]] && kill -0 "$chaos_pid" 2>/dev/null; then
     kill "$chaos_pid" 2>/dev/null || true
     wait "$chaos_pid" 2>/dev/null || true
   fi
+  chaos_pid=""
+}
+
+cleanup() {
+  local status="${1:-0}"
+  if [[ "$status" != "0" ]]; then
+    dump_cluster_state
+  fi
+  stop_chaos
   rm -rf "$TOOLS_DIR"
   if [[ "${NOKV_SOAK_DOWN:-0}" == "1" ]]; then
     docker compose down -v
   fi
 }
-trap cleanup EXIT
-trap 'trap - EXIT; cleanup; exit 130' INT TERM
+trap 'status=$?; cleanup "$status"; exit "$status"' EXIT
+trap 'trap - EXIT; cleanup 130; exit 130' INT TERM
 
 go build -o "$TOOLS_DIR/nokv-fsmeta-history" ./cmd/nokv-fsmeta-history
 go build -o "$TOOLS_DIR/nokv-fsmeta-soak" ./cmd/nokv-fsmeta-soak
+go build -o "$TOOLS_DIR/nokv-fsmeta-scrub" ./cmd/nokv-fsmeta-scrub
 
 if [[ "${NOKV_SOAK_BUILD:-1}" == "1" ]]; then
   docker compose up -d --build
@@ -67,3 +85,13 @@ fi
   --steps "$STEPS" \
   --batch "$BATCH" \
   --seed-start "$SEED_START"
+
+stop_chaos
+wait_fsmeta
+if [[ "${NOKV_SOAK_SCRUB:-1}" == "1" ]]; then
+  "$TOOLS_DIR/nokv-fsmeta-scrub" \
+    --addr "$ADDR" \
+    --mount "$MOUNT" \
+    --timeout "${NOKV_SOAK_SCRUB_TIMEOUT:-60s}" \
+    --max-issues "${NOKV_SOAK_SCRUB_MAX_ISSUES:-64}"
+fi

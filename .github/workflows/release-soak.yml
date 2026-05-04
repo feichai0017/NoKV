@@ -1,0 +1,44 @@
+name: Release Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Release soak duration: 24h or 72h"
+        required: true
+        default: "24h"
+        type: choice
+        options:
+          - "24h"
+          - "72h"
+
+permissions:
+  contents: read
+
+jobs:
+  fsmeta-release-soak:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 4380
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: 24h fsmeta soak
+        if: ${{ github.event.inputs.duration == '24h' }}
+        env:
+          NOKV_SOAK_DOWN: "1"
+          NOKV_SOAK_DUMP_LOGS: "1"
+          NOKV_SOAK_LOG_TAIL: "500"
+        run: make test-soak-24h
+
+      - name: 72h fsmeta soak
+        if: ${{ github.event.inputs.duration == '72h' }}
+        env:
+          NOKV_SOAK_DOWN: "1"
+          NOKV_SOAK_DUMP_LOGS: "1"
+          NOKV_SOAK_LOG_TAIL: "500"
+        run: make test-soak-72h
