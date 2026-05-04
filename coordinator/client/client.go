@@ -202,7 +202,10 @@ func (c *GRPCClient) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegion
 
 // GetRegionByKey forwards region lookup RPC.
 func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
+	// Region lookup is a metadata authority read: standby coordinators can
+	// reject it with lease-not-held, so it must fail over like TSO/AllocID even
+	// though the RPC does not mutate user metadata.
+	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
 		return coord.GetRegionByKey(ctx, req)
 	}, func(resp *coordpb.GetRegionByKeyResponse) error {
 		return c.validateGetRegionByKeyResponse(req, resp)
