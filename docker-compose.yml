@@ -267,12 +267,33 @@ services:
     container_name: nokv-mount-init
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
+    environment:
+      # Comma-separated mount IDs to register before the fsmeta gateway starts.
+      # Keep "default" as the Compose default for existing demos / CI smoke
+      # tests; set NOKV_MOUNT_IDS=fsmeta-bench (or fsmeta) for fsmeta
+      # benchmark runs that should use a dedicated mount.
+      NOKV_MOUNT_IDS: ${NOKV_MOUNT_IDS:-default}
+      NOKV_MOUNT_ROOT_INODE: ${NOKV_MOUNT_ROOT_INODE:-1}
+      NOKV_MOUNT_SCHEMA_VERSION: ${NOKV_MOUNT_SCHEMA_VERSION:-1}
+      NOKV_MOUNT_COORDINATOR_ADDR: ${NOKV_MOUNT_COORDINATOR_ADDR:-nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379}
     command:
       - |
-        until /usr/local/bin/nokv mount register \
-          --coordinator-addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
-          --mount default --root-inode 1 --schema-version 1; do
-          sleep 1
+        mount_ids="$${NOKV_MOUNT_IDS:-default}"
+        coordinator_addr="$${NOKV_MOUNT_COORDINATOR_ADDR:-nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379}"
+        root_inode="$${NOKV_MOUNT_ROOT_INODE:-1}"
+        schema_version="$${NOKV_MOUNT_SCHEMA_VERSION:-1}"
+
+        for mount in $$(printf '%s' "$$mount_ids" | tr ',' ' '); do
+          if [ -z "$$mount" ]; then
+            continue
+          fi
+          until /usr/local/bin/nokv mount register \
+            --coordinator-addr "$$coordinator_addr" \
+            --mount "$$mount" \
+            --root-inode "$$root_inode" \
+            --schema-version "$$schema_version"; do
+            sleep 1
+          done
         done
     depends_on:
       coordinator-1: { condition: service_started }
