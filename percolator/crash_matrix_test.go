@@ -1,6 +1,7 @@
 package percolator
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +11,51 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPercolatorCrashMatrixBatchPrewriteApplyFailureRetries(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(32)
+	primary := []byte("crash-prewrite-primary")
+	secondary := []byte("crash-prewrite-secondary")
+	startTs := uint64(90)
+	injected := errors.New("prewrite batch apply failed")
+	store.failNextApply(injected)
+
+	errs := Prewrite(store, latches, &kvrpcpb.PrewriteRequest{
+		PrimaryLock:  primary,
+		StartVersion: startTs,
+		LockTtl:      3000,
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: primary, Value: []byte("primary-value")},
+			{Op: kvrpcpb.Mutation_Put, Key: secondary, Value: []byte("secondary-value")},
+		},
+	})
+	require.Len(t, errs, 1)
+	require.Contains(t, errs[0].GetRetryable(), injected.Error())
+
+	reader := NewReader(db)
+	for _, key := range [][]byte{primary, secondary} {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.Nil(t, lock, "key=%s", key)
+	}
+
+	require.Empty(t, Prewrite(store, latches, &kvrpcpb.PrewriteRequest{
+		PrimaryLock:  primary,
+		StartVersion: startTs,
+		LockTtl:      3000,
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: primary, Value: []byte("primary-value")},
+			{Op: kvrpcpb.Mutation_Put, Key: secondary, Value: []byte("secondary-value")},
+		},
+	}))
+	for _, key := range [][]byte{primary, secondary} {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.NotNil(t, lock, "key=%s", key)
+	}
+}
 
 func TestPercolatorCrashMatrixPrimaryCommittedSecondaryRecovered(t *testing.T) {
 	db := openTestDB(t)
@@ -59,6 +105,58 @@ func TestPercolatorCrashMatrixPrimaryCommittedSecondaryRecovered(t *testing.T) {
 	lock, err := reader.GetLock(secondary)
 	require.NoError(t, err)
 	require.Nil(t, lock)
+}
+
+func TestPercolatorCrashMatrixSecondaryResolveApplyFailureRetries(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(32)
+	primary := []byte("crash-resolve-primary")
+	secondary := []byte("crash-resolve-secondary")
+	startTs := uint64(130)
+	commitTs := uint64(150)
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		PrimaryLock:  primary,
+		StartVersion: startTs,
+		LockTtl:      3000,
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: primary, Value: []byte("primary-value")},
+			{Op: kvrpcpb.Mutation_Put, Key: secondary, Value: []byte("secondary-value")},
+		},
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{primary},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	}))
+
+	injected := errors.New("resolve batch apply failed")
+	store.failNextApply(injected)
+	resolved, keyErr := ResolveLock(store, latches, &kvrpcpb.ResolveLockRequest{
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+		Keys:          [][]byte{secondary},
+	})
+	require.Zero(t, resolved)
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetRetryable(), injected.Error())
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(secondary)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	resolved, keyErr = ResolveLock(store, latches, &kvrpcpb.ResolveLockRequest{
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+		Keys:          [][]byte{secondary},
+	})
+	require.Nil(t, keyErr)
+	require.Equal(t, uint64(1), resolved)
+	value, _, err := reader.GetValue(secondary, commitTs+10)
+	require.NoError(t, err)
+	require.Equal(t, []byte("secondary-value"), value)
 }
 
 func TestPercolatorCrashMatrixPrimaryRollbackSecondaryRecovered(t *testing.T) {

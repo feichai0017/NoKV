@@ -41,41 +41,55 @@ func Prewrite(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRe
 
 	reader := NewReader(db)
 	var errs []*kvrpcpb.KeyError
+	ops := make([]versionedOp, 0, len(req.Mutations)*3)
 	for _, mut := range req.Mutations {
 		if mut == nil {
 			continue
 		}
-		if err := prewriteMutation(db, reader, req, mut); err != nil {
+		planned, err := planPrewriteMutation(reader, req, mut)
+		if err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		ops = append(ops, planned...)
 	}
-	return errs
+	if len(errs) > 0 {
+		return errs
+	}
+	// Prewrite is the lock admission boundary for a region request. Validation
+	// happens for every mutation before storage is touched, so semantic key
+	// errors never hide partial locks. Storage failures are retryable: replaying
+	// the same start_ts observes its own locks and finishes the missing keys.
+	if err := applyVersionedOps(db, ops...); err != nil {
+		return []*kvrpcpb.KeyError{keyErrorRetryable(err)}
+	}
+	return nil
 }
 
-func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
+func planPrewriteMutation(reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) ([]versionedOp, *kvrpcpb.KeyError) {
 	key := mut.GetKey()
 	if len(key) == 0 {
-		return keyErrorAbort(errEmptyMutationKey)
+		return nil, keyErrorAbort(errEmptyMutationKey)
 	}
 	lock, err := reader.GetLock(key)
 	if err != nil {
-		return keyErrorRetryable(err)
+		return nil, keyErrorRetryable(err)
 	}
 	if lock != nil && lock.Ts != req.StartVersion {
-		return keyErrorLocked(key, lock)
+		return nil, keyErrorLocked(key, lock)
 	}
 	if write, commitTs, err := reader.MostRecentWrite(key); err != nil {
-		return keyErrorRetryable(err)
+		return nil, keyErrorRetryable(err)
 	} else if write != nil && commitTs >= req.StartVersion {
-		return keyErrorWriteConflict(key, req.PrimaryLock, commitTs, write.StartTs, req.StartVersion)
+		return nil, keyErrorWriteConflict(key, req.PrimaryLock, commitTs, write.StartTs, req.StartVersion)
 	}
 	if mut.GetAssertionNotExist() {
 		exists, err := keyExistsAt(reader, key, req.StartVersion)
 		if err != nil {
-			return keyErrorRetryable(err)
+			return nil, keyErrorRetryable(err)
 		}
 		if exists {
-			return keyErrorAlreadyExists(key)
+			return nil, keyErrorAlreadyExists(key)
 		}
 	}
 	ops := make([]versionedOp, 0, 3)
@@ -90,7 +104,7 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
 		)
 	default:
-		return keyErrorAbortf(errUnsupportedMutationOp, "%v", mut.Op)
+		return nil, keyErrorAbortf(errUnsupportedMutationOp, "%v", mut.Op)
 	}
 	newLock := mvcc.Lock{
 		Primary:     kv.SafeCopy(nil, req.PrimaryLock),
@@ -102,10 +116,7 @@ func prewriteMutation(db txnstore.Store, reader *Reader, req *kvrpcpb.PrewriteRe
 	}
 	encoded := mvcc.EncodeLock(newLock)
 	ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, value: encoded})
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return keyErrorRetryable(err)
-	}
-	return nil
+	return ops, nil
 }
 
 // validateCommitVersion rejects commits that would violate MVCC ordering.
@@ -129,33 +140,19 @@ func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitReques
 	defer guard.Release()
 
 	reader := NewReader(db)
+	ops := make([]versionedOp, 0, len(req.Keys)*2)
 	for _, key := range req.Keys {
-		if len(key) == 0 {
-			return keyErrorAbort(errEmptyCommitKey)
-		}
-		lock, err := reader.GetLock(key)
+		planned, err := planCommitKey(reader, key, req.StartVersion, req.CommitVersion)
 		if err != nil {
-			return keyErrorRetryable(err)
-		}
-		if lock == nil {
-			write, _, err := reader.GetWriteByStartTs(key, req.StartVersion)
-			if err != nil {
-				return keyErrorRetryable(err)
-			}
-			if write != nil {
-				if write.Kind == kvrpcpb.Mutation_Rollback {
-					return keyErrorAbort(errTxnAlreadyRolledBack)
-				}
-				continue
-			}
-			return keyErrorAbort(errLockNotFound)
-		}
-		if lock.Ts != req.StartVersion {
-			return keyErrorLocked(key, lock)
-		}
-		if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
 			return err
 		}
+		ops = append(ops, planned...)
+	}
+	// Commit remains Percolator-idempotent: already committed keys produce no
+	// write op, while residual locks are cleaned with the commit records for the
+	// same key. The DB may fan multi-key requests out by LSM shard affinity.
+	if err := applyVersionedOps(db, ops...); err != nil {
+		return keyErrorRetryable(err)
 	}
 	return nil
 }
@@ -168,13 +165,19 @@ func BatchRollback(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Batch
 	guard := latches.Acquire(req.Keys)
 	defer guard.Release()
 	reader := NewReader(db)
+	ops := make([]versionedOp, 0, len(req.Keys)*3)
 	for _, key := range req.Keys {
-		if len(key) == 0 {
-			return keyErrorAbort(errEmptyRollbackKey)
-		}
-		if err := rollbackKey(db, reader, key, req.StartVersion); err != nil {
+		planned, err := planRollbackKey(reader, key, req.StartVersion)
+		if err != nil {
 			return err
 		}
+		ops = append(ops, planned...)
+	}
+	// Rollback markers and lock tombstones for one key must be planned together;
+	// the DB preserves per-key shard affinity when it persists the internal
+	// entries, and retries keep rollback idempotent.
+	if err := applyVersionedOps(db, ops...); err != nil {
+		return keyErrorRetryable(err)
 	}
 	return nil
 }
@@ -195,10 +198,17 @@ func ResolveLock(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Resolve
 
 	reader := NewReader(db)
 	var resolved uint64
+	ops := make([]versionedOp, 0, len(req.Keys)*3)
+	seen := make(map[string]struct{}, len(req.Keys))
 	for _, key := range req.Keys {
 		if len(key) == 0 {
 			continue
 		}
+		keyID := string(key)
+		if _, ok := seen[keyID]; ok {
+			continue
+		}
+		seen[keyID] = struct{}{}
 		lock, err := reader.GetLock(key)
 		if err != nil {
 			return resolved, keyErrorRetryable(err)
@@ -207,15 +217,22 @@ func ResolveLock(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.Resolve
 			continue
 		}
 		if req.CommitVersion == 0 {
-			if err := rollbackKey(db, reader, key, req.StartVersion); err != nil {
+			planned, err := planRollbackKey(reader, key, req.StartVersion)
+			if err != nil {
 				return resolved, err
 			}
+			ops = append(ops, planned...)
 		} else {
-			if err := commitKey(db, reader, key, lock, req.CommitVersion); err != nil {
+			planned, err := planCommitKeyWithLock(reader, key, lock, req.CommitVersion)
+			if err != nil {
 				return resolved, err
 			}
+			ops = append(ops, planned...)
 		}
 		resolved++
+	}
+	if err := applyVersionedOps(db, ops...); err != nil {
+		return 0, keyErrorRetryable(err)
 	}
 	return resolved, nil
 }
@@ -396,52 +413,98 @@ func keyExistsAt(reader *Reader, key []byte, readTs uint64) (bool, error) {
 	}
 }
 
-func commitKey(db txnstore.Store, reader *Reader, key []byte, lock *mvcc.Lock, commitVersion uint64) *kvrpcpb.KeyError {
+func planCommitKey(reader *Reader, key []byte, startVersion, commitVersion uint64) ([]versionedOp, *kvrpcpb.KeyError) {
+	if len(key) == 0 {
+		return nil, keyErrorAbort(errEmptyCommitKey)
+	}
+	lock, err := reader.GetLock(key)
+	if err != nil {
+		return nil, keyErrorRetryable(err)
+	}
+	if lock == nil {
+		write, _, err := reader.GetWriteByStartTs(key, startVersion)
+		if err != nil {
+			return nil, keyErrorRetryable(err)
+		}
+		if write != nil {
+			if write.Kind == kvrpcpb.Mutation_Rollback {
+				return nil, keyErrorAbort(errTxnAlreadyRolledBack)
+			}
+			return nil, nil
+		}
+		return nil, keyErrorAbort(errLockNotFound)
+	}
+	if lock.Ts != startVersion {
+		return nil, keyErrorLocked(key, lock)
+	}
+	return planCommitKeyWithLock(reader, key, lock, commitVersion)
+}
+
+func planCommitKeyWithLock(reader *Reader, key []byte, lock *mvcc.Lock, commitVersion uint64) ([]versionedOp, *kvrpcpb.KeyError) {
 	write, _, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
-		return keyErrorRetryable(err)
+		return nil, keyErrorRetryable(err)
 	}
 	if write != nil {
 		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return keyErrorAbort(errTxnAlreadyRolledBack)
+			return nil, keyErrorAbort(errTxnAlreadyRolledBack)
 		}
-		if err := applyVersionedOps(db, versionedOp{
+		return []versionedOp{{
 			cf:      kv.CFLock,
 			key:     key,
 			version: lockColumnTs,
 			meta:    kv.BitDelete,
-		}); err != nil {
-			return keyErrorRetryable(err)
-		}
-		return nil
+		}}, nil
 	}
 
 	if lock.MinCommitTs > commitVersion {
-		return keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
+		return nil, keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
 
 	entry := mvcc.EncodeWrite(mvcc.Write{Kind: lock.Kind, StartTs: lock.Ts})
-	if err := applyVersionedOps(db,
-		versionedOp{cf: kv.CFWrite, key: key, version: commitVersion, value: entry},
-		versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
-	); err != nil {
+	return []versionedOp{
+		{cf: kv.CFWrite, key: key, version: commitVersion, value: entry},
+		{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
+	}, nil
+}
+
+func commitKey(db txnstore.Store, reader *Reader, key []byte, lock *mvcc.Lock, commitVersion uint64) *kvrpcpb.KeyError {
+	ops, keyErr := planCommitKeyWithLock(reader, key, lock, commitVersion)
+	if keyErr != nil {
+		return keyErr
+	}
+	if err := applyVersionedOps(db, ops...); err != nil {
 		return keyErrorRetryable(err)
 	}
 	return nil
 }
 
 func rollbackKey(db txnstore.Store, reader *Reader, key []byte, startTs uint64) *kvrpcpb.KeyError {
-	write, _, err := reader.GetWriteByStartTs(key, startTs)
-	if err != nil {
+	ops, keyErr := planRollbackKey(reader, key, startTs)
+	if keyErr != nil {
+		return keyErr
+	}
+	if err := applyVersionedOps(db, ops...); err != nil {
 		return keyErrorRetryable(err)
 	}
+	return nil
+}
+
+func planRollbackKey(reader *Reader, key []byte, startTs uint64) ([]versionedOp, *kvrpcpb.KeyError) {
+	if len(key) == 0 {
+		return nil, keyErrorAbort(errEmptyRollbackKey)
+	}
+	write, _, err := reader.GetWriteByStartTs(key, startTs)
+	if err != nil {
+		return nil, keyErrorRetryable(err)
+	}
 	if write != nil {
-		return nil
+		return nil, nil
 	}
 
 	lock, err := reader.GetLock(key)
 	if err != nil {
-		return keyErrorRetryable(err)
+		return nil, keyErrorRetryable(err)
 	}
 
 	rollback := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: startTs})
@@ -452,10 +515,7 @@ func rollbackKey(db txnstore.Store, reader *Reader, key []byte, startTs uint64) 
 	if lock != nil && lock.Ts == startTs {
 		ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete})
 	}
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return keyErrorRetryable(err)
-	}
-	return nil
+	return ops, nil
 }
 
 type versionedOp struct {
@@ -476,6 +536,9 @@ func applyVersionedOps(db txnstore.Store, ops ...versionedOp) error {
 		entry := kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires)
 		entries = append(entries, entry)
 	}
+	// NoKV's DB regroups these internal entries by commit-pipeline shard before
+	// they reach the sharded LSM. Percolator batches at the protocol phase
+	// boundary; storage keeps the per-key placement invariant.
 	err := db.ApplyInternalEntries(entries)
 	for _, entry := range entries {
 		if entry != nil {
