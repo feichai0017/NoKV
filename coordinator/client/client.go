@@ -389,7 +389,7 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 		return zero, errNoReachableAddress
 	}
 	var lastErr error
-	for round := 0; round < maxAuthorityMissRetryRounds; round++ {
+	for round := range maxAuthorityMissRetryRounds {
 		endpoints := c.orderedEndpoints()
 		if len(endpoints) == 0 {
 			return zero, errNoReachableAddress
