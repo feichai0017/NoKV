@@ -334,6 +334,9 @@ func TryFetchRuntimeStatus(ctx context.Context, addr string, regionID uint64) (*
 	return status, nil
 }
 
+// Wait helpers tolerate transient admin RPC failures because raft membership,
+// leader transfer, and process restart tests intentionally create short windows
+// where a node is alive but cannot yet answer a stable runtime status.
 func WaitForLeaderPeer(tb testing.TB, ctx context.Context, addr string, regionID, peerID uint64) {
 	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)

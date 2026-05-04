@@ -394,6 +394,9 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 		if len(endpoints) == 0 {
 			return zero, errNoReachableAddress
 		}
+		// Not-leader / lease-not-held replies mean the client reached a coordinator,
+		// but not the current authority. If every endpoint misses authority, retry
+		// the whole set briefly so rooted leadership and tenure can converge.
 		allAuthorityMiss := true
 		for i, endpoint := range endpoints {
 			resp, err := call(endpoint.coord)

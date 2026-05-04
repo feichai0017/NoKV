@@ -27,6 +27,9 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
 	state, err := s.currentReadState()
+	// Region lookup is an authority-bearing metadata read. A coordinator that
+	// already owns the tenure should renew it before rejecting clients with a
+	// stale local read-state view.
 	renewed, renewErr := s.renewMetadataTenureIfNeeded(ctx, state, err)
 	if renewErr != nil {
 		return nil, renewErr
@@ -230,6 +233,9 @@ func (s *Service) currentReadState() (readState, error) {
 	return state, nil
 }
 
+// renewMetadataTenureIfNeeded only refreshes tenure already held by this
+// coordinator. It must not campaign over another holder just because a metadata
+// read arrived during that holder's active tenure.
 func (s *Service) renewMetadataTenureIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
 	if loadErr != nil || s == nil || !s.coordinatorLeaseEnabled() || !state.leasePresent {
 		return false, nil

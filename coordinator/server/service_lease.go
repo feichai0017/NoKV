@@ -258,6 +258,8 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
 		return nil
 	}
+	// Fast path: avoid serializing read traffic behind the campaign lock while
+	// the current tenure is still outside the renew and clock-skew windows.
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
@@ -265,6 +267,8 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	// Another request or the background renew loop may have refreshed tenure
+	// while this caller waited for writeMu.
 	nowUnixNano, _, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
@@ -273,6 +277,8 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	s.allocMu.Lock()
 	inheritedFrontiers := eunomia.Frontiers(rootstate.State{IDFence: s.currentIDFenceLocked(), TSOFence: s.currentTSOFenceLocked()}, s.currentDescriptorRevision())
 	s.allocMu.Unlock()
+	// Recompute time and expiry after sampling allocator fences so the tenure
+	// command carries fresh bounds and does not campaign unnecessarily.
 	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
