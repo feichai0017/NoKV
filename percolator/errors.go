@@ -14,6 +14,7 @@ var (
 	errEmptyCommitKey              = errors.New("percolator: empty key in commit")
 	errEmptyRollbackKey            = errors.New("percolator: empty key in rollback")
 	errUnsupportedMutationOp       = errors.New("percolator: unsupported mutation op")
+	errInvalidFSMetaCreate         = errors.New("percolator: invalid fsmeta create")
 	errCommitVersionNotAfterStart  = errors.New("percolator: commit version must be greater than start version")
 	errTxnAlreadyRolledBack        = errors.New("percolator: transaction already rolled back")
 	errLockNotFound                = errors.New("percolator: lock not found")

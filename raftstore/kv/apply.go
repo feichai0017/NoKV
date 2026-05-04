@@ -62,6 +62,13 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
 			result := percolator.TxnHeartBeat(db, latches, r.GetTxnHeartBeat())
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TxnHeartBeat{TxnHeartBeat: result}})
+		case raftcmdpb.CmdType_CMD_FSMETA_CREATE:
+			err := percolator.ApplyFSMetaCreate(db, latches, r.GetFsmetaCreate())
+			result := &kvrpcpb.FSMetaCreateResponse{Error: err}
+			if err == nil {
+				result.AppliedKeys = uint64(len(r.GetFsmetaCreate().GetMutations()))
+			}
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_FsmetaCreate{FsmetaCreate: result}})
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 			result, err := applyMVCCMaintenance(db, r.GetMvccMaintenance())
 			if err != nil {

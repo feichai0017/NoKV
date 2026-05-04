@@ -196,6 +196,17 @@ message MVCCMaintenanceResponse {
   uint64 applied_entries = 2;
 }
 
+message FSMetaCreateRequest {
+  repeated Mutation mutations = 1;
+  uint64 start_version = 2;
+  uint64 commit_version = 3;
+}
+
+message FSMetaCreateResponse {
+  KeyError error = 1;
+  uint64 applied_keys = 2;
+}
+
 message Context {
   uint64 region_id = 1;
   nokv.meta.v1.RegionEpoch region_epoch = 2;
@@ -297,6 +308,16 @@ message KvTxnHeartBeatResponse {
   nokv.error.v1.RegionError region_error = 2;
 }
 
+message KvFSMetaCreateRequest {
+  Context context = 1;
+  FSMetaCreateRequest request = 2;
+}
+
+message KvFSMetaCreateResponse {
+  FSMetaCreateResponse response = 1;
+  nokv.error.v1.RegionError region_error = 2;
+}
+
 enum ApplyWatchEventSource {
   APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
   APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
@@ -332,6 +353,7 @@ service NoKV {
   rpc KvResolveLock(KvResolveLockRequest) returns (KvResolveLockResponse);
   rpc KvCheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
   rpc KvTxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
+  rpc KvFSMetaCreate(KvFSMetaCreateRequest) returns (KvFSMetaCreateResponse);
   rpc KvWatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
 }
 

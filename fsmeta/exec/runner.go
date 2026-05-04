@@ -38,6 +38,13 @@ type TxnRunner interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
+// FSMetaCreateFastPath is an optional TxnRunner extension. handled=false
+// means the runner could not keep this create inside one region and the caller
+// must fall back to Mutate.
+type FSMetaCreateFastPath interface {
+	FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
+}
+
 // MountAdmission is the executor's mount-admission view.
 type MountAdmission struct {
 	MountID       fsmeta.MountID
@@ -256,6 +263,14 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 			return err
 		}
 		all := append(cloneMutations(mutations), quotaMutations...)
+		if len(quotaMutations) == 0 {
+			if fast, ok := e.runner.(FSMetaCreateFastPath); ok {
+				handled, err := fast.FSMetaCreate(ctx, plan.PrimaryKey, all, startVersion, commitVersion)
+				if err != nil || handled {
+					return err
+				}
+			}
+		}
 		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
 	}); err != nil {
 		return err

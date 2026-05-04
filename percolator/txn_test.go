@@ -214,6 +214,65 @@ func TestPrewriteAndCommitPut(t *testing.T) {
 	require.Nil(t, lock)
 }
 
+func TestApplyFSMetaCreateMaterializesCommittedKeys(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	req := &kvrpcpb.FSMetaCreateRequest{
+		StartVersion:  10,
+		CommitVersion: 11,
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("dentry"), Value: []byte("ino=42"), AssertionNotExist: true},
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("inode"), Value: []byte("attrs"), AssertionNotExist: true},
+		},
+	}
+
+	require.Nil(t, ApplyFSMetaCreate(db, latches, req))
+
+	reader := NewReader(db)
+	for _, mut := range req.GetMutations() {
+		value, _, err := reader.GetValue(mut.GetKey(), req.GetCommitVersion())
+		require.NoError(t, err)
+		require.Equal(t, mut.GetValue(), value)
+		lock, err := reader.GetLock(mut.GetKey())
+		require.NoError(t, err)
+		require.Nil(t, lock)
+	}
+	_, _, err := reader.GetValue([]byte("dentry"), req.GetStartVersion())
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	require.Nil(t, ApplyFSMetaCreate(db, latches, req))
+}
+
+func TestApplyFSMetaCreateRejectsExistingDentry(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		StartVersion: 1,
+		PrimaryLock:  []byte("dentry"),
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("dentry"),
+			Value: []byte("old"),
+		}},
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{[]byte("dentry")},
+		StartVersion:  1,
+		CommitVersion: 5,
+	}))
+
+	keyErr := ApplyFSMetaCreate(db, latches, &kvrpcpb.FSMetaCreateRequest{
+		StartVersion:  6,
+		CommitVersion: 7,
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("dentry"), Value: []byte("new"), AssertionNotExist: true},
+			{Op: kvrpcpb.Mutation_Put, Key: []byte("inode"), Value: []byte("attrs"), AssertionNotExist: true},
+		},
+	})
+	require.NotNil(t, keyErr.GetAlreadyExists())
+	require.Equal(t, []byte("dentry"), keyErr.GetAlreadyExists().GetKey())
+}
+
 func TestCommittedLockDoesNotHideVisiblePut(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)

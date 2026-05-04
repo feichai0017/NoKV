@@ -387,6 +387,16 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 			if len(key) > 0 && !keyInRange(meta, key) {
 				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 			}
+		case raftcmdpb.CmdType_CMD_FSMETA_CREATE:
+			for _, mut := range r.GetFsmetaCreate().GetMutations() {
+				if mut == nil {
+					continue
+				}
+				key := mut.GetKey()
+				if len(key) > 0 && !keyInRange(meta, key) {
+					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+				}
+			}
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 			for _, entry := range r.GetMvccMaintenance().GetTombstones() {
 				if entry == nil {

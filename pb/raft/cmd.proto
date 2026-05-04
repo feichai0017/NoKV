@@ -59,6 +59,7 @@ enum CmdType {
   CMD_CHECK_TXN_STATUS = 7;
   CMD_MVCC_MAINTENANCE = 8;
   CMD_TXN_HEART_BEAT = 9;
+  CMD_FSMETA_CREATE = 10;
 }
 
 message Request {
@@ -74,6 +75,7 @@ message Request {
     nokv.kv.v1.CheckTxnStatusRequest check_txn_status = 8;
     nokv.kv.v1.MVCCMaintenanceRequest mvcc_maintenance = 9;
     nokv.kv.v1.TxnHeartBeatRequest txn_heart_beat = 10;
+    nokv.kv.v1.FSMetaCreateRequest fsmeta_create = 11;
   }
 }
 
@@ -88,6 +90,7 @@ message Response {
     nokv.kv.v1.CheckTxnStatusResponse check_txn_status = 7;
     nokv.kv.v1.MVCCMaintenanceResponse mvcc_maintenance = 8;
     nokv.kv.v1.TxnHeartBeatResponse txn_heart_beat = 9;
+    nokv.kv.v1.FSMetaCreateResponse fsmeta_create = 10;
   }
 }
 

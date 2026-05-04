@@ -157,6 +157,151 @@ func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitReques
 	return nil
 }
 
+// ApplyFSMetaCreate atomically materializes a filesystem create operation that
+// is already ordered by one region's Raft log. Unlike Prewrite/Commit, it never
+// exposes locks: every mutation becomes visible at commitVersion in one local
+// storage batch, or none of them do.
+func ApplyFSMetaCreate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.FSMetaCreateRequest) *kvrpcpb.KeyError {
+	if req == nil {
+		return nil
+	}
+	if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
+		return err
+	}
+	mutations := req.GetMutations()
+	if len(mutations) != 2 || mutations[0] == nil || mutations[1] == nil {
+		return keyErrorAbort(errInvalidFSMetaCreate)
+	}
+	keys := make([][]byte, 0, len(mutations))
+	for _, mut := range mutations {
+		if mut != nil && len(mut.Key) > 0 {
+			keys = append(keys, mut.Key)
+		}
+	}
+	guard := latches.Acquire(keys)
+	defer guard.Release()
+
+	reader := NewReader(db)
+	if applied, err := fsmetaCreateAlreadyApplied(db, reader, req); err != nil {
+		return keyErrorRetryable(err)
+	} else if applied {
+		return nil
+	}
+
+	primary := mutations[0].GetKey()
+	ops := make([]versionedOp, 0, len(mutations)*3)
+	for i, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		if err := validateFSMetaCreateMutation(i, mut); err != nil {
+			return err
+		}
+		key := mut.GetKey()
+		lock, err := reader.GetLock(key)
+		if err != nil {
+			return keyErrorRetryable(err)
+		}
+		if lock != nil {
+			return keyErrorLocked(key, lock)
+		}
+		if write, commitTs, err := reader.MostRecentWrite(key); err != nil {
+			return keyErrorRetryable(err)
+		} else if write != nil && commitTs >= req.StartVersion {
+			return keyErrorWriteConflict(key, primary, commitTs, write.StartTs, req.StartVersion)
+		}
+		if mut.GetAssertionNotExist() {
+			exists, err := keyExistsAt(reader, key, req.StartVersion)
+			if err != nil {
+				return keyErrorRetryable(err)
+			}
+			if exists {
+				return keyErrorAlreadyExists(key)
+			}
+		}
+		ops = append(ops, committedMutationOps(mut, req.StartVersion, req.CommitVersion)...)
+	}
+	if err := applyVersionedOps(db, ops...); err != nil {
+		return keyErrorRetryable(err)
+	}
+	return nil
+}
+
+func validateFSMetaCreateMutation(index int, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
+	if len(mut.GetKey()) == 0 {
+		return keyErrorAbort(errEmptyMutationKey)
+	}
+	switch mut.GetOp() {
+	case kvrpcpb.Mutation_Put, kvrpcpb.Mutation_Delete:
+	default:
+		return keyErrorAbortf(errUnsupportedMutationOp, "%v", mut.GetOp())
+	}
+	if index < 2 && (mut.GetOp() != kvrpcpb.Mutation_Put || !mut.GetAssertionNotExist()) {
+		return keyErrorAbort(errInvalidFSMetaCreate)
+	}
+	return nil
+}
+
+func fsmetaCreateAlreadyApplied(db txnstore.Store, reader *Reader, req *kvrpcpb.FSMetaCreateRequest) (bool, error) {
+	anyPresent := false
+	allPresent := true
+	for _, mut := range req.GetMutations() {
+		if mut == nil {
+			continue
+		}
+		write, commitTs, err := reader.GetWriteByStartTs(mut.GetKey(), req.StartVersion)
+		if err != nil {
+			return false, err
+		}
+		if write == nil {
+			allPresent = false
+			continue
+		}
+		anyPresent = true
+		if commitTs != req.CommitVersion || write.Kind != mut.GetOp() {
+			return false, nil
+		}
+		if mut.GetOp() == kvrpcpb.Mutation_Put {
+			matches, err := defaultRecordMatches(db, mut, req.StartVersion)
+			if err != nil || !matches {
+				return false, err
+			}
+		}
+	}
+	return anyPresent && allPresent, nil
+}
+
+func defaultRecordMatches(db txnstore.Store, mut *kvrpcpb.Mutation, startVersion uint64) (bool, error) {
+	entry, err := db.GetInternalEntry(kv.CFDefault, mut.GetKey(), startVersion)
+	if err != nil {
+		return false, err
+	}
+	defer entry.DecrRef()
+	if entry.Meta&kv.BitDelete > 0 {
+		return false, nil
+	}
+	return bytes.Equal(entry.Value, mut.GetValue()) && entry.ExpiresAt == mut.GetExpiresAt(), nil
+}
+
+func committedMutationOps(mut *kvrpcpb.Mutation, startVersion, commitVersion uint64) []versionedOp {
+	write := mvcc.EncodeWrite(mvcc.Write{Kind: mut.GetOp(), StartTs: startVersion})
+	switch mut.GetOp() {
+	case kvrpcpb.Mutation_Put:
+		return []versionedOp{
+			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, meta: kv.BitDelete},
+			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, value: mut.GetValue(), expires: mut.GetExpiresAt()},
+			{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: write},
+		}
+	case kvrpcpb.Mutation_Delete:
+		return []versionedOp{
+			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, meta: kv.BitDelete},
+			{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: write},
+		}
+	default:
+		return nil
+	}
+}
+
 // BatchRollback rolls back the provided keys for the given start version.
 func BatchRollback(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
 	if req == nil {

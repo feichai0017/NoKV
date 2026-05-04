@@ -402,6 +402,106 @@ func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	return c.TwoPhaseCommit(ctx, append([]byte(nil), primary...), cleaned, startVersion, commitVersion, lockTTL)
 }
 
+// FSMetaCreate attempts to materialize a filesystem create as one region-local
+// Raft command. It returns handled=false when the mutation set does not fit in
+// one region, allowing callers to fall back to the regular 2PC path.
+func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	if len(primary) == 0 {
+		return false, &ProtocolError{Operation: "fsmeta create", Detail: "primary key required"}
+	}
+	cleaned := make([]*kvrpcpb.Mutation, 0, len(mutations))
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		cleaned = append(cleaned, cloneMutation(mut))
+	}
+	if len(cleaned) == 0 {
+		return true, nil
+	}
+	if len(cleaned) != 2 {
+		return false, nil
+	}
+	if !mutationHasPrimary(cleaned, primary) {
+		return false, &ProtocolError{Operation: "fsmeta create", Detail: fmt.Sprintf("primary key %q not present in mutations", primary)}
+	}
+	var lastErr error
+	attempted := false
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		groups, err := c.groupMutationsByRoute(ctx, cleaned)
+		if err != nil {
+			return false, err
+		}
+		if len(groups) != 1 {
+			if attempted {
+				return true, &RetryExhaustedError{Operation: "fsmeta create"}
+			}
+			return false, nil
+		}
+		var group *mutationRouteBatch
+		for _, candidate := range groups {
+			group = candidate
+		}
+		resp, regionErr, err := c.fsmetaCreateRegionOnce(ctx, group.region, cleaned, startVersion, commitVersion)
+		attempted = true
+		if err != nil {
+			if isTransportUnavailable(err) {
+				lastErr = err
+				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
+					return true, err
+				}
+				continue
+			}
+			return true, err
+		}
+		if regionErr != nil {
+			lastErr = c.handleRegionError(group.region.desc.RegionID, regionErr)
+			if lastErr != nil {
+				return true, lastErr
+			}
+			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
+				return true, err
+			}
+			continue
+		}
+		if err := txnKeyError(resp.GetError()); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	if lastErr != nil {
+		return true, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	return true, &RetryExhaustedError{Operation: "fsmeta create"}
+}
+
+func (c *Client) fsmetaCreateRegionOnce(ctx context.Context, region regionSnapshot, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (*kvrpcpb.FSMetaCreateResponse, *errorpb.RegionError, error) {
+	cl, err := c.storeClient(ctx, region.leader)
+	if err != nil {
+		return nil, nil, err
+	}
+	header, err := buildContext(region)
+	if err != nil {
+		return nil, nil, err
+	}
+	req := &kvrpcpb.KvFSMetaCreateRequest{
+		Context: header,
+		Request: &kvrpcpb.FSMetaCreateRequest{
+			Mutations:     cloneMutations(mutations),
+			StartVersion:  startVersion,
+			CommitVersion: commitVersion,
+		},
+	}
+	resp, err := cl.KvFSMetaCreate(ctx, req)
+	if err != nil {
+		return nil, nil, normalizeRPCError(err)
+	}
+	return resp.GetResponse(), resp.GetRegionError(), nil
+}
+
 // Put performs a single-key Put using the two-phase commit path.
 func (c *Client) Put(ctx context.Context, key, value []byte, startVersion, commitVersion, lockTTL uint64) error {
 	mut := &kvrpcpb.Mutation{

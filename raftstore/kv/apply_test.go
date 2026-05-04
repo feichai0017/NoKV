@@ -10,6 +10,7 @@ import (
 
 	NoKV "github.com/feichai0017/NoKV"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/percolator"
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -134,6 +135,40 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NoError(t, err)
 	defer gotWrite.DecrRef()
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
+}
+
+func TestApplyFSMetaCreateCommandMaterializesBothKeys(t *testing.T) {
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_FSMETA_CREATE,
+			Cmd: &raftcmdpb.Request_FsmetaCreate{FsmetaCreate: &kvrpcpb.FSMetaCreateRequest{
+				StartVersion:  10,
+				CommitVersion: 11,
+				Mutations: []*kvrpcpb.Mutation{
+					{Op: kvrpcpb.Mutation_Put, Key: []byte("dentry"), Value: []byte("ino=42"), AssertionNotExist: true},
+					{Op: kvrpcpb.Mutation_Put, Key: []byte("inode"), Value: []byte("attrs"), AssertionNotExist: true},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	require.Nil(t, resp.GetResponses()[0].GetFsmetaCreate().GetError())
+	require.Equal(t, uint64(2), resp.GetResponses()[0].GetFsmetaCreate().GetAppliedKeys())
+
+	reader := percolator.NewReader(db)
+	dentry, _, err := reader.GetValue([]byte("dentry"), 11)
+	require.NoError(t, err)
+	require.Equal(t, []byte("ino=42"), dentry)
+	inode, _, err := reader.GetValue([]byte("inode"), 11)
+	require.NoError(t, err)
+	require.Equal(t, []byte("attrs"), inode)
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {
