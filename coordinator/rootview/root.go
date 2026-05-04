@@ -394,19 +394,25 @@ func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (
 		return rootstate.EunomiaState{}, nil
 	}
 	protocolState, err := run()
+	if eunomiaStatePresent(protocolState) {
+		// Meta-root returns the authoritative Eunomia state even for HELD
+		// rejections. Merge it before returning the error so a losing
+		// coordinator stops campaigning on a stale local tenure mirror.
+		s.mergeEunomiaState(protocolState)
+	}
 	if err != nil {
 		return protocolState, err
 	}
-	// The Apply response carries the authoritative post-apply
-	// Tenure/Legacy/Handover from the meta-root leader. Merge it into the cached
-	// snapshot BEFORE the reload roundtrip so subsequent calls never race
-	// against a follower that has not yet replicated the event. Without this,
-	// a coordinator that writes to the meta-root leader and then reads back
-	// from a lagging follower observes a state regression and treats its own
-	// fresh lease as stale, which triggers churn (lease lineage mismatches,
-	// "lease held" retries) in multi-coordinator deployments.
-	s.mergeEunomiaState(protocolState)
 	return protocolState, s.reload()
+}
+
+func eunomiaStatePresent(state rootstate.EunomiaState) bool {
+	return state.Tenure.Present() ||
+		state.Legacy.Present() ||
+		state.Handover.HolderID != "" ||
+		state.Handover.LegacyEra != 0 ||
+		state.Handover.SuccessorEra != 0 ||
+		state.Handover.Stage != rootproto.HandoverStageUnspecified
 }
 
 // mergeEunomiaState overlays the Tenure/Legacy/Handover from an

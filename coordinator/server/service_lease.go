@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -264,6 +265,9 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
+	if err := s.activeOtherTenureError(holderID, nowUnixNano); err != nil {
+		return err
+	}
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -272,6 +276,9 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	nowUnixNano, _, holderID, renewIn, clockSkew = s.leaseCampaignBounds()
 	if s.coordinatorLeaseStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
+	}
+	if err := s.activeOtherTenureError(holderID, nowUnixNano); err != nil {
+		return err
 	}
 
 	s.allocMu.Lock()
@@ -300,6 +307,22 @@ func (s *Service) ensureTenure(ctx context.Context) error {
 	}
 	s.eunomiaMetrics.recordTenureEraTransition(current.Era, protocolState.Tenure.Era)
 	return s.reloadAndFenceAllocators(true)
+}
+
+func (s *Service) activeOtherTenureError(holderID string, nowUnixNano int64) error {
+	current, seal := s.currentTenureView()
+	currentHolder := strings.TrimSpace(current.HolderID)
+	localHolder := strings.TrimSpace(holderID)
+	if currentHolder == "" || currentHolder == localHolder || !current.ActiveAt(nowUnixNano) {
+		return nil
+	}
+	if rootstate.TenureSealed(current, seal) {
+		return nil
+	}
+	// A live rooted holder is the authority. Standby coordinators must not
+	// campaign over it just because their local tenure loop or a client request
+	// arrived; clients should fail over to the current holder until expiry.
+	return fmt.Errorf("%w: rooted holder=%s local_holder=%s expires_unix_nano=%d", rootstate.ErrPrimacy, currentHolder, localHolder, current.ExpiresUnixNano)
 }
 
 func (s *Service) coordinatorLeaseStillValid(holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {
