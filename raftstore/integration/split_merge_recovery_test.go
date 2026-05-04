@@ -63,8 +63,11 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 	}
 	require.NoError(t, parentLeader.Server.Store().ProposeSplit(71, childMeta, childMeta.StartKey))
 	require.Eventually(t, func() bool {
-		a := testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 72)
-		b := testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 72)
+		a, errA := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 72)
+		b, errB := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 72)
+		if errA != nil || errB != nil {
+			return false
+		}
 		return a.GetKnown() && a.GetHosted() && b.GetKnown() && b.GetHosted()
 	}, 5*time.Second, 20*time.Millisecond, testcluster.DumpStatus(t, ctx, 72, seed, target))
 	_, _ = testcluster.FindLeader(t, ctx, 72, seed, target)
@@ -73,27 +76,39 @@ func TestSplitMergeRestartSafetyAcrossStores(t *testing.T) {
 	target.Restart(t, nil, true)
 	wireAll()
 	require.Eventually(t, func() bool {
-		return testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 71).GetKnown() &&
-			testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 71).GetKnown() &&
-			testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 72).GetKnown() &&
-			testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 72).GetKnown()
+		parentSeed, errParentSeed := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 71)
+		parentTarget, errParentTarget := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 71)
+		childSeed, errChildSeed := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 72)
+		childTarget, errChildTarget := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 72)
+		if errParentSeed != nil || errParentTarget != nil || errChildSeed != nil || errChildTarget != nil {
+			return false
+		}
+		return parentSeed.GetKnown() && parentTarget.GetKnown() && childSeed.GetKnown() && childTarget.GetKnown()
 	}, 5*time.Second, 20*time.Millisecond)
 
 	parentLeader, _ = testcluster.FindLeader(t, ctx, 71, seed, target)
 	require.NoError(t, parentLeader.Server.Store().ProposeMerge(71, 72))
 	require.Eventually(t, func() bool {
-		return !testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 72).GetKnown() &&
-			!testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 72).GetKnown()
+		childSeed, errSeed := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 72)
+		childTarget, errTarget := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 72)
+		if errSeed != nil || errTarget != nil {
+			return false
+		}
+		return !childSeed.GetKnown() && !childTarget.GetKnown()
 	}, 5*time.Second, 20*time.Millisecond)
 
 	seed.Restart(t, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
 	target.Restart(t, nil, true)
 	wireAll()
 	require.Eventually(t, func() bool {
-		return testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 71).GetKnown() &&
-			testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 71).GetKnown() &&
-			!testcluster.FetchRuntimeStatus(t, ctx, seed.Addr(), 72).GetKnown() &&
-			!testcluster.FetchRuntimeStatus(t, ctx, target.Addr(), 72).GetKnown()
+		parentSeed, errParentSeed := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 71)
+		parentTarget, errParentTarget := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 71)
+		childSeed, errChildSeed := testcluster.TryPollRuntimeStatus(ctx, seed.Addr(), 72)
+		childTarget, errChildTarget := testcluster.TryPollRuntimeStatus(ctx, target.Addr(), 72)
+		if errParentSeed != nil || errParentTarget != nil || errChildSeed != nil || errChildTarget != nil {
+			return false
+		}
+		return parentSeed.GetKnown() && parentTarget.GetKnown() && !childSeed.GetKnown() && !childTarget.GetKnown()
 	}, 5*time.Second, 20*time.Millisecond)
 
 	testcluster.AssertValue(t, seed.DB, []byte("bravo"), []byte("v1"))

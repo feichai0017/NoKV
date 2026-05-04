@@ -20,13 +20,19 @@ func waitForStableLeader(tb testing.TB, ctx context.Context, regionID uint64, no
 	deadline := time.Now().Add(10 * time.Second)
 	var stableLeader uint64
 	var stableCount int
+	var lastErr error
 	for time.Now().Before(deadline) {
 		var leaderNode *testcluster.Node
 		var leaderStatus *adminpb.RegionRuntimeStatusResponse
 		var leaderPeerID uint64
 		consistent := true
 		for _, node := range nodes {
-			status := testcluster.FetchRuntimeStatus(tb, ctx, node.Addr(), regionID)
+			status, err := testcluster.TryPollRuntimeStatus(ctx, node.Addr(), regionID)
+			if err != nil {
+				lastErr = err
+				consistent = false
+				break
+			}
 			if !status.GetKnown() || !status.GetHosted() || status.GetLeaderPeerId() == 0 {
 				consistent = false
 				break
@@ -62,7 +68,7 @@ func waitForStableLeader(tb testing.TB, ctx context.Context, regionID uint64, no
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	tb.Fatalf("timed out waiting for stable leader on region %d: %s", regionID, testcluster.DumpStatus(tb, ctx, regionID, nodes...))
+	tb.Fatalf("timed out waiting for stable leader on region %d (last error=%v): %s", regionID, lastErr, testcluster.DumpStatus(tb, ctx, regionID, nodes...))
 	return nil, nil
 }
 
