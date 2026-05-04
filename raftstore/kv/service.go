@@ -321,27 +321,27 @@ func (s *Service) KvTxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBea
 	return out, nil
 }
 
-func (s *Service) KvFSMetaCreate(ctx context.Context, req *kvrpcpb.KvFSMetaCreateRequest) (*kvrpcpb.KvFSMetaCreateResponse, error) {
+func (s *Service) KvTryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta create request missing payload")
+		return nil, status.Error(codes.InvalidArgument, "atomic mutate request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
 		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_FSMETA_CREATE,
-			Cmd:     &raftcmdpb.Request_FsmetaCreate{FsmetaCreate: req.GetRequest()},
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: req.GetRequest()},
 		}},
 	})
 	if err != nil {
 		return nil, rpcStatus(err)
 	}
-	out := &kvrpcpb.KvFSMetaCreateResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetFsmetaCreate() != nil {
-		out.Response = resp.GetResponses()[0].GetFsmetaCreate()
+	out := &kvrpcpb.KvTryAtomicMutateResponse{RegionError: resp.GetRegionError()}
+	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetTryAtomicMutate() != nil {
+		out.Response = resp.GetResponses()[0].GetTryAtomicMutate()
 	}
 	return out, nil
 }

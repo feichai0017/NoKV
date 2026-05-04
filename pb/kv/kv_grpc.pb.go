@@ -21,17 +21,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NoKV_KvGet_FullMethodName            = "/nokv.kv.v1.NoKV/KvGet"
-	NoKV_KvBatchGet_FullMethodName       = "/nokv.kv.v1.NoKV/KvBatchGet"
-	NoKV_KvScan_FullMethodName           = "/nokv.kv.v1.NoKV/KvScan"
-	NoKV_KvPrewrite_FullMethodName       = "/nokv.kv.v1.NoKV/KvPrewrite"
-	NoKV_KvCommit_FullMethodName         = "/nokv.kv.v1.NoKV/KvCommit"
-	NoKV_KvBatchRollback_FullMethodName  = "/nokv.kv.v1.NoKV/KvBatchRollback"
-	NoKV_KvResolveLock_FullMethodName    = "/nokv.kv.v1.NoKV/KvResolveLock"
-	NoKV_KvCheckTxnStatus_FullMethodName = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
-	NoKV_KvTxnHeartBeat_FullMethodName   = "/nokv.kv.v1.NoKV/KvTxnHeartBeat"
-	NoKV_KvFSMetaCreate_FullMethodName   = "/nokv.kv.v1.NoKV/KvFSMetaCreate"
-	NoKV_KvWatchApply_FullMethodName     = "/nokv.kv.v1.NoKV/KvWatchApply"
+	NoKV_KvGet_FullMethodName             = "/nokv.kv.v1.NoKV/KvGet"
+	NoKV_KvBatchGet_FullMethodName        = "/nokv.kv.v1.NoKV/KvBatchGet"
+	NoKV_KvScan_FullMethodName            = "/nokv.kv.v1.NoKV/KvScan"
+	NoKV_KvPrewrite_FullMethodName        = "/nokv.kv.v1.NoKV/KvPrewrite"
+	NoKV_KvCommit_FullMethodName          = "/nokv.kv.v1.NoKV/KvCommit"
+	NoKV_KvBatchRollback_FullMethodName   = "/nokv.kv.v1.NoKV/KvBatchRollback"
+	NoKV_KvResolveLock_FullMethodName     = "/nokv.kv.v1.NoKV/KvResolveLock"
+	NoKV_KvCheckTxnStatus_FullMethodName  = "/nokv.kv.v1.NoKV/KvCheckTxnStatus"
+	NoKV_KvTxnHeartBeat_FullMethodName    = "/nokv.kv.v1.NoKV/KvTxnHeartBeat"
+	NoKV_KvTryAtomicMutate_FullMethodName = "/nokv.kv.v1.NoKV/KvTryAtomicMutate"
+	NoKV_KvWatchApply_FullMethodName      = "/nokv.kv.v1.NoKV/KvWatchApply"
 )
 
 // NoKVClient is the client API for NoKV service.
@@ -47,7 +47,7 @@ type NoKVClient interface {
 	KvResolveLock(ctx context.Context, in *KvResolveLockRequest, opts ...grpc.CallOption) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
 	KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
-	KvFSMetaCreate(ctx context.Context, in *KvFSMetaCreateRequest, opts ...grpc.CallOption) (*KvFSMetaCreateResponse, error)
+	KvTryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
 	KvWatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
 }
 
@@ -149,10 +149,10 @@ func (c *noKVClient) KvTxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatReque
 	return out, nil
 }
 
-func (c *noKVClient) KvFSMetaCreate(ctx context.Context, in *KvFSMetaCreateRequest, opts ...grpc.CallOption) (*KvFSMetaCreateResponse, error) {
+func (c *noKVClient) KvTryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(KvFSMetaCreateResponse)
-	err := c.cc.Invoke(ctx, NoKV_KvFSMetaCreate_FullMethodName, in, out, cOpts...)
+	out := new(KvTryAtomicMutateResponse)
+	err := c.cc.Invoke(ctx, NoKV_KvTryAtomicMutate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ type NoKVServer interface {
 	KvResolveLock(context.Context, *KvResolveLockRequest) (*KvResolveLockResponse, error)
 	KvCheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
 	KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
-	KvFSMetaCreate(context.Context, *KvFSMetaCreateRequest) (*KvFSMetaCreateResponse, error)
+	KvTryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
 	KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
 }
 
@@ -229,8 +229,8 @@ func (UnimplementedNoKVServer) KvCheckTxnStatus(context.Context, *KvCheckTxnStat
 func (UnimplementedNoKVServer) KvTxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KvTxnHeartBeat not implemented")
 }
-func (UnimplementedNoKVServer) KvFSMetaCreate(context.Context, *KvFSMetaCreateRequest) (*KvFSMetaCreateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method KvFSMetaCreate not implemented")
+func (UnimplementedNoKVServer) KvTryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KvTryAtomicMutate not implemented")
 }
 func (UnimplementedNoKVServer) KvWatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method KvWatchApply not implemented")
@@ -417,20 +417,20 @@ func _NoKV_KvTxnHeartBeat_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NoKV_KvFSMetaCreate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(KvFSMetaCreateRequest)
+func _NoKV_KvTryAtomicMutate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KvTryAtomicMutateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NoKVServer).KvFSMetaCreate(ctx, in)
+		return srv.(NoKVServer).KvTryAtomicMutate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: NoKV_KvFSMetaCreate_FullMethodName,
+		FullMethod: NoKV_KvTryAtomicMutate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NoKVServer).KvFSMetaCreate(ctx, req.(*KvFSMetaCreateRequest))
+		return srv.(NoKVServer).KvTryAtomicMutate(ctx, req.(*KvTryAtomicMutateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -490,8 +490,8 @@ var NoKV_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _NoKV_KvTxnHeartBeat_Handler,
 		},
 		{
-			MethodName: "KvFSMetaCreate",
-			Handler:    _NoKV_KvFSMetaCreate_Handler,
+			MethodName: "KvTryAtomicMutate",
+			Handler:    _NoKV_KvTryAtomicMutate_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

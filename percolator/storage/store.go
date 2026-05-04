@@ -15,3 +15,10 @@ type Store interface {
 	GetInternalEntry(cf kv.ColumnFamily, key []byte, version uint64) (*kv.Entry, error)
 	NewInternalIterator(opt *index.Options) index.Iterator
 }
+
+// AtomicInternalApplyPlanner reports whether a batch of internal entries will
+// be persisted as one indivisible local apply group. Region-local 1PC fast
+// paths must fall back to Percolator 2PC when this cannot be proven.
+type AtomicInternalApplyPlanner interface {
+	CanApplyInternalEntriesAtomically(entries []*kv.Entry) bool
+}

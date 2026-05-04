@@ -16,8 +16,8 @@ type KVClient interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
-type fsmetaCreateFastPath interface {
-	FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
+type atomicMutateFastPath interface {
+	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
 }
 
 // TSOClient is the coordinator timestamp surface required by Runner.
@@ -125,13 +125,13 @@ func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
 }
 
-// FSMetaCreate delegates to the region-local fsmeta create fast path when the
-// underlying KV client supports it. handled=false means callers should keep the
-// regular Percolator 2PC path.
-func (r *Runner) FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	fast, ok := r.kv.(fsmetaCreateFastPath)
+// TryAtomicMutate delegates to the region-local 1PC fast path when the
+// underlying KV client supports it. handled=false means callers should keep
+// the regular Percolator 2PC path.
+func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	fast, ok := r.kv.(atomicMutateFastPath)
 	if !ok {
 		return false, nil
 	}
-	return fast.FSMetaCreate(ctx, primary, mutations, startVersion, commitVersion)
+	return fast.TryAtomicMutate(ctx, primary, predicates, mutations, startVersion, commitVersion)
 }

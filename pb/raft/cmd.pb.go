@@ -29,17 +29,17 @@ const (
 type CmdType int32
 
 const (
-	CmdType_CMD_INVALID          CmdType = 0
-	CmdType_CMD_GET              CmdType = 1
-	CmdType_CMD_SCAN             CmdType = 2
-	CmdType_CMD_PREWRITE         CmdType = 3
-	CmdType_CMD_COMMIT           CmdType = 4
-	CmdType_CMD_BATCH_ROLLBACK   CmdType = 5
-	CmdType_CMD_RESOLVE_LOCK     CmdType = 6
-	CmdType_CMD_CHECK_TXN_STATUS CmdType = 7
-	CmdType_CMD_MVCC_MAINTENANCE CmdType = 8
-	CmdType_CMD_TXN_HEART_BEAT   CmdType = 9
-	CmdType_CMD_FSMETA_CREATE    CmdType = 10
+	CmdType_CMD_INVALID           CmdType = 0
+	CmdType_CMD_GET               CmdType = 1
+	CmdType_CMD_SCAN              CmdType = 2
+	CmdType_CMD_PREWRITE          CmdType = 3
+	CmdType_CMD_COMMIT            CmdType = 4
+	CmdType_CMD_BATCH_ROLLBACK    CmdType = 5
+	CmdType_CMD_RESOLVE_LOCK      CmdType = 6
+	CmdType_CMD_CHECK_TXN_STATUS  CmdType = 7
+	CmdType_CMD_MVCC_MAINTENANCE  CmdType = 8
+	CmdType_CMD_TXN_HEART_BEAT    CmdType = 9
+	CmdType_CMD_TRY_ATOMIC_MUTATE CmdType = 10
 )
 
 // Enum value maps for CmdType.
@@ -55,20 +55,20 @@ var (
 		7:  "CMD_CHECK_TXN_STATUS",
 		8:  "CMD_MVCC_MAINTENANCE",
 		9:  "CMD_TXN_HEART_BEAT",
-		10: "CMD_FSMETA_CREATE",
+		10: "CMD_TRY_ATOMIC_MUTATE",
 	}
 	CmdType_value = map[string]int32{
-		"CMD_INVALID":          0,
-		"CMD_GET":              1,
-		"CMD_SCAN":             2,
-		"CMD_PREWRITE":         3,
-		"CMD_COMMIT":           4,
-		"CMD_BATCH_ROLLBACK":   5,
-		"CMD_RESOLVE_LOCK":     6,
-		"CMD_CHECK_TXN_STATUS": 7,
-		"CMD_MVCC_MAINTENANCE": 8,
-		"CMD_TXN_HEART_BEAT":   9,
-		"CMD_FSMETA_CREATE":    10,
+		"CMD_INVALID":           0,
+		"CMD_GET":               1,
+		"CMD_SCAN":              2,
+		"CMD_PREWRITE":          3,
+		"CMD_COMMIT":            4,
+		"CMD_BATCH_ROLLBACK":    5,
+		"CMD_RESOLVE_LOCK":      6,
+		"CMD_CHECK_TXN_STATUS":  7,
+		"CMD_MVCC_MAINTENANCE":  8,
+		"CMD_TXN_HEART_BEAT":    9,
+		"CMD_TRY_ATOMIC_MUTATE": 10,
 	}
 )
 
@@ -451,7 +451,7 @@ type Request struct {
 	//	*Request_CheckTxnStatus
 	//	*Request_MvccMaintenance
 	//	*Request_TxnHeartBeat
-	//	*Request_FsmetaCreate
+	//	*Request_TryAtomicMutate
 	Cmd           isRequest_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -582,10 +582,10 @@ func (x *Request) GetTxnHeartBeat() *kv.TxnHeartBeatRequest {
 	return nil
 }
 
-func (x *Request) GetFsmetaCreate() *kv.FSMetaCreateRequest {
+func (x *Request) GetTryAtomicMutate() *kv.TryAtomicMutateRequest {
 	if x != nil {
-		if x, ok := x.Cmd.(*Request_FsmetaCreate); ok {
-			return x.FsmetaCreate
+		if x, ok := x.Cmd.(*Request_TryAtomicMutate); ok {
+			return x.TryAtomicMutate
 		}
 	}
 	return nil
@@ -631,8 +631,8 @@ type Request_TxnHeartBeat struct {
 	TxnHeartBeat *kv.TxnHeartBeatRequest `protobuf:"bytes,10,opt,name=txn_heart_beat,json=txnHeartBeat,proto3,oneof"`
 }
 
-type Request_FsmetaCreate struct {
-	FsmetaCreate *kv.FSMetaCreateRequest `protobuf:"bytes,11,opt,name=fsmeta_create,json=fsmetaCreate,proto3,oneof"`
+type Request_TryAtomicMutate struct {
+	TryAtomicMutate *kv.TryAtomicMutateRequest `protobuf:"bytes,11,opt,name=try_atomic_mutate,json=tryAtomicMutate,proto3,oneof"`
 }
 
 func (*Request_Get) isRequest_Cmd() {}
@@ -653,7 +653,7 @@ func (*Request_MvccMaintenance) isRequest_Cmd() {}
 
 func (*Request_TxnHeartBeat) isRequest_Cmd() {}
 
-func (*Request_FsmetaCreate) isRequest_Cmd() {}
+func (*Request_TryAtomicMutate) isRequest_Cmd() {}
 
 type Response struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -668,7 +668,7 @@ type Response struct {
 	//	*Response_CheckTxnStatus
 	//	*Response_MvccMaintenance
 	//	*Response_TxnHeartBeat
-	//	*Response_FsmetaCreate
+	//	*Response_TryAtomicMutate
 	Cmd           isResponse_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -792,10 +792,10 @@ func (x *Response) GetTxnHeartBeat() *kv.TxnHeartBeatResponse {
 	return nil
 }
 
-func (x *Response) GetFsmetaCreate() *kv.FSMetaCreateResponse {
+func (x *Response) GetTryAtomicMutate() *kv.TryAtomicMutateResponse {
 	if x != nil {
-		if x, ok := x.Cmd.(*Response_FsmetaCreate); ok {
-			return x.FsmetaCreate
+		if x, ok := x.Cmd.(*Response_TryAtomicMutate); ok {
+			return x.TryAtomicMutate
 		}
 	}
 	return nil
@@ -841,8 +841,8 @@ type Response_TxnHeartBeat struct {
 	TxnHeartBeat *kv.TxnHeartBeatResponse `protobuf:"bytes,9,opt,name=txn_heart_beat,json=txnHeartBeat,proto3,oneof"`
 }
 
-type Response_FsmetaCreate struct {
-	FsmetaCreate *kv.FSMetaCreateResponse `protobuf:"bytes,10,opt,name=fsmeta_create,json=fsmetaCreate,proto3,oneof"`
+type Response_TryAtomicMutate struct {
+	TryAtomicMutate *kv.TryAtomicMutateResponse `protobuf:"bytes,10,opt,name=try_atomic_mutate,json=tryAtomicMutate,proto3,oneof"`
 }
 
 func (*Response_Get) isResponse_Cmd() {}
@@ -863,7 +863,7 @@ func (*Response_MvccMaintenance) isResponse_Cmd() {}
 
 func (*Response_TxnHeartBeat) isResponse_Cmd() {}
 
-func (*Response_FsmetaCreate) isResponse_Cmd() {}
+func (*Response_TryAtomicMutate) isResponse_Cmd() {}
 
 type RaftCmdRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1010,7 +1010,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x14max_stale_read_index\x18\b \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
 	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\x12\x19\n" +
 	"\bstore_id\x18\n" +
-	" \x01(\x04R\astoreId\"\xce\x05\n" +
+	" \x01(\x04R\astoreId\"\xd8\x05\n" +
 	"\aRequest\x120\n" +
 	"\bcmd_type\x18\x01 \x01(\x0e2\x15.nokv.raft.v1.CmdTypeR\acmdType\x12*\n" +
 	"\x03get\x18\x02 \x01(\v2\x16.nokv.kv.v1.GetRequestH\x00R\x03get\x12-\n" +
@@ -1022,9 +1022,9 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x10check_txn_status\x18\b \x01(\v2!.nokv.kv.v1.CheckTxnStatusRequestH\x00R\x0echeckTxnStatus\x12O\n" +
 	"\x10mvcc_maintenance\x18\t \x01(\v2\".nokv.kv.v1.MVCCMaintenanceRequestH\x00R\x0fmvccMaintenance\x12G\n" +
 	"\x0etxn_heart_beat\x18\n" +
-	" \x01(\v2\x1f.nokv.kv.v1.TxnHeartBeatRequestH\x00R\ftxnHeartBeat\x12F\n" +
-	"\rfsmeta_create\x18\v \x01(\v2\x1f.nokv.kv.v1.FSMetaCreateRequestH\x00R\ffsmetaCreateB\x05\n" +
-	"\x03cmd\"\xa7\x05\n" +
+	" \x01(\v2\x1f.nokv.kv.v1.TxnHeartBeatRequestH\x00R\ftxnHeartBeat\x12P\n" +
+	"\x11try_atomic_mutate\x18\v \x01(\v2\".nokv.kv.v1.TryAtomicMutateRequestH\x00R\x0ftryAtomicMutateB\x05\n" +
+	"\x03cmd\"\xb1\x05\n" +
 	"\bResponse\x12+\n" +
 	"\x03get\x18\x01 \x01(\v2\x17.nokv.kv.v1.GetResponseH\x00R\x03get\x12.\n" +
 	"\x04scan\x18\x02 \x01(\v2\x18.nokv.kv.v1.ScanResponseH\x00R\x04scan\x12:\n" +
@@ -1034,9 +1034,9 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\fresolve_lock\x18\x06 \x01(\v2\x1f.nokv.kv.v1.ResolveLockResponseH\x00R\vresolveLock\x12N\n" +
 	"\x10check_txn_status\x18\a \x01(\v2\".nokv.kv.v1.CheckTxnStatusResponseH\x00R\x0echeckTxnStatus\x12P\n" +
 	"\x10mvcc_maintenance\x18\b \x01(\v2#.nokv.kv.v1.MVCCMaintenanceResponseH\x00R\x0fmvccMaintenance\x12H\n" +
-	"\x0etxn_heart_beat\x18\t \x01(\v2 .nokv.kv.v1.TxnHeartBeatResponseH\x00R\ftxnHeartBeat\x12G\n" +
-	"\rfsmeta_create\x18\n" +
-	" \x01(\v2 .nokv.kv.v1.FSMetaCreateResponseH\x00R\ffsmetaCreateB\x05\n" +
+	"\x0etxn_heart_beat\x18\t \x01(\v2 .nokv.kv.v1.TxnHeartBeatResponseH\x00R\ftxnHeartBeat\x12Q\n" +
+	"\x11try_atomic_mutate\x18\n" +
+	" \x01(\v2#.nokv.kv.v1.TryAtomicMutateResponseH\x00R\x0ftryAtomicMutateB\x05\n" +
 	"\x03cmd\"t\n" +
 	"\x0eRaftCmdRequest\x12/\n" +
 	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x121\n" +
@@ -1044,7 +1044,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x0fRaftCmdResponse\x12/\n" +
 	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x124\n" +
 	"\tresponses\x18\x02 \x03(\v2\x16.nokv.raft.v1.ResponseR\tresponses\x12=\n" +
-	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError*\xe8\x01\n" +
+	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError*\xec\x01\n" +
 	"\aCmdType\x12\x0f\n" +
 	"\vCMD_INVALID\x10\x00\x12\v\n" +
 	"\aCMD_GET\x10\x01\x12\f\n" +
@@ -1056,8 +1056,8 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x10CMD_RESOLVE_LOCK\x10\x06\x12\x18\n" +
 	"\x14CMD_CHECK_TXN_STATUS\x10\a\x12\x18\n" +
 	"\x14CMD_MVCC_MAINTENANCE\x10\b\x12\x16\n" +
-	"\x12CMD_TXN_HEART_BEAT\x10\t\x12\x15\n" +
-	"\x11CMD_FSMETA_CREATE\x10\n" +
+	"\x12CMD_TXN_HEART_BEAT\x10\t\x12\x19\n" +
+	"\x15CMD_TRY_ATOMIC_MUTATE\x10\n" +
 	"B/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
 
 var (
@@ -1098,7 +1098,7 @@ var file_raft_cmd_proto_goTypes = []any{
 	(*kv.CheckTxnStatusRequest)(nil),   // 20: nokv.kv.v1.CheckTxnStatusRequest
 	(*kv.MVCCMaintenanceRequest)(nil),  // 21: nokv.kv.v1.MVCCMaintenanceRequest
 	(*kv.TxnHeartBeatRequest)(nil),     // 22: nokv.kv.v1.TxnHeartBeatRequest
-	(*kv.FSMetaCreateRequest)(nil),     // 23: nokv.kv.v1.FSMetaCreateRequest
+	(*kv.TryAtomicMutateRequest)(nil),  // 23: nokv.kv.v1.TryAtomicMutateRequest
 	(*kv.GetResponse)(nil),             // 24: nokv.kv.v1.GetResponse
 	(*kv.ScanResponse)(nil),            // 25: nokv.kv.v1.ScanResponse
 	(*kv.PrewriteResponse)(nil),        // 26: nokv.kv.v1.PrewriteResponse
@@ -1108,7 +1108,7 @@ var file_raft_cmd_proto_goTypes = []any{
 	(*kv.CheckTxnStatusResponse)(nil),  // 30: nokv.kv.v1.CheckTxnStatusResponse
 	(*kv.MVCCMaintenanceResponse)(nil), // 31: nokv.kv.v1.MVCCMaintenanceResponse
 	(*kv.TxnHeartBeatResponse)(nil),    // 32: nokv.kv.v1.TxnHeartBeatResponse
-	(*kv.FSMetaCreateResponse)(nil),    // 33: nokv.kv.v1.FSMetaCreateResponse
+	(*kv.TryAtomicMutateResponse)(nil), // 33: nokv.kv.v1.TryAtomicMutateResponse
 	(*error1.RegionError)(nil),         // 34: nokv.error.v1.RegionError
 }
 var file_raft_cmd_proto_depIdxs = []int32{
@@ -1129,7 +1129,7 @@ var file_raft_cmd_proto_depIdxs = []int32{
 	20, // 14: nokv.raft.v1.Request.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusRequest
 	21, // 15: nokv.raft.v1.Request.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceRequest
 	22, // 16: nokv.raft.v1.Request.txn_heart_beat:type_name -> nokv.kv.v1.TxnHeartBeatRequest
-	23, // 17: nokv.raft.v1.Request.fsmeta_create:type_name -> nokv.kv.v1.FSMetaCreateRequest
+	23, // 17: nokv.raft.v1.Request.try_atomic_mutate:type_name -> nokv.kv.v1.TryAtomicMutateRequest
 	24, // 18: nokv.raft.v1.Response.get:type_name -> nokv.kv.v1.GetResponse
 	25, // 19: nokv.raft.v1.Response.scan:type_name -> nokv.kv.v1.ScanResponse
 	26, // 20: nokv.raft.v1.Response.prewrite:type_name -> nokv.kv.v1.PrewriteResponse
@@ -1139,7 +1139,7 @@ var file_raft_cmd_proto_depIdxs = []int32{
 	30, // 24: nokv.raft.v1.Response.check_txn_status:type_name -> nokv.kv.v1.CheckTxnStatusResponse
 	31, // 25: nokv.raft.v1.Response.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceResponse
 	32, // 26: nokv.raft.v1.Response.txn_heart_beat:type_name -> nokv.kv.v1.TxnHeartBeatResponse
-	33, // 27: nokv.raft.v1.Response.fsmeta_create:type_name -> nokv.kv.v1.FSMetaCreateResponse
+	33, // 27: nokv.raft.v1.Response.try_atomic_mutate:type_name -> nokv.kv.v1.TryAtomicMutateResponse
 	5,  // 28: nokv.raft.v1.RaftCmdRequest.header:type_name -> nokv.raft.v1.CmdHeader
 	6,  // 29: nokv.raft.v1.RaftCmdRequest.requests:type_name -> nokv.raft.v1.Request
 	5,  // 30: nokv.raft.v1.RaftCmdResponse.header:type_name -> nokv.raft.v1.CmdHeader
@@ -1167,7 +1167,7 @@ func file_raft_cmd_proto_init() {
 		(*Request_CheckTxnStatus)(nil),
 		(*Request_MvccMaintenance)(nil),
 		(*Request_TxnHeartBeat)(nil),
-		(*Request_FsmetaCreate)(nil),
+		(*Request_TryAtomicMutate)(nil),
 	}
 	file_raft_cmd_proto_msgTypes[5].OneofWrappers = []any{
 		(*Response_Get)(nil),
@@ -1179,7 +1179,7 @@ func file_raft_cmd_proto_init() {
 		(*Response_CheckTxnStatus)(nil),
 		(*Response_MvccMaintenance)(nil),
 		(*Response_TxnHeartBeat)(nil),
-		(*Response_FsmetaCreate)(nil),
+		(*Response_TryAtomicMutate)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

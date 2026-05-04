@@ -402,12 +402,12 @@ func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	return c.TwoPhaseCommit(ctx, append([]byte(nil), primary...), cleaned, startVersion, commitVersion, lockTTL)
 }
 
-// FSMetaCreate attempts to materialize a filesystem create as one region-local
-// Raft command. It returns handled=false when the mutation set does not fit in
-// one region, allowing callers to fall back to the regular 2PC path.
-func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+// TryAtomicMutate attempts to materialize mutations as one region-local 1PC
+// Raft command. It returns handled=false when routing or local storage
+// atomicity cannot be proven, allowing callers to fall back to regular 2PC.
+func (c *Client) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	if len(primary) == 0 {
-		return false, &ProtocolError{Operation: "fsmeta create", Detail: "primary key required"}
+		return false, &ProtocolError{Operation: "atomic mutate", Detail: "primary key required"}
 	}
 	cleaned := make([]*kvrpcpb.Mutation, 0, len(mutations))
 	for _, mut := range mutations {
@@ -419,22 +419,20 @@ func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*
 	if len(cleaned) == 0 {
 		return true, nil
 	}
-	if len(cleaned) != 2 {
-		return false, nil
-	}
-	if !mutationHasPrimary(cleaned, primary) {
-		return false, &ProtocolError{Operation: "fsmeta create", Detail: fmt.Sprintf("primary key %q not present in mutations", primary)}
+	preds := cloneAtomicPredicates(predicates)
+	if !atomicMutateHasPrimary(cleaned, preds, primary) {
+		return false, &ProtocolError{Operation: "atomic mutate", Detail: fmt.Sprintf("primary key %q not present in mutations or predicates", primary)}
 	}
 	var lastErr error
-	attempted := false
+	ambiguous := false
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
-		groups, err := c.groupMutationsByRoute(ctx, cleaned)
+		groups, err := c.groupAtomicMutateByRoute(ctx, cleaned, preds)
 		if err != nil {
 			return false, err
 		}
 		if len(groups) != 1 {
-			if attempted {
-				return true, &RetryExhaustedError{Operation: "fsmeta create"}
+			if ambiguous {
+				return true, &RetryExhaustedError{Operation: "atomic mutate"}
 			}
 			return false, nil
 		}
@@ -442,10 +440,10 @@ func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*
 		for _, candidate := range groups {
 			group = candidate
 		}
-		resp, regionErr, err := c.fsmetaCreateRegionOnce(ctx, group.region, cleaned, startVersion, commitVersion)
-		attempted = true
+		resp, regionErr, err := c.tryAtomicMutateRegionOnce(ctx, group.region, preds, cleaned, startVersion, commitVersion)
 		if err != nil {
 			if isTransportUnavailable(err) {
+				ambiguous = true
 				lastErr = err
 				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
 					return true, err
@@ -464,6 +462,9 @@ func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*
 			}
 			continue
 		}
+		if resp.GetFallbackToTwoPhaseCommit() {
+			return false, nil
+		}
 		if err := txnKeyError(resp.GetError()); err != nil {
 			return true, err
 		}
@@ -475,10 +476,10 @@ func (c *Client) FSMetaCreate(ctx context.Context, primary []byte, mutations []*
 	if err := ctx.Err(); err != nil {
 		return true, err
 	}
-	return true, &RetryExhaustedError{Operation: "fsmeta create"}
+	return true, &RetryExhaustedError{Operation: "atomic mutate"}
 }
 
-func (c *Client) fsmetaCreateRegionOnce(ctx context.Context, region regionSnapshot, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (*kvrpcpb.FSMetaCreateResponse, *errorpb.RegionError, error) {
+func (c *Client) tryAtomicMutateRegionOnce(ctx context.Context, region regionSnapshot, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (*kvrpcpb.TryAtomicMutateResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
 		return nil, nil, err
@@ -487,15 +488,16 @@ func (c *Client) fsmetaCreateRegionOnce(ctx context.Context, region regionSnapsh
 	if err != nil {
 		return nil, nil, err
 	}
-	req := &kvrpcpb.KvFSMetaCreateRequest{
+	req := &kvrpcpb.KvTryAtomicMutateRequest{
 		Context: header,
-		Request: &kvrpcpb.FSMetaCreateRequest{
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Predicates:    cloneAtomicPredicates(predicates),
 			Mutations:     cloneMutations(mutations),
 			StartVersion:  startVersion,
 			CommitVersion: commitVersion,
 		},
 	}
-	resp, err := cl.KvFSMetaCreate(ctx, req)
+	resp, err := cl.KvTryAtomicMutate(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
@@ -1115,6 +1117,24 @@ func cloneMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
 	return out
 }
 
+func cloneAtomicPredicate(pred *kvrpcpb.AtomicPredicate) *kvrpcpb.AtomicPredicate {
+	if pred == nil {
+		return nil
+	}
+	return proto.Clone(pred).(*kvrpcpb.AtomicPredicate)
+}
+
+func cloneAtomicPredicates(predicates []*kvrpcpb.AtomicPredicate) []*kvrpcpb.AtomicPredicate {
+	out := make([]*kvrpcpb.AtomicPredicate, 0, len(predicates))
+	for _, pred := range predicates {
+		if pred == nil {
+			continue
+		}
+		out = append(out, cloneAtomicPredicate(pred))
+	}
+	return out
+}
+
 func cloneKeys(keys [][]byte) [][]byte {
 	out := make([][]byte, len(keys))
 	for i, key := range keys {
@@ -1146,6 +1166,21 @@ func mutationHasPrimary(muts []*kvrpcpb.Mutation, primary []byte) bool {
 	return false
 }
 
+func atomicMutateHasPrimary(muts []*kvrpcpb.Mutation, preds []*kvrpcpb.AtomicPredicate, primary []byte) bool {
+	if mutationHasPrimary(muts, primary) {
+		return true
+	}
+	for _, pred := range preds {
+		if pred == nil {
+			continue
+		}
+		if bytesCompare(pred.GetKey(), primary) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) groupMutationsByRoute(ctx context.Context, mutations []*kvrpcpb.Mutation) (map[uint64]*mutationRouteBatch, error) {
 	groups := make(map[uint64]*mutationRouteBatch)
 	for _, mut := range mutations {
@@ -1163,6 +1198,40 @@ func (c *Client) groupMutationsByRoute(ctx context.Context, mutations []*kvrpcpb
 			groups[id] = group
 		}
 		group.mutations = append(group.mutations, mut)
+	}
+	return groups, nil
+}
+
+func (c *Client) groupAtomicMutateByRoute(ctx context.Context, mutations []*kvrpcpb.Mutation, predicates []*kvrpcpb.AtomicPredicate) (map[uint64]*mutationRouteBatch, error) {
+	groups := make(map[uint64]*mutationRouteBatch)
+	addKey := func(key []byte) error {
+		region, err := c.routeKeyWithRetry(ctx, key)
+		if err != nil {
+			return err
+		}
+		id := region.desc.RegionID
+		group := groups[id]
+		if group == nil {
+			group = &mutationRouteBatch{region: region}
+			groups[id] = group
+		}
+		return nil
+	}
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		if err := addKey(mut.GetKey()); err != nil {
+			return nil, err
+		}
+	}
+	for _, pred := range predicates {
+		if pred == nil {
+			continue
+		}
+		if err := addKey(pred.GetKey()); err != nil {
+			return nil, err
+		}
 	}
 	return groups, nil
 }

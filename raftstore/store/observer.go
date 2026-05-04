@@ -230,12 +230,12 @@ func applyEventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, r
 				CommitVersion: resolve.GetCommitVersion(),
 				Keys:          cloneApplyKeys(resolve.GetKeys()),
 			})
-		case raftcmdpb.CmdType_CMD_FSMETA_CREATE:
-			create := request.GetFsmetaCreate()
-			if create == nil || create.GetCommitVersion() == 0 || len(create.GetMutations()) == 0 || response == nil || response.GetFsmetaCreate() == nil {
+		case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+			atomicMutate := request.GetTryAtomicMutate()
+			if atomicMutate == nil || atomicMutate.GetCommitVersion() == 0 || len(atomicMutate.GetMutations()) == 0 || response == nil || response.GetTryAtomicMutate() == nil {
 				continue
 			}
-			if response.GetFsmetaCreate().GetError() != nil {
+			if response.GetTryAtomicMutate().GetError() != nil || response.GetTryAtomicMutate().GetFallbackToTwoPhaseCommit() {
 				continue
 			}
 			out = append(out, ApplyEvent{
@@ -243,8 +243,8 @@ func applyEventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, r
 				Term:          entry.Term,
 				Index:         entry.Index,
 				Source:        ApplyEventSourceCommit,
-				CommitVersion: create.GetCommitVersion(),
-				Keys:          cloneMutationKeys(create.GetMutations()),
+				CommitVersion: atomicMutate.GetCommitVersion(),
+				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
 			})
 		}
 	}

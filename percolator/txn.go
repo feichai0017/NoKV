@@ -157,77 +157,142 @@ func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitReques
 	return nil
 }
 
-// ApplyFSMetaCreate atomically materializes a filesystem create operation that
-// is already ordered by one region's Raft log. Unlike Prewrite/Commit, it never
-// exposes locks: every mutation becomes visible at commitVersion in one local
-// storage batch, or none of them do.
-func ApplyFSMetaCreate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.FSMetaCreateRequest) *kvrpcpb.KeyError {
+// AtomicMutateResult is the local outcome for a region-local 1PC attempt.
+type AtomicMutateResult struct {
+	Error       *kvrpcpb.KeyError
+	AppliedKeys uint64
+	Fallback    bool
+}
+
+// ApplyAtomicMutate tries to materialize a region-local MVCC mutation without
+// exposing Percolator locks. It is only allowed to write when the DB can prove
+// the resulting internal entries share one atomic local apply group; otherwise
+// callers must fall back to the regular 2PC protocol.
+func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.TryAtomicMutateRequest) AtomicMutateResult {
 	if req == nil {
-		return nil
+		return AtomicMutateResult{}
 	}
 	if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
-		return err
+		return AtomicMutateResult{Error: err}
 	}
 	mutations := req.GetMutations()
-	if len(mutations) != 2 || mutations[0] == nil || mutations[1] == nil {
-		return keyErrorAbort(errInvalidFSMetaCreate)
+	if len(mutations) == 0 {
+		return AtomicMutateResult{}
 	}
-	keys := make([][]byte, 0, len(mutations))
+	keys := make([][]byte, 0, len(mutations)+len(req.GetPredicates()))
 	for _, mut := range mutations {
 		if mut != nil && len(mut.Key) > 0 {
 			keys = append(keys, mut.Key)
+		}
+	}
+	for _, pred := range req.GetPredicates() {
+		if pred != nil && len(pred.Key) > 0 {
+			keys = append(keys, pred.Key)
 		}
 	}
 	guard := latches.Acquire(keys)
 	defer guard.Release()
 
 	reader := NewReader(db)
-	if applied, err := fsmetaCreateAlreadyApplied(db, reader, req); err != nil {
-		return keyErrorRetryable(err)
+	if applied, err := atomicMutateAlreadyApplied(db, reader, req); err != nil {
+		return AtomicMutateResult{Error: keyErrorRetryable(err)}
 	} else if applied {
-		return nil
+		return AtomicMutateResult{AppliedKeys: uint64(len(mutations))}
 	}
 
 	primary := mutations[0].GetKey()
 	ops := make([]versionedOp, 0, len(mutations)*3)
-	for i, mut := range mutations {
+	for _, pred := range req.GetPredicates() {
+		if err := validateAtomicPredicate(reader, pred, req.StartVersion); err != nil {
+			return AtomicMutateResult{Error: err}
+		}
+	}
+	for _, mut := range mutations {
 		if mut == nil {
 			continue
 		}
-		if err := validateFSMetaCreateMutation(i, mut); err != nil {
-			return err
+		if err := validateAtomicMutation(mut); err != nil {
+			return AtomicMutateResult{Error: err}
 		}
 		key := mut.GetKey()
 		lock, err := reader.GetLock(key)
 		if err != nil {
-			return keyErrorRetryable(err)
+			return AtomicMutateResult{Error: keyErrorRetryable(err)}
 		}
 		if lock != nil {
-			return keyErrorLocked(key, lock)
+			return AtomicMutateResult{Error: keyErrorLocked(key, lock)}
 		}
 		if write, commitTs, err := reader.MostRecentWrite(key); err != nil {
-			return keyErrorRetryable(err)
+			return AtomicMutateResult{Error: keyErrorRetryable(err)}
 		} else if write != nil && commitTs >= req.StartVersion {
-			return keyErrorWriteConflict(key, primary, commitTs, write.StartTs, req.StartVersion)
+			return AtomicMutateResult{Error: keyErrorWriteConflict(key, primary, commitTs, write.StartTs, req.StartVersion)}
 		}
 		if mut.GetAssertionNotExist() {
 			exists, err := keyExistsAt(reader, key, req.StartVersion)
 			if err != nil {
-				return keyErrorRetryable(err)
+				return AtomicMutateResult{Error: keyErrorRetryable(err)}
 			}
 			if exists {
-				return keyErrorAlreadyExists(key)
+				return AtomicMutateResult{Error: keyErrorAlreadyExists(key)}
 			}
 		}
 		ops = append(ops, committedMutationOps(mut, req.StartVersion, req.CommitVersion)...)
 	}
-	if err := applyVersionedOps(db, ops...); err != nil {
+	entries := versionedOpsToEntries(ops...)
+	defer releaseEntries(entries)
+	planner, ok := db.(txnstore.AtomicInternalApplyPlanner)
+	if !ok || !planner.CanApplyInternalEntriesAtomically(entries) {
+		return AtomicMutateResult{Fallback: true}
+	}
+	if err := applyVersionedEntries(db, entries); err != nil {
+		return AtomicMutateResult{Error: keyErrorRetryable(err)}
+	}
+	return AtomicMutateResult{AppliedKeys: uint64(len(mutations))}
+}
+
+func validateAtomicPredicate(reader *Reader, pred *kvrpcpb.AtomicPredicate, startVersion uint64) *kvrpcpb.KeyError {
+	if pred == nil {
+		return keyErrorAbort(errInvalidAtomicMutate)
+	}
+	key := pred.GetKey()
+	if len(key) == 0 {
+		return keyErrorAbort(errEmptyMutationKey)
+	}
+	lock, err := reader.GetLock(key)
+	if err != nil {
 		return keyErrorRetryable(err)
+	}
+	if lock != nil {
+		// Predicates can reference keys outside the mutation set. They still
+		// participate in transaction conflict detection; otherwise a 1PC
+		// compare could observe a committed snapshot while ignoring a live
+		// Percolator writer on the same key.
+		return keyErrorLocked(key, lock)
+	}
+	readVersion := pred.GetReadVersion()
+	if readVersion == 0 {
+		readVersion = startVersion
+	}
+	exists, err := keyExistsAt(reader, key, readVersion)
+	if err != nil {
+		return keyErrorRetryable(err)
+	}
+	switch pred.GetKind() {
+	case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS:
+		if exists {
+			return keyErrorAlreadyExists(key)
+		}
+	case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS:
+		if !exists {
+			return keyErrorAbort(errInvalidAtomicMutate)
+		}
+	default:
+		return keyErrorAbort(errInvalidAtomicMutate)
 	}
 	return nil
 }
 
-func validateFSMetaCreateMutation(index int, mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
+func validateAtomicMutation(mut *kvrpcpb.Mutation) *kvrpcpb.KeyError {
 	if len(mut.GetKey()) == 0 {
 		return keyErrorAbort(errEmptyMutationKey)
 	}
@@ -236,13 +301,10 @@ func validateFSMetaCreateMutation(index int, mut *kvrpcpb.Mutation) *kvrpcpb.Key
 	default:
 		return keyErrorAbortf(errUnsupportedMutationOp, "%v", mut.GetOp())
 	}
-	if index < 2 && (mut.GetOp() != kvrpcpb.Mutation_Put || !mut.GetAssertionNotExist()) {
-		return keyErrorAbort(errInvalidFSMetaCreate)
-	}
 	return nil
 }
 
-func fsmetaCreateAlreadyApplied(db txnstore.Store, reader *Reader, req *kvrpcpb.FSMetaCreateRequest) (bool, error) {
+func atomicMutateAlreadyApplied(db txnstore.Store, reader *Reader, req *kvrpcpb.TryAtomicMutateRequest) (bool, error) {
 	anyPresent := false
 	allPresent := true
 	for _, mut := range req.GetMutations() {
@@ -676,21 +738,35 @@ func applyVersionedOps(db txnstore.Store, ops ...versionedOp) error {
 	if len(ops) == 0 {
 		return nil
 	}
-	entries := make([]*kv.Entry, 0, len(ops))
-	for _, op := range ops {
-		entry := kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires)
-		entries = append(entries, entry)
-	}
+	entries := versionedOpsToEntries(ops...)
 	// NoKV's DB regroups these internal entries by commit-pipeline shard before
 	// they reach the sharded LSM. Percolator batches at the protocol phase
 	// boundary; storage keeps the per-key placement invariant.
-	err := db.ApplyInternalEntries(entries)
+	defer releaseEntries(entries)
+	return applyVersionedEntries(db, entries)
+}
+
+func versionedOpsToEntries(ops ...versionedOp) []*kv.Entry {
+	entries := make([]*kv.Entry, 0, len(ops))
+	for _, op := range ops {
+		entries = append(entries, kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires))
+	}
+	return entries
+}
+
+func applyVersionedEntries(db txnstore.Store, entries []*kv.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return db.ApplyInternalEntries(entries)
+}
+
+func releaseEntries(entries []*kv.Entry) {
 	for _, entry := range entries {
 		if entry != nil {
 			entry.DecrRef()
 		}
 	}
-	return err
 }
 
 func currentPhysicalTimeMillis() uint64 {

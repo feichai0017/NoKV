@@ -38,11 +38,11 @@ type TxnRunner interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
-// FSMetaCreateFastPath is an optional TxnRunner extension. handled=false
-// means the runner could not keep this create inside one region and the caller
-// must fall back to Mutate.
-type FSMetaCreateFastPath interface {
-	FSMetaCreate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
+// AtomicMutateFastPath is an optional TxnRunner extension. handled=false
+// means the runner could not keep the mutation in one proven-atomic local
+// apply group and the caller must fall back to Mutate.
+type AtomicMutateFastPath interface {
+	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
 }
 
 // MountAdmission is the executor's mount-admission view.
@@ -252,6 +252,10 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 			AssertionNotExist: true,
 		},
 	}
+	predicates := []*kvrpcpb.AtomicPredicate{
+		{Key: cloneBytes(plan.MutateKeys[0]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+		{Key: cloneBytes(plan.MutateKeys[1]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:  req.Mount,
@@ -264,8 +268,8 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 		}
 		all := append(cloneMutations(mutations), quotaMutations...)
 		if len(quotaMutations) == 0 {
-			if fast, ok := e.runner.(FSMetaCreateFastPath); ok {
-				handled, err := fast.FSMetaCreate(ctx, plan.PrimaryKey, all, startVersion, commitVersion)
+			if fast, ok := e.runner.(AtomicMutateFastPath); ok {
+				handled, err := fast.TryAtomicMutate(ctx, plan.PrimaryKey, cloneAtomicPredicates(predicates), all, startVersion, commitVersion)
 				if err != nil || handled {
 					return err
 				}
@@ -1275,6 +1279,22 @@ func cloneMutations(in []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
 			Value:             cloneBytes(mut.GetValue()),
 			AssertionNotExist: mut.GetAssertionNotExist(),
 			ExpiresAt:         mut.GetExpiresAt(),
+		})
+	}
+	return out
+}
+
+func cloneAtomicPredicates(in []*kvrpcpb.AtomicPredicate) []*kvrpcpb.AtomicPredicate {
+	out := make([]*kvrpcpb.AtomicPredicate, 0, len(in))
+	for _, pred := range in {
+		if pred == nil {
+			out = append(out, nil)
+			continue
+		}
+		out = append(out, &kvrpcpb.AtomicPredicate{
+			Key:         cloneBytes(pred.GetKey()),
+			Kind:        pred.GetKind(),
+			ReadVersion: pred.GetReadVersion(),
 		})
 	}
 	return out

@@ -2,8 +2,10 @@ package kv
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/feichai0017/NoKV/dbcore/commit"
 	"github.com/feichai0017/NoKV/engine/index"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -14,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,19 +140,24 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
 }
 
-func TestApplyFSMetaCreateCommandMaterializesBothKeys(t *testing.T) {
+func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {
 	opt := NoKV.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
+	opt.LSMShardCount = 1
 	db, err := NoKV.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_FSMETA_CREATE,
-			Cmd: &raftcmdpb.Request_FsmetaCreate{FsmetaCreate: &kvrpcpb.FSMetaCreateRequest{
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd: &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateRequest{
 				StartVersion:  10,
 				CommitVersion: 11,
+				Predicates: []*kvrpcpb.AtomicPredicate{
+					{Key: []byte("dentry"), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+					{Key: []byte("inode"), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+				},
 				Mutations: []*kvrpcpb.Mutation{
 					{Op: kvrpcpb.Mutation_Put, Key: []byte("dentry"), Value: []byte("ino=42"), AssertionNotExist: true},
 					{Op: kvrpcpb.Mutation_Put, Key: []byte("inode"), Value: []byte("attrs"), AssertionNotExist: true},
@@ -159,8 +167,9 @@ func TestApplyFSMetaCreateCommandMaterializesBothKeys(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.GetResponses(), 1)
-	require.Nil(t, resp.GetResponses()[0].GetFsmetaCreate().GetError())
-	require.Equal(t, uint64(2), resp.GetResponses()[0].GetFsmetaCreate().GetAppliedKeys())
+	require.Nil(t, resp.GetResponses()[0].GetTryAtomicMutate().GetError())
+	require.False(t, resp.GetResponses()[0].GetTryAtomicMutate().GetFallbackToTwoPhaseCommit())
+	require.Equal(t, uint64(2), resp.GetResponses()[0].GetTryAtomicMutate().GetAppliedKeys())
 
 	reader := percolator.NewReader(db)
 	dentry, _, err := reader.GetValue([]byte("dentry"), 11)
@@ -169,6 +178,72 @@ func TestApplyFSMetaCreateCommandMaterializesBothKeys(t *testing.T) {
 	inode, _, err := reader.GetValue([]byte("inode"), 11)
 	require.NoError(t, err)
 	require.Equal(t, []byte("attrs"), inode)
+}
+
+func TestApplyTryAtomicMutateCommandFallsBackForCrossShardBatch(t *testing.T) {
+	const shardCount = 4
+
+	opt := NoKV.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.LSMShardCount = shardCount
+	db, err := NoKV.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	startVersion := uint64(30)
+	commitVersion := uint64(31)
+	dentryKey, inodeKey := keysWithDifferentDefaultShardsForApplyTest(t, shardCount, startVersion)
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd: &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateRequest{
+				StartVersion:  startVersion,
+				CommitVersion: commitVersion,
+				Predicates: []*kvrpcpb.AtomicPredicate{
+					{Key: dentryKey, Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+					{Key: inodeKey, Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+				},
+				Mutations: []*kvrpcpb.Mutation{
+					{Op: kvrpcpb.Mutation_Put, Key: dentryKey, Value: []byte("ino=42"), AssertionNotExist: true},
+					{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: []byte("attrs"), AssertionNotExist: true},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
+	require.NotNil(t, atomicResp)
+	require.Nil(t, atomicResp.GetError())
+	require.True(t, atomicResp.GetFallbackToTwoPhaseCommit())
+	require.Zero(t, atomicResp.GetAppliedKeys())
+
+	reader := percolator.NewReader(db)
+	for _, key := range [][]byte{dentryKey, inodeKey} {
+		_, _, err := reader.GetValue(key, commitVersion)
+		require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	}
+}
+
+func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, version uint64) ([]byte, []byte) {
+	t.Helper()
+	keysByShard := make([][]byte, shardCount)
+	for i := range 10000 {
+		key := fmt.Appendf(nil, "apply-atomic-%d", i)
+		shardID := commit.ShardForInternalKey(entrykv.InternalKey(entrykv.CFDefault, key, version), shardCount)
+		if shardID >= 0 && shardID < shardCount && keysByShard[shardID] == nil {
+			keysByShard[shardID] = key
+		}
+	}
+	for low := range shardCount {
+		for high := low + 1; high < shardCount; high++ {
+			if keysByShard[low] != nil && keysByShard[high] != nil {
+				return keysByShard[low], keysByShard[high]
+			}
+		}
+	}
+	t.Fatalf("could not find different-shard keys for shardCount=%d", shardCount)
+	return nil, nil
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {

@@ -27,6 +27,21 @@ type fakeRunner struct {
 	mutateErrs    []error
 }
 
+type atomicMutateCall struct {
+	primary       []byte
+	predicates    []*kvrpcpb.AtomicPredicate
+	mutations     []*kvrpcpb.Mutation
+	startVersion  uint64
+	commitVersion uint64
+}
+
+type fakeAtomicRunner struct {
+	*fakeRunner
+	handled     bool
+	err         error
+	atomicCalls []atomicMutateCall
+}
+
 type fakeMountResolver struct {
 	records map[fsmeta.MountID]MountAdmission
 	err     error
@@ -247,6 +262,61 @@ func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrp
 	return nil
 }
 
+func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	r.atomicCalls = append(r.atomicCalls, atomicMutateCall{
+		primary:       cloneBytes(primary),
+		predicates:    cloneAtomicPredicates(predicates),
+		mutations:     cloneMutations(mutations),
+		startVersion:  startVersion,
+		commitVersion: commitVersion,
+	})
+	if r.err != nil {
+		return true, r.err
+	}
+	if !r.handled {
+		return false, nil
+	}
+	for _, pred := range predicates {
+		if pred == nil {
+			continue
+		}
+		_, exists := r.data[string(pred.GetKey())]
+		switch pred.GetKind() {
+		case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS:
+			if exists {
+				return true, fsmeta.ErrExists
+			}
+		case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS:
+			if !exists {
+				return true, fsmeta.ErrNotFound
+			}
+		default:
+			return true, fsmeta.ErrInvalidRequest
+		}
+	}
+	cloned := make([]*kvrpcpb.Mutation, 0, len(mutations))
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		if mut.GetAssertionNotExist() {
+			if _, exists := r.data[string(mut.GetKey())]; exists {
+				return true, fsmeta.ErrExists
+			}
+		}
+		cloned = append(cloned, cloneMutation(mut))
+	}
+	for _, mut := range cloned {
+		switch mut.GetOp() {
+		case kvrpcpb.Mutation_Put:
+			r.data[string(mut.GetKey())] = append([]byte(nil), mut.GetValue()...)
+		case kvrpcpb.Mutation_Delete:
+			delete(r.data, string(mut.GetKey()))
+		}
+	}
+	return true, nil
+}
+
 func TestExecutorCreateAndLookup(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := New(runner)
@@ -277,6 +347,87 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.Len(t, runner.mutations[0], 2)
 	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Inode: 22}
+	err = executor.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+
+	plan, err := fsmeta.PlanCreate(req)
+	require.NoError(t, err)
+	require.Len(t, runner.atomicCalls, 1)
+	call := runner.atomicCalls[0]
+	require.Equal(t, plan.PrimaryKey, call.primary)
+	require.Equal(t, uint64(1), call.startVersion)
+	require.Equal(t, uint64(2), call.commitVersion)
+	require.Len(t, call.predicates, 2)
+	require.Equal(t, plan.MutateKeys[0], call.predicates[0].GetKey())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS, call.predicates[0].GetKind())
+	require.Equal(t, plan.MutateKeys[1], call.predicates[1].GetKey())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS, call.predicates[1].GetKind())
+	require.Len(t, call.mutations, 2)
+	require.True(t, call.mutations[0].GetAssertionNotExist())
+	require.True(t, call.mutations[1].GetAssertionNotExist())
+	require.Empty(t, base.mutations)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+}
+
+func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, base.mutations, 1)
+	require.Len(t, base.mutations[0], 2)
+}
+
+func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
+	require.NoError(t, err)
+	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Inode:  22,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+	require.NoError(t, err)
+
+	// Quota reservation adds a third key, so Create must use the full 2PC
+	// path until AtomicMutate can prove all fsmeta and quota keys share one
+	// atomic local apply group.
+	require.Empty(t, runner.atomicCalls)
+	require.Len(t, base.mutations, 1)
+	require.Len(t, base.mutations[0], 3)
+	require.Equal(t, quotaKey, base.mutations[0][2].GetKey())
 }
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {

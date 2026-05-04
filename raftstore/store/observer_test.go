@@ -65,8 +65,8 @@ func TestApplyEventsFromCommandExtractsVisibleCommitSources(t *testing.T) {
 				Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{}},
 			},
 			{
-				CmdType: raftcmdpb.CmdType_CMD_FSMETA_CREATE,
-				Cmd: &raftcmdpb.Request_FsmetaCreate{FsmetaCreate: &kvrpcpb.FSMetaCreateRequest{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd: &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateRequest{
 					Mutations:     createMutations,
 					CommitVersion: 22,
 				}},
@@ -78,7 +78,7 @@ func TestApplyEventsFromCommandExtractsVisibleCommitSources(t *testing.T) {
 		{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{}}},
 		{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{}}},
 		{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: &kvrpcpb.PrewriteResponse{}}},
-		{Cmd: &raftcmdpb.Response_FsmetaCreate{FsmetaCreate: &kvrpcpb.FSMetaCreateResponse{}}},
+		{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{AppliedKeys: 2}}},
 	}}
 
 	events := applyEventsFromCommand(myraft.Entry{Term: 3, Index: 11}, req, resp)
@@ -126,6 +126,27 @@ func TestApplyEventsFromCommandSkipsErroredResponses(t *testing.T) {
 	}
 	resp := &raftcmdpb.RaftCmdResponse{Responses: []*raftcmdpb.Response{{
 		Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: &kvrpcpb.KeyError{}}},
+	}}}
+
+	require.Empty(t, applyEventsFromCommand(myraft.Entry{Term: 3, Index: 11}, req, resp))
+}
+
+func TestApplyEventsFromCommandSkipsAtomicMutateFallback(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: 7},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd: &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateRequest{
+				Mutations: []*kvrpcpb.Mutation{
+					{Key: []byte("dentry")},
+					{Key: []byte("inode")},
+				},
+				CommitVersion: 22,
+			}},
+		}},
+	}
+	resp := &raftcmdpb.RaftCmdResponse{Responses: []*raftcmdpb.Response{{
+		Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{FallbackToTwoPhaseCommit: true}},
 	}}}
 
 	require.Empty(t, applyEventsFromCommand(myraft.Entry{Term: 3, Index: 11}, req, resp))
