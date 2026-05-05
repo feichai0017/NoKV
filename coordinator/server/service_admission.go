@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,82 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func (s *Service) resetAuthorityServing() {
+	if s == nil {
+		return
+	}
+	s.authorityMu.Lock()
+	s.authorityState = authorityServing
+	s.authorityInflight = 0
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) beginDutyAdmission(ctx context.Context, mandate uint32) (func(), error) {
+	if s == nil || !s.coordinatorLeaseEnabled() {
+		return func() {}, nil
+	}
+	if err := s.ensureTenure(ctx); err != nil {
+		return nil, translateTenureError(err)
+	}
+	if s.handoverFinalizerCandidate() {
+		if err := s.FinalizeHandover(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.eunomiaGate(gateMandateAdmission, mandate); err != nil {
+		return nil, err
+	}
+	done, err := s.beginAuthorityServing(ctx, mandate)
+	if err != nil {
+		return nil, err
+	}
+	return done, nil
+}
+
+func (s *Service) beginAuthorityServing(ctx context.Context, mandate uint32) (func(), error) {
+	if s == nil || !s.coordinatorLeaseEnabled() {
+		return func() {}, nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, status.Error(codes.Canceled, err.Error())
+		}
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	switch s.authorityState {
+	case authorityServing:
+		s.authorityInflight++
+		return func() { s.finishAuthorityServing() }, nil
+	case authorityDraining:
+		return nil, statusTenure(fmt.Errorf("%w: authority is draining", rootstate.ErrSilence))
+	case authoritySealed:
+		return nil, statusTenure(fmt.Errorf("%w: authority is sealed", rootstate.ErrSilence))
+	default:
+		return nil, statusTenure(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, s.authorityState))
+	}
+}
+
+func (s *Service) finishAuthorityServing() {
+	if s == nil || !s.coordinatorLeaseEnabled() {
+		return
+	}
+	s.authorityMu.Lock()
+	if s.authorityInflight > 0 {
+		s.authorityInflight--
+	}
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) authorityServingSnapshot() (authorityServingState, uint64) {
+	if s == nil {
+		return authorityServing, 0
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	return s.authorityState, s.authorityInflight
+}
 
 func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
 	if expected == 0 {

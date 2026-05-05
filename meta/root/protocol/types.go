@@ -63,6 +63,25 @@ type AuthorityHandoffRecord struct {
 	Frontiers       MandateFrontiers
 }
 
+type AuthorityRootToken struct {
+	Term     uint64
+	Index    uint64
+	Revision uint64
+}
+
+type AuthorityCertificate struct {
+	HolderID           string
+	Era                uint64
+	Mandate            uint32
+	ExpiresUnixNano    int64
+	IssuedRootToken    AuthorityRootToken
+	LineageDigest      string
+	ObservedLegacyEra  uint64
+	LegacyDigest       string
+	DescriptorRevision uint64
+	InheritedFrontiers MandateFrontiers
+}
+
 type MandateWitness struct {
 	Mandate          uint32
 	Era              uint64
@@ -242,6 +261,80 @@ func NewMandateWitness(mandate uint32, era, consumedFrontier uint64) MandateWitn
 		Era:              era,
 		ConsumedFrontier: consumedFrontier,
 	}
+}
+
+func NewAuthorityCertificate(holderID string, era uint64, mandate uint32, expiresUnixNano int64, issuedRootToken AuthorityRootToken, lineageDigest string, observedLegacyEra uint64, legacyDigest string, descriptorRevision uint64, inheritedFrontiers MandateFrontiers) (AuthorityCertificate, error) {
+	holderID = strings.TrimSpace(holderID)
+	lineageDigest = strings.TrimSpace(lineageDigest)
+	legacyDigest = strings.TrimSpace(legacyDigest)
+	if holderID == "" {
+		return AuthorityCertificate{}, fmt.Errorf("authority certificate: holder id is required")
+	}
+	if era == 0 || era == MandateWitnessEraSuppressed {
+		return AuthorityCertificate{}, fmt.Errorf("authority certificate: detached era is required")
+	}
+	resolvedMandate := mandate & mandateMaskAll
+	if resolvedMandate == 0 {
+		return AuthorityCertificate{}, fmt.Errorf("authority certificate: duty mask is required")
+	}
+	if expiresUnixNano <= 0 {
+		return AuthorityCertificate{}, fmt.Errorf("authority certificate: expiry is required")
+	}
+	if observedLegacyEra != 0 && legacyDigest == "" {
+		return AuthorityCertificate{}, fmt.Errorf("authority certificate: legacy digest is required")
+	}
+	return AuthorityCertificate{
+		HolderID:           holderID,
+		Era:                era,
+		Mandate:            resolvedMandate,
+		ExpiresUnixNano:    expiresUnixNano,
+		IssuedRootToken:    issuedRootToken,
+		LineageDigest:      lineageDigest,
+		ObservedLegacyEra:  observedLegacyEra,
+		LegacyDigest:       legacyDigest,
+		DescriptorRevision: descriptorRevision,
+		InheritedFrontiers: inheritedFrontiers,
+	}, nil
+}
+
+func (c AuthorityCertificate) Present() bool {
+	return strings.TrimSpace(c.HolderID) != "" || c.Era != 0 || c.Mandate != 0 || c.ExpiresUnixNano != 0
+}
+
+func (c AuthorityCertificate) Validate(mandate uint32, era uint64, nowUnixNano int64, observedLegacyEra uint64, legacyDigest string) error {
+	if !c.Present() {
+		return fmt.Errorf("authority certificate: missing")
+	}
+	holderID := strings.TrimSpace(c.HolderID)
+	if holderID == "" {
+		return fmt.Errorf("authority certificate: holder id is required")
+	}
+	if era == 0 || era == MandateWitnessEraSuppressed {
+		return fmt.Errorf("authority certificate: invalid reply era=%d", era)
+	}
+	if c.Era != era {
+		return fmt.Errorf("authority certificate: era=%d reply_era=%d", c.Era, era)
+	}
+	if c.Mandate&mandate != mandate {
+		return fmt.Errorf("authority certificate: required_mandate=%d certificate_mandate=%d", mandate, c.Mandate)
+	}
+	if c.ExpiresUnixNano <= 0 {
+		return fmt.Errorf("authority certificate: expiry is required")
+	}
+	if nowUnixNano > 0 && c.ExpiresUnixNano <= nowUnixNano {
+		return fmt.Errorf("authority certificate: expired")
+	}
+	if c.ObservedLegacyEra < observedLegacyEra {
+		return fmt.Errorf("authority certificate: observed_legacy_era=%d reply_observed_legacy_era=%d", c.ObservedLegacyEra, observedLegacyEra)
+	}
+	if observedLegacyEra != 0 && c.ObservedLegacyEra != observedLegacyEra {
+		return fmt.Errorf("authority certificate: observed_legacy_era=%d reply_observed_legacy_era=%d", c.ObservedLegacyEra, observedLegacyEra)
+	}
+	legacyDigest = strings.TrimSpace(legacyDigest)
+	if observedLegacyEra != 0 && legacyDigest != "" && strings.TrimSpace(c.LegacyDigest) != legacyDigest {
+		return fmt.Errorf("authority certificate: legacy digest mismatch")
+	}
+	return nil
 }
 
 func NewSuppressedMandateWitness(mandate uint32) MandateWitness {

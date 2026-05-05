@@ -52,13 +52,12 @@ func (s *Service) storeControlOperations(storeID uint64) []*coordpb.SchedulerOpe
 }
 
 func (s *Service) requireDutyAdmission(ctx context.Context, mandate uint32) error {
-	if s == nil || !s.coordinatorLeaseEnabled() {
-		return nil
+	done, err := s.beginDutyAdmission(ctx, mandate)
+	if err != nil {
+		return err
 	}
-	if err := s.ensureTenure(ctx); err != nil {
-		return translateTenureError(err)
-	}
-	return s.eunomiaGate(gateMandateAdmission, mandate)
+	done()
+	return nil
 }
 
 // RunTenureLoop keeps the local coordinator lease renewed while ctx
@@ -76,7 +75,7 @@ func (s *Service) RunTenureLoop(ctx context.Context) {
 		case <-ctx.Done():
 			if s.storage.IsLeader() {
 				releaseCtx, cancel := context.WithTimeout(context.Background(), defaultTenureReleaseTimeout)
-				_ = s.releaseTenure(releaseCtx)
+				_ = s.DrainAndSealTenure(releaseCtx)
 				cancel()
 			}
 			return
@@ -87,6 +86,7 @@ func (s *Service) RunTenureLoop(ctx context.Context) {
 					failures++
 					next = s.coordinatorLeaseRetryDelay(failures)
 				} else {
+					_ = s.FinalizeHandover(ctx)
 					failures = 0
 					next = s.jitterDuration(next, 20)
 				}
@@ -103,6 +103,93 @@ func (s *Service) RunTenureLoop(ctx context.Context) {
 // lease for the configured holder. It is intended for graceful shutdown.
 func (s *Service) ReleaseTenure() error {
 	return s.releaseTenure(context.Background())
+}
+
+// DrainAndSealTenure stops admitting new authority-bearing requests, waits for
+// requests already in service, then records one rooted legacy seal.
+func (s *Service) DrainAndSealTenure(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	if s.localTenureAlreadySealed() {
+		s.markAuthoritySealed()
+		return nil
+	}
+	s.authorityMu.Lock()
+	if s.authorityState == authoritySealed {
+		s.authorityMu.Unlock()
+		return nil
+	}
+	s.authorityState = authorityDraining
+	s.authorityMu.Unlock()
+
+	if err := s.waitAuthorityInflightDrained(ctx); err != nil {
+		s.markAuthorityServing()
+		return err
+	}
+	if s.localTenureAlreadySealed() {
+		s.markAuthoritySealed()
+		return nil
+	}
+	if err := s.sealTenure(ctx); err != nil {
+		s.markAuthorityServing()
+		return err
+	}
+	s.markAuthoritySealed()
+	return nil
+}
+
+func (s *Service) waitAuthorityInflightDrained(ctx context.Context) error {
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, inflight := s.authorityServingSnapshot()
+		if inflight == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) localTenureAlreadySealed() bool {
+	current, seal := s.currentTenureView()
+	if !rootstate.TenureSealed(current, seal) {
+		return false
+	}
+	s.leaseMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	s.leaseMu.RUnlock()
+	return holderID != "" && strings.TrimSpace(current.HolderID) == holderID
+}
+
+func (s *Service) markAuthorityServing() {
+	if s == nil {
+		return
+	}
+	s.authorityMu.Lock()
+	if s.authorityState != authoritySealed {
+		s.authorityState = authorityServing
+	}
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) markAuthoritySealed() {
+	if s == nil {
+		return
+	}
+	s.authorityMu.Lock()
+	s.authorityState = authoritySealed
+	s.authorityMu.Unlock()
 }
 
 func (s *Service) releaseTenure(ctx context.Context) error {
@@ -221,6 +308,96 @@ func (s *Service) reattachHandover(ctx context.Context) error {
 		return nil
 	}
 	return s.applyHandoverCommand(ctx, rootproto.HandoverActReattach, gateHandoverMutation, rootproto.NewMandateFrontiers())
+}
+
+// FinalizeHandover advances a successor handoff through the rooted finality
+// stages once the inherited frontier coverage is already visible in root.
+func (s *Service) FinalizeHandover(ctx context.Context) error {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !s.storage.IsLeader() {
+		return nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return err
+	}
+	s.refreshCurrentRootSnapshot(snapshot)
+	nowFn := s.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	nowUnixNano := nowFn().UnixNano()
+	s.leaseMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	s.leaseMu.RUnlock()
+	if holderID == "" ||
+		strings.TrimSpace(snapshot.Tenure.HolderID) != holderID ||
+		!snapshot.Tenure.ActiveAt(nowUnixNano) ||
+		!snapshot.Legacy.Present() ||
+		snapshot.Legacy.Era >= snapshot.Tenure.Era {
+		return nil
+	}
+	if !rootproto.HandoverStageAtLeast(snapshot.Handover.Stage, rootproto.HandoverStageConfirmed) {
+		if err := s.confirmHandover(ctx); err != nil {
+			if handoverFinalizerIgnorable(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	snapshot, err = s.storage.Load()
+	if err != nil {
+		return err
+	}
+	s.refreshCurrentRootSnapshot(snapshot)
+	if !rootproto.HandoverStageAtLeast(snapshot.Handover.Stage, rootproto.HandoverStageClosed) {
+		if err := s.closeHandover(ctx); err != nil {
+			if handoverFinalizerIgnorable(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	snapshot, err = s.storage.Load()
+	if err != nil {
+		return err
+	}
+	s.refreshCurrentRootSnapshot(snapshot)
+	if !rootproto.HandoverStageAtLeast(snapshot.Handover.Stage, rootproto.HandoverStageReattached) {
+		if err := s.reattachHandover(ctx); err != nil {
+			if handoverFinalizerIgnorable(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) handoverFinalizerCandidate() bool {
+	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+		return false
+	}
+	current, legacy := s.currentTenureView()
+	return legacy.Present() && current.Era > legacy.Era
+}
+
+func handoverFinalizerIgnorable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, rootstate.ErrFinality) ||
+		errors.Is(err, rootstate.ErrInheritance) ||
+		errors.Is(err, rootstate.ErrPrimacy) {
+		return true
+	}
+	code := status.Code(err)
+	return code == codes.FailedPrecondition || code == codes.InvalidArgument
 }
 
 func (s *Service) applyHandoverCommand(ctx context.Context, kind rootproto.HandoverAct, gate gateKind, frontiers rootproto.MandateFrontiers) error {

@@ -173,3 +173,29 @@ func TestCoverageAndHandoverWitnessHelpers(t *testing.T) {
 	require.True(t, HandoverStageAtLeast(HandoverStageClosed, HandoverStageConfirmed))
 	require.False(t, HandoverStageAtLeast(HandoverStageConfirmed, HandoverStageClosed))
 }
+
+func TestAuthorityCertificateValidation(t *testing.T) {
+	frontiers := NewMandateFrontiers(
+		MandateFrontier{Mandate: MandateAllocID, Frontier: 20},
+		MandateFrontier{Mandate: MandateTSO, Frontier: 30},
+	)
+	cert, err := NewAuthorityCertificate(
+		"c1",
+		7,
+		MandateAllocID|MandateTSO,
+		2_000,
+		AuthorityRootToken{Term: 1, Index: 5, Revision: 6},
+		"lineage",
+		6,
+		"legacy",
+		11,
+		frontiers,
+	)
+	require.NoError(t, err)
+	require.NoError(t, cert.Validate(MandateAllocID, 7, 1_000, 6, "legacy"))
+	require.ErrorContains(t, cert.Validate(MandateGetRegionByKey, 7, 1_000, 6, "legacy"), "required_mandate")
+	require.ErrorContains(t, cert.Validate(MandateAllocID, 8, 1_000, 6, "legacy"), "reply_era")
+	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 2_000, 6, "legacy"), "expired")
+	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 1_000, 7, "legacy"), "reply_observed_legacy_era")
+	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 1_000, 6, "other"), "legacy digest mismatch")
+}

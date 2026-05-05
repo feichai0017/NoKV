@@ -40,26 +40,29 @@ import (
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster        *catalog.Cluster
-	ids            *idalloc.IDAllocator
-	tso            *tso.Allocator
-	storage        rootview.RootStorage
-	idWindowHigh   uint64
-	idWindowSize   uint64
-	tsoWindowHigh  uint64
-	tsoWindowSize  uint64
-	allocMu        sync.Mutex
-	writeMu        sync.Mutex
-	leaseMu        sync.RWMutex
-	coordinatorID  string
-	leaseTTL       time.Duration
-	leaseRenewIn   time.Duration
-	leaseClockSkew time.Duration
-	now            func() time.Time
-	leaseView      coordinatorLeaseView
-	rootViewMu     sync.RWMutex
-	rootView       coordinatorRootSnapshotView
-	rootViewTTL    time.Duration
+	cluster           *catalog.Cluster
+	ids               *idalloc.IDAllocator
+	tso               *tso.Allocator
+	storage           rootview.RootStorage
+	idWindowHigh      uint64
+	idWindowSize      uint64
+	tsoWindowHigh     uint64
+	tsoWindowSize     uint64
+	allocMu           sync.Mutex
+	writeMu           sync.Mutex
+	leaseMu           sync.RWMutex
+	coordinatorID     string
+	leaseTTL          time.Duration
+	leaseRenewIn      time.Duration
+	leaseClockSkew    time.Duration
+	now               func() time.Time
+	leaseView         coordinatorLeaseView
+	authorityMu       sync.Mutex
+	authorityState    authorityServingState
+	authorityInflight uint64
+	rootViewMu        sync.RWMutex
+	rootView          coordinatorRootSnapshotView
+	rootViewTTL       time.Duration
 	// storeHeartbeatTTL holds the time.Duration value as an int64 so callers
 	// (storeState reads, ConfigureStoreHeartbeatTTL writes) avoid a data race
 	// without taking a lock on the read path.
@@ -68,6 +71,27 @@ type Service struct {
 	lastRootReload    int64
 	lastRootError     string
 	eunomiaMetrics    eunomiaMetrics
+}
+
+type authorityServingState uint8
+
+const (
+	authorityServing authorityServingState = iota
+	authorityDraining
+	authoritySealed
+)
+
+func (s authorityServingState) String() string {
+	switch s {
+	case authorityServing:
+		return "serving"
+	case authorityDraining:
+		return "draining"
+	case authoritySealed:
+		return "sealed"
+	default:
+		return "unknown"
+	}
 }
 
 type coordinatorLeaseView struct {
@@ -166,6 +190,7 @@ func (s *Service) ConfigureTenure(holderID string, ttl, renewIn time.Duration) {
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
 	s.coordinatorID = holderID
+	s.resetAuthorityServing()
 	if holderID == "" {
 		s.leaseTTL = 0
 		s.leaseRenewIn = 0

@@ -10,6 +10,7 @@ import (
 // SnapshotAnomalies surfaces the most important finality/audit gaps in a form
 // suitable for CLI or standalone checker consumption.
 type FinalityDefect string
+type AuthorityCompletionState string
 
 const (
 	FinalityDefectNone                    FinalityDefect = ""
@@ -22,6 +23,13 @@ const (
 	FinalityDefectReattachWithoutClose    FinalityDefect = "reattach_without_close"
 	FinalityDefectReattachLineageMismatch FinalityDefect = "reattach_lineage_mismatch"
 	FinalityDefectReattachIncomplete      FinalityDefect = "reattach_incomplete"
+)
+
+const (
+	AuthorityCompletionNone                 AuthorityCompletionState = ""
+	AuthorityCompletionSealedPending        AuthorityCompletionState = "sealed_handoff_pending"
+	AuthorityCompletionSealedCompleted      AuthorityCompletionState = "sealed_handoff_completed"
+	AuthorityCompletionExpiredWithoutLegacy AuthorityCompletionState = "expired_takeover_without_legacy"
 )
 
 type SnapshotAnomalies struct {
@@ -44,6 +52,7 @@ type Report struct {
 	Handoff                rootproto.AuthorityHandoffRecord
 	HandoverWitness        rootproto.HandoverWitness
 	Handover               rootproto.HandoverStatus
+	AuthorityCompletion    AuthorityCompletionState
 	Anomalies              SnapshotAnomalies
 }
 
@@ -130,6 +139,19 @@ func evaluateFinalityDefect(snapshot rootview.Snapshot, holderID string, nowUnix
 	return FinalityDefectMissingClose
 }
 
+func evaluateAuthorityCompletion(snapshot rootview.Snapshot, witness rootproto.HandoverWitness) AuthorityCompletionState {
+	if snapshot.Legacy.Present() {
+		if witness.FinalitySatisfied() && rootproto.HandoverStageAtLeast(witness.Stage, rootproto.HandoverStageReattached) {
+			return AuthorityCompletionSealedCompleted
+		}
+		return AuthorityCompletionSealedPending
+	}
+	if snapshot.Tenure.Era > 1 {
+		return AuthorityCompletionExpiredWithoutLegacy
+	}
+	return AuthorityCompletionNone
+}
+
 // BuildReport materializes one rooted snapshot into a standalone audit report
 // that callers can serialize or render without duplicating anomaly logic.
 func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
@@ -143,5 +165,6 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		FinalityDefect:              finalityDefect,
 	}
 	report.Anomalies = anomalies
+	report.AuthorityCompletion = evaluateAuthorityCompletion(snapshot, report.HandoverWitness)
 	return report
 }

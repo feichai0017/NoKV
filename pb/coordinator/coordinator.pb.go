@@ -2946,6 +2946,174 @@ func (x *RootToken) GetRevision() uint64 {
 	return 0
 }
 
+type AuthorityFrontier struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mandate       uint32                 `protobuf:"varint,1,opt,name=mandate,proto3" json:"mandate,omitempty"`
+	Frontier      uint64                 `protobuf:"varint,2,opt,name=frontier,proto3" json:"frontier,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorityFrontier) Reset() {
+	*x = AuthorityFrontier{}
+	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorityFrontier) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorityFrontier) ProtoMessage() {}
+
+func (x *AuthorityFrontier) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorityFrontier.ProtoReflect.Descriptor instead.
+func (*AuthorityFrontier) Descriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *AuthorityFrontier) GetMandate() uint32 {
+	if x != nil {
+		return x.Mandate
+	}
+	return 0
+}
+
+func (x *AuthorityFrontier) GetFrontier() uint64 {
+	if x != nil {
+		return x.Frontier
+	}
+	return 0
+}
+
+type AuthorityCertificate struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	HolderId           string                 `protobuf:"bytes,1,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	Era                uint64                 `protobuf:"varint,2,opt,name=era,proto3" json:"era,omitempty"`
+	Mandate            uint32                 `protobuf:"varint,3,opt,name=mandate,proto3" json:"mandate,omitempty"`
+	ExpiresUnixNano    int64                  `protobuf:"varint,4,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
+	IssuedRootToken    *RootToken             `protobuf:"bytes,5,opt,name=issued_root_token,json=issuedRootToken,proto3" json:"issued_root_token,omitempty"`
+	LineageDigest      string                 `protobuf:"bytes,6,opt,name=lineage_digest,json=lineageDigest,proto3" json:"lineage_digest,omitempty"`
+	ObservedLegacyEra  uint64                 `protobuf:"varint,7,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
+	LegacyDigest       string                 `protobuf:"bytes,8,opt,name=legacy_digest,json=legacyDigest,proto3" json:"legacy_digest,omitempty"`
+	DescriptorRevision uint64                 `protobuf:"varint,9,opt,name=descriptor_revision,json=descriptorRevision,proto3" json:"descriptor_revision,omitempty"`
+	InheritedFrontiers []*AuthorityFrontier   `protobuf:"bytes,10,rep,name=inherited_frontiers,json=inheritedFrontiers,proto3" json:"inherited_frontiers,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AuthorityCertificate) Reset() {
+	*x = AuthorityCertificate{}
+	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorityCertificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorityCertificate) ProtoMessage() {}
+
+func (x *AuthorityCertificate) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorityCertificate.ProtoReflect.Descriptor instead.
+func (*AuthorityCertificate) Descriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *AuthorityCertificate) GetHolderId() string {
+	if x != nil {
+		return x.HolderId
+	}
+	return ""
+}
+
+func (x *AuthorityCertificate) GetEra() uint64 {
+	if x != nil {
+		return x.Era
+	}
+	return 0
+}
+
+func (x *AuthorityCertificate) GetMandate() uint32 {
+	if x != nil {
+		return x.Mandate
+	}
+	return 0
+}
+
+func (x *AuthorityCertificate) GetExpiresUnixNano() int64 {
+	if x != nil {
+		return x.ExpiresUnixNano
+	}
+	return 0
+}
+
+func (x *AuthorityCertificate) GetIssuedRootToken() *RootToken {
+	if x != nil {
+		return x.IssuedRootToken
+	}
+	return nil
+}
+
+func (x *AuthorityCertificate) GetLineageDigest() string {
+	if x != nil {
+		return x.LineageDigest
+	}
+	return ""
+}
+
+func (x *AuthorityCertificate) GetObservedLegacyEra() uint64 {
+	if x != nil {
+		return x.ObservedLegacyEra
+	}
+	return 0
+}
+
+func (x *AuthorityCertificate) GetLegacyDigest() string {
+	if x != nil {
+		return x.LegacyDigest
+	}
+	return ""
+}
+
+func (x *AuthorityCertificate) GetDescriptorRevision() uint64 {
+	if x != nil {
+		return x.DescriptorRevision
+	}
+	return 0
+}
+
+func (x *AuthorityCertificate) GetInheritedFrontiers() []*AuthorityFrontier {
+	if x != nil {
+		return x.InheritedFrontiers
+	}
+	return nil
+}
+
 type GetRegionByKeyRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Key   []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -2965,7 +3133,7 @@ type GetRegionByKeyRequest struct {
 
 func (x *GetRegionByKeyRequest) Reset() {
 	*x = GetRegionByKeyRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	mi := &file_coordinator_coordinator_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2977,7 +3145,7 @@ func (x *GetRegionByKeyRequest) String() string {
 func (*GetRegionByKeyRequest) ProtoMessage() {}
 
 func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	mi := &file_coordinator_coordinator_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2990,7 +3158,7 @@ func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{37}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetRegionByKeyRequest) GetKey() []byte {
@@ -3061,14 +3229,15 @@ type GetRegionByKeyResponse struct {
 	// serving_class reports the client-visible serving contract used for this reply.
 	ServingClass ServingClass `protobuf:"varint,13,opt,name=serving_class,json=servingClass,proto3,enum=nokv.coordinator.v1.ServingClass" json:"serving_class,omitempty"`
 	// sync_health reports the rooted catch-up health that justified this reply.
-	SyncHealth    SyncHealth `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SyncHealth           SyncHealth            `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
+	AuthorityCertificate *AuthorityCertificate `protobuf:"bytes,16,opt,name=authority_certificate,json=authorityCertificate,proto3" json:"authority_certificate,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyResponse) Reset() {
 	*x = GetRegionByKeyResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	mi := &file_coordinator_coordinator_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3080,7 +3249,7 @@ func (x *GetRegionByKeyResponse) String() string {
 func (*GetRegionByKeyResponse) ProtoMessage() {}
 
 func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	mi := &file_coordinator_coordinator_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3093,7 +3262,7 @@ func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyResponse.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{38}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetRegionByKeyResponse) GetRegionDescriptor() *meta.RegionDescriptor {
@@ -3201,6 +3370,13 @@ func (x *GetRegionByKeyResponse) GetSyncHealth() SyncHealth {
 	return SyncHealth_SYNC_HEALTH_UNSPECIFIED
 }
 
+func (x *GetRegionByKeyResponse) GetAuthorityCertificate() *AuthorityCertificate {
+	if x != nil {
+		return x.AuthorityCertificate
+	}
+	return nil
+}
+
 type AllocIDRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
@@ -3210,7 +3386,7 @@ type AllocIDRequest struct {
 
 func (x *AllocIDRequest) Reset() {
 	*x = AllocIDRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[39]
+	mi := &file_coordinator_coordinator_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3222,7 +3398,7 @@ func (x *AllocIDRequest) String() string {
 func (*AllocIDRequest) ProtoMessage() {}
 
 func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[39]
+	mi := &file_coordinator_coordinator_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3235,7 +3411,7 @@ func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDRequest.ProtoReflect.Descriptor instead.
 func (*AllocIDRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{39}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *AllocIDRequest) GetCount() uint64 {
@@ -3251,16 +3427,17 @@ type AllocIDResponse struct {
 	Count   uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// era and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	Era               uint64 `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
-	ConsumedFrontier  uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedLegacyEra uint64 `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Era                  uint64                `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
+	ConsumedFrontier     uint64                `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedLegacyEra    uint64                `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
+	AuthorityCertificate *AuthorityCertificate `protobuf:"bytes,6,opt,name=authority_certificate,json=authorityCertificate,proto3" json:"authority_certificate,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *AllocIDResponse) Reset() {
 	*x = AllocIDResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[40]
+	mi := &file_coordinator_coordinator_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3272,7 +3449,7 @@ func (x *AllocIDResponse) String() string {
 func (*AllocIDResponse) ProtoMessage() {}
 
 func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[40]
+	mi := &file_coordinator_coordinator_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3285,7 +3462,7 @@ func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDResponse.ProtoReflect.Descriptor instead.
 func (*AllocIDResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{40}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *AllocIDResponse) GetFirstId() uint64 {
@@ -3323,6 +3500,13 @@ func (x *AllocIDResponse) GetObservedLegacyEra() uint64 {
 	return 0
 }
 
+func (x *AllocIDResponse) GetAuthorityCertificate() *AuthorityCertificate {
+	if x != nil {
+		return x.AuthorityCertificate
+	}
+	return nil
+}
+
 type TsoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
@@ -3332,7 +3516,7 @@ type TsoRequest struct {
 
 func (x *TsoRequest) Reset() {
 	*x = TsoRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[41]
+	mi := &file_coordinator_coordinator_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3344,7 +3528,7 @@ func (x *TsoRequest) String() string {
 func (*TsoRequest) ProtoMessage() {}
 
 func (x *TsoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[41]
+	mi := &file_coordinator_coordinator_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3357,7 +3541,7 @@ func (x *TsoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoRequest.ProtoReflect.Descriptor instead.
 func (*TsoRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{41}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TsoRequest) GetCount() uint64 {
@@ -3373,16 +3557,17 @@ type TsoResponse struct {
 	Count     uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// era and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	Era               uint64 `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
-	ConsumedFrontier  uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedLegacyEra uint64 `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Era                  uint64                `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
+	ConsumedFrontier     uint64                `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedLegacyEra    uint64                `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
+	AuthorityCertificate *AuthorityCertificate `protobuf:"bytes,6,opt,name=authority_certificate,json=authorityCertificate,proto3" json:"authority_certificate,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *TsoResponse) Reset() {
 	*x = TsoResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[42]
+	mi := &file_coordinator_coordinator_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3394,7 +3579,7 @@ func (x *TsoResponse) String() string {
 func (*TsoResponse) ProtoMessage() {}
 
 func (x *TsoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[42]
+	mi := &file_coordinator_coordinator_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3407,7 +3592,7 @@ func (x *TsoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoResponse.ProtoReflect.Descriptor instead.
 func (*TsoResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{42}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TsoResponse) GetTimestamp() uint64 {
@@ -3443,6 +3628,13 @@ func (x *TsoResponse) GetObservedLegacyEra() uint64 {
 		return x.ObservedLegacyEra
 	}
 	return 0
+}
+
+func (x *TsoResponse) GetAuthorityCertificate() *AuthorityCertificate {
+	if x != nil {
+		return x.AuthorityCertificate
+	}
+	return nil
 }
 
 var File_coordinator_coordinator_proto protoreflect.FileDescriptor
@@ -3611,7 +3803,22 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tRootToken\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x04R\brevision\"\xb1\x02\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\"I\n" +
+	"\x11AuthorityFrontier\x12\x18\n" +
+	"\amandate\x18\x01 \x01(\rR\amandate\x12\x1a\n" +
+	"\bfrontier\x18\x02 \x01(\x04R\bfrontier\"\xdd\x03\n" +
+	"\x14AuthorityCertificate\x12\x1b\n" +
+	"\tholder_id\x18\x01 \x01(\tR\bholderId\x12\x10\n" +
+	"\x03era\x18\x02 \x01(\x04R\x03era\x12\x18\n" +
+	"\amandate\x18\x03 \x01(\rR\amandate\x12*\n" +
+	"\x11expires_unix_nano\x18\x04 \x01(\x03R\x0fexpiresUnixNano\x12J\n" +
+	"\x11issued_root_token\x18\x05 \x01(\v2\x1e.nokv.coordinator.v1.RootTokenR\x0fissuedRootToken\x12%\n" +
+	"\x0elineage_digest\x18\x06 \x01(\tR\rlineageDigest\x12.\n" +
+	"\x13observed_legacy_era\x18\a \x01(\x04R\x11observedLegacyEra\x12#\n" +
+	"\rlegacy_digest\x18\b \x01(\tR\flegacyDigest\x12/\n" +
+	"\x13descriptor_revision\x18\t \x01(\x04R\x12descriptorRevision\x12W\n" +
+	"\x13inherited_frontiers\x18\n" +
+	" \x03(\v2&.nokv.coordinator.v1.AuthorityFrontierR\x12inheritedFrontiers\"\xb1\x02\n" +
 	"\x15GetRegionByKeyRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12<\n" +
 	"\tfreshness\x18\x02 \x01(\x0e2\x1e.nokv.coordinator.v1.FreshnessR\tfreshness\x12N\n" +
@@ -3619,7 +3826,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
 	"maxRootLag\x88\x01\x01\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
-	"\r_max_root_lag\"\xfc\x06\n" +
+	"\r_max_root_lag\"\xdc\a\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -3637,24 +3844,27 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x13observed_legacy_era\x18\x0f \x01(\x04R\x11observedLegacyEra\x12F\n" +
 	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
 	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
-	"syncHealth\"&\n" +
+	"syncHealth\x12^\n" +
+	"\x15authority_certificate\x18\x10 \x01(\v2).nokv.coordinator.v1.AuthorityCertificateR\x14authorityCertificate\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb1\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\x91\x02\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
 	"\bfirst_id\x18\x01 \x01(\x04R\afirstId\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x10\n" +
 	"\x03era\x18\x03 \x01(\x04R\x03era\x12+\n" +
 	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12.\n" +
-	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra\"\"\n" +
+	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra\x12^\n" +
+	"\x15authority_certificate\x18\x06 \x01(\v2).nokv.coordinator.v1.AuthorityCertificateR\x14authorityCertificate\"\"\n" +
 	"\n" +
 	"TsoRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb0\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\x90\x02\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x10\n" +
 	"\x03era\x18\x03 \x01(\x04R\x03era\x12+\n" +
 	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12.\n" +
-	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra*j\n" +
+	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra\x12^\n" +
+	"\x15authority_certificate\x18\x06 \x01(\v2).nokv.coordinator.v1.AuthorityCertificateR\x14authorityCertificate*j\n" +
 	"\n" +
 	"StoreState\x12\x17\n" +
 	"\x13STORE_STATE_UNKNOWN\x10\x00\x12\x12\n" +
@@ -3763,7 +3973,7 @@ func file_coordinator_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_coordinator_coordinator_proto_goTypes = []any{
 	(StoreState)(0),                        // 0: nokv.coordinator.v1.StoreState
 	(MountState)(0),                        // 1: nokv.coordinator.v1.MountState
@@ -3816,109 +4026,116 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(*RemoveRegionRequest)(nil),            // 48: nokv.coordinator.v1.RemoveRegionRequest
 	(*RemoveRegionResponse)(nil),           // 49: nokv.coordinator.v1.RemoveRegionResponse
 	(*RootToken)(nil),                      // 50: nokv.coordinator.v1.RootToken
-	(*GetRegionByKeyRequest)(nil),          // 51: nokv.coordinator.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),         // 52: nokv.coordinator.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),                 // 53: nokv.coordinator.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),                // 54: nokv.coordinator.v1.AllocIDResponse
-	(*TsoRequest)(nil),                     // 55: nokv.coordinator.v1.TsoRequest
-	(*TsoResponse)(nil),                    // 56: nokv.coordinator.v1.TsoResponse
-	(*meta.RootCursor)(nil),                // 57: nokv.meta.v1.RootCursor
-	(*meta.RootTailToken)(nil),             // 58: nokv.meta.v1.RootTailToken
-	(*meta.RootCommittedEvent)(nil),        // 59: nokv.meta.v1.RootCommittedEvent
-	(*meta.RootEvent)(nil),                 // 60: nokv.meta.v1.RootEvent
-	(*meta.RootPendingPeerChange)(nil),     // 61: nokv.meta.v1.RootPendingPeerChange
-	(*meta.RootPendingRangeChange)(nil),    // 62: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RegionDescriptor)(nil),          // 63: nokv.meta.v1.RegionDescriptor
+	(*AuthorityFrontier)(nil),              // 51: nokv.coordinator.v1.AuthorityFrontier
+	(*AuthorityCertificate)(nil),           // 52: nokv.coordinator.v1.AuthorityCertificate
+	(*GetRegionByKeyRequest)(nil),          // 53: nokv.coordinator.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),         // 54: nokv.coordinator.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),                 // 55: nokv.coordinator.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),                // 56: nokv.coordinator.v1.AllocIDResponse
+	(*TsoRequest)(nil),                     // 57: nokv.coordinator.v1.TsoRequest
+	(*TsoResponse)(nil),                    // 58: nokv.coordinator.v1.TsoResponse
+	(*meta.RootCursor)(nil),                // 59: nokv.meta.v1.RootCursor
+	(*meta.RootTailToken)(nil),             // 60: nokv.meta.v1.RootTailToken
+	(*meta.RootCommittedEvent)(nil),        // 61: nokv.meta.v1.RootCommittedEvent
+	(*meta.RootEvent)(nil),                 // 62: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),     // 63: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil),    // 64: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RegionDescriptor)(nil),          // 65: nokv.meta.v1.RegionDescriptor
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	0,  // 0: nokv.coordinator.v1.StoreInfo.state:type_name -> nokv.coordinator.v1.StoreState
 	15, // 1: nokv.coordinator.v1.GetStoreResponse.store:type_name -> nokv.coordinator.v1.StoreInfo
 	15, // 2: nokv.coordinator.v1.ListStoresResponse.stores:type_name -> nokv.coordinator.v1.StoreInfo
 	1,  // 3: nokv.coordinator.v1.MountInfo.state:type_name -> nokv.coordinator.v1.MountState
-	57, // 4: nokv.coordinator.v1.MountInfo.registered_at:type_name -> nokv.meta.v1.RootCursor
-	57, // 5: nokv.coordinator.v1.MountInfo.retired_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 4: nokv.coordinator.v1.MountInfo.registered_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 5: nokv.coordinator.v1.MountInfo.retired_at:type_name -> nokv.meta.v1.RootCursor
 	20, // 6: nokv.coordinator.v1.GetMountResponse.mount:type_name -> nokv.coordinator.v1.MountInfo
 	20, // 7: nokv.coordinator.v1.ListMountsResponse.mounts:type_name -> nokv.coordinator.v1.MountInfo
 	2,  // 8: nokv.coordinator.v1.SubtreeAuthorityInfo.state:type_name -> nokv.coordinator.v1.SubtreeAuthorityState
-	57, // 9: nokv.coordinator.v1.SubtreeAuthorityInfo.declared_at:type_name -> nokv.meta.v1.RootCursor
-	57, // 10: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_started_at:type_name -> nokv.meta.v1.RootCursor
-	57, // 11: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_completed_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 9: nokv.coordinator.v1.SubtreeAuthorityInfo.declared_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 10: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_started_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 11: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_completed_at:type_name -> nokv.meta.v1.RootCursor
 	25, // 12: nokv.coordinator.v1.ListSubtreeAuthoritiesResponse.subtrees:type_name -> nokv.coordinator.v1.SubtreeAuthorityInfo
 	28, // 13: nokv.coordinator.v1.QuotaFenceInfo.subject:type_name -> nokv.coordinator.v1.QuotaSubject
-	57, // 14: nokv.coordinator.v1.QuotaFenceInfo.updated_at:type_name -> nokv.meta.v1.RootCursor
+	59, // 14: nokv.coordinator.v1.QuotaFenceInfo.updated_at:type_name -> nokv.meta.v1.RootCursor
 	28, // 15: nokv.coordinator.v1.GetQuotaFenceRequest.subject:type_name -> nokv.coordinator.v1.QuotaSubject
 	29, // 16: nokv.coordinator.v1.GetQuotaFenceResponse.fence:type_name -> nokv.coordinator.v1.QuotaFenceInfo
 	29, // 17: nokv.coordinator.v1.ListQuotaFencesResponse.fences:type_name -> nokv.coordinator.v1.QuotaFenceInfo
-	58, // 18: nokv.coordinator.v1.WatchRootEventsRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	58, // 19: nokv.coordinator.v1.WatchRootEventsResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	59, // 20: nokv.coordinator.v1.WatchRootEventsResponse.events:type_name -> nokv.meta.v1.RootCommittedEvent
+	60, // 18: nokv.coordinator.v1.WatchRootEventsRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	60, // 19: nokv.coordinator.v1.WatchRootEventsResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	61, // 20: nokv.coordinator.v1.WatchRootEventsResponse.events:type_name -> nokv.meta.v1.RootCommittedEvent
 	3,  // 21: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
 	36, // 22: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
-	60, // 23: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	62, // 23: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
 	43, // 24: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
 	4,  // 25: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	5,  // 26: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	6,  // 27: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	7,  // 28: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	61, // 29: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
-	62, // 30: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	63, // 29: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	64, // 30: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
 	4,  // 31: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
 	5,  // 32: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
 	6,  // 33: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
 	7,  // 34: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
 	8,  // 35: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
 	42, // 36: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
-	60, // 37: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	62, // 37: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
 	43, // 38: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
-	9,  // 39: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
-	50, // 40: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
-	63, // 41: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	50, // 42: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
-	9,  // 43: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
-	10, // 44: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	50, // 45: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
-	11, // 46: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
-	12, // 47: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
-	13, // 48: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
-	14, // 49: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	16, // 50: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
-	18, // 51: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
-	21, // 52: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
-	23, // 53: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
-	26, // 54: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
-	30, // 55: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
-	32, // 56: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
-	34, // 57: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
-	38, // 58: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	40, // 59: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	44, // 60: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	46, // 61: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	48, // 62: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	51, // 63: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	53, // 64: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	55, // 65: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	37, // 66: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	17, // 67: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
-	19, // 68: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
-	22, // 69: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
-	24, // 70: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
-	27, // 71: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
-	31, // 72: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
-	33, // 73: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
-	35, // 74: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
-	39, // 75: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	41, // 76: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	45, // 77: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	47, // 78: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	49, // 79: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	52, // 80: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	54, // 81: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	56, // 82: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	66, // [66:83] is the sub-list for method output_type
-	49, // [49:66] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	50, // 39: nokv.coordinator.v1.AuthorityCertificate.issued_root_token:type_name -> nokv.coordinator.v1.RootToken
+	51, // 40: nokv.coordinator.v1.AuthorityCertificate.inherited_frontiers:type_name -> nokv.coordinator.v1.AuthorityFrontier
+	9,  // 41: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
+	50, // 42: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
+	65, // 43: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	50, // 44: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
+	9,  // 45: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
+	10, // 46: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
+	50, // 47: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	11, // 48: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
+	12, // 49: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
+	13, // 50: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
+	52, // 51: nokv.coordinator.v1.GetRegionByKeyResponse.authority_certificate:type_name -> nokv.coordinator.v1.AuthorityCertificate
+	52, // 52: nokv.coordinator.v1.AllocIDResponse.authority_certificate:type_name -> nokv.coordinator.v1.AuthorityCertificate
+	52, // 53: nokv.coordinator.v1.TsoResponse.authority_certificate:type_name -> nokv.coordinator.v1.AuthorityCertificate
+	14, // 54: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	16, // 55: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
+	18, // 56: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
+	21, // 57: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
+	23, // 58: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
+	26, // 59: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
+	30, // 60: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
+	32, // 61: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
+	34, // 62: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
+	38, // 63: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	40, // 64: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	44, // 65: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	46, // 66: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	48, // 67: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	53, // 68: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	55, // 69: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	57, // 70: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	37, // 71: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	17, // 72: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
+	19, // 73: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
+	22, // 74: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
+	24, // 75: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
+	27, // 76: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
+	31, // 77: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
+	33, // 78: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
+	35, // 79: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
+	39, // 80: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	41, // 81: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	45, // 82: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	47, // 83: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	49, // 84: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	54, // 85: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	56, // 86: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	58, // 87: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	71, // [71:88] is the sub-list for method output_type
+	54, // [54:71] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
@@ -3926,14 +4143,14 @@ func file_coordinator_coordinator_proto_init() {
 	if File_coordinator_coordinator_proto != nil {
 		return
 	}
-	file_coordinator_coordinator_proto_msgTypes[37].OneofWrappers = []any{}
+	file_coordinator_coordinator_proto_msgTypes[39].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_coordinator_proto_rawDesc), len(file_coordinator_coordinator_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   43,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

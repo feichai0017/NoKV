@@ -184,7 +184,9 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	case <-ctx.Done():
-		_ = svc.ReleaseTenure()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = svc.DrainAndSealTenure(shutdownCtx)
+		shutdownCancel()
 		grpcServer.GracefulStop()
 		serveErr := <-serveErrCh
 		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {

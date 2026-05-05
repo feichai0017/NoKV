@@ -109,13 +109,11 @@ func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesConfirmedCl
 
 	leader.ConfigureTenure("c-successor", 10*time.Second, 3*time.Second)
 	require.NoError(t, leader.ReloadFromStorage())
-	_, err = leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.NoError(t, err)
 
 	coordfailpoints.Set(coordfailpoints.AfterApplyHandoverBeforeReload)
 	t.Cleanup(func() { coordfailpoints.Set(coordfailpoints.None) })
 
-	err = leader.ConfirmHandover()
+	_, err = leader.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.ErrorIs(t, err, coordfailpoints.ErrAfterApplyHandoverBeforeReload)
 
 	rootState, err := cluster.Roots[leaderID].Current()
@@ -129,8 +127,8 @@ func TestControlPlaneFailpointAfterApplyHandoverBeforeReloadPreservesConfirmedCl
 	restarted.ConfigureTenure("c-successor", 10*time.Second, 3*time.Second)
 	require.NoError(t, restarted.ReloadFromStorage())
 
-	require.NoError(t, restarted.CloseHandover())
-	require.NoError(t, restarted.ReattachHandover())
+	_, err = restarted.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
 
 	audit := restarted.DiagnosticsSnapshot()["audit"].(map[string]any)
 	require.Equal(t, "reattached", audit["handover_stage"])

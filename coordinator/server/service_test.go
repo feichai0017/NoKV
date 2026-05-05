@@ -2215,7 +2215,7 @@ func TestServiceTenureLoopDoesNotCampaignOverActiveOtherHolder(t *testing.T) {
 	require.Equal(t, 0, store.campaignCalls)
 }
 
-func TestServiceTenureLoopReleasesOnContextCancel(t *testing.T) {
+func TestServiceTenureLoopSealsOnContextCancel(t *testing.T) {
 	store := &fakeStorage{leader: true}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureTenure("c1", 80*time.Millisecond, 30*time.Millisecond)
@@ -2233,9 +2233,78 @@ func TestServiceTenureLoopReleasesOnContextCancel(t *testing.T) {
 
 	cancel()
 	require.Eventually(t, func() bool {
-		return store.releaseCalls >= 1
+		return store.sealCalls >= 1 && store.snapshot.Legacy.Era != 0
 	}, time.Second, 10*time.Millisecond)
 	<-done
+}
+
+func TestServiceDrainAndSealBlocksNewAuthorityRequests(t *testing.T) {
+	store := &fakeStorage{leader: true}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", time.Second, 300*time.Millisecond)
+
+	doneAdmission, err := svc.beginDutyAdmission(context.Background(), rootproto.MandateAllocID)
+	require.NoError(t, err)
+
+	drainDone := make(chan error, 1)
+	go func() {
+		drainDone <- svc.DrainAndSealTenure(context.Background())
+	}()
+
+	require.Eventually(t, func() bool {
+		state, inflight := svc.authorityServingSnapshot()
+		return state == authorityDraining && inflight == 1
+	}, 300*time.Millisecond, 10*time.Millisecond)
+
+	_, err = svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+
+	doneAdmission()
+	require.NoError(t, <-drainDone)
+	state, inflight := svc.authorityServingSnapshot()
+	require.Equal(t, authoritySealed, state)
+	require.Zero(t, inflight)
+	require.Equal(t, 1, store.sealCalls)
+	require.NotZero(t, store.snapshot.Legacy.Era)
+}
+
+func TestServiceFinalizeHandoverAdvancesAllStages(t *testing.T) {
+	legacy := rootstate.Legacy{
+		HolderID: "c1",
+		Era:      1,
+		Mandate:  rootproto.MandateDefault,
+		Frontiers: rootproto.NewMandateFrontiers(
+			rootproto.MandateFrontier{Mandate: rootproto.MandateAllocID, Frontier: 10},
+			rootproto.MandateFrontier{Mandate: rootproto.MandateTSO, Frontier: 20},
+			rootproto.MandateFrontier{Mandate: rootproto.MandateGetRegionByKey, Frontier: 0},
+		),
+	}
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			Allocator: rootview.AllocatorState{IDCurrent: 10, TSCurrent: 20},
+			Tenure: rootstate.Tenure{
+				HolderID:        "c2",
+				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
+				Era:             2,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   rootstate.DigestOfLegacy(legacy),
+			},
+			Legacy: legacy,
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c2", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	require.NoError(t, svc.FinalizeHandover(context.Background()))
+	require.Equal(t, 1, store.confirmCalls)
+	require.Equal(t, 1, store.closeCalls)
+	require.Equal(t, 1, store.reattachCalls)
+	require.Equal(t, rootproto.HandoverStageReattached, store.snapshot.Handover.Stage)
 }
 
 func TestServiceTenureRetryDelayBacksOff(t *testing.T) {

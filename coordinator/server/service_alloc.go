@@ -246,9 +246,11 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.MandateAllocID); err != nil {
+	done, err := s.beginDutyAdmission(ctx, rootproto.MandateAllocID)
+	if err != nil {
 		return nil, err
 	}
+	defer done()
 	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -258,12 +260,17 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	}
 	lease, seal := s.currentTenureView()
 	witness := s.monotoneReplyEvidence(rootproto.MandateAllocID, lease, allocationConsumedFrontier(first, count))
+	cert, err := s.authorityCertificate(ctx, rootproto.MandateAllocID, witness.ConsumedFrontier, 0)
+	if err != nil {
+		return nil, err
+	}
 	return &coordpb.AllocIDResponse{
-		FirstId:           first,
-		Count:             count,
-		Era:               witness.Era,
-		ConsumedFrontier:  witness.ConsumedFrontier,
-		ObservedLegacyEra: seal.Era,
+		FirstId:              first,
+		Count:                count,
+		Era:                  witness.Era,
+		ConsumedFrontier:     witness.ConsumedFrontier,
+		ObservedLegacyEra:    seal.Era,
+		AuthorityCertificate: cert,
 	}, nil
 }
 
@@ -282,9 +289,11 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	if err := s.requireLeaderForWrite(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.MandateTSO); err != nil {
+	done, err := s.beginDutyAdmission(ctx, rootproto.MandateTSO)
+	if err != nil {
 		return nil, err
 	}
+	defer done()
 	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -294,12 +303,17 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	}
 	lease, seal := s.currentTenureView()
 	witness := s.monotoneReplyEvidence(rootproto.MandateTSO, lease, allocationConsumedFrontier(first, got))
+	cert, err := s.authorityCertificate(ctx, rootproto.MandateTSO, witness.ConsumedFrontier, 0)
+	if err != nil {
+		return nil, err
+	}
 	return &coordpb.TsoResponse{
-		Timestamp:         first,
-		Count:             got,
-		Era:               witness.Era,
-		ConsumedFrontier:  witness.ConsumedFrontier,
-		ObservedLegacyEra: seal.Era,
+		Timestamp:            first,
+		Count:                got,
+		Era:                  witness.Era,
+		ConsumedFrontier:     witness.ConsumedFrontier,
+		ObservedLegacyEra:    seal.Era,
+		AuthorityCertificate: cert,
 	}, nil
 }
 

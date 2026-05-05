@@ -41,10 +41,18 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	if err != nil {
 		return nil, err
 	}
+	done, err := s.beginAuthorityServing(ctx, rootproto.MandateGetRegionByKey)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
 		resp := admission.responseBase()
 		resp.NotFound = true
+		if err := s.attachMetadataAuthorityCertificate(ctx, resp); err != nil {
+			return nil, err
+		}
 		return resp, nil
 	}
 	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
@@ -56,6 +64,9 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	resp := admission.responseBase()
 	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
 	resp.DescriptorRevision = desc.RootEpoch
+	if err := s.attachMetadataAuthorityCertificate(ctx, resp); err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 
@@ -120,6 +131,18 @@ func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
 		ServingClass:               a.servingClass,
 		SyncHealth:                 a.syncHealth,
 	}
+}
+
+func (s *Service) attachMetadataAuthorityCertificate(ctx context.Context, resp *coordpb.GetRegionByKeyResponse) error {
+	if s == nil || resp == nil || resp.GetEra() == rootproto.MandateWitnessEraAttached || resp.GetEra() == rootproto.MandateWitnessEraSuppressed {
+		return nil
+	}
+	cert, err := s.authorityCertificate(ctx, rootproto.MandateGetRegionByKey, resp.GetDescriptorRevision(), resp.GetDescriptorRevision())
+	if err != nil {
+		return err
+	}
+	resp.AuthorityCertificate = cert
+	return nil
 }
 
 func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest, state readState, loadErr error) (metadataAnswerability, error) {

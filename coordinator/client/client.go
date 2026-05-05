@@ -477,7 +477,7 @@ func (c *GRPCClient) validateAllocIDResponse(req *coordpb.AllocIDRequest, resp *
 	if resp == nil {
 		return fmt.Errorf("%w: alloc id response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.allocGen)
+	return c.validateMonotoneWitness("alloc_id", rootproto.MandateAllocID, normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), resp.GetAuthorityCertificate(), &c.allocGen)
 }
 
 func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyRequest, resp *coordpb.GetRegionByKeyResponse) error {
@@ -692,10 +692,10 @@ func (c *GRPCClient) validateTSOResponse(req *coordpb.TsoRequest, resp *coordpb.
 	if resp == nil {
 		return fmt.Errorf("%w: tso response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.tsoGen)
+	return c.validateMonotoneWitness("tso", rootproto.MandateTSO, normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), resp.GetAuthorityCertificate(), &c.tsoGen)
 }
 
-func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, era, consumedFrontier, observedLegacyEra uint64, floor *witnessEraFloor) error {
+func (c *GRPCClient) validateMonotoneWitness(kind string, mandate uint32, requestedCount, first, gotCount, era, consumedFrontier, observedLegacyEra uint64, certificate *coordpb.AuthorityCertificate, floor *witnessEraFloor) error {
 	if era == rootproto.MandateWitnessEraSuppressed {
 		return fmt.Errorf("%w: %s reply evidence suppressed", errInvalidWitness, kind)
 	}
@@ -708,6 +708,9 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first,
 	}
 	if consumedFrontier != expectedFrontier {
 		return fmt.Errorf("%w: %s consumed_frontier=%d expected=%d", errInvalidWitness, kind, consumedFrontier, expectedFrontier)
+	}
+	if err := validateAuthorityCertificate(kind, mandate, era, observedLegacyEra, consumedFrontier, certificate); err != nil {
+		return err
 	}
 	return c.advanceWitnessEraFloor(kind, era, observedLegacyEra, floor)
 }
@@ -735,7 +738,59 @@ func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResp
 		}
 		return c.advanceAttachedMetadataFloor(resp)
 	}
+	if err := validateAuthorityCertificate("get_region_by_key", rootproto.MandateGetRegionByKey, era, resp.GetObservedLegacyEra(), resp.GetDescriptorRevision(), resp.GetAuthorityCertificate()); err != nil {
+		return err
+	}
+	if cert := resp.GetAuthorityCertificate(); cert != nil && cert.GetDescriptorRevision() < resp.GetDescriptorRevision() {
+		return fmt.Errorf("%w: get_region_by_key certificate_descriptor_revision=%d descriptor_revision=%d", errInvalidWitness, cert.GetDescriptorRevision(), resp.GetDescriptorRevision())
+	}
 	return c.advanceWitnessEraFloor("get_region_by_key", era, resp.GetObservedLegacyEra(), &c.metadataGen)
+}
+
+func validateAuthorityCertificate(kind string, mandate uint32, era, observedLegacyEra, requiredFrontier uint64, certificate *coordpb.AuthorityCertificate) error {
+	if era == rootproto.MandateWitnessEraAttached {
+		if certificate != nil {
+			return fmt.Errorf("%w: %s attached reply carries authority certificate", errInvalidWitness, kind)
+		}
+		return nil
+	}
+	cert := authorityCertificateFromProto(certificate)
+	if err := cert.Validate(mandate, era, time.Now().UnixNano(), observedLegacyEra, ""); err != nil {
+		return fmt.Errorf("%w: %s %v", errInvalidWitness, kind, err)
+	}
+	if requiredFrontier != 0 && cert.InheritedFrontiers.Frontier(mandate) < requiredFrontier {
+		return fmt.Errorf("%w: %s certificate_frontier=%d required=%d", errInvalidWitness, kind, cert.InheritedFrontiers.Frontier(mandate), requiredFrontier)
+	}
+	return nil
+}
+
+func authorityCertificateFromProto(certificate *coordpb.AuthorityCertificate) rootproto.AuthorityCertificate {
+	if certificate == nil {
+		return rootproto.AuthorityCertificate{}
+	}
+	frontiers := rootproto.NewMandateFrontiers()
+	for _, frontier := range certificate.GetInheritedFrontiers() {
+		if frontier == nil {
+			continue
+		}
+		frontiers = frontiers.WithFrontier(frontier.GetMandate(), frontier.GetFrontier())
+	}
+	return rootproto.AuthorityCertificate{
+		HolderID:        certificate.GetHolderId(),
+		Era:             certificate.GetEra(),
+		Mandate:         certificate.GetMandate(),
+		ExpiresUnixNano: certificate.GetExpiresUnixNano(),
+		IssuedRootToken: rootproto.AuthorityRootToken{
+			Term:     certificate.GetIssuedRootToken().GetTerm(),
+			Index:    certificate.GetIssuedRootToken().GetIndex(),
+			Revision: certificate.GetIssuedRootToken().GetRevision(),
+		},
+		LineageDigest:      certificate.GetLineageDigest(),
+		ObservedLegacyEra:  certificate.GetObservedLegacyEra(),
+		LegacyDigest:       certificate.GetLegacyDigest(),
+		DescriptorRevision: certificate.GetDescriptorRevision(),
+		InheritedFrontiers: frontiers,
+	}
 }
 
 func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyResponse) error {

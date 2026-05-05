@@ -815,6 +815,27 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 	require.Contains(t, err.Error(), "reply evidence suppressed")
 }
 
+func TestGRPCClientRejectsMissingAuthorityCertificate(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"missing-cert"}, map[string]*scriptedCoordinatorServer{
+		"missing-cert": {
+			disableDefaultAuthorityCertificate: true,
+			allocResponses: []*coordpb.AllocIDResponse{
+				{
+					FirstId:          100,
+					Count:            1,
+					Era:              2,
+					ConsumedFrontier: 100,
+				},
+			},
+		},
+	})
+
+	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "authority certificate: missing")
+}
+
 func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
 		"mixed": {
@@ -839,7 +860,8 @@ func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 type scriptedCoordinatorServer struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	mu sync.Mutex
+	mu                                 sync.Mutex
+	disableDefaultAuthorityCertificate bool
 
 	storeResponses []*coordpb.StoreHeartbeatResponse
 	storeErrors    []error
@@ -934,6 +956,7 @@ func (s *scriptedCoordinatorServer) AllocID(_ context.Context, _ *coordpb.AllocI
 	}
 	resp := s.allocResponses[0]
 	s.allocResponses = s.allocResponses[1:]
+	s.attachDefaultAuthorityCertificate(resp)
 	return resp, nil
 }
 
@@ -954,6 +977,7 @@ func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest
 	}
 	resp := s.tsoResponses[0]
 	s.tsoResponses = s.tsoResponses[1:]
+	s.attachDefaultAuthorityCertificate(resp)
 	return resp, nil
 }
 
@@ -971,7 +995,58 @@ func (s *scriptedCoordinatorServer) GetRegionByKey(_ context.Context, _ *coordpb
 	}
 	resp := s.getResponses[0]
 	s.getResponses = s.getResponses[1:]
+	s.attachDefaultAuthorityCertificate(resp)
 	return resp, err
+}
+
+func (s *scriptedCoordinatorServer) attachDefaultAuthorityCertificate(resp any) {
+	if s == nil || s.disableDefaultAuthorityCertificate {
+		return
+	}
+	switch r := resp.(type) {
+	case *coordpb.AllocIDResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.MandateWitnessEraSuppressed || r.GetAuthorityCertificate() != nil {
+			return
+		}
+		r.AuthorityCertificate = defaultAuthorityCertificate(rootproto.MandateAllocID, r.GetEra(), r.GetConsumedFrontier(), r.GetObservedLegacyEra(), 0)
+	case *coordpb.TsoResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.MandateWitnessEraSuppressed || r.GetAuthorityCertificate() != nil {
+			return
+		}
+		r.AuthorityCertificate = defaultAuthorityCertificate(rootproto.MandateTSO, r.GetEra(), r.GetConsumedFrontier(), r.GetObservedLegacyEra(), 0)
+	case *coordpb.GetRegionByKeyResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.MandateWitnessEraSuppressed || r.GetAuthorityCertificate() != nil {
+			return
+		}
+		r.AuthorityCertificate = defaultAuthorityCertificate(rootproto.MandateGetRegionByKey, r.GetEra(), r.GetDescriptorRevision(), r.GetObservedLegacyEra(), r.GetDescriptorRevision())
+	}
+}
+
+func defaultAuthorityCertificate(mandate uint32, era, frontier, observedLegacyEra, descriptorRevision uint64) *coordpb.AuthorityCertificate {
+	frontiers := []*coordpb.AuthorityFrontier{
+		{Mandate: rootproto.MandateAllocID, Frontier: frontier},
+		{Mandate: rootproto.MandateTSO, Frontier: frontier},
+		{Mandate: rootproto.MandateGetRegionByKey, Frontier: frontier},
+	}
+	return &coordpb.AuthorityCertificate{
+		HolderId:           "holder",
+		Era:                era,
+		Mandate:            rootproto.MandateDefault,
+		ExpiresUnixNano:    time.Now().Add(time.Hour).UnixNano(),
+		IssuedRootToken:    &coordpb.RootToken{Term: 1, Index: era, Revision: era},
+		LineageDigest:      "lineage",
+		ObservedLegacyEra:  observedLegacyEra,
+		LegacyDigest:       defaultLegacyDigest(observedLegacyEra),
+		DescriptorRevision: descriptorRevision,
+		InheritedFrontiers: frontiers,
+	}
+}
+
+func defaultLegacyDigest(observedLegacyEra uint64) string {
+	if observedLegacyEra == 0 {
+		return ""
+	}
+	return "legacy"
 }
 
 func newScriptedCoordinatorClient(t *testing.T, order []string, servers map[string]*scriptedCoordinatorServer) *GRPCClient {

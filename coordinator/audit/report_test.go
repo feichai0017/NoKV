@@ -54,6 +54,7 @@ func TestBuildReport(t *testing.T) {
 	require.Equal(t, uint64(3), report.CurrentEra)
 	require.True(t, report.HandoverWitness.FinalitySatisfied())
 	require.Equal(t, rootproto.HandoverStageReattached, report.Handover.Stage)
+	require.Equal(t, coordaudit.AuthorityCompletionSealedCompleted, report.AuthorityCompletion)
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
 
@@ -91,7 +92,22 @@ func TestBuildReportSurfacesClosureGaps(t *testing.T) {
 	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
 	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
 	require.False(t, report.Anomalies.SealedEraStillLive)
+	require.Equal(t, coordaudit.AuthorityCompletionSealedPending, report.AuthorityCompletion)
 	require.Equal(t, coordaudit.FinalityDefectMissingConfirm, report.Anomalies.FinalityDefect)
+}
+
+func TestBuildReportSurfacesExpiredTakeoverWithoutLegacy(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		Tenure: rootstate.Tenure{
+			HolderID:        "c2",
+			ExpiresUnixNano: 2_000,
+			Era:             2,
+			Mandate:         rootproto.MandateDefault,
+		},
+	}, "c2", 1_000)
+
+	require.Equal(t, coordaudit.AuthorityCompletionExpiredWithoutLegacy, report.AuthorityCompletion)
+	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {

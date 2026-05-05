@@ -306,6 +306,24 @@ message RootToken {
   uint64 revision = 3;
 }
 
+message AuthorityFrontier {
+  uint32 mandate = 1;
+  uint64 frontier = 2;
+}
+
+message AuthorityCertificate {
+  string holder_id = 1;
+  uint64 era = 2;
+  uint32 mandate = 3;
+  int64 expires_unix_nano = 4;
+  RootToken issued_root_token = 5;
+  string lineage_digest = 6;
+  uint64 observed_legacy_era = 7;
+  string legacy_digest = 8;
+  uint64 descriptor_revision = 9;
+  repeated AuthorityFrontier inherited_frontiers = 10;
+}
+
 enum Freshness {
   FRESHNESS_UNSPECIFIED = 0;
   // Strong requires leader-grade freshness.
@@ -407,6 +425,7 @@ message GetRegionByKeyResponse {
   ServingClass serving_class = 13;
   // sync_health reports the rooted catch-up health that justified this reply.
   SyncHealth sync_health = 14;
+  AuthorityCertificate authority_certificate = 16;
 }
 
 message AllocIDRequest {
@@ -421,6 +440,7 @@ message AllocIDResponse {
   uint64 era = 3;
   uint64 consumed_frontier = 4;
   uint64 observed_legacy_era = 5;
+  AuthorityCertificate authority_certificate = 6;
 }
 
 message TsoRequest {
@@ -435,6 +455,7 @@ message TsoResponse {
   uint64 era = 3;
   uint64 consumed_frontier = 4;
   uint64 observed_legacy_era = 5;
+  AuthorityCertificate authority_certificate = 6;
 }
 
 service Coordinator {

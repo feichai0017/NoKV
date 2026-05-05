@@ -66,6 +66,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	lastReload := s.lastRootReload
 	lastReloadErr := s.lastRootError
 	s.statusMu.RUnlock()
+	authorityState, authorityInflight := s.authorityServingSnapshot()
 
 	regionCount := 0
 	regionDetails := []map[string]any{}
@@ -146,6 +147,10 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"mandate":   lease.Mandate,
 			"frontiers": diagnosticsCoordinatorFrontiers(leaseFrontiers),
 		},
+		"authority": map[string]any{
+			"serving_state": authorityState.String(),
+			"in_flight":     authorityInflight,
+		},
 		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
 		"seal": map[string]any{
 			"holder_id":          rootSnapshot.Legacy.HolderID,
@@ -168,6 +173,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"sealed_era_retired":           report.HandoverWitness.SealedEraRetired,
 			"finality_satisfied":           report.HandoverWitness.FinalitySatisfied(),
 			"handover_stage":               report.Handover.Stage.String(),
+			"authority_completion":         string(report.AuthorityCompletion),
 			"finality_defect":              string(report.Anomalies.FinalityDefect),
 			"handover_recorded": map[string]any{
 				"holder_id":     rootSnapshot.Handover.HolderID,
