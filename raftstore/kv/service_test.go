@@ -351,6 +351,58 @@ func TestServiceResolveAndCheckStatus(t *testing.T) {
 	require.NotNil(t, rollbackResp)
 }
 
+func TestServiceCheckTxnStatusUsesServiceTimeWhenCurrentTimeZero(t *testing.T) {
+	h := newServiceHarness(t, harnessConfig{campaignLeader: true})
+	key := []byte("short-ttl-lock")
+	startTs := uint64(40)
+	prewriteResp, err := h.service.Prewrite(context.Background(), &kvrpcpb.KvPrewriteRequest{
+		Context: h.ctx,
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   key,
+				Value: []byte("value"),
+			}},
+			PrimaryLock:  key,
+			StartVersion: startTs,
+			LockTtl:      1,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, prewriteResp.GetRegionError())
+	require.Empty(t, prewriteResp.GetResponse().GetErrors())
+
+	time.Sleep(20 * time.Millisecond)
+	statusResp, err := h.service.CheckTxnStatus(context.Background(), &kvrpcpb.KvCheckTxnStatusRequest{
+		Context: h.ctx,
+		Request: &kvrpcpb.CheckTxnStatusRequest{
+			PrimaryKey:         key,
+			LockTs:             startTs,
+			CurrentTs:          startTs + 10,
+			CallerStartTs:      startTs + 10,
+			RollbackIfNotExist: true,
+			CurrentTime:        0,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, statusResp.GetRegionError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, statusResp.GetResponse().GetAction())
+
+	// CurrentTime=0 is filled by the StoreKV service, so a read-side resolver can
+	// physically expire the lock before the original writer reaches Commit.
+	commitResp, err := h.service.Commit(context.Background(), &kvrpcpb.KvCommitRequest{
+		Context: h.ctx,
+		Request: &kvrpcpb.CommitRequest{
+			Keys:          [][]byte{entrykv.SafeCopy(nil, key)},
+			StartVersion:  startTs,
+			CommitVersion: startTs + 1,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, commitResp.GetRegionError())
+	require.Contains(t, commitResp.GetResponse().GetError().GetAbort(), "transaction already rolled back")
+}
+
 func TestServiceRegionEpochMismatch(t *testing.T) {
 	db, localMeta := openTestDB(t)
 	applier := kv.NewApplier(db, nil)

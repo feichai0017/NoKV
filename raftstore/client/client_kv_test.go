@@ -872,6 +872,47 @@ func TestClientTwoPhaseCommitRejectsMissingPrimaryMutation(t *testing.T) {
 	require.ErrorContains(t, err, fmt.Sprintf("primary key %q missing from mutations", []byte("omega")))
 }
 
+func TestClientTwoPhaseCommitRejectsMissingPrewritePayload(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	commitCalls := 0
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		prewriteFn: func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+			return &kvrpcpb.KvPrewriteResponse{}, nil
+		},
+		commitFn: func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+			commitCalls++
+			return &kvrpcpb.KvCommitResponse{Response: &kvrpcpb.CommitResponse{}}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value")},
+	}, 10, 11, 3000)
+	require.True(t, IsProtocolError(err))
+	require.ErrorContains(t, err, "missing prewrite payload")
+	require.Zero(t, commitCalls)
+}
+
 func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
