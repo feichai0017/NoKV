@@ -1418,6 +1418,40 @@ func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
 	require.Equal(t, parent, firstPage[0].Dentry.Parent)
 }
 
+func TestExecutorDirPageDecodeFailureFallsBackToRunner(t *testing.T) {
+	runner := newFakeRunner()
+	cache := &corruptDirPageCache{}
+	executor, err := New(runner, WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "a", Inode: 10,
+	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	require.NoError(t, err)
+
+	out, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "a", out[0].Dentry.Name)
+	require.NotEmpty(t, runner.scanVersions, "corrupt derived cache must fall back to the runner")
+}
+
+func TestEncodeDirPageEntriesRejectsPartialMaterialization(t *testing.T) {
+	_, err := encodeDirPageEntries([]fsmeta.DentryAttrPair{{
+		Dentry: fsmeta.DentryRecord{Parent: 1, Name: "bad", Inode: 10, Type: fsmeta.InodeTypeFile},
+		Inode: fsmeta.InodeRecord{
+			Inode:       10,
+			Type:        fsmeta.InodeTypeFile,
+			OpaqueAttrs: make([]byte, fsmeta.MaxInodeOpaqueAttrsBytes+1),
+		},
+	}})
+	require.Error(t, err)
+}
+
 func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	runner := newFakeRunner()
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
@@ -1451,3 +1485,19 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	require.Greater(t, len(runner.scanVersions), scansBefore,
 		"epoch bump must force a runner scan on the next ReadDirPlus")
 }
+
+type corruptDirPageCache struct{}
+
+func (c *corruptDirPageCache) CurrentEpoch(dirpage.DirectoryKey) uint64 { return 0 }
+
+func (c *corruptDirPageCache) Lookup(dirpage.PageKey, uint64) ([]dirpage.Entry, bool) {
+	return []dirpage.Entry{{Name: []byte("stale"), Inode: 999, AttrBlob: []byte("not-an-inode")}}, true
+}
+
+func (c *corruptDirPageCache) MaterializeAsync(dirpage.PageKey, uint64, []dirpage.Entry) error {
+	return nil
+}
+
+func (c *corruptDirPageCache) Invalidate(dirpage.DirectoryKey) uint64 { return 1 }
+
+func (c *corruptDirPageCache) Stats() dirpage.Stats { return dirpage.Stats{} }

@@ -2,6 +2,7 @@ package dirpage
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -88,12 +89,14 @@ func TestCacheInvalidateDropsAllPagesForDirectory(t *testing.T) {
 
 	require.NoError(t, c.MaterializeAsync(firstPage, 1, makeEntries(1, 16)))
 	require.NoError(t, c.MaterializeAsync(nextPage, 1, makeEntries(1, 16)))
+	require.Len(t, c.dirs[firstPage.Directory()], 2)
 	c.Invalidate(firstPage.Directory())
 
 	_, ok := c.Lookup(firstPage, 1)
 	require.False(t, ok)
 	_, ok = c.Lookup(nextPage, 1)
 	require.False(t, ok)
+	require.Empty(t, c.dirs[firstPage.Directory()])
 }
 
 // TestCacheStaleByFrontier confirms Lookup with the wrong frontier
@@ -349,4 +352,20 @@ func TestDecodeRejectsCorruption(t *testing.T) {
 	bad[0] ^= 0xff
 	_, _, _, err = decodePage(bad)
 	require.ErrorIs(t, err, errPageBadMagic)
+}
+
+func TestDecodeRejectsOversizedStartAfterLength(t *testing.T) {
+	var encoded []byte
+	var fixed [recordHeaderFixed]byte
+	binary.LittleEndian.PutUint32(fixed[0:4], dirPageMagic)
+	binary.LittleEndian.PutUint16(fixed[4:6], dirPageVersion)
+	encoded = append(encoded, fixed[:]...)
+	encoded = binary.AppendUvarint(encoded, 1)     // mount
+	encoded = binary.AppendUvarint(encoded, 1)     // parent
+	encoded = binary.AppendUvarint(encoded, 1<<62) // impossible start_after length
+	encoded = binary.AppendUvarint(encoded, 0)     // limit, unreachable
+	encoded = append(encoded, make([]byte, 4)...)  // checksum tail placeholder
+
+	_, _, _, err := decodePage(encoded)
+	require.ErrorIs(t, err, errPageTruncated)
 }

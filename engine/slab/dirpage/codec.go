@@ -181,6 +181,17 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 		cursor += n
 		return v, nil
 	}
+	readBytes := func(n uint64) ([]byte, error) {
+		// Keep corrupted length prefixes from overflowing int conversion or
+		// slicing past the decoded frame. The cache is derived, so corrupt
+		// frames are treated as misses by callers.
+		if n > uint64(len(buf)-cursor) {
+			return nil, errPageTruncated
+		}
+		out := buf[cursor : cursor+int(n)]
+		cursor += int(n)
+		return out, nil
+	}
 
 	mount, err := read()
 	if err != nil {
@@ -194,11 +205,11 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 	if err != nil {
 		return pageHeader{}, nil, 0, err
 	}
-	if cursor+int(startAfterLen) > len(buf) {
-		return pageHeader{}, nil, 0, errPageTruncated
+	startAfterBytes, err := readBytes(startAfterLen)
+	if err != nil {
+		return pageHeader{}, nil, 0, err
 	}
-	startAfter := string(buf[cursor : cursor+int(startAfterLen)])
-	cursor += int(startAfterLen)
+	startAfter := string(startAfterBytes)
 	limit, err := read()
 	if err != nil {
 		return pageHeader{}, nil, 0, err
@@ -222,12 +233,12 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 		if err != nil {
 			return pageHeader{}, nil, 0, err
 		}
-		if cursor+int(nameLen) > len(buf) {
-			return pageHeader{}, nil, 0, errPageTruncated
+		nameBytes, err := readBytes(nameLen)
+		if err != nil {
+			return pageHeader{}, nil, 0, err
 		}
 		name := make([]byte, nameLen)
-		copy(name, buf[cursor:cursor+int(nameLen)])
-		cursor += int(nameLen)
+		copy(name, nameBytes)
 
 		inode, err := read()
 		if err != nil {
@@ -237,12 +248,12 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 		if err != nil {
 			return pageHeader{}, nil, 0, err
 		}
-		if cursor+int(blobLen) > len(buf) {
-			return pageHeader{}, nil, 0, errPageTruncated
+		blobBytes, err := readBytes(blobLen)
+		if err != nil {
+			return pageHeader{}, nil, 0, err
 		}
 		blob := make([]byte, blobLen)
-		copy(blob, buf[cursor:cursor+int(blobLen)])
-		cursor += int(blobLen)
+		copy(blob, blobBytes)
 
 		entries = append(entries, Entry{Name: name, Inode: inode, AttrBlob: blob})
 	}
@@ -301,8 +312,4 @@ func splitIntoPages(startAfter string, entries []Entry, maxPageBytes int) [][]En
 // keyString is a debug helper for error messages.
 func (k PageKey) keyString() string {
 	return fmt.Sprintf("(mount=%d parent=%d start_after=%q limit=%d)", k.Mount, k.Parent, k.StartAfter, k.Limit)
-}
-
-func (k DirectoryKey) keyString() string {
-	return fmt.Sprintf("(mount=%d parent=%d)", k.Mount, k.Parent)
 }

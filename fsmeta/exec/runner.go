@@ -501,7 +501,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		pageKey = dirPageKey(req.Mount, req.Parent, req.StartAfter, plan.Limit)
 		frontier = e.dirPages.CurrentEpoch(pageKey.Directory())
 		if entries, ok := e.dirPages.Lookup(pageKey, frontier); ok {
-			return decodeDirPageEntries(pageKey, entries)
+			if cached, err := decodeDirPageEntries(pageKey, entries); err == nil {
+				return cached, nil
+			}
 		}
 	}
 
@@ -551,23 +553,25 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	}
 	if useDirPage {
 		// Materialize is best-effort: if Invalidate fired since we read,
-		// the cache drops the write and the next call re-fetches.
-		_ = e.dirPages.MaterializeAsync(pageKey, frontier, encodeDirPageEntries(out))
+		// the cache drops the write and the next call re-fetches. Encoding must
+		// be all-or-none: a partial cached page would be worse than a miss.
+		if entries, err := encodeDirPageEntries(out); err == nil {
+			_ = e.dirPages.MaterializeAsync(pageKey, frontier, entries)
+		}
 	}
 	return out, nil
 }
 
 // encodeDirPageEntries converts assembled DentryAttrPairs into the
-// generic dirpage Entry shape. AttrBlob is the encoded InodeRecord; if
-// encoding fails we drop the entry from the materialization so the cache
-// never serves a value the consumer can't decode (the next ReadDirPlus
-// re-runs the runner path).
-func encodeDirPageEntries(pairs []fsmeta.DentryAttrPair) []dirpage.Entry {
+// generic dirpage Entry shape. AttrBlob is the encoded InodeRecord; if any
+// entry cannot be encoded, the whole materialization is skipped so the cache
+// never serves a truncated page as complete.
+func encodeDirPageEntries(pairs []fsmeta.DentryAttrPair) ([]dirpage.Entry, error) {
 	out := make([]dirpage.Entry, 0, len(pairs))
 	for _, p := range pairs {
 		blob, err := fsmeta.EncodeInodeValue(p.Inode)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		out = append(out, dirpage.Entry{
 			Name:     []byte(p.Dentry.Name),
@@ -575,7 +579,7 @@ func encodeDirPageEntries(pairs []fsmeta.DentryAttrPair) []dirpage.Entry {
 			AttrBlob: blob,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // decodeDirPageEntries reverses encodeDirPageEntries. Decode failure on

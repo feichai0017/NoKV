@@ -62,7 +62,7 @@ func RunConcurrentBatches(ctx context.Context, exec Executor, model *Model, ops 
 	if model == nil {
 		return errModelRequired
 	}
-	if batchSize <= 1 {
+	if batchSize <= 1 && !opts.AllowIndeterminateErrors {
 		return Run(ctx, exec, model, ops)
 	}
 	if batchSize > maxConcurrentHistoryBatch {
@@ -135,19 +135,6 @@ func historyBarrier(op Operation) bool {
 	}
 }
 
-func runSequentialObserved(ctx context.Context, exec Executor, model *Model, index int, op Operation, history *[]string) error {
-	got := execute(ctx, exec, model, op)
-	want := applyObserved(model, op, got)
-	*history = append(*history, fmt.Sprintf("%03d sequential %s -> got=%s want=%s", index, op, summarize(got), summarize(want)))
-	if err := compareResult(got, want); err != nil {
-		return fmt.Errorf("step %d failed: %w\nhistory:\n%s", index, err, strings.Join(*history, "\n"))
-	}
-	if err := model.CheckInvariants(); err != nil {
-		return fmt.Errorf("step %d corrupted model invariants: %w\nhistory:\n%s", index, err, strings.Join(*history, "\n"))
-	}
-	return nil
-}
-
 func runSequentialObservedCandidates(ctx context.Context, exec Executor, candidates []*Model, index int, op Operation, opts HistoryOptions, maxCandidates int, history *[]string) ([]*Model, error) {
 	got := execute(ctx, exec, candidates[0], op)
 	next, firstMismatch := advanceCandidates(candidates, op, got, opts, maxCandidates)
@@ -190,18 +177,23 @@ func executeConcurrentBatch(ctx context.Context, exec Executor, model *Model, ba
 
 func linearizeCandidateBatch(base []*Model, observed []observedOperation, opts HistoryOptions, maxCandidates int) ([]*Model, [][]int, error) {
 	next := make([]historyCandidate, 0, len(base))
+	seen := make(map[string]struct{}, maxCandidates)
 	var firstMismatch error
 	for _, candidate := range base {
-		matches, err := linearizeBatchCandidates(candidate, observed, opts, maxCandidates-len(next))
+		matches, err := linearizeBatchCandidates(candidate, observed, opts, maxCandidates)
 		if err != nil && firstMismatch == nil {
 			firstMismatch = err
 		}
-		next = append(next, matches...)
+		for _, match := range matches {
+			next = appendUniqueHistoryCandidate(next, seen, match, maxCandidates)
+			if len(next) >= maxCandidates {
+				break
+			}
+		}
 		if len(next) >= maxCandidates {
 			break
 		}
 	}
-	next = dedupeHistoryCandidates(next, maxCandidates)
 	if len(next) == 0 {
 		if firstMismatch == nil {
 			firstMismatch = fmt.Errorf("no candidate operation respects real-time constraints")
@@ -215,14 +207,6 @@ func linearizeCandidateBatch(base []*Model, observed []observedOperation, opts H
 		orders = append(orders, candidate.order)
 	}
 	return models, orders, nil
-}
-
-func linearizeBatch(base *Model, observed []observedOperation) (*Model, []int, error) {
-	matches, err := linearizeBatchCandidates(base, observed, HistoryOptions{}, 1)
-	if len(matches) != 0 {
-		return matches[0].model, matches[0].order, nil
-	}
-	return nil, nil, err
 }
 
 func linearizeBatchCandidates(base *Model, observed []observedOperation, opts HistoryOptions, limit int) ([]historyCandidate, error) {
@@ -305,6 +289,7 @@ func applyObserved(model *Model, op Operation, got Result) Result {
 
 func advanceCandidates(base []*Model, op Operation, got Result, opts HistoryOptions, maxCandidates int) ([]*Model, error) {
 	out := make([]historyCandidate, 0, len(base))
+	seen := make(map[string]struct{}, maxCandidates)
 	var firstMismatch error
 	for _, candidate := range base {
 		next, err := advanceOneCandidate(candidate, op, got, opts)
@@ -315,7 +300,7 @@ func advanceCandidates(base []*Model, op Operation, got Result, opts HistoryOpti
 			continue
 		}
 		for _, model := range next {
-			out = append(out, historyCandidate{model: model})
+			out = appendUniqueHistoryCandidate(out, seen, historyCandidate{model: model}, maxCandidates)
 			if len(out) >= maxCandidates {
 				break
 			}
@@ -324,7 +309,6 @@ func advanceCandidates(base []*Model, op Operation, got Result, opts HistoryOpti
 			break
 		}
 	}
-	out = dedupeHistoryCandidates(out, maxCandidates)
 	models := make([]*Model, 0, len(out))
 	for _, candidate := range out {
 		models = append(models, candidate.model)
@@ -368,7 +352,7 @@ func isIndeterminateHistoryError(err error) bool {
 		return false
 	}
 	switch nokverrors.KindOf(err) {
-	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable, nokverrors.KindRegionRouting, nokverrors.KindNotLeader, nokverrors.KindRetryExhausted, nokverrors.KindAborted:
+	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable, nokverrors.KindRegionRouting, nokverrors.KindNotLeader, nokverrors.KindRetryExhausted:
 		return true
 	default:
 		return false
@@ -433,6 +417,18 @@ func dedupeHistoryCandidates(in []historyCandidate, limit int) []historyCandidat
 		}
 	}
 	return out
+}
+
+func appendUniqueHistoryCandidate(out []historyCandidate, seen map[string]struct{}, candidate historyCandidate, limit int) []historyCandidate {
+	if len(out) >= limit {
+		return out
+	}
+	key := modelFingerprint(candidate.model)
+	if _, ok := seen[key]; ok {
+		return out
+	}
+	seen[key] = struct{}{}
+	return append(out, candidate)
 }
 
 func modelFingerprint(m *Model) string {

@@ -137,12 +137,18 @@ func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, sco
 			op.Inode = scopeGeneratedInode(inodeBase, op.Inode)
 			if op.Parent == fsmeta.RootInode {
 				op.Parent = scopeInode
+			} else {
+				op.Parent = scopeGeneratedInode(inodeBase, op.Parent)
 			}
 			if op.FromParent == fsmeta.RootInode {
 				op.FromParent = scopeInode
+			} else {
+				op.FromParent = scopeGeneratedInode(inodeBase, op.FromParent)
 			}
 			if op.ToParent == fsmeta.RootInode {
 				op.ToParent = scopeInode
+			} else {
+				op.ToParent = scopeGeneratedInode(inodeBase, op.ToParent)
 			}
 			out = append(out, op)
 		}

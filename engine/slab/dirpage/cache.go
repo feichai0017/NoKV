@@ -49,8 +49,9 @@ type Cache struct {
 	cfg    Config
 	mgr    *slab.Manager
 	pageMu sync.RWMutex
-	pages  map[PageKey]*pageSet // in-memory index of materialized pages
-	epochs sync.Map             // DirectoryKey -> *atomic.Uint64 (current invalidation epoch)
+	pages  map[PageKey]*pageSet              // in-memory index of materialized pages
+	dirs   map[DirectoryKey]map[PageKey]bool // reverse index for directory-scoped invalidation
+	epochs sync.Map                          // DirectoryKey -> *atomic.Uint64 (current invalidation epoch)
 	stats  stats
 }
 
@@ -120,6 +121,7 @@ func Open(cfg Config) (*Cache, error) {
 		cfg:   cfg,
 		mgr:   mgr,
 		pages: make(map[PageKey]*pageSet),
+		dirs:  make(map[DirectoryKey]map[PageKey]bool),
 	}
 	if err := c.reload(); err != nil {
 		_ = mgr.Close()
@@ -253,6 +255,7 @@ func (c *Cache) MaterializeAsync(key PageKey, frontier uint64, entries []Entry) 
 	}
 	sort.Slice(locs, func(i, j int) bool { return locs[i].PageNo < locs[j].PageNo })
 	c.pages[key] = &pageSet{frontier: frontier, pages: locs}
+	c.indexPageLocked(key)
 	c.pageMu.Unlock()
 	c.stats.storeOK.Add(1)
 	return nil
@@ -270,11 +273,10 @@ func (c *Cache) Invalidate(key DirectoryKey) uint64 {
 	ep := c.epochFor(key)
 	next := ep.Add(1)
 	c.pageMu.Lock()
-	for pageKey := range c.pages {
-		if pageKey.Directory() == key {
-			delete(c.pages, pageKey)
-		}
+	for pageKey := range c.dirs[key] {
+		delete(c.pages, pageKey)
 	}
+	delete(c.dirs, key)
 	c.pageMu.Unlock()
 	return next
 }
@@ -429,7 +431,18 @@ func (c *Cache) reloadSegment(fid uint32) error {
 		sort.Slice(locs, func(i, j int) bool { return locs[i].PageNo < locs[j].PageNo })
 		if cur, ok := c.pages[key]; !ok || latest > cur.frontier {
 			c.pages[key] = &pageSet{frontier: latest, pages: locs}
+			c.indexPageLocked(key)
 		}
 	}
 	return nil
+}
+
+func (c *Cache) indexPageLocked(key PageKey) {
+	dir := key.Directory()
+	pages := c.dirs[dir]
+	if pages == nil {
+		pages = make(map[PageKey]bool)
+		c.dirs[dir] = pages
+	}
+	pages[key] = true
 }

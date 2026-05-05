@@ -123,6 +123,9 @@ func BenchmarkDirPageInvalidate(b *testing.B) {
 	keys := make([]PageKey, 1024)
 	for i := range keys {
 		keys[i] = PageKey{Mount: 1, Parent: uint64(i)}
+		if err := c.MaterializeAsync(keys[i], 0, makeEntries(1, 16)); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.ResetTimer()
 	b.ReportAllocs()
