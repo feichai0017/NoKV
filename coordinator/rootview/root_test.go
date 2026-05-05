@@ -525,6 +525,57 @@ func TestRootStorePreservesAppliedGrantAcrossStaleObservedReload(t *testing.T) {
 	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
 }
 
+func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *testing.T) {
+	initial := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "grant-1",
+				HolderID:        "coord-1",
+				Era:             1,
+				ExpiresUnixNano: 1_000,
+			},
+		},
+	}
+	fresher := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 12},
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "grant-3",
+				HolderID:        "coord-3",
+				Era:             3,
+				ExpiresUnixNano: 3_000,
+				IssuedAt:        rootstate.Cursor{Term: 1, Index: 12},
+			},
+		},
+	}
+	olderApply := rootstate.EunomiaState{
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:         "grant-2",
+			HolderID:        "coord-2",
+			Era:             2,
+			ExpiresUnixNano: 2_000,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 11},
+		},
+	}
+	fake := &fakeRootBackend{
+		snapshot:         initial,
+		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: fresher}},
+		useObserved:      false,
+		isLeader:         true,
+		applyGrantResult: olderApply,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActIssue})
+	require.NoError(t, err)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "coord-3", loaded.ActiveGrant.HolderID)
+	require.Equal(t, uint64(3), loaded.ActiveGrant.Era)
+}
+
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	store, err := OpenRootStore(fakeBasicRoot{
 		snapshot: rootstate.Snapshot{Descriptors: map[uint64]topology.Descriptor{}},

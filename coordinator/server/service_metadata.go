@@ -270,7 +270,7 @@ func (s *Service) currentReadState() (readState, error) {
 // ensureMetadataGrantIfNeeded obtains or refreshes a region_lookup grant for
 // authoritative metadata reads. It must not campaign over another live holder.
 func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
-	if loadErr != nil || s == nil || !s.coordinatorGrantEnabled() {
+	if s == nil || !s.coordinatorGrantEnabled() {
 		return false, nil
 	}
 	s.grantMu.RLock()
@@ -281,15 +281,28 @@ func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readSta
 	if holderID == "" {
 		return false, nil
 	}
-	if state.grantPresent && strings.TrimSpace(state.grantHolderID) != holderID {
-		return false, nil
-	}
 	nowFn := s.now
 	if nowFn == nil {
 		nowFn = time.Now
 	}
 	nowUnixNano := nowFn().UnixNano()
 	current := s.currentGrant()
+	currentHasLookup := false
+	if current.Present() && strings.TrimSpace(current.HolderID) == holderID {
+		_, currentHasLookup = current.Duty(rootproto.DutyRegionLookup)
+	}
+	if loadErr != nil {
+		if !currentHasLookup || !current.ActiveAt(nowUnixNano) {
+			return false, nil
+		}
+		if err := s.ensureGrant(ctx); err != nil {
+			return false, translateGrantError(err)
+		}
+		return true, nil
+	}
+	if state.grantPresent && strings.TrimSpace(state.grantHolderID) != holderID {
+		return false, nil
+	}
 	if state.grantPresent &&
 		state.grantExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
 		state.grantExpiresAt > nowUnixNano+clockSkew.Nanoseconds() &&

@@ -65,13 +65,13 @@ func (s *protocolMatrixStorage) SaveAllocatorState(_ context.Context, idCurrent,
 }
 
 func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
 		s.campaigns++
 		if s.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, s.campaignErr
 		}
-		holderID := strings.TrimSpace(cmd.HolderID)
 		if s.snapshot.ActiveGrant.Present() && s.snapshot.ActiveGrant.HolderID != holderID && s.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
 			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
@@ -129,6 +129,9 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 		return s.protocolState(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
 		s.reattaches++
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
 		successor := s.snapshot.ActiveGrant.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			for i := range s.snapshot.RetiredGrants {

@@ -13,24 +13,38 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type authorityProof struct {
+	Grant                   rootproto.AuthorityGrant
+	ObservedRetiredEraFloor uint64
+	Evidence                *metapb.RootAuthorityEvidence
+}
+
 func (s *Service) authorityEvidence(ctx context.Context, duty rootproto.DutyID, usage rootproto.DutyBound) (*metapb.RootAuthorityEvidence, error) {
+	proof, err := s.authorityEvidenceSnapshot(ctx, duty, usage)
+	if err != nil {
+		return nil, err
+	}
+	return proof.Evidence, nil
+}
+
+func (s *Service) authorityEvidenceSnapshot(ctx context.Context, duty rootproto.DutyID, usage rootproto.DutyBound) (authorityProof, error) {
 	if s == nil || !s.coordinatorGrantEnabled() {
-		return nil, nil
+		return authorityProof{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, status.FromContextError(err).Err()
+		return authorityProof{}, status.FromContextError(err).Err()
 	}
 	snapshot, err := s.currentRootSnapshotCoveringAuthority(duty, usage)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "load rooted authority evidence snapshot: "+err.Error())
+		return authorityProof{}, status.Error(codes.FailedPrecondition, "load rooted authority evidence snapshot: "+err.Error())
 	}
 	grant := snapshot.ActiveGrant
 	cert, err := grantCertificate(grant)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return authorityProof{}, status.Error(codes.Internal, err.Error())
 	}
 	observedFloor := uint64(0)
 	for _, retirement := range snapshot.RetiredGrants {
@@ -38,7 +52,7 @@ func (s *Service) authorityEvidence(ctx context.Context, duty rootproto.DutyID, 
 			observedFloor = retirement.Era
 		}
 	}
-	return metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
+	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
 		Certificate: cert,
 		Usage: rootproto.AuthorityUsage{
 			DutyID: duty,
@@ -47,7 +61,12 @@ func (s *Service) authorityEvidence(ctx context.Context, duty rootproto.DutyID, 
 		},
 		ObservedRetirements:     snapshot.RetiredGrants,
 		ObservedRetiredEraFloor: observedFloor,
-	}), nil
+	})
+	return authorityProof{
+		Grant:                   grant,
+		ObservedRetiredEraFloor: observedFloor,
+		Evidence:                evidence,
+	}, nil
 }
 
 func (s *Service) currentRootSnapshotCoveringAuthority(duty rootproto.DutyID, usage rootproto.DutyBound) (rootview.Snapshot, error) {

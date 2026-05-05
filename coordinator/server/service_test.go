@@ -140,13 +140,13 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 }
 
 func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
 		f.campaignCalls++
 		if f.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, f.campaignErr
 		}
-		holderID := strings.TrimSpace(cmd.HolderID)
 		if f.snapshot.ActiveGrant.Present() &&
 			f.snapshot.ActiveGrant.HolderID != holderID &&
 			f.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
@@ -253,10 +253,10 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 		return f.protocolState(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
 		f.reattachCalls++
-		successor := f.snapshot.ActiveGrant.GrantID
-		if strings.TrimSpace(successor) == "" {
+		if !f.snapshot.ActiveGrant.Present() || f.snapshot.ActiveGrant.HolderID != holderID {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
+		successor := f.snapshot.ActiveGrant.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			for i := range f.snapshot.RetiredGrants {
 				if f.snapshot.RetiredGrants[i].GrantID == predecessor {

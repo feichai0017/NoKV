@@ -262,7 +262,7 @@ func maxUint64(a, b uint64) uint64 {
 // AllocID allocates one or more globally unique ids.
 func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
@@ -286,26 +286,25 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	grant := s.currentGrant()
 	consumedFrontier := allocationConsumedFrontier(first, count)
-	evidence, err := s.authorityEvidence(ctx, rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
 	if err != nil {
 		return nil, err
 	}
 	return &coordpb.AllocIDResponse{
 		FirstId:                 first,
 		Count:                   count,
-		Era:                     grant.Era,
+		Era:                     proof.Grant.Era,
 		ConsumedFrontier:        consumedFrontier,
-		ObservedRetiredEraFloor: s.observedRetiredEraFloor(),
-		AuthorityEvidence:       evidence,
+		ObservedRetiredEraFloor: proof.ObservedRetiredEraFloor,
+		AuthorityEvidence:       proof.Evidence,
 	}, nil
 }
 
 // Tso allocates one or more timestamps.
 func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
@@ -329,19 +328,18 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	grant := s.currentGrant()
 	consumedFrontier := allocationConsumedFrontier(first, got)
-	evidence, err := s.authorityEvidence(ctx, rootproto.DutyTSO, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyTSO, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
 	if err != nil {
 		return nil, err
 	}
 	return &coordpb.TsoResponse{
 		Timestamp:               first,
 		Count:                   got,
-		Era:                     grant.Era,
+		Era:                     proof.Grant.Era,
 		ConsumedFrontier:        consumedFrontier,
-		ObservedRetiredEraFloor: s.observedRetiredEraFloor(),
-		AuthorityEvidence:       evidence,
+		ObservedRetiredEraFloor: proof.ObservedRetiredEraFloor,
+		AuthorityEvidence:       proof.Evidence,
 	}, nil
 }
 

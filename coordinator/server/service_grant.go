@@ -530,22 +530,6 @@ func (s *Service) currentGrant() rootproto.AuthorityGrant {
 	return s.grantView.Grant()
 }
 
-func (s *Service) observedRetiredEraFloor() uint64 {
-	if s == nil {
-		return 0
-	}
-	s.grantMu.RLock()
-	retirements := s.grantView.Retirements()
-	s.grantMu.RUnlock()
-	var floor uint64
-	for _, retirement := range retirements {
-		if retirement.Era > floor {
-			floor = retirement.Era
-		}
-	}
-	return floor
-}
-
 func (s *Service) grantCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {
 	if s == nil {
 		return 0, 0, "", 0, 0

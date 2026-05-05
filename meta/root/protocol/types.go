@@ -148,6 +148,7 @@ const (
 	GrantSignerKeyID              = "nokv-eunomia-root-ed25519-v1"
 	GrantSigningPrivateKeyEnv     = "NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY"
 	GrantVerificationPublicKeyEnv = "NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY"
+	GrantAllowEphemeralKeysEnv    = "NOKV_EUNOMIA_GRANT_ALLOW_EPHEMERAL_KEYS"
 )
 
 type grantKeyMaterial struct {
@@ -175,6 +176,12 @@ func loadGrantKeyMaterial() grantKeyMaterial {
 	private := parseEd25519PrivateKeyEnv(GrantSigningPrivateKeyEnv)
 	public := parseEd25519PublicKeyEnv(GrantVerificationPublicKeyEnv)
 	if private == nil && public == nil {
+		if !allowEphemeralGrantKeys() {
+			panic("meta/root/protocol: " + GrantSigningPrivateKeyEnv +
+				" and/or " + GrantVerificationPublicKeyEnv +
+				" must be provided; set " + GrantAllowEphemeralKeysEnv +
+				"=1 only for local dev/test")
+		}
 		generatedPublic, generatedPrivate, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			panic("meta/root/protocol: generate local grant signing key: " + err.Error())
@@ -185,6 +192,13 @@ func loadGrantKeyMaterial() grantKeyMaterial {
 		public = private.Public().(ed25519.PublicKey)
 	}
 	return grantKeyMaterial{private: private, public: public}
+}
+
+func allowEphemeralGrantKeys() bool {
+	if strings.TrimSpace(os.Getenv(GrantAllowEphemeralKeysEnv)) != "" {
+		return true
+	}
+	return len(os.Args) > 0 && strings.HasSuffix(os.Args[0], ".test")
 }
 
 func parseEd25519PrivateKeyEnv(name string) ed25519.PrivateKey {

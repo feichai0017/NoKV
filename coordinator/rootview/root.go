@@ -407,10 +407,16 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	if s == nil {
 		return
 	}
+	incoming := Snapshot{
+		ActiveGrant:       state.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
+	}
 	s.mu.Lock()
-	s.snapshot.ActiveGrant = state.ActiveGrant
-	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
-	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
+	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
+	s.snapshot.ActiveGrant = merged.ActiveGrant
+	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), merged.RetiredGrants...)
+	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), merged.GrantInheritances...)
 	s.mu.Unlock()
 }
 

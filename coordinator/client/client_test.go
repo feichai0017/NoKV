@@ -330,6 +330,9 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 		s.applyEventLocked(rootevent.GrantSealed(retirement))
 		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
 		successor := s.snapshot.ActiveGrant.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			s.applyEventLocked(rootevent.GrantInherited(rootproto.GrantInheritance{
