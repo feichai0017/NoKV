@@ -121,6 +121,22 @@ type AuthorityEvidence struct {
 	Usage                   AuthorityUsage
 	ObservedRetirements     []GrantRetirement
 	ObservedRetiredEraFloor uint64
+	ServedUnixNano          int64
+}
+
+type AuthorityVerifierKey struct {
+	ClusterID string
+	DutyID    DutyID
+	Scope     DutyScope
+}
+
+type AuthorityVerifierState struct {
+	Key                   AuthorityVerifierKey
+	MaxSeenEra            uint64
+	RetiredEraFloor       uint64
+	MaxRootToken          AuthorityRootToken
+	MaxDescriptorRevision uint64
+	MaxFrontier           DutyBound
 }
 
 type GrantAct uint8
@@ -269,6 +285,15 @@ func (g AuthorityGrant) ActiveAt(nowUnixNano int64) bool {
 func (g AuthorityGrant) Duty(duty DutyID) (DutyGrant, bool) {
 	for _, entry := range g.Duties {
 		if entry.DutyID == duty {
+			return entry, true
+		}
+	}
+	return DutyGrant{}, false
+}
+
+func (g AuthorityGrant) DutyFor(duty DutyID, scope DutyScope) (DutyGrant, bool) {
+	for _, entry := range g.Duties {
+		if entry.DutyID == duty && ScopeEqual(entry.Scope, scope) {
 			return entry, true
 		}
 	}

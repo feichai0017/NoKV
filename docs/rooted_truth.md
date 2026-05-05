@@ -137,8 +137,9 @@ These are **validated, typed writes** that internally:
 2. Emit the appropriate `KindGrantIssued` / `KindGrantSealed` /
    `KindGrantRetired` / `KindGrantInherited` event
 3. Append through the normal log path
-4. Return the new `EunomiaState = { ActiveGrant, RetiredGrants, GrantInheritances }`
-   and, for issue, a root-signed deterministic `GrantCertificate`
+4. Return the new `EunomiaState = { ActiveGrant, RetiredGrants,
+   GrantInheritances, RetiredEraFloor }` and, for issue, a root-signed
+   deterministic `GrantCertificate`
 
 Crash-before-seal is handled conservatively: root never fabricates an exact
 served frontier. After expiry, the successor retires the predecessor using the

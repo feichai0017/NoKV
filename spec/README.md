@@ -29,7 +29,7 @@ counterexamples.
 
 | Spec | Coverage boundary | Main invariants | Related implementation tests |
 | --- | --- | --- | --- |
-| `Eunomia.tla` | Repeated rooted handoff for the control-plane authority lineage. | Inheritance, Primacy, Silence, Finality. | `coordinator/integration/*`, `meta/root/state/*`. |
+| `Eunomia.tla` | Current root-issued bounded-grant authority protocol for detached coordinators. | Primacy, bounded inheritance, evidence usage coverage, verifier silence, retired-floor finality. | `coordinator/integration/*`, `coordinator/audit/*`, `meta/root/state/*`, `meta/root/replicated/*`. |
 | `EunomiaMultiDim.tla` | Lease-start coverage model for served-read handoff. | No write behind a served read after successor issue. | `coordinator/integration/root_model_test.go`. |
 | `MountLifecycle.tla` | Rooted fsmeta mount registration and retirement. | No implicit mount, terminal retirement, stable mount identity. | `fsmeta/exec/mount_test.go`, `fsmeta/server/service_test.go`. |
 | `SubtreeAuthority.tla` | Namespace subtree authority handoff consumed by subtree rename. | One active authority, successor frontier coverage, sealed-reply rejection, predecessor finality. | `fsmeta/integration/namespace_chaos_test.go`, `fsmeta/contract/*`. |

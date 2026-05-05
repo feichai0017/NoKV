@@ -6,14 +6,21 @@ import "fmt"
 // It intentionally keeps the schema small so adapters can project external
 // traces into a common authority-gap vocabulary.
 type ReplyTraceRecord struct {
-	Source               string `json:"source,omitempty"`
-	Duty                 string `json:"duty"`
-	GrantID              string `json:"grant_id,omitempty"`
-	Era                  uint64 `json:"era"`
-	UsageUpper           uint64 `json:"usage_upper,omitempty"`
-	GrantUpper           uint64 `json:"grant_upper,omitempty"`
-	ObservedSuccessorEra uint64 `json:"observed_successor_era,omitempty"`
-	Accepted             bool   `json:"accepted"`
+	Source                  string `json:"source,omitempty"`
+	Duty                    string `json:"duty"`
+	GrantID                 string `json:"grant_id,omitempty"`
+	Era                     uint64 `json:"era"`
+	UsageUpper              uint64 `json:"usage_upper,omitempty"`
+	EvidenceUsageUpper      uint64 `json:"evidence_usage_upper,omitempty"`
+	GrantUpper              uint64 `json:"grant_upper,omitempty"`
+	ObservedRetiredEraFloor uint64 `json:"observed_retired_era_floor,omitempty"`
+	ObservedSuccessorEra    uint64 `json:"observed_successor_era,omitempty"`
+	ServedUnixNano          int64  `json:"served_unix_nano,omitempty"`
+	GrantExpiresUnixNano    int64  `json:"grant_expires_unix_nano,omitempty"`
+	MaxReplyAgeNano         int64  `json:"max_reply_age_nano,omitempty"`
+	EvidencePresent         bool   `json:"evidence_present,omitempty"`
+	SignatureValid          bool   `json:"signature_valid,omitempty"`
+	Accepted                bool   `json:"accepted"`
 }
 
 // ReplyTraceAnomaly captures one reply-level legality violation discovered by
@@ -86,6 +93,48 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 		if !record.Accepted {
 			continue
 		}
+		if requiresEunomiaEvidence(record) {
+			if !record.EvidencePresent {
+				anomalies = append(anomalies, ReplyTraceAnomaly{
+					Index:  idx,
+					Kind:   "accepted_missing_evidence",
+					Duty:   record.Duty,
+					Era:    record.Era,
+					Reason: "accepted NoKV authority reply without AuthorityEvidence",
+				})
+				continue
+			}
+			if !record.SignatureValid {
+				anomalies = append(anomalies, ReplyTraceAnomaly{
+					Index:  idx,
+					Kind:   "accepted_invalid_signature",
+					Duty:   record.Duty,
+					Era:    record.Era,
+					Reason: "accepted NoKV authority reply without a valid root grant signature",
+				})
+				continue
+			}
+		}
+		if record.EvidenceUsageUpper != 0 && record.UsageUpper > record.EvidenceUsageUpper {
+			anomalies = append(anomalies, ReplyTraceAnomaly{
+				Index:  idx,
+				Kind:   "reply_usage_not_covered_by_evidence",
+				Duty:   record.Duty,
+				Era:    record.Era,
+				Reason: fmt.Sprintf("accepted usage %d outside evidence usage %d", record.UsageUpper, record.EvidenceUsageUpper),
+			})
+			continue
+		}
+		if record.GrantUpper != 0 && record.EvidenceUsageUpper > record.GrantUpper {
+			anomalies = append(anomalies, ReplyTraceAnomaly{
+				Index:  idx,
+				Kind:   "evidence_outside_grant",
+				Duty:   record.Duty,
+				Era:    record.Era,
+				Reason: fmt.Sprintf("accepted evidence usage %d outside grant upper bound %d", record.EvidenceUsageUpper, record.GrantUpper),
+			})
+			continue
+		}
 		if record.GrantUpper != 0 && record.UsageUpper > record.GrantUpper {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:  idx,
@@ -93,6 +142,27 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 				Duty:   record.Duty,
 				Era:    record.Era,
 				Reason: fmt.Sprintf("accepted usage %d outside grant upper bound %d", record.UsageUpper, record.GrantUpper),
+			})
+			continue
+		}
+		if record.GrantExpiresUnixNano > 0 && record.ServedUnixNano > record.GrantExpiresUnixNano {
+			anomalies = append(anomalies, ReplyTraceAnomaly{
+				Index:  idx,
+				Kind:   "reply_served_after_grant_expiry",
+				Duty:   record.Duty,
+				Era:    record.Era,
+				Reason: fmt.Sprintf("accepted reply served at %d after grant expiry %d", record.ServedUnixNano, record.GrantExpiresUnixNano),
+			})
+			continue
+		}
+		if record.MaxReplyAgeNano > 0 && report.NowUnixNano > 0 && record.ServedUnixNano > 0 &&
+			report.NowUnixNano-record.ServedUnixNano > record.MaxReplyAgeNano {
+			anomalies = append(anomalies, ReplyTraceAnomaly{
+				Index:  idx,
+				Kind:   "reply_exceeds_max_age",
+				Duty:   record.Duty,
+				Era:    record.Era,
+				Reason: fmt.Sprintf("accepted reply age %d exceeds max age %d", report.NowUnixNano-record.ServedUnixNano, record.MaxReplyAgeNano),
 			})
 			continue
 		}
@@ -108,13 +178,14 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 				continue
 			}
 		}
-		if report.RetiredEraFloor != 0 && record.Era <= report.RetiredEraFloor {
+		retiredFloor := maxUint64(report.RetiredEraFloor, record.ObservedRetiredEraFloor)
+		if retiredFloor != 0 && record.Era <= retiredFloor {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:  idx,
 				Kind:   "accepted_retired_era_reply",
 				Duty:   record.Duty,
 				Era:    record.Era,
-				Reason: fmt.Sprintf("accepted reply era %d at or below retired era floor %d", record.Era, report.RetiredEraFloor),
+				Reason: fmt.Sprintf("accepted reply era %d at or below retired era floor %d", record.Era, retiredFloor),
 			})
 			continue
 		}
@@ -130,4 +201,16 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 		}
 	}
 	return anomalies
+}
+
+func requiresEunomiaEvidence(record ReplyTraceRecord) bool {
+	source := record.Source
+	return source == "" || source == "nokv"
+}
+
+func maxUint64(a, b uint64) uint64 {
+	if a >= b {
+		return a
+	}
+	return b
 }

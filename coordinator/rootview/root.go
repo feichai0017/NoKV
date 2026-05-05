@@ -396,7 +396,8 @@ func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (
 func eunomiaStatePresent(state rootstate.EunomiaState) bool {
 	return state.ActiveGrant.Present() ||
 		len(state.RetiredGrants) > 0 ||
-		len(state.GrantInheritances) > 0
+		len(state.GrantInheritances) > 0 ||
+		state.RetiredEraFloor != 0
 }
 
 // mergeEunomiaState overlays the committed authority grant lifecycle from an
@@ -411,12 +412,14 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 		ActiveGrant:       state.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
+		RetiredEraFloor:   state.RetiredEraFloor,
 	}
 	s.mu.Lock()
 	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
 	s.snapshot.ActiveGrant = merged.ActiveGrant
 	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), merged.RetiredGrants...)
 	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), merged.GrantInheritances...)
+	s.snapshot.RetiredEraFloor = merged.RetiredEraFloor
 	s.mu.Unlock()
 }
 

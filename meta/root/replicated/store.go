@@ -338,6 +338,9 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || len(cmd.RequestedDuties) == 0 {
 		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
+	if !validDutyGrants(cmd.RequestedDuties) || !validAuthorityUsages(cmd.ExactUsages) {
+		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrDuty
+	}
 	requestedGrantID := strings.TrimSpace(cmd.GrantID)
 	if requestedGrantID != "" &&
 		s.state.ActiveGrant.Present() &&
@@ -434,6 +437,9 @@ func (s *Store) sealGrantLocked(ctx context.Context, cmd rootproto.GrantCommand)
 	if cmd.GrantID != "" && cmd.GrantID != active.GrantID {
 		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
+	if !validAuthorityUsages(cmd.ExactUsages) {
+		return s.state.Eunomia(), rootstate.ErrDuty
+	}
 	bounds := exactUsageBounds(active, cmd.ExactUsages)
 	if !dutyBoundsCovered(active.Duties, bounds) {
 		return s.state.Eunomia(), rootstate.ErrInheritance
@@ -484,9 +490,28 @@ func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantComma
 	}
 	successor := s.state.ActiveGrant.GrantID
 	events := make([]rootevent.Event, 0, len(cmd.PredecessorGrantIDs))
+	seen := make(map[string]struct{}, len(cmd.PredecessorGrantIDs))
 	for _, predecessor := range cmd.PredecessorGrantIDs {
-		if strings.TrimSpace(predecessor) == "" {
+		predecessor = strings.TrimSpace(predecessor)
+		if predecessor == "" {
 			continue
+		}
+		if _, duplicate := seen[predecessor]; duplicate {
+			continue
+		}
+		seen[predecessor] = struct{}{}
+		retirement, ok := findRetirementByGrantID(s.state.RetiredGrants, predecessor)
+		if !ok {
+			return s.state.Eunomia(), rootstate.ErrInheritance
+		}
+		if retirement.InheritedByGrantID != "" {
+			if retirement.InheritedByGrantID == successor {
+				continue
+			}
+			return s.state.Eunomia(), rootstate.ErrFinality
+		}
+		if !predecessorRetirementCovered(s.state.ActiveGrant, retirement) {
+			return s.state.Eunomia(), rootstate.ErrInheritance
 		}
 		events = append(events, rootevent.GrantInherited(rootproto.GrantInheritance{
 			PredecessorGrantID: predecessor,
@@ -526,40 +551,69 @@ func exactUsageBounds(grant rootproto.AuthorityGrant, usages []rootproto.Authori
 
 func dutyBoundsCovered(grantBounds, usageBounds []rootproto.DutyGrant) bool {
 	for _, usage := range usageBounds {
-		grant, ok := findDutyGrant(grantBounds, usage.DutyID)
-		if !ok || !dutyBoundCovers(grant.Bound, usage.Bound) {
+		grant, ok := findDutyGrant(grantBounds, usage.DutyID, usage.Scope)
+		if !ok || !rootproto.DutyBoundCovers(grant.Bound, usage.Bound) {
 			return false
 		}
 	}
 	return true
 }
 
-func findDutyGrant(grants []rootproto.DutyGrant, duty rootproto.DutyID) (rootproto.DutyGrant, bool) {
+func findDutyGrant(grants []rootproto.DutyGrant, duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.DutyGrant, bool) {
 	for _, grant := range grants {
-		if grant.DutyID == duty {
+		if grant.DutyID == duty && rootproto.ScopeEqual(grant.Scope, scope) {
 			return grant, true
 		}
 	}
 	return rootproto.DutyGrant{}, false
 }
 
-func dutyBoundCovers(grant, usage rootproto.DutyBound) bool {
-	if grant.Kind != usage.Kind {
-		return false
+func validDutyGrants(grants []rootproto.DutyGrant) bool {
+	seen := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		if !rootproto.ValidateDutyGrant(grant) {
+			return false
+		}
+		key := string(grant.DutyID) + "\x00" + dutyScopeKey(grant.Scope)
+		if _, duplicate := seen[key]; duplicate {
+			return false
+		}
+		seen[key] = struct{}{}
 	}
-	switch usage.Kind {
-	case rootproto.DutyBoundMonotone:
-		return usage.MonotoneUpper <= grant.MonotoneUpper
-	case rootproto.DutyBoundVersion:
-		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
-			usage.MaxRootLag <= grant.MaxRootLag
-	case rootproto.DutyBoundBudget:
-		return usage.Budget <= grant.Budget
-	case rootproto.DutyBoundEpoch:
-		return usage.Epoch <= grant.Epoch
-	default:
-		return false
+	return true
+}
+
+func validAuthorityUsages(usages []rootproto.AuthorityUsage) bool {
+	for _, usage := range usages {
+		if !rootproto.ValidateAuthorityUsage(usage) {
+			return false
+		}
 	}
+	return true
+}
+
+func predecessorRetirementCovered(successor rootproto.AuthorityGrant, retirement rootproto.GrantRetirement) bool {
+	for _, inherited := range successor.PredecessorRetirements {
+		if inherited.GrantID == retirement.GrantID &&
+			inherited.Era == retirement.Era &&
+			dutyBoundsCovered(successor.Duties, retirement.Bounds) {
+			return true
+		}
+	}
+	return false
+}
+
+func findRetirementByGrantID(retirements []rootproto.GrantRetirement, grantID string) (rootproto.GrantRetirement, bool) {
+	for _, retirement := range retirements {
+		if retirement.GrantID == grantID {
+			return retirement, true
+		}
+	}
+	return rootproto.GrantRetirement{}, false
+}
+
+func dutyScopeKey(scope rootproto.DutyScope) string {
+	return fmt.Sprintf("%d/%s/%d/%x/%x", scope.Kind, scope.MountID, scope.SubtreeRoot, scope.StartKey, scope.EndKey)
 }
 
 func signGrantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificate, error) {
@@ -644,8 +698,13 @@ func (s *Store) maybeCompactLocked() {
 	if s == nil {
 		return
 	}
+	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, s.maxRetainedRecords)
+	snapshotState := s.state
+	if plan.Compacted {
+		snapshotState = rootstate.CompactEunomiaState(snapshotState)
+	}
 	snapshot := rootstate.Snapshot{
-		State:               s.state,
+		State:               snapshotState,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
 		Mounts:              rootstate.CloneMounts(s.mounts),
@@ -655,7 +714,6 @@ func (s *Store) maybeCompactLocked() {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
 	}
-	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, s.maxRetainedRecords)
 	if !plan.Compacted {
 		s.records = plan.Tail.Records
 		s.retainFrom = plan.RetainFrom
@@ -664,6 +722,7 @@ func (s *Store) maybeCompactLocked() {
 	if err := s.driver.InstallBootstrap(plan.Observed(snapshot)); err != nil {
 		return
 	}
+	s.state = snapshotState
 	s.records = plan.Tail.Records
 	s.retainFrom = plan.RetainFrom
 }

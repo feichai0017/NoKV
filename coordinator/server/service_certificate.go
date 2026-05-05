@@ -1,16 +1,13 @@
 package server
 
 import (
-	"context"
-	"fmt"
+	"reflect"
 
-	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 type authorityProof struct {
@@ -19,123 +16,60 @@ type authorityProof struct {
 	Evidence                *metapb.RootAuthorityEvidence
 }
 
-func (s *Service) authorityEvidence(ctx context.Context, duty rootproto.DutyID, usage rootproto.DutyBound) (*metapb.RootAuthorityEvidence, error) {
-	proof, err := s.authorityEvidenceSnapshot(ctx, duty, usage)
-	if err != nil {
-		return nil, err
-	}
-	return proof.Evidence, nil
-}
-
-func (s *Service) authorityEvidenceSnapshot(ctx context.Context, duty rootproto.DutyID, usage rootproto.DutyBound) (authorityProof, error) {
-	if s == nil || !s.coordinatorGrantEnabled() {
+func (a dutyAdmission) authorityEvidence(usage rootproto.DutyBound) (authorityProof, error) {
+	if !a.grant.Present() {
 		return authorityProof{}, nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if !grantCertificateMatches(a.certificate, a.grant) {
+		return authorityProof{}, status.Error(codes.Internal, "root-issued grant certificate is missing or stale")
 	}
-	if err := ctx.Err(); err != nil {
-		return authorityProof{}, status.FromContextError(err).Err()
+	if a.grant.ExpiresUnixNano <= a.servedUnixNano {
+		return authorityProof{}, status.Error(codes.FailedPrecondition, "admitted grant expired before evidence generation")
 	}
-	snapshot, err := s.currentRootSnapshotCoveringAuthority(duty, usage)
-	if err != nil {
-		return authorityProof{}, status.Error(codes.FailedPrecondition, "load rooted authority evidence snapshot: "+err.Error())
-	}
-	grant := snapshot.ActiveGrant
-	cert, err := grantCertificate(grant)
-	if err != nil {
-		return authorityProof{}, status.Error(codes.Internal, err.Error())
-	}
-	observedFloor := uint64(0)
-	for _, retirement := range snapshot.RetiredGrants {
-		if retirement.Era > observedFloor {
-			observedFloor = retirement.Era
-		}
+	scope := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	dutyGrant, ok := a.grant.DutyFor(a.duty, scope)
+	if !ok || !rootproto.DutyBoundCovers(dutyGrant.Bound, usage) {
+		return authorityProof{}, status.Errorf(codes.FailedPrecondition, "admitted grant does not cover duty=%s grant_id=%s era=%d", rootproto.DutyName(a.duty), a.grant.GrantID, a.grant.Era)
 	}
 	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
-		Certificate: cert,
+		Certificate: a.certificate,
 		Usage: rootproto.AuthorityUsage{
-			DutyID: duty,
-			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			DutyID: a.duty,
+			Scope:  scope,
 			Usage:  usage,
 		},
-		ObservedRetirements:     snapshot.RetiredGrants,
-		ObservedRetiredEraFloor: observedFloor,
+		ObservedRetirements:     a.retirements,
+		ObservedRetiredEraFloor: a.retiredEraFloor,
+		ServedUnixNano:          a.servedUnixNano,
 	})
 	return authorityProof{
-		Grant:                   grant,
-		ObservedRetiredEraFloor: observedFloor,
+		Grant:                   a.grant,
+		ObservedRetiredEraFloor: a.retiredEraFloor,
 		Evidence:                evidence,
 	}, nil
 }
 
-func (s *Service) currentRootSnapshotCoveringAuthority(duty rootproto.DutyID, usage rootproto.DutyBound) (rootview.Snapshot, error) {
-	snapshot, err := s.currentRootSnapshot()
-	if err != nil {
-		return rootview.Snapshot{}, err
-	}
-	if authoritySnapshotCovers(snapshot, duty, usage) {
-		return snapshot, nil
-	}
-	snapshot, err = s.reloadRootedView(true)
-	if err != nil {
-		return rootview.Snapshot{}, err
-	}
-	if authoritySnapshotCovers(snapshot, duty, usage) {
-		return snapshot, nil
-	}
-	return rootview.Snapshot{}, status.Errorf(
-		codes.FailedPrecondition,
-		"rooted grant does not cover duty=%s grant_id=%s era=%d",
-		rootproto.DutyName(duty),
-		snapshot.ActiveGrant.GrantID,
-		snapshot.ActiveGrant.Era,
-	)
+func grantCertificateMatches(cert rootproto.GrantCertificate, grant rootproto.AuthorityGrant) bool {
+	return grantCertificatePresent(cert) &&
+		grant.Present() &&
+		reflect.DeepEqual(cert.Grant, grant)
 }
 
-func authoritySnapshotCovers(snapshot rootview.Snapshot, duty rootproto.DutyID, usage rootproto.DutyBound) bool {
-	grant := snapshot.ActiveGrant
-	if !grant.Present() {
+func grantCertificateCoversGrant(cert rootproto.GrantCertificate, grant rootproto.AuthorityGrant) bool {
+	if !grantCertificatePresent(cert) || !grant.Present() {
 		return false
 	}
-	dutyGrant, ok := grant.Duty(duty)
-	if !ok {
-		return false
-	}
-	return authorityBoundCovers(dutyGrant.Bound, usage)
+	certGrant := cert.Grant
+	return certGrant.GrantID == grant.GrantID &&
+		certGrant.HolderID == grant.HolderID &&
+		certGrant.Era == grant.Era &&
+		certGrant.ExpiresUnixNano == grant.ExpiresUnixNano &&
+		reflect.DeepEqual(certGrant.Duties, grant.Duties) &&
+		reflect.DeepEqual(certGrant.PredecessorRetirements, grant.PredecessorRetirements)
 }
 
-func authorityBoundCovers(grant, usage rootproto.DutyBound) bool {
-	if grant.Kind != usage.Kind {
-		return false
-	}
-	switch usage.Kind {
-	case rootproto.DutyBoundMonotone:
-		return usage.MonotoneUpper <= grant.MonotoneUpper
-	case rootproto.DutyBoundVersion:
-		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
-			usage.MaxRootLag <= grant.MaxRootLag
-	case rootproto.DutyBoundBudget:
-		return usage.Budget <= grant.Budget
-	case rootproto.DutyBoundEpoch:
-		return usage.Epoch <= grant.Epoch
-	default:
-		return false
-	}
-}
-
-func grantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificate, error) {
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
-	if err != nil {
-		return rootproto.GrantCertificate{}, err
-	}
-	signature := rootproto.SignGrantBytes(payload)
-	if len(signature) == 0 {
-		return rootproto.GrantCertificate{}, fmt.Errorf("root grant signing key is not configured")
-	}
-	return rootproto.GrantCertificate{
-		Grant:       grant,
-		SignerKeyID: rootproto.GrantSignerKeyID,
-		Signature:   signature,
-	}, nil
+func grantCertificatePresent(cert rootproto.GrantCertificate) bool {
+	return cert.Grant.Present() &&
+		cert.SignerKeyID != "" &&
+		len(cert.Signature) != 0
 }

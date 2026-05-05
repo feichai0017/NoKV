@@ -18,8 +18,8 @@ func TestEvaluateReplyTraceFlagsRetiredGrantReply(t *testing.T) {
 	}, "c2", 1_000)
 
 	anomalies := coordaudit.EvaluateReplyTrace(report, []coordaudit.ReplyTraceRecord{
-		{Duty: "alloc_id", GrantID: "g1", Era: 1, Accepted: true},
-		{Duty: "alloc_id", GrantID: "g2", Era: 2, Accepted: true},
+		{Source: "nokv", Duty: "alloc_id", GrantID: "g1", Era: 1, EvidencePresent: true, SignatureValid: true, Accepted: true},
+		{Source: "nokv", Duty: "alloc_id", GrantID: "g2", Era: 2, EvidencePresent: true, SignatureValid: true, Accepted: true},
 	})
 	require.Len(t, anomalies, 1)
 	require.Equal(t, "accepted_retired_grant_reply", anomalies[0].Kind)
@@ -28,11 +28,48 @@ func TestEvaluateReplyTraceFlagsRetiredGrantReply(t *testing.T) {
 
 func TestEvaluateReplyTraceFlagsReplyOutsideGrant(t *testing.T) {
 	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
-		{Duty: "alloc_id", Era: 1, UsageUpper: 11, GrantUpper: 10, Accepted: true},
-		{Duty: "alloc_id", Era: 1, UsageUpper: 10, GrantUpper: 10, Accepted: true},
+		{Source: "nokv", Duty: "alloc_id", Era: 1, UsageUpper: 11, EvidenceUsageUpper: 11, GrantUpper: 10, EvidencePresent: true, SignatureValid: true, Accepted: true},
+		{Source: "nokv", Duty: "alloc_id", Era: 1, UsageUpper: 10, EvidenceUsageUpper: 10, GrantUpper: 10, EvidencePresent: true, SignatureValid: true, Accepted: true},
 	})
 	require.Len(t, anomalies, 1)
-	require.Equal(t, "reply_outside_grant", anomalies[0].Kind)
+	require.Equal(t, "evidence_outside_grant", anomalies[0].Kind)
+}
+
+func TestEvaluateReplyTraceFlagsReplyUsageNotCoveredByEvidence(t *testing.T) {
+	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
+		{Source: "nokv", Duty: "alloc_id", Era: 1, UsageUpper: 900, EvidenceUsageUpper: 100, GrantUpper: 1_000, EvidencePresent: true, SignatureValid: true, Accepted: true},
+	})
+	require.Len(t, anomalies, 1)
+	require.Equal(t, "reply_usage_not_covered_by_evidence", anomalies[0].Kind)
+}
+
+func TestEvaluateReplyTraceFlagsMissingOrInvalidEvidence(t *testing.T) {
+	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
+		{Source: "nokv", Duty: "tso", Era: 1, Accepted: true},
+		{Source: "nokv", Duty: "tso", Era: 2, EvidencePresent: true, SignatureValid: false, Accepted: true},
+	})
+	require.Len(t, anomalies, 2)
+	require.Equal(t, "accepted_missing_evidence", anomalies[0].Kind)
+	require.Equal(t, "accepted_invalid_signature", anomalies[1].Kind)
+}
+
+func TestEvaluateReplyTraceFlagsClockViolations(t *testing.T) {
+	report := coordaudit.Report{NowUnixNano: 2_000}
+	anomalies := coordaudit.EvaluateReplyTrace(report, []coordaudit.ReplyTraceRecord{
+		{Source: "nokv", Duty: "tso", Era: 1, ServedUnixNano: 1_100, GrantExpiresUnixNano: 1_000, EvidencePresent: true, SignatureValid: true, Accepted: true},
+		{Source: "nokv", Duty: "tso", Era: 2, ServedUnixNano: 1_000, GrantExpiresUnixNano: 3_000, MaxReplyAgeNano: 500, EvidencePresent: true, SignatureValid: true, Accepted: true},
+	})
+	require.Len(t, anomalies, 2)
+	require.Equal(t, "reply_served_after_grant_expiry", anomalies[0].Kind)
+	require.Equal(t, "reply_exceeds_max_age", anomalies[1].Kind)
+}
+
+func TestEvaluateReplyTraceUsesObservedRetiredFloor(t *testing.T) {
+	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
+		{Source: "nokv", Duty: "region_lookup", Era: 3, ObservedRetiredEraFloor: 3, EvidencePresent: true, SignatureValid: true, Accepted: true},
+	})
+	require.Len(t, anomalies, 1)
+	require.Equal(t, "accepted_retired_era_reply", anomalies[0].Kind)
 }
 
 func TestEvaluateReplyTraceFlagsAcceptedReplyBehindSuccessor(t *testing.T) {

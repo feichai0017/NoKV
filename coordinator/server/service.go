@@ -95,9 +95,11 @@ func (s authorityServingState) String() string {
 }
 
 type coordinatorGrantView struct {
-	grant        rootproto.AuthorityGrant
-	retirements  []rootproto.GrantRetirement
-	inheritances []rootproto.GrantInheritance
+	grant           rootproto.AuthorityGrant
+	certificate     rootproto.GrantCertificate
+	retirements     []rootproto.GrantRetirement
+	inheritances    []rootproto.GrantInheritance
+	retiredEraFloor uint64
 }
 
 type coordinatorRootSnapshotView struct {
@@ -112,21 +114,35 @@ func (v *coordinatorGrantView) Reset() {
 		return
 	}
 	v.grant = rootproto.AuthorityGrant{}
+	v.certificate = rootproto.GrantCertificate{}
 	v.retirements = nil
 	v.inheritances = nil
+	v.retiredEraFloor = 0
 }
 
 func (v *coordinatorGrantView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
-	v.grant = snapshot.ActiveGrant
+	cert := v.certificate
+	if grantCertificateCoversGrant(cert, snapshot.ActiveGrant) {
+		v.grant = cert.Grant
+		v.certificate = cert
+	} else {
+		v.grant = snapshot.ActiveGrant
+		v.certificate = rootproto.GrantCertificate{}
+	}
 	v.retirements = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
 	v.inheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
+	v.retiredEraFloor = snapshot.RetiredEraFloor
 }
 
 func (v coordinatorGrantView) Grant() rootproto.AuthorityGrant {
 	return v.grant
+}
+
+func (v coordinatorGrantView) Certificate() rootproto.GrantCertificate {
+	return v.certificate
 }
 
 func (v coordinatorGrantView) Retirements() []rootproto.GrantRetirement {

@@ -76,6 +76,7 @@ func TestBuildReportSurfacesRetiredNotInherited(t *testing.T) {
 	require.Equal(t, coordaudit.AuthorityCompletionRetiredNotInherited, report.AuthorityCompletion)
 	require.True(t, report.Anomalies.RetiredGrantNotInherited)
 	require.Equal(t, coordaudit.FinalityDefectRetiredNotInherited, report.Anomalies.FinalityDefect)
+	require.Zero(t, report.RetiredEraFloor)
 }
 
 func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
@@ -99,6 +100,29 @@ func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
 
 	require.True(t, report.Anomalies.InvalidSuccessorBound)
 	require.Equal(t, coordaudit.FinalityDefectInvalidSuccessorBound, report.Anomalies.FinalityDefect)
+}
+
+func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		RetiredEraFloor: 3,
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID: "g4",
+			Era:     4,
+			Duties:  []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40)},
+		},
+	}, "c4", 1_000)
+
+	require.Equal(t, uint64(3), report.RetiredEraFloor)
+	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
+}
+
+func TestBuildReportSurfacesOrphanInheritance(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		GrantInheritances: []rootproto.GrantInheritance{{PredecessorGrantID: "missing", SuccessorGrantID: "g2"}},
+	}, "c2", 1_000)
+
+	require.True(t, report.Anomalies.OrphanInheritance)
+	require.Equal(t, coordaudit.FinalityDefectOrphanInheritance, report.Anomalies.FinalityDefect)
 }
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {

@@ -42,6 +42,7 @@ type State struct {
 	ActiveGrant       rootproto.AuthorityGrant
 	RetiredGrants     []rootproto.GrantRetirement
 	GrantInheritances []rootproto.GrantInheritance
+	RetiredEraFloor   uint64
 }
 
 type StoreMembershipState uint8
@@ -526,8 +527,53 @@ func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.E
 	for i := range state.RetiredGrants {
 		if state.RetiredGrants[i].GrantID == inheritance.PredecessorGrantID {
 			state.RetiredGrants[i].InheritedByGrantID = inheritance.SuccessorGrantID
+			if state.RetiredGrants[i].Era > state.RetiredEraFloor {
+				state.RetiredEraFloor = state.RetiredGrants[i].Era
+			}
 		}
 	}
+}
+
+func CompactEunomiaState(state State) State {
+	if state.RetiredEraFloor == 0 {
+		return state
+	}
+	originalRetirements := append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
+	activePredecessors := make(map[string]struct{}, len(state.ActiveGrant.PredecessorRetirements))
+	for _, retirement := range state.ActiveGrant.PredecessorRetirements {
+		if retirement.GrantID != "" {
+			activePredecessors[retirement.GrantID] = struct{}{}
+		}
+	}
+	retirements := make([]rootproto.GrantRetirement, 0, len(originalRetirements))
+	for _, retirement := range originalRetirements {
+		if retirement.InheritedByGrantID != "" && retirement.Era <= state.RetiredEraFloor {
+			if _, active := activePredecessors[retirement.GrantID]; !active {
+				continue
+			}
+		}
+		retirements = append(retirements, retirement)
+	}
+	inheritances := make([]rootproto.GrantInheritance, 0, len(state.GrantInheritances))
+	for _, inheritance := range state.GrantInheritances {
+		keep := true
+		for _, retirement := range originalRetirements {
+			if retirement.GrantID == inheritance.PredecessorGrantID &&
+				retirement.InheritedByGrantID != "" &&
+				retirement.Era <= state.RetiredEraFloor {
+				if _, active := activePredecessors[retirement.GrantID]; !active {
+					keep = false
+				}
+				break
+			}
+		}
+		if keep {
+			inheritances = append(inheritances, inheritance)
+		}
+	}
+	state.RetiredGrants = retirements
+	state.GrantInheritances = inheritances
+	return state
 }
 
 // NextCursor returns the next ordered root cursor.

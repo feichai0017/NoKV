@@ -1,243 +1,291 @@
 ------------------------------ MODULE Eunomia ------------------------------
 EXTENDS Naturals, FiniteSets
 
-\* Repeated-handoff positive model for the control-plane paper.
-\* This module intentionally models only service-level authority lineage,
-\* not the underlying consensus protocol.
+\* Bounded positive model for the current Eunomia grant protocol.
 \*
-\* The working fault vocabulary is kept inline for now rather than split
-\* into a separate Fault.tla:
-\*   delayed_reply
-\*   revived_holder
-\*   root_unreach
-\*   lease_expiry
-\*   successor_campaign
-\*   budget_exhaustion
-\*   descriptor_publish_race
+\* The model intentionally ignores the underlying consensus protocol. The
+\* root log is represented by these committed state transitions:
+\*
+\*   IssueGrant        == GrantIssued
+\*   SealExact         == GrantSealed(sealed_exact)
+\*   RetireExpired     == GrantRetired(expired_bound)
+\*   InheritRetirement == GrantInherited
+\*
+\* Each authority reply carries evidence from the admitted grant:
+\*
+\*   era, reply usage, evidence usage, and observed retired floor.
+\*
+\* This is a single monotone-duty abstraction. alloc_id and tso map directly to
+\* the monotone bound. region_lookup uses the same shape with descriptor
+\* revision as the monotone coordinate; the implementation adds root-token and
+\* storage-epoch checks around that duty.
 
 CONSTANTS
     \* @type: Int;
     MaxEra,
     \* @type: Int;
-    MaxFrontier
+    MaxFrontier,
+    \* @type: Int;
+    MaxInflight
 
-Eras        == 0..MaxEra
-Frontiers   == 0..MaxFrontier
-Phases      == {"Attached", "Active", "Sealed", "Covered", "Closed"}
-NoPending   == MaxEra + 1
-ReplySet    == { [era |-> e, frontier |-> f] : e \in Eras, f \in Frontiers }
-NoDelivered == [valid |-> FALSE, era |-> 0, frontier |-> 0]
+Eras          == 1..MaxEra
+Frontiers     == 0..MaxFrontier
+NoGrant       == MaxEra + 1
+RetireModes   == {"none", "sealed_exact", "expired_bound"}
+ReplySet      == { [era |-> e,
+                    usage |-> u,
+                    evidenceUsage |-> eu,
+                    observedFloor |-> f] :
+                    e \in Eras,
+                    u \in Frontiers,
+                    eu \in Frontiers,
+                    f \in 0..MaxEra }
+NoAccepted    == [valid |-> FALSE,
+                  era |-> 0,
+                  usage |-> 0,
+                  evidenceUsage |-> 0,
+                  floorAtAccept |-> 0,
+                  observedFloor |-> 0]
 
 VARIABLES
-    \* @type: Str;
-    phase,
     \* @type: Set(Int);
     issued,
     \* @type: Int;
-    activeEra,
-    \* @type: Int;
-    pendingSeal,
-    \* @type: Set(Int);
-    sealed,
-    \* @type: Set(Int);
-    covered,
-    \* @type: Set(Int);
-    closed,
+    active,
     \* @type: Int -> Int;
-    frontier,
-    \* @type: Set([era: Int, frontier: Int]);
+    bound,
+    \* @type: Int -> Int;
+    served,
+    \* @type: Set(Int);
+    retired,
+    \* @type: Int -> Int;
+    retirementBound,
+    \* @type: Int -> Str;
+    retirementMode,
+    \* @type: Int -> Int;
+    inheritedBy,
+    \* @type: Int;
+    retiredFloor,
+    \* @type: Int;
+    verifierFloor,
+    \* @type: Set([era: Int, usage: Int, evidenceUsage: Int, observedFloor: Int]);
     inflight,
-    \* @type: [valid: Bool, era: Int, frontier: Int];
-    delivered
+    \* @type: [valid: Bool, era: Int, usage: Int, evidenceUsage: Int, floorAtAccept: Int, observedFloor: Int];
+    accepted
 
-Vars == <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight, delivered>>
+Vars ==
+    << issued, active, bound, served, retired, retirementBound,
+       retirementMode, inheritedBy, retiredFloor, verifierFloor, inflight,
+       accepted >>
 
 Init ==
-    /\ phase = "Attached"
     /\ issued = {}
-    /\ activeEra = 0
-    /\ pendingSeal = NoPending
-    /\ sealed = {}
-    /\ covered = {}
-    /\ closed = {}
-    /\ frontier = [e \in Eras |-> 0]
+    /\ active = NoGrant
+    /\ bound = [e \in Eras |-> 0]
+    /\ served = [e \in Eras |-> 0]
+    /\ retired = {}
+    /\ retirementBound = [e \in Eras |-> 0]
+    /\ retirementMode = [e \in Eras |-> "none"]
+    /\ inheritedBy = [e \in Eras |-> NoGrant]
+    /\ retiredFloor = 0
+    /\ verifierFloor = 0
     /\ inflight = {}
-    /\ delivered = NoDelivered
+    /\ accepted = NoAccepted
 
-Issue ==
-    \E e \in Eras:
-        /\ phase \in {"Attached", "Sealed"}
-        /\ e \notin issued
-        /\ e > activeEra
-        /\ issued' = issued \cup {e}
-        /\ frontier' = [frontier EXCEPT ![e] = frontier[activeEra]]
-        /\ activeEra' = e
-        /\ phase' = "Active"
-        /\ delivered' = NoDelivered
-        /\ UNCHANGED <<pendingSeal, sealed, covered, closed, inflight>>
+NextEra == Cardinality(issued) + 1
 
-ActiveReply ==
-    /\ phase = "Active"
-    /\ activeEra \in issued
-    /\ activeEra \notin sealed
-    /\ \E f \in Frontiers:
-        /\ f >= frontier[activeEra]
-        /\ frontier' = [frontier EXCEPT ![activeEra] = f]
-        /\ inflight' = inflight \cup {[era |-> activeEra, frontier |-> f]}
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, closed>>
-    /\ phase' = phase
+PendingRetired ==
+    { e \in retired : inheritedBy[e] = NoGrant }
 
-DeliverReply ==
+Max(a, b) ==
+    IF a >= b THEN a ELSE b
+
+IssueGrant ==
+    /\ active = NoGrant
+    /\ NextEra \in Eras
+    /\ \E b \in Frontiers:
+        /\ \A p \in PendingRetired:
+            b >= retirementBound[p]
+        /\ issued' = issued \cup {NextEra}
+        /\ active' = NextEra
+        /\ bound' = [bound EXCEPT ![NextEra] = b]
+        /\ served' = [served EXCEPT ![NextEra] = 0]
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<retired, retirementBound, retirementMode, inheritedBy,
+                   retiredFloor, verifierFloor, inflight>>
+
+ServeReply ==
+    /\ active # NoGrant
+    /\ Cardinality(inflight) < MaxInflight
+    /\ \E u \in Frontiers:
+        \E eu \in Frontiers:
+            /\ u <= eu
+            /\ eu <= bound[active]
+            /\ inflight' = inflight \cup
+                {[era |-> active,
+                  usage |-> u,
+                  evidenceUsage |-> eu,
+                  observedFloor |-> retiredFloor]}
+            /\ served' = [served EXCEPT ![active] = Max(served[active], u)]
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, active, bound, retired, retirementBound,
+                   retirementMode, inheritedBy, retiredFloor, verifierFloor>>
+
+DeliverAcceptedReply ==
     /\ \E r \in inflight:
-        /\ r.era \notin sealed
+        /\ r.usage <= r.evidenceUsage
+        /\ r.evidenceUsage <= bound[r.era]
+        /\ r.era > verifierFloor
+        /\ r.era > r.observedFloor
         /\ inflight' = inflight \ {r}
-        /\ delivered' = [valid |-> TRUE, era |-> r.era, frontier |-> r.frontier]
-    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier>>
+        /\ accepted' = [valid |-> TRUE,
+                        era |-> r.era,
+                        usage |-> r.usage,
+                        evidenceUsage |-> r.evidenceUsage,
+                        floorAtAccept |-> verifierFloor,
+                        observedFloor |-> r.observedFloor]
+        /\ verifierFloor' = Max(verifierFloor, r.observedFloor)
+    /\ UNCHANGED <<issued, active, bound, served, retired, retirementBound,
+                   retirementMode, inheritedBy, retiredFloor>>
 
 DropReply ==
     /\ \E r \in inflight:
         /\ inflight' = inflight \ {r}
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier>>
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, active, bound, served, retired, retirementBound,
+                   retirementMode, inheritedBy, retiredFloor, verifierFloor>>
 
-ClearDelivered ==
-    /\ delivered.valid
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<phase, issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight>>
+ClearAccepted ==
+    /\ accepted.valid
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, active, bound, served, retired, retirementBound,
+                   retirementMode, inheritedBy, retiredFloor, verifierFloor,
+                   inflight>>
 
-Seal ==
-    /\ phase = "Active"
-    /\ pendingSeal = NoPending
-    /\ activeEra \notin sealed
-    /\ sealed' = sealed \cup {activeEra}
-    /\ pendingSeal' = activeEra
-    /\ phase' = "Sealed"
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeEra, covered, closed, frontier, inflight>>
+SealExact ==
+    /\ active # NoGrant
+    /\ active \notin retired
+    /\ retired' = retired \cup {active}
+    /\ retirementBound' = [retirementBound EXCEPT ![active] = served[active]]
+    /\ retirementMode' = [retirementMode EXCEPT ![active] = "sealed_exact"]
+    /\ active' = NoGrant
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, bound, served, inheritedBy, retiredFloor,
+                   verifierFloor, inflight>>
 
-Cover ==
-    /\ phase \in {"Sealed", "Active"}
-    /\ pendingSeal # NoPending
-    /\ activeEra \in issued
-    /\ activeEra > pendingSeal
-    /\ frontier[activeEra] >= frontier[pendingSeal]
-    /\ covered' = covered \cup {pendingSeal}
-    /\ pendingSeal' = NoPending
-    /\ phase' = "Covered"
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeEra, sealed, closed, frontier, inflight>>
+RetireExpired ==
+    /\ active # NoGrant
+    /\ active \notin retired
+    /\ retired' = retired \cup {active}
+    /\ retirementBound' = [retirementBound EXCEPT ![active] = bound[active]]
+    /\ retirementMode' = [retirementMode EXCEPT ![active] = "expired_bound"]
+    /\ active' = NoGrant
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, bound, served, inheritedBy, retiredFloor,
+                   verifierFloor, inflight>>
 
-Close ==
-    /\ phase = "Covered"
-    /\ \E e \in covered \ closed:
-        /\ closed' = closed \cup {e}
-        /\ phase' = "Closed"
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, frontier, inflight>>
-
-Reattach ==
-    /\ phase = "Closed"
-    /\ \A e \in sealed: e \in covered \/ e \in closed
-    \* Reattach completes the predecessor handover and returns the successor to
-    \* steady-state serving, so the next seal/issue cycle can proceed.
-    /\ phase' = "Active"
-    /\ delivered' = NoDelivered
-    /\ UNCHANGED <<issued, activeEra, pendingSeal, sealed, covered, closed, frontier, inflight>>
+InheritRetirement ==
+    /\ active # NoGrant
+    /\ \E p \in PendingRetired:
+        /\ bound[active] >= retirementBound[p]
+        /\ inheritedBy' = [inheritedBy EXCEPT ![p] = active]
+        /\ retiredFloor' = Max(retiredFloor, p)
+    /\ accepted' = NoAccepted
+    /\ UNCHANGED <<issued, active, bound, served, retired, retirementBound,
+                   retirementMode, verifierFloor, inflight>>
 
 Stutter ==
     UNCHANGED Vars
 
 Next ==
-    \/ Issue
-    \/ ActiveReply
-    \/ DeliverReply
+    \/ IssueGrant
+    \/ ServeReply
+    \/ DeliverAcceptedReply
     \/ DropReply
-    \/ ClearDelivered
-    \/ Seal
-    \/ Cover
-    \/ Close
-    \/ Reattach
+    \/ ClearAccepted
+    \/ SealExact
+    \/ RetireExpired
+    \/ InheritRetirement
     \/ Stutter
 
 TypeOK ==
-    /\ phase \in Phases
     /\ issued \subseteq Eras
-    /\ activeEra \in Eras
-    /\ pendingSeal \in 0..(MaxEra + 1)
-    /\ sealed \subseteq issued
-    /\ covered \subseteq sealed
-    /\ closed \subseteq covered
-    /\ frontier \in [Eras -> Frontiers]
+    /\ active \in Eras \cup {NoGrant}
+    /\ bound \in [Eras -> Frontiers]
+    /\ served \in [Eras -> Frontiers]
+    /\ retired \subseteq issued
+    /\ retirementBound \in [Eras -> Frontiers]
+    /\ retirementMode \in [Eras -> RetireModes]
+    /\ inheritedBy \in [Eras -> (Eras \cup {NoGrant})]
+    /\ retiredFloor \in 0..MaxEra
+    /\ verifierFloor \in 0..MaxEra
     /\ inflight \subseteq ReplySet
-    /\ delivered \in [valid : BOOLEAN, era : Eras, frontier : Frontiers]
+    /\ accepted \in [valid : BOOLEAN,
+                     era : 0..MaxEra,
+                     usage : Frontiers,
+                     evidenceUsage : Frontiers,
+                     floorAtAccept : 0..MaxEra,
+                     observedFloor : 0..MaxEra]
 
-LiveEras == issued \ sealed
-
-\* Stronger Primacy shape invariant: every issued era that is not the
-\* current active era has already been sealed. This is induction-friendly
-\* and does not depend on the concrete era bound; the bound only limits
-\* how many times TLC can exercise the repeated cycle in one run.
-OnlyCurrentMayRemainUnsealed ==
-    \A e \in issued:
-        e # activeEra => e \in sealed
-
-ActiveEraIssued ==
-    issued = {} \/ activeEra \in issued
-
-PrimacyInductive ==
-    /\ ActiveEraIssued
-    /\ OnlyCurrentMayRemainUnsealed
-
-\* Primacy: at most one era is live for serving.
+\* Primacy: at most one root-active grant can serve.
 Primacy ==
-    Cardinality(LiveEras) <= 1
+    active = NoGrant \/ (active \in issued /\ active \notin retired)
 
-\* Inheritance: any sealed predecessor that is marked covered must be covered by a
-\* strictly newer era whose frontier is no smaller.
-Inheritance ==
-    \A e \in covered:
-        \E h \in issued:
-            /\ h > e
-            /\ h = activeEra \/ h \in LiveEras
-            /\ frontier[h] >= frontier[e]
+\* Bounded inheritance: every pending predecessor retirement is covered by the
+\* current successor grant before that successor can serve as the active grant.
+BoundedInheritance ==
+    active = NoGrant \/
+        \A p \in PendingRetired:
+            bound[active] >= retirementBound[p]
 
-\* Silence: once an era is sealed, a valid reply may not still cite it.
-Silence ==
-    delivered.valid => delivered.era \notin sealed
+\* Root-issued bounded evidence: every accepted reply is covered by its
+\* evidence usage, and that evidence usage is inside the signed grant bound.
+EvidenceBounded ==
+    accepted.valid =>
+        /\ accepted.usage <= accepted.evidenceUsage
+        /\ accepted.evidenceUsage <= bound[accepted.era]
 
-\* Finality: every sealed predecessor must be pending cover,
-\* already covered, or already closed before reattach is legal.
+\* Silence is client-local and monotone: after a verifier has observed a
+\* retired floor, it never accepts a reply at or below that floor. A delayed old
+\* reply can only be accepted by a verifier that has not yet seen the successor
+\* floor, and it must still be inside the predecessor's signed grant bound.
+VerifierSilence ==
+    accepted.valid =>
+        /\ accepted.era > accepted.floorAtAccept
+        /\ accepted.era > accepted.observedFloor
+
+\* Finality: inherited grants are real retired predecessors, and the successor
+\* grant covers the predecessor's retirement bound. Retired-but-not-inherited is
+\* allowed as explicit pending audit state, never as silent completion.
 Finality ==
-    \A e \in sealed:
-        /\ e = pendingSeal \/ e \in covered \/ e \in closed
+    \A e \in retired:
+        inheritedBy[e] = NoGrant \/
+            /\ inheritedBy[e] \in issued
+            /\ inheritedBy[e] > e
+            /\ bound[inheritedBy[e]] >= retirementBound[e]
 
-G1_Eunomia ==
-    Inheritance
+RetiredFloorCoversInherited ==
+    \A e \in retired:
+        inheritedBy[e] # NoGrant => e <= retiredFloor
 
-G2_Primacy ==
-    Primacy
+ServedWithinGrant ==
+    \A e \in issued:
+        served[e] <= bound[e]
 
-G2_PrimacyInductive ==
-    PrimacyInductive
-
-G3_Silence ==
-    Silence
-
-G4_Finality ==
-    Finality
+RetirementWithinGrant ==
+    \A e \in retired:
+        /\ retirementMode[e] # "none"
+        /\ retirementBound[e] <= bound[e]
 
 EunomiaGuarantees ==
-    /\ G1_Eunomia
-    /\ G2_Primacy
-    /\ G3_Silence
-    /\ G4_Finality
-
-\* Stronger lemma used to support an induction-style argument for Primacy:
-\* if only the current active era may remain unsealed, then there can be
-\* at most one live era.
-THEOREM PrimacyInductiveImpliesPrimacy ==
-    PrimacyInductive => Primacy
+    /\ Primacy
+    /\ BoundedInheritance
+    /\ EvidenceBounded
+    /\ VerifierSilence
+    /\ Finality
+    /\ RetiredFloorCoversInherited
+    /\ ServedWithinGrant
+    /\ RetirementWithinGrant
 
 Spec ==
     Init /\ [][Next]_Vars

@@ -356,6 +356,12 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
+	if err := s.refreshCurrentGrantCertificateIfNeeded(ctx, holderID, nowUnixNano); err != nil {
+		return err
+	}
+	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+		return nil
+	}
 	if err := s.activeOtherGrantError(holderID, nowUnixNano); err != nil {
 		return err
 	}
@@ -374,7 +380,7 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 		return nil
 	}
 	currentEra := s.currentGrant().Era
-	protocolState, _, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
+	protocolState, cert, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:            rootproto.GrantActIssue,
 		HolderID:        holderID,
 		GrantID:         nextCoordinatorGrantID(holderID, currentEra),
@@ -396,6 +402,7 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 		return err
 	}
 	s.publishEunomiaState(protocolState)
+	s.cacheGrantCertificate(cert)
 	s.eunomiaMetrics.recordGrantEraTransition(currentEra, protocolState.ActiveGrant.Era)
 	return s.reloadAndFenceAllocators(true)
 }
@@ -435,7 +442,44 @@ func (s *Service) coordinatorGrantStillValid(holderID string, nowUnixNano int64,
 		current.ExpiresUnixNano <= nowUnixNano+clockSkew.Nanoseconds() {
 		return false
 	}
+	if !s.currentGrantCertificateValid(current) {
+		return false
+	}
 	return !s.coordinatorGrantNeedsRenewal(current)
+}
+
+func (s *Service) currentGrantCertificateValid(grant rootproto.AuthorityGrant) bool {
+	if s == nil || !grant.Present() {
+		return false
+	}
+	s.grantMu.RLock()
+	cert := s.grantView.Certificate()
+	s.grantMu.RUnlock()
+	return grantCertificateMatches(cert, grant)
+}
+
+func (s *Service) refreshCurrentGrantCertificateIfNeeded(ctx context.Context, holderID string, nowUnixNano int64) error {
+	current := s.currentGrant()
+	if !current.Present() ||
+		strings.TrimSpace(current.HolderID) != strings.TrimSpace(holderID) ||
+		!current.ActiveAt(nowUnixNano) ||
+		s.currentGrantCertificateValid(current) {
+		return nil
+	}
+	protocolState, cert, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        holderID,
+		GrantID:         current.GrantID,
+		ExpiresUnixNano: current.ExpiresUnixNano,
+		NowUnixNano:     nowUnixNano,
+		RequestedDuties: append([]rootproto.DutyGrant(nil), current.Duties...),
+	})
+	if err != nil {
+		return err
+	}
+	s.publishEunomiaState(protocolState)
+	s.cacheGrantCertificate(cert)
+	return nil
 }
 
 func (s *Service) coordinatorGrantNeedsRenewal(grant rootproto.AuthorityGrant) bool {

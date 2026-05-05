@@ -47,11 +47,16 @@ type GRPCClient struct {
 	endpoints []grpcEndpoint
 	preferred int
 
-	verifyMu         sync.Mutex
-	allocGen         witnessEraFloor
-	tsoGen           witnessEraFloor
-	metadataGen      witnessEraFloor
-	metadataAttached metadataAttachedFloor
+	verifyMu             sync.Mutex
+	verifierStore        AuthorityVerifierStore
+	verifierClusterID    string
+	authorityClockSkew   time.Duration
+	authorityMaxReplyAge time.Duration
+	now                  func() time.Time
+	allocGen             witnessEraFloor
+	tsoGen               witnessEraFloor
+	metadataGen          witnessEraFloor
+	metadataAttached     metadataAttachedFloor
 }
 
 type grpcEndpoint struct {
@@ -61,9 +66,23 @@ type grpcEndpoint struct {
 }
 
 const maxAuthorityMissRetryRounds = 3
+const defaultAuthorityClockSkewAllowance = time.Second
+const defaultAuthorityMaxReplyAge = 30 * time.Second
+
+type GRPCClientOptions struct {
+	VerifierStore               AuthorityVerifierStore
+	VerifierClusterID           string
+	AuthorityClockSkewAllowance time.Duration
+	AuthorityMaxReplyAge        time.Duration
+	Now                         func() time.Time
+}
 
 // NewGRPCClient dials a Coordinator endpoint and returns a ready client.
 func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
+	return NewGRPCClientWithOptions(ctx, addr, GRPCClientOptions{}, dialOpts...)
+}
+
+func NewGRPCClientWithOptions(ctx context.Context, addr string, clientOpts GRPCClientOptions, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
 	addrs, err := splitAddresses(addr)
 	if err != nil {
 		return nil, err
@@ -87,8 +106,33 @@ func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption
 			coord: coordpb.NewCoordinatorClient(conn),
 		})
 	}
+	store := clientOpts.VerifierStore
+	if store == nil {
+		store = NewMemoryAuthorityVerifierStore()
+	}
+	clusterID := strings.TrimSpace(clientOpts.VerifierClusterID)
+	if clusterID == "" {
+		clusterID = "default"
+	}
+	clockSkew := clientOpts.AuthorityClockSkewAllowance
+	if clockSkew <= 0 {
+		clockSkew = defaultAuthorityClockSkewAllowance
+	}
+	maxReplyAge := clientOpts.AuthorityMaxReplyAge
+	if maxReplyAge <= 0 {
+		maxReplyAge = defaultAuthorityMaxReplyAge
+	}
+	nowFn := clientOpts.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
 	return &GRPCClient{
-		endpoints: endpoints,
+		endpoints:            endpoints,
+		verifierStore:        store,
+		verifierClusterID:    clusterID,
+		authorityClockSkew:   clockSkew,
+		authorityMaxReplyAge: maxReplyAge,
+		now:                  nowFn,
 	}, nil
 }
 
@@ -711,10 +755,10 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, duty rootproto.DutyID,
 	if consumedFrontier != expectedFrontier {
 		return fmt.Errorf("%w: %s consumed_frontier=%d expected=%d", errInvalidWitness, kind, consumedFrontier, expectedFrontier)
 	}
-	if err := validateAuthorityEvidence(kind, duty, era, observedRetiredEraFloor, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier}, evidence); err != nil {
+	if err := c.validateAuthorityEvidence(kind, duty, era, observedRetiredEraFloor, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier}, evidence); err != nil {
 		return err
 	}
-	return c.advanceWitnessEraFloor(kind, era, observedRetiredEraFloor, floor)
+	return c.advanceWitnessEraFloor(kind, duty, era, observedRetiredEraFloor, floor)
 }
 
 func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResponse) error {
@@ -740,13 +784,16 @@ func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResp
 		}
 		return c.advanceAttachedMetadataFloor(resp)
 	}
-	if err := validateAuthorityEvidence("get_region_by_key", rootproto.DutyRegionLookup, era, resp.GetObservedRetiredEraFloor(), rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()}, resp.GetAuthorityEvidence()); err != nil {
+	if err := c.validateAuthorityEvidence("get_region_by_key", rootproto.DutyRegionLookup, era, resp.GetObservedRetiredEraFloor(), rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()}, resp.GetAuthorityEvidence()); err != nil {
 		return err
 	}
-	return c.advanceWitnessEraFloor("get_region_by_key", era, resp.GetObservedRetiredEraFloor(), &c.metadataGen)
+	if err := c.advanceWitnessEraFloor("get_region_by_key", rootproto.DutyRegionLookup, era, resp.GetObservedRetiredEraFloor(), &c.metadataGen); err != nil {
+		return err
+	}
+	return c.advanceMetadataVerifierRootFloor(resp)
 }
 
-func validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observedRetiredEraFloor uint64, required rootproto.DutyBound, pbEvidence *metapb.RootAuthorityEvidence) error {
+func (c *GRPCClient) validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observedRetiredEraFloor uint64, required rootproto.DutyBound, pbEvidence *metapb.RootAuthorityEvidence) error {
 	if era == rootproto.AuthorityEraAttached {
 		if duty != rootproto.DutyRegionLookup {
 			return fmt.Errorf("%w: %s attached era is only valid for metadata witnesses", errInvalidWitness, kind)
@@ -774,41 +821,51 @@ func validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observed
 	if cert.Grant.Era != era {
 		return fmt.Errorf("%w: %s grant_era=%d reply_era=%d", errInvalidWitness, kind, cert.Grant.Era, era)
 	}
-	if cert.Grant.ExpiresUnixNano <= time.Now().UnixNano() {
+	nowUnixNano := time.Now().UnixNano()
+	clockSkew := defaultAuthorityClockSkewAllowance
+	maxReplyAge := defaultAuthorityMaxReplyAge
+	if c != nil {
+		if c.now != nil {
+			nowUnixNano = c.now().UnixNano()
+		}
+		if c.authorityClockSkew > 0 {
+			clockSkew = c.authorityClockSkew
+		}
+		if c.authorityMaxReplyAge > 0 {
+			maxReplyAge = c.authorityMaxReplyAge
+		}
+	}
+	if evidence.ServedUnixNano <= 0 {
+		return fmt.Errorf("%w: %s authority evidence missing served_unix_nano", errInvalidWitness, kind)
+	}
+	if evidence.ServedUnixNano > nowUnixNano+clockSkew.Nanoseconds() {
+		return fmt.Errorf("%w: %s authority evidence served in the future", errInvalidWitness, kind)
+	}
+	if nowUnixNano-evidence.ServedUnixNano > maxReplyAge.Nanoseconds() {
+		return fmt.Errorf("%w: %s authority evidence exceeds max reply age", errInvalidWitness, kind)
+	}
+	if evidence.ServedUnixNano > cert.Grant.ExpiresUnixNano {
+		return fmt.Errorf("%w: %s authority evidence served after grant expiry", errInvalidWitness, kind)
+	}
+	if cert.Grant.ExpiresUnixNano+clockSkew.Nanoseconds() <= nowUnixNano {
 		return fmt.Errorf("%w: %s authority evidence expired", errInvalidWitness, kind)
 	}
 	if evidence.Usage.DutyID != duty {
 		return fmt.Errorf("%w: %s evidence_duty=%s required=%s", errInvalidWitness, kind, evidence.Usage.DutyID, duty)
 	}
-	grantDuty, ok := cert.Grant.Duty(duty)
+	if !rootproto.ValidateAuthorityUsage(evidence.Usage) {
+		return fmt.Errorf("%w: %s authority evidence has invalid duty scope or usage", errInvalidWitness, kind)
+	}
+	grantDuty, ok := cert.Grant.DutyFor(duty, evidence.Usage.Scope)
 	if !ok ||
-		!authorityEvidenceBoundCovers(grantDuty.Bound, evidence.Usage.Usage) ||
-		!authorityEvidenceBoundCovers(evidence.Usage.Usage, required) {
+		!rootproto.DutyBoundCovers(grantDuty.Bound, evidence.Usage.Usage) ||
+		!rootproto.DutyBoundCovers(evidence.Usage.Usage, required) {
 		return fmt.Errorf("%w: %s usage outside grant", errInvalidWitness, kind)
 	}
 	if observedRetiredEraFloor != 0 && evidence.ObservedRetiredEraFloor < observedRetiredEraFloor {
 		return fmt.Errorf("%w: %s observed_retired_floor=%d reply_observed=%d", errInvalidWitness, kind, evidence.ObservedRetiredEraFloor, observedRetiredEraFloor)
 	}
 	return nil
-}
-
-func authorityEvidenceBoundCovers(grant, usage rootproto.DutyBound) bool {
-	if grant.Kind != usage.Kind {
-		return false
-	}
-	switch usage.Kind {
-	case rootproto.DutyBoundMonotone:
-		return usage.MonotoneUpper <= grant.MonotoneUpper
-	case rootproto.DutyBoundVersion:
-		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
-			usage.MaxRootLag <= grant.MaxRootLag
-	case rootproto.DutyBoundBudget:
-		return usage.Budget <= grant.Budget
-	case rootproto.DutyBoundEpoch:
-		return usage.Epoch <= grant.Epoch
-	default:
-		return false
-	}
 }
 
 func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyResponse) error {
@@ -832,35 +889,136 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 			c.metadataAttached.descriptorRevision,
 		)
 	}
+	storeState, err := c.loadVerifierStateLocked(rootproto.DutyRegionLookup)
+	if err != nil {
+		return err
+	}
+	if !authorityRootTokenZero(storeState.MaxRootToken) &&
+		!metadataRootTokenSatisfied(currentToken, authorityRootTokenToCoordProto(storeState.MaxRootToken)) {
+		return fmt.Errorf(
+			"%w: get_region_by_key era=0 current_root_token regressed behind durable verifier floor",
+			errInvalidWitness,
+		)
+	}
+	if storeState.MaxDescriptorRevision != 0 &&
+		resp.GetDescriptorRevision() != 0 &&
+		resp.GetDescriptorRevision() < storeState.MaxDescriptorRevision {
+		return fmt.Errorf(
+			"%w: get_region_by_key era=0 descriptor_revision=%d durable_floor=%d",
+			errInvalidWitness,
+			resp.GetDescriptorRevision(),
+			storeState.MaxDescriptorRevision,
+		)
+	}
 
 	if currentToken != nil {
 		c.metadataAttached.currentToken = proto.Clone(currentToken).(*coordpb.RootToken)
 		c.metadataAttached.hasCurrentToken = true
+		storeState.MaxRootToken = authorityRootTokenFromCoordProto(currentToken)
 	}
 	if resp.GetDescriptorRevision() > c.metadataAttached.descriptorRevision {
 		c.metadataAttached.descriptorRevision = resp.GetDescriptorRevision()
 	}
+	if resp.GetDescriptorRevision() > storeState.MaxDescriptorRevision {
+		storeState.MaxDescriptorRevision = resp.GetDescriptorRevision()
+	}
+	if err := c.saveVerifierStateLocked(storeState); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedRetiredEraFloor uint64, floor *witnessEraFloor) error {
+func (c *GRPCClient) advanceMetadataVerifierRootFloor(resp *coordpb.GetRegionByKeyResponse) error {
+	c.verifyMu.Lock()
+	defer c.verifyMu.Unlock()
+	storeState, err := c.loadVerifierStateLocked(rootproto.DutyRegionLookup)
+	if err != nil {
+		return err
+	}
+	currentToken := resp.GetCurrentRootToken()
+	if !authorityRootTokenZero(storeState.MaxRootToken) &&
+		!metadataRootTokenSatisfied(currentToken, authorityRootTokenToCoordProto(storeState.MaxRootToken)) {
+		return fmt.Errorf("%w: get_region_by_key current_root_token regressed behind durable verifier floor", errInvalidWitness)
+	}
+	if storeState.MaxDescriptorRevision != 0 &&
+		resp.GetDescriptorRevision() != 0 &&
+		resp.GetDescriptorRevision() < storeState.MaxDescriptorRevision {
+		return fmt.Errorf("%w: get_region_by_key descriptor_revision=%d durable_floor=%d", errInvalidWitness, resp.GetDescriptorRevision(), storeState.MaxDescriptorRevision)
+	}
+	if currentToken != nil {
+		storeState.MaxRootToken = authorityRootTokenFromCoordProto(currentToken)
+	}
+	if resp.GetDescriptorRevision() > storeState.MaxDescriptorRevision {
+		storeState.MaxDescriptorRevision = resp.GetDescriptorRevision()
+	}
+	return c.saveVerifierStateLocked(storeState)
+}
+
+func (c *GRPCClient) advanceWitnessEraFloor(kind string, duty rootproto.DutyID, era, observedRetiredEraFloor uint64, floor *witnessEraFloor) error {
 	c.verifyMu.Lock()
 	defer c.verifyMu.Unlock()
 	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: %s era suppressed", errInvalidWitness, kind)
 	}
-	nextRetiredSeen := max(observedRetiredEraFloor, floor.retiredSeen)
+	storeState, err := c.loadVerifierStateLocked(duty)
+	if err != nil {
+		return err
+	}
+	currentRetiredSeen := max(floor.retiredSeen, storeState.RetiredEraFloor)
+	currentMaxSeen := max(floor.maxSeen, storeState.MaxSeenEra)
+	nextRetiredSeen := max(observedRetiredEraFloor, currentRetiredSeen)
 	if nextRetiredSeen != 0 && era <= nextRetiredSeen {
 		return fmt.Errorf("%w: %s era=%d retired_floor=%d", errStaleWitnessEra, kind, era, nextRetiredSeen)
 	}
-	if era < floor.maxSeen {
-		return fmt.Errorf("%w: %s era=%d max_seen=%d", errStaleWitnessEra, kind, era, floor.maxSeen)
+	if era < currentMaxSeen {
+		return fmt.Errorf("%w: %s era=%d max_seen=%d", errStaleWitnessEra, kind, era, currentMaxSeen)
+	}
+	nextMaxSeen := max(era, currentMaxSeen)
+	storeState.MaxSeenEra = nextMaxSeen
+	storeState.RetiredEraFloor = nextRetiredSeen
+	if err := c.saveVerifierStateLocked(storeState); err != nil {
+		return err
 	}
 	floor.retiredSeen = nextRetiredSeen
-	if era > floor.maxSeen {
-		floor.maxSeen = era
+	floor.maxSeen = nextMaxSeen
+	return nil
+}
+
+func (c *GRPCClient) loadVerifierStateLocked(duty rootproto.DutyID) (AuthorityVerifierState, error) {
+	key := c.authorityVerifierKey(duty)
+	if c == nil || c.verifierStore == nil {
+		return AuthorityVerifierState{Key: key}, nil
+	}
+	state, err := c.verifierStore.LoadAuthorityVerifier(key)
+	if err != nil {
+		return AuthorityVerifierState{}, fmt.Errorf("%w: load authority verifier state: %v", errInvalidWitness, err)
+	}
+	if state.Key.ClusterID == "" {
+		state.Key = key
+	}
+	return state, nil
+}
+
+func (c *GRPCClient) saveVerifierStateLocked(state AuthorityVerifierState) error {
+	if c == nil || c.verifierStore == nil {
+		return nil
+	}
+	if err := c.verifierStore.SaveAuthorityVerifier(state); err != nil {
+		return fmt.Errorf("%w: save authority verifier state: %v", errInvalidWitness, err)
 	}
 	return nil
+}
+
+func (c *GRPCClient) authorityVerifierKey(duty rootproto.DutyID) AuthorityVerifierKey {
+	clusterID := "default"
+	if c != nil && strings.TrimSpace(c.verifierClusterID) != "" {
+		clusterID = strings.TrimSpace(c.verifierClusterID)
+	}
+	return AuthorityVerifierKey{
+		ClusterID: clusterID,
+		DutyID:    duty,
+		Scope:     rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+	}
 }
 
 func requestedAllocIDCount(req *coordpb.AllocIDRequest) uint64 {
@@ -934,6 +1092,29 @@ func metadataRootTokenSatisfied(current, required *coordpb.RootToken) bool {
 
 func metadataRootTokenZero(token *coordpb.RootToken) bool {
 	return token == nil || (token.GetTerm() == 0 && token.GetIndex() == 0 && token.GetRevision() == 0)
+}
+
+func authorityRootTokenZero(token rootproto.AuthorityRootToken) bool {
+	return token.Term == 0 && token.Index == 0 && token.Revision == 0
+}
+
+func authorityRootTokenFromCoordProto(token *coordpb.RootToken) rootproto.AuthorityRootToken {
+	if token == nil {
+		return rootproto.AuthorityRootToken{}
+	}
+	return rootproto.AuthorityRootToken{
+		Term:     token.GetTerm(),
+		Index:    token.GetIndex(),
+		Revision: token.GetRevision(),
+	}
+}
+
+func authorityRootTokenToCoordProto(token rootproto.AuthorityRootToken) *coordpb.RootToken {
+	return &coordpb.RootToken{
+		Term:     token.Term,
+		Index:    token.Index,
+		Revision: token.Revision,
+	}
 }
 
 func metadataCursorAfter(a, b *coordpb.RootToken) bool {

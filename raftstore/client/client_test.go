@@ -84,14 +84,15 @@ func (mc *mockCluster) regionMeta(id uint64) (*metapb.RegionDescriptor, bool) {
 }
 
 type mockRegionResolver struct {
-	mu       sync.Mutex
-	region   *metapb.RegionDescriptor
-	regions  []*metapb.RegionDescriptor
-	err      error
-	errs     []error
-	calls    int
-	closed   bool
-	closeErr error
+	mu                             sync.Mutex
+	region                         *metapb.RegionDescriptor
+	regions                        []*metapb.RegionDescriptor
+	err                            error
+	errs                           []error
+	calls                          int
+	lastRequiredDescriptorRevision uint64
+	closed                         bool
+	closeErr                       error
 }
 
 type testStoreEndpoint struct {
@@ -183,6 +184,9 @@ func (mr *mockRegionResolver) GetRegionByKey(_ context.Context, req *coordpb.Get
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
 	mr.calls++
+	if req != nil {
+		mr.lastRequiredDescriptorRevision = req.GetRequiredDescriptorRevision()
+	}
 	if len(mr.errs) > 0 {
 		err := mr.errs[0]
 		mr.errs = mr.errs[1:]
@@ -1591,6 +1595,40 @@ func TestClientHandleRegionErrorUpdatesIndexedCache(t *testing.T) {
 	got, ok = cli.regionForKeyFromCache([]byte("omega"))
 	require.True(t, ok)
 	require.Equal(t, uint64(12), got.desc.RegionID)
+}
+
+func TestClientEpochMismatchRaisesRouteLookupDescriptorFloor(t *testing.T) {
+	resolver := &mockRegionResolver{region: &metapb.RegionDescriptor{
+		RegionId:  2,
+		StartKey:  []byte("a"),
+		EndKey:    []byte("z"),
+		Epoch:     &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+		RootEpoch: 8,
+		Peers:     []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+	}}
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "unused"}},
+		RegionResolver: resolver,
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+	cli.upsertRegionLocked(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId:  1,
+		StartKey:  []byte("a"),
+		EndKey:    []byte("z"),
+		Epoch:     &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		RootEpoch: 7,
+		Peers:     []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	}), 1)
+
+	err = cli.handleRegionError(1, &errorpb.RegionError{EpochNotMatch: &errorpb.EpochNotMatch{}})
+	require.NoError(t, err)
+	_, err = cli.regionForKeyFromResolver(context.Background(), []byte("b"))
+	require.NoError(t, err)
+
+	resolver.mu.Lock()
+	require.Equal(t, uint64(8), resolver.lastRequiredDescriptorRevision)
+	resolver.mu.Unlock()
 }
 
 func TestClientHandleRegionErrorDropsIndexedCacheWhenLeaderUnknown(t *testing.T) {

@@ -29,6 +29,7 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloor:   state.RetiredEraFloor,
 	}
 }
 
@@ -45,6 +46,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		ActiveGrant:       RootAuthorityGrantFromProto(pbState.GetActiveGrant()),
 		RetiredGrants:     RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
+		RetiredEraFloor:   pbState.GetRetiredEraFloor(),
 	}
 }
 
@@ -190,6 +192,7 @@ func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaSt
 		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloor:   state.RetiredEraFloor,
 	}
 }
 
@@ -201,6 +204,7 @@ func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.Eunomia
 		ActiveGrant:       RootAuthorityGrantFromProto(state.GetActiveGrant()),
 		RetiredGrants:     RootGrantRetirementsFromProto(state.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(state.GetGrantInheritances()),
+		RetiredEraFloor:   state.GetRetiredEraFloor(),
 	}
 }
 
@@ -580,6 +584,7 @@ func RootAuthorityEvidenceToProto(evidence rootproto.AuthorityEvidence) *metapb.
 		Usage:                   RootAuthorityUsageToProto(evidence.Usage),
 		ObservedRetirements:     RootGrantRetirementsToProto(evidence.ObservedRetirements),
 		ObservedRetiredEraFloor: evidence.ObservedRetiredEraFloor,
+		ServedUnixNano:          evidence.ServedUnixNano,
 	}
 }
 
@@ -592,6 +597,7 @@ func RootAuthorityEvidenceFromProto(evidence *metapb.RootAuthorityEvidence) root
 		Usage:                   RootAuthorityUsageFromProto(evidence.GetUsage()),
 		ObservedRetirements:     RootGrantRetirementsFromProto(evidence.GetObservedRetirements()),
 		ObservedRetiredEraFloor: evidence.GetObservedRetiredEraFloor(),
+		ServedUnixNano:          evidence.GetServedUnixNano(),
 	}
 }
 

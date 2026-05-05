@@ -96,7 +96,35 @@ func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 		ActiveGrant:       f.snapshot.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), f.snapshot.GrantInheritances...),
+		RetiredEraFloor:   f.snapshot.RetiredEraFloor,
 	}
+}
+
+func testGrantCertificate(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
+	payload, _ := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}
+}
+
+func testDutyGrantsCover(grants, usages []rootproto.DutyGrant) bool {
+	for _, usage := range usages {
+		found := false
+		for _, grant := range grants {
+			if grant.DutyID == usage.DutyID &&
+				rootproto.ScopeEqual(grant.Scope, usage.Scope) &&
+				rootproto.DutyBoundCovers(grant.Bound, usage.Bound) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *fakeStorage) Load() (rootview.Snapshot, error) {
@@ -143,10 +171,16 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
-		f.campaignCalls++
 		if f.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, f.campaignErr
 		}
+		if f.snapshot.ActiveGrant.Present() &&
+			f.snapshot.ActiveGrant.GrantID == strings.TrimSpace(cmd.GrantID) &&
+			f.snapshot.ActiveGrant.HolderID == holderID &&
+			testDutyGrantsCover(f.snapshot.ActiveGrant.Duties, cmd.RequestedDuties) {
+			return f.protocolState(), testGrantCertificate(f.snapshot.ActiveGrant), nil
+		}
+		f.campaignCalls++
 		if f.snapshot.ActiveGrant.Present() &&
 			f.snapshot.ActiveGrant.HolderID != holderID &&
 			f.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
@@ -207,7 +241,7 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 			}
 		}
 		f.advanceRootToken()
-		return f.protocolState(), rootproto.GrantCertificate{Grant: f.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test-signature")}, nil
+		return f.protocolState(), testGrantCertificate(f.snapshot.ActiveGrant), nil
 	case rootproto.GrantActSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
@@ -2081,9 +2115,15 @@ func TestServiceAuthorityEvidenceRejectsUnrootedAllocatorFrontier(t *testing.T) 
 	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.RefreshFromStorage())
 
-	evidence, err := svc.authorityEvidence(context.Background(), rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 6})
+	admission := dutyAdmission{
+		grant:          store.snapshot.ActiveGrant,
+		certificate:    rootproto.GrantCertificate{Grant: store.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test-signature")},
+		duty:           rootproto.DutyAllocID,
+		servedUnixNano: time.Now().UnixNano(),
+	}
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 6})
 	require.Error(t, err)
-	require.Nil(t, evidence)
+	require.Nil(t, proof.Evidence)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
 
@@ -2324,7 +2364,7 @@ func TestServiceDrainAndSealBlocksNewAuthorityRequests(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Contains(t, status.Convert(err).Message(), "authority is draining")
 
-	doneAdmission()
+	doneAdmission.Done()
 	require.NoError(t, <-drainDone)
 	state, inflight := svc.authorityServingSnapshot()
 	require.Equal(t, authoritySealed, state)

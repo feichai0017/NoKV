@@ -376,7 +376,7 @@ func diagnosticsInvalidSuccessorBound(grant rootproto.AuthorityGrant, retirement
 		}
 		for _, bound := range retirement.Bounds {
 			duty, ok := grant.Duty(bound.DutyID)
-			if !ok || !authorityBoundCovers(duty.Bound, bound.Bound) {
+			if !ok || !rootproto.DutyBoundCovers(duty.Bound, bound.Bound) {
 				return true
 			}
 		}

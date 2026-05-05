@@ -109,9 +109,10 @@ The mapping to concrete implementation types is direct:
 | `GrantInheritance` | `GrantInheritance` / `RootGrantInheritance` |
 | `AuthorityEvidence` | `AuthorityEvidence` / `RootAuthorityEvidence` |
 
-Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. V2 is a
-grant protocol: graceful shutdown records exact usage, while crash-before-seal
-is handled by retiring the predecessor at its root-known grant bound.
+Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. Eunomia
+is a grant protocol: graceful shutdown records exact usage, while
+crash-before-seal is handled by retiring the predecessor at its root-known grant
+bound.
 
 Grant certificates use Ed25519. Processes that sign grant certificates read
 `NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` as a base64 Ed25519 seed or private
@@ -122,46 +123,33 @@ ephemeral key with `NOKV_EUNOMIA_GRANT_ALLOW_EPHEMERAL_KEYS=1`; distributed
 deployments must not use ephemeral keys because certificates signed in one
 process cannot be verified after restart or by another process.
 
-### Eunomia production-hardening backlog
+### Eunomia production-hardening status
 
-The current grant protocol gives NoKV a bounded authority model for the
-implemented duties, but several engineering items remain before treating it as
-a production security boundary. Track these as protocol work, not as
-compatibility shims.
+The grant protocol is now hardened around root-issued bounded authority:
 
-#### P0: certificate ownership and verifier durability
+- `ApplyGrant(Issue)` returns a committed `GrantCertificate`, and coordinators
+  cache and forward that certificate. Serving code does not synthesize or sign
+  grant certificates.
+- Authority RPC admission returns an immutable admitted-grant token. Reply era,
+  usage, and `AuthorityEvidence` are derived from that same token, so a slow RPC
+  cannot be admitted under one grant and return evidence for a successor grant.
+- Every authority evidence record carries `served_unix_nano`. Coordinators stop
+  admission inside the configured clock-skew window before expiry; clients check
+  served time, max reply age, expiry, signature, duty, scope, usage coverage, and
+  monotonic floors.
+- Clients use a pluggable `AuthorityVerifierStore`. The default is in-memory for
+  tests and local development; production can opt into the protobuf file-backed
+  store, which writes with temp file, fsync, and atomic rename.
+- Root rejects unregistered duties through a `DutySpec` registry. The closed
+  implemented set is `alloc_id`, `tso`, and `region_lookup`.
+- Root persists `retired_era_floor` and compacts inherited retired-grant details
+  while keeping pending retirements and the floor needed by client/audit
+  finality checks.
+- The current TLA model and audit trace checker use the same grant vocabulary:
+  issue, exact seal, expiry-bound retirement, inheritance, reply-carried
+  evidence usage, and verifier retired floors.
 
-- Root-issued certificate cache: `ApplyGrant(Issue)` returns a committed
-  `GrantCertificate`. The coordinator should persist that certificate in its
-  local grant view and attach it to every `AuthorityEvidence` reply. A
-  coordinator must not re-sign the grant certificate; the private signing key
-  belongs to meta-root, a root-quorum signer, or KMS.
-- Verifier-only coordinator mode: a coordinator with cached root-issued
-  certificates and only public verification material should still serve
-  authority RPCs. Missing certificates or locally synthesized certificates must
-  fail closed.
-- Durable client verifier store: production clients need a pluggable
-  `AuthorityVerifierStore`. Tests can keep using an in-memory store, but
-  production clients should persist monotonic floors before accepting later
-  replies from newer eras.
-- Verifier state format: store compact protobuf records, not ad hoc JSON. The
-  record key should include `cluster_id`, `duty`, and `scope`; the value should
-  include `max_seen_era`, `retired_era_floor`, `retired_grant_ids`,
-  `max_root_token`, `max_descriptor_revision`, and per-duty usage frontier.
-  File-backed stores should use temp-write, fsync, and rename.
-
-#### P1: clock and evidence time
-
-- Add `served_unix_nano` to `AuthorityEvidence`. A verifier should check that
-  the served timestamp is within the grant expiry and within a configured
-  maximum reply age.
-- Coordinators should stop serving a grant at `expiry - max_clock_skew` and
-  renew before that local deadline. Root expiry remains the authority boundary;
-  the local skew margin is an admission policy.
-- Diagnostics should expose the skew policy, grant remaining time, renew
-  deadline, and whether admission is open, draining, or expired.
-
-#### P2: production key management
+#### Remaining production key management
 
 - Split signing and verification behind `GrantSigner`, `GrantVerifier`, and
   `KeySetProvider` interfaces. Environment variables should remain a dev/test
@@ -173,7 +161,7 @@ compatibility shims.
   active-plus-retired verification key set until all grants signed by retired
   keys have expired and their verifier floors are durable.
 
-#### P3: duty extension contract
+#### Duty extension contract
 
 Every new duty must register a complete `DutySpec`; adding a string name is not
 enough. The spec must define:
@@ -185,31 +173,8 @@ enough. The spec must define:
 - client verifier rule and audit checker rule
 
 The initial closed set is `alloc_id`, `tso`, and `region_lookup`. Unknown or
-unregistered duties should be rejected by root, coordinator admission, client
-verification, and audit.
-
-#### P4: tests and audit
-
-- Root tests: deterministic root certificate bytes, tamper rejection, key-id
-  lookup, rotation window, and missing signer failure.
-- Coordinator tests: cached root-issued certificate survives reload; a
-  verifier-only coordinator can serve; no locally re-signed certificates appear
-  in replies.
-- Client tests: durable verifier floors survive restart and still reject delayed
-  old-era replies; floor updates happen only after full evidence validation.
-- Clock tests: fast coordinator clock, slow coordinator clock, delayed reply,
-  and near-expiry renew admission.
-- Audit tests: every reply usage is covered by its evidence usage, every
-  evidence usage is inside the grant bound, retired floors are monotonic, and
-  metadata replies obey root-token and descriptor-revision rules.
-
-Recommended implementation order:
-
-1. Root-issued certificate cache in coordinator grant view.
-2. Durable verifier-state protobuf plus file/local-meta store.
-3. `served_unix_nano` and clock-skew admission policy.
-4. Key provider and key rotation.
-5. `DutySpec` registry and audit integration.
+unregistered duties are rejected by root, coordinator admission, client
+verification, and audit-facing checks.
 
 ---
 

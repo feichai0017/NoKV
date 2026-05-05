@@ -15,6 +15,7 @@ const (
 	FinalityDefectNone                  FinalityDefect = ""
 	FinalityDefectRetiredNotInherited   FinalityDefect = "retired_not_inherited"
 	FinalityDefectInvalidSuccessorBound FinalityDefect = "invalid_successor_bound"
+	FinalityDefectOrphanInheritance     FinalityDefect = "orphan_inheritance"
 )
 
 const (
@@ -27,6 +28,7 @@ const (
 type SnapshotAnomalies struct {
 	RetiredGrantNotInherited    bool
 	InvalidSuccessorBound       bool
+	OrphanInheritance           bool
 	LeaseStartCoverageViolation bool
 	FinalityDefect              FinalityDefect
 }
@@ -61,9 +63,10 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		ActiveGrant:            snapshot.ActiveGrant,
 		RetiredGrants:          append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:      append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+		RetiredEraFloor:        snapshot.RetiredEraFloor,
 	}
 	for _, retirement := range report.RetiredGrants {
-		if retirement.Era > report.RetiredEraFloor {
+		if retirement.InheritedByGrantID != "" && retirement.Era > report.RetiredEraFloor {
 			report.RetiredEraFloor = retirement.Era
 		}
 		if retirement.Present() && retirement.InheritedByGrantID == "" {
@@ -71,7 +74,10 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		}
 	}
 	report.Anomalies.InvalidSuccessorBound = invalidSuccessorBound(report.ActiveGrant, report.RetiredGrants)
+	report.Anomalies.OrphanInheritance = orphanInheritance(report.RetiredGrants, report.GrantInheritances)
 	switch {
+	case report.Anomalies.OrphanInheritance:
+		report.Anomalies.FinalityDefect = FinalityDefectOrphanInheritance
 	case report.Anomalies.InvalidSuccessorBound:
 		report.Anomalies.FinalityDefect = FinalityDefectInvalidSuccessorBound
 	case report.Anomalies.RetiredGrantNotInherited:
@@ -115,8 +121,8 @@ func invalidSuccessorBound(grant rootproto.AuthorityGrant, retirements []rootpro
 			continue
 		}
 		for _, bound := range retirement.Bounds {
-			duty, ok := grant.Duty(bound.DutyID)
-			if !ok || !authorityBoundCovers(duty.Bound, bound.Bound) {
+			duty, ok := grant.DutyFor(bound.DutyID, bound.Scope)
+			if !ok || !rootproto.DutyBoundCovers(duty.Bound, bound.Bound) {
 				return true
 			}
 		}
@@ -124,21 +130,21 @@ func invalidSuccessorBound(grant rootproto.AuthorityGrant, retirements []rootpro
 	return false
 }
 
-func authorityBoundCovers(grant, usage rootproto.DutyBound) bool {
-	if grant.Kind != usage.Kind {
-		return false
+func orphanInheritance(retirements []rootproto.GrantRetirement, inheritances []rootproto.GrantInheritance) bool {
+	retired := make(map[string]rootproto.GrantRetirement, len(retirements))
+	for _, retirement := range retirements {
+		if retirement.GrantID != "" {
+			retired[retirement.GrantID] = retirement
+		}
 	}
-	switch usage.Kind {
-	case rootproto.DutyBoundMonotone:
-		return usage.MonotoneUpper <= grant.MonotoneUpper
-	case rootproto.DutyBoundVersion:
-		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
-			usage.MaxRootLag <= grant.MaxRootLag
-	case rootproto.DutyBoundBudget:
-		return usage.Budget <= grant.Budget
-	case rootproto.DutyBoundEpoch:
-		return usage.Epoch <= grant.Epoch
-	default:
-		return false
+	for _, inheritance := range inheritances {
+		retirement, ok := retired[inheritance.PredecessorGrantID]
+		if !ok {
+			return true
+		}
+		if retirement.InheritedByGrantID != "" && retirement.InheritedByGrantID != inheritance.SuccessorGrantID {
+			return true
+		}
 	}
+	return false
 }
