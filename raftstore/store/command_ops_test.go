@@ -16,12 +16,12 @@ import (
 
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	txnmvcc "github.com/feichai0017/NoKV/txn/mvcc"
+	"github.com/feichai0017/NoKV/txn/percolator"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/stretchr/testify/require"
 )
 

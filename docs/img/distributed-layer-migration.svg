@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 940" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <style>
+      .title { font-size: 38px; font-weight: 760; fill: #0f172a; }
+      .subtitle { font-size: 17px; font-weight: 520; fill: #64748b; }
+      .section { font-size: 13px; font-weight: 780; letter-spacing: 1.8px; fill: #475569; }
+      .card-title { font-size: 21px; font-weight: 760; fill: #0f172a; }
+      .step-title { font-size: 18px; font-weight: 760; fill: #0f172a; }
+      .body { font-size: 14px; font-weight: 520; fill: #475569; }
+      .small { font-size: 12px; font-weight: 520; fill: #64748b; }
+      .mono { font-family: 'SFMono-Regular', ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 650; fill: #334155; }
+      .mono-light { font-family: 'SFMono-Regular', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 650; fill: #64748b; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="940" fill="#f8fafc"/>
+
+  <text x="80" y="72" class="title">Standalone to Distributed Cluster</text>
+  <text x="80" y="104" class="subtitle">Promote an existing NoKV workdir into a replicated raftstore cluster without replacing the storage core.</text>
+
+  <rect x="80" y="138" width="1440" height="158" rx="22" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="112" y="174" class="section">POSITIONING</text>
+
+  <rect x="122" y="196" width="405" height="58" rx="16" fill="#fff1f2" stroke="#fb7185" stroke-width="2"/>
+  <text x="324" y="219" text-anchor="middle" class="step-title">Typical migration</text>
+  <text x="324" y="240" text-anchor="middle" class="small">dump/import · dual write · external scripts · manual cutover</text>
+
+  <path d="M 545 225 L 610 225" fill="none" stroke="#94a3b8" stroke-width="2.2" marker-end="url(#arrow)"/>
+
+  <rect x="630" y="196" width="405" height="58" rx="16" fill="#ecfeff" stroke="#22d3ee" stroke-width="2"/>
+  <text x="832" y="219" text-anchor="middle" class="step-title">NoKV migration contract</text>
+  <text x="832" y="240" text-anchor="middle" class="small">same workdir · explicit mode · recoverable promotion</text>
+
+  <path d="M 1053 225 L 1118 225" fill="none" stroke="#94a3b8" stroke-width="2.2" marker-end="url(#arrow)"/>
+
+  <rect x="1138" y="196" width="340" height="58" rx="16" fill="#ecfdf5" stroke="#34d399" stroke-width="2"/>
+  <text x="1308" y="219" text-anchor="middle" class="step-title">Current scope</text>
+  <text x="1308" y="240" text-anchor="middle" class="small">offline · one-shot seed · normal raft expansion</text>
+
+  <rect x="80" y="335" width="1440" height="405" rx="22" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="112" y="371" class="section">PROMOTION PIPELINE</text>
+
+  <rect x="120" y="430" width="250" height="132" rx="18" fill="#fffbeb" stroke="#f59e0b" stroke-width="2.4"/>
+  <text x="245" y="462" text-anchor="middle" class="card-title">Standalone</text>
+  <text x="245" y="488" text-anchor="middle" class="mono">local.Open(workdir)</text>
+  <line x1="150" y1="505" x2="340" y2="505" stroke="#fde68a" stroke-width="1.5"/>
+  <text x="150" y="530" class="body">- WAL / LSM / manifest</text>
+  <text x="150" y="552" class="body">- no raft region truth</text>
+
+  <rect x="460" y="430" width="250" height="132" rx="18" fill="#eff6ff" stroke="#60a5fa" stroke-width="2.4"/>
+  <text x="585" y="462" text-anchor="middle" class="card-title">Plan</text>
+  <text x="585" y="488" text-anchor="middle" class="mono">nokv migrate plan</text>
+  <line x1="490" y1="505" x2="680" y2="505" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="490" y="530" class="body">- read-only preflight</text>
+  <text x="490" y="552" class="body">- reject unsafe workdirs</text>
+
+  <rect x="800" y="392" width="330" height="208" rx="20" fill="#eef2ff" stroke="#6366f1" stroke-width="2.8"/>
+  <text x="965" y="426" text-anchor="middle" class="card-title">Promote</text>
+  <text x="965" y="452" text-anchor="middle" class="mono">nokv migrate init</text>
+  <line x1="835" y1="470" x2="1095" y2="470" stroke="#c7d2fe" stroke-width="1.5"/>
+  <text x="835" y="496" class="body">1. write mode = preparing</text>
+  <text x="835" y="520" class="body">2. persist full-range RegionMeta</text>
+  <text x="858" y="539" class="mono-light">raftstore/localmeta</text>
+  <text x="835" y="563" class="body">3. export seed SST snapshot</text>
+  <text x="835" y="587" class="body">4. synthesize raft seed state</text>
+
+  <rect x="1220" y="430" width="250" height="132" rx="18" fill="#ecfdf5" stroke="#10b981" stroke-width="2.4"/>
+  <text x="1345" y="462" text-anchor="middle" class="card-title">Serve</text>
+  <text x="1345" y="488" text-anchor="middle" class="mono">nokv serve</text>
+  <line x1="1250" y1="505" x2="1440" y2="505" stroke="#bbf7d0" stroke-width="1.5"/>
+  <text x="1250" y="530" class="body">- load localmeta catalog</text>
+  <text x="1250" y="552" class="body">- start raftstore peer</text>
+
+  <path d="M 370 496 L 460 496" fill="none" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 710 496 L 800 496" fill="none" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 1130 496 L 1220 496" fill="none" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="325" y="646" width="950" height="58" rx="17" fill="#fff7ed" stroke="#fb923c" stroke-width="2.2"/>
+  <text x="800" y="671" text-anchor="middle" class="step-title">Expand through normal distributed operations</text>
+  <text x="800" y="693" text-anchor="middle" class="small">add peer · snapshot install · membership validation · leader transfer · remove peer</text>
+
+  <path d="M 1345 562 L 1345 623 L 800 623 L 800 646" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+
+  <rect x="80" y="780" width="1440" height="112" rx="22" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="112" y="816" class="section">CORRECTNESS BOUNDARIES</text>
+
+  <rect x="120" y="842" width="305" height="34" rx="11" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="272" y="864" text-anchor="middle" class="small">standalone writes stop before init</text>
+
+  <rect x="455" y="842" width="305" height="34" rx="11" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="607" y="864" text-anchor="middle" class="small">half-promoted workdir refuses local open</text>
+
+  <rect x="790" y="842" width="305" height="34" rx="11" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="942" y="864" text-anchor="middle" class="small">engine manifest stays engine-only</text>
+
+  <rect x="1125" y="842" width="355" height="34" rx="11" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="1302" y="864" text-anchor="middle" class="small">region truth lives in localmeta and coordinator</text>
+
+  <text x="80" y="920" class="small">Design intent: migration is not a side-channel data rewrite. It is a stateful promotion protocol that preserves the local storage core, creates distributed recovery truth, and hands execution to raftstore.</text>
+</svg>

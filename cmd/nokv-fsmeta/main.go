@@ -37,6 +37,7 @@ func main() {
 		metricsAddr            = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 		negCacheDir            = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
 		dirPageDir             = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
+		inodeAffinityShards    = flag.Int("inode-affinity-shards", 4, "local LSM shard count used to choose Create inode IDs that match dentry shard placement")
 		sessionCleanupInterval = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit    = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
 	)
@@ -53,6 +54,7 @@ func main() {
 		CoordinatorAddr:        *coordAddr,
 		NegativeCacheDir:       *negCacheDir,
 		DirPageCacheDir:        *dirPageDir,
+		InodeAffinityShards:    *inodeAffinityShards,
 		SessionCleanupInterval: *sessionCleanupInterval,
 		SessionCleanupLimit:    uint32(*sessionCleanupLimit),
 	})

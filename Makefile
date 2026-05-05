@@ -112,8 +112,8 @@ test-history-smoke:
 # and rooted control-plane surfaces.
 test-model-smoke:
 	@echo "Running distributed model smoke tests..."
-	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-8} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-64} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
-	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-2} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-4} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-8} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-64} go test ./txn/percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-2} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-4} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./txn/percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
 	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-1} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-6} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
 	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-2} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-24} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
 
@@ -121,7 +121,7 @@ test-model-smoke:
 # boundaries.
 test-crash-matrix-smoke:
 	@echo "Running crash-consistency matrix smoke tests..."
-	go test ./percolator -run TestPercolatorCrashMatrix -count=1 -v
+	go test ./txn/percolator -run TestPercolatorCrashMatrix -count=1 -v
 	go test ./raftstore/peer -run TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks -count=1 -v
 
 # Run a reproducible seed-driven fault schedule across real split-region
@@ -133,7 +133,7 @@ test-deterministic-simulation-smoke:
 # Run the highest-signal distributed correctness suites before the full package sweep.
 test-correctness-smoke: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke
 	@echo "Running distributed correctness smoke tests..."
-	go test -p $(GO_TEST_P) ./percolator/... ./raftstore/client ./raftstore/mvcc ./raftstore/store ./raftstore/integration ./coordinator/integration ./meta/root/integration -count=1
+	go test -p $(GO_TEST_P) ./txn/percolator/... ./raftstore/client ./raftstore/mvcc ./raftstore/store ./raftstore/integration ./coordinator/integration ./meta/root/integration -count=1
 
 # Run longer seeded model/fault schedules plus failpoint-heavy suites. This is
 # intended for nightly CI and manual release hardening, not every PR edit loop.
@@ -143,11 +143,11 @@ test-correctness-nightly:
 	NOKV_RAFTSTORE_CONTRACT_SEEDS=$${NOKV_RAFTSTORE_CONTRACT_SEEDS:-8} NOKV_RAFTSTORE_CONTRACT_STEPS=$${NOKV_RAFTSTORE_CONTRACT_STEPS:-120} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaContractOnSplitCluster -count=1 -v
 	NOKV_CONTRACT_HISTORY_SEEDS=$${NOKV_CONTRACT_HISTORY_SEEDS:-64} NOKV_CONTRACT_HISTORY_STEPS=$${NOKV_CONTRACT_HISTORY_STEPS:-240} NOKV_CONTRACT_HISTORY_BATCH=$${NOKV_CONTRACT_HISTORY_BATCH:-3} go test ./fsmeta/contract -run TestFSMetaExecutorConcurrentHistoryContract -count=1 -v
 	NOKV_RAFTSTORE_HISTORY_SEEDS=$${NOKV_RAFTSTORE_HISTORY_SEEDS:-4} NOKV_RAFTSTORE_HISTORY_STEPS=$${NOKV_RAFTSTORE_HISTORY_STEPS:-80} NOKV_RAFTSTORE_HISTORY_BATCH=$${NOKV_RAFTSTORE_HISTORY_BATCH:-3} go test ./fsmeta/integration -run TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster -count=1 -v
-	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-64} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-256} go test ./percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
-	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-16} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-24} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_MODEL_SEEDS=$${NOKV_PERCOLATOR_MODEL_SEEDS:-64} NOKV_PERCOLATOR_MODEL_STEPS=$${NOKV_PERCOLATOR_MODEL_STEPS:-256} go test ./txn/percolator -run TestTxnModelGeneratedScheduleIsSerializable -count=1 -v
+	NOKV_PERCOLATOR_CONCURRENT_SEEDS=$${NOKV_PERCOLATOR_CONCURRENT_SEEDS:-16} NOKV_PERCOLATOR_CONCURRENT_WAVES=$${NOKV_PERCOLATOR_CONCURRENT_WAVES:-24} NOKV_PERCOLATOR_CONCURRENT_BATCH=$${NOKV_PERCOLATOR_CONCURRENT_BATCH:-4} go test ./txn/percolator -run TestTxnModelConcurrentHistoryIsSerializable -count=1 -v
 	NOKV_RAFTSTORE_FAULT_SEEDS=$${NOKV_RAFTSTORE_FAULT_SEEDS:-4} NOKV_RAFTSTORE_FAULT_STEPS=$${NOKV_RAFTSTORE_FAULT_STEPS:-18} go test ./raftstore/integration -run TestTwoPhaseCommitFaultScheduleAcrossSplitCluster -count=1 -v
 	NOKV_ROOT_MODEL_SEEDS=$${NOKV_ROOT_MODEL_SEEDS:-16} NOKV_ROOT_MODEL_STEPS=$${NOKV_ROOT_MODEL_STEPS:-128} go test ./coordinator/integration -run TestRootModelReplayAndWatchSchedule -count=1 -v
-	go test ./percolator -run TestPercolatorCrashMatrix -count=3 -v
+	go test ./txn/percolator -run TestPercolatorCrashMatrix -count=3 -v
 	go test ./raftstore/peer -run TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks -count=3 -v
 	NOKV_SIMULATION_SEEDS=$${NOKV_SIMULATION_SEEDS:-4} NOKV_SIMULATION_STEPS=$${NOKV_SIMULATION_STEPS:-18} go test ./raftstore/integration -run TestDeterministicFaultSimulationAcrossSplitCluster -count=1 -v
 	CHAOS_TRACE_METRICS=1 go test ./raftstore/transport ./raftstore/integration -run 'Test(GRPCTransport|PartitionedFollower|TransferLeader|RepeatedLinkFlap|ExpandSnapshotInstallInterruptedBeforePublish)' -count=1 -v

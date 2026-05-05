@@ -2,6 +2,7 @@ package raftstore
 
 import (
 	"context"
+	"sync/atomic"
 
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -20,6 +21,10 @@ type atomicMutateFastPath interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
 }
 
+type statsProvider interface {
+	Stats() map[string]any
+}
+
 // TSOClient is the coordinator timestamp surface required by Runner.
 type TSOClient interface {
 	Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error)
@@ -29,8 +34,9 @@ type TSOClient interface {
 // fsmeta TxnRunner contract. It intentionally contains no filesystem
 // semantics; fsmeta/exec remains the only interpreter of OperationPlan.
 type Runner struct {
-	kv  KVClient
-	tso TSOClient
+	kv                           KVClient
+	tso                          TSOClient
+	atomicRunnerUnsupportedTotal atomic.Uint64
 }
 
 // NewRunner constructs a TxnRunner backed by raftstore KV RPCs and coordinator
@@ -125,12 +131,31 @@ func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
 }
 
+// Stats returns runtime-adapter counters. Nested KV stats come from the real
+// raftstore client when available, keeping fsmeta expvar useful without making
+// optional observability part of KVClient.
+func (r *Runner) Stats() map[string]any {
+	if r == nil {
+		return map[string]any{
+			"atomic_runner_unsupported_total": uint64(0),
+		}
+	}
+	out := map[string]any{
+		"atomic_runner_unsupported_total": r.atomicRunnerUnsupportedTotal.Load(),
+	}
+	if stats, ok := r.kv.(statsProvider); ok {
+		out["kv"] = stats.Stats()
+	}
+	return out
+}
+
 // TryAtomicMutate delegates to the region-local 1PC fast path when the
 // underlying KV client supports it. handled=false means callers should keep
 // the regular Percolator 2PC path.
 func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	fast, ok := r.kv.(atomicMutateFastPath)
 	if !ok {
+		r.atomicRunnerUnsupportedTotal.Add(1)
 		return false, nil
 	}
 	return fast.TryAtomicMutate(ctx, primary, predicates, mutations, startVersion, commitVersion)

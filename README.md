@@ -232,7 +232,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
-| [`percolator/`](./percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
+| [`txn/percolator/`](./txn/percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
 | [`local/`](./local) | Embedded single-node DB facade, local stats, workdir mode, and local-only write runtime internals | [Runtime](docs/runtime.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |

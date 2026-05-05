@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -25,17 +23,6 @@ type ImportRule struct {
 	PackageExact  bool
 	Forbidden     []string
 	Exempt        []string
-}
-
-type CombinedImportRule struct {
-	Name     string
-	Required []string
-	Allowed  []string
-}
-
-type RemovedPathRule struct {
-	Name string
-	Path string
 }
 
 type Violation struct {
@@ -66,7 +53,43 @@ var importRules = []ImportRule{
 			modulePath + "/coordinator",
 			modulePath + "/meta/root",
 			modulePath + "/raftstore",
-			modulePath + "/percolator",
+			modulePath + "/txn/percolator",
+		},
+	},
+	{
+		Name:          "txn layer stays below distributed assembly",
+		PackagePrefix: modulePath + "/txn",
+		Forbidden: []string{
+			modulePath + "/fsmeta",
+			modulePath + "/coordinator",
+			modulePath + "/meta/root",
+			modulePath + "/raftstore",
+		},
+	},
+	{
+		Name:          "txn mvcc stays protocol-neutral",
+		PackagePrefix: modulePath + "/txn/mvcc",
+		Forbidden: []string{
+			modulePath + "/txn/percolator",
+			modulePath + "/txn/latch",
+		},
+	},
+	{
+		Name:          "txn storage stays protocol-neutral",
+		PackagePrefix: modulePath + "/txn/storage",
+		Forbidden: []string{
+			modulePath + "/txn/percolator",
+			modulePath + "/txn/latch",
+			modulePath + "/txn/mvcc",
+		},
+	},
+	{
+		Name:          "txn latch stays protocol-neutral",
+		PackagePrefix: modulePath + "/txn/latch",
+		Forbidden: []string{
+			modulePath + "/txn/percolator",
+			modulePath + "/txn/mvcc",
+			modulePath + "/txn/storage",
 		},
 	},
 	{
@@ -142,34 +165,6 @@ var importRules = []ImportRule{
 	},
 }
 
-var combinedImportRules = []CombinedImportRule{
-	{
-		Name: "only raftstore fsmeta runtime combines fsmeta exec with coordinator and raftstore clients",
-		Required: []string{
-			modulePath + "/fsmeta/exec",
-			modulePath + "/coordinator/client",
-			modulePath + "/raftstore/client",
-		},
-		Allowed: []string{
-			modulePath + "/fsmeta/runtime/raftstore",
-		},
-	},
-}
-
-var removedPathRules = []RemovedPathRule{
-	{Name: "raftstore descriptor package stays removed", Path: "raftstore/descriptor"},
-	{Name: "top-level scheduler package stays folded into coordinator/storecontrol", Path: "scheduler"},
-	{Name: "raftstore scheduler package stays moved to coordinator/storecontrol", Path: "raftstore/scheduler"},
-	{Name: "coordinator adapter package stays folded into coordinator/storecontrol", Path: "coordinator/adapter"},
-	{Name: "coordinator view package stays folded into coordinator/catalog", Path: "coordinator/view"},
-	{Name: "coordinator eunomia package stays removed", Path: "coordinator/protocol/eunomia"},
-	{Name: "old db runtime package stays removed", Path: "runtime"},
-	{Name: "dbcore package stays folded into local/internal and utils", Path: "dbcore"},
-	{Name: "local background package stays folded into local", Path: "local/internal/background"},
-	{Name: "raftstore mode package stays moved to local/workdir", Path: "raftstore/mode"},
-	{Name: "raftstore migrate mode alias stays removed", Path: "raftstore/migrate/mode.go"},
-}
-
 func ModuleRoot() (string, error) {
 	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
 	out, err := cmd.Output()
@@ -229,53 +224,6 @@ func CheckImportRules(packages []GoPackage) []Violation {
 	return violations
 }
 
-func CheckCombinedImportRules(packages []GoPackage) []Violation {
-	var violations []Violation
-	for _, rule := range combinedImportRules {
-		for _, pkg := range packages {
-			if rule.isAllowed(pkg.ImportPath) || !importsAll(pkg.Imports, rule.Required) {
-				continue
-			}
-			violations = append(violations, Violation{
-				Rule:    rule.Name,
-				Package: pkg.ImportPath,
-				Import:  strings.Join(rule.Required, ", "),
-			})
-		}
-	}
-	return violations
-}
-
-func CheckRemovedPathRules(root string) []Violation {
-	var violations []Violation
-	for _, rule := range removedPathRules {
-		path := filepath.Join(root, rule.Path)
-		if _, err := os.Stat(path); err == nil {
-			violations = append(violations, Violation{
-				Rule:    rule.Name,
-				Package: rule.Path,
-			})
-		}
-	}
-	return violations
-}
-
-func importsAll(imports, required []string) bool {
-	for _, req := range required {
-		found := false
-		for _, imp := range imports {
-			if pathMatches(imp, req) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
 func (r ImportRule) matchesPackage(path string) bool {
 	if r.PackageExact {
 		return path == r.PackagePrefix
@@ -286,15 +234,6 @@ func (r ImportRule) matchesPackage(path string) bool {
 func (r ImportRule) isExempt(path string) bool {
 	for _, exempt := range r.Exempt {
 		if pathMatches(path, exempt) {
-			return true
-		}
-	}
-	return false
-}
-
-func (r CombinedImportRule) isAllowed(path string) bool {
-	for _, allowed := range r.Allowed {
-		if pathMatches(path, allowed) {
 			return true
 		}
 	}

@@ -7,7 +7,7 @@ import (
 
 	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator/latch"
+	"github.com/feichai0017/NoKV/txn/latch"
 )
 
 func openBenchmarkDB(b *testing.B) *local.DB {

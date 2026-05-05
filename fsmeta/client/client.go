@@ -16,7 +16,7 @@ import (
 
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
 type Client interface {
-	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
@@ -66,12 +66,18 @@ func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption
 	}, nil
 }
 
-func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	if err := c.requireRPC(); err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
-	_, err := c.rpc.Create(ctx, createRequestToProto(req, inode))
-	return translateRPCError(err)
+	resp, err := c.rpc.Create(ctx, createRequestToProto(req))
+	if err != nil {
+		return fsmeta.CreateResult{}, translateRPCError(err)
+	}
+	return fsmeta.CreateResult{
+		Dentry: dentryFromProto(resp.GetDentry()),
+		Inode:  inodeFromProto(resp.GetInode()),
+	}, nil
 }
 
 func (c *GRPCClient) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {

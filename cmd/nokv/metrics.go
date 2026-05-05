@@ -9,6 +9,7 @@ import (
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/txn/percolator"
 )
 
 type debugSnapshotFunc func() any
@@ -59,6 +60,7 @@ func installCoordinatorExpvar(svc *coordserver.Service) {
 var (
 	metaRootExpvarOnce     sync.Once
 	metaRootExpvarProvider atomic.Value
+	storePercolatorOnce    sync.Once
 )
 
 type metaRootExpvarContext struct {
@@ -115,6 +117,17 @@ func metaRootSnapshot(ctx metaRootExpvarContext) map[string]any {
 		out["leader_id"] = leader.LeaderID()
 	}
 	return out
+}
+
+// installStorePercolatorExpvar publishes process-local Percolator counters for
+// store processes. Client-side fsmeta metrics say why 1PC was admitted or
+// skipped; this store-side metric says whether the request reached MVCC apply.
+func installStorePercolatorExpvar() {
+	storePercolatorOnce.Do(func() {
+		expvar.Publish("nokv_store_percolator", expvar.Func(func() any {
+			return percolator.AtomicMutateStats()
+		}))
+	})
 }
 
 // startExpvarServer starts an optional HTTP endpoint exposing /debug/vars.

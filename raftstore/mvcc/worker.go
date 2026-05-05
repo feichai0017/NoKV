@@ -7,7 +7,7 @@ import (
 	"time"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 

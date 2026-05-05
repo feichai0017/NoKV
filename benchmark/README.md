@@ -105,6 +105,11 @@ NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args 
   -fsmeta_readdirplus=true
 ```
 
+Native fsmeta now assigns Create inode IDs inside the fsmeta service using the
+coordinator `AllocID` authority and a shard-affine allocator. The
+`-fsmeta_create_affinity_shards` flag is only a diagnostic input for the
+generic-KV comparison driver; it does not affect the native fsmeta service.
+
 For derived-cache runs, start `nokv-fsmeta` with:
 
 ```bash

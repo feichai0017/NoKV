@@ -44,13 +44,18 @@ type Options struct {
 
 	// NegativeCacheDir enables the slab-backed negative dentry cache. Empty
 	// disables it. This is a Derived cache: authoritative reads still fall
-	// back to raftstore/percolator on miss or invalidation.
+	// back to raftstore plus txn/percolator on miss or invalidation.
 	NegativeCacheDir string
 
 	// DirPageCacheDir enables the slab-backed ReadDirPlus page cache. Empty
 	// disables it. Pages are derived from authoritative LSM reads and are
 	// invalidated by fsmeta mutations.
 	DirPageCacheDir string
+
+	// InodeAffinityShards must match the store-side LSM shard count for Create
+	// to choose IDs that can hit the region-local 1PC apply group. Mismatch is
+	// safe because the percolator fallback gate remains authoritative.
+	InodeAffinityShards int
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -121,6 +126,16 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = coord.Close()
 		return nil, fmt.Errorf("init runner: %w", err)
 	}
+	shards := opts.InodeAffinityShards
+	if shards == 0 {
+		shards = defaultInodeAffinityShards
+	}
+	inodes, err := NewShardAffineInodeAllocator(coord, shards)
+	if err != nil {
+		_ = kv.Close()
+		_ = coord.Close()
+		return nil, fmt.Errorf("init inode allocator: %w", err)
+	}
 
 	mountTTL := opts.MountTTL
 	if mountTTL == 0 {
@@ -134,6 +149,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
 	pub := rootPublisher{coord: coord}
 	execOpts := []fsmetaexec.Option{
+		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithMountResolver(mounts),
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),

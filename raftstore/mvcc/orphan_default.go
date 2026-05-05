@@ -7,7 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 // OrphanDefaultOptions bounds one CFDefault orphan cleanup pass.

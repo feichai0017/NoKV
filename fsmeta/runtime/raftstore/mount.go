@@ -55,7 +55,9 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fs
 		return fsmetaexec.MountAdmission{}, err
 	}
 	record, err := mountFromProto(resp)
-	c.put(mount, now, record, err)
+	if err == nil {
+		c.put(mount, now, record, nil)
+	}
 	c.countAdmissionReject(record, err)
 	return record, err
 }

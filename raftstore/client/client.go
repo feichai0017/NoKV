@@ -6,6 +6,7 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -49,17 +50,21 @@ type RetryPolicy struct {
 
 // Client provides Region-aware helpers for StoreKV RPCs, including 2PC.
 type Client struct {
-	mu                 sync.RWMutex
-	stores             map[uint64]*storeConn
-	regions            map[uint64]*regionState
-	regionIndex        []regionRange
-	regionResolver     RegionResolver
-	storeResolver      StoreResolver
-	routeLookupTimeout time.Duration
-	storeRevalidateIn  time.Duration
-	dialTimeout        time.Duration
-	dialOpts           []grpc.DialOption
-	retry              RetryPolicy
+	mu                       sync.RWMutex
+	stores                   map[uint64]*storeConn
+	regions                  map[uint64]*regionState
+	regionIndex              []regionRange
+	regionResolver           RegionResolver
+	storeResolver            StoreResolver
+	routeLookupTimeout       time.Duration
+	storeRevalidateIn        time.Duration
+	dialTimeout              time.Duration
+	dialOpts                 []grpc.DialOption
+	retry                    RetryPolicy
+	atomicRouteSingleTotal   atomic.Uint64
+	atomicRouteMultiTotal    atomic.Uint64
+	atomicLocalFallbackTotal atomic.Uint64
+	atomicSuccessTotal       atomic.Uint64
 }
 
 // New constructs a Client using the provided configuration.
@@ -129,4 +134,23 @@ func (c *Client) Close() error {
 		}
 	}
 	return first
+}
+
+// Stats exposes client-side fast-path admission counters. They are counted per
+// route attempt so region churn and retry loops are visible in benchmark runs.
+func (c *Client) Stats() map[string]any {
+	if c == nil {
+		return map[string]any{
+			"atomic_route_single_total":   uint64(0),
+			"atomic_route_multi_total":    uint64(0),
+			"atomic_local_fallback_total": uint64(0),
+			"atomic_success_total":        uint64(0),
+		}
+	}
+	return map[string]any{
+		"atomic_route_single_total":   c.atomicRouteSingleTotal.Load(),
+		"atomic_route_multi_total":    c.atomicRouteMultiTotal.Load(),
+		"atomic_local_fallback_total": c.atomicLocalFallbackTotal.Load(),
+		"atomic_success_total":        c.atomicSuccessTotal.Load(),
+	}
 }

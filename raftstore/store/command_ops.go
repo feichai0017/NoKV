@@ -157,7 +157,8 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 		return nil, fmt.Errorf("raftstore: command %d context unavailable: %w", req.Header.GetRequestId(), err)
 	}
 	id := req.Header.RequestId
-	prop, err := s.cmds.pipe.registerProposal(id)
+	proposalKey := proposalKeyFromHeader(req.Header)
+	prop, err := s.cmds.pipe.registerProposal(proposalKey)
 	if err != nil {
 		s.recordAdmission(Admission{
 			Class:     AdmissionClassWrite,
@@ -181,7 +182,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 		return nil, errCommandPipelineUnavailable
 	}
 	if err := s.router.SendCommand(peer.ID(), req); err != nil {
-		s.cmds.pipe.removeProposal(id)
+		s.cmds.pipe.removeProposal(proposalKey)
 		s.recordAdmission(Admission{
 			Class:     AdmissionClassWrite,
 			Reason:    AdmissionReasonUnknown,
@@ -219,7 +220,7 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 		}
 		return result.resp, nil
 	case <-ctx.Done():
-		s.cmds.pipe.removeProposal(id)
+		s.cmds.pipe.removeProposal(proposalKey)
 		return nil, fmt.Errorf("raftstore: command %d failed while waiting: %w", id, ctx.Err())
 	}
 }

@@ -25,12 +25,15 @@ func TestFSMetaExecutorModelContract(t *testing.T) {
 		t.Run(fmt.Sprintf("seed_%03d", seed), func(t *testing.T) {
 			model := NewModel("vol")
 			runner := newVersionedRunner()
-			executor, err := fsmetaexec.New(runner, fsmetaexec.WithClock(func() time.Time {
-				return time.Unix(0, model.NowUnixNs)
-			}))
+			ops := GenerateScript(seed, steps)
+			executor, err := fsmetaexec.New(runner,
+				fsmetaexec.WithInodeAllocator(newScriptInodeAllocator(ops)),
+				fsmetaexec.WithClock(func() time.Time {
+					return time.Unix(0, model.NowUnixNs)
+				}),
+			)
 			require.NoError(t, err)
 
-			ops := GenerateScript(seed, steps)
 			err = Run(context.Background(), executor, model, ops)
 			require.NoError(t, err, "seed=%d steps=%d", seed, steps)
 		})

@@ -4,7 +4,7 @@
 
 - Topic: NoKV's namespace metadata substrate.
 - Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
-- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore/percolator/coordinator`.
+- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore + txn/percolator + coordinator`.
 - Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime adapter is `fsmeta/runtime/raftstore.Open`.
 
 ## 1. Conclusion
@@ -253,7 +253,7 @@ The fsmeta benchmark lives in `benchmark/fsmeta`. The core comparison is two pat
 | Driver | Behavior |
 |---|---|
 | `native-fsmeta` | Calls the fsmeta typed API. |
-| `generic-kv` | Uses the same raftstore/percolator substrate but stitches the metadata schema on the client. |
+| `generic-kv` | Uses the same raftstore + txn/percolator substrate but stitches the metadata schema on the client. |
 
 Stage 1 headline: `ReadDirPlus` average latency 12.0 ms vs 510.3 ms — about 42.5×. Result CSVs are in `benchmark/fsmeta/results/`.
 

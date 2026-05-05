@@ -12,10 +12,10 @@ import (
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	local "github.com/feichai0017/NoKV/local"
-	"github.com/feichai0017/NoKV/percolator"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/txn/mvcc"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )

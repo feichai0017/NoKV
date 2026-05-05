@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	local "github.com/feichai0017/NoKV/local"
-	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
@@ -34,6 +33,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	transportpkg "github.com/feichai0017/NoKV/raftstore/transport"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/feichai0017/NoKV/utils"
 
 	"google.golang.org/grpc/credentials"

@@ -431,11 +431,13 @@ func (c *Client) TryAtomicMutate(ctx context.Context, primary []byte, predicates
 			return false, err
 		}
 		if len(groups) != 1 {
+			c.atomicRouteMultiTotal.Add(1)
 			if ambiguous {
 				return true, &RetryExhaustedError{Operation: "atomic mutate"}
 			}
 			return false, nil
 		}
+		c.atomicRouteSingleTotal.Add(1)
 		var group *mutationRouteBatch
 		for _, candidate := range groups {
 			group = candidate
@@ -463,11 +465,13 @@ func (c *Client) TryAtomicMutate(ctx context.Context, primary []byte, predicates
 			continue
 		}
 		if resp.GetFallbackToTwoPhaseCommit() {
+			c.atomicLocalFallbackTotal.Add(1)
 			return false, nil
 		}
 		if err := txnKeyError(resp.GetError()); err != nil {
 			return true, err
 		}
+		c.atomicSuccessTotal.Add(1)
 		return true, nil
 	}
 	if lastErr != nil {
@@ -500,6 +504,12 @@ func (c *Client) tryAtomicMutateRegionOnce(ctx context.Context, region regionSna
 	resp, err := cl.TryAtomicMutate(ctx, req)
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
+	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("atomic mutate", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("atomic mutate", region.desc.RegionID, "missing atomic mutate payload")
 	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
@@ -693,6 +703,12 @@ func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, 
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("prewrite", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("prewrite", region.desc.RegionID, "missing prewrite payload")
+	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
@@ -812,6 +828,12 @@ func (c *Client) commitRegionOnce(ctx context.Context, region regionSnapshot, ke
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("commit", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("commit", region.desc.RegionID, "missing commit payload")
+	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
@@ -888,6 +910,12 @@ func (c *Client) batchRollbackRegionOnce(ctx context.Context, region regionSnaps
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("rollback", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("rollback", region.desc.RegionID, "missing rollback payload")
+	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
@@ -930,6 +958,9 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 		if err != nil {
 			return nil, normalizeRPCError(err)
 		}
+		if resp == nil {
+			return nil, kvPayloadProtocolError("check txn status", region.desc.RegionID, "nil kv response")
+		}
 		if regionErr := resp.GetRegionError(); regionErr != nil {
 			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
@@ -939,6 +970,9 @@ func (c *Client) CheckTxnStatus(ctx context.Context, primary []byte, lockTs, cur
 				return nil, err
 			}
 			continue
+		}
+		if resp.GetResponse() == nil {
+			return nil, kvPayloadProtocolError("check txn status", region.desc.RegionID, "missing check txn status payload")
 		}
 		return resp.GetResponse(), nil
 	}
@@ -991,6 +1025,9 @@ func (c *Client) txnHeartBeatAt(ctx context.Context, primary []byte, startVersio
 		if err != nil {
 			return nil, normalizeRPCError(err)
 		}
+		if resp == nil {
+			return nil, kvPayloadProtocolError("txn heartbeat", region.desc.RegionID, "nil kv response")
+		}
 		if regionErr := resp.GetRegionError(); regionErr != nil {
 			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
 			if lastErr != nil {
@@ -1000,6 +1037,9 @@ func (c *Client) txnHeartBeatAt(ctx context.Context, primary []byte, startVersio
 				return nil, err
 			}
 			continue
+		}
+		if resp.GetResponse() == nil {
+			return nil, kvPayloadProtocolError("txn heartbeat", region.desc.RegionID, "missing txn heartbeat payload")
 		}
 		return resp.GetResponse(), nil
 	}
@@ -1096,7 +1136,17 @@ func (c *Client) resolveRegionLocksOnce(ctx context.Context, region regionSnapsh
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
 	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("resolve lock", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("resolve lock", region.desc.RegionID, "missing resolve lock payload")
+	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
+}
+
+func kvPayloadProtocolError(operation string, regionID uint64, detail string) error {
+	return &ProtocolError{Operation: operation, Detail: fmt.Sprintf("region %d: %s", regionID, detail)}
 }
 
 func cloneMutation(mut *kvrpcpb.Mutation) *kvrpcpb.Mutation {

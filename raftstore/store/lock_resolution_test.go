@@ -6,10 +6,10 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/stretchr/testify/require"
 )
 

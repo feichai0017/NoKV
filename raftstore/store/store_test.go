@@ -17,14 +17,14 @@ import (
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	local "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/meta/topology"
-	"github.com/feichai0017/NoKV/percolator"
-	"github.com/feichai0017/NoKV/percolator/latch"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
+	"github.com/feichai0017/NoKV/txn/latch"
+	"github.com/feichai0017/NoKV/txn/percolator"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/stretchr/testify/require"
 )
 

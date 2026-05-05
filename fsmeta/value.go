@@ -39,6 +39,22 @@ type InodeRecord struct {
 	OpaqueAttrs   []byte    `json:"opaque_attrs,omitempty"`
 }
 
+// InodeRecord materializes create-only attributes into the stored inode value.
+// Create owns LinkCount and inode identity, so callers cannot smuggle them
+// through CreateAttrs.
+func (attrs CreateAttrs) InodeRecord(inode InodeID) InodeRecord {
+	return InodeRecord{
+		Inode:         inode,
+		Type:          attrs.Type,
+		Size:          attrs.Size,
+		Mode:          attrs.Mode,
+		LinkCount:     1,
+		CreatedUnixNs: attrs.CreatedUnixNs,
+		UpdatedUnixNs: attrs.UpdatedUnixNs,
+		OpaqueAttrs:   append([]byte(nil), attrs.OpaqueAttrs...),
+	}
+}
+
 // DentryRecord is the value stored under a parent/name dentry key.
 type DentryRecord struct {
 	Parent InodeID   `json:"parent"`

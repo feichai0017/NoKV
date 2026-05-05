@@ -13,13 +13,17 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/command"
 )
 
-func mustCommandEntry(t *testing.T, requestID uint64) myraft.Entry {
+func mustCommandEntry(t *testing.T, regionID, peerID, requestID uint64) myraft.Entry {
 	t.Helper()
 	payload, err := command.Encode(&raftcmdpb.RaftCmdRequest{
-		Header: &raftcmdpb.CmdHeader{RequestId: requestID},
+		Header: &raftcmdpb.CmdHeader{RegionId: regionID, PeerId: peerID, RequestId: requestID},
 	})
 	require.NoError(t, err)
 	return myraft.Entry{Type: myraft.EntryNormal, Data: payload}
+}
+
+func testProposalKey(regionID, peerID, requestID uint64) commandProposalKey {
+	return commandProposalKey{regionID: regionID, peerID: peerID, requestID: requestID}
 }
 
 func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
@@ -30,16 +34,16 @@ func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 		return nil, applyErr
 	})
 
-	prop1, err := cp.registerProposal(11)
+	prop1, err := cp.registerProposal(testProposalKey(1, 101, 11))
 	require.NoError(t, err)
-	prop2, err := cp.registerProposal(22)
+	prop2, err := cp.registerProposal(testProposalKey(1, 101, 22))
 	require.NoError(t, err)
 	require.NotNil(t, prop1)
 	require.NotNil(t, prop2)
 
 	err = cp.applyEntries([]myraft.Entry{
-		mustCommandEntry(t, 11),
-		mustCommandEntry(t, 22),
+		mustCommandEntry(t, 1, 101, 11),
+		mustCommandEntry(t, 1, 101, 22),
 	})
 	require.ErrorIs(t, err, applyErr)
 	require.Equal(t, []uint64{11}, applied)
@@ -58,16 +62,17 @@ func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
 	cp := newCommandPipeline(nil)
 
-	first, err := cp.registerProposal(7)
+	key := testProposalKey(2, 202, 7)
+	first, err := cp.registerProposal(key)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	second, err := cp.registerProposal(7)
+	second, err := cp.registerProposal(key)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate proposal id")
 	require.Nil(t, second)
 
-	cp.completeProposal(7, &raftcmdpb.RaftCmdResponse{}, nil)
+	cp.completeProposal(key, &raftcmdpb.RaftCmdResponse{}, nil)
 	result := <-first.ch
 	require.NoError(t, result.err)
 	require.NotNil(t, result.resp)
@@ -76,18 +81,45 @@ func TestCommandPipelineRegisterProposalRejectsDuplicateID(t *testing.T) {
 func TestCommandPipelineRemoveProposalDropsPendingResult(t *testing.T) {
 	cp := newCommandPipeline(nil)
 
-	prop, err := cp.registerProposal(9)
+	key := testProposalKey(3, 303, 9)
+	prop, err := cp.registerProposal(key)
 	require.NoError(t, err)
 	require.NotNil(t, prop)
 
-	cp.removeProposal(9)
-	cp.completeProposal(9, &raftcmdpb.RaftCmdResponse{}, nil)
+	cp.removeProposal(key)
+	cp.completeProposal(key, &raftcmdpb.RaftCmdResponse{}, nil)
 
 	select {
 	case <-prop.ch:
 		t.Fatal("removed proposal should not receive a completion result")
 	default:
 	}
+}
+
+func TestCommandPipelineIgnoresForeignPeerRequestIDCollision(t *testing.T) {
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	})
+
+	localKey := testProposalKey(7, 701, 1)
+	prop, err := cp.registerProposal(localKey)
+	require.NoError(t, err)
+	require.NotNil(t, prop)
+
+	require.NoError(t, cp.applyEntries([]myraft.Entry{
+		mustCommandEntry(t, 7, 702, 1),
+	}))
+
+	select {
+	case <-prop.ch:
+		t.Fatal("foreign peer entry with colliding request id completed local proposal")
+	default:
+	}
+
+	cp.completeProposal(localKey, &raftcmdpb.RaftCmdResponse{}, nil)
+	result := <-prop.ch
+	require.NoError(t, result.err)
+	require.NotNil(t, result.resp)
 }
 
 func TestCommandPipelineRejectsUnframedPayload(t *testing.T) {

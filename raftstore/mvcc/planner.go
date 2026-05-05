@@ -6,7 +6,7 @@ import (
 	"time"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -22,7 +22,7 @@ type GCPlanSnapshot struct {
 
 // GCPlanConfig wires the read-only MVCC GC planner into DB background
 // services. MVCCStore is the only required data-plane surface; callers may pass
-// a wider concrete type, but the planner only uses percolator/storage.Store.
+// a wider concrete type, but the planner only uses txn/storage.Store.
 type GCPlanConfig struct {
 	MVCCStore txnstore.Store
 	Interval  time.Duration
