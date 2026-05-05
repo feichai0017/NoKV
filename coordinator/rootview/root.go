@@ -64,11 +64,6 @@ type rootTailBackend interface {
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
 }
 
-type rootLeaderBackend interface {
-	IsLeader() bool
-	LeaderID() uint64
-}
-
 type rootSubmitBackend interface {
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
@@ -87,7 +82,6 @@ type rootBackendAdapter struct {
 	refresh  rootRefreshBackend
 	tail     rootTailBackend
 	submit   rootSubmitBackend
-	leader   rootLeaderBackend
 	protocol rootCoordinatorProtocolBackend
 	closer   rootCloseBackend
 }
@@ -131,20 +125,14 @@ func (a rootBackendAdapter) CanSubmitRootWrites() bool {
 	if a.submit != nil {
 		return a.submit.CanSubmitRootWrites()
 	}
-	if a.leader == nil {
-		return true
-	}
-	return a.leader.IsLeader()
+	return true
 }
 
 func (a rootBackendAdapter) LeaderID() uint64 {
 	if a.submit != nil {
 		return a.submit.LeaderID()
 	}
-	if a.leader == nil {
-		return 0
-	}
-	return a.leader.LeaderID()
+	return 0
 }
 
 func (a rootBackendAdapter) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
@@ -179,9 +167,6 @@ func adaptRootBackend(root rootBackend) (rootRuntimeBackend, rootBackendCapabili
 	}
 	if submit, ok := root.(rootSubmitBackend); ok {
 		adapter.submit = submit
-	}
-	if leader, ok := root.(rootLeaderBackend); ok {
-		adapter.leader = leader
 	}
 	if protocol, ok := root.(rootCoordinatorProtocolBackend); ok {
 		adapter.protocol = protocol

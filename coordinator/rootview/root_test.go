@@ -144,8 +144,8 @@ func (f *fakeRootBackend) ObserveCommitted() (rootstorage.ObservedCommitted, err
 	return rootstorage.CloneObservedCommitted(f.observed), nil
 }
 
-func (f *fakeRootBackend) IsLeader() bool   { return f.isLeader }
-func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
+func (f *fakeRootBackend) CanSubmitRootWrites() bool { return f.isLeader }
+func (f *fakeRootBackend) LeaderID() uint64          { return f.leaderID }
 
 func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	if f.applyGrantErr != nil {

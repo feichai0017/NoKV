@@ -749,8 +749,8 @@ These do **not** have a degraded fallback.
 
 - the local coordinator must first campaign / renew the rooted grant
 - the rooted grant must still be active for the local holder
-- the rooted era must not already be sealed
-- the rooted duty mask must admit the requested action
+- the rooted era must not already be retired
+- the grant duty list and bound must admit the requested action
 
 If any of those fail, the request is rejected instead of falling back to stale
 local state. This is the current boundary between:
@@ -758,7 +758,7 @@ local state. This is the current boundary between:
 - read-path degradation
 - write-path fail-stop admission
 
-#### Lifecycle mutations (`Seal`, `Confirm`, `Close`, `Reattach`)
+#### Lifecycle mutations (`Seal`, `RetireExpired`, `Inherit`)
 
 Lifecycle mutations are stricter than hot-path duty admission:
 
@@ -766,7 +766,7 @@ Lifecycle mutations are stricter than hot-path duty admission:
 - they reject any stale-holder / expired-grant / retired-era view
 - they treat finality as a rooted safety condition, not a best-effort hint
 
-That is why seal / confirm / close / reattach do not use the cached mirror
+That is why seal / expire-retire / inherit do not use the cached mirror
 admission path.
 
 ### 8.5 Operational diagnostics
@@ -778,8 +778,7 @@ admission path.
 
 `eunomia_metrics` is grouped into:
 
-- `tenure_era_transitions_total`
-- `handover_stage_transitions_total`
+- `grant_era_transitions_total`
 - `gate_rejections_total`
 - `guarantee_violations_total`
 

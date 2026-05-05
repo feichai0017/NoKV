@@ -105,6 +105,10 @@ func (s *Store) IsLeader() bool {
 	return s.driver.IsLeader()
 }
 
+func (s *Store) CanSubmitRootWrites() bool {
+	return s.IsLeader()
+}
+
 func (s *Store) LeaderID() uint64 {
 	if s == nil || s.driver == nil {
 		return 0
