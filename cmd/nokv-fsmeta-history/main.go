@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	fsmetacontract "github.com/feichai0017/NoKV/fsmeta/contract"
@@ -15,14 +17,15 @@ import (
 
 func main() {
 	var (
-		addr    = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC address")
-		mount   = flag.String("mount", "default", "registered mount ID")
-		seeds   = flag.Int("seeds", 1, "number of deterministic seeds to run")
-		start   = flag.Int64("seed-start", 1, "first deterministic seed")
-		steps   = flag.Int("steps", 64, "generated operations per seed before external filtering")
-		batch   = flag.Int("batch", 3, "concurrent history batch size")
-		timeout = flag.Duration("timeout", 60*time.Second, "overall command timeout")
-		scope   = flag.String("scope-prefix", "history", "unique root directory prefix for isolating each generated history")
+		addr               = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC address")
+		mount              = flag.String("mount", "default", "registered mount ID")
+		seeds              = flag.Int("seeds", 1, "number of deterministic seeds to run")
+		start              = flag.Int64("seed-start", 1, "first deterministic seed")
+		steps              = flag.Int("steps", 64, "generated operations per seed before external filtering")
+		batch              = flag.Int("batch", 3, "concurrent history batch size")
+		timeout            = flag.Duration("timeout", 60*time.Second, "overall command timeout")
+		scope              = flag.String("scope-prefix", "history", "unique root directory prefix for isolating each generated history")
+		allowIndeterminate = flag.Bool("allow-indeterminate-errors", false, "treat retryable availability errors as operations with unknown commit outcome")
 	)
 	flag.Parse()
 	if *seeds <= 0 || *start <= 0 || *steps <= 0 {
@@ -47,11 +50,19 @@ func main() {
 		unique := time.Now().UnixNano()
 		scopeName := fmt.Sprintf("%s-%06d-%d", *scope, seed, unique)
 		scopeInode := fsmeta.InodeID(9_000_000_000 + seed*1_000_000 + unique%1_000_000)
-		ops := externalHistoryOps(fsmetacontract.GenerateScript(seed, *steps), mountID, scopeName, scopeInode)
+		scopeOp := scopeCreateOperation(mountID, scopeName, scopeInode)
+		if err := createScopeWithRetry(ctx, cli, scopeOp); err != nil {
+			log.Fatalf("create history scope seed=%d: %v", seed, err)
+		}
+		if got := model.Apply(scopeOp); got.Err != nil {
+			log.Fatalf("apply history scope seed=%d: %v", seed, got.Err)
+		}
+		ops := externalHistoryOps(fsmetacontract.GenerateScript(seed, *steps), mountID, scopeInode, scopeInode)
 		if len(ops) == 0 {
 			log.Fatalf("seed %d generated no external-safe operations", seed)
 		}
-		if err := fsmetacontract.RunConcurrentBatches(ctx, cli, model, ops, *batch); err != nil {
+		opts := fsmetacontract.HistoryOptions{AllowIndeterminateErrors: *allowIndeterminate}
+		if err := fsmetacontract.RunConcurrentBatches(ctx, cli, model, ops, *batch, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "fsmeta history failed seed=%d steps=%d filtered_ops=%d\n", seed, *steps, len(ops))
 			log.Fatal(err)
 		}
@@ -59,9 +70,8 @@ func main() {
 	}
 }
 
-func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeName string, scopeInode fsmeta.InodeID) []fsmetacontract.Operation {
-	out := make([]fsmetacontract.Operation, 0, len(in)+1)
-	out = append(out, fsmetacontract.Operation{
+func scopeCreateOperation(mount fsmeta.MountID, scopeName string, scopeInode fsmeta.InodeID) fsmetacontract.Operation {
+	return fsmetacontract.Operation{
 		Kind:   fsmetacontract.OpCreate,
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
@@ -69,7 +79,47 @@ func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, sco
 		Inode:  scopeInode,
 		Type:   fsmeta.InodeTypeDirectory,
 		Mode:   0o755,
-	})
+	}
+}
+
+func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmetacontract.Operation) error {
+	delay := 100 * time.Millisecond
+	for {
+		err := cli.Create(ctx, fsmeta.CreateRequest{
+			Mount:  op.Mount,
+			Parent: op.Parent,
+			Name:   op.Name,
+			Inode:  op.Inode,
+		}, fsmeta.InodeRecord{
+			Type:      op.Type,
+			Mode:      op.Mode,
+			LinkCount: 1,
+		})
+		if err == nil || errors.Is(err, fsmeta.ErrExists) {
+			return nil
+		}
+		// Compose startup can return NotFound until the fsmeta gateway observes
+		// rooted mount/root admission. The scope create is an admission barrier,
+		// so retrying here keeps startup synchronization out of the generated
+		// correctness history.
+		if !nokverrors.Retryable(err) && !nokverrors.IsKind(err, nokverrors.KindNotFound) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if delay < time.Second {
+			delay *= 2
+		}
+	}
+}
+
+func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeInode, inodeBase fsmeta.InodeID) []fsmetacontract.Operation {
+	out := make([]fsmetacontract.Operation, 0, len(in))
 	for _, op := range in {
 		switch op.Kind {
 		case fsmetacontract.OpOpenWriteSession,
@@ -80,17 +130,35 @@ func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, sco
 			continue
 		default:
 			op.Mount = mount
+			// The generated inodes are unique only within one in-memory script.
+			// Docker chaos runs multiple seeds against the same mounted system,
+			// so external histories must shift inode ids into the per-seed scope
+			// to avoid cross-seed namespace pollution.
+			op.Inode = scopeGeneratedInode(inodeBase, op.Inode)
 			if op.Parent == fsmeta.RootInode {
 				op.Parent = scopeInode
+			} else {
+				op.Parent = scopeGeneratedInode(inodeBase, op.Parent)
 			}
 			if op.FromParent == fsmeta.RootInode {
 				op.FromParent = scopeInode
+			} else {
+				op.FromParent = scopeGeneratedInode(inodeBase, op.FromParent)
 			}
 			if op.ToParent == fsmeta.RootInode {
 				op.ToParent = scopeInode
+			} else {
+				op.ToParent = scopeGeneratedInode(inodeBase, op.ToParent)
 			}
 			out = append(out, op)
 		}
 	}
 	return out
+}
+
+func scopeGeneratedInode(base, inode fsmeta.InodeID) fsmeta.InodeID {
+	if inode == 0 {
+		return 0
+	}
+	return base + inode
 }

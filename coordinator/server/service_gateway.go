@@ -368,7 +368,7 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	if err := s.requireExpectedClusterEpoch(req.GetExpectedClusterEpoch()); err != nil {
 		return nil, err
 	}
-	assessment, err := s.assessRootEventLifecycle(event)
+	assessment, validationSnapshot, storageBacked, err := s.assessRootEventLifecycle(event)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
@@ -379,7 +379,17 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 		resp.Accepted = true
 		return resp, nil
 	}
-	if err := s.cluster.ValidateRootEvent(event); err != nil {
+	var validationErr error
+	if storageBacked {
+		// Durable root storage is the write authority. A coordinator can receive
+		// a valid follow-up event before its local cache has replayed the earlier
+		// event, so validate against the loaded storage snapshot used for the
+		// lifecycle decision instead of the potentially stale cache.
+		validationErr = s.cluster.ValidateRootEventAgainstSnapshot(validationSnapshot, event)
+	} else {
+		validationErr = s.cluster.ValidateRootEvent(event)
+	}
+	if err := validationErr; err != nil {
 		switch {
 		case errors.Is(err, catalog.ErrInvalidRegionID), errors.Is(err, catalog.ErrInvalidMountID):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -410,16 +420,16 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	return resp, nil
 }
 
-func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.TransitionAssessment, error) {
+func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.TransitionAssessment, rootstate.Snapshot, bool, error) {
 	if s == nil || s.storage == nil {
 		if s == nil || s.cluster == nil {
-			return rootstate.TransitionAssessment{}, nil
+			return rootstate.TransitionAssessment{}, rootstate.Snapshot{}, false, nil
 		}
-		return s.cluster.ObserveRootEventLifecycle(event), nil
+		return s.cluster.ObserveRootEventLifecycle(event), rootstate.Snapshot{}, false, nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return rootstate.TransitionAssessment{}, fmt.Errorf("load rooted snapshot: %w", err)
+		return rootstate.TransitionAssessment{}, rootstate.Snapshot{}, false, fmt.Errorf("load rooted snapshot: %w", err)
 	}
 	rooted := rootstate.Snapshot{
 		Stores:              snapshot.Stores,
@@ -432,7 +442,7 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 	}
 	assessment := rootstate.AssessTransition(rooted, event)
 	_, err = rootstate.EvaluateRootEventLifecycle(rooted, event)
-	return assessment, err
+	return assessment, rooted, true, err
 }
 
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.

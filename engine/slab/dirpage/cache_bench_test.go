@@ -115,20 +115,23 @@ func BenchmarkDirPageMaterializeAsync(b *testing.B) {
 }
 
 // BenchmarkDirPageInvalidate measures the cost of bumping the
-// invalidation epoch — what every fsmeta Create/Unlink/Link/Rename
-// pays after a successful commit. The work is one sync.Map lookup +
-// atomic.Add + map delete, all in memory.
+// invalidation epoch — what every fsmeta Create/Unlink/Link/Rename pays after
+// a successful commit. The work is one sync.Map lookup + atomic.Add plus a
+// small in-memory page-index sweep for cached pages under that directory.
 func BenchmarkDirPageInvalidate(b *testing.B) {
 	c := newBenchCache(b, 16<<10)
 	keys := make([]PageKey, 1024)
 	for i := range keys {
 		keys[i] = PageKey{Mount: 1, Parent: uint64(i)}
+		if err := c.MaterializeAsync(keys[i], 0, makeEntries(1, 16)); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.ResetTimer()
 	b.ReportAllocs()
 	i := 0
 	for b.Loop() {
-		c.Invalidate(keys[i&1023])
+		c.Invalidate(keys[i&1023].Directory())
 		i++
 	}
 }

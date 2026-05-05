@@ -26,7 +26,7 @@ func TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster(t *testing.T) {
 			}))
 			ops := fsmetacontract.GenerateScript(seed, steps)
 
-			err := fsmetacontract.RunConcurrentBatches(ctx, executor, model, ops, batchSize)
+			err := fsmetacontract.RunConcurrentBatches(ctx, executor, model, ops, batchSize, fsmetacontract.HistoryOptions{})
 			require.NoError(t, err, "seed=%d steps=%d batch=%d", seed, steps, batchSize)
 		})
 	}

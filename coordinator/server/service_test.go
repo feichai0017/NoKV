@@ -133,7 +133,10 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
 		Stores:              rootstate.CloneStoreMemberships(f.snapshot.Stores),
+		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(f.snapshot.SnapshotEpochs),
 		Mounts:              rootstate.CloneMounts(f.snapshot.Mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(f.snapshot.Subtrees),
+		Quotas:              rootstate.CloneQuotaFences(f.snapshot.Quotas),
 		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
@@ -1672,6 +1675,32 @@ func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
 	require.Equal(t, coordpb.TransitionStatus_TRANSITION_STATUS_COMPLETED, resp.GetAssessment().GetStatus())
 	require.Equal(t, coordpb.TransitionDecision_TRANSITION_DECISION_SKIP, resp.GetAssessment().GetDecision())
 	require.Equal(t, "peer:171:add:2:201", resp.GetAssessment().GetTransitionId())
+}
+
+func TestServicePublishRootEventValidatesAgainstStorageSnapshot(t *testing.T) {
+	cluster := catalog.NewCluster()
+	require.NoError(t, cluster.PublishRootEvent(rootevent.MountRegistered("default", 1, 1)))
+
+	var rooted rootstate.Snapshot
+	rootstate.ApplyEventToSnapshot(&rooted, rootstate.Cursor{Term: 1, Index: 1}, rootevent.MountRegistered("default", 1, 1))
+	rootstate.ApplyEventToSnapshot(&rooted, rootstate.Cursor{Term: 1, Index: 2}, rootevent.SubtreeHandoffStarted("default", 1, 21))
+	store := &fakeStorage{
+		leader:   true,
+		snapshot: rootview.SnapshotFromRoot(rooted),
+	}
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
+
+	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(rootevent.SubtreeHandoffCompleted("default", 1, 21)),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+	require.Equal(t, 1, store.eventCalls)
+
+	subtree := store.snapshot.Subtrees[rootstate.SubtreeAuthorityKey("default", 1)]
+	require.Equal(t, rootstate.SubtreeAuthorityActive, subtree.State)
+	require.Equal(t, uint64(21), subtree.Frontier)
+	require.Equal(t, "default/1#1", subtree.AuthorityID)
 }
 
 func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {

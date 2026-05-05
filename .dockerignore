@@ -6,6 +6,7 @@
 /build
 artifacts
 **/*.pprof
+benchmark/ycsb/data
 
 # Module caches
 .gocache

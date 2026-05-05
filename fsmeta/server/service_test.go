@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 	"github.com/stretchr/testify/require"
@@ -355,6 +356,7 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted},
 		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange},
 		{name: "mount retired", err: fsmeta.ErrMountRetired, code: codes.FailedPrecondition},
+		{name: "retry exhausted", err: nokverrors.New(nokverrors.KindRetryExhausted, "fsmeta: retry exhausted"), code: codes.Unavailable},
 		{name: "internal", err: errors.New("boom"), code: codes.Internal},
 	}
 	for _, tt := range tests {

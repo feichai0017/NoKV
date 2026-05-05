@@ -793,6 +793,14 @@ func (c *Cluster) validateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, 
 	return applyRootEventToRegionView(regions, event)
 }
 
+// ValidateRootEventAgainstSnapshot validates an event against a caller-provided
+// rooted snapshot. Storage-backed coordinators use this to keep validation on
+// the same authority view that will receive the append, even when the local
+// cache is still catching up through watch/replay.
+func (c *Cluster) ValidateRootEventAgainstSnapshot(snapshot rootstate.Snapshot, event rootevent.Event) error {
+	return c.validateRootEventAgainstSnapshot(snapshot, event)
+}
+
 func (c *Cluster) clonePendingPeerChanges() map[uint64]rootstate.PendingPeerChange {
 	if c == nil {
 		return make(map[uint64]rootstate.PendingPeerChange)

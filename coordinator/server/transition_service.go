@@ -43,7 +43,7 @@ func (s *Service) AssessRootEvent(_ context.Context, req *coordpb.AssessRootEven
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
 	}
-	assessment, err := s.assessRootEventLifecycle(event)
+	assessment, _, _, err := s.assessRootEventLifecycle(event)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}

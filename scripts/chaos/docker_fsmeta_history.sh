@@ -13,6 +13,7 @@ BATCH="${NOKV_DOCKER_CHAOS_BATCH:-3}"
 TIMEOUT="${NOKV_DOCKER_CHAOS_TIMEOUT:-60s}"
 READY_TIMEOUT="${NOKV_DOCKER_CHAOS_READY_TIMEOUT:-180}"
 CHAOS_INTERVAL="${NOKV_DOCKER_CHAOS_INTERVAL:-5}"
+ALLOW_INDETERMINATE="${NOKV_DOCKER_CHAOS_ALLOW_INDETERMINATE:-1}"
 TOOLS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-chaos.XXXXXX")"
 chaos_pid=""
 
@@ -172,14 +173,23 @@ if [[ "${NOKV_DOCKER_CHAOS_NEMESIS:-1}" == "1" ]]; then
   chaos_pid="$!"
 fi
 
-"$TOOLS_DIR/nokv-fsmeta-history" \
-  --addr "$ADDR" \
-  --mount "$MOUNT" \
-  --seed-start 1 \
-  --seeds "$SEEDS" \
-  --steps "$STEPS" \
-  --batch "$BATCH" \
+history_args=(
+  --addr "$ADDR"
+  --mount "$MOUNT"
+  --seed-start 1
+  --seeds "$SEEDS"
+  --steps "$STEPS"
+  --batch "$BATCH"
   --timeout "$TIMEOUT"
+)
+if [[ "$ALLOW_INDETERMINATE" == "1" ]]; then
+  # Process chaos can return Unavailable after a request crosses the service
+  # boundary. The checker keeps both commit and no-commit candidates for those
+  # operations instead of reporting a namespace-semantic mismatch.
+  history_args+=(--allow-indeterminate-errors)
+fi
+
+"$TOOLS_DIR/nokv-fsmeta-history" "${history_args[@]}"
 
 stop_chaos
 wait_fsmeta

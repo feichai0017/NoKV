@@ -13,23 +13,28 @@ func TestExternalHistoryOpsScopesRootOperationsAndFiltersInternalSessions(t *tes
 		scopeName  = "history-scope"
 		scopeInode = fsmeta.InodeID(9001)
 	)
+	scopeOp := scopeCreateOperation(mount, scopeName, scopeInode)
+	requireOp(t, scopeOp, fsmetacontract.OpCreate, mount, fsmeta.RootInode, scopeName, scopeInode)
+
 	ops := externalHistoryOps([]fsmetacontract.Operation{
 		{Kind: fsmetacontract.OpOpenWriteSession, Mount: "vol", Parent: fsmeta.RootInode, Inode: 10},
 		{Kind: fsmetacontract.OpCreate, Mount: "vol", Parent: fsmeta.RootInode, Name: "alpha", Inode: 11},
 		{Kind: fsmetacontract.OpRenameSubtree, Mount: "vol", FromParent: fsmeta.RootInode, FromName: "alpha", ToParent: fsmeta.RootInode, ToName: "beta"},
 		{Kind: fsmetacontract.OpLink, Mount: "vol", Parent: fsmeta.RootInode, Name: "link", Inode: 11},
 		{Kind: fsmetacontract.OpAdvanceTime, Mount: "vol", AdvanceNs: 1},
-	}, mount, scopeName, scopeInode)
+	}, mount, scopeInode, scopeInode)
 
-	if len(ops) != 4 {
-		t.Fatalf("filtered op count=%d, want 4: %#v", len(ops), ops)
+	if len(ops) != 3 {
+		t.Fatalf("filtered op count=%d, want 3: %#v", len(ops), ops)
 	}
-	requireOp(t, ops[0], fsmetacontract.OpCreate, mount, fsmeta.RootInode, scopeName, scopeInode)
-	requireOp(t, ops[1], fsmetacontract.OpCreate, mount, scopeInode, "alpha", 11)
-	if ops[2].Mount != mount || ops[2].FromParent != scopeInode || ops[2].ToParent != scopeInode {
-		t.Fatalf("rename was not scoped into generated root: %#v", ops[2])
+	requireOp(t, ops[0], fsmetacontract.OpCreate, mount, scopeInode, "alpha", scopeInode+11)
+	if ops[1].Mount != mount || ops[1].FromParent != scopeInode || ops[1].ToParent != scopeInode {
+		t.Fatalf("rename was not scoped into generated root: %#v", ops[1])
 	}
-	requireOp(t, ops[3], fsmetacontract.OpLink, mount, scopeInode, "link", 11)
+	requireOp(t, ops[2], fsmetacontract.OpLink, mount, scopeInode, "link", scopeInode+11)
+	if got := scopeGeneratedInode(scopeInode, 0); got != 0 {
+		t.Fatalf("zero inode remapped to %d", got)
+	}
 }
 
 func requireOp(t *testing.T, op fsmetacontract.Operation, kind fsmetacontract.OperationKind, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {
