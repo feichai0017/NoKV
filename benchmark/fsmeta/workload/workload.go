@@ -32,7 +32,7 @@ var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload complete
 // Client is the fsmeta operation surface needed by metadata workloads.
 // fsmeta/client.GRPCClient satisfies this interface.
 type Client interface {
-	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
@@ -44,7 +44,6 @@ type CheckpointStormConfig struct {
 	Clients           int
 	Directories       int
 	FilesPerDirectory int
-	StartInode        fsmeta.InodeID
 }
 
 type HotspotFanInConfig struct {
@@ -55,7 +54,6 @@ type HotspotFanInConfig struct {
 	ReadsPerClient int
 	PageLimit      uint32
 	ReadDirPlus    bool
-	StartInode     fsmeta.InodeID
 }
 
 type WatchSubtreeConfig struct {
@@ -63,7 +61,6 @@ type WatchSubtreeConfig struct {
 	RunID              string
 	Clients            int
 	Files              int
-	StartInode         fsmeta.InodeID
 	BackPressureWindow uint32
 }
 
@@ -117,21 +114,24 @@ func RunCheckpointStorm(ctx context.Context, cli Client, cfg CheckpointStormConf
 	cfg = normalizeCheckpointStormConfig(cfg)
 	started := time.Now()
 	rec := newRecorder()
+	dirInodes := make([]fsmeta.InodeID, cfg.Directories)
 
 	for i := 0; i < cfg.Directories; i++ {
-		inode := cfg.StartInode + fsmeta.InodeID(i)
 		name := fmt.Sprintf("storm-%s-dir-%04d", cfg.RunID, i)
 		rec.recordCall("mkdir", func() error {
-			return cli.Create(ctx, fsmeta.CreateRequest{
+			result, err := cli.Create(ctx, fsmeta.CreateRequest{
 				Mount:  cfg.Mount,
 				Parent: fsmeta.RootInode,
 				Name:   name,
-				Inode:  inode,
-			}, fsmeta.InodeRecord{
-				Type:      fsmeta.InodeTypeDirectory,
-				Mode:      0o755,
-				LinkCount: 1,
+				Attrs: fsmeta.CreateAttrs{
+					Type: fsmeta.InodeTypeDirectory,
+					Mode: 0o755,
+				},
 			})
+			if err == nil {
+				dirInodes[i] = result.Inode.Inode
+			}
+			return err
 		})
 	}
 
@@ -149,20 +149,19 @@ func RunCheckpointStorm(ctx context.Context, cli Client, cfg CheckpointStormConf
 				}
 				dir := idx % cfg.Directories
 				file := idx / cfg.Directories
-				parent := cfg.StartInode + fsmeta.InodeID(dir)
-				inode := cfg.StartInode + fsmeta.InodeID(cfg.Directories+idx)
+				parent := dirInodes[dir]
 				name := fmt.Sprintf("storm-%s-dir-%04d-file-%08d", cfg.RunID, dir, file)
 				rec.recordCall("create_checkpoint", func() error {
-					return cli.Create(ctx, fsmeta.CreateRequest{
+					_, err := cli.Create(ctx, fsmeta.CreateRequest{
 						Mount:  cfg.Mount,
 						Parent: parent,
 						Name:   name,
-						Inode:  inode,
-					}, fsmeta.InodeRecord{
-						Type:      fsmeta.InodeTypeFile,
-						Mode:      0o644,
-						LinkCount: 1,
+						Attrs: fsmeta.CreateAttrs{
+							Type: fsmeta.InodeTypeFile,
+							Mode: 0o644,
+						},
 					})
+					return err
 				})
 			}
 		}(worker)
@@ -177,34 +176,36 @@ func RunHotspotFanIn(ctx context.Context, cli Client, cfg HotspotFanInConfig) (R
 	started := time.Now()
 	rec := newRecorder()
 
-	dirInode := cfg.StartInode
 	dirName := fmt.Sprintf("hotspot-%s", cfg.RunID)
+	var dirInode fsmeta.InodeID
 	rec.recordCall("mkdir", func() error {
-		return cli.Create(ctx, fsmeta.CreateRequest{
+		result, err := cli.Create(ctx, fsmeta.CreateRequest{
 			Mount:  cfg.Mount,
 			Parent: fsmeta.RootInode,
 			Name:   dirName,
-			Inode:  dirInode,
-		}, fsmeta.InodeRecord{
-			Type:      fsmeta.InodeTypeDirectory,
-			Mode:      0o755,
-			LinkCount: 1,
+			Attrs: fsmeta.CreateAttrs{
+				Type: fsmeta.InodeTypeDirectory,
+				Mode: 0o755,
+			},
 		})
+		if err == nil {
+			dirInode = result.Inode.Inode
+		}
+		return err
 	})
 	for i := 0; i < cfg.Files; i++ {
-		inode := cfg.StartInode + fsmeta.InodeID(i+1)
 		name := fmt.Sprintf("hotspot-%s-file-%08d", cfg.RunID, i)
 		rec.recordCall("seed_create", func() error {
-			return cli.Create(ctx, fsmeta.CreateRequest{
+			_, err := cli.Create(ctx, fsmeta.CreateRequest{
 				Mount:  cfg.Mount,
 				Parent: dirInode,
 				Name:   name,
-				Inode:  inode,
-			}, fsmeta.InodeRecord{
-				Type:      fsmeta.InodeTypeFile,
-				Mode:      0o644,
-				LinkCount: 1,
+				Attrs: fsmeta.CreateAttrs{
+					Type: fsmeta.InodeTypeFile,
+					Mode: 0o644,
+				},
 			})
+			return err
 		})
 	}
 
@@ -251,19 +252,22 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	started := time.Now()
 	rec := newRecorder()
 
-	dirInode := cfg.StartInode
 	dirName := fmt.Sprintf("watch-%s", cfg.RunID)
+	var dirInode fsmeta.InodeID
 	rec.recordCall("mkdir", func() error {
-		return cli.Create(ctx, fsmeta.CreateRequest{
+		result, err := cli.Create(ctx, fsmeta.CreateRequest{
 			Mount:  cfg.Mount,
 			Parent: fsmeta.RootInode,
 			Name:   dirName,
-			Inode:  dirInode,
-		}, fsmeta.InodeRecord{
-			Type:      fsmeta.InodeTypeDirectory,
-			Mode:      0o755,
-			LinkCount: 1,
+			Attrs: fsmeta.CreateAttrs{
+				Type: fsmeta.InodeTypeDirectory,
+				Mode: 0o755,
+			},
 		})
+		if err == nil {
+			dirInode = result.Inode.Inode
+		}
+		return err
 	})
 	prefix, err := fsmeta.EncodeDentryPrefix(cfg.Mount, dirInode)
 	if err != nil {
@@ -282,12 +286,12 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	if err != nil {
 		return Result{}, err
 	}
-	if err := cli.Create(ctx, fsmeta.CreateRequest{
+	if _, err := cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  cfg.Mount,
 		Parent: dirInode,
 		Name:   "watch-warmup",
-		Inode:  cfg.StartInode + fsmeta.InodeID(cfg.Files+1),
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Mode: 0o644, LinkCount: 1}); err != nil {
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	}); err != nil {
 		return Result{}, err
 	}
 	if err := waitForWatchKey(ctx, stream, warmupKey); err != nil {
@@ -309,7 +313,6 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 				if idx >= cfg.Files {
 					return
 				}
-				inode := cfg.StartInode + fsmeta.InodeID(idx+1)
 				name := fmt.Sprintf("watch-%s-file-%08d", cfg.RunID, idx)
 				key, err := fsmeta.EncodeDentryKey(cfg.Mount, dirInode, name)
 				if err != nil {
@@ -318,16 +321,16 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 				}
 				starts.put(key, time.Now())
 				rec.recordCall("watch_create", func() error {
-					return cli.Create(ctx, fsmeta.CreateRequest{
+					_, err := cli.Create(ctx, fsmeta.CreateRequest{
 						Mount:  cfg.Mount,
 						Parent: dirInode,
 						Name:   name,
-						Inode:  inode,
-					}, fsmeta.InodeRecord{
-						Type:      fsmeta.InodeTypeFile,
-						Mode:      0o644,
-						LinkCount: 1,
+						Attrs: fsmeta.CreateAttrs{
+							Type: fsmeta.InodeTypeFile,
+							Mode: 0o644,
+						},
 					})
+					return err
 				})
 			}
 		}()
@@ -630,9 +633,6 @@ func normalizeCheckpointStormConfig(cfg CheckpointStormConfig) CheckpointStormCo
 	if cfg.FilesPerDirectory <= 0 {
 		cfg.FilesPerDirectory = 128
 	}
-	if cfg.StartInode == 0 {
-		cfg.StartInode = 1_000_000
-	}
 	return cfg
 }
 
@@ -648,9 +648,6 @@ func normalizeWatchSubtreeConfig(cfg WatchSubtreeConfig) WatchSubtreeConfig {
 	}
 	if cfg.Files <= 0 {
 		cfg.Files = 1024
-	}
-	if cfg.StartInode == 0 {
-		cfg.StartInode = 3_000_000
 	}
 	if cfg.BackPressureWindow == 0 {
 		cfg.BackPressureWindow = uint32(cfg.Files + 1)
@@ -679,9 +676,6 @@ func normalizeHotspotFanInConfig(cfg HotspotFanInConfig) HotspotFanInConfig {
 	}
 	if cfg.PageLimit > fsmeta.MaxReadDirLimit {
 		cfg.PageLimit = fsmeta.MaxReadDirLimit
-	}
-	if cfg.StartInode == 0 {
-		cfg.StartInode = 2_000_000
 	}
 	return cfg
 }

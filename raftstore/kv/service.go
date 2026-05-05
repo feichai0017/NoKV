@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -78,9 +79,17 @@ func (s *Service) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.
 		return nil, rpcStatus(err)
 	}
 	resp := &kvrpcpb.KvGetResponse{RegionError: result.GetRegionError()}
-	if len(result.GetResponses()) > 0 && result.GetResponses()[0].GetGet() != nil {
-		resp.Response = result.GetResponses()[0].GetGet()
+	if resp.GetRegionError() != nil {
+		return resp, nil
 	}
+	first, err := singleRaftResponse("get", result)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetGet() == nil {
+		return nil, raftPayloadError("get", "missing get payload")
+	}
+	resp.Response = first.GetGet()
 	return resp, nil
 }
 
@@ -118,21 +127,15 @@ func (s *Service) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) 
 	}
 	resp := &kvrpcpb.KvBatchGetResponse{RegionError: result.GetRegionError()}
 	if result.GetRegionError() == nil {
-		responses := make([]*kvrpcpb.GetResponse, 0, len(requests))
-		for _, r := range result.GetResponses() {
-			if r == nil {
-				responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
-				continue
-			}
-			if get := r.GetGet(); get != nil {
-				responses = append(responses, get)
-				continue
-			}
-			responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
+		if len(result.GetResponses()) != len(requests) {
+			return nil, raftPayloadError("batch get", fmt.Sprintf("expected %d raft responses, got %d", len(requests), len(result.GetResponses())))
 		}
-		// Ensure the response count matches the request count.
-		for len(responses) < len(requests) {
-			responses = append(responses, &kvrpcpb.GetResponse{NotFound: true})
+		responses := make([]*kvrpcpb.GetResponse, 0, len(requests))
+		for i, r := range result.GetResponses() {
+			if r == nil || r.GetGet() == nil {
+				return nil, raftPayloadError("batch get", fmt.Sprintf("response %d missing get payload", i))
+			}
+			responses = append(responses, r.GetGet())
 		}
 		resp.Response = &kvrpcpb.BatchGetResponse{Responses: responses}
 	}
@@ -163,9 +166,17 @@ func (s *Service) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcp
 		return nil, rpcStatus(err)
 	}
 	resp := &kvrpcpb.KvScanResponse{RegionError: result.GetRegionError()}
-	if len(result.GetResponses()) > 0 && result.GetResponses()[0].GetScan() != nil {
-		resp.Response = result.GetResponses()[0].GetScan()
+	if resp.GetRegionError() != nil {
+		return resp, nil
 	}
+	first, err := singleRaftResponse("scan", result)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetScan() == nil {
+		return nil, raftPayloadError("scan", "missing scan payload")
+	}
+	resp.Response = first.GetScan()
 	return resp, nil
 }
 
@@ -188,9 +199,17 @@ func (s *Service) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) 
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvPrewriteResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetPrewrite() != nil {
-		out.Response = resp.GetResponses()[0].GetPrewrite()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("prewrite", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetPrewrite() == nil {
+		return nil, raftPayloadError("prewrite", "missing prewrite payload")
+	}
+	out.Response = first.GetPrewrite()
 	return out, nil
 }
 
@@ -213,9 +232,17 @@ func (s *Service) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kv
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvCommitResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetCommit() != nil {
-		out.Response = resp.GetResponses()[0].GetCommit()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("commit", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetCommit() == nil {
+		return nil, raftPayloadError("commit", "missing commit payload")
+	}
+	out.Response = first.GetCommit()
 	return out, nil
 }
 
@@ -238,9 +265,17 @@ func (s *Service) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbac
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvBatchRollbackResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetBatchRollback() != nil {
-		out.Response = resp.GetResponses()[0].GetBatchRollback()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("batch rollback", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetBatchRollback() == nil {
+		return nil, raftPayloadError("batch rollback", "missing batch rollback payload")
+	}
+	out.Response = first.GetBatchRollback()
 	return out, nil
 }
 
@@ -263,9 +298,17 @@ func (s *Service) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockReq
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvResolveLockResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetResolveLock() != nil {
-		out.Response = resp.GetResponses()[0].GetResolveLock()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("resolve lock", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetResolveLock() == nil {
+		return nil, raftPayloadError("resolve lock", "missing resolve lock payload")
+	}
+	out.Response = first.GetResolveLock()
 	return out, nil
 }
 
@@ -289,9 +332,17 @@ func (s *Service) CheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnSta
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvCheckTxnStatusResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetCheckTxnStatus() != nil {
-		out.Response = resp.GetResponses()[0].GetCheckTxnStatus()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("check txn status", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetCheckTxnStatus() == nil {
+		return nil, raftPayloadError("check txn status", "missing check txn status payload")
+	}
+	out.Response = first.GetCheckTxnStatus()
 	return out, nil
 }
 
@@ -315,9 +366,17 @@ func (s *Service) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatR
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvTxnHeartBeatResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetTxnHeartBeat() != nil {
-		out.Response = resp.GetResponses()[0].GetTxnHeartBeat()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("txn heartbeat", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetTxnHeartBeat() == nil {
+		return nil, raftPayloadError("txn heartbeat", "missing txn heartbeat payload")
+	}
+	out.Response = first.GetTxnHeartBeat()
 	return out, nil
 }
 
@@ -340,9 +399,17 @@ func (s *Service) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicM
 		return nil, rpcStatus(err)
 	}
 	out := &kvrpcpb.KvTryAtomicMutateResponse{RegionError: resp.GetRegionError()}
-	if len(resp.GetResponses()) > 0 && resp.GetResponses()[0].GetTryAtomicMutate() != nil {
-		out.Response = resp.GetResponses()[0].GetTryAtomicMutate()
+	if out.GetRegionError() != nil {
+		return out, nil
 	}
+	first, err := singleRaftResponse("atomic mutate", resp)
+	if err != nil {
+		return nil, err
+	}
+	if first.GetTryAtomicMutate() == nil {
+		return nil, raftPayloadError("atomic mutate", "missing atomic mutate payload")
+	}
+	out.Response = first.GetTryAtomicMutate()
 	return out, nil
 }
 
@@ -358,6 +425,24 @@ func (s *Service) propose(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*
 		return nil, errStoreNotInitialized
 	}
 	return s.store.ProposeCommand(ctx, req)
+}
+
+func singleRaftResponse(op string, resp *raftcmdpb.RaftCmdResponse) (*raftcmdpb.Response, error) {
+	if resp == nil {
+		return nil, raftPayloadError(op, "missing raft response")
+	}
+	if resp.GetRegionError() != nil {
+		return nil, nil
+	}
+	if len(resp.GetResponses()) != 1 || resp.GetResponses()[0] == nil {
+		return nil, raftPayloadError(op, fmt.Sprintf("expected one raft response, got %d", len(resp.GetResponses())))
+	}
+	return resp.GetResponses()[0], nil
+}
+
+func raftPayloadError(op, detail string) error {
+	msg := fmt.Sprintf("raftstore/kv: %s response protocol violation: %s", op, detail)
+	return status.Error(codes.FailedPrecondition, nokverrors.New(nokverrors.KindProtocolViolation, msg).Error())
 }
 
 func buildHeader(ctx *kvrpcpb.Context) (*raftcmdpb.CmdHeader, error) {

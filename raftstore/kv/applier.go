@@ -3,11 +3,11 @@ package kv
 import (
 	"fmt"
 
-	"github.com/feichai0017/NoKV/percolator/latch"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/txn/latch"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 // NewEntryApplier returns an ApplyFunc that decodes raft log entries and

@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/feichai0017/NoKV/percolator/latch"
+	"github.com/feichai0017/NoKV/txn/latch"
 )
 
 func TestManagerSerializesConflicts(t *testing.T) {

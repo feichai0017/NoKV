@@ -89,7 +89,12 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 
 	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
+	inodes, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, 4)
+	require.NoError(t, err)
+	executorOpts := []fsmetaexec.Option{
+		fsmetaexec.WithInodeAllocator(inodes),
+		fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}),
+	}
 	executorOpts = append(executorOpts, opts...)
 	executor, err := fsmetaexec.New(runner, executorOpts...)
 	require.NoError(t, err)
@@ -182,7 +187,12 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 
 	runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 	require.NoError(t, err)
-	executorOpts := []fsmetaexec.Option{fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC})}
+	inodes, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, 4)
+	require.NoError(t, err)
+	executorOpts := []fsmetaexec.Option{
+		fsmetaexec.WithInodeAllocator(inodes),
+		fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}),
+	}
 	executorOpts = append(executorOpts, opts...)
 	executor, err := fsmetaexec.New(runner, executorOpts...)
 	require.NoError(t, err)

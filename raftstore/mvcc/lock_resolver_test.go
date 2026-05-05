@@ -8,10 +8,10 @@ import (
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	local "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator"
-	"github.com/feichai0017/NoKV/percolator/latch"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/txn/latch"
+	txnmvcc "github.com/feichai0017/NoKV/txn/mvcc"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/stretchr/testify/require"
 )
 

@@ -9,8 +9,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	txnmvcc "github.com/feichai0017/NoKV/txn/mvcc"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 

@@ -243,7 +243,7 @@ func (m *Model) create(op Operation) Result {
 	dentry := fsmeta.DentryRecord{Parent: op.Parent, Name: op.Name, Inode: op.Inode, Type: op.Type}
 	m.inodes[op.Inode] = inode
 	m.dentries[key] = dentry
-	return Result{}
+	return Result{Dentry: dentry, Inode: inode}
 }
 
 func (m *Model) updateInode(op Operation) Result {

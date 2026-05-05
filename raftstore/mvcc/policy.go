@@ -2,7 +2,7 @@ package mvcc
 
 import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
+	txnmvcc "github.com/feichai0017/NoKV/txn/mvcc"
 )
 
 const defaultMaxBufferedVersionsPerKey = 65536

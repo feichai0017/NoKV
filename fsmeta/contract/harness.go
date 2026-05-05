@@ -11,7 +11,7 @@ import (
 
 // Executor is the fsmeta API surface exercised by the contract harness.
 type Executor interface {
-	Create(context.Context, fsmeta.CreateRequest, fsmeta.InodeRecord) error
+	Create(context.Context, fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	UpdateInode(context.Context, fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
@@ -37,6 +37,9 @@ func Run(ctx context.Context, exec Executor, model *Model, ops []Operation) erro
 	history := make([]string, 0, len(ops))
 	for i, op := range ops {
 		got := execute(ctx, exec, model, op)
+		if op.Kind == OpCreate && got.Err == nil {
+			op.Inode = got.Inode.Inode
+		}
 		var want Result
 		if op.Kind == OpSnapshotSubtree {
 			if got.Err == nil {
@@ -61,18 +64,17 @@ func Run(ctx context.Context, exec Executor, model *Model, ops []Operation) erro
 func execute(ctx context.Context, exec Executor, model *Model, op Operation) Result {
 	switch op.Kind {
 	case OpCreate:
-		err := exec.Create(ctx, fsmeta.CreateRequest{
+		result, err := exec.Create(ctx, fsmeta.CreateRequest{
 			Mount:  op.Mount,
 			Parent: op.Parent,
 			Name:   op.Name,
-			Inode:  op.Inode,
-		}, fsmeta.InodeRecord{
-			Type:      op.Type,
-			Size:      op.Size,
-			Mode:      op.Mode,
-			LinkCount: 1,
+			Attrs: fsmeta.CreateAttrs{
+				Type: op.Type,
+				Size: op.Size,
+				Mode: op.Mode,
+			},
 		})
-		return Result{Err: err}
+		return Result{Err: err, Dentry: result.Dentry, Inode: result.Inode}
 	case OpUpdateInode:
 		inode, err := exec.UpdateInode(ctx, fsmeta.UpdateInodeRequest{
 			Mount:   op.Mount,

@@ -11,8 +11,8 @@ import (
 	local "github.com/feichai0017/NoKV/local"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )

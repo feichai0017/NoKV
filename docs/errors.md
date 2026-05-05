@@ -54,7 +54,7 @@ Examples:
 - `engine/vfs/vfs.go`: `ErrRenameNoReplaceUnsupported`
 - `engine/lsm/compaction.go`: compaction planner/runtime domain errors
 - `raftstore/peer/errors.go`: peer lifecycle/state errors
-- `percolator/errors.go`: transaction protocol key-error builders and
+- `txn/percolator/errors.go`: transaction protocol key-error builders and
   Percolator protocol sentinels
 - `errors/errors.go`: transaction key-error carrier used by transaction retry
   logic

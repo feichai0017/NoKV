@@ -84,7 +84,7 @@ func TestMountCacheRefreshesAfterTTL(t *testing.T) {
 	require.True(t, second.Retired)
 }
 
-func TestMountCacheCachesNotFound(t *testing.T) {
+func TestMountCacheDoesNotCacheNotFound(t *testing.T) {
 	lookup := &fakeMountLookup{resp: &coordpb.GetMountResponse{NotFound: true}}
 	now := time.Unix(100, 0)
 	cache := &mountCache{
@@ -97,10 +97,10 @@ func TestMountCacheCachesNotFound(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
 	_, err = cache.ResolveMount(context.Background(), fsmeta.MountID("missing"))
 	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
-	require.Equal(t, 1, lookup.calls)
+	require.Equal(t, 2, lookup.calls)
 	require.Equal(t, map[string]any{
-		"cache_hits_total":        uint64(1),
-		"cache_misses_total":      uint64(1),
+		"cache_hits_total":        uint64(0),
+		"cache_misses_total":      uint64(2),
 		"admission_rejects_total": uint64(2),
 	}, cache.Stats())
 }

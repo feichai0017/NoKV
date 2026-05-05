@@ -35,10 +35,17 @@ type fakeExecutor struct {
 	err          error
 }
 
-func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	e.createReq = req
-	e.createInode = inode
-	return e.err
+	if e.err != nil {
+		return fsmeta.CreateResult{}, e.err
+	}
+	e.createInode = req.Attrs.InodeRecord(42)
+	result := fsmeta.CreateResult{
+		Dentry: fsmeta.DentryRecord{Parent: req.Parent, Name: req.Name, Inode: e.createInode.Inode, Type: e.createInode.Type},
+		Inode:  e.createInode,
+	}
+	return result, nil
 }
 
 func (e *fakeExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
@@ -169,25 +176,30 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	client, cleanup := openBufconnClient(t, executor)
 	defer cleanup()
 
-	_, err := client.Create(context.Background(), &fsmetapb.CreateRequest{
+	createResp, err := client.Create(context.Background(), &fsmetapb.CreateRequest{
 		Mount:  "vol",
 		Parent: uint64(fsmeta.RootInode),
 		Name:   "checkpoint",
-		Inode: &fsmetapb.InodeRecord{
-			Inode:       42,
+		Attrs: &fsmetapb.CreateInodeAttrs{
 			Type:        fsmetapb.InodeType_INODE_TYPE_FILE,
 			Size:        4096,
 			Mode:        0o644,
-			LinkCount:   1,
 			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
 		},
 	})
 	require.NoError(t, err)
+	require.Equal(t, uint64(42), createResp.GetDentry().GetInode())
+	require.Equal(t, uint64(42), createResp.GetInode().GetInode())
 	require.Equal(t, fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "checkpoint",
-		Inode:  42,
+		Attrs: fsmeta.CreateAttrs{
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
+		},
 	}, executor.createReq)
 	require.Equal(t, fsmeta.InodeRecord{
 		Inode:       42,

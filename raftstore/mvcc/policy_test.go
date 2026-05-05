@@ -5,8 +5,8 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	txnmvcc "github.com/feichai0017/NoKV/percolator/mvcc"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	txnmvcc "github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/stretchr/testify/require"
 )
 

@@ -17,8 +17,9 @@ const genericKVDefaultLockTTL uint64 = 3000
 // plain key/value schema. It is intentionally not the native path: Create uses
 // read-then-write checks, and ReadDirPlus uses scan plus N point reads.
 type GenericKVDriver struct {
-	runner  fsmetaexec.TxnRunner
-	lockTTL uint64
+	runner    fsmetaexec.TxnRunner
+	allocator fsmetaexec.InodeAllocator
+	lockTTL   uint64
 }
 
 // GenericKVOption configures a GenericKVDriver.
@@ -37,13 +38,17 @@ func WithGenericKVLockTTL(ttl uint64) GenericKVOption {
 // NewGenericKVDriver constructs the generic-KV baseline used by fsmeta
 // benchmarks. The runner is shared with native fsmeta execution to keep the
 // storage cluster and transaction implementation constant.
-func NewGenericKVDriver(runner fsmetaexec.TxnRunner, opts ...GenericKVOption) (*GenericKVDriver, error) {
+func NewGenericKVDriver(runner fsmetaexec.TxnRunner, allocator fsmetaexec.InodeAllocator, opts ...GenericKVOption) (*GenericKVDriver, error) {
 	if runner == nil {
 		return nil, errors.New("benchmark/fsmeta/workload: txn runner required")
 	}
+	if allocator == nil {
+		return nil, errors.New("benchmark/fsmeta/workload: inode allocator required")
+	}
 	driver := &GenericKVDriver{
-		runner:  runner,
-		lockTTL: genericKVDefaultLockTTL,
+		runner:    runner,
+		allocator: allocator,
+		lockTTL:   genericKVDefaultLockTTL,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -56,42 +61,44 @@ func NewGenericKVDriver(runner fsmetaexec.TxnRunner, opts ...GenericKVOption) (*
 // Create creates one dentry and inode by composing plain KV reads and a 2PC
 // mutation. Unlike native fsmeta, this path does not use server-side
 // AssertionNotExist; it models the common "schema over KV" baseline.
-func (d *GenericKVDriver) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
-	plan, err := fsmeta.PlanCreate(req)
+func (d *GenericKVDriver) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	inodeID, err := d.allocator.AllocateCreateInode(ctx, req.Mount, req.Parent, req.Name)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
+	}
+	plan, err := fsmeta.PlanCreate(req, inodeID)
+	if err != nil {
+		return fsmeta.CreateResult{}, err
 	}
 	startVersion, commitVersion, err := d.reserveTxnVersions(ctx)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	if _, ok, err := d.runner.Get(ctx, plan.MutateKeys[0], startVersion); err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	} else if ok {
-		return fsmeta.ErrExists
+		return fsmeta.CreateResult{}, fsmeta.ErrExists
 	}
 	if _, ok, err := d.runner.Get(ctx, plan.MutateKeys[1], startVersion); err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	} else if ok {
-		return fsmeta.ErrExists
+		return fsmeta.CreateResult{}, fsmeta.ErrExists
 	}
 
-	inode.Inode = req.Inode
-	if inode.LinkCount == 0 {
-		inode.LinkCount = 1
-	}
-	dentryValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+	inode := req.Attrs.InodeRecord(inodeID)
+	dentry := fsmeta.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
-		Inode:  req.Inode,
+		Inode:  inodeID,
 		Type:   inode.Type,
-	})
+	}
+	dentryValue, err := fsmeta.EncodeDentryValue(dentry)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	inodeValue, err := fsmeta.EncodeInodeValue(inode)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	mutations := []*kvrpcpb.Mutation{
 		{
@@ -105,7 +112,10 @@ func (d *GenericKVDriver) Create(ctx context.Context, req fsmeta.CreateRequest, 
 			Value: inodeValue,
 		},
 	}
-	return d.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, d.lockTTL)
+	if err := d.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, d.lockTTL); err != nil {
+		return fsmeta.CreateResult{}, err
+	}
+	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
 // Lookup models a schema-over-KV point lookup for one dentry.

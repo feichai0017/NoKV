@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type scriptInodeAllocator struct {
+	mu     sync.Mutex
+	byName map[string][]fsmeta.InodeID
+	next   fsmeta.InodeID
+}
+
+func newScriptInodeAllocator(ops []Operation) *scriptInodeAllocator {
+	alloc := &scriptInodeAllocator{byName: make(map[string][]fsmeta.InodeID), next: 1_000_000}
+	for _, op := range ops {
+		if op.Kind != OpCreate {
+			continue
+		}
+		key := createIDKey(op.Mount, op.Parent, op.Name)
+		alloc.byName[key] = append(alloc.byName[key], op.Inode)
+		if op.Inode >= alloc.next {
+			alloc.next = op.Inode + 1
+		}
+	}
+	return alloc
+}
+
+func (a *scriptInodeAllocator) AllocateCreateInode(_ context.Context, mount fsmeta.MountID, parent fsmeta.InodeID, name string) (fsmeta.InodeID, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	key := createIDKey(mount, parent, name)
+	if ids := a.byName[key]; len(ids) > 0 {
+		id := ids[0]
+		if len(ids) == 1 {
+			delete(a.byName, key)
+		} else {
+			a.byName[key] = ids[1:]
+		}
+		return id, nil
+	}
+	id := a.next
+	a.next++
+	return id, nil
+}
+
+func createIDKey(mount fsmeta.MountID, parent fsmeta.InodeID, name string) string {
+	return fmt.Sprintf("%s/%d/%s", mount, parent, name)
+}
+
 func TestFSMetaExecutorConcurrentHistoryContract(t *testing.T) {
 	seeds := envInt("NOKV_CONTRACT_HISTORY_SEEDS", 8)
 	steps := envInt("NOKV_CONTRACT_HISTORY_STEPS", 48)
@@ -20,12 +64,15 @@ func TestFSMetaExecutorConcurrentHistoryContract(t *testing.T) {
 		t.Run(fmt.Sprintf("seed_%03d", seed), func(t *testing.T) {
 			model := NewModel("vol")
 			runner := newVersionedRunner()
-			executor, err := fsmetaexec.New(runner, fsmetaexec.WithClock(func() time.Time {
-				return time.Unix(0, model.NowUnixNs)
-			}))
+			ops := GenerateScript(seed, steps)
+			executor, err := fsmetaexec.New(runner,
+				fsmetaexec.WithInodeAllocator(newScriptInodeAllocator(ops)),
+				fsmetaexec.WithClock(func() time.Time {
+					return time.Unix(0, model.NowUnixNs)
+				}),
+			)
 			require.NoError(t, err)
 
-			ops := GenerateScript(seed, steps)
 			err = RunConcurrentBatches(context.Background(), executor, model, ops, batchSize, HistoryOptions{})
 			require.NoError(t, err, "seed=%d steps=%d batch=%d", seed, steps, batchSize)
 		})
@@ -52,8 +99,8 @@ func TestIndeterminateHistoryErrorExcludesAborted(t *testing.T) {
 
 type unavailableCreateExecutor struct{}
 
-func (unavailableCreateExecutor) Create(context.Context, fsmeta.CreateRequest, fsmeta.InodeRecord) error {
-	return nokverrors.New(nokverrors.KindRetryExhausted, "store unavailable after retry")
+func (unavailableCreateExecutor) Create(context.Context, fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	return fsmeta.CreateResult{}, nokverrors.New(nokverrors.KindRetryExhausted, "store unavailable after retry")
 }
 
 func (unavailableCreateExecutor) UpdateInode(context.Context, fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {

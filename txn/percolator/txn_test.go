@@ -14,8 +14,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	local "github.com/feichai0017/NoKV/local"
-	"github.com/feichai0017/NoKV/percolator/latch"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
+	"github.com/feichai0017/NoKV/txn/latch"
+	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -55,6 +55,15 @@ func atomicPutIfAbsentRequest(startVersion, commitVersion uint64, firstKey, firs
 			{Op: kvrpcpb.Mutation_Put, Key: kv.SafeCopy(nil, secondKey), Value: kv.SafeCopy(nil, secondValue), AssertionNotExist: true},
 		},
 	}
+}
+
+func atomicMutateStat(t *testing.T, stats map[string]any, key string) uint64 {
+	t.Helper()
+	raw, ok := stats[key]
+	require.Truef(t, ok, "missing stat %s", key)
+	got, ok := raw.(uint64)
+	require.Truef(t, ok, "stat %s has type %T", key, raw)
+	return got
 }
 
 func latestWALPath(t *testing.T, dir string) string {
@@ -259,6 +268,22 @@ func TestApplyAtomicMutateMaterializesCommittedKeys(t *testing.T) {
 	require.Nil(t, result.Error)
 	require.False(t, result.Fallback)
 	require.Equal(t, uint64(2), result.AppliedKeys)
+}
+
+func TestApplyAtomicMutateStatsRecordLocalFallback(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(16)
+	before := AtomicMutateStats()
+
+	result := ApplyAtomicMutate(store, latches, atomicPutIfAbsentRequest(20, 21, []byte("dentry"), []byte("ino=42"), []byte("inode"), []byte("attrs")))
+	require.Nil(t, result.Error)
+	require.True(t, result.Fallback)
+	require.Zero(t, store.applyCalls)
+
+	after := AtomicMutateStats()
+	require.Equal(t, atomicMutateStat(t, before, "atomic_apply_called_total")+1, atomicMutateStat(t, after, "atomic_apply_called_total"))
+	require.Equal(t, atomicMutateStat(t, before, "atomic_local_fallback_total")+1, atomicMutateStat(t, after, "atomic_local_fallback_total"))
 }
 
 func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
@@ -1588,6 +1613,54 @@ func TestCheckTxnStatusTTLExpire(t *testing.T) {
 	lock, err = reader.GetLock([]byte("primary"))
 	require.NoError(t, err)
 	require.Nil(t, lock)
+}
+
+func TestCheckTxnStatusTTLRollbackMakesForegroundCommitAbort(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("foreground-primary")
+	startTs := uint64(100)
+	commitTs := uint64(101)
+	pre := &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("value"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: startTs,
+		LockTtl:      5,
+	}
+	require.Empty(t, Prewrite(db, latches, pre))
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	// This models a read-side lock resolver racing with the original writer.
+	// Once physical time passes the fixed TTL, CheckTxnStatus is allowed to
+	// rollback the primary even if the foreground client is merely delayed in
+	// the commit queue. The following commit must then fail, matching the class
+	// of fsmeta UpdateInode failures seen under the semantic benchmark.
+	status := CheckTxnStatus(db, latches, &kvrpcpb.CheckTxnStatusRequest{
+		PrimaryKey:         key,
+		LockTs:             startTs,
+		CurrentTs:          startTs + 10,
+		CallerStartTs:      startTs + 10,
+		RollbackIfNotExist: true,
+		CurrentTime:        lock.StartTime + lock.TTL,
+	})
+	require.Nil(t, status.GetError())
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusTTLExpireRollback, status.GetAction())
+
+	commitErr := Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  startTs,
+		CommitVersion: commitTs,
+	})
+	require.NotNil(t, commitErr)
+	require.Contains(t, commitErr.GetAbort(), "transaction already rolled back")
 }
 
 func TestCheckTxnStatusDoesNotExpireFromLogicalTSODistance(t *testing.T) {

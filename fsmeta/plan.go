@@ -45,7 +45,21 @@ type CreateRequest struct {
 	Mount  MountID
 	Parent InodeID
 	Name   string
-	Inode  InodeID
+	Attrs  CreateAttrs
+}
+
+type CreateAttrs struct {
+	Type          InodeType
+	Size          uint64
+	Mode          uint32
+	CreatedUnixNs int64
+	UpdatedUnixNs int64
+	OpaqueAttrs   []byte
+}
+
+type CreateResult struct {
+	Dentry DentryRecord
+	Inode  InodeRecord
 }
 
 type UpdateInodeRequest struct {
@@ -132,21 +146,21 @@ type ExpireWriteSessionsResult struct {
 	Expired uint64
 }
 
-func PlanCreate(req CreateRequest) (OperationPlan, error) {
+func PlanCreate(req CreateRequest, inodeID InodeID) (OperationPlan, error) {
 	if err := validateMountID(req.Mount); err != nil {
 		return OperationPlan{}, err
 	}
 	if err := validateInodeID(req.Parent); err != nil {
 		return OperationPlan{}, err
 	}
-	if err := validateInodeID(req.Inode); err != nil {
+	if err := validateInodeID(inodeID); err != nil {
 		return OperationPlan{}, err
 	}
 	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	inode, err := EncodeInodeKey(req.Mount, req.Inode)
+	inode, err := EncodeInodeKey(req.Mount, inodeID)
 	if err != nil {
 		return OperationPlan{}, err
 	}

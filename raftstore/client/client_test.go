@@ -626,11 +626,11 @@ func (s *mockService) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLoc
 }
 
 func (s *mockService) CheckTxnStatus(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
-	return &kvrpcpb.KvCheckTxnStatusResponse{}, nil
+	return &kvrpcpb.KvCheckTxnStatusResponse{Response: &kvrpcpb.CheckTxnStatusResponse{}}, nil
 }
 
 func (s *mockService) TxnHeartBeat(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
-	return &kvrpcpb.KvTxnHeartBeatResponse{}, nil
+	return &kvrpcpb.KvTxnHeartBeatResponse{Response: &kvrpcpb.TxnHeartBeatResponse{}}, nil
 }
 
 func (s *blockingService) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
@@ -865,7 +865,7 @@ func TestClientBatchGetAndMutateHelpers(t *testing.T) {
 
 	resp, err := cli.CheckTxnStatus(ctx, []byte("alfa"), 1, 2, 3)
 	require.NoError(t, err)
-	require.Nil(t, resp)
+	require.Equal(t, kvrpcpb.CheckTxnStatusAction_CheckTxnStatusNoAction, resp.GetAction())
 
 	resolved, err := cli.ResolveLocks(ctx, 1, 0, [][]byte{[]byte("alfa"), []byte("zulu")})
 	require.NoError(t, err)

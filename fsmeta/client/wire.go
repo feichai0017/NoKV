@@ -5,13 +5,23 @@ import (
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 )
 
-func createRequestToProto(req fsmeta.CreateRequest, inode fsmeta.InodeRecord) *fsmetapb.CreateRequest {
-	inode.Inode = req.Inode
+func createRequestToProto(req fsmeta.CreateRequest) *fsmetapb.CreateRequest {
 	return &fsmetapb.CreateRequest{
 		Mount:  string(req.Mount),
 		Parent: uint64(req.Parent),
 		Name:   req.Name,
-		Inode:  inodeToProto(inode),
+		Attrs:  createAttrsToProto(req.Attrs),
+	}
+}
+
+func createAttrsToProto(attrs fsmeta.CreateAttrs) *fsmetapb.CreateInodeAttrs {
+	return &fsmetapb.CreateInodeAttrs{
+		Type:          inodeTypeToProto(attrs.Type),
+		Size:          attrs.Size,
+		Mode:          attrs.Mode,
+		CreatedUnixNs: attrs.CreatedUnixNs,
+		UpdatedUnixNs: attrs.UpdatedUnixNs,
+		OpaqueAttrs:   append([]byte(nil), attrs.OpaqueAttrs...),
 	}
 }
 
@@ -175,19 +185,6 @@ func inodeFromProto(pb *fsmetapb.InodeRecord) fsmeta.InodeRecord {
 		CreatedUnixNs: pb.GetCreatedUnixNs(),
 		UpdatedUnixNs: pb.GetUpdatedUnixNs(),
 		OpaqueAttrs:   append([]byte(nil), pb.GetOpaqueAttrs()...),
-	}
-}
-
-func inodeToProto(record fsmeta.InodeRecord) *fsmetapb.InodeRecord {
-	return &fsmetapb.InodeRecord{
-		Inode:         uint64(record.Inode),
-		Type:          inodeTypeToProto(record.Type),
-		Size:          record.Size,
-		Mode:          record.Mode,
-		LinkCount:     record.LinkCount,
-		CreatedUnixNs: record.CreatedUnixNs,
-		UpdatedUnixNs: record.UpdatedUnixNs,
-		OpaqueAttrs:   append([]byte(nil), record.OpaqueAttrs...),
 	}
 }
 
