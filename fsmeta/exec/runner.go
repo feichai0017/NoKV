@@ -74,10 +74,10 @@ type NegativeCache interface {
 
 // DirPageCache is the ReadDirPlus page memo surface.
 type DirPageCache interface {
-	CurrentEpoch(dirpage.PageKey) uint64
+	CurrentEpoch(dirpage.DirectoryKey) uint64
 	Lookup(dirpage.PageKey, uint64) ([]dirpage.Entry, bool)
 	MaterializeAsync(dirpage.PageKey, uint64, []dirpage.Entry) error
-	Invalidate(dirpage.PageKey) uint64
+	Invalidate(dirpage.DirectoryKey) uint64
 	Stats() dirpage.Stats
 }
 
@@ -417,14 +417,25 @@ func (e *Executor) invalidateNegative(keys ...[]byte) {
 	}
 }
 
-// dirPageKey hashes (mount, parent) into the dirpage cache's PageKey
-// shape. fsmeta.MountID is a string; we use xxhash.Sum64 to fold it into
-// a uint64 mount slot. Collision probability across reasonable mount
-// counts (<= 10K) is ~5e-12, well below "fallback re-warm" tolerance.
-func dirPageKey(mount fsmeta.MountID, parent fsmeta.InodeID) dirpage.PageKey {
-	return dirpage.PageKey{
+// dirPageDirectoryKey hashes (mount, parent) into the dirpage cache's
+// directory invalidation key. fsmeta.MountID is a string; we use xxhash.Sum64
+// to fold it into a uint64 mount slot. Collision probability across reasonable
+// mount counts (<= 10K) is ~5e-12, well below "fallback re-warm" tolerance.
+func dirPageDirectoryKey(mount fsmeta.MountID, parent fsmeta.InodeID) dirpage.DirectoryKey {
+	return dirpage.DirectoryKey{
 		Mount:  xxhash.Sum64String(string(mount)),
 		Parent: uint64(parent),
+	}
+}
+
+// dirPageKey includes the caller-visible page cursor. ReadDirPlus cache hits
+// are only valid for the exact StartAfter/Limit shape that produced them.
+func dirPageKey(mount fsmeta.MountID, parent fsmeta.InodeID, startAfter string, limit uint32) dirpage.PageKey {
+	return dirpage.PageKey{
+		Mount:      xxhash.Sum64String(string(mount)),
+		Parent:     uint64(parent),
+		StartAfter: startAfter,
+		Limit:      limit,
 	}
 }
 
@@ -445,7 +456,7 @@ func (e *Executor) invalidateDirPages(mount fsmeta.MountID, parents ...fsmeta.In
 			continue
 		}
 		seen[p] = struct{}{}
-		e.dirPages.Invalidate(dirPageKey(mount, p))
+		e.dirPages.Invalidate(dirPageDirectoryKey(mount, p))
 	}
 }
 
@@ -487,10 +498,10 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	var pageKey dirpage.PageKey
 	var frontier uint64
 	if useDirPage {
-		pageKey = dirPageKey(req.Mount, req.Parent)
-		frontier = e.dirPages.CurrentEpoch(pageKey)
+		pageKey = dirPageKey(req.Mount, req.Parent, req.StartAfter, plan.Limit)
+		frontier = e.dirPages.CurrentEpoch(pageKey.Directory())
 		if entries, ok := e.dirPages.Lookup(pageKey, frontier); ok {
-			return decodeDirPageEntries(entries)
+			return decodeDirPageEntries(pageKey, entries)
 		}
 	}
 
@@ -541,7 +552,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	if useDirPage {
 		// Materialize is best-effort: if Invalidate fired since we read,
 		// the cache drops the write and the next call re-fetches.
-		_ = e.dirPages.MaterializeAsync(pageKey, frontier, encodeDirPageEntries(req, out))
+		_ = e.dirPages.MaterializeAsync(pageKey, frontier, encodeDirPageEntries(out))
 	}
 	return out, nil
 }
@@ -551,7 +562,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 // encoding fails we drop the entry from the materialization so the cache
 // never serves a value the consumer can't decode (the next ReadDirPlus
 // re-runs the runner path).
-func encodeDirPageEntries(req fsmeta.ReadDirRequest, pairs []fsmeta.DentryAttrPair) []dirpage.Entry {
+func encodeDirPageEntries(pairs []fsmeta.DentryAttrPair) []dirpage.Entry {
 	out := make([]dirpage.Entry, 0, len(pairs))
 	for _, p := range pairs {
 		blob, err := fsmeta.EncodeInodeValue(p.Inode)
@@ -564,14 +575,13 @@ func encodeDirPageEntries(req fsmeta.ReadDirRequest, pairs []fsmeta.DentryAttrPa
 			AttrBlob: blob,
 		})
 	}
-	_ = req // reserved for future per-mount projection (e.g. xattr split)
 	return out
 }
 
 // decodeDirPageEntries reverses encodeDirPageEntries. Decode failure on
 // any entry treats the whole page set as corrupt and forces a fallback
 // to the runner.
-func decodeDirPageEntries(entries []dirpage.Entry) ([]fsmeta.DentryAttrPair, error) {
+func decodeDirPageEntries(key dirpage.PageKey, entries []dirpage.Entry) ([]fsmeta.DentryAttrPair, error) {
 	out := make([]fsmeta.DentryAttrPair, 0, len(entries))
 	for _, e := range entries {
 		inode, err := fsmeta.DecodeInodeValue(e.AttrBlob)
@@ -580,9 +590,10 @@ func decodeDirPageEntries(entries []dirpage.Entry) ([]fsmeta.DentryAttrPair, err
 		}
 		out = append(out, fsmeta.DentryAttrPair{
 			Dentry: fsmeta.DentryRecord{
-				Name:  string(e.Name),
-				Inode: fsmeta.InodeID(e.Inode),
-				Type:  inode.Type,
+				Parent: fsmeta.InodeID(key.Parent),
+				Name:   string(e.Name),
+				Inode:  fsmeta.InodeID(e.Inode),
+				Type:   inode.Type,
 			},
 			Inode: inode,
 		})

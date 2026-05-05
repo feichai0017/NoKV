@@ -22,16 +22,19 @@ func TestExternalHistoryOpsScopesRootOperationsAndFiltersInternalSessions(t *tes
 		{Kind: fsmetacontract.OpRenameSubtree, Mount: "vol", FromParent: fsmeta.RootInode, FromName: "alpha", ToParent: fsmeta.RootInode, ToName: "beta"},
 		{Kind: fsmetacontract.OpLink, Mount: "vol", Parent: fsmeta.RootInode, Name: "link", Inode: 11},
 		{Kind: fsmetacontract.OpAdvanceTime, Mount: "vol", AdvanceNs: 1},
-	}, mount, scopeInode)
+	}, mount, scopeInode, scopeInode)
 
 	if len(ops) != 3 {
 		t.Fatalf("filtered op count=%d, want 3: %#v", len(ops), ops)
 	}
-	requireOp(t, ops[0], fsmetacontract.OpCreate, mount, scopeInode, "alpha", 11)
+	requireOp(t, ops[0], fsmetacontract.OpCreate, mount, scopeInode, "alpha", scopeInode+11)
 	if ops[1].Mount != mount || ops[1].FromParent != scopeInode || ops[1].ToParent != scopeInode {
 		t.Fatalf("rename was not scoped into generated root: %#v", ops[1])
 	}
-	requireOp(t, ops[2], fsmetacontract.OpLink, mount, scopeInode, "link", 11)
+	requireOp(t, ops[2], fsmetacontract.OpLink, mount, scopeInode, "link", scopeInode+11)
+	if got := scopeGeneratedInode(scopeInode, 0); got != 0 {
+		t.Fatalf("zero inode remapped to %d", got)
+	}
 }
 
 func requireOp(t *testing.T, op fsmetacontract.Operation, kind fsmetacontract.OperationKind, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {

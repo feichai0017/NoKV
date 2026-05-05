@@ -47,6 +47,7 @@ func rpcCodeForKind(kind nokverrors.Kind) codes.Code {
 		nokverrors.KindProtocolViolation:
 		return codes.FailedPrecondition
 	case nokverrors.KindRetryable,
+		nokverrors.KindRetryExhausted,
 		nokverrors.KindUnavailable,
 		nokverrors.KindRouteUnavailable,
 		nokverrors.KindRegionRouting,

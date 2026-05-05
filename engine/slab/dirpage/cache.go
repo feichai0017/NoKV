@@ -50,7 +50,7 @@ type Cache struct {
 	mgr    *slab.Manager
 	pageMu sync.RWMutex
 	pages  map[PageKey]*pageSet // in-memory index of materialized pages
-	epochs sync.Map             // PageKey -> *atomic.Uint64 (current invalidation epoch)
+	epochs sync.Map             // DirectoryKey -> *atomic.Uint64 (current invalidation epoch)
 	stats  stats
 }
 
@@ -133,9 +133,9 @@ func (c *Cache) Close() error {
 	return c.mgr.Close()
 }
 
-// Lookup returns the materialized entries for key if their stored
-// frontier matches frontier. Returns (nil, false) on miss, stale, or
-// any decode error encountered along the way.
+// Lookup returns the materialized entries for key if their stored frontier and
+// page identity match. Returns (nil, false) on miss, stale, or any decode
+// error encountered along the way.
 //
 // frontier is opaque: in fsmeta wiring this is the WatchSubtree event
 // cursor. The cache only requires that callers pass the same value for
@@ -180,7 +180,9 @@ func (c *Cache) Lookup(key PageKey, frontier uint64) ([]Entry, bool) {
 		// Defense in depth: if a segment was truncated under us and the
 		// in-memory locator now points at a different page, drop the
 		// whole set rather than return inconsistent data.
-		if hdr.Mount != key.Mount || hdr.Parent != key.Parent || hdr.Frontier != frontier {
+		if hdr.Mount != key.Mount || hdr.Parent != key.Parent ||
+			hdr.StartAfter != key.StartAfter || hdr.Limit != key.Limit ||
+			hdr.Frontier != frontier {
 			c.stats.misses.Add(1)
 			return nil, false
 		}
@@ -207,17 +209,20 @@ func (c *Cache) Lookup(key PageKey, frontier uint64) ([]Entry, bool) {
 // dropped (counter Dropped++) — the caller's view was stale by the time
 // the write happened.
 func (c *Cache) MaterializeAsync(key PageKey, frontier uint64, entries []Entry) error {
-	if cur := c.currentEpoch(key); cur > frontier {
+	dir := key.Directory()
+	if cur := c.currentEpoch(dir); cur > frontier {
 		c.stats.dropped.Add(1)
 		return nil
 	}
-	pageGroups := splitIntoPages(entries, c.cfg.MaxPageBytes)
+	pageGroups := splitIntoPages(key.StartAfter, entries, c.cfg.MaxPageBytes)
 
 	locs := make([]pageLoc, 0, len(pageGroups))
 	for pageNo, group := range pageGroups {
 		hdr := pageHeader{
 			Mount:      key.Mount,
 			Parent:     key.Parent,
+			StartAfter: key.StartAfter,
+			Limit:      key.Limit,
 			PageNo:     uint32(pageNo),
 			Frontier:   frontier,
 			EntryCount: uint32(len(group)),
@@ -241,7 +246,7 @@ func (c *Cache) MaterializeAsync(key PageKey, frontier uint64, entries []Entry) 
 	// Race: if Invalidate fired after we passed the entry check but
 	// before we got here, we may overwrite the just-bumped epoch's
 	// fresh state. Re-check under the lock.
-	if cur := c.currentEpoch(key); cur > frontier {
+	if cur := c.currentEpoch(dir); cur > frontier {
 		c.pageMu.Unlock()
 		c.stats.dropped.Add(1)
 		return nil
@@ -253,38 +258,42 @@ func (c *Cache) MaterializeAsync(key PageKey, frontier uint64, entries []Entry) 
 	return nil
 }
 
-// Invalidate marks the cache's pages for key as stale and bumps the
-// per-key epoch. Returns the new epoch value so callers that synthesize
-// frontiers (instead of pulling from WatchSubtree) can use it as the
-// next "current" frontier.
+// Invalidate marks all cached pages for a directory as stale and bumps the
+// directory epoch. Returns the new epoch value so callers that synthesize
+// frontiers (instead of pulling from WatchSubtree) can use it as the next
+// "current" frontier.
 //
 // Invalidate is sound regardless of in-flight MaterializeAsync calls: a
 // MaterializeAsync that races sees the bumped epoch on its second check
 // and drops its store rather than publishing stale pages.
-func (c *Cache) Invalidate(key PageKey) uint64 {
+func (c *Cache) Invalidate(key DirectoryKey) uint64 {
 	ep := c.epochFor(key)
 	next := ep.Add(1)
 	c.pageMu.Lock()
-	delete(c.pages, key)
+	for pageKey := range c.pages {
+		if pageKey.Directory() == key {
+			delete(c.pages, pageKey)
+		}
+	}
 	c.pageMu.Unlock()
 	return next
 }
 
-// CurrentEpoch returns the cache's current invalidation epoch for key.
-// Useful for tests and for the consumer's "current frontier" supply
-// when WatchSubtree is not in scope.
-func (c *Cache) CurrentEpoch(key PageKey) uint64 {
+// CurrentEpoch returns the cache's current invalidation epoch for a directory.
+// Useful for tests and for the consumer's "current frontier" supply when
+// WatchSubtree is not in scope.
+func (c *Cache) CurrentEpoch(key DirectoryKey) uint64 {
 	return c.currentEpoch(key)
 }
 
-func (c *Cache) currentEpoch(key PageKey) uint64 {
+func (c *Cache) currentEpoch(key DirectoryKey) uint64 {
 	if v, ok := c.epochs.Load(key); ok {
 		return v.(*atomic.Uint64).Load()
 	}
 	return 0
 }
 
-func (c *Cache) epochFor(key PageKey) *atomic.Uint64 {
+func (c *Cache) epochFor(key DirectoryKey) *atomic.Uint64 {
 	if v, ok := c.epochs.Load(key); ok {
 		return v.(*atomic.Uint64)
 	}
@@ -387,7 +396,7 @@ func (c *Cache) reloadSegment(fid uint32) error {
 			// either unfinished writes or future writers' space.
 			break
 		}
-		key := PageKey{Mount: hdr.Mount, Parent: hdr.Parent}
+		key := PageKey{Mount: hdr.Mount, Parent: hdr.Parent, StartAfter: hdr.StartAfter, Limit: hdr.Limit}
 		groups[key] = append(groups[key], loaded{
 			hdr: hdr,
 			loc: pageLoc{

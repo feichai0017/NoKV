@@ -57,7 +57,7 @@ func main() {
 		if got := model.Apply(scopeOp); got.Err != nil {
 			log.Fatalf("apply history scope seed=%d: %v", seed, got.Err)
 		}
-		ops := externalHistoryOps(fsmetacontract.GenerateScript(seed, *steps), mountID, scopeInode)
+		ops := externalHistoryOps(fsmetacontract.GenerateScript(seed, *steps), mountID, scopeInode, scopeInode)
 		if len(ops) == 0 {
 			log.Fatalf("seed %d generated no external-safe operations", seed)
 		}
@@ -118,7 +118,7 @@ func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmet
 	}
 }
 
-func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeInode fsmeta.InodeID) []fsmetacontract.Operation {
+func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeInode, inodeBase fsmeta.InodeID) []fsmetacontract.Operation {
 	out := make([]fsmetacontract.Operation, 0, len(in))
 	for _, op := range in {
 		switch op.Kind {
@@ -130,6 +130,11 @@ func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, sco
 			continue
 		default:
 			op.Mount = mount
+			// The generated inodes are unique only within one in-memory script.
+			// Docker chaos runs multiple seeds against the same mounted system,
+			// so external histories must shift inode ids into the per-seed scope
+			// to avoid cross-seed namespace pollution.
+			op.Inode = scopeGeneratedInode(inodeBase, op.Inode)
 			if op.Parent == fsmeta.RootInode {
 				op.Parent = scopeInode
 			}
@@ -143,4 +148,11 @@ func externalHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, sco
 		}
 	}
 	return out
+}
+
+func scopeGeneratedInode(base, inode fsmeta.InodeID) fsmeta.InodeID {
+	if inode == 0 {
+		return 0
+	}
+	return base + inode
 }

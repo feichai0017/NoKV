@@ -69,6 +69,33 @@ func TestCacheLookupMissAndHit(t *testing.T) {
 	require.Equal(t, uint64(1), stats.StoreOK)
 }
 
+func TestCachePageKeyIncludesPagination(t *testing.T) {
+	c, _ := newTestCache(t)
+	afterA := PageKey{Mount: 1, Parent: 42, StartAfter: "a", Limit: 1}
+	firstPage := PageKey{Mount: 1, Parent: 42, Limit: 1}
+
+	require.NoError(t, c.MaterializeAsync(afterA, 1, makeEntries(1, 16)))
+	_, ok := c.Lookup(firstPage, 1)
+	require.False(t, ok, "a page materialized for one cursor must not satisfy a different cursor")
+	_, ok = c.Lookup(afterA, 1)
+	require.True(t, ok)
+}
+
+func TestCacheInvalidateDropsAllPagesForDirectory(t *testing.T) {
+	c, _ := newTestCache(t)
+	firstPage := PageKey{Mount: 1, Parent: 42, Limit: 1}
+	nextPage := PageKey{Mount: 1, Parent: 42, StartAfter: "a", Limit: 1}
+
+	require.NoError(t, c.MaterializeAsync(firstPage, 1, makeEntries(1, 16)))
+	require.NoError(t, c.MaterializeAsync(nextPage, 1, makeEntries(1, 16)))
+	c.Invalidate(firstPage.Directory())
+
+	_, ok := c.Lookup(firstPage, 1)
+	require.False(t, ok)
+	_, ok = c.Lookup(nextPage, 1)
+	require.False(t, ok)
+}
+
 // TestCacheStaleByFrontier confirms Lookup with the wrong frontier
 // returns a stale miss without surfacing the cached entries.
 func TestCacheStaleByFrontier(t *testing.T) {
@@ -95,16 +122,16 @@ func TestCacheInvalidateBumpsEpoch(t *testing.T) {
 	c, _ := newTestCache(t)
 	key := PageKey{Mount: 3, Parent: 11}
 
-	require.Equal(t, uint64(0), c.CurrentEpoch(key))
-	next := c.Invalidate(key)
+	require.Equal(t, uint64(0), c.CurrentEpoch(key.Directory()))
+	next := c.Invalidate(key.Directory())
 	require.Equal(t, uint64(1), next)
-	require.Equal(t, uint64(1), c.CurrentEpoch(key))
+	require.Equal(t, uint64(1), c.CurrentEpoch(key.Directory()))
 
 	require.NoError(t, c.MaterializeAsync(key, next, makeEntries(2, 8)))
 	_, ok := c.Lookup(key, next)
 	require.True(t, ok)
 
-	bumped := c.Invalidate(key)
+	bumped := c.Invalidate(key.Directory())
 	require.Equal(t, uint64(2), bumped)
 	_, ok = c.Lookup(key, next)
 	require.False(t, ok, "Invalidate must drop the prior page set")
@@ -119,9 +146,9 @@ func TestCacheMaterializeDropsAfterInvalidate(t *testing.T) {
 
 	// Bump epoch to 5 first.
 	for range 5 {
-		c.Invalidate(key)
+		c.Invalidate(key.Directory())
 	}
-	require.Equal(t, uint64(5), c.CurrentEpoch(key))
+	require.Equal(t, uint64(5), c.CurrentEpoch(key.Directory()))
 
 	// Materialize against a stale frontier (4) while current epoch is 5.
 	// Cache must drop the write.
@@ -247,10 +274,10 @@ func TestCacheConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for i := range ops {
 				key := keyOf(seed + i)
-				ep := c.CurrentEpoch(key)
+				ep := c.CurrentEpoch(key.Directory())
 				_ = c.MaterializeAsync(key, ep, makeEntries(4, 16))
 				if i%17 == 0 {
-					c.Invalidate(key)
+					c.Invalidate(key.Directory())
 				}
 			}
 		}(w)
@@ -260,7 +287,7 @@ func TestCacheConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for i := range ops {
 				key := keyOf(seed + i)
-				ep := c.CurrentEpoch(key)
+				ep := c.CurrentEpoch(key.Directory())
 				if entries, ok := c.Lookup(key, ep); ok {
 					require.NotEmpty(t, entries)
 				}

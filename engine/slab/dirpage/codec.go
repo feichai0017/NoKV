@@ -1,8 +1,8 @@
 // Package dirpage implements the DirPageSlab Derived consumer of
-// engine/slab. It materializes (mount, parent_inode) directory listings
-// as packed pages in a slab so that ReadDirPlus can short-circuit a
-// fan-out of N LSM prefix scans + N inode Gets into a single sequential
-// page read.
+// engine/slab. It materializes individual (mount, parent_inode, cursor,
+// limit) directory pages as packed records in a slab so that ReadDirPlus
+// can short-circuit a fan-out of one LSM prefix scan + N inode Gets into
+// a single sequential page read.
 //
 // Wire format and consistency model in brief:
 //
@@ -35,8 +35,9 @@ import (
 // frame. The four ASCII bytes are "DPSL" little-endian.
 const dirPageMagic uint32 = 0x4c535044
 
-// dirPageVersion is the wire-format version. Bumped only on incompatible
-// changes; readers reject mismatched versions.
+// dirPageVersion is the current dirpage slab format. NoKV has not shipped a
+// stable dirpage cache format yet, so development-time incompatible changes
+// keep the clean v1 format instead of carrying migration branches.
 const dirPageVersion uint16 = 1
 
 // recordHeaderFixed is the size of the magic + version prefix we read
@@ -45,14 +46,27 @@ const dirPageVersion uint16 = 1
 // other consumers' records in the future).
 const recordHeaderFixed = 4 + 2 // magic + version
 
-// PageKey identifies one cached directory listing. Mount and Parent are
-// opaque to dirpage; the consumer (typically fsmeta) maps its own typed
-// identifiers to these uint widths. Mount is uint64 — fsmeta's MountID
-// is a string, callers hash it (e.g. xxhash.Sum64) so collision
-// probability across mounts is negligible (~5e-12 at 10K mounts).
-type PageKey struct {
+// DirectoryKey identifies the mutation invalidation scope for one directory.
+// A directory can have many cached PageKeys, but all of them become stale when
+// any child dentry changes.
+type DirectoryKey struct {
 	Mount  uint64
 	Parent uint64
+}
+
+// PageKey identifies one cached directory page. Mount and Parent are opaque to
+// dirpage; the consumer maps its own typed identifiers to these uint widths.
+// StartAfter and Limit are part of the identity because the cache stores one
+// caller-visible page, not a complete logical directory.
+type PageKey struct {
+	Mount      uint64
+	Parent     uint64
+	StartAfter string
+	Limit      uint32
+}
+
+func (k PageKey) Directory() DirectoryKey {
+	return DirectoryKey{Mount: k.Mount, Parent: k.Parent}
 }
 
 // Entry is one materialized directory entry. AttrBlob is the consumer-
@@ -69,6 +83,8 @@ type Entry struct {
 type pageHeader struct {
 	Mount      uint64
 	Parent     uint64
+	StartAfter string
+	Limit      uint32
 	PageNo     uint32
 	Frontier   uint64
 	EntryCount uint32
@@ -77,12 +93,14 @@ type pageHeader struct {
 // estimatePageSize gives the on-disk footprint of a page with the listed
 // entries. Used by the splitter to decide when to roll over to the next
 // page. Slightly pessimistic (assumes max varint width).
-func estimatePageSize(entries []Entry) int {
+func estimatePageSize(startAfter string, entries []Entry) int {
 	const overhead = recordHeaderFixed +
 		binary.MaxVarintLen64*3 + // mount + parent + frontier
-		binary.MaxVarintLen32*2 + // page_no + entry_count
+		binary.MaxVarintLen64 + // start_after_len
+		binary.MaxVarintLen32*3 + // limit + page_no + entry_count
 		4 // crc32
 	total := overhead
+	total += len(startAfter)
 	for _, e := range entries {
 		total += binary.MaxVarintLen64 // name_len
 		total += len(e.Name)
@@ -107,6 +125,9 @@ func encodePage(dst []byte, hdr pageHeader, entries []Entry) []byte {
 	// header (varint)
 	dst = binary.AppendUvarint(dst, hdr.Mount)
 	dst = binary.AppendUvarint(dst, hdr.Parent)
+	dst = binary.AppendUvarint(dst, uint64(len(hdr.StartAfter)))
+	dst = append(dst, hdr.StartAfter...)
+	dst = binary.AppendUvarint(dst, uint64(hdr.Limit))
 	dst = binary.AppendUvarint(dst, uint64(hdr.PageNo))
 	dst = binary.AppendUvarint(dst, hdr.Frontier)
 	dst = binary.AppendUvarint(dst, uint64(hdr.EntryCount))
@@ -169,6 +190,19 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 	if err != nil {
 		return pageHeader{}, nil, 0, err
 	}
+	startAfterLen, err := read()
+	if err != nil {
+		return pageHeader{}, nil, 0, err
+	}
+	if cursor+int(startAfterLen) > len(buf) {
+		return pageHeader{}, nil, 0, errPageTruncated
+	}
+	startAfter := string(buf[cursor : cursor+int(startAfterLen)])
+	cursor += int(startAfterLen)
+	limit, err := read()
+	if err != nil {
+		return pageHeader{}, nil, 0, err
+	}
 	pageNo, err := read()
 	if err != nil {
 		return pageHeader{}, nil, 0, err
@@ -226,6 +260,8 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 	hdr := pageHeader{
 		Mount:      mount,
 		Parent:     parent,
+		StartAfter: startAfter,
+		Limit:      uint32(limit),
 		PageNo:     uint32(pageNo),
 		Frontier:   frontier,
 		EntryCount: uint32(entryCount),
@@ -236,7 +272,7 @@ func decodePage(buf []byte) (pageHeader, []Entry, int, error) {
 // splitIntoPages partitions entries into groups, each fitting under
 // maxPageBytes when encoded. Empty entries returns one empty page so the
 // caller still records "this directory is materialized as empty".
-func splitIntoPages(entries []Entry, maxPageBytes int) [][]Entry {
+func splitIntoPages(startAfter string, entries []Entry, maxPageBytes int) [][]Entry {
 	if len(entries) == 0 {
 		return [][]Entry{nil}
 	}
@@ -245,13 +281,13 @@ func splitIntoPages(entries []Entry, maxPageBytes int) [][]Entry {
 	}
 	var pages [][]Entry
 	cur := []Entry{}
-	curSize := estimatePageSize(nil)
+	curSize := estimatePageSize(startAfter, nil)
 	for _, e := range entries {
 		entrySize := binary.MaxVarintLen64 + len(e.Name) + binary.MaxVarintLen64 + binary.MaxVarintLen64 + len(e.AttrBlob)
 		if len(cur) > 0 && curSize+entrySize > maxPageBytes {
 			pages = append(pages, cur)
 			cur = []Entry{}
-			curSize = estimatePageSize(nil)
+			curSize = estimatePageSize(startAfter, nil)
 		}
 		cur = append(cur, e)
 		curSize += entrySize
@@ -264,5 +300,9 @@ func splitIntoPages(entries []Entry, maxPageBytes int) [][]Entry {
 
 // keyString is a debug helper for error messages.
 func (k PageKey) keyString() string {
+	return fmt.Sprintf("(mount=%d parent=%d start_after=%q limit=%d)", k.Mount, k.Parent, k.StartAfter, k.Limit)
+}
+
+func (k DirectoryKey) keyString() string {
 	return fmt.Sprintf("(mount=%d parent=%d)", k.Mount, k.Parent)
 }

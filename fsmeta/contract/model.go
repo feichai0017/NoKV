@@ -53,8 +53,8 @@ type Operation struct {
 }
 
 func (op Operation) String() string {
-	return fmt.Sprintf("%s mount=%s parent=%d name=%q inode=%d from=(%d,%q) to=(%d,%q) session=%q advance_ns=%d snapshot=%d",
-		op.Kind, op.Mount, op.Parent, op.Name, op.Inode, op.FromParent, op.FromName, op.ToParent, op.ToName, op.Session, op.AdvanceNs, op.SnapshotRef)
+	return fmt.Sprintf("%s mount=%s parent=%d name=%q inode=%d from=(%d,%q) to=(%d,%q) session=%q start_after=%q limit=%d advance_ns=%d snapshot=%d",
+		op.Kind, op.Mount, op.Parent, op.Name, op.Inode, op.FromParent, op.FromName, op.ToParent, op.ToName, op.Session, op.StartAfter, op.Limit, op.AdvanceNs, op.SnapshotRef)
 }
 
 // Result is the comparable response shape returned by both the reference model
