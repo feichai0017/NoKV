@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -455,7 +456,7 @@ func modelFingerprint(m *Model) string {
 	for inode := range m.inodes {
 		inodeIDs = append(inodeIDs, inode)
 	}
-	sort.Slice(inodeIDs, func(i, j int) bool { return inodeIDs[i] < inodeIDs[j] })
+	slices.Sort(inodeIDs)
 	for _, id := range inodeIDs {
 		inode := m.inodes[id]
 		fmt.Fprintf(&b, "i:%d=%s/%d/%d/%d/%x;", id, inode.Type, inode.Size, inode.Mode, inode.LinkCount, inode.OpaqueAttrs)
@@ -464,7 +465,7 @@ func modelFingerprint(m *Model) string {
 	for id := range m.sessions {
 		sessionIDs = append(sessionIDs, id)
 	}
-	sort.Slice(sessionIDs, func(i, j int) bool { return sessionIDs[i] < sessionIDs[j] })
+	slices.Sort(sessionIDs)
 	for _, id := range sessionIDs {
 		session := m.sessions[id]
 		fmt.Fprintf(&b, "s:%s=%d/%d;", id, session.Inode, session.ExpiresUnixNs)
@@ -473,7 +474,7 @@ func modelFingerprint(m *Model) string {
 	for id := range m.owners {
 		ownerIDs = append(ownerIDs, id)
 	}
-	sort.Slice(ownerIDs, func(i, j int) bool { return ownerIDs[i] < ownerIDs[j] })
+	slices.Sort(ownerIDs)
 	for _, id := range ownerIDs {
 		owner := m.owners[id]
 		fmt.Fprintf(&b, "o:%d=%s/%d;", id, owner.Session, owner.ExpiresUnixNs)
@@ -490,7 +491,7 @@ func modelFingerprint(m *Model) string {
 	for version := range m.snapshots {
 		versions = append(versions, version)
 	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	slices.Sort(versions)
 	for _, version := range versions {
 		snapshot := m.snapshots[version]
 		fmt.Fprintf(&b, "snap:%d:", version)
@@ -512,7 +513,7 @@ func modelFingerprint(m *Model) string {
 		for inode := range snapshot.inodes {
 			snapshotInodeIDs = append(snapshotInodeIDs, inode)
 		}
-		sort.Slice(snapshotInodeIDs, func(i, j int) bool { return snapshotInodeIDs[i] < snapshotInodeIDs[j] })
+		slices.Sort(snapshotInodeIDs)
 		for _, id := range snapshotInodeIDs {
 			inode := snapshot.inodes[id]
 			fmt.Fprintf(&b, "i:%d=%s/%d/%d/%d/%x;", id, inode.Type, inode.Size, inode.Mode, inode.LinkCount, inode.OpaqueAttrs)
