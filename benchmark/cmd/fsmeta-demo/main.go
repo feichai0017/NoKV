@@ -27,7 +27,6 @@ func main() {
 		pageLimit      = flag.Uint("page-limit", 0, "readdir page limit; 0 uses workload default")
 		watchWindow    = flag.Uint("watch-window", 0, "watch-subtree back-pressure window; 0 uses workload default")
 		useReadDirPlus = flag.Bool("readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
-		startInode     = flag.Uint64("start-inode", 1_000_000, "first inode id used by generated metadata")
 		timeout        = flag.Duration("timeout", 2*time.Minute, "overall workload timeout")
 		printCSV       = flag.Bool("csv", false, "print summary as CSV instead of a table")
 	)
@@ -59,7 +58,6 @@ func main() {
 		pageLimit:      uint32(*pageLimit),
 		watchWindow:    uint32(*watchWindow),
 		readDirPlus:    *useReadDirPlus,
-		startInode:     fsmeta.InodeID(*startInode),
 	})
 	if *printCSV {
 		_ = workload.WriteSummaryCSV(os.Stdout, workload.SummaryRows(result))
@@ -84,7 +82,6 @@ type runConfig struct {
 	pageLimit      uint32
 	watchWindow    uint32
 	readDirPlus    bool
-	startInode     fsmeta.InodeID
 }
 
 func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Result, error) {
@@ -96,7 +93,6 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 			Clients:           cfg.clients,
 			Directories:       cfg.dirs,
 			FilesPerDirectory: cfg.filesPerDir,
-			StartInode:        cfg.startInode,
 		})
 	case workload.HotspotFanIn:
 		return workload.RunHotspotFanIn(ctx, cli, workload.HotspotFanInConfig{
@@ -107,7 +103,6 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 			ReadsPerClient: cfg.readsPerClient,
 			PageLimit:      cfg.pageLimit,
 			ReadDirPlus:    cfg.readDirPlus,
-			StartInode:     cfg.startInode,
 		})
 	case workload.WatchSubtree:
 		return workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
@@ -115,7 +110,6 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 			RunID:              cfg.runID,
 			Clients:            cfg.clients,
 			Files:              cfg.files,
-			StartInode:         cfg.startInode,
 			BackPressureWindow: cfg.watchWindow,
 		})
 	case workload.NegativeLookup:

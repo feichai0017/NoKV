@@ -1,289 +1,129 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 980" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
   <defs>
-    <!-- Gradients -->
-    <linearGradient id="g-control" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#eef2ff"/>
-      <stop offset="100%" stop-color="#e0e7ff"/>
-    </linearGradient>
-    <linearGradient id="g-execution" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ecfdf5"/>
-      <stop offset="100%" stop-color="#d1fae5"/>
-    </linearGradient>
-    <linearGradient id="g-truth" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#faf5ff"/>
-      <stop offset="100%" stop-color="#f3e8ff"/>
-    </linearGradient>
-    <linearGradient id="g-substrate" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fffbeb"/>
-      <stop offset="100%" stop-color="#fef3c7"/>
-    </linearGradient>
-    <linearGradient id="g-client" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f8fafc"/>
-      <stop offset="100%" stop-color="#e2e8f0"/>
-    </linearGradient>
-    <linearGradient id="g-migration" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fff1f2"/>
-      <stop offset="100%" stop-color="#ffe4e6"/>
-    </linearGradient>
-
-    <!-- Arrowheads -->
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
     </marker>
-    <marker id="arrow-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6366f1"/>
     </marker>
-
-    <!-- Subtle shadow -->
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-      <feOffset dx="0" dy="1" result="offsetblur"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.08"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.08"/>
     </filter>
+    <style>
+      .title { font-size: 36px; font-weight: 760; fill: #0f172a; }
+      .subtitle { font-size: 16px; font-weight: 520; fill: #64748b; }
+      .layer-label { font-size: 15px; font-weight: 760; letter-spacing: 1.8px; fill: #475569; }
+      .section-title { font-size: 18px; font-weight: 760; fill: #0f172a; }
+      .small-title { font-size: 15px; font-weight: 760; fill: #0f172a; }
+      .body { font-size: 13px; font-weight: 520; fill: #475569; }
+      .tiny { font-size: 11px; font-weight: 520; fill: #64748b; }
+      .mono { font-family: 'SFMono-Regular', ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 600; fill: #334155; }
+    </style>
   </defs>
 
-  <!-- ============ TITLE ============ -->
-  <text x="600" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a" letter-spacing="0.5">
-    NoKV · Architecture
-  </text>
-  <text x="600" y="62" text-anchor="middle" font-size="13" fill="#64748b" font-weight="500">
-    Three deployment shapes · Three planes · One storage core
-  </text>
+  <rect width="1600" height="980" fill="#f8fafc"/>
 
-  <!-- ============ TOP: CLIENTS / FRONTENDS ============ -->
-  <g filter="url(#shadow)">
-    <rect x="60" y="95" width="1080" height="70" rx="10" fill="url(#g-client)" stroke="#cbd5e1" stroke-width="1.5"/>
-  </g>
-  <text x="80" y="120" font-size="11" font-weight="700" fill="#475569" letter-spacing="1.5">CLIENTS &amp; FRONTENDS</text>
+  <text x="80" y="70" class="title">NoKV Current Architecture</text>
+  <text x="80" y="100" class="subtitle">Namespace-native metadata service over a distributed transaction and storage substrate</text>
 
-  <!-- Client boxes -->
-  <g transform="translate(120, 132)">
-    <rect x="0" y="0" width="180" height="24" rx="5" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="90" y="16" text-anchor="middle" font-size="12" fill="#334155" font-weight="600">Embedded Go SDK · NoKV.Open</text>
-  </g>
-  <g transform="translate(330, 132)">
-    <rect x="0" y="0" width="160" height="24" rx="5" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="80" y="16" text-anchor="middle" font-size="12" fill="#334155" font-weight="600">Redis Gateway · RESP</text>
-  </g>
-  <g transform="translate(520, 132)">
-    <rect x="0" y="0" width="160" height="24" rx="5" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="80" y="16" text-anchor="middle" font-size="12" fill="#334155" font-weight="600">nokv · nokv-config CLI</text>
-  </g>
-  <g transform="translate(710, 132)">
-    <rect x="0" y="0" width="160" height="24" rx="5" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="80" y="16" text-anchor="middle" font-size="12" fill="#334155" font-weight="600">gRPC · raftstore/client</text>
-  </g>
-  <g transform="translate(900, 132)">
-    <rect x="0" y="0" width="200" height="24" rx="5" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="100" y="16" text-anchor="middle" font-size="12" fill="#334155" font-weight="600">expvar · Stats · Observability</text>
-  </g>
+  <rect x="80" y="130" width="1440" height="132" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#soft-shadow)"/>
+  <text x="105" y="160" class="layer-label">LAYER 3 - NAMESPACE / AGENT WORKSPACE</text>
 
-  <!-- ============ THREE PLANES (parallel view) ============ -->
-  <!-- Plane group title -->
-  <text x="600" y="210" text-anchor="middle" font-size="11" font-weight="700" fill="#475569" letter-spacing="1.5">DISTRIBUTED RUNTIME — THREE PLANES, OWNED SEPARATELY</text>
+  <rect x="120" y="182" width="250" height="48" rx="12" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.6"/>
+  <text x="245" y="203" text-anchor="middle" class="small-title">Distributed FS</text>
+  <text x="245" y="221" text-anchor="middle" class="tiny">FUSE / NFS / DFS frontend</text>
 
-  <!-- Control Plane (left) -->
-  <g filter="url(#shadow)">
-    <rect x="60" y="230" width="350" height="180" rx="10" fill="url(#g-control)" stroke="#6366f1" stroke-width="2"/>
-  </g>
-  <rect x="60" y="230" width="350" height="34" rx="10" fill="#6366f1"/>
-  <rect x="60" y="258" width="350" height="6" fill="#6366f1"/>
-  <text x="80" y="252" font-size="13" font-weight="700" fill="white" letter-spacing="0.8">CONTROL PLANE</text>
-  <text x="390" y="252" text-anchor="end" font-size="11" fill="#c7d2fe" font-weight="500">coordinator/</text>
+  <rect x="405" y="182" width="250" height="48" rx="12" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.6"/>
+  <text x="530" y="203" text-anchor="middle" class="small-title">Object Namespace</text>
+  <text x="530" y="221" text-anchor="middle" class="tiny">bucket / prefix / version metadata</text>
 
-  <g transform="translate(80, 280)">
-    <rect x="0" y="0" width="310" height="42" rx="6" fill="white" stroke="#a5b4fc" stroke-width="1.2"/>
-    <text x="155" y="18" text-anchor="middle" font-size="13" fill="#4338ca" font-weight="700">Coordinator Service</text>
-    <text x="155" y="33" text-anchor="middle" font-size="11" fill="#6366f1">Route lookup · TSO · Heartbeats</text>
-  </g>
-  <g transform="translate(80, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#a5b4fc" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#4338ca" font-weight="700">Lease Manager</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#6366f1">authority handoff</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#6366f1">seal · close · reattach</text>
-  </g>
-  <g transform="translate(240, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#a5b4fc" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#4338ca" font-weight="700">View / Scheduler</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#6366f1">region catalog</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#6366f1">transition runtime</text>
-  </g>
+  <rect x="690" y="182" width="270" height="48" rx="12" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.6"/>
+  <text x="825" y="203" text-anchor="middle" class="small-title">AI Dataset / Agent Workspace</text>
+  <text x="825" y="221" text-anchor="middle" class="tiny">checkpoint, snapshot, watch streams</text>
 
-  <!-- Truth Plane (center) -->
-  <g filter="url(#shadow)">
-    <rect x="425" y="230" width="350" height="180" rx="10" fill="url(#g-truth)" stroke="#8b5cf6" stroke-width="2"/>
-  </g>
-  <rect x="425" y="230" width="350" height="34" rx="10" fill="#8b5cf6"/>
-  <rect x="425" y="258" width="350" height="6" fill="#8b5cf6"/>
-  <text x="445" y="252" font-size="13" font-weight="700" fill="white" letter-spacing="0.8">TRUTH PLANE</text>
-  <text x="755" y="252" text-anchor="end" font-size="11" fill="#ddd6fe" font-weight="500">meta/root/</text>
+  <rect x="1000" y="182" width="220" height="48" rx="12" fill="#ecfeff" stroke="#22d3ee" stroke-width="1.6"/>
+  <text x="1110" y="203" text-anchor="middle" class="small-title">fsmeta client</text>
+  <text x="1110" y="221" text-anchor="middle" class="tiny">Go typed client + gRPC</text>
 
-  <g transform="translate(445, 280)">
-    <rect x="0" y="0" width="310" height="42" rx="6" fill="white" stroke="#c4b5fd" stroke-width="1.2"/>
-    <text x="155" y="18" text-anchor="middle" font-size="13" fill="#6d28d9" font-weight="700">Delos-lite Rooted Truth Kernel</text>
-    <text x="155" y="33" text-anchor="middle" font-size="11" fill="#8b5cf6">Typed event log · Virtual log · Checkpoints</text>
-  </g>
-  <g transform="translate(445, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#c4b5fd" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#6d28d9" font-weight="700">Local Backend</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#8b5cf6">single-node truth</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#8b5cf6">file + checkpoint</text>
-  </g>
-  <g transform="translate(605, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#c4b5fd" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#6d28d9" font-weight="700">Replicated Backend</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#8b5cf6">embedded Raft</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#8b5cf6">quorum durability</text>
-  </g>
+  <rect x="1260" y="174" width="220" height="64" rx="14" fill="#ccfbf1" stroke="#14b8a6" stroke-width="2.2"/>
+  <text x="1370" y="198" text-anchor="middle" class="small-title">nokv-fsmeta</text>
+  <text x="1370" y="218" text-anchor="middle" class="tiny">gateway / runtime host</text>
 
-  <!-- Execution Plane (right) -->
-  <g filter="url(#shadow)">
-    <rect x="790" y="230" width="350" height="180" rx="10" fill="url(#g-execution)" stroke="#10b981" stroke-width="2"/>
-  </g>
-  <rect x="790" y="230" width="350" height="34" rx="10" fill="#10b981"/>
-  <rect x="790" y="258" width="350" height="6" fill="#10b981"/>
-  <text x="810" y="252" font-size="13" font-weight="700" fill="white" letter-spacing="0.8">EXECUTION PLANE</text>
-  <text x="1120" y="252" text-anchor="end" font-size="11" fill="#a7f3d0" font-weight="500">raftstore/</text>
+  <rect x="80" y="300" width="1440" height="420" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#soft-shadow)"/>
+  <text x="105" y="330" class="layer-label">LAYER 2 - DISTRIBUTED METADATA SUBSTRATE</text>
 
-  <g transform="translate(810, 280)">
-    <rect x="0" y="0" width="310" height="42" rx="6" fill="white" stroke="#6ee7b7" stroke-width="1.2"/>
-    <text x="155" y="18" text-anchor="middle" font-size="13" fill="#047857" font-weight="700">Store · Peer · RaftAdmin</text>
-    <text x="155" y="33" text-anchor="middle" font-size="11" fill="#10b981">Multi-Raft region management</text>
-  </g>
-  <g transform="translate(810, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#6ee7b7" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#047857" font-weight="700">LocalMeta</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#10b981">replica catalog</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#10b981">raft pointers</text>
-  </g>
-  <g transform="translate(970, 332)">
-    <rect x="0" y="0" width="150" height="58" rx="6" fill="white" stroke="#6ee7b7" stroke-width="1.2"/>
-    <text x="75" y="20" text-anchor="middle" font-size="12" fill="#047857" font-weight="700">Snapshot / Transport</text>
-    <text x="75" y="36" text-anchor="middle" font-size="10" fill="#10b981">SST-based install</text>
-    <text x="75" y="49" text-anchor="middle" font-size="10" fill="#10b981">gRPC raft transport</text>
-  </g>
+  <rect x="480" y="348" width="640" height="76" rx="16" fill="#ecfdf5" stroke="#10b981" stroke-width="2.2"/>
+  <text x="800" y="374" text-anchor="middle" class="section-title">fsmeta service boundary</text>
+  <text x="800" y="396" text-anchor="middle" class="body">server-side Create / ReadDirPlus / WatchSubtree / SnapshotSubtree / RenameSubtree</text>
+  <text x="800" y="414" text-anchor="middle" class="mono">fsmeta/server -> fsmeta/exec -> fsmeta/runtime/raftstore</text>
 
-  <!-- Connection lines between planes -->
-  <!-- Control ↔ Truth -->
-  <path d="M 410 320 L 425 320" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
-  <!-- Truth ↔ Execution -->
-  <path d="M 775 320 L 790 320" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <rect x="115" y="460" width="420" height="180" rx="16" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2.2"/>
+  <text x="325" y="490" text-anchor="middle" fill="#6d28d9" font-size="18" font-weight="760">Truth Plane</text>
+  <text x="325" y="514" text-anchor="middle" class="mono">meta/root/</text>
+  <line x1="145" y1="530" x2="505" y2="530" stroke="#ddd6fe" stroke-width="1.5"/>
+  <text x="145" y="555" class="body">- rooted typed event log and snapshots</text>
+  <text x="145" y="578" class="body">- mount, subtree authority, quota fence</text>
+  <text x="145" y="601" class="body">- snapshot epoch and replay/watch catch-up</text>
+  <text x="145" y="624" class="body">- replicated root or local root backend</text>
 
-  <!-- Clients → Planes -->
-  <path d="M 210 156 L 210 230" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 600 156 L 600 230" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 990 156 L 990 230" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
+  <rect x="590" y="460" width="420" height="180" rx="16" fill="#eef2ff" stroke="#6366f1" stroke-width="2.2"/>
+  <text x="800" y="490" text-anchor="middle" fill="#4338ca" font-size="18" font-weight="760">Control Plane</text>
+  <text x="800" y="514" text-anchor="middle" class="mono">coordinator/</text>
+  <line x1="620" y1="530" x2="980" y2="530" stroke="#c7d2fe" stroke-width="1.5"/>
+  <text x="620" y="555" class="body">- route catalog and store discovery</text>
+  <text x="620" y="578" class="body">- TSO and global AllocID authority</text>
+  <text x="620" y="601" class="body">- scheduling policy and storecontrol channel</text>
+  <text x="620" y="624" class="body">- lease / primacy / HA coordinator client</text>
 
-  <!-- ============ STORAGE SUBSTRATE ============ -->
-  <text x="600" y="455" text-anchor="middle" font-size="11" font-weight="700" fill="#475569" letter-spacing="1.5">SHARED STORAGE SUBSTRATE — USED BY EVERY SHAPE</text>
+  <rect x="1065" y="460" width="420" height="180" rx="16" fill="#ecfdf5" stroke="#10b981" stroke-width="2.2"/>
+  <text x="1275" y="490" text-anchor="middle" fill="#047857" font-size="18" font-weight="760">Execution Plane</text>
+  <text x="1275" y="514" text-anchor="middle" class="mono">raftstore/</text>
+  <line x1="1095" y1="530" x2="1455" y2="530" stroke="#bbf7d0" stroke-width="1.5"/>
+  <text x="1095" y="555" class="body">- StoreKV RPC and region routing</text>
+  <text x="1095" y="578" class="body">- store / peer / multi-Raft lifecycle</text>
+  <text x="1095" y="601" class="body">- kv.Apply, snapshots, transport</text>
+  <text x="1095" y="624" class="body">- localmeta: replica catalog and raft pointers</text>
 
-  <g filter="url(#shadow)">
-    <rect x="60" y="470" width="1080" height="140" rx="10" fill="url(#g-substrate)" stroke="#f59e0b" stroke-width="2"/>
-  </g>
-  <rect x="60" y="470" width="1080" height="34" rx="10" fill="#f59e0b"/>
-  <rect x="60" y="498" width="1080" height="6" fill="#f59e0b"/>
-  <text x="80" y="492" font-size="13" font-weight="700" fill="white" letter-spacing="0.8">NoKV DB · engine/</text>
-  <text x="1120" y="492" text-anchor="end" font-size="11" fill="#fde68a" font-weight="500">one substrate, all modes</text>
+  <rect x="280" y="660" width="1040" height="42" rx="12" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  <text x="310" y="686" class="small-title">Transaction layer</text>
+  <text x="465" y="686" class="body">Percolator 2PC, AtomicMutate 1PC safety gate, MVCC codec/GC, latch manager, storage interface</text>
+  <text x="1175" y="686" class="mono">txn/</text>
 
-  <!-- Substrate modules -->
-  <g transform="translate(80, 520)">
-    <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">WAL</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">append-only segments</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">CRC · rotation · watchdog</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/wal/</text>
-  </g>
-  <g transform="translate(260, 520)">
-    <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">LSM</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">MemTable · Flush · SST</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">Leveled + Ingest Buffer</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/lsm/</text>
-  </g>
-  <g transform="translate(440, 520)">
-    <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">Slab</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">derived sidecar pages</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">append-only mmap</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/slab/</text>
-  </g>
-  <g transform="translate(620, 520)">
-    <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">Manifest</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">VersionEdit log</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">atomic CURRENT handoff</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/manifest/</text>
-  </g>
-  <g transform="translate(800, 520)">
-    <rect x="0" y="0" width="160" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="80" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">VFS + FaultFS</text>
-    <text x="80" y="40" text-anchor="middle" font-size="10" fill="#d97706">cross-platform rename</text>
-    <text x="80" y="54" text-anchor="middle" font-size="10" fill="#d97706">18-op fault injection</text>
-    <text x="80" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">engine/vfs/</text>
-  </g>
-  <g transform="translate(980, 520)">
-    <rect x="0" y="0" width="140" height="76" rx="6" fill="white" stroke="#fcd34d" stroke-width="1.2"/>
-    <text x="70" y="22" text-anchor="middle" font-size="13" fill="#b45309" font-weight="700">Percolator MVCC</text>
-    <text x="70" y="40" text-anchor="middle" font-size="10" fill="#d97706">prewrite / commit</text>
-    <text x="70" y="54" text-anchor="middle" font-size="10" fill="#d97706">resolve · rollback</text>
-    <text x="70" y="68" text-anchor="middle" font-size="9" fill="#92400e" font-style="italic">percolator/</text>
-  </g>
+  <rect x="80" y="760" width="1440" height="150" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" filter="url(#soft-shadow)"/>
+  <text x="105" y="790" class="layer-label">LAYER 1 - SINGLE-NODE STORAGE ENGINE</text>
 
-  <!-- Connection: planes → substrate -->
-  <path d="M 230 410 L 230 470" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 600 410 L 600 470" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 960 410 L 960 470" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
+  <rect x="560" y="798" width="480" height="42" rx="12" fill="#fff7ed" stroke="#f59e0b" stroke-width="2.2"/>
+  <text x="800" y="815" text-anchor="middle" class="small-title">local DB facade and runtime internals</text>
+  <text x="800" y="832" text-anchor="middle" class="mono">local/</text>
 
-  <!-- ============ BOTTOM: DEPLOYMENT SHAPES & MIGRATION ============ -->
-  <text x="600" y="650" text-anchor="middle" font-size="11" font-weight="700" fill="#475569" letter-spacing="1.5">THREE DEPLOYMENT SHAPES · ONE MIGRATION PROTOCOL</text>
+  <rect x="120" y="854" width="210" height="42" rx="11" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <text x="225" y="871" text-anchor="middle" class="small-title">WAL</text>
+  <text x="225" y="888" text-anchor="middle" class="mono">engine/wal</text>
 
-  <!-- Embedded -->
-  <g filter="url(#shadow)">
-    <rect x="60" y="670" width="280" height="120" rx="10" fill="white" stroke="#94a3b8" stroke-width="1.5"/>
-  </g>
-  <text x="200" y="697" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">🧩  Embedded</text>
-  <line x1="85" y1="707" x2="315" y2="707" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="200" y="728" text-anchor="middle" font-size="11" fill="#475569" font-weight="500">Library in a Go program</text>
-  <text x="200" y="746" text-anchor="middle" font-size="10" fill="#64748b">NoKV.Open(opt) · same DB substrate</text>
-  <text x="200" y="760" text-anchor="middle" font-size="10" fill="#64748b">no distributed cost, full engine features</text>
-  <text x="200" y="778" text-anchor="middle" font-size="10" fill="#6366f1" font-weight="600">→ docs/getting_started.md</text>
+  <rect x="375" y="854" width="210" height="42" rx="11" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <text x="480" y="871" text-anchor="middle" class="small-title">LSM</text>
+  <text x="480" y="888" text-anchor="middle" class="mono">engine/lsm</text>
 
-  <!-- Seeded (middle) -->
-  <g filter="url(#shadow)">
-    <rect x="360" y="670" width="280" height="120" rx="10" fill="url(#g-migration)" stroke="#f43f5e" stroke-width="1.5"/>
-  </g>
-  <text x="500" y="697" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">🔀  Seeded · Migration Bridge</text>
-  <line x1="385" y1="707" x2="615" y2="707" stroke="#fecdd3" stroke-width="1"/>
-  <text x="500" y="728" text-anchor="middle" font-size="11" fill="#475569" font-weight="500">plan → init → seeded → expand</text>
-  <text x="500" y="746" text-anchor="middle" font-size="10" fill="#64748b">existing workdir promoted into cluster</text>
-  <text x="500" y="760" text-anchor="middle" font-size="10" fill="#64748b">lifecycle + failpoint at every stage</text>
-  <text x="500" y="778" text-anchor="middle" font-size="10" fill="#e11d48" font-weight="600">→ docs/migration.md</text>
+  <rect x="630" y="854" width="210" height="42" rx="11" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <text x="735" y="871" text-anchor="middle" class="small-title">Manifest</text>
+  <text x="735" y="888" text-anchor="middle" class="mono">engine/manifest</text>
 
-  <!-- Distributed -->
-  <g filter="url(#shadow)">
-    <rect x="660" y="670" width="280" height="120" rx="10" fill="white" stroke="#94a3b8" stroke-width="1.5"/>
-  </g>
-  <text x="800" y="697" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">🌐  Distributed</text>
-  <line x1="685" y1="707" x2="915" y2="707" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="800" y="728" text-anchor="middle" font-size="11" fill="#475569" font-weight="500">Multi-Raft replicated mesh</text>
-  <text x="800" y="746" text-anchor="middle" font-size="10" fill="#64748b">three planes active · region-sharded</text>
-  <text x="800" y="760" text-anchor="middle" font-size="10" fill="#64748b">Redis gateway + Coordinator + stores</text>
-  <text x="800" y="778" text-anchor="middle" font-size="10" fill="#6366f1" font-weight="600">→ docs/raftstore.md</text>
+  <rect x="885" y="854" width="250" height="42" rx="11" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <text x="1010" y="871" text-anchor="middle" class="small-title">Derived slab caches</text>
+  <text x="1010" y="888" text-anchor="middle" class="mono">dirpage / negative</text>
 
-  <!-- Formal spec side note -->
-  <g filter="url(#shadow)">
-    <rect x="960" y="670" width="180" height="120" rx="10" fill="#f8fafc" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3"/>
-  </g>
-  <text x="1050" y="697" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">📐  Formally Specified</text>
-  <line x1="985" y1="707" x2="1115" y2="707" stroke="#e9d5ff" stroke-width="1"/>
-  <text x="1050" y="726" text-anchor="middle" font-size="10" fill="#475569">6 TLA+ specifications</text>
-  <text x="1050" y="740" text-anchor="middle" font-size="10" fill="#475569">positive + contrast family</text>
-  <text x="1050" y="754" text-anchor="middle" font-size="10" fill="#475569">TLC machine-checked</text>
-  <text x="1050" y="778" text-anchor="middle" font-size="10" fill="#8b5cf6" font-weight="600">→ spec/</text>
+  <rect x="1180" y="854" width="260" height="42" rx="11" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+  <text x="1310" y="871" text-anchor="middle" class="small-title">VFS / file substrate</text>
+  <text x="1310" y="888" text-anchor="middle" class="mono">engine/vfs, engine/file</text>
 
-  <!-- Arrows: shapes → storage -->
-  <path d="M 200 670 L 200 610" stroke="#cbd5e1" stroke-width="1" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 500 670 L 500 610" stroke="#fca5a5" stroke-width="1" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
-  <path d="M 800 670 L 800 610" stroke="#cbd5e1" stroke-width="1" fill="none" marker-end="url(#arrow-dash)" stroke-dasharray="3,3"/>
+  <path d="M 1370 238 C 1370 290, 1180 318, 1040 348" fill="none" stroke="#64748b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M 800 424 L 800 460" fill="none" stroke="#64748b" stroke-width="2.2" marker-end="url(#arrow)"/>
+  <path d="M 960 424 L 960 442 L 1275 442 L 1275 460" fill="none" stroke="#64748b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M 535 550 L 590 550" fill="none" stroke="#64748b" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path d="M 1010 550 L 1065 550" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 1275 640 L 1275 660" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 800 702 L 800 798" fill="none" stroke="#64748b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+
+  <rect x="80" y="925" width="1440" height="34" rx="10" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="100" y="947" class="tiny">Consensus note: NoKV reuses etcd/raft RawNode only inside the raftstore consensus core. Storage engine, fsmeta semantics, coordinator, rooted truth, transactions, caches, and test harnesses are in-house.</text>
 </svg>

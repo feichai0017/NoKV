@@ -10,10 +10,10 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
-	"github.com/feichai0017/NoKV/percolator"
-	"github.com/feichai0017/NoKV/percolator/latch"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	"github.com/feichai0017/NoKV/txn/latch"
+	"github.com/feichai0017/NoKV/txn/mvcc"
+	"github.com/feichai0017/NoKV/txn/percolator"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 

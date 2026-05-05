@@ -15,22 +15,31 @@ import (
 type fakeClient struct {
 	mu       sync.RWMutex
 	dentries map[string]fsmeta.DentryRecord
+	next     fsmeta.InodeID
 }
 
 func newFakeClient() *fakeClient {
-	return &fakeClient{dentries: make(map[string]fsmeta.DentryRecord)}
+	return &fakeClient{dentries: make(map[string]fsmeta.DentryRecord), next: 100}
 }
 
-func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
+func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	inode := req.Attrs.InodeRecord(c.next)
+	c.next++
+	dentry := fsmeta.DentryRecord{
+		Parent: req.Parent,
+		Name:   req.Name,
+		Inode:  inode.Inode,
+		Type:   inode.Type,
+	}
 	c.dentries[dentryID(req.Parent, req.Name)] = fsmeta.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
-		Inode:  req.Inode,
+		Inode:  inode.Inode,
 		Type:   inode.Type,
 	}
-	return nil
+	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
 func (c *fakeClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
@@ -78,7 +87,6 @@ func TestRunCheckpointStorm(t *testing.T) {
 		Clients:           2,
 		Directories:       2,
 		FilesPerDirectory: 3,
-		StartInode:        100,
 	})
 	require.NoError(t, err)
 	require.Equal(t, CheckpointStorm, result.Name)
@@ -98,7 +106,6 @@ func TestRunHotspotFanIn(t *testing.T) {
 		Files:          3,
 		ReadsPerClient: 4,
 		ReadDirPlus:    true,
-		StartInode:     200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, HotspotFanIn, result.Name)
@@ -112,7 +119,6 @@ func TestRunWatchSubtree(t *testing.T) {
 		RunID:              "test",
 		Clients:            2,
 		Files:              3,
-		StartInode:         300,
 		BackPressureWindow: 8,
 	})
 	require.NoError(t, err)
@@ -178,19 +184,20 @@ func newFakeWatchClient() *fakeWatchClient {
 	}
 }
 
-func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
-	if err := c.fakeClient.Create(ctx, req, inode); err != nil {
-		return err
+func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	result, err := c.fakeClient.Create(ctx, req)
+	if err != nil {
+		return fsmeta.CreateResult{}, err
 	}
 	if c.stream == nil {
-		return nil
+		return result, nil
 	}
 	key, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	if len(c.stream.prefix) > 0 && !bytes.HasPrefix(key, c.stream.prefix) {
-		return nil
+		return result, nil
 	}
 	c.stream.events <- fsmeta.WatchEvent{
 		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: uint64(len(c.stream.events) + 1)},
@@ -198,7 +205,7 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest, 
 		Source:        fsmeta.WatchEventSourceCommit,
 		Key:           key,
 	}
-	return nil
+	return result, nil
 }
 
 func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {

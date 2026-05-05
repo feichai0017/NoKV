@@ -278,6 +278,9 @@ func respectsRealTime(candidate int, used []bool, observed []observedOperation) 
 }
 
 func applyObserved(model *Model, op Operation, got Result) Result {
+	if op.Kind == OpCreate && got.Err == nil {
+		op.Inode = got.Inode.Inode
+	}
 	if op.Kind == OpSnapshotSubtree {
 		if got.Err == nil {
 			return model.ApplySnapshot(op, got.Token)

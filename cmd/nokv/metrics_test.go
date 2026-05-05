@@ -30,3 +30,14 @@ func TestInstallCoordinatorExpvarPublishesDedicatedEunomiaSnapshot(t *testing.T)
 	require.True(t, ok)
 	require.Equal(t, state["eunomia_metrics"], cccSnapshot)
 }
+
+func TestInstallStorePercolatorExpvarPublishesAtomicCounters(t *testing.T) {
+	installStorePercolatorExpvar()
+
+	metricsVar := expvar.Get("nokv_store_percolator")
+	require.NotNil(t, metricsVar)
+	var snapshot map[string]any
+	require.NoError(t, json.Unmarshal([]byte(metricsVar.String()), &snapshot))
+	require.Contains(t, snapshot, "atomic_apply_called_total")
+	require.Contains(t, snapshot, "atomic_local_fallback_total")
+}

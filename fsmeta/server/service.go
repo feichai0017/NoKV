@@ -16,7 +16,7 @@ import (
 // Executor is the fsmeta operation surface exported by the gRPC service.
 // fsmeta/exec.Executor satisfies this interface.
 type Executor interface {
-	Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error
+	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
@@ -83,11 +83,14 @@ func (s *Service) Create(ctx context.Context, req *fsmetapb.CreateRequest) (*fsm
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "fsmeta create request is required")
 	}
-	createReq, inode := createRequestFromProto(req)
-	if err := s.executor.Create(ctx, createReq, inode); err != nil {
+	result, err := s.executor.Create(ctx, createRequestFromProto(req))
+	if err != nil {
 		return nil, rpcError(err)
 	}
-	return &fsmetapb.CreateResponse{}, nil
+	return &fsmetapb.CreateResponse{
+		Dentry: dentryToProto(result.Dentry),
+		Inode:  inodeToProto(result.Inode),
+	}, nil
 }
 
 func (s *Service) UpdateInode(ctx context.Context, req *fsmetapb.UpdateInodeRequest) (*fsmetapb.UpdateInodeResponse, error) {

@@ -22,8 +22,15 @@ type fakeExecutor struct {
 	err error
 }
 
-func (e *fakeExecutor) Create(context.Context, fsmeta.CreateRequest, fsmeta.InodeRecord) error {
-	return e.err
+func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	if e.err != nil {
+		return fsmeta.CreateResult{}, e.err
+	}
+	inode := req.Attrs.InodeRecord(42)
+	return fsmeta.CreateResult{
+		Dentry: fsmeta.DentryRecord{Parent: req.Parent, Name: req.Name, Inode: inode.Inode, Type: inode.Type},
+		Inode:  inode,
+	}, nil
 }
 
 func (e *fakeExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
@@ -177,6 +184,16 @@ func TestTypedClientMutationRPCs(t *testing.T) {
 	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
 	defer cleanup()
 
+	created, err := cli.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "created",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(42), created.Inode.Inode)
+	require.Equal(t, "created", created.Dentry.Name)
+
 	require.NoError(t, cli.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 1,
@@ -249,12 +266,12 @@ func TestTypedClientErrorTranslation(t *testing.T) {
 	cli, cleanup := openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrExists})
 	defer cleanup()
 
-	err := cli.Create(context.Background(), fsmeta.CreateRequest{
+	_, err := cli.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "checkpoint",
-		Inode:  42,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 
 	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrNotFound})

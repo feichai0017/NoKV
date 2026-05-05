@@ -4,7 +4,6 @@ import (
 	"time"
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
@@ -12,6 +11,7 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 // Config wires together the dependencies required to host one raftstore node

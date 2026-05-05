@@ -21,10 +21,17 @@ type stagedPublishFake struct {
 	unlinkCtxErr error
 }
 
-func (f *stagedPublishFake) Create(_ context.Context, req fsmeta.CreateRequest, _ fsmeta.InodeRecord) error {
+func (f *stagedPublishFake) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	f.calls = append(f.calls, "create")
 	f.created = req
-	return f.createErr
+	if f.createErr != nil {
+		return fsmeta.CreateResult{}, f.createErr
+	}
+	inode := req.Attrs.InodeRecord(99)
+	return fsmeta.CreateResult{
+		Dentry: fsmeta.DentryRecord{Parent: req.Parent, Name: req.Name, Inode: inode.Inode, Type: inode.Type},
+		Inode:  inode,
+	}, nil
 }
 
 func (f *stagedPublishFake) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
@@ -42,18 +49,23 @@ func (f *stagedPublishFake) Unlink(ctx context.Context, req fsmeta.UnlinkRequest
 
 func TestPublishStagedNamespaceEntryCommitsAfterPrepare(t *testing.T) {
 	cli := &stagedPublishFake{}
-	var prepared fsmeta.CreateRequest
+	var prepared fsmeta.CreateResult
 	req := stagedPublishRequest()
 
-	err := PublishStagedNamespaceEntry(context.Background(), cli, req, func(_ context.Context, stage fsmeta.CreateRequest) error {
+	err := PublishStagedNamespaceEntry(context.Background(), cli, req, func(_ context.Context, stage fsmeta.CreateResult) error {
 		cli.calls = append(cli.calls, "prepare")
 		prepared = stage
 		return nil
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"create", "prepare", "rename"}, cli.calls)
-	require.Equal(t, fsmeta.CreateRequest{Mount: "vol", Parent: 7, Name: ".stage-artifact", Inode: 99}, cli.created)
-	require.Equal(t, cli.created, prepared)
+	require.Equal(t, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   ".stage-artifact",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	}, cli.created)
+	require.Equal(t, fsmeta.InodeID(99), prepared.Inode.Inode)
 	require.Equal(t, fsmeta.RenameSubtreeRequest{
 		Mount:      "vol",
 		FromParent: 7,
@@ -68,7 +80,7 @@ func TestPublishStagedNamespaceEntryCleansUpWhenPrepareFails(t *testing.T) {
 	prepareErr := errors.New("body upload failed")
 	req := stagedPublishRequest()
 
-	err := PublishStagedNamespaceEntry(context.Background(), cli, req, func(context.Context, fsmeta.CreateRequest) error {
+	err := PublishStagedNamespaceEntry(context.Background(), cli, req, func(context.Context, fsmeta.CreateResult) error {
 		cli.calls = append(cli.calls, "prepare")
 		return prepareErr
 	})
@@ -81,7 +93,7 @@ func TestPublishStagedNamespaceEntryReportsCleanupFailure(t *testing.T) {
 	cli := &stagedPublishFake{unlinkErr: errors.New("unlink failed")}
 	prepareErr := errors.New("prepare failed")
 
-	err := PublishStagedNamespaceEntry(context.Background(), cli, stagedPublishRequest(), func(context.Context, fsmeta.CreateRequest) error {
+	err := PublishStagedNamespaceEntry(context.Background(), cli, stagedPublishRequest(), func(context.Context, fsmeta.CreateResult) error {
 		return prepareErr
 	})
 	require.ErrorIs(t, err, prepareErr)
@@ -93,7 +105,7 @@ func TestPublishStagedNamespaceEntryCleanupIgnoresCanceledRequestContext(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := PublishStagedNamespaceEntry(ctx, cli, stagedPublishRequest(), func(context.Context, fsmeta.CreateRequest) error {
+	err := PublishStagedNamespaceEntry(ctx, cli, stagedPublishRequest(), func(context.Context, fsmeta.CreateResult) error {
 		return context.Canceled
 	})
 	require.ErrorIs(t, err, context.Canceled)
@@ -128,11 +140,6 @@ func stagedPublishRequest() StagedPublishRequest {
 		StageName:   ".stage-artifact",
 		FinalParent: 8,
 		FinalName:   "artifact",
-		InodeID:     99,
-		Inode: fsmeta.InodeRecord{
-			Type:      fsmeta.InodeTypeFile,
-			Mode:      0o644,
-			LinkCount: 1,
-		},
+		Attrs:       fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
 	}
 }

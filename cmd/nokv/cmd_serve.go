@@ -306,6 +306,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	defer func() {
 		_ = server.Close()
 	}()
+	installStorePercolatorExpvar()
 	metricsLn, err := startExpvarServer(*metricsAddr)
 	if err != nil {
 		return fmt.Errorf("start serve metrics endpoint: %w", err)

@@ -12,8 +12,7 @@ func TestPlanCreateTouchesDentryAndInode(t *testing.T) {
 		Mount:  "vol",
 		Parent: RootInode,
 		Name:   "file",
-		Inode:  22,
-	})
+	}, 22)
 	require.NoError(t, err)
 
 	dentry, err := EncodeDentryKey("vol", RootInode, "file")

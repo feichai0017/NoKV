@@ -1,9 +1,9 @@
 package server
 
 import (
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/store"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 func newMVCCMaintenanceWorker(cfg MVCCMaintenanceConfig, mvccStore txnstore.Store, raftStore *store.Store) (*storemvcc.MaintenanceWorker, bool) {

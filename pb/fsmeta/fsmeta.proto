@@ -40,14 +40,26 @@ message DentryAttrPair {
   InodeRecord inode = 2;
 }
 
+message CreateInodeAttrs {
+  InodeType type = 1;
+  uint64 size = 2;
+  uint32 mode = 3;
+  int64 created_unix_ns = 4;
+  int64 updated_unix_ns = 5;
+  bytes opaque_attrs = 6;
+}
+
 message CreateRequest {
   string mount = 1;
   uint64 parent = 2;
   string name = 3;
-  InodeRecord inode = 4;
+  CreateInodeAttrs attrs = 4;
 }
 
-message CreateResponse {}
+message CreateResponse {
+  DentryRecord dentry = 1;
+  InodeRecord inode = 2;
+}
 
 message UpdateInodeRequest {
   string mount = 1;

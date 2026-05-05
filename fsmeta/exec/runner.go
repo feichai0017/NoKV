@@ -45,6 +45,19 @@ type AtomicMutateFastPath interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
 }
 
+// InodeAllocator assigns Create inode IDs. The executor allocates once before
+// transaction retry so a retry cannot publish a different inode for the same
+// logical Create after a conflict or ambiguous transport error.
+type InodeAllocator interface {
+	AllocateCreateInode(ctx context.Context, mount fsmeta.MountID, parent fsmeta.InodeID, name string) (fsmeta.InodeID, error)
+}
+
+// statsProvider is implemented by lower fsmeta runtime layers that can expose
+// their own counters without becoming part of the transaction execution API.
+type statsProvider interface {
+	Stats() map[string]any
+}
+
 // MountAdmission is the executor's mount-admission view.
 type MountAdmission struct {
 	MountID       fsmeta.MountID
@@ -83,16 +96,23 @@ type DirPageCache interface {
 
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
-	runner                 TxnRunner
-	mounts                 MountResolver
-	quotas                 QuotaResolver
-	subtrees               SubtreeHandoffPublisher
-	negCache               NegativeCache
-	dirPages               DirPageCache
-	lockTTL                uint64
-	now                    func() time.Time
-	txnRetriesTotal        atomic.Uint64
-	txnRetryExhaustedTotal atomic.Uint64
+	runner                               TxnRunner
+	inodes                               InodeAllocator
+	mounts                               MountResolver
+	quotas                               QuotaResolver
+	subtrees                             SubtreeHandoffPublisher
+	negCache                             NegativeCache
+	dirPages                             DirPageCache
+	lockTTL                              uint64
+	now                                  func() time.Time
+	txnRetriesTotal                      atomic.Uint64
+	txnRetryExhaustedTotal               atomic.Uint64
+	createTotal                          atomic.Uint64
+	createFastPathAttemptTotal           atomic.Uint64
+	createFastPathSkipQuotaTotal         atomic.Uint64
+	createFastPathRunnerUnsupportedTotal atomic.Uint64
+	createFastPathFallbackTotal          atomic.Uint64
+	createFastPathSuccessTotal           atomic.Uint64
 }
 
 // Option configures an Executor.
@@ -129,6 +149,13 @@ func WithMountResolver(resolver MountResolver) Option {
 func WithQuotaResolver(resolver QuotaResolver) Option {
 	return func(e *Executor) {
 		e.quotas = resolver
+	}
+}
+
+// WithInodeAllocator enables server-side inode assignment for Create.
+func WithInodeAllocator(allocator InodeAllocator) Option {
+	return func(e *Executor) {
+		e.inodes = allocator
 	}
 }
 
@@ -191,15 +218,32 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 func (e *Executor) Stats() map[string]any {
 	if e == nil {
 		return map[string]any{
-			"txn_retries_total":         uint64(0),
-			"txn_retry_exhausted_total": uint64(0),
+			"txn_retries_total":                        uint64(0),
+			"txn_retry_exhausted_total":                uint64(0),
+			"create_total":                             uint64(0),
+			"create_fastpath_attempt_total":            uint64(0),
+			"create_fastpath_skip_quota_total":         uint64(0),
+			"create_fastpath_runner_unsupported_total": uint64(0),
+			"create_fastpath_fallback_total":           uint64(0),
+			"create_fastpath_success_total":            uint64(0),
+			"negative_cache_enabled":                   false,
+			"dirpage_cache_enabled":                    false,
 		}
 	}
 	out := map[string]any{
-		"txn_retries_total":         e.txnRetriesTotal.Load(),
-		"txn_retry_exhausted_total": e.txnRetryExhaustedTotal.Load(),
-		"negative_cache_enabled":    e.negCache != nil,
-		"dirpage_cache_enabled":     e.dirPages != nil,
+		"txn_retries_total":                        e.txnRetriesTotal.Load(),
+		"txn_retry_exhausted_total":                e.txnRetryExhaustedTotal.Load(),
+		"create_total":                             e.createTotal.Load(),
+		"create_fastpath_attempt_total":            e.createFastPathAttemptTotal.Load(),
+		"create_fastpath_skip_quota_total":         e.createFastPathSkipQuotaTotal.Load(),
+		"create_fastpath_runner_unsupported_total": e.createFastPathRunnerUnsupportedTotal.Load(),
+		"create_fastpath_fallback_total":           e.createFastPathFallbackTotal.Load(),
+		"create_fastpath_success_total":            e.createFastPathSuccessTotal.Load(),
+		"negative_cache_enabled":                   e.negCache != nil,
+		"dirpage_cache_enabled":                    e.dirPages != nil,
+	}
+	if stats, ok := e.runner.(statsProvider); ok {
+		out["runner"] = stats.Stats()
 	}
 	if e.dirPages != nil {
 		stats := e.dirPages.Stats()
@@ -209,34 +253,51 @@ func (e *Executor) Stats() map[string]any {
 		out["dirpage_store_ok"] = stats.StoreOK
 		out["dirpage_dropped"] = stats.Dropped
 	}
+	if stats, ok := e.inodes.(statsProvider); ok {
+		out["inode_allocator"] = stats.Stats()
+	}
 	return out
 }
 
 // Create creates one dentry and its inode record in a single transaction.
-func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode fsmeta.InodeRecord) error {
-	plan, err := fsmeta.PlanCreate(req)
-	if err != nil {
-		return err
+func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	if e.inodes == nil {
+		return fsmeta.CreateResult{}, errInodeAllocatorRequired
+	}
+	if _, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name); err != nil {
+		return fsmeta.CreateResult{}, err
+	}
+	if _, err := fsmeta.EncodeInodeValue(req.Attrs.InodeRecord(fsmeta.RootInode)); err != nil {
+		return fsmeta.CreateResult{}, err
 	}
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
-	inode.Inode = req.Inode
-	if inode.LinkCount == 0 {
-		inode.LinkCount = 1
+	// Allocate after cheap semantic validation and mount admission. Transaction
+	// retries below reuse this single ID; failed creates may leave coordinator
+	// ID gaps, but they cannot publish a different inode on retry.
+	inodeID, err := e.inodes.AllocateCreateInode(ctx, req.Mount, req.Parent, req.Name)
+	if err != nil {
+		return fsmeta.CreateResult{}, err
 	}
-	dentryValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+	plan, err := fsmeta.PlanCreate(req, inodeID)
+	if err != nil {
+		return fsmeta.CreateResult{}, err
+	}
+	inode := req.Attrs.InodeRecord(inodeID)
+	dentry := fsmeta.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
-		Inode:  req.Inode,
+		Inode:  inodeID,
 		Type:   inode.Type,
-	})
+	}
+	dentryValue, err := fsmeta.EncodeDentryValue(dentry)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	inodeValue, err := fsmeta.EncodeInodeValue(inode)
 	if err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	mutations := []*kvrpcpb.Mutation{
 		{
@@ -256,6 +317,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 		{Key: cloneBytes(plan.MutateKeys[0]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
 		{Key: cloneBytes(plan.MutateKeys[1]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
 	}
+	e.createTotal.Add(1)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:  req.Mount,
@@ -269,22 +331,33 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest, inode f
 		all := append(cloneMutations(mutations), quotaMutations...)
 		if len(quotaMutations) == 0 {
 			if fast, ok := e.runner.(AtomicMutateFastPath); ok {
+				// Fast-path counters are per transaction attempt, not per logical
+				// Create, so contention retries and admission misses stay visible.
+				e.createFastPathAttemptTotal.Add(1)
 				handled, err := fast.TryAtomicMutate(ctx, plan.PrimaryKey, cloneAtomicPredicates(predicates), all, startVersion, commitVersion)
 				if err != nil || handled {
+					if err == nil {
+						e.createFastPathSuccessTotal.Add(1)
+					}
 					return err
 				}
+				e.createFastPathFallbackTotal.Add(1)
+			} else {
+				e.createFastPathRunnerUnsupportedTotal.Add(1)
 			}
+		} else {
+			e.createFastPathSkipQuotaTotal.Add(1)
 		}
 		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
 	}); err != nil {
-		return err
+		return fsmeta.CreateResult{}, err
 	}
 	// The new dentry replaces a previously-missing key; drop any negative
 	// memo a prior Lookup may have planted, and bump the parent's dirpage
 	// epoch so a stale ReadDirPlus result cannot mask the new entry.
 	e.invalidateNegative(plan.MutateKeys[0])
 	e.invalidateDirPages(req.Mount, req.Parent)
-	return nil
+	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
 // UpdateInode updates mutable inode attributes and applies the size quota delta
@@ -1218,9 +1291,9 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 //
 //  1. When a concurrent reader at start_ts > our commit_ts encounters our
 //     prewrite lock, it pushes lock.MinCommitTs = reader_start_ts + 1 via
-//     CheckTxnStatus (see percolator/txn.go: CallerStartTs handling).
+//     CheckTxnStatus (see txn/percolator/txn.go: CallerStartTs handling).
 //  2. commitKey rejects the commit with keyErrorCommitTsExpired when
-//     lock.MinCommitTs > commitVersion (see percolator/txn.go:373-375).
+//     lock.MinCommitTs > commitVersion (see txn/percolator/txn.go:373-375).
 //
 // Together these force a retry-with-fresh-ts under contention — incorrect
 // pre-allocation is detected at commit time, never silently violated. The

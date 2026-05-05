@@ -115,6 +115,20 @@ func TestRunnerBatchGetKeyErrorsPreserveKind(t *testing.T) {
 	require.True(t, nokverrors.Retryable(err))
 }
 
+func TestRunnerTryAtomicMutateRecordsUnsupportedKV(t *testing.T) {
+	runner, err := NewRunner(&fakeRunnerKV{}, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 10, Count: 2}})
+	require.NoError(t, err)
+
+	handled, err := runner.TryAtomicMutate(context.Background(), []byte("p"), nil, []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Mutation_Put,
+		Key: []byte("p"),
+	}}, 10, 11)
+	require.NoError(t, err)
+	require.False(t, handled)
+	stats := runner.Stats()
+	require.Equal(t, uint64(1), stats["atomic_runner_unsupported_total"])
+}
+
 var _ KVClient = (*fakeRunnerKV)(nil)
 var _ TSOClient = (*fakeRunnerTSO)(nil)
 var _ fsmetaexec.TxnRunner = (*Runner)(nil)

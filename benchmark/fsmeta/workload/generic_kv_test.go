@@ -15,49 +15,43 @@ import (
 
 func TestGenericKVDriverCreateUsesPlainMutations(t *testing.T) {
 	runner := newFakeTxnRunner()
-	driver, err := NewGenericKVDriver(runner)
+	driver, err := NewGenericKVDriver(runner, &fakeInodeAllocator{ids: []fsmeta.InodeID{42, 43}})
 	require.NoError(t, err)
 
 	req := fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file-a",
-		Inode:  42,
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
 	}
-	require.NoError(t, driver.Create(context.Background(), req, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Mode:      0o644,
-		LinkCount: 1,
-	}))
+	result, err := driver.Create(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(42), result.Inode.Inode)
 	require.Len(t, runner.mutateCalls, 1)
 	require.Len(t, runner.mutateCalls[0], 2)
 	for _, mut := range runner.mutateCalls[0] {
 		require.False(t, mut.GetAssertionNotExist(), "generic-KV baseline must not use native assertion")
 	}
 
-	err = driver.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = driver.Create(context.Background(), req)
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Len(t, runner.mutateCalls, 1, "duplicate create should stop at client-side existence check")
 }
 
 func TestGenericKVDriverReadDirPlusUsesPointGets(t *testing.T) {
 	runner := newFakeTxnRunner()
-	driver, err := NewGenericKVDriver(runner)
+	driver, err := NewGenericKVDriver(runner, &fakeInodeAllocator{ids: []fsmeta.InodeID{100, 101}})
 	require.NoError(t, err)
 
 	ctx := context.Background()
 	for i, name := range []string{"file-a", "file-b"} {
-		require.NoError(t, driver.Create(ctx, fsmeta.CreateRequest{
+		_, err := driver.Create(ctx, fsmeta.CreateRequest{
 			Mount:  "vol",
 			Parent: fsmeta.RootInode,
 			Name:   name,
-			Inode:  fsmeta.InodeID(100 + i),
-		}, fsmeta.InodeRecord{
-			Type:      fsmeta.InodeTypeFile,
-			Size:      uint64(4096 + i),
-			Mode:      0o644,
-			LinkCount: 1,
-		}))
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: uint64(4096 + i), Mode: 0o644},
+		})
+		require.NoError(t, err)
 	}
 	runner.resetCallCounters()
 
@@ -76,12 +70,13 @@ func TestGenericKVDriverReadDirPlusUsesPointGets(t *testing.T) {
 
 func TestGenericKVDriverLookup(t *testing.T) {
 	runner := newFakeTxnRunner()
-	driver, err := NewGenericKVDriver(runner)
+	driver, err := NewGenericKVDriver(runner, &fakeInodeAllocator{ids: []fsmeta.InodeID{42}})
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a", Inode: 42}
-	require.NoError(t, driver.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1}))
+	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
+	_, err = driver.Create(ctx, req)
+	require.NoError(t, err)
 	runner.resetCallCounters()
 
 	got, err := driver.Lookup(ctx, fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a"})
@@ -95,7 +90,7 @@ func TestGenericKVDriverLookup(t *testing.T) {
 
 func TestGenericKVDriverReadDirPlusReturnsNotFoundForDanglingDentry(t *testing.T) {
 	runner := newFakeTxnRunner()
-	driver, err := NewGenericKVDriver(runner)
+	driver, err := NewGenericKVDriver(runner, &fakeInodeAllocator{ids: []fsmeta.InodeID{42}})
 	require.NoError(t, err)
 
 	dentryKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "dangling")
@@ -123,6 +118,19 @@ type fakeTxnRunner struct {
 	getCalls      [][]byte
 	batchGetCalls int
 	mutateCalls   [][]*kvrpcpb.Mutation
+}
+
+type fakeInodeAllocator struct {
+	ids []fsmeta.InodeID
+}
+
+func (a *fakeInodeAllocator) AllocateCreateInode(context.Context, fsmeta.MountID, fsmeta.InodeID, string) (fsmeta.InodeID, error) {
+	if len(a.ids) == 0 {
+		return 0, fsmeta.ErrInvalidInodeID
+	}
+	id := a.ids[0]
+	a.ids = a.ids[1:]
+	return id, nil
 }
 
 func newFakeTxnRunner() *fakeTxnRunner {

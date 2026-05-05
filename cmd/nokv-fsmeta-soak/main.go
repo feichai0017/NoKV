@@ -112,20 +112,20 @@ func soakHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeNa
 func runSessionProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fsmeta.MountID, seed int64) error {
 	unique := time.Now().UnixNano()
 	name := fmt.Sprintf("soak-session-%06d-%d", seed, unique)
-	inode := fsmeta.InodeID(1_000_000 + seed*1_000_000 + unique%1_000_000)
-	if err := cli.Create(ctx, fsmeta.CreateRequest{
+	result, err := cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   name,
-		Inode:  inode,
-	}, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      uint64(seed),
-		Mode:      0o644,
-		LinkCount: 1,
-	}); err != nil && !errors.Is(err, fsmeta.ErrExists) {
+		Attrs: fsmeta.CreateAttrs{
+			Type: fsmeta.InodeTypeFile,
+			Size: uint64(seed),
+			Mode: 0o644,
+		},
+	})
+	if err != nil && !errors.Is(err, fsmeta.ErrExists) {
 		return err
 	}
+	inode := result.Inode.Inode
 
 	session := fsmeta.SessionID(fmt.Sprintf("soak-writer-%06d-%d", seed, unique))
 	expires := time.Now().Add(2 * time.Minute).UnixNano()
@@ -151,7 +151,7 @@ func runSessionProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fs
 	}); err != nil {
 		return err
 	}
-	_, err := cli.ExpireWriteSessions(ctx, fsmeta.ExpireWriteSessionsRequest{Mount: mount, Limit: 32})
+	_, err = cli.ExpireWriteSessions(ctx, fsmeta.ExpireWriteSessionsRequest{Mount: mount, Limit: 32})
 	return err
 }
 
@@ -192,17 +192,15 @@ func runWatchProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fsme
 
 	unique := time.Now().UnixNano()
 	name := fmt.Sprintf("soak-watch-%06d-%d", seed, unique)
-	inode := fsmeta.InodeID(2_000_000 + seed*1_000_000 + unique%1_000_000)
-	if err := cli.Create(watchCtx, fsmeta.CreateRequest{
+	if _, err := cli.Create(watchCtx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   name,
-		Inode:  inode,
-	}, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      1,
-		Mode:      0o644,
-		LinkCount: 1,
+		Attrs: fsmeta.CreateAttrs{
+			Type: fsmeta.InodeTypeFile,
+			Size: 1,
+			Mode: 0o644,
+		},
 	}); err != nil && !errors.Is(err, fsmeta.ErrExists) {
 		return err
 	}

@@ -431,11 +431,13 @@ func (c *Client) TryAtomicMutate(ctx context.Context, primary []byte, predicates
 			return false, err
 		}
 		if len(groups) != 1 {
+			c.atomicRouteMultiTotal.Add(1)
 			if ambiguous {
 				return true, &RetryExhaustedError{Operation: "atomic mutate"}
 			}
 			return false, nil
 		}
+		c.atomicRouteSingleTotal.Add(1)
 		var group *mutationRouteBatch
 		for _, candidate := range groups {
 			group = candidate
@@ -463,11 +465,13 @@ func (c *Client) TryAtomicMutate(ctx context.Context, primary []byte, predicates
 			continue
 		}
 		if resp.GetFallbackToTwoPhaseCommit() {
+			c.atomicLocalFallbackTotal.Add(1)
 			return false, nil
 		}
 		if err := txnKeyError(resp.GetError()); err != nil {
 			return true, err
 		}
+		c.atomicSuccessTotal.Add(1)
 		return true, nil
 	}
 	if lastErr != nil {

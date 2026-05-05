@@ -20,14 +20,9 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "checkpoint-0001",
-		Inode:  42,
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644},
 	}
-	err := executor.Create(ctx, req, fsmeta.InodeRecord{
-		Type:      fsmeta.InodeTypeFile,
-		Size:      4096,
-		LinkCount: 1,
-		Mode:      0o644,
-	})
+	created, err := executor.Create(ctx, req)
 	require.NoError(t, err)
 
 	record, err := executor.Lookup(ctx, fsmeta.LookupRequest{
@@ -39,7 +34,7 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 	require.Equal(t, fsmeta.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
-		Inode:  req.Inode,
+		Inode:  created.Inode.Inode,
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
 
@@ -52,7 +47,7 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 	require.Equal(t, []fsmeta.DentryRecord{{
 		Parent: req.Parent,
 		Name:   req.Name,
-		Inode:  req.Inode,
+		Inode:  created.Inode.Inode,
 		Type:   fsmeta.InodeTypeFile,
 	}}, entries)
 
@@ -66,11 +61,11 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 		Dentry: fsmeta.DentryRecord{
 			Parent: req.Parent,
 			Name:   req.Name,
-			Inode:  req.Inode,
+			Inode:  created.Inode.Inode,
 			Type:   fsmeta.InodeTypeFile,
 		},
 		Inode: fsmeta.InodeRecord{
-			Inode:     req.Inode,
+			Inode:     created.Inode.Inode,
 			Type:      fsmeta.InodeTypeFile,
 			Size:      4096,
 			Mode:      0o644,
@@ -78,7 +73,7 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 		},
 	}}, pairs)
 
-	err = executor.Create(ctx, req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = executor.Create(ctx, req)
 	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
 }
 
@@ -88,12 +83,12 @@ func TestRaftstoreRuntimeRenameAcrossRegionsOnRealCluster(t *testing.T) {
 
 	executor := openSplitRealClusterExecutor(t, ctx)
 
-	err := executor.Create(ctx, fsmeta.CreateRequest{
+	created, err := executor.Create(ctx, fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "alpha",
-		Inode:  61,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
@@ -121,7 +116,7 @@ func TestRaftstoreRuntimeRenameAcrossRegionsOnRealCluster(t *testing.T) {
 	require.Equal(t, fsmeta.DentryRecord{
 		Parent: fsmeta.RootInode,
 		Name:   "zulu",
-		Inode:  61,
+		Inode:  created.Inode.Inode,
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
 

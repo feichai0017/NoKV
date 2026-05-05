@@ -42,6 +42,15 @@ type fakeAtomicRunner struct {
 	atomicCalls []atomicMutateCall
 }
 
+func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+	t.Helper()
+	raw, ok := stats[key]
+	require.Truef(t, ok, "missing stat %s", key)
+	got, ok := raw.(uint64)
+	require.Truef(t, ok, "stat %s has type %T", key, raw)
+	require.Equal(t, want, got)
+}
+
 type fakeMountResolver struct {
 	records map[fsmeta.MountID]MountAdmission
 	err     error
@@ -60,6 +69,31 @@ type fakeQuotaResolver struct {
 	err      error
 	changes  [][]QuotaChange
 	mutation *kvrpcpb.Mutation
+}
+
+type fakeInodeAllocator struct {
+	next  fsmeta.InodeID
+	ids   []fsmeta.InodeID
+	err   error
+	calls int
+}
+
+func (a *fakeInodeAllocator) AllocateCreateInode(context.Context, fsmeta.MountID, fsmeta.InodeID, string) (fsmeta.InodeID, error) {
+	a.calls++
+	if a.err != nil {
+		return 0, a.err
+	}
+	if len(a.ids) > 0 {
+		id := a.ids[0]
+		a.ids = a.ids[1:]
+		return id, nil
+	}
+	if a.next == 0 {
+		a.next = 22
+	}
+	id := a.next
+	a.next++
+	return id, nil
 }
 
 type subtreePublishCall struct {
@@ -319,16 +353,17 @@ func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, pr
 
 func TestExecutorCreateAndLookup(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
 
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
 		Mount:  "vol",
@@ -349,18 +384,38 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 }
 
+func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
+	executor, err := New(newFakeRunner())
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.ErrorIs(t, err, errInodeAllocatorRequired)
+}
+
 func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
-	executor, err := New(runner)
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
-	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Inode: 22}
-	err = executor.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
+	_, err = executor.Create(context.Background(), req)
 	require.NoError(t, err)
 
-	plan, err := fsmeta.PlanCreate(req)
+	plan, err := fsmeta.PlanCreate(req, 22)
 	require.NoError(t, err)
+	stats := executor.Stats()
+	requireStatUint(t, stats, "create_total", 1)
+	requireStatUint(t, stats, "create_fastpath_attempt_total", 1)
+	requireStatUint(t, stats, "create_fastpath_success_total", 1)
+	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
+	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
+	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
 	require.Len(t, runner.atomicCalls, 1)
 	call := runner.atomicCalls[0]
 	require.Equal(t, plan.PrimaryKey, call.primary)
@@ -388,20 +443,50 @@ func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
 func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
-	executor, err := New(runner)
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 
 	require.Len(t, runner.atomicCalls, 1)
+	stats := executor.Stats()
+	requireStatUint(t, stats, "create_total", 1)
+	requireStatUint(t, stats, "create_fastpath_attempt_total", 1)
+	requireStatUint(t, stats, "create_fastpath_success_total", 0)
+	requireStatUint(t, stats, "create_fastpath_fallback_total", 1)
+	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
+	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
 	require.Len(t, base.mutations, 1)
 	require.Len(t, base.mutations[0], 2)
+}
+
+func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	stats := executor.Stats()
+	requireStatUint(t, stats, "create_total", 1)
+	requireStatUint(t, stats, "create_fastpath_attempt_total", 0)
+	requireStatUint(t, stats, "create_fastpath_success_total", 0)
+	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
+	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
+	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 1)
+	require.Len(t, runner.mutations, 1)
 }
 
 func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
@@ -410,20 +495,27 @@ func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: 7,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
 	require.NoError(t, err)
 
 	// Quota reservation adds a third key, so Create must use the full 2PC
 	// path until AtomicMutate can prove all fsmeta and quota keys share one
 	// atomic local apply group.
+	stats := executor.Stats()
+	requireStatUint(t, stats, "create_total", 1)
+	requireStatUint(t, stats, "create_fastpath_attempt_total", 0)
+	requireStatUint(t, stats, "create_fastpath_success_total", 0)
+	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
+	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 1)
+	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
 	require.Empty(t, runner.atomicCalls)
 	require.Len(t, base.mutations, 1)
 	require.Len(t, base.mutations[0], 3)
@@ -432,14 +524,14 @@ func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}))
 	require.NoError(t, err)
 
-	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Inode: 22}
-	err = executor.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
+	_, err = executor.Create(context.Background(), req)
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), req, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = executor.Create(context.Background(), req)
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Len(t, runner.mutations, 1)
 	require.Zero(t, runner.getCalls)
@@ -451,15 +543,15 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
 		}}
-		executor, err := New(runner, WithMountResolver(resolver))
+		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
-		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 			Mount:  "vol",
 			Parent: fsmeta.RootInode,
 			Name:   "file",
-			Inode:  22,
-		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
 		require.NoError(t, err)
 		require.Equal(t, 1, resolver.calls)
 		require.Len(t, runner.mutations, 1)
@@ -468,15 +560,15 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	t.Run("missing mount", func(t *testing.T) {
 		runner := newFakeRunner()
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{}}
-		executor, err := New(runner, WithMountResolver(resolver))
+		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
-		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 			Mount:  "missing",
 			Parent: fsmeta.RootInode,
 			Name:   "file",
-			Inode:  22,
-		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
 		require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
 		require.Equal(t, 1, resolver.calls)
 		require.Empty(t, runner.mutations)
@@ -487,15 +579,15 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
 			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
 		}}
-		executor, err := New(runner, WithMountResolver(resolver))
+		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
-		err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 			Mount:  "vol",
 			Parent: fsmeta.RootInode,
 			Name:   "file",
-			Inode:  22,
-		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
 		require.ErrorIs(t, err, fsmeta.ErrMountRetired)
 		require.Equal(t, 1, resolver.calls)
 		require.Empty(t, runner.mutations)
@@ -507,15 +599,15 @@ func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: 7,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
 	require.NoError(t, err)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
@@ -525,15 +617,15 @@ func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 	runner := newFakeRunner()
 	quota := &fakeQuotaResolver{err: fsmeta.ErrQuotaExceeded}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: 7,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 4096})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 	require.Empty(t, runner.mutations)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
@@ -873,15 +965,15 @@ func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	runner.mutateErr = fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
 		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("dentry")},
 	}}}
-	executor, err := New(runner)
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 	require.Zero(t, runner.getCalls)
 }
@@ -898,17 +990,19 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 		}}},
 		nil,
 	}
-	executor, err := New(runner)
+	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
+	executor, err := New(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(5), runner.nextTS)
 	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
@@ -927,17 +1021,19 @@ func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 		}}},
 		nil,
 	}
-	executor, err := New(runner)
+	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
+	executor, err := New(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
 		Name:   "file",
-		Inode:  22,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(5), runner.nextTS)
 	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
@@ -1311,7 +1407,7 @@ func TestExecutorNegativeCacheLookupShortCircuit(t *testing.T) {
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
 	})
-	executor, err := New(runner, WithNegativeCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
 	require.NoError(t, err)
 
 	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "missing"}
@@ -1333,7 +1429,7 @@ func TestExecutorNegativeCacheInvalidatedByCreate(t *testing.T) {
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
 	})
-	executor, err := New(runner, WithNegativeCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
 	require.NoError(t, err)
 
 	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "novel"}
@@ -1342,9 +1438,9 @@ func TestExecutorNegativeCacheInvalidatedByCreate(t *testing.T) {
 
 	// Create the dentry. After commit the cache must drop the memo so the
 	// next Lookup re-issues against the runner and observes the new entry.
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
-		Mount: "vol", Parent: fsmeta.RootInode, Name: "novel", Inode: 100,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: "vol", Parent: fsmeta.RootInode, Name: "novel", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 
 	record, err := executor.Lookup(context.Background(), req)
@@ -1357,15 +1453,15 @@ func TestExecutorDirPageReadDirPlusCacheHit(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithDirPageCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
 	parent := fsmeta.RootInode
-	for i, name := range []string{"a", "b", "c"} {
-		err := executor.Create(context.Background(), fsmeta.CreateRequest{
-			Mount: mount, Parent: parent, Name: name, Inode: fsmeta.InodeID(10 + i),
-		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	for _, name := range []string{"a", "b", "c"} {
+		_, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount: mount, Parent: parent, Name: name, Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
 		require.NoError(t, err)
 	}
 
@@ -1390,15 +1486,15 @@ func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithDirPageCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
 	parent := fsmeta.RootInode
-	for i, name := range []string{"a", "b", "c"} {
-		err := executor.Create(context.Background(), fsmeta.CreateRequest{
-			Mount: mount, Parent: parent, Name: name, Inode: fsmeta.InodeID(10 + i),
-		}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	for _, name := range []string{"a", "b", "c"} {
+		_, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount: mount, Parent: parent, Name: name, Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
 		require.NoError(t, err)
 	}
 
@@ -1421,14 +1517,14 @@ func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
 func TestExecutorDirPageDecodeFailureFallsBackToRunner(t *testing.T) {
 	runner := newFakeRunner()
 	cache := &corruptDirPageCache{}
-	executor, err := New(runner, WithDirPageCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
 	parent := fsmeta.RootInode
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
-		Mount: mount, Parent: parent, Name: "a", Inode: 10,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "a", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 
 	out, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
@@ -1457,7 +1553,7 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithDirPageCache(cache))
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{99}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
@@ -1470,9 +1566,9 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a dentry; this must bump the dirpage epoch.
-	err = executor.Create(context.Background(), fsmeta.CreateRequest{
-		Mount: mount, Parent: parent, Name: "fresh", Inode: 99,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile})
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "fresh", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
 	require.NoError(t, err)
 
 	// Next ReadDirPlus must miss the cache (epoch advanced) and re-scan.

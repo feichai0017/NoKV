@@ -4,7 +4,7 @@
 // Protocol ops: Prewrite, Commit, Rollback, ResolveLock, CheckTxnStatus,
 // TxnHeartBeat.
 // Concurrency is controlled by a striped-mutex latch manager
-// (percolator/latch) shared per raftstore/kv service instance.
+// (txn/latch) shared per raftstore/kv service instance.
 // The timestamp oracle is provided by coordinator/tso.
 //
 // This package is used in distributed mode only. Embedded DB APIs
@@ -15,14 +15,15 @@ package percolator
 
 import (
 	"bytes"
+	"sync/atomic"
 	"time"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator/latch"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	"github.com/feichai0017/NoKV/txn/latch"
+	"github.com/feichai0017/NoKV/txn/mvcc"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
@@ -164,6 +165,23 @@ type AtomicMutateResult struct {
 	Fallback    bool
 }
 
+type atomicMutateStatsRegistry struct {
+	applyCalledTotal   atomic.Uint64
+	localFallbackTotal atomic.Uint64
+}
+
+var atomicMutateStats atomicMutateStatsRegistry
+
+// AtomicMutateStats returns package-wide server-side 1PC counters. These are
+// deliberately protocol-level counters, so callers can tell whether a request
+// reached Percolator after client-side region admission.
+func AtomicMutateStats() map[string]any {
+	return map[string]any{
+		"atomic_apply_called_total":   atomicMutateStats.applyCalledTotal.Load(),
+		"atomic_local_fallback_total": atomicMutateStats.localFallbackTotal.Load(),
+	}
+}
+
 // ApplyAtomicMutate tries to materialize a region-local MVCC mutation without
 // exposing Percolator locks. It is only allowed to write when the DB can prove
 // the resulting internal entries share one atomic local apply group; otherwise
@@ -179,6 +197,7 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 	if len(mutations) == 0 {
 		return AtomicMutateResult{}
 	}
+	atomicMutateStats.applyCalledTotal.Add(1)
 	keys := make([][]byte, 0, len(mutations)+len(req.GetPredicates()))
 	for _, mut := range mutations {
 		if mut != nil && len(mut.Key) > 0 {
@@ -242,6 +261,7 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 	defer releaseEntries(entries)
 	planner, ok := db.(txnstore.AtomicInternalApplyPlanner)
 	if !ok || !planner.CanApplyInternalEntriesAtomically(entries) {
+		atomicMutateStats.localFallbackTotal.Add(1)
 		return AtomicMutateResult{Fallback: true}
 	}
 	if err := applyVersionedEntries(db, entries); err != nil {

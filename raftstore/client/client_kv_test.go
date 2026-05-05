@@ -20,15 +20,16 @@ import (
 
 type scriptedKVService struct {
 	mockService
-	getFn            func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error)
-	batchGetFn       func(context.Context, *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error)
-	scanFn           func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error)
-	prewriteFn       func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error)
-	commitFn         func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error)
-	rollbackFn       func(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error)
-	resolveLockFn    func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error)
-	checkTxnStatusFn func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error)
-	txnHeartBeatFn   func(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error)
+	getFn             func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error)
+	batchGetFn        func(context.Context, *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error)
+	scanFn            func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error)
+	prewriteFn        func(context.Context, *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error)
+	commitFn          func(context.Context, *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error)
+	rollbackFn        func(context.Context, *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error)
+	resolveLockFn     func(context.Context, *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error)
+	checkTxnStatusFn  func(context.Context, *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error)
+	txnHeartBeatFn    func(context.Context, *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error)
+	tryAtomicMutateFn func(context.Context, *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error)
 }
 
 func (s *scriptedKVService) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
@@ -92,6 +93,113 @@ func (s *scriptedKVService) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxn
 		return s.txnHeartBeatFn(ctx, req)
 	}
 	return s.mockService.TxnHeartBeat(ctx, req)
+}
+
+func (s *scriptedKVService) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
+	if s.tryAtomicMutateFn != nil {
+		return s.tryAtomicMutateFn(ctx, req)
+	}
+	return s.mockService.TryAtomicMutate(ctx, req)
+}
+
+func TestClientTryAtomicMutateStatsRecordRouteFallback(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "unused"}},
+		RegionResolver: resolverFromCluster(cluster),
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	handled, err := cli.TryAtomicMutate(context.Background(), []byte("alfa"), nil, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
+	}, 10, 11)
+	require.NoError(t, err)
+	require.False(t, handled)
+	stats := cli.Stats()
+	require.Equal(t, uint64(0), stats["atomic_route_single_total"])
+	require.Equal(t, uint64(1), stats["atomic_route_multi_total"])
+	require.Equal(t, uint64(0), stats["atomic_local_fallback_total"])
+	require.Equal(t, uint64(0), stats["atomic_success_total"])
+}
+
+func TestClientTryAtomicMutateStatsRecordLocalFallbackAndSuccess(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   nil,
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var fallback bool
+	svc.tryAtomicMutateFn = func(context.Context, *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
+		if fallback {
+			return &kvrpcpb.KvTryAtomicMutateResponse{
+				Response: &kvrpcpb.TryAtomicMutateResponse{FallbackToTwoPhaseCommit: true},
+			}, nil
+		}
+		return &kvrpcpb.KvTryAtomicMutateResponse{
+			Response: &kvrpcpb.TryAtomicMutateResponse{AppliedKeys: 1},
+		}, nil
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	fallback = true
+	handled, err := cli.TryAtomicMutate(context.Background(), []byte("alfa"), nil, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 10, 11)
+	require.NoError(t, err)
+	require.False(t, handled)
+
+	fallback = false
+	handled, err = cli.TryAtomicMutate(context.Background(), []byte("alfa"), nil, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 12, 13)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	stats := cli.Stats()
+	require.Equal(t, uint64(2), stats["atomic_route_single_total"])
+	require.Equal(t, uint64(0), stats["atomic_route_multi_total"])
+	require.Equal(t, uint64(1), stats["atomic_local_fallback_total"])
+	require.Equal(t, uint64(1), stats["atomic_success_total"])
 }
 
 func TestClientCommitRegionReturnsKeyError(t *testing.T) {

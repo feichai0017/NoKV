@@ -23,18 +23,20 @@ func TestFSMetadataNamespaceChaosSurvivesGatewayRestartAndMixedMutations(t *test
 	}()
 
 	mount := fsmeta.MountID("vol")
-	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+	_, err := cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   "alpha",
-		Inode:  1001,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 64, Mode: 0o644, LinkCount: 1}))
-	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 64, Mode: 0o644},
+	})
+	require.NoError(t, err)
+	_, err = cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   "beta",
-		Inode:  1002,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 128, Mode: 0o644, LinkCount: 1}))
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 128, Mode: 0o644},
+	})
+	require.NoError(t, err)
 	require.NoError(t, cli.Link(ctx, fsmeta.LinkRequest{
 		Mount:      mount,
 		FromParent: fsmeta.RootInode,
@@ -62,12 +64,13 @@ func TestFSMetadataNamespaceChaosSurvivesGatewayRestartAndMixedMutations(t *test
 		Parent: fsmeta.RootInode,
 		Name:   "alpha",
 	}))
-	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+	_, err = cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   "gamma",
-		Inode:  1003,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 256, Mode: 0o644, LinkCount: 1}))
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 256, Mode: 0o644},
+	})
+	require.NoError(t, err)
 
 	pairs, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
 		Mount:  mount,
@@ -89,12 +92,13 @@ func TestFSMetadataRenameSubtreePublishesSingleHandoffOnRealCluster(t *testing.T
 	defer cleanup()
 
 	mount := fsmeta.MountID("vol")
-	require.NoError(t, cli.Create(ctx, fsmeta.CreateRequest{
+	_, err := cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
 		Parent: fsmeta.RootInode,
 		Name:   "source",
-		Inode:  1101,
-	}, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, Size: 512, Mode: 0o644, LinkCount: 1}))
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 512, Mode: 0o644},
+	})
+	require.NoError(t, err)
 	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
 		Mount:      mount,
 		FromParent: fsmeta.RootInode,

@@ -14,7 +14,7 @@ const stagedPublishCleanupTimeout = 5 * time.Second
 // StagedPublishClient is the narrow namespace surface needed for staged
 // publish. GRPCClient satisfies it.
 type StagedPublishClient interface {
-	Create(context.Context, fsmeta.CreateRequest, fsmeta.InodeRecord) error
+	Create(context.Context, fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error
 	Unlink(context.Context, fsmeta.UnlinkRequest) error
 }
@@ -31,14 +31,13 @@ type StagedPublishRequest struct {
 	StageName   string
 	FinalParent fsmeta.InodeID
 	FinalName   string
-	InodeID     fsmeta.InodeID
-	Inode       fsmeta.InodeRecord
+	Attrs       fsmeta.CreateAttrs
 }
 
 // PrepareStagedFunc is called after the staged namespace entry is created and
 // before the final rename. The callback is where a caller writes external body
 // data, uploads an object, or validates a content-addressed reference.
-type PrepareStagedFunc func(context.Context, fsmeta.CreateRequest) error
+type PrepareStagedFunc func(context.Context, fsmeta.CreateResult) error
 
 // PublishStagedNamespaceEntry implements the stage -> commit namespace pattern.
 //
@@ -53,7 +52,7 @@ func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, r
 		return errStagedPublishClientRequired
 	}
 	create := req.createRequest()
-	if _, err := fsmeta.PlanCreate(create); err != nil {
+	if _, err := fsmeta.PlanCreate(create, fsmeta.RootInode); err != nil {
 		return err
 	}
 	rename := req.renameRequest()
@@ -61,11 +60,12 @@ func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, r
 		return err
 	}
 
-	if err := cli.Create(ctx, create, req.Inode); err != nil {
+	result, err := cli.Create(ctx, create)
+	if err != nil {
 		return err
 	}
 	if prepare != nil {
-		if err := prepare(ctx, create); err != nil {
+		if err := prepare(ctx, result); err != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stagedPublishCleanupTimeout)
 			defer cancel()
 			if cleanupErr := cli.Unlink(cleanupCtx, fsmeta.UnlinkRequest{
@@ -86,7 +86,7 @@ func (r StagedPublishRequest) createRequest() fsmeta.CreateRequest {
 		Mount:  r.Mount,
 		Parent: r.StageParent,
 		Name:   r.StageName,
-		Inode:  r.InodeID,
+		Attrs:  r.Attrs,
 	}
 }
 

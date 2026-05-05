@@ -16,10 +16,15 @@ var (
 	errWatchRouterRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: router is required")
 	errKVClientRequired            = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: raftstore kv client required")
 	errTSOClientRequired           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: tso client required")
+	errIDAllocatorClientRequired   = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: id allocator client required")
 	errTimestampCountRequired      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: timestamp count must be > 0")
+	errInodeAllocBatchRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: inode allocation batch must be > 0")
 	errRootEventNotAccepted        = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: root event was not accepted")
 	errNilTSOResponse              = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: nil tso response")
 	errZeroTSOTimestamp            = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: zero tso timestamp")
+	errNilAllocIDResponse          = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: nil alloc id response")
+	errEmptyAllocIDResponse        = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty alloc id response")
+	errNoUsableInodeID             = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: no usable inode id in allocation batch")
 )
 
 func errTSOCountMismatch(got, requested uint64) error {

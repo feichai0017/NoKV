@@ -85,15 +85,14 @@ func scopeCreateOperation(mount fsmeta.MountID, scopeName string, scopeInode fsm
 func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmetacontract.Operation) error {
 	delay := 100 * time.Millisecond
 	for {
-		err := cli.Create(ctx, fsmeta.CreateRequest{
+		_, err := cli.Create(ctx, fsmeta.CreateRequest{
 			Mount:  op.Mount,
 			Parent: op.Parent,
 			Name:   op.Name,
-			Inode:  op.Inode,
-		}, fsmeta.InodeRecord{
-			Type:      op.Type,
-			Mode:      op.Mode,
-			LinkCount: 1,
+			Attrs: fsmeta.CreateAttrs{
+				Type: op.Type,
+				Mode: op.Mode,
+			},
 		})
 		if err == nil || errors.Is(err, fsmeta.ErrExists) {
 			return nil

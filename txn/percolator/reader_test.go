@@ -5,7 +5,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
+	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/stretchr/testify/require"
 )
 

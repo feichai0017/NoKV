@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
@@ -331,7 +330,7 @@ func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 				if !ok || len(userKey) == 0 {
 					continue
 				}
-				return lsm.ShardForUserKey(userKey, n)
+				return utils.ShardForUserKey(userKey, n)
 			}
 		}
 	}

@@ -5,14 +5,27 @@ import (
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 )
 
-func createRequestFromProto(req *fsmetapb.CreateRequest) (fsmeta.CreateRequest, fsmeta.InodeRecord) {
-	inode := inodeFromProto(req.GetInode())
+func createRequestFromProto(req *fsmetapb.CreateRequest) fsmeta.CreateRequest {
 	return fsmeta.CreateRequest{
 		Mount:  fsmeta.MountID(req.GetMount()),
 		Parent: fsmeta.InodeID(req.GetParent()),
 		Name:   req.GetName(),
-		Inode:  inode.Inode,
-	}, inode
+		Attrs:  createAttrsFromProto(req.GetAttrs()),
+	}
+}
+
+func createAttrsFromProto(pb *fsmetapb.CreateInodeAttrs) fsmeta.CreateAttrs {
+	if pb == nil {
+		return fsmeta.CreateAttrs{}
+	}
+	return fsmeta.CreateAttrs{
+		Type:          inodeTypeFromProto(pb.GetType()),
+		Size:          pb.GetSize(),
+		Mode:          pb.GetMode(),
+		CreatedUnixNs: pb.GetCreatedUnixNs(),
+		UpdatedUnixNs: pb.GetUpdatedUnixNs(),
+		OpaqueAttrs:   append([]byte(nil), pb.GetOpaqueAttrs()...),
+	}
 }
 
 func updateInodeRequestFromProto(req *fsmetapb.UpdateInodeRequest) fsmeta.UpdateInodeRequest {
@@ -168,22 +181,6 @@ func expireWriteSessionsRequestFromProto(req *fsmetapb.ExpireWriteSessionsReques
 	return fsmeta.ExpireWriteSessionsRequest{
 		Mount: fsmeta.MountID(req.GetMount()),
 		Limit: req.GetLimit(),
-	}
-}
-
-func inodeFromProto(pb *fsmetapb.InodeRecord) fsmeta.InodeRecord {
-	if pb == nil {
-		return fsmeta.InodeRecord{}
-	}
-	return fsmeta.InodeRecord{
-		Inode:         fsmeta.InodeID(pb.GetInode()),
-		Type:          inodeTypeFromProto(pb.GetType()),
-		Size:          pb.GetSize(),
-		Mode:          pb.GetMode(),
-		LinkCount:     pb.GetLinkCount(),
-		CreatedUnixNs: pb.GetCreatedUnixNs(),
-		UpdatedUnixNs: pb.GetUpdatedUnixNs(),
-		OpaqueAttrs:   append([]byte(nil), pb.GetOpaqueAttrs()...),
 	}
 }
 

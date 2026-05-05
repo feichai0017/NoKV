@@ -8,8 +8,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/percolator/mvcc"
-	txnstore "github.com/feichai0017/NoKV/percolator/storage"
+	"github.com/feichai0017/NoKV/txn/mvcc"
+	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
 

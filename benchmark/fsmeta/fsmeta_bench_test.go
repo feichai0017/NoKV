@@ -26,22 +26,22 @@ import (
 const benchEnvKey = "NOKV_FSMETA_BENCH"
 
 var (
-	fsmetaDrivers        = flag.String("fsmeta_drivers", workload.DriverNativeFSMetadata, "comma-separated drivers: native-fsmeta,generic-kv")
-	fsmetaAddr           = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
-	fsmetaCoordAddr      = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for generic-kv driver")
-	fsmetaWorkloads      = flag.String("fsmeta_workloads", "checkpoint-storm,hotspot-fanin", "comma-separated workloads: checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
-	fsmetaMount          = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
-	fsmetaClients        = flag.Int("fsmeta_clients", 8, "concurrent clients")
-	fsmetaDirs           = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
-	fsmetaFilesPerDir    = flag.Int("fsmeta_files_per_dir", 128, "checkpoint-storm files per directory")
-	fsmetaFiles          = flag.Int("fsmeta_files", 2048, "hotspot-fanin file count")
-	fsmetaReadsPerClient = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin reads per client")
-	fsmetaPageLimit      = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
-	fsmetaReadDirPlus    = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
-	fsmetaWatchWindow    = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
-	fsmetaStartInode     = flag.Uint64("fsmeta_start_inode", 10_000_000, "first inode id used by generated metadata")
-	fsmetaTimeout        = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
-	fsmetaOutput         = flag.String("fsmeta_output", "", "summary CSV output path")
+	fsmetaDrivers              = flag.String("fsmeta_drivers", workload.DriverNativeFSMetadata, "comma-separated drivers: native-fsmeta,generic-kv")
+	fsmetaAddr                 = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
+	fsmetaCoordAddr            = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for generic-kv driver")
+	fsmetaWorkloads            = flag.String("fsmeta_workloads", "checkpoint-storm,hotspot-fanin", "comma-separated workloads: checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
+	fsmetaMount                = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
+	fsmetaClients              = flag.Int("fsmeta_clients", 8, "concurrent clients")
+	fsmetaDirs                 = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
+	fsmetaFilesPerDir          = flag.Int("fsmeta_files_per_dir", 128, "checkpoint-storm files per directory")
+	fsmetaFiles                = flag.Int("fsmeta_files", 2048, "hotspot-fanin file count")
+	fsmetaReadsPerClient       = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin reads per client")
+	fsmetaPageLimit            = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
+	fsmetaReadDirPlus          = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
+	fsmetaWatchWindow          = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
+	fsmetaCreateAffinityShards = flag.Int("fsmeta_create_affinity_shards", 0, "diagnostic shard count for generic-kv inode allocation; native fsmeta uses the server allocator")
+	fsmetaTimeout              = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
+	fsmetaOutput               = flag.String("fsmeta_output", "", "summary CSV output path")
 )
 
 func TestBenchmarkFSMeta(t *testing.T) {
@@ -54,13 +54,12 @@ func TestBenchmarkFSMeta(t *testing.T) {
 
 	runID := workload.NewRunID()
 	var results []workload.Result
-	for driverIndex, driverName := range parseDrivers(*fsmetaDrivers) {
+	for _, driverName := range parseDrivers(*fsmetaDrivers) {
 		cli, cleanup := openBenchmarkClient(t, ctx, driverName)
 		defer cleanup()
 		driverRunID := runID + "-" + driverName
-		startInode := fsmeta.InodeID(*fsmetaStartInode + uint64(driverIndex)*10_000_000)
 		for _, workloadName := range parseWorkloads(*fsmetaWorkloads) {
-			result, err := runBenchmarkWorkload(ctx, cli, driverName, workloadName, driverRunID, startInode)
+			result, err := runBenchmarkWorkload(ctx, cli, driverName, workloadName, driverRunID)
 			if err != nil {
 				t.Fatalf("run %s/%s: %v", driverName, workloadName, err)
 			}
@@ -108,15 +107,6 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 		if resp.GetMount().GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
 			t.Fatalf("benchmark mount %q is retired", *fsmetaMount)
 		}
-		publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-			Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
-		})
-		if err != nil {
-			t.Fatalf("declare benchmark subtree authority: %v", err)
-		}
-		if publishResp == nil || !publishResp.GetAccepted() {
-			t.Fatalf("benchmark subtree authority root event was not accepted")
-		}
 		return
 	}
 	publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
@@ -128,15 +118,9 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	if publishResp == nil || !publishResp.GetAccepted() {
 		t.Fatalf("benchmark mount root event was not accepted")
 	}
-	publishResp, err = coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.SubtreeAuthorityDeclared(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), strings.TrimSpace(*fsmetaMount), 0, 0)),
-	})
-	if err != nil {
-		t.Fatalf("declare benchmark subtree authority: %v", err)
-	}
-	if publishResp == nil || !publishResp.GetAccepted() {
-		t.Fatalf("benchmark subtree authority root event was not accepted")
-	}
+	// MountRegistered materializes the root subtree authority in rooted truth;
+	// publishing a second explicit declaration would not be idempotent after
+	// the frontier advances during a long benchmark run.
 }
 
 func openBenchmarkClient(t *testing.T, ctx context.Context, driverName string) (workload.Client, func()) {
@@ -169,21 +153,32 @@ func openBenchmarkClient(t *testing.T, ctx context.Context, driverName string) (
 		runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
 		if err != nil {
 			_ = kv.Close()
+			_ = coordRPC.Close()
 			t.Fatalf("open raftstore runner: %v", err)
 		}
-		cli, err := workload.NewGenericKVDriver(runner)
+		allocator, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, *fsmetaCreateAffinityShards)
 		if err != nil {
 			_ = kv.Close()
+			_ = coordRPC.Close()
+			t.Fatalf("open generic-kv inode allocator: %v", err)
+		}
+		cli, err := workload.NewGenericKVDriver(runner, allocator)
+		if err != nil {
+			_ = kv.Close()
+			_ = coordRPC.Close()
 			t.Fatalf("open generic-kv driver: %v", err)
 		}
-		return cli, func() { _ = kv.Close() }
+		return cli, func() {
+			_ = kv.Close()
+			_ = coordRPC.Close()
+		}
 	default:
 		t.Fatalf("unknown fsmeta driver %q", driverName)
 		return nil, nil
 	}
 }
 
-func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, workloadName, runID string, startInode fsmeta.InodeID) (workload.Result, error) {
+func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, workloadName, runID string) (workload.Result, error) {
 	var (
 		result workload.Result
 		err    error
@@ -196,7 +191,6 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			Clients:           *fsmetaClients,
 			Directories:       *fsmetaDirs,
 			FilesPerDirectory: *fsmetaFilesPerDir,
-			StartInode:        startInode,
 		})
 	case workload.HotspotFanIn:
 		result, err = workload.RunHotspotFanIn(ctx, cli, workload.HotspotFanInConfig{
@@ -207,7 +201,6 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			ReadsPerClient: *fsmetaReadsPerClient,
 			PageLimit:      uint32(*fsmetaPageLimit),
 			ReadDirPlus:    *fsmetaReadDirPlus,
-			StartInode:     startInode + 1_000_000,
 		})
 	case workload.WatchSubtree:
 		result, err = workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
@@ -215,7 +208,6 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			RunID:              runID,
 			Clients:            *fsmetaClients,
 			Files:              *fsmetaFiles,
-			StartInode:         startInode + 2_000_000,
 			BackPressureWindow: uint32(*fsmetaWatchWindow),
 		})
 	case workload.NegativeLookup:

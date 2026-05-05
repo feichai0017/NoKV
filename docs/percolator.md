@@ -1,6 +1,6 @@
 # Percolator Distributed Transaction Design
 
-This document explains NoKV's distributed transaction path implemented by `percolator/` and executed through `raftstore`.
+This document explains NoKV's distributed transaction path implemented by `txn/percolator/` and executed through `raftstore`.
 
 The scope here is the current code path:
 
@@ -42,10 +42,10 @@ sequenceDiagram
 
 Key files:
 
-- [`percolator/txn.go`](../percolator/txn.go)
-- [`percolator/reader.go`](../percolator/reader.go)
-- [`percolator/codec.go`](../percolator/codec.go)
-- [`percolator/latch/latch.go`](../percolator/latch/latch.go)
+- [`txn/percolator/txn.go`](../txn/percolator/txn.go)
+- [`txn/percolator/reader.go`](../txn/percolator/reader.go)
+- [`txn/mvcc/codec.go`](../txn/mvcc/codec.go)
+- [`txn/latch/latch.go`](../txn/latch/latch.go)
 - [`raftstore/kv/apply.go`](../raftstore/kv/apply.go)
 - [`raftstore/client/client.go`](../raftstore/client/client.go)
 
@@ -74,7 +74,7 @@ NoKV uses three MVCC column families:
 
 ### 2.1 Lock Record
 
-`percolator/mvcc.Lock` (encoded by `mvcc.EncodeLock`):
+`txn/mvcc.Lock` (encoded by `mvcc.EncodeLock`):
 
 - `Primary`
 - `Ts` (start timestamp)
@@ -85,7 +85,7 @@ NoKV uses three MVCC column families:
 
 ### 2.2 Write Record
 
-`percolator/mvcc.Write` (encoded by `mvcc.EncodeWrite`):
+`txn/mvcc.Write` (encoded by `mvcc.EncodeWrite`):
 
 - `Kind`
 - `StartTs`
@@ -272,7 +272,7 @@ Notes:
 
 Primary coverage:
 
-- [`percolator/txn_test.go`](../percolator/txn_test.go)
+- [`txn/percolator/txn_test.go`](../txn/percolator/txn_test.go)
 - [`raftstore/kv/service_test.go`](../raftstore/kv/service_test.go)
 - [`raftstore/client/client_test.go`](../raftstore/client/client_test.go)
 - [`raftstore/server/node_test.go`](../raftstore/server/node_test.go)
