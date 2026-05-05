@@ -51,15 +51,6 @@ func (s *Service) storeControlOperations(storeID uint64) []*coordpb.SchedulerOpe
 	return scheduling.PlanStoreOperations(storeID, s.cluster.Snapshot())
 }
 
-func (s *Service) requireDutyAdmission(ctx context.Context, mandate uint32) error {
-	done, err := s.beginDutyAdmission(ctx, mandate)
-	if err != nil {
-		return err
-	}
-	done()
-	return nil
-}
-
 // RunTenureLoop keeps the local coordinator lease renewed while ctx
 // remains alive. The loop is explicit so callers can decide lifecycle and avoid
 // hidden background goroutines in constructors.

@@ -22,7 +22,7 @@ func (s *Service) authorityCertificate(ctx context.Context, mandate uint32, cons
 	if err := ctx.Err(); err != nil {
 		return nil, status.Error(codes.Canceled, err.Error())
 	}
-	snapshot, err := s.currentRootSnapshot()
+	snapshot, err := s.currentRootSnapshotCoveringAuthority(mandate, consumedFrontier, descriptorRevision)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "load rooted authority certificate snapshot: "+err.Error())
 	}
@@ -30,7 +30,7 @@ func (s *Service) authorityCertificate(ctx context.Context, mandate uint32, cons
 	if lease.Era == rootproto.MandateWitnessEraAttached || lease.Era == rootproto.MandateWitnessEraSuppressed {
 		return nil, nil
 	}
-	frontiers := s.authorityFrontiersForCertificate(snapshot, mandate, consumedFrontier, descriptorRevision)
+	frontiers := authorityFrontiersFromRootSnapshot(snapshot)
 	legacyDigest := ""
 	if snapshot.Legacy.Present() {
 		legacyDigest = rootstate.DigestOfLegacy(snapshot.Legacy)
@@ -57,21 +57,47 @@ func (s *Service) authorityCertificate(ctx context.Context, mandate uint32, cons
 	return authorityCertificateToProto(cert), nil
 }
 
-func (s *Service) authorityFrontiersForCertificate(snapshot rootview.Snapshot, mandate uint32, consumedFrontier, descriptorRevision uint64) rootproto.MandateFrontiers {
-	frontiers := eunomia.Frontiers(rootstate.State{
+func (s *Service) currentRootSnapshotCoveringAuthority(mandate uint32, consumedFrontier, descriptorRevision uint64) (rootview.Snapshot, error) {
+	snapshot, err := s.currentRootSnapshot()
+	if err != nil {
+		return rootview.Snapshot{}, err
+	}
+	if authoritySnapshotCovers(snapshot, mandate, consumedFrontier, descriptorRevision) {
+		return snapshot, nil
+	}
+	snapshot, err = s.reloadRootedView(true)
+	if err != nil {
+		return rootview.Snapshot{}, err
+	}
+	if authoritySnapshotCovers(snapshot, mandate, consumedFrontier, descriptorRevision) {
+		return snapshot, nil
+	}
+	return rootview.Snapshot{}, status.Errorf(
+		codes.FailedPrecondition,
+		"rooted authority certificate frontier not covered: duty=%s required_frontier=%d rooted_frontier=%d required_descriptor_revision=%d rooted_descriptor_revision=%d",
+		rootproto.MandateName(mandate),
+		consumedFrontier,
+		authorityFrontiersFromRootSnapshot(snapshot).Frontier(mandate),
+		descriptorRevision,
+		rootstate.MaxDescriptorRevision(snapshot.Descriptors),
+	)
+}
+
+func authoritySnapshotCovers(snapshot rootview.Snapshot, mandate uint32, consumedFrontier, descriptorRevision uint64) bool {
+	if descriptorRevision > rootstate.MaxDescriptorRevision(snapshot.Descriptors) {
+		return false
+	}
+	if mandate == 0 || consumedFrontier == 0 {
+		return true
+	}
+	return authorityFrontiersFromRootSnapshot(snapshot).Frontier(mandate) >= consumedFrontier
+}
+
+func authorityFrontiersFromRootSnapshot(snapshot rootview.Snapshot) rootproto.MandateFrontiers {
+	return eunomia.Frontiers(rootstate.State{
 		IDFence:  snapshot.Allocator.IDCurrent,
 		TSOFence: snapshot.Allocator.TSCurrent,
 	}, rootstate.MaxDescriptorRevision(snapshot.Descriptors))
-	s.allocMu.Lock()
-	frontiers = eunomia.Frontiers(rootstate.State{
-		IDFence:  maxUint64(snapshot.Allocator.IDCurrent, s.currentIDFenceLocked()),
-		TSOFence: maxUint64(snapshot.Allocator.TSCurrent, s.currentTSOFenceLocked()),
-	}, maxUint64(descriptorRevision, rootstate.MaxDescriptorRevision(snapshot.Descriptors)))
-	s.allocMu.Unlock()
-	if mandate != 0 && consumedFrontier > frontiers.Frontier(mandate) {
-		frontiers = frontiers.WithFrontier(mandate, consumedFrontier)
-	}
-	return frontiers
 }
 
 func authorityCertificateToProto(cert rootproto.AuthorityCertificate) *coordpb.AuthorityCertificate {

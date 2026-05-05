@@ -1948,6 +1948,57 @@ func TestServicePersistsAllocatorState(t *testing.T) {
 	require.Equal(t, uint64(10099), store.lastTS)
 }
 
+func TestServiceAuthorityCertificateUsesRootedAllocatorFence(t *testing.T) {
+	store := &fakeStorage{}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+
+	resp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 2})
+	require.NoError(t, err)
+	cert := resp.GetAuthorityCertificate()
+	require.NotNil(t, cert)
+	require.Equal(t, "c1", cert.GetHolderId())
+	require.Equal(t, uint64(1), cert.GetEra())
+	require.Equal(t, resp.GetConsumedFrontier(), uint64(11))
+	require.GreaterOrEqual(t, authorityCertificateFrontierForTest(cert, rootproto.MandateAllocID), resp.GetConsumedFrontier())
+	require.Equal(t, store.snapshot.Allocator.IDCurrent, authorityCertificateFrontierForTest(cert, rootproto.MandateAllocID))
+}
+
+func TestServiceAuthorityCertificateRejectsUnrootedAllocatorFrontier(t *testing.T) {
+	store := &fakeStorage{
+		snapshot: rootview.Snapshot{
+			Tenure: rootstate.Tenure{
+				HolderID:        "c1",
+				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+				Era:             1,
+				Mandate:         rootproto.MandateDefault,
+				LineageDigest:   "rooted",
+			},
+			Allocator: rootview.AllocatorState{IDCurrent: 5},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
+	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.RefreshFromStorage())
+
+	cert, err := svc.authorityCertificate(context.Background(), rootproto.MandateAllocID, 6, 0)
+	require.Error(t, err)
+	require.Nil(t, cert)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func authorityCertificateFrontierForTest(cert *coordpb.AuthorityCertificate, mandate uint32) uint64 {
+	if cert == nil {
+		return 0
+	}
+	for _, frontier := range cert.GetInheritedFrontiers() {
+		if frontier.GetMandate() == mandate {
+			return frontier.GetFrontier()
+		}
+	}
+	return 0
+}
+
 func TestServiceIDWindowPersistsFenceOncePerWindow(t *testing.T) {
 	store := &fakeStorage{}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2139,12 +2190,12 @@ func TestServiceTenureRenewDoesNotReloadAllocators(t *testing.T) {
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, 1, store.loadCalls)
+	require.Equal(t, 2, store.loadCalls)
 
 	now = now.Add(85 * time.Millisecond)
 	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, 2, store.loadCalls)
+	require.Equal(t, 4, store.loadCalls)
 	require.Equal(t, 2, store.campaignCalls)
 }
 
@@ -2348,11 +2399,11 @@ func TestServiceReleaseTenureDoesNotReloadAllocators(t *testing.T) {
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
-	require.Equal(t, 1, store.loadCalls)
+	require.Equal(t, 2, store.loadCalls)
 
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReleaseTenure())
-	require.Equal(t, 2, store.loadCalls)
+	require.Equal(t, 3, store.loadCalls)
 	require.Equal(t, 1, store.releaseCalls)
 }
 
