@@ -113,6 +113,14 @@ Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. V2 is a
 grant protocol: graceful shutdown records exact usage, while crash-before-seal
 is handled by retiring the predecessor at its root-known grant bound.
 
+Grant certificates use Ed25519. Processes that sign grant evidence read
+`NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` as a base64 Ed25519 seed or private
+key. Verifier-only processes may use `NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY` as
+the base64 public key. If neither variable is set, NoKV creates a process-local
+ephemeral key for tests and single-process development; distributed deployments
+must configure shared verification material so clients can validate evidence
+from every coordinator.
+
 ---
 
 ## 3. Deployment Model

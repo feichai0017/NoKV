@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -64,7 +65,13 @@ func (s *Service) currentRootSnapshotCoveringAuthority(duty rootproto.DutyID, us
 	if authoritySnapshotCovers(snapshot, duty, usage) {
 		return snapshot, nil
 	}
-	return rootview.Snapshot{}, status.Errorf(codes.FailedPrecondition, "rooted grant does not cover duty=%s", rootproto.DutyName(duty))
+	return rootview.Snapshot{}, status.Errorf(
+		codes.FailedPrecondition,
+		"rooted grant does not cover duty=%s grant_id=%s era=%d",
+		rootproto.DutyName(duty),
+		snapshot.ActiveGrant.GrantID,
+		snapshot.ActiveGrant.Era,
+	)
 }
 
 func authoritySnapshotCovers(snapshot rootview.Snapshot, duty rootproto.DutyID, usage rootproto.DutyBound) bool {
@@ -103,9 +110,13 @@ func grantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificat
 	if err != nil {
 		return rootproto.GrantCertificate{}, err
 	}
+	signature := rootproto.SignGrantBytes(payload)
+	if len(signature) == 0 {
+		return rootproto.GrantCertificate{}, fmt.Errorf("root grant signing key is not configured")
+	}
 	return rootproto.GrantCertificate{
 		Grant:       grant,
 		SignerKeyID: rootproto.GrantSignerKeyID,
-		Signature:   rootproto.SignGrantBytes(payload),
+		Signature:   signature,
 	}, nil
 }

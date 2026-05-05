@@ -1034,6 +1034,54 @@ func TestGRPCClientRejectsMissingAuthorityEvidence(t *testing.T) {
 	require.Contains(t, err.Error(), "authority evidence missing grant certificate")
 }
 
+func TestValidateAuthorityEvidenceBindsReplyUsageToEvidence(t *testing.T) {
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-2",
+		HolderID:        "holder",
+		Era:             2,
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		Duties: []rootproto.DutyGrant{{
+			DutyID: rootproto.DutyAllocID,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Bound:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 1_000},
+		}},
+	}
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	require.NoError(t, err)
+	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
+		Certificate: rootproto.GrantCertificate{
+			Grant:       grant,
+			SignerKeyID: rootproto.GrantSignerKeyID,
+			Signature:   rootproto.SignGrantBytes(payload),
+		},
+		Usage: rootproto.AuthorityUsage{
+			DutyID: rootproto.DutyAllocID,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Usage:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 100},
+		},
+	})
+
+	err = validateAuthorityEvidence("alloc_id", rootproto.DutyAllocID, 2, 0, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 900}, evidence)
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "usage outside grant")
+}
+
+func TestAdvanceWitnessEraFloorDoesNotPersistRejectedFloor(t *testing.T) {
+	cli := &GRPCClient{}
+	floor := witnessEraFloor{maxSeen: 5}
+
+	err := cli.advanceWitnessEraFloor("alloc_id", 4, 10, &floor)
+	require.Error(t, err)
+	require.True(t, IsStaleWitnessEra(err))
+	require.Zero(t, floor.retiredSeen)
+	require.Equal(t, uint64(5), floor.maxSeen)
+
+	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", 6, 0, &floor))
+	require.Zero(t, floor.retiredSeen)
+	require.Equal(t, uint64(6), floor.maxSeen)
+}
+
 func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
 		"mixed": {

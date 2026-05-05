@@ -334,6 +334,18 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || len(cmd.RequestedDuties) == 0 {
 		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
+	requestedGrantID := strings.TrimSpace(cmd.GrantID)
+	if requestedGrantID != "" &&
+		s.state.ActiveGrant.Present() &&
+		s.state.ActiveGrant.GrantID == requestedGrantID &&
+		s.state.ActiveGrant.HolderID == holderID &&
+		dutyBoundsCovered(s.state.ActiveGrant.Duties, cmd.RequestedDuties) {
+		cert, err := signGrantCertificate(s.state.ActiveGrant)
+		if err != nil {
+			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+		}
+		return s.state.Eunomia(), cert, nil
+	}
 	events := make([]rootevent.Event, 0, 3)
 	var predecessors []rootproto.GrantRetirement
 	for _, retirement := range s.state.RetiredGrants {
@@ -374,8 +386,12 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 		}
 	}
 	era := nextGrantEra(s.state)
+	grantID := requestedGrantID
+	if grantID == "" || grantID == active.GrantID || retiredGrantIDExists(s.state.RetiredGrants, grantID) {
+		grantID = fmt.Sprintf("%s/%d", holderID, era)
+	}
 	grant := rootproto.AuthorityGrant{
-		GrantID:                fmt.Sprintf("%s/%d", holderID, era),
+		GrantID:                grantID,
 		HolderID:               holderID,
 		Era:                    era,
 		ExpiresUnixNano:        cmd.ExpiresUnixNano,
@@ -392,6 +408,15 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 	}
 	return commit.State.Eunomia(), cert, nil
+}
+
+func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {
+	for _, retirement := range retirements {
+		if retirement.GrantID == grantID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) sealGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
@@ -538,10 +563,14 @@ func signGrantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertif
 	if err != nil {
 		return rootproto.GrantCertificate{}, err
 	}
+	signature := rootproto.SignGrantBytes(payload)
+	if len(signature) == 0 {
+		return rootproto.GrantCertificate{}, fmt.Errorf("root grant signing key is not configured")
+	}
 	return rootproto.GrantCertificate{
 		Grant:       grant,
 		SignerKeyID: rootproto.GrantSignerKeyID,
-		Signature:   rootproto.SignGrantBytes(payload),
+		Signature:   signature,
 	}, nil
 }
 

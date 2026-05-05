@@ -2,7 +2,9 @@ package protocol
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
+	"crypto/rand"
+	"encoding/base64"
+	"os"
 	"strings"
 )
 
@@ -142,20 +144,83 @@ type GrantCommand struct {
 	PredecessorGrantIDs []string
 }
 
-const GrantSignerKeyID = "nokv-eunomia-root-ed25519-v1"
+const (
+	GrantSignerKeyID              = "nokv-eunomia-root-ed25519-v1"
+	GrantSigningPrivateKeyEnv     = "NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY"
+	GrantVerificationPublicKeyEnv = "NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY"
+)
 
-var rootGrantSigningKey = func() ed25519.PrivateKey {
-	seed := sha256.Sum256([]byte("nokv:eunomia:root-issued-bounded-authority-grant:v1"))
-	return ed25519.NewKeyFromSeed(seed[:])
-}()
+type grantKeyMaterial struct {
+	private ed25519.PrivateKey
+	public  ed25519.PublicKey
+}
+
+var rootGrantKeys = loadGrantKeyMaterial()
 
 func SignGrantBytes(payload []byte) []byte {
-	return ed25519.Sign(rootGrantSigningKey, payload)
+	if len(rootGrantKeys.private) != ed25519.PrivateKeySize {
+		return nil
+	}
+	return ed25519.Sign(rootGrantKeys.private, payload)
 }
 
 func VerifyGrantBytes(payload, signature []byte) bool {
-	publicKey := rootGrantSigningKey.Public().(ed25519.PublicKey)
-	return ed25519.Verify(publicKey, payload, signature)
+	if len(rootGrantKeys.public) != ed25519.PublicKeySize {
+		return false
+	}
+	return ed25519.Verify(rootGrantKeys.public, payload, signature)
+}
+
+func loadGrantKeyMaterial() grantKeyMaterial {
+	private := parseEd25519PrivateKeyEnv(GrantSigningPrivateKeyEnv)
+	public := parseEd25519PublicKeyEnv(GrantVerificationPublicKeyEnv)
+	if private == nil && public == nil {
+		generatedPublic, generatedPrivate, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			panic("meta/root/protocol: generate local grant signing key: " + err.Error())
+		}
+		return grantKeyMaterial{private: generatedPrivate, public: generatedPublic}
+	}
+	if public == nil && private != nil {
+		public = private.Public().(ed25519.PublicKey)
+	}
+	return grantKeyMaterial{private: private, public: public}
+}
+
+func parseEd25519PrivateKeyEnv(name string) ed25519.PrivateKey {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	decoded := mustDecodeGrantKeyEnv(name, raw)
+	switch len(decoded) {
+	case ed25519.SeedSize:
+		return ed25519.NewKeyFromSeed(decoded)
+	case ed25519.PrivateKeySize:
+		return ed25519.PrivateKey(decoded)
+	default:
+		panic(name + " must be base64 Ed25519 seed or private key")
+	}
+}
+
+func parseEd25519PublicKeyEnv(name string) ed25519.PublicKey {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	decoded := mustDecodeGrantKeyEnv(name, raw)
+	if len(decoded) != ed25519.PublicKeySize {
+		panic(name + " must be base64 Ed25519 public key")
+	}
+	return ed25519.PublicKey(decoded)
+}
+
+func mustDecodeGrantKeyEnv(name, raw string) []byte {
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		panic(name + " must be base64: " + err.Error())
+	}
+	return decoded
 }
 
 func NewGlobalMonotoneDuty(duty DutyID, upper uint64) DutyGrant {

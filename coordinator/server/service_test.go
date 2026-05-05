@@ -713,6 +713,34 @@ func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
 	require.Contains(t, err.Error(), errNotLeaderPrefix)
 }
 
+func TestServiceGetRegionByKeyGrantModeIssuesLookupGrant(t *testing.T) {
+	cluster := catalog.NewCluster()
+	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	desc.RootEpoch = 5
+	token := rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5}
+	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+	}, token)
+	storage := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			RootToken:   token,
+			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+		},
+	}
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	svc.ConfigureAuthorityGrant("c1", time.Second, 300*time.Millisecond)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+	require.NoError(t, err)
+	require.Equal(t, 1, storage.campaignCalls)
+	require.NotZero(t, resp.GetEra())
+	require.NotNil(t, resp.GetAuthorityEvidence())
+	require.Equal(t, coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE, resp.GetServingClass())
+}
+
 func TestServiceGetRegionByKeyRenewsSelfHeldExpiringGrant(t *testing.T) {
 	cluster := catalog.NewCluster()
 	desc := testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)

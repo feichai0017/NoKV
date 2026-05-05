@@ -139,7 +139,7 @@ const defaultGrantRenewIn = 3 * time.Second
 const defaultGrantClockSkew = 500 * time.Millisecond
 const defaultGrantRetryMin = 200 * time.Millisecond
 const maxGrantRetry = 60 * time.Second
-const defaultGrantReleaseTimeout = 2 * time.Second
+const defaultGrantReleaseTimeout = defaultGrantTTL
 const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 const defaultStoreHeartbeatTTL = 10 * time.Second
 

@@ -377,6 +377,7 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 	protocolState, _, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:            rootproto.GrantActIssue,
 		HolderID:        holderID,
+		GrantID:         nextCoordinatorGrantID(holderID, currentEra),
 		ExpiresUnixNano: expiresUnixNano,
 		NowUnixNano:     nowUnixNano,
 		RequestedDuties: []rootproto.DutyGrant{
@@ -397,6 +398,14 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 	s.publishEunomiaState(protocolState)
 	s.eunomiaMetrics.recordGrantEraTransition(currentEra, protocolState.ActiveGrant.Era)
 	return s.reloadAndFenceAllocators(true)
+}
+
+func nextCoordinatorGrantID(holderID string, currentEra uint64) string {
+	holderID = strings.TrimSpace(holderID)
+	if holderID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%d", holderID, currentEra+1)
 }
 
 func (s *Service) activeOtherGrantError(holderID string, nowUnixNano int64) error {

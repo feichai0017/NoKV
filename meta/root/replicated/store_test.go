@@ -326,6 +326,44 @@ func TestReplicatedStoreIssueGrant(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+func TestReplicatedStoreIssueGrantIdempotentByGrantID(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	cmd := rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        "c1",
+		GrantID:         "c1/request-1",
+		ExpiresUnixNano: 1_000,
+		NowUnixNano:     100,
+		RequestedDuties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 123),
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 456),
+		},
+	}
+
+	firstState, firstCert, err := stores[leaderID].ApplyGrant(context.Background(), cmd)
+	require.NoError(t, err)
+	secondState, secondCert, err := stores[leaderID].ApplyGrant(context.Background(), cmd)
+	require.NoError(t, err)
+
+	require.Equal(t, firstState.ActiveGrant, secondState.ActiveGrant)
+	require.Equal(t, firstCert.Grant, secondCert.Grant)
+	require.Equal(t, uint64(1), secondState.ActiveGrant.Era)
+	require.Equal(t, "c1/request-1", secondState.ActiveGrant.GrantID)
+	require.Empty(t, secondState.RetiredGrants)
+
+	wider := cmd
+	wider.RequestedDuties = []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 200),
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 500),
+	}
+	widerState, _, err := stores[leaderID].ApplyGrant(context.Background(), wider)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), widerState.ActiveGrant.Era)
+	require.NotEqual(t, "c1/request-1", widerState.ActiveGrant.GrantID)
+	require.Len(t, widerState.RetiredGrants, 1)
+	require.Equal(t, "c1/request-1", widerState.RetiredGrants[0].GrantID)
+}
+
 func TestReplicatedStoreSealAndInheritGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))

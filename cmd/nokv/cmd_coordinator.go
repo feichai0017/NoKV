@@ -41,6 +41,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for grant-gated control plane (required)")
 	grantTTL := fs.Duration("grant-ttl", 10*time.Second, "coordinator grant ttl")
 	grantRenewBefore := fs.Duration("grant-renew-before", 3*time.Second, "renew/campaign before grant expiry")
+	shutdownGrace := fs.Duration("shutdown-grace", 0, "maximum time to drain and seal coordinator grant before graceful shutdown (default: grant ttl, or 10s when grant ttl is disabled)")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator listen address")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator address: host|docker")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
@@ -184,8 +185,17 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		}
 		return nil
 	case <-ctx.Done():
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = svc.DrainAndSealGrant(shutdownCtx)
+		drainBudget := *shutdownGrace
+		if drainBudget <= 0 {
+			drainBudget = *grantTTL
+		}
+		if drainBudget <= 0 {
+			drainBudget = 10 * time.Second
+		}
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), drainBudget)
+		if err := svc.DrainAndSealGrant(shutdownCtx); err != nil {
+			_, _ = fmt.Fprintf(w, "Coordinator drain/seal grant failed: %v\n", err)
+		}
 		shutdownCancel()
 		grpcServer.GracefulStop()
 		serveErr := <-serveErrCh

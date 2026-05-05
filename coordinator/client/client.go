@@ -781,7 +781,9 @@ func validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observed
 		return fmt.Errorf("%w: %s evidence_duty=%s required=%s", errInvalidWitness, kind, evidence.Usage.DutyID, duty)
 	}
 	grantDuty, ok := cert.Grant.Duty(duty)
-	if !ok || !authorityEvidenceBoundCovers(grantDuty.Bound, evidence.Usage.Usage) || !authorityEvidenceBoundCovers(grantDuty.Bound, required) {
+	if !ok ||
+		!authorityEvidenceBoundCovers(grantDuty.Bound, evidence.Usage.Usage) ||
+		!authorityEvidenceBoundCovers(evidence.Usage.Usage, required) {
 		return fmt.Errorf("%w: %s usage outside grant", errInvalidWitness, kind)
 	}
 	if observedRetiredEraFloor != 0 && evidence.ObservedRetiredEraFloor < observedRetiredEraFloor {
@@ -847,15 +849,17 @@ func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedRetiredEra
 	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: %s era suppressed", errInvalidWitness, kind)
 	}
-	if observedRetiredEraFloor > floor.retiredSeen {
-		floor.retiredSeen = observedRetiredEraFloor
+	nextRetiredSeen := floor.retiredSeen
+	if observedRetiredEraFloor > nextRetiredSeen {
+		nextRetiredSeen = observedRetiredEraFloor
 	}
-	if floor.retiredSeen != 0 && era <= floor.retiredSeen {
-		return fmt.Errorf("%w: %s era=%d retired_floor=%d", errStaleWitnessEra, kind, era, floor.retiredSeen)
+	if nextRetiredSeen != 0 && era <= nextRetiredSeen {
+		return fmt.Errorf("%w: %s era=%d retired_floor=%d", errStaleWitnessEra, kind, era, nextRetiredSeen)
 	}
 	if era < floor.maxSeen {
 		return fmt.Errorf("%w: %s era=%d max_seen=%d", errStaleWitnessEra, kind, era, floor.maxSeen)
 	}
+	floor.retiredSeen = nextRetiredSeen
 	if era > floor.maxSeen {
 		floor.maxSeen = era
 	}

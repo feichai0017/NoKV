@@ -180,6 +180,7 @@ Restart semantics:
 - Common flags:
   - `--addr` (default `127.0.0.1:2379`)
   - `--grant-ttl`, `--grant-renew-before` (default `10s` / `3s`)
+  - `--shutdown-grace` (default: `--grant-ttl`, or `10s` when grant TTL is disabled)
   - `--root-refresh` (default `200ms`)
   - `--id-start`, `--ts-start` (allocator seeds; only used when the meta-root cluster has no allocator state yet)
   - `--config` + `--scope host|docker` (resolves `--addr` from `raft_config.json`)

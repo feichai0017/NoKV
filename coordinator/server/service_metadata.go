@@ -33,7 +33,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	// Region lookup is an authority-bearing metadata read. A coordinator that
 	// already owns the grant should renew it before rejecting clients with a
 	// stale local read-state view.
-	renewed, renewErr := s.renewMetadataGrantIfNeeded(ctx, state, err)
+	renewed, renewErr := s.ensureMetadataGrantIfNeeded(ctx, state, err)
 	if renewErr != nil {
 		return nil, renewErr
 	}
@@ -187,6 +187,11 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 	if err != nil {
 		return metadataAnswerability{}, err
 	}
+	if loadErr == nil && s != nil && s.coordinatorGrantEnabled() &&
+		servingClass == coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE &&
+		(!admission.state.grantPresent || admission.state.era == rootproto.AuthorityEraAttached || !admission.state.grantHasLookup || !admission.state.grantActive) {
+		return metadataAnswerability{}, statusGrant(fmt.Errorf("%w: required_duty=%s", rootstate.ErrDuty, rootproto.DutyName(rootproto.DutyRegionLookup)))
+	}
 	admission.servingClass = servingClass
 	admission.syncHealth = syncHealth
 	return admission, nil
@@ -262,11 +267,10 @@ func (s *Service) currentReadState() (readState, error) {
 	return state, nil
 }
 
-// renewMetadataGrantIfNeeded only refreshes grant already held by this
-// coordinator. It must not campaign over another holder just because a metadata
-// read arrived during that holder's active grant.
-func (s *Service) renewMetadataGrantIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
-	if loadErr != nil || s == nil || !s.coordinatorGrantEnabled() || !state.grantPresent {
+// ensureMetadataGrantIfNeeded obtains or refreshes a region_lookup grant for
+// authoritative metadata reads. It must not campaign over another live holder.
+func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
+	if loadErr != nil || s == nil || !s.coordinatorGrantEnabled() {
 		return false, nil
 	}
 	s.grantMu.RLock()
@@ -274,7 +278,10 @@ func (s *Service) renewMetadataGrantIfNeeded(ctx context.Context, state readStat
 	renewIn := s.grantRenewIn
 	clockSkew := s.grantClockSkew
 	s.grantMu.RUnlock()
-	if holderID == "" || strings.TrimSpace(state.grantHolderID) != holderID {
+	if holderID == "" {
+		return false, nil
+	}
+	if state.grantPresent && strings.TrimSpace(state.grantHolderID) != holderID {
 		return false, nil
 	}
 	nowFn := s.now
@@ -283,7 +290,8 @@ func (s *Service) renewMetadataGrantIfNeeded(ctx context.Context, state readStat
 	}
 	nowUnixNano := nowFn().UnixNano()
 	current := s.currentGrant()
-	if state.grantExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
+	if state.grantPresent &&
+		state.grantExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
 		state.grantExpiresAt > nowUnixNano+clockSkew.Nanoseconds() &&
 		!s.coordinatorGrantNeedsRenewal(current) {
 		return false, nil
