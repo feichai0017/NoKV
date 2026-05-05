@@ -271,7 +271,7 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	if count == 0 {
 		count = 1
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	done, err := s.beginDutyAdmission(ctx, rootproto.DutyAllocID)
@@ -314,7 +314,7 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	if count == 0 {
 		count = 1
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	done, err := s.beginDutyAdmission(ctx, rootproto.DutyTSO)

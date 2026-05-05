@@ -29,7 +29,7 @@ type RootStorage interface {
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 	Refresh() error
-	IsLeader() bool
+	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	Close() error
 }
@@ -47,7 +47,7 @@ type rootRuntimeBackend interface {
 	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	TailNotify() <-chan struct{}
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
-	IsLeader() bool
+	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 	Close() error
@@ -69,6 +69,11 @@ type rootLeaderBackend interface {
 	LeaderID() uint64
 }
 
+type rootSubmitBackend interface {
+	CanSubmitRootWrites() bool
+	LeaderID() uint64
+}
+
 type rootCoordinatorProtocolBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
@@ -81,6 +86,7 @@ type rootBackendAdapter struct {
 	rootBackend
 	refresh  rootRefreshBackend
 	tail     rootTailBackend
+	submit   rootSubmitBackend
 	leader   rootLeaderBackend
 	protocol rootCoordinatorProtocolBackend
 	closer   rootCloseBackend
@@ -121,7 +127,10 @@ func (a rootBackendAdapter) ObserveCommitted() (rootstorage.ObservedCommitted, e
 	return a.tail.ObserveCommitted()
 }
 
-func (a rootBackendAdapter) IsLeader() bool {
+func (a rootBackendAdapter) CanSubmitRootWrites() bool {
+	if a.submit != nil {
+		return a.submit.CanSubmitRootWrites()
+	}
 	if a.leader == nil {
 		return true
 	}
@@ -129,6 +138,9 @@ func (a rootBackendAdapter) IsLeader() bool {
 }
 
 func (a rootBackendAdapter) LeaderID() uint64 {
+	if a.submit != nil {
+		return a.submit.LeaderID()
+	}
 	if a.leader == nil {
 		return 0
 	}
@@ -164,6 +176,9 @@ func adaptRootBackend(root rootBackend) (rootRuntimeBackend, rootBackendCapabili
 	}
 	if tail, ok := root.(rootTailBackend); ok {
 		adapter.tail = tail
+	}
+	if submit, ok := root.(rootSubmitBackend); ok {
+		adapter.submit = submit
 	}
 	if leader, ok := root.(rootLeaderBackend); ok {
 		adapter.leader = leader
@@ -264,11 +279,11 @@ func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.Tail
 	return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, s.root.TailNotify(), s.WaitForTail)
 }
 
-func (s *RootStore) IsLeader() bool {
+func (s *RootStore) CanSubmitRootWrites() bool {
 	if s == nil || s.root == nil {
 		return true
 	}
-	return s.root.IsLeader()
+	return s.root.CanSubmitRootWrites()
 }
 
 func (s *RootStore) LeaderID() uint64 {

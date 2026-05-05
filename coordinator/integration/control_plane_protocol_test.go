@@ -188,7 +188,9 @@ func dutyGrantsFromUsagesForProtocolTest(usages []rootproto.AuthorityUsage) []ro
 }
 
 func (s *protocolMatrixStorage) Refresh() error { return nil }
-func (s *protocolMatrixStorage) IsLeader() bool { return s == nil || s.leader || s.leaderID == 0 }
+func (s *protocolMatrixStorage) CanSubmitRootWrites() bool {
+	return s == nil || s.leader || s.leaderID == 0
+}
 func (s *protocolMatrixStorage) LeaderID() uint64 {
 	if s == nil {
 		return 0

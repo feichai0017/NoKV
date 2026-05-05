@@ -224,10 +224,10 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f *followerStorage) Refresh() error   { return nil }
-func (f *followerStorage) Close() error     { return nil }
-func (f *followerStorage) IsLeader() bool   { return false }
-func (f *followerStorage) LeaderID() uint64 { return 2 }
+func (f *followerStorage) Refresh() error            { return nil }
+func (f *followerStorage) Close() error              { return nil }
+func (f *followerStorage) CanSubmitRootWrites() bool { return false }
+func (f *followerStorage) LeaderID() uint64          { return 2 }
 
 type clientRootStorage struct {
 	mu       sync.Mutex
@@ -343,10 +343,10 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	}
 }
 
-func (s *clientRootStorage) Refresh() error   { return nil }
-func (s *clientRootStorage) Close() error     { return nil }
-func (s *clientRootStorage) IsLeader() bool   { return s.leader }
-func (s *clientRootStorage) LeaderID() uint64 { return s.leaderID }
+func (s *clientRootStorage) Refresh() error            { return nil }
+func (s *clientRootStorage) Close() error              { return nil }
+func (s *clientRootStorage) CanSubmitRootWrites() bool { return s.leader }
+func (s *clientRootStorage) LeaderID() uint64          { return s.leaderID }
 
 func (s *clientRootStorage) applyEventLocked(event rootevent.Event) {
 	rooted := s.snapshot.RootSnapshot()

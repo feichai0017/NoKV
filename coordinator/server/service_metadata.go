@@ -211,7 +211,7 @@ func (s *Service) currentReadState() (readState, error) {
 	}
 	state := readState{
 		degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
-		servedByLeader: s.storage == nil || s.storage.IsLeader(),
+		servedByLeader: s.storage == nil || s.storage.CanSubmitRootWrites(),
 		servedToken:    servedToken,
 		currentToken:   servedToken,
 		catchUpState:   rootview.CatchUpStateFresh,

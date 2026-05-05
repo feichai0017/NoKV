@@ -132,7 +132,7 @@ func (c *Cluster) WaitLeader(excluded ...uint64) uint64 {
 			if _, excluded := skip[id]; excluded || store == nil {
 				continue
 			}
-			if store.IsLeader() {
+			if store.CanSubmitRootWrites() {
 				leaderID = id
 				return true
 			}

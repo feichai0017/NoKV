@@ -112,7 +112,10 @@ Historical single-process "local" backend has been removed.
 - exactly 3 replicas, one leader
 - `Append` proposes a raft log entry; returns after it's committed to quorum
 - Non-leader nodes reject `Append` with `codes.FailedPrecondition`
-- Leader changes trigger `IsLeader()` / `LeaderID()` state updates that coordinator consumes
+- Leader changes trigger root write-access / `LeaderID()` state updates that
+  coordinator consumes. In remote-root deployments, the coordinator sees
+  `CanSubmitRootWrites()` rather than raw local Raft leadership because the
+  root client routes writes to the current meta-root leader.
 - On-disk state per peer: `root.events.wal`, `root.checkpoint.binpb`, `root.raft.bin`
   (raft hard state + snapshot + retained entries)
 

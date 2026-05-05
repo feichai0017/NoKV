@@ -315,7 +315,7 @@ func (f *fakeStorage) Refresh() error {
 	return nil
 }
 
-func (f *fakeStorage) IsLeader() bool {
+func (f *fakeStorage) CanSubmitRootWrites() bool {
 	return f == nil || f.leader || f.leaderID == 0
 }
 

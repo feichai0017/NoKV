@@ -401,7 +401,7 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 		}
 		// Not-leader / grant-not-held replies mean the client reached a coordinator,
 		// but not the current authority. If every endpoint misses authority, retry
-		// the whole set briefly so rooted leadership and grant ownership can converge.
+		// the whole set briefly so root write access and grant ownership can converge.
 		allAuthorityMiss := true
 		for i, endpoint := range endpoints {
 			resp, err := call(endpoint.coord)

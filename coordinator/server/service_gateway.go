@@ -360,7 +360,7 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	s.writeMu.Lock()
@@ -457,7 +457,7 @@ func (s *Service) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionReq
 	if regionID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	removed := s.cluster.HasRegion(regionID)

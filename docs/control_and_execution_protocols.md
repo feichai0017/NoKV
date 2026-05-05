@@ -386,7 +386,7 @@ Optional future fields:
 
 Should be served only when:
 
-- the node is rooted leader
+- the coordinator-side root backend can submit root writes
 - and the serving catalog has incorporated at least the requested `RootToken`
 
 If this is not true, the server should reject rather than silently downgrade.
@@ -814,11 +814,11 @@ Read responses should conceptually expose:
 
 ### 9.2 Write-side API direction
 
-Leader-only writes should remain leader-only.
+Root-write RPCs should remain gated by root write access.
 
 Write requests should continue to require:
 
-- rooted leadership
+- `CanSubmitRootWrites()` at the coordinator-side root backend
 - expected cluster epoch where applicable
 
 Write responses should eventually expose:

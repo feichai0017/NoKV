@@ -257,10 +257,10 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 	}
 }
 
-func (s *coordinatorRootStorage) Refresh() error   { return nil }
-func (s *coordinatorRootStorage) Close() error     { return nil }
-func (s *coordinatorRootStorage) IsLeader() bool   { return true }
-func (s *coordinatorRootStorage) LeaderID() uint64 { return 1 }
+func (s *coordinatorRootStorage) Refresh() error            { return nil }
+func (s *coordinatorRootStorage) Close() error              { return nil }
+func (s *coordinatorRootStorage) CanSubmitRootWrites() bool { return true }
+func (s *coordinatorRootStorage) LeaderID() uint64          { return 1 }
 
 func (s *coordinatorRootStorage) applyEventLocked(event rootevent.Event) {
 	rooted := s.snapshot.RootSnapshot()

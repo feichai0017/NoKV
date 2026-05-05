@@ -27,10 +27,10 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f fakeLoadStore) Refresh() error   { return nil }
-func (f fakeLoadStore) IsLeader() bool   { return true }
-func (f fakeLoadStore) LeaderID() uint64 { return 1 }
-func (f fakeLoadStore) Close() error     { return nil }
+func (f fakeLoadStore) Refresh() error            { return nil }
+func (f fakeLoadStore) CanSubmitRootWrites() bool { return true }
+func (f fakeLoadStore) LeaderID() uint64          { return 1 }
+func (f fakeLoadStore) Close() error              { return nil }
 
 type fakeRootBackend struct {
 	snapshot            rootstate.Snapshot
@@ -305,8 +305,8 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.ErrorContains(t, (RemoteRootConfig{Targets: map[uint64]string{1: "   "}}).Validate(), "missing remote root address")
 	require.NoError(t, (RemoteRootConfig{Targets: map[uint64]string{1: "127.0.0.1:1"}}).Validate())
 
-	require.False(t, (&remoteRootBackend{}).IsLeader())
-	require.True(t, (&remoteRootBackend{Client: &rootclient.Client{}}).IsLeader())
+	require.False(t, (&remoteRootBackend{}).CanSubmitRootWrites())
+	require.True(t, (&remoteRootBackend{Client: &rootclient.Client{}}).CanSubmitRootWrites())
 	adapted, caps := adaptRootBackend(&remoteRootBackend{Client: &rootclient.Client{}})
 	require.True(t, caps.tail)
 	require.Nil(t, adapted.TailNotify())
@@ -319,7 +319,7 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.Equal(t, rootstorage.TailAdvance{}, mustObserveTail(store))
 	require.Equal(t, rootstorage.TailAdvance{}, mustWaitTail(store))
 	require.Nil(t, store.SubscribeTail(rootstorage.TailToken{}))
-	require.True(t, store.IsLeader())
+	require.True(t, store.CanSubmitRootWrites())
 	require.Zero(t, store.LeaderID())
 	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.Event{}))
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 1, 2))
@@ -404,7 +404,7 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 	loaded, err := store.Load()
 	require.NoError(t, err)
 	require.Equal(t, desc, loaded.Descriptors[desc.RegionID])
-	require.True(t, store.IsLeader())
+	require.True(t, store.CanSubmitRootWrites())
 	require.Equal(t, uint64(9), store.LeaderID())
 	require.NotNil(t, store.SubscribeTail(rootstorage.TailToken{}))
 

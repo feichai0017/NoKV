@@ -17,11 +17,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *Service) requireLeaderForWrite() error {
+func (s *Service) requireRootWriteAccess() error {
 	if s == nil || s.storage == nil {
 		return nil
 	}
-	if s.storage.IsLeader() {
+	if s.storage.CanSubmitRootWrites() {
 		return nil
 	}
 	leaderID := s.storage.LeaderID()
@@ -35,7 +35,7 @@ func (s *Service) grantScopedStoreOperations(ctx context.Context, storeID uint64
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return s.storeControlOperations(storeID)
 	}
-	if s.storage != nil && !s.storage.IsLeader() {
+	if s.storage != nil && !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
 	if err := s.ensureGrant(ctx); err != nil {
@@ -64,7 +64,7 @@ func (s *Service) RunGrantLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			if s.storage.IsLeader() {
+			if s.storage.CanSubmitRootWrites() {
 				releaseCtx, cancel := context.WithTimeout(context.Background(), defaultGrantReleaseTimeout)
 				_ = s.DrainAndSealGrant(releaseCtx)
 				cancel()
@@ -72,7 +72,7 @@ func (s *Service) RunGrantLoop(ctx context.Context) {
 			return
 		case <-timer.C:
 			next := s.coordinatorGrantLoopInterval()
-			if s.storage.IsLeader() {
+			if s.storage.CanSubmitRootWrites() {
 				if err := s.ensureGrant(ctx); err != nil {
 					failures++
 					next = s.coordinatorGrantRetryDelay(failures)
@@ -105,7 +105,7 @@ func (s *Service) DrainAndSealGrant(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.storage.IsLeader() {
+	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
 	if s.localGrantAlreadySealed() {
@@ -221,7 +221,7 @@ func (s *Service) sealGrant(ctx context.Context) error {
 	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
 		return nil
 	}
-	if !s.storage.IsLeader() {
+	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
 	s.allocMu.Lock()
@@ -275,7 +275,7 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.storage.IsLeader() {
+	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
 	snapshot, err := s.storage.Load()

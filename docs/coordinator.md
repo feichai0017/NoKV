@@ -343,25 +343,28 @@ Related CLI behavior:
 
 ## 8. Service Semantics
 
-`Coordinator` intentionally separates rooted truth leadership from the outer gRPC
-service surface.
+`Coordinator` intentionally separates root write access, meta-root Raft
+leadership, and Eunomia authority holding.
 
 In `3 coordinator + replicated meta`:
 
 - all three `coordinator` processes may listen and serve RPC
-- only the rooted leader may commit truth writes
+- only the coordinator whose root backend can submit root writes may commit truth
+  mutations
 - followers refresh rooted state and serve read/view traffic
 
 In separated mode:
 
-- `meta-root` leadership determines which root endpoint accepts truth writes
+- `meta-root` leadership determines which root endpoint commits truth writes
+- the coordinator-side root client may still report `CanSubmitRootWrites=true`
+  because it routes writes to that meta-root leader
 - `AuthorityGrant` determines which Coordinator may serve singleton duties
 - non-holder Coordinators may still serve route reads if their rooted view
   satisfies the caller's freshness contract
 
-### Leader-only writes
+### Root-write RPCs
 
-These RPCs require rooted leadership:
+These RPCs require `CanSubmitRootWrites()` at the coordinator-side root backend:
 
 - `RegionHeartbeat`
 - `PublishRootEvent`
@@ -369,8 +372,9 @@ These RPCs require rooted leadership:
 - `AllocID`
 - `Tso`
 
-Followers return `FailedPrecondition` with `coordinator not leader` semantics, and
-clients are expected to retry against another Coordinator endpoint.
+Backends that cannot submit root writes return `FailedPrecondition` with
+`coordinator not leader` semantics, and clients retry against another
+Coordinator endpoint.
 
 In separated mode, `AllocID`, `Tso`, and authoritative `GetRegionByKey`
 responses require the local Coordinator to hold a covering `AuthorityGrant`.
@@ -397,8 +401,9 @@ protocol surface:
 
 ### Client behavior
 
-`coordinator/client` accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
-converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.
+`coordinator/client` accepts multiple Coordinator addresses. Write RPCs retry
+across Coordinator nodes and converge on an endpoint whose root backend can
+submit root writes. Read RPCs may use any available Coordinator endpoint.
 
 ---
 
