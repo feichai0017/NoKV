@@ -113,13 +113,103 @@ Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. V2 is a
 grant protocol: graceful shutdown records exact usage, while crash-before-seal
 is handled by retiring the predecessor at its root-known grant bound.
 
-Grant certificates use Ed25519. Processes that sign grant evidence read
+Grant certificates use Ed25519. Processes that sign grant certificates read
 `NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` as a base64 Ed25519 seed or private
 key. Verifier-only processes may use `NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY` as
-the base64 public key. If neither variable is set, NoKV creates a process-local
-ephemeral key for tests and single-process development; distributed deployments
-must configure shared verification material so clients can validate evidence
-from every coordinator.
+the base64 public key. If neither variable is set, production processes fail
+closed. Tests and local single-process development may opt into a process-local
+ephemeral key with `NOKV_EUNOMIA_GRANT_ALLOW_EPHEMERAL_KEYS=1`; distributed
+deployments must not use ephemeral keys because certificates signed in one
+process cannot be verified after restart or by another process.
+
+### Eunomia production-hardening backlog
+
+The current grant protocol gives NoKV a bounded authority model for the
+implemented duties, but several engineering items remain before treating it as
+a production security boundary. Track these as protocol work, not as
+compatibility shims.
+
+#### P0: certificate ownership and verifier durability
+
+- Root-issued certificate cache: `ApplyGrant(Issue)` returns a committed
+  `GrantCertificate`. The coordinator should persist that certificate in its
+  local grant view and attach it to every `AuthorityEvidence` reply. A
+  coordinator must not re-sign the grant certificate; the private signing key
+  belongs to meta-root, a root-quorum signer, or KMS.
+- Verifier-only coordinator mode: a coordinator with cached root-issued
+  certificates and only public verification material should still serve
+  authority RPCs. Missing certificates or locally synthesized certificates must
+  fail closed.
+- Durable client verifier store: production clients need a pluggable
+  `AuthorityVerifierStore`. Tests can keep using an in-memory store, but
+  production clients should persist monotonic floors before accepting later
+  replies from newer eras.
+- Verifier state format: store compact protobuf records, not ad hoc JSON. The
+  record key should include `cluster_id`, `duty`, and `scope`; the value should
+  include `max_seen_era`, `retired_era_floor`, `retired_grant_ids`,
+  `max_root_token`, `max_descriptor_revision`, and per-duty usage frontier.
+  File-backed stores should use temp-write, fsync, and rename.
+
+#### P1: clock and evidence time
+
+- Add `served_unix_nano` to `AuthorityEvidence`. A verifier should check that
+  the served timestamp is within the grant expiry and within a configured
+  maximum reply age.
+- Coordinators should stop serving a grant at `expiry - max_clock_skew` and
+  renew before that local deadline. Root expiry remains the authority boundary;
+  the local skew margin is an admission policy.
+- Diagnostics should expose the skew policy, grant remaining time, renew
+  deadline, and whether admission is open, draining, or expired.
+
+#### P2: production key management
+
+- Split signing and verification behind `GrantSigner`, `GrantVerifier`, and
+  `KeySetProvider` interfaces. Environment variables should remain a dev/test
+  provider, not the production design.
+- Production deployments should use KMS/HSM-backed signing or a root quorum
+  signer. Clients and coordinators should receive only public verification
+  material unless they are part of the root signing service.
+- Support key rotation by carrying a `key_id` in certificates and serving an
+  active-plus-retired verification key set until all grants signed by retired
+  keys have expired and their verifier floors are durable.
+
+#### P3: duty extension contract
+
+Every new duty must register a complete `DutySpec`; adding a string name is not
+enough. The spec must define:
+
+- scope semantics, such as global, mount, subtree, or region range
+- bound type, such as monotone, version, budget, or epoch
+- reply usage extraction and the "usage is covered by evidence" rule
+- graceful seal frontier and expired-bound retirement rule
+- client verifier rule and audit checker rule
+
+The initial closed set is `alloc_id`, `tso`, and `region_lookup`. Unknown or
+unregistered duties should be rejected by root, coordinator admission, client
+verification, and audit.
+
+#### P4: tests and audit
+
+- Root tests: deterministic root certificate bytes, tamper rejection, key-id
+  lookup, rotation window, and missing signer failure.
+- Coordinator tests: cached root-issued certificate survives reload; a
+  verifier-only coordinator can serve; no locally re-signed certificates appear
+  in replies.
+- Client tests: durable verifier floors survive restart and still reject delayed
+  old-era replies; floor updates happen only after full evidence validation.
+- Clock tests: fast coordinator clock, slow coordinator clock, delayed reply,
+  and near-expiry renew admission.
+- Audit tests: every reply usage is covered by its evidence usage, every
+  evidence usage is inside the grant bound, retired floors are monotonic, and
+  metadata replies obey root-token and descriptor-revision rules.
+
+Recommended implementation order:
+
+1. Root-issued certificate cache in coordinator grant view.
+2. Durable verifier-state protobuf plus file/local-meta store.
+3. `served_unix_nano` and clock-skew admission policy.
+4. Key provider and key rotation.
+5. `DutySpec` registry and audit integration.
 
 ---
 
