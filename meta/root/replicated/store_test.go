@@ -427,6 +427,66 @@ func TestReplicatedStoreRejectsSuccessorWithoutRetirementCoverage(t *testing.T) 
 	require.Len(t, successor.PredecessorRetirements, 1)
 }
 
+func TestReplicatedStoreRejectsUnregisteredDuty(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	_, _, err := stores[leaderID].ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        "c1",
+		ExpiresUnixNano: 1_000,
+		NowUnixNano:     100,
+		RequestedDuties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyLeaseStart, 10),
+		},
+	})
+	require.ErrorIs(t, err, rootstate.ErrDuty)
+}
+
+func TestReplicatedStoreRejectsInvalidGrantInheritance(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	_, err := issueGrantWithDuties(stores[leaderID], "c1", 1_000, 100, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
+	})
+	require.NoError(t, err)
+
+	_, err = inheritGrant(stores[leaderID], "c1", "missing-grant")
+	require.ErrorIs(t, err, rootstate.ErrInheritance)
+}
+
+func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 1)
+	store := stores[leaderID]
+
+	c1, _, err := issueGrant(store, "c1", 1_000, 100, 10, 20, 1)
+	require.NoError(t, err)
+	_, err = sealGrant(store, "c1", c1.GrantID, nil)
+	require.NoError(t, err)
+	c2, err := issueGrantWithDuties(store, "c2", 1_200, 200, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40),
+		rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 1, 0),
+	})
+	require.NoError(t, err)
+	_, err = inheritGrant(store, "c2", c1.GrantID)
+	require.NoError(t, err)
+	_, err = sealGrant(store, "c2", c2.GrantID, nil)
+	require.NoError(t, err)
+
+	current, err := store.Current()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), current.RetiredEraFloor)
+	require.Len(t, current.RetiredGrants, 1)
+	require.Equal(t, c2.GrantID, current.RetiredGrants[0].GrantID)
+	require.Empty(t, current.GrantInheritances)
+
+	reopened, err := Open(Config{Driver: drivers[leaderID], MaxRetainedRecords: 1})
+	require.NoError(t, err)
+	reopenedState, err := reopened.Current()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), reopenedState.RetiredEraFloor)
+	require.Len(t, reopenedState.RetiredGrants, 1)
+	require.Equal(t, c2.GrantID, reopenedState.RetiredGrants[0].GrantID)
+}
+
 func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
 	followerID := uint64(1)

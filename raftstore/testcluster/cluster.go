@@ -38,6 +38,7 @@ import (
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 type Node struct {
@@ -200,6 +201,15 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
 		active := s.snapshot.ActiveGrant
+		requestedGrantID := strings.TrimSpace(cmd.GrantID)
+		if requestedGrantID != "" &&
+			active.Present() &&
+			active.GrantID == requestedGrantID &&
+			active.HolderID == holderID &&
+			coordinatorDutyGrantsCover(active.Duties, cmd.RequestedDuties) {
+			cert, err := coordinatorRootGrantCertificate(active)
+			return s.protocolStateLocked(), cert, err
+		}
 		if active.Present() && active.HolderID != holderID && active.ActiveAt(cmd.NowUnixNano) {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
@@ -209,7 +219,7 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 				era = retirement.Era + 1
 			}
 		}
-		grantID := strings.TrimSpace(cmd.GrantID)
+		grantID := requestedGrantID
 		if grantID == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, era)
 		}
@@ -226,7 +236,8 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 			Duties: append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
 		}
 		s.applyEventLocked(rootevent.GrantIssued(grant))
-		return s.protocolStateLocked(), rootproto.GrantCertificate{Grant: s.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID}, nil
+		cert, err := coordinatorRootGrantCertificate(s.snapshot.ActiveGrant)
+		return s.protocolStateLocked(), cert, err
 	case rootproto.GrantActSeal:
 		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
@@ -279,7 +290,42 @@ func (s *coordinatorRootStorage) protocolStateLocked() rootstate.EunomiaState {
 		ActiveGrant:       s.snapshot.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
+		RetiredEraFloor:   s.snapshot.RetiredEraFloor,
 	}
+}
+
+func coordinatorRootGrantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificate, error) {
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	if err != nil {
+		return rootproto.GrantCertificate{}, err
+	}
+	signature := rootproto.SignGrantBytes(payload)
+	if len(signature) == 0 {
+		return rootproto.GrantCertificate{}, fmt.Errorf("testcluster root grant signing key is not configured")
+	}
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   signature,
+	}, nil
+}
+
+func coordinatorDutyGrantsCover(grants, usages []rootproto.DutyGrant) bool {
+	for _, usage := range usages {
+		var matched bool
+		for _, grant := range grants {
+			if grant.DutyID == usage.DutyID &&
+				rootproto.ScopeEqual(grant.Scope, usage.Scope) &&
+				rootproto.DutyBoundCovers(grant.Bound, usage.Bound) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func coordinatorDutyGrantsFromUsages(usages []rootproto.AuthorityUsage) []rootproto.DutyGrant {

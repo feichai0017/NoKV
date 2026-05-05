@@ -59,6 +59,18 @@ func (s *Service) refreshGrantMirror(snapshot rootview.Snapshot) {
 	s.grantMu.Unlock()
 }
 
+func (s *Service) cacheGrantCertificate(cert rootproto.GrantCertificate) {
+	if s == nil || !cert.Grant.Present() {
+		return
+	}
+	s.grantMu.Lock()
+	if grantCertificateCoversGrant(cert, s.grantView.grant) {
+		s.grantView.grant = cert.Grant
+		s.grantView.certificate = cert
+	}
+	s.grantMu.Unlock()
+}
+
 func (s *Service) rootSnapshotRefreshWindow() time.Duration {
 	if s == nil || s.rootViewTTL <= 0 {
 		return defaultRootSnapshotRefreshInterval
@@ -126,6 +138,7 @@ func (s *Service) currentAuthoritySnapshot() rootview.Snapshot {
 		ActiveGrant:       s.grantView.grant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.grantView.retirements...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.grantView.inheritances...),
+		RetiredEraFloor:   s.grantView.retiredEraFloor,
 	}
 }
 
@@ -137,6 +150,7 @@ func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 		ActiveGrant:       state.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
+		RetiredEraFloor:   state.RetiredEraFloor,
 	}
 	s.refreshGrantMirror(snapshot)
 	s.rootViewMu.Lock()
@@ -144,6 +158,7 @@ func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 		s.rootView.snapshot.ActiveGrant = snapshot.ActiveGrant
 		s.rootView.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
 		s.rootView.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
+		s.rootView.snapshot.RetiredEraFloor = snapshot.RetiredEraFloor
 	}
 	s.rootViewMu.Unlock()
 }
@@ -151,7 +166,8 @@ func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 func serviceEunomiaStatePresent(state rootstate.EunomiaState) bool {
 	return state.ActiveGrant.Present() ||
 		len(state.RetiredGrants) > 0 ||
-		len(state.GrantInheritances) > 0
+		len(state.GrantInheritances) > 0 ||
+		state.RetiredEraFloor != 0
 }
 
 func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
@@ -167,6 +183,7 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 				ActiveGrant:       snapshot.ActiveGrant,
 				RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 				GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+				RetiredEraFloor:   snapshot.RetiredEraFloor,
 			},
 			Stores:              snapshot.Stores,
 			Subtrees:            snapshot.Subtrees,

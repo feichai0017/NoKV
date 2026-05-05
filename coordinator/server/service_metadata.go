@@ -44,16 +44,21 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	if err != nil {
 		return nil, err
 	}
-	done, err := s.beginAuthorityServing(ctx, rootproto.DutyRegionLookup)
-	if err != nil {
-		return nil, err
+	var authorityAdmission dutyAdmission
+	var authorityAdmitted bool
+	if s != nil && s.coordinatorGrantEnabled() && admission.state.era != rootproto.AuthorityEraAttached && admission.state.era != rootproto.AuthorityEraSuppressed {
+		authorityAdmission, err = s.beginDutyAdmission(ctx, rootproto.DutyRegionLookup)
+		if err != nil {
+			return nil, err
+		}
+		authorityAdmitted = true
+		defer authorityAdmission.Done()
 	}
-	defer done()
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
 		resp := admission.responseBase()
 		resp.NotFound = true
-		if err := s.attachMetadataAuthorityEvidence(ctx, resp); err != nil {
+		if err := s.attachMetadataAuthorityEvidence(resp, authorityAdmission, authorityAdmitted); err != nil {
 			return nil, err
 		}
 		return resp, nil
@@ -67,7 +72,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	resp := admission.responseBase()
 	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
 	resp.DescriptorRevision = desc.RootEpoch
-	if err := s.attachMetadataAuthorityEvidence(ctx, resp); err != nil {
+	if err := s.attachMetadataAuthorityEvidence(resp, authorityAdmission, authorityAdmitted); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -135,15 +140,20 @@ func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
 	}
 }
 
-func (s *Service) attachMetadataAuthorityEvidence(ctx context.Context, resp *coordpb.GetRegionByKeyResponse) error {
+func (s *Service) attachMetadataAuthorityEvidence(resp *coordpb.GetRegionByKeyResponse, admission dutyAdmission, admitted bool) error {
 	if s == nil || resp == nil || resp.GetEra() == rootproto.AuthorityEraAttached || resp.GetEra() == rootproto.AuthorityEraSuppressed {
 		return nil
 	}
-	evidence, err := s.authorityEvidence(ctx, rootproto.DutyRegionLookup, rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()})
+	if !admitted {
+		return statusGrant(fmt.Errorf("%w: missing region_lookup admission", rootstate.ErrDuty))
+	}
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()})
 	if err != nil {
 		return err
 	}
-	resp.AuthorityEvidence = evidence
+	resp.Era = proof.Grant.Era
+	resp.ObservedRetiredEraFloor = proof.ObservedRetiredEraFloor
+	resp.AuthorityEvidence = proof.Evidence
 	return nil
 }
 
@@ -238,6 +248,7 @@ func (s *Service) currentReadState() (readState, error) {
 		state.grantHolderID = snapshot.ActiveGrant.HolderID
 		state.grantExpiresAt = snapshot.ActiveGrant.ExpiresUnixNano
 	}
+	state.retiredEraFloor = snapshot.RetiredEraFloor
 	for _, retirement := range snapshot.RetiredGrants {
 		if retirement.Era > state.retiredEraFloor {
 			state.retiredEraFloor = retirement.Era

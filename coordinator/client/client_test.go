@@ -1062,9 +1062,11 @@ func TestValidateAuthorityEvidenceBindsReplyUsageToEvidence(t *testing.T) {
 			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
 			Usage:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 100},
 		},
+		ServedUnixNano: time.Now().UnixNano(),
 	})
 
-	err = validateAuthorityEvidence("alloc_id", rootproto.DutyAllocID, 2, 0, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 900}, evidence)
+	cli := &GRPCClient{verifierStore: NewMemoryAuthorityVerifierStore(), verifierClusterID: "test", now: time.Now}
+	err = cli.validateAuthorityEvidence("alloc_id", rootproto.DutyAllocID, 2, 0, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 900}, evidence)
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
 	require.Contains(t, err.Error(), "usage outside grant")
@@ -1074,15 +1076,63 @@ func TestAdvanceWitnessEraFloorDoesNotPersistRejectedFloor(t *testing.T) {
 	cli := &GRPCClient{}
 	floor := witnessEraFloor{maxSeen: 5}
 
-	err := cli.advanceWitnessEraFloor("alloc_id", 4, 10, &floor)
+	err := cli.advanceWitnessEraFloor("alloc_id", rootproto.DutyAllocID, 4, 10, &floor)
 	require.Error(t, err)
 	require.True(t, IsStaleWitnessEra(err))
 	require.Zero(t, floor.retiredSeen)
 	require.Equal(t, uint64(5), floor.maxSeen)
 
-	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", 6, 0, &floor))
+	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", rootproto.DutyAllocID, 6, 0, &floor))
 	require.Zero(t, floor.retiredSeen)
 	require.Equal(t, uint64(6), floor.maxSeen)
+}
+
+func TestFileAuthorityVerifierStorePersistsFloorAcrossRestart(t *testing.T) {
+	path := t.TempDir() + "/authority-verifier.pb"
+	store := NewFileAuthorityVerifierStore(path)
+	cli := &GRPCClient{verifierStore: store, verifierClusterID: "cluster-a"}
+	floor := witnessEraFloor{}
+
+	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", rootproto.DutyAllocID, 2, 1, &floor))
+
+	restarted := &GRPCClient{
+		verifierStore:     NewFileAuthorityVerifierStore(path),
+		verifierClusterID: "cluster-a",
+	}
+	var restartedFloor witnessEraFloor
+	err := restarted.advanceWitnessEraFloor("alloc_id", rootproto.DutyAllocID, 1, 0, &restartedFloor)
+	require.Error(t, err)
+	require.True(t, IsStaleWitnessEra(err))
+	require.Contains(t, err.Error(), "retired_floor=1")
+}
+
+func TestValidateAuthorityEvidenceRejectsMissingServedTime(t *testing.T) {
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-2",
+		HolderID:        "holder",
+		Era:             2,
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+	}
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	require.NoError(t, err)
+	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
+		Certificate: rootproto.GrantCertificate{
+			Grant:       grant,
+			SignerKeyID: rootproto.GrantSignerKeyID,
+			Signature:   rootproto.SignGrantBytes(payload),
+		},
+		Usage: rootproto.AuthorityUsage{
+			DutyID: rootproto.DutyAllocID,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Usage:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 10},
+		},
+	})
+	cli := &GRPCClient{verifierStore: NewMemoryAuthorityVerifierStore(), verifierClusterID: "test"}
+	err = cli.validateAuthorityEvidence("alloc_id", rootproto.DutyAllocID, 2, 0, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 10}, evidence)
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "missing served_unix_nano")
 }
 
 func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
@@ -1298,6 +1348,7 @@ func defaultAuthorityEvidence(duty rootproto.DutyID, usage rootproto.DutyBound, 
 			Usage:  usage,
 		},
 		ObservedRetiredEraFloor: observedRetiredEra,
+		ServedUnixNano:          time.Now().UnixNano(),
 	})
 }
 

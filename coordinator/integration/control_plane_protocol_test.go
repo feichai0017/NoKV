@@ -19,6 +19,7 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -68,10 +69,16 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
-		s.campaigns++
 		if s.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, s.campaignErr
 		}
+		if s.snapshot.ActiveGrant.Present() &&
+			s.snapshot.ActiveGrant.GrantID == strings.TrimSpace(cmd.GrantID) &&
+			s.snapshot.ActiveGrant.HolderID == holderID &&
+			protocolTestDutiesCover(s.snapshot.ActiveGrant.Duties, cmd.RequestedDuties) {
+			return s.protocolState(), protocolTestGrantCertificate(s.snapshot.ActiveGrant), nil
+		}
+		s.campaigns++
 		if s.snapshot.ActiveGrant.Present() && s.snapshot.ActiveGrant.HolderID != holderID && s.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
 			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
@@ -112,7 +119,7 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 			}
 		}
 		s.advanceRootToken()
-		return s.protocolState(), rootproto.GrantCertificate{Grant: s.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test")}, nil
+		return s.protocolState(), protocolTestGrantCertificate(s.snapshot.ActiveGrant), nil
 	case rootproto.GrantActSeal:
 		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != strings.TrimSpace(cmd.HolderID) {
 			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
@@ -188,6 +195,31 @@ func dutyGrantsFromUsagesForProtocolTest(usages []rootproto.AuthorityUsage) []ro
 		out = append(out, rootproto.DutyGrant{DutyID: usage.DutyID, Scope: usage.Scope, Bound: usage.Usage})
 	}
 	return out
+}
+
+func protocolTestGrantCertificate(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
+	payload, _ := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}
+}
+
+func protocolTestDutiesCover(grants, usages []rootproto.DutyGrant) bool {
+	for _, usage := range usages {
+		found := false
+		for _, grant := range grants {
+			if grant.DutyID == usage.DutyID && rootproto.ScopeEqual(grant.Scope, usage.Scope) && rootproto.DutyBoundCovers(grant.Bound, usage.Bound) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *protocolMatrixStorage) Refresh() error { return nil }

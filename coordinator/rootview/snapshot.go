@@ -59,6 +59,7 @@ type Snapshot struct {
 	ActiveGrant         rootproto.AuthorityGrant
 	RetiredGrants       []rootproto.GrantRetirement
 	GrantInheritances   []rootproto.GrantInheritance
+	RetiredEraFloor     uint64
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -78,6 +79,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		ActiveGrant:         snapshot.ActiveGrant,
 		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+		RetiredEraFloor:     snapshot.RetiredEraFloor,
 	}
 }
 
@@ -93,6 +95,7 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	out.ActiveGrant = current.ActiveGrant
 	out.RetiredGrants = append([]rootproto.GrantRetirement(nil), current.RetiredGrants...)
 	out.GrantInheritances = append([]rootproto.GrantInheritance(nil), current.GrantInheritances...)
+	out.RetiredEraFloor = current.RetiredEraFloor
 	return out
 }
 
@@ -126,7 +129,7 @@ func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) boo
 }
 
 func authorityGeneration(snapshot Snapshot) uint64 {
-	generation := snapshot.ActiveGrant.Era
+	generation := max(snapshot.RetiredEraFloor, snapshot.ActiveGrant.Era)
 	for _, retirement := range snapshot.RetiredGrants {
 		if retirement.Era > generation {
 			generation = retirement.Era
@@ -173,6 +176,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		ActiveGrant:       snapshot.State.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
+		RetiredEraFloor:   snapshot.State.RetiredEraFloor,
 	}
 }
 
@@ -186,6 +190,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 			ActiveGrant:       s.ActiveGrant,
 			RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
 			GrantInheritances: append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
+			RetiredEraFloor:   s.RetiredEraFloor,
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),

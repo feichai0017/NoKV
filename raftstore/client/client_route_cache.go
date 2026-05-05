@@ -99,7 +99,12 @@ func (c *Client) regionForKeyFromCache(key []byte) (regionSnapshot, bool) {
 func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regionSnapshot, error) {
 	ctx, cancel := contextWithTimeout(ctx, c.routeLookupTimeout)
 	defer cancel()
-	resp, err := c.regionResolver.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)})
+	req := &coordpb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)}
+	requiredDescriptorRevision := c.requiredRouteDescriptorRevision()
+	if requiredDescriptorRevision != 0 {
+		req.RequiredDescriptorRevision = requiredDescriptorRevision
+	}
+	resp, err := c.regionResolver.GetRegionByKey(ctx, req)
 	if err != nil {
 		return regionSnapshot{}, &RouteUnavailableError{
 			Key: append([]byte(nil), key...),
@@ -112,6 +117,14 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	desc := metawire.DescriptorFromProto(resp.GetRegionDescriptor())
 	if desc.RegionID == 0 {
 		return regionSnapshot{}, errResolvedRegionIDMissing
+	}
+	if requiredDescriptorRevision != 0 && desc.RootEpoch < requiredDescriptorRevision {
+		return regionSnapshot{}, &RegionRoutingError{
+			Operation: "resolve region",
+			RegionID:  desc.RegionID,
+			Key:       append([]byte(nil), key...),
+			Detail:    fmt.Sprintf("descriptor revision %d is below required %d", desc.RootEpoch, requiredDescriptorRevision),
+		}
 	}
 	if len(desc.Peers) == 0 {
 		return regionSnapshot{}, &RegionRoutingError{
@@ -126,6 +139,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 		leader = old.leader
 	}
 	c.mu.Lock()
+	c.advanceRouteDescriptorRevisionLocked(desc.RootEpoch)
 	c.upsertRegionLocked(desc, leader)
 	c.mu.Unlock()
 	if !containsKey(desc, key) {
@@ -160,6 +174,7 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 	}
 	if epochMismatch := err.GetEpochNotMatch(); epochMismatch != nil {
 		c.mu.Lock()
+		c.observeEpochMismatchLocked(regionID, epochMismatch)
 		c.removeRegionLocked(regionID)
 		for _, meta := range epochMismatch.GetRegions() {
 			if meta == nil {
@@ -196,6 +211,42 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 		RegionID:  regionID,
 		Detail:    fmt.Sprintf("protobuf region error: %v", err),
 	}
+}
+
+func (c *Client) requiredRouteDescriptorRevision() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.requiredDescriptorRevision
+}
+
+func (c *Client) observeEpochMismatchLocked(regionID uint64, mismatch *errorpb.EpochNotMatch) {
+	if c == nil || mismatch == nil {
+		return
+	}
+	if region, ok := c.regions[regionID]; ok && region != nil && region.desc.RootEpoch != 0 {
+		c.advanceRouteDescriptorRevisionLocked(nextDescriptorRevision(region.desc.RootEpoch))
+	}
+	for _, meta := range mismatch.GetRegions() {
+		if meta == nil {
+			continue
+		}
+		desc := metawire.DescriptorFromProto(meta)
+		c.advanceRouteDescriptorRevisionLocked(desc.RootEpoch)
+	}
+}
+
+func (c *Client) advanceRouteDescriptorRevisionLocked(revision uint64) {
+	if c == nil || revision == 0 || revision <= c.requiredDescriptorRevision {
+		return
+	}
+	c.requiredDescriptorRevision = revision
+}
+
+func nextDescriptorRevision(revision uint64) uint64 {
+	if revision == ^uint64(0) {
+		return revision
+	}
+	return revision + 1
 }
 
 func (c *Client) upsertRegionLocked(desc topology.Descriptor, leader uint64) {

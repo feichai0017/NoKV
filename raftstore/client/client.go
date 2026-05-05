@@ -50,21 +50,22 @@ type RetryPolicy struct {
 
 // Client provides Region-aware helpers for StoreKV RPCs, including 2PC.
 type Client struct {
-	mu                       sync.RWMutex
-	stores                   map[uint64]*storeConn
-	regions                  map[uint64]*regionState
-	regionIndex              []regionRange
-	regionResolver           RegionResolver
-	storeResolver            StoreResolver
-	routeLookupTimeout       time.Duration
-	storeRevalidateIn        time.Duration
-	dialTimeout              time.Duration
-	dialOpts                 []grpc.DialOption
-	retry                    RetryPolicy
-	atomicRouteSingleTotal   atomic.Uint64
-	atomicRouteMultiTotal    atomic.Uint64
-	atomicLocalFallbackTotal atomic.Uint64
-	atomicSuccessTotal       atomic.Uint64
+	mu                         sync.RWMutex
+	stores                     map[uint64]*storeConn
+	regions                    map[uint64]*regionState
+	regionIndex                []regionRange
+	regionResolver             RegionResolver
+	storeResolver              StoreResolver
+	requiredDescriptorRevision uint64
+	routeLookupTimeout         time.Duration
+	storeRevalidateIn          time.Duration
+	dialTimeout                time.Duration
+	dialOpts                   []grpc.DialOption
+	retry                      RetryPolicy
+	atomicRouteSingleTotal     atomic.Uint64
+	atomicRouteMultiTotal      atomic.Uint64
+	atomicLocalFallbackTotal   atomic.Uint64
+	atomicSuccessTotal         atomic.Uint64
 }
 
 // New constructs a Client using the provided configuration.

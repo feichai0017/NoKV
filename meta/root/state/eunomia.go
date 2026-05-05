@@ -6,6 +6,7 @@ type EunomiaState struct {
 	ActiveGrant       rootproto.AuthorityGrant
 	RetiredGrants     []rootproto.GrantRetirement
 	GrantInheritances []rootproto.GrantInheritance
+	RetiredEraFloor   uint64
 }
 
 func (s State) Eunomia() EunomiaState {
@@ -13,5 +14,6 @@ func (s State) Eunomia() EunomiaState {
 		ActiveGrant:       s.ActiveGrant,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
+		RetiredEraFloor:   s.RetiredEraFloor,
 	}
 }

@@ -12,6 +12,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type dutyAdmission struct {
+	grant           rootproto.AuthorityGrant
+	certificate     rootproto.GrantCertificate
+	retirements     []rootproto.GrantRetirement
+	retiredEraFloor uint64
+	duty            rootproto.DutyID
+	servedUnixNano  int64
+	done            func()
+}
+
+func (a dutyAdmission) Done() {
+	if a.done != nil {
+		a.done()
+	}
+}
+
 func (s *Service) resetAuthorityServing() {
 	if s == nil {
 		return
@@ -22,29 +38,31 @@ func (s *Service) resetAuthorityServing() {
 	s.authorityMu.Unlock()
 }
 
-func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID) (func(), error) {
+func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID) (dutyAdmission, error) {
 	if s == nil || !s.coordinatorGrantEnabled() {
-		return func() {}, nil
+		return dutyAdmission{done: func() {}}, nil
 	}
 	if err := s.rejectIfAuthorityClosed(); err != nil {
-		return nil, err
+		return dutyAdmission{}, err
 	}
 	if err := s.ensureGrant(ctx); err != nil {
-		return nil, translateGrantError(err)
+		return dutyAdmission{}, translateGrantError(err)
 	}
 	if s.grantInheritanceCandidate() {
 		if err := s.InheritRetiredGrants(ctx); err != nil {
-			return nil, err
+			return dutyAdmission{}, err
 		}
 	}
-	if err := s.eunomiaGate(gateDutyAdmission, duty); err != nil {
-		return nil, err
+	admission, err := s.admitDutyFromCachedGrant(duty)
+	if err != nil {
+		return dutyAdmission{}, err
 	}
 	done, err := s.beginAuthorityServing(ctx, duty)
 	if err != nil {
-		return nil, err
+		return dutyAdmission{}, err
 	}
-	return done, nil
+	admission.done = done
+	return admission, nil
 }
 
 func (s *Service) beginAuthorityServing(ctx context.Context, duty rootproto.DutyID) (func(), error) {
@@ -133,15 +151,6 @@ const (
 	gateDutyAdmission gateKind = iota
 )
 
-// eunomiaGate checks the cached grant mirror on authority-bearing hot paths.
-// The mirror is kept current by rooted-tail refresh and by ApplyGrant responses.
-func (s *Service) eunomiaGate(kind gateKind, duty rootproto.DutyID) error {
-	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
-		return nil
-	}
-	return s.eunomiaGateCached(kind, duty)
-}
-
 func (s *Service) rejectIfAuthorityClosed() error {
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return nil
@@ -161,8 +170,38 @@ func (s *Service) rejectIfAuthorityClosed() error {
 	}
 }
 
-func (s *Service) eunomiaGateCached(kind gateKind, duty rootproto.DutyID) error {
-	return s.validateGateGrant(kind, duty, s.currentGrant())
+func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission, error) {
+	if s == nil {
+		return dutyAdmission{}, nil
+	}
+	nowUnixNano := s.nowUnixNano()
+	s.grantMu.RLock()
+	view := s.grantView
+	holderID := strings.TrimSpace(s.coordinatorID)
+	clockSkew := s.grantClockSkew
+	s.grantMu.RUnlock()
+	if err := s.validateGateGrant(gateDutyAdmission, duty, view.grant); err != nil {
+		return dutyAdmission{}, err
+	}
+	if view.grant.ExpiresUnixNano <= nowUnixNano+clockSkew.Nanoseconds() {
+		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: grant inside clock-skew window era=%d", rootstate.ErrInvalidGrant, view.grant.Era))
+	}
+	if holderID == "" || view.grant.HolderID != holderID {
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, view.grant.HolderID, holderID))
+	}
+	if !grantCertificateMatches(view.certificate, view.grant) {
+		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: missing root-issued grant certificate grant_id=%s era=%d", rootstate.ErrInvalidGrant, view.grant.GrantID, view.grant.Era))
+	}
+	return dutyAdmission{
+		grant:           view.grant,
+		certificate:     view.certificate,
+		retirements:     append([]rootproto.GrantRetirement(nil), view.retirements...),
+		retiredEraFloor: view.retiredEraFloor,
+		duty:            duty,
+		servedUnixNano:  nowUnixNano,
+	}, nil
 }
 
 func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {

@@ -56,6 +56,7 @@ message RootState {
   RootAuthorityGrant active_grant = 7;
   repeated RootGrantRetirement retired_grants = 8;
   repeated RootGrantInheritance grant_inheritances = 9;
+  uint64 retired_era_floor = 10;
 }
 
 message RootCheckpoint {
@@ -250,6 +251,26 @@ message RootAuthorityEvidence {
   RootAuthorityUsage usage = 2;
   repeated RootGrantRetirement observed_retirements = 3;
   uint64 observed_retired_era_floor = 4;
+  int64 served_unix_nano = 5;
+}
+
+message RootAuthorityVerifierKey {
+  string cluster_id = 1;
+  string duty_id = 2;
+  RootDutyScope scope = 3;
+}
+
+message RootAuthorityVerifierState {
+  RootAuthorityVerifierKey key = 1;
+  uint64 max_seen_era = 2;
+  uint64 retired_era_floor = 3;
+  RootTailToken max_root_token = 4;
+  uint64 max_descriptor_revision = 5;
+  RootDutyBound max_frontier = 6;
+}
+
+message RootAuthorityVerifierStore {
+  repeated RootAuthorityVerifierState states = 1;
 }
 
 message RootRegionDescriptor {
@@ -380,6 +401,7 @@ message RootEunomiaState {
   RootAuthorityGrant active_grant = 1;
   repeated RootGrantRetirement retired_grants = 2;
   repeated RootGrantInheritance grant_inheritances = 3;
+  uint64 retired_era_floor = 4;
 }
 
 enum RootGrantAct {

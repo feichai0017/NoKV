@@ -274,11 +274,11 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
-	done, err := s.beginDutyAdmission(ctx, rootproto.DutyAllocID)
+	admission, err := s.beginDutyAdmission(ctx, rootproto.DutyAllocID)
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer admission.Done()
 	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -287,7 +287,7 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	consumedFrontier := allocationConsumedFrontier(first, count)
-	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
 	if err != nil {
 		return nil, err
 	}
@@ -316,11 +316,11 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
-	done, err := s.beginDutyAdmission(ctx, rootproto.DutyTSO)
+	admission, err := s.beginDutyAdmission(ctx, rootproto.DutyTSO)
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer admission.Done()
 	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -329,7 +329,7 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
 	consumedFrontier := allocationConsumedFrontier(first, got)
-	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyTSO, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
 	if err != nil {
 		return nil, err
 	}
