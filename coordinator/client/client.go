@@ -849,10 +849,7 @@ func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedRetiredEra
 	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: %s era suppressed", errInvalidWitness, kind)
 	}
-	nextRetiredSeen := floor.retiredSeen
-	if observedRetiredEraFloor > nextRetiredSeen {
-		nextRetiredSeen = observedRetiredEraFloor
-	}
+	nextRetiredSeen := max(observedRetiredEraFloor, floor.retiredSeen)
 	if nextRetiredSeen != 0 && era <= nextRetiredSeen {
 		return fmt.Errorf("%w: %s era=%d retired_floor=%d", errStaleWitnessEra, kind, era, nextRetiredSeen)
 	}
