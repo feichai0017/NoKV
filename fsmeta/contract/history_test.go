@@ -24,7 +24,7 @@ func TestFSMetaExecutorConcurrentHistoryContract(t *testing.T) {
 			require.NoError(t, err)
 
 			ops := GenerateScript(seed, steps)
-			err = RunConcurrentBatches(context.Background(), executor, model, ops, batchSize)
+			err = RunConcurrentBatches(context.Background(), executor, model, ops, batchSize, HistoryOptions{})
 			require.NoError(t, err, "seed=%d steps=%d batch=%d", seed, steps, batchSize)
 		})
 	}

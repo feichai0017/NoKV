@@ -58,7 +58,7 @@ func runRound(ctx context.Context, addr string, mount fsmeta.MountID, seed int64
 	if len(ops) == 0 {
 		return fmt.Errorf("generated no namespace operations")
 	}
-	if err := fsmetacontract.RunConcurrentBatches(roundCtx, cli, model, ops, batch); err != nil {
+	if err := fsmetacontract.RunConcurrentBatches(roundCtx, cli, model, ops, batch, fsmetacontract.HistoryOptions{}); err != nil {
 		return fmt.Errorf("namespace history: %w", err)
 	}
 	if err := runSessionProbe(roundCtx, cli, mount, seed); err != nil {
