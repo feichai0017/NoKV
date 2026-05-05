@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -47,7 +48,8 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		_ = listener.Close()
 	})
 
-	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
+	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), newClientRootStorage(true))
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
 	grpcServer := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(grpcServer, svc)
 	go func() {
@@ -172,7 +174,8 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 	go func() { _ = followerGRPC.Serve(followerListener) }()
 	t.Cleanup(followerGRPC.GracefulStop)
 
-	leaderSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
+	leaderSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), newClientRootStorage(true))
+	leaderSvc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
 	leaderGRPC := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(leaderGRPC, leaderSvc)
 	go func() { _ = leaderGRPC.Serve(leaderListener) }()
@@ -218,16 +221,176 @@ func (f *followerStorage) AppendRootEvent(context.Context, rootevent.Event) erro
 func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) error {
 	return nil
 }
-func (f *followerStorage) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
-	return rootstate.EunomiaState{}, nil
+func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f *followerStorage) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	return rootstate.EunomiaState{}, nil
+func (f *followerStorage) Refresh() error            { return nil }
+func (f *followerStorage) Close() error              { return nil }
+func (f *followerStorage) CanSubmitRootWrites() bool { return false }
+func (f *followerStorage) LeaderID() uint64          { return 2 }
+
+type clientRootStorage struct {
+	mu       sync.Mutex
+	leader   bool
+	leaderID uint64
+	snapshot rootview.Snapshot
 }
-func (f *followerStorage) Refresh() error   { return nil }
-func (f *followerStorage) Close() error     { return nil }
-func (f *followerStorage) IsLeader() bool   { return false }
-func (f *followerStorage) LeaderID() uint64 { return 2 }
+
+func newClientRootStorage(leader bool) *clientRootStorage {
+	return &clientRootStorage{
+		leader:   leader,
+		leaderID: 1,
+		snapshot: rootview.Snapshot{
+			CatchUpState:        rootview.CatchUpStateFresh,
+			Stores:              make(map[uint64]rootstate.StoreMembership),
+			SnapshotEpochs:      make(map[string]rootstate.SnapshotEpoch),
+			Mounts:              make(map[string]rootstate.MountRecord),
+			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
+			Quotas:              make(map[string]rootstate.QuotaFence),
+			Descriptors:         make(map[uint64]topology.Descriptor),
+			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+		},
+	}
+}
+
+func (s *clientRootStorage) Load() (rootview.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rootview.CloneSnapshot(s.snapshot), nil
+}
+
+func (s *clientRootStorage) AppendRootEvent(_ context.Context, event rootevent.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyEventLocked(event)
+	return nil
+}
+
+func (s *clientRootStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idCurrent > s.snapshot.Allocator.IDCurrent {
+		s.snapshot.Allocator.IDCurrent = idCurrent
+	}
+	if tsCurrent > s.snapshot.Allocator.TSCurrent {
+		s.snapshot.Allocator.TSCurrent = tsCurrent
+	}
+	return nil
+}
+
+func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	holderID := strings.TrimSpace(cmd.HolderID)
+	switch cmd.Kind {
+	case rootproto.GrantActIssue:
+		active := s.snapshot.ActiveGrant
+		if active.Present() && active.HolderID != holderID && active.ActiveAt(cmd.NowUnixNano) {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		era := active.Era + 1
+		for _, retirement := range s.snapshot.RetiredGrants {
+			if retirement.Era >= era {
+				era = retirement.Era + 1
+			}
+		}
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, era)
+		}
+		grant := rootproto.AuthorityGrant{
+			GrantID:         grantID,
+			HolderID:        holderID,
+			Era:             era,
+			ExpiresUnixNano: cmd.ExpiresUnixNano,
+			IssuedRootToken: rootproto.AuthorityRootToken{
+				Term:     s.snapshot.RootToken.Cursor.Term,
+				Index:    s.snapshot.RootToken.Cursor.Index,
+				Revision: s.snapshot.RootToken.Revision,
+			},
+			Duties: append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
+		}
+		s.applyEventLocked(rootevent.GrantIssued(grant))
+		return s.protocolStateLocked(), clientGrantCertificateForTest(s.snapshot.ActiveGrant), nil
+	case rootproto.GrantActSeal:
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		retirement := rootproto.GrantRetirement{
+			GrantID:  s.snapshot.ActiveGrant.GrantID,
+			HolderID: s.snapshot.ActiveGrant.HolderID,
+			Era:      s.snapshot.ActiveGrant.Era,
+			Mode:     rootproto.GrantRetirementSealedExact,
+			Bounds:   clientDutyGrantsFromUsages(cmd.ExactUsages),
+		}
+		if len(retirement.Bounds) == 0 {
+			retirement.Bounds = append([]rootproto.DutyGrant(nil), s.snapshot.ActiveGrant.Duties...)
+		}
+		s.applyEventLocked(rootevent.GrantSealed(retirement))
+		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
+	case rootproto.GrantActInherit:
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		successor := s.snapshot.ActiveGrant.GrantID
+		for _, predecessor := range cmd.PredecessorGrantIDs {
+			s.applyEventLocked(rootevent.GrantInherited(rootproto.GrantInheritance{
+				PredecessorGrantID: predecessor,
+				SuccessorGrantID:   successor,
+			}))
+		}
+		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
+	default:
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
+	}
+}
+
+func (s *clientRootStorage) Refresh() error            { return nil }
+func (s *clientRootStorage) Close() error              { return nil }
+func (s *clientRootStorage) CanSubmitRootWrites() bool { return s.leader }
+func (s *clientRootStorage) LeaderID() uint64          { return s.leaderID }
+
+func (s *clientRootStorage) applyEventLocked(event rootevent.Event) {
+	rooted := s.snapshot.RootSnapshot()
+	cursor := rootstate.NextCursor(rooted.State.LastCommitted)
+	rootstate.ApplyEventToSnapshot(&rooted, cursor, event)
+	nextRevision := s.snapshot.RootToken.Revision + 1
+	s.snapshot = rootview.SnapshotFromRoot(rooted)
+	s.snapshot.RootToken.Revision = nextRevision
+}
+
+func (s *clientRootStorage) protocolStateLocked() rootstate.EunomiaState {
+	return rootstate.EunomiaState{
+		ActiveGrant:       s.snapshot.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
+	}
+}
+
+func clientGrantCertificateForTest(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
+	payload, _ := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}
+}
+
+func clientDutyGrantsFromUsages(usages []rootproto.AuthorityUsage) []rootproto.DutyGrant {
+	out := make([]rootproto.DutyGrant, 0, len(usages))
+	for _, usage := range usages {
+		if usage.DutyID == "" {
+			continue
+		}
+		out = append(out, rootproto.DutyGrant{
+			DutyID: usage.DutyID,
+			Scope:  usage.Scope,
+			Bound:  usage.Usage,
+		})
+	}
+	return out
+}
 
 func TestGRPCClientDoesNotRetryReadOnNotLeaderWriteError(t *testing.T) {
 	err := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")
@@ -246,24 +409,24 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.True(t, IsStaleWitnessEra(errStaleWitnessEra))
 	require.True(t, IsInvalidWitness(errInvalidWitness))
 	require.False(t, IsNotLeader(errEmptyAddress))
-	require.False(t, IsLeaseNotHeld(errEmptyAddress))
+	require.False(t, IsGrantNotHeld(errEmptyAddress))
 	_, ok := LeaderHint(errEmptyAddress)
 	require.False(t, ok)
 }
 
-func TestGRPCClientRetriesWriteOnLeaseNotHeld(t *testing.T) {
-	err := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": meta/root/state: coordinator lease held")
-	require.True(t, IsLeaseNotHeld(err))
+func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {
+	err := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": meta/root/state: coordinator grant held")
+	require.True(t, IsGrantNotHeld(err))
 	require.True(t, retryableWrite(err))
 	require.False(t, retryableRead(err))
 	require.False(t, IsNotLeader(err))
 }
 
-func TestGRPCClientRetriesTSOAcrossLeaseNotHeldEndpoint(t *testing.T) {
-	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+func TestGRPCClientRetriesTSOAcrossGrantNotHeldEndpoint(t *testing.T) {
+	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
-			tsoErrors: []error{leaseErr},
+			tsoErrors: []error{grantErr},
 		},
 		"holder": {
 			tsoResponses: []*coordpb.TsoResponse{{
@@ -285,11 +448,11 @@ func TestGRPCClientRetriesTSOAcrossLeaseNotHeldEndpoint(t *testing.T) {
 	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
 }
 
-func TestGRPCClientRetriesAllocIDAcrossLeaseNotHeldEndpoint(t *testing.T) {
-	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+func TestGRPCClientRetriesAllocIDAcrossGrantNotHeldEndpoint(t *testing.T) {
+	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
-			allocErrors: []error{leaseErr},
+			allocErrors: []error{grantErr},
 		},
 		"holder": {
 			allocResponses: []*coordpb.AllocIDResponse{{
@@ -311,11 +474,11 @@ func TestGRPCClientRetriesAllocIDAcrossLeaseNotHeldEndpoint(t *testing.T) {
 	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
 }
 
-func TestGRPCClientRetriesGetRegionByKeyAcrossLeaseNotHeldEndpoint(t *testing.T) {
-	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+func TestGRPCClientRetriesGetRegionByKeyAcrossGrantNotHeldEndpoint(t *testing.T) {
+	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
-			getErrors: []error{leaseErr},
+			getErrors: []error{grantErr},
 		},
 		"holder": {
 			getResponses: []*coordpb.GetRegionByKeyResponse{
@@ -351,14 +514,14 @@ func TestGRPCClientRetriesGetRegionByKeyAcrossLeaseNotHeldEndpoint(t *testing.T)
 	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
 }
 
-func TestGRPCClientRetriesTSOAfterFullLeaseMissRound(t *testing.T) {
-	leaseErr := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+func TestGRPCClientRetriesTSOAfterFullGrantMissRound(t *testing.T) {
+	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
-			tsoErrors: []error{leaseErr, leaseErr},
+			tsoErrors: []error{grantErr, grantErr},
 		},
 		"holder": {
-			tsoErrors: []error{leaseErr},
+			tsoErrors: []error{grantErr},
 			tsoResponses: []*coordpb.TsoResponse{{
 				Timestamp:        300,
 				Count:            1,
@@ -395,6 +558,44 @@ func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
 	require.Contains(t, err.Error(), "consumed_frontier=10 expected=11")
+}
+
+func TestGRPCClientRejectsAttachedEraForMonotoneAuthority(t *testing.T) {
+	t.Run("alloc_id", func(t *testing.T) {
+		cli := newScriptedCoordinatorClient(t, []string{"alloc-attached"}, map[string]*scriptedCoordinatorServer{
+			"alloc-attached": {
+				allocResponses: []*coordpb.AllocIDResponse{{
+					FirstId:          100,
+					Count:            1,
+					Era:              rootproto.AuthorityEraAttached,
+					ConsumedFrontier: 100,
+				}},
+			},
+		})
+
+		_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		require.Error(t, err)
+		require.True(t, IsInvalidWitness(err))
+		require.Contains(t, err.Error(), "attached era is only valid for metadata witnesses")
+	})
+
+	t.Run("tso", func(t *testing.T) {
+		cli := newScriptedCoordinatorClient(t, []string{"tso-attached"}, map[string]*scriptedCoordinatorServer{
+			"tso-attached": {
+				tsoResponses: []*coordpb.TsoResponse{{
+					Timestamp:        200,
+					Count:            1,
+					Era:              rootproto.AuthorityEraAttached,
+					ConsumedFrontier: 200,
+				}},
+			},
+		})
+
+		_, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+		require.Error(t, err)
+		require.True(t, IsInvalidWitness(err))
+		require.Contains(t, err.Error(), "attached era is only valid for metadata witnesses")
+	})
 }
 
 func TestGRPCClientRetriesStaleWitnessEraAcrossEndpoints(t *testing.T) {
@@ -776,7 +977,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 				{
 					FirstId:          100,
 					Count:            1,
-					Era:              rootproto.MandateWitnessEraSuppressed,
+					Era:              rootproto.AuthorityEraSuppressed,
 					ConsumedFrontier: 0,
 				},
 			},
@@ -790,7 +991,7 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
 					DescriptorRevision:         10,
 					RequiredDescriptorRevision: 8,
-					Era:                        rootproto.MandateWitnessEraSuppressed,
+					Era:                        rootproto.AuthorityEraSuppressed,
 					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
 					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
 					ServedByLeader:             true,
@@ -815,16 +1016,85 @@ func TestGRPCClientRejectsSuppressedReplyEvidence(t *testing.T) {
 	require.Contains(t, err.Error(), "reply evidence suppressed")
 }
 
+func TestGRPCClientRejectsMissingAuthorityEvidence(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"missing-cert"}, map[string]*scriptedCoordinatorServer{
+		"missing-cert": {
+			disableDefaultAuthorityEvidence: true,
+			allocResponses: []*coordpb.AllocIDResponse{
+				{
+					FirstId:          100,
+					Count:            1,
+					Era:              2,
+					ConsumedFrontier: 100,
+				},
+			},
+		},
+	})
+
+	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "authority evidence missing grant certificate")
+}
+
+func TestValidateAuthorityEvidenceBindsReplyUsageToEvidence(t *testing.T) {
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-2",
+		HolderID:        "holder",
+		Era:             2,
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		Duties: []rootproto.DutyGrant{{
+			DutyID: rootproto.DutyAllocID,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Bound:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 1_000},
+		}},
+	}
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	require.NoError(t, err)
+	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
+		Certificate: rootproto.GrantCertificate{
+			Grant:       grant,
+			SignerKeyID: rootproto.GrantSignerKeyID,
+			Signature:   rootproto.SignGrantBytes(payload),
+		},
+		Usage: rootproto.AuthorityUsage{
+			DutyID: rootproto.DutyAllocID,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Usage:  rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 100},
+		},
+	})
+
+	err = validateAuthorityEvidence("alloc_id", rootproto.DutyAllocID, 2, 0, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 900}, evidence)
+	require.Error(t, err)
+	require.True(t, IsInvalidWitness(err))
+	require.Contains(t, err.Error(), "usage outside grant")
+}
+
+func TestAdvanceWitnessEraFloorDoesNotPersistRejectedFloor(t *testing.T) {
+	cli := &GRPCClient{}
+	floor := witnessEraFloor{maxSeen: 5}
+
+	err := cli.advanceWitnessEraFloor("alloc_id", 4, 10, &floor)
+	require.Error(t, err)
+	require.True(t, IsStaleWitnessEra(err))
+	require.Zero(t, floor.retiredSeen)
+	require.Equal(t, uint64(5), floor.maxSeen)
+
+	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", 6, 0, &floor))
+	require.Zero(t, floor.retiredSeen)
+	require.Equal(t, uint64(6), floor.maxSeen)
+}
+
 func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
 		"mixed": {
 			allocResponses: []*coordpb.AllocIDResponse{
 				{
-					FirstId:           100,
-					Count:             1,
-					Era:               2,
-					ConsumedFrontier:  100,
-					ObservedLegacyEra: 2,
+					FirstId:                 100,
+					Count:                   1,
+					Era:                     2,
+					ConsumedFrontier:        100,
+					ObservedRetiredEraFloor: 2,
 				},
 			},
 		},
@@ -833,13 +1103,14 @@ func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
 	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.True(t, IsStaleWitnessEra(err))
-	require.Contains(t, err.Error(), "sealed_floor=2")
+	require.Contains(t, err.Error(), "retired_floor=2")
 }
 
 type scriptedCoordinatorServer struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	mu sync.Mutex
+	mu                              sync.Mutex
+	disableDefaultAuthorityEvidence bool
 
 	storeResponses []*coordpb.StoreHeartbeatResponse
 	storeErrors    []error
@@ -934,6 +1205,7 @@ func (s *scriptedCoordinatorServer) AllocID(_ context.Context, _ *coordpb.AllocI
 	}
 	resp := s.allocResponses[0]
 	s.allocResponses = s.allocResponses[1:]
+	s.attachDefaultAuthorityEvidence(resp)
 	return resp, nil
 }
 
@@ -954,6 +1226,7 @@ func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest
 	}
 	resp := s.tsoResponses[0]
 	s.tsoResponses = s.tsoResponses[1:]
+	s.attachDefaultAuthorityEvidence(resp)
 	return resp, nil
 }
 
@@ -971,7 +1244,61 @@ func (s *scriptedCoordinatorServer) GetRegionByKey(_ context.Context, _ *coordpb
 	}
 	resp := s.getResponses[0]
 	s.getResponses = s.getResponses[1:]
+	s.attachDefaultAuthorityEvidence(resp)
 	return resp, err
+}
+
+func (s *scriptedCoordinatorServer) attachDefaultAuthorityEvidence(resp any) {
+	if s == nil || s.disableDefaultAuthorityEvidence {
+		return
+	}
+	switch r := resp.(type) {
+	case *coordpb.AllocIDResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.AuthorityEraSuppressed || r.GetAuthorityEvidence() != nil {
+			return
+		}
+		r.AuthorityEvidence = defaultAuthorityEvidence(rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: r.GetConsumedFrontier()}, r.GetEra(), r.GetObservedRetiredEraFloor())
+	case *coordpb.TsoResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.AuthorityEraSuppressed || r.GetAuthorityEvidence() != nil {
+			return
+		}
+		r.AuthorityEvidence = defaultAuthorityEvidence(rootproto.DutyTSO, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: r.GetConsumedFrontier()}, r.GetEra(), r.GetObservedRetiredEraFloor())
+	case *coordpb.GetRegionByKeyResponse:
+		if r == nil || r.GetEra() == 0 || r.GetEra() == rootproto.AuthorityEraSuppressed || r.GetAuthorityEvidence() != nil {
+			return
+		}
+		r.AuthorityEvidence = defaultAuthorityEvidence(rootproto.DutyRegionLookup, rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: r.GetDescriptorRevision()}, r.GetEra(), r.GetObservedRetiredEraFloor())
+	}
+}
+
+func defaultAuthorityEvidence(duty rootproto.DutyID, usage rootproto.DutyBound, era, observedRetiredEra uint64) *metapb.RootAuthorityEvidence {
+	grant := rootproto.AuthorityGrant{
+		GrantID:         fmt.Sprintf("grant-%d", era),
+		HolderID:        "holder",
+		Era:             era,
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		IssuedRootToken: rootproto.AuthorityRootToken{Term: 1, Index: era},
+		Duties: []rootproto.DutyGrant{{
+			DutyID: duty,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Bound:  usage,
+		}},
+	}
+	payload, _ := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	cert := rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}
+	return metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
+		Certificate: cert,
+		Usage: rootproto.AuthorityUsage{
+			DutyID: duty,
+			Scope:  rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			Usage:  usage,
+		},
+		ObservedRetiredEraFloor: observedRetiredEra,
+	})
 }
 
 func newScriptedCoordinatorClient(t *testing.T, order []string, servers map[string]*scriptedCoordinatorServer) *GRPCClient {

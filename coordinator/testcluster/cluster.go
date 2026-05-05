@@ -132,7 +132,7 @@ func (c *Cluster) WaitLeader(excluded ...uint64) uint64 {
 			if _, excluded := skip[id]; excluded || store == nil {
 				continue
 			}
-			if store.IsLeader() {
+			if store.CanSubmitRootWrites() {
 				leaderID = id
 				return true
 			}
@@ -148,13 +148,13 @@ func (c *Cluster) LeaderService() (uint64, *coordserver.Service) {
 	return id, c.Services[id]
 }
 
-func (c *Cluster) ConfigureTenures(ttl, renewIn time.Duration) {
+func (c *Cluster) ConfigureAuthorityGrants(ttl, renewIn time.Duration) {
 	c.tb.Helper()
 	for id, svc := range c.Services {
 		if svc == nil {
 			continue
 		}
-		svc.ConfigureTenure("c"+strconv.FormatUint(id, 10), ttl, renewIn)
+		svc.ConfigureAuthorityGrant("c"+strconv.FormatUint(id, 10), ttl, renewIn)
 	}
 }
 

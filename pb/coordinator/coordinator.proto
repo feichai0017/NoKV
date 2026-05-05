@@ -400,13 +400,14 @@ message GetRegionByKeyResponse {
   // era identifies the detached/rooted authority instance that
   // served this reply when coordinator lease evidence is available.
   uint64 era = 12;
-  // observed_legacy_era carries the latest rooted sealed era
+  // observed_retired_era_floor carries the latest rooted sealed era
   // observed by the serving coordinator when it constructed this reply.
-  uint64 observed_legacy_era = 15;
+  uint64 observed_retired_era_floor = 15;
   // serving_class reports the client-visible serving contract used for this reply.
   ServingClass serving_class = 13;
   // sync_health reports the rooted catch-up health that justified this reply.
   SyncHealth sync_health = 14;
+  nokv.meta.v1.RootAuthorityEvidence authority_evidence = 16;
 }
 
 message AllocIDRequest {
@@ -420,7 +421,8 @@ message AllocIDResponse {
   // legality witness for monotone detached replies.
   uint64 era = 3;
   uint64 consumed_frontier = 4;
-  uint64 observed_legacy_era = 5;
+  uint64 observed_retired_era_floor = 5;
+  nokv.meta.v1.RootAuthorityEvidence authority_evidence = 6;
 }
 
 message TsoRequest {
@@ -434,7 +436,8 @@ message TsoResponse {
   // legality witness for monotone detached replies.
   uint64 era = 3;
   uint64 consumed_frontier = 4;
-  uint64 observed_legacy_era = 5;
+  uint64 observed_retired_era_floor = 5;
+  nokv.meta.v1.RootAuthorityEvidence authority_evidence = 6;
 }
 
 service Coordinator {

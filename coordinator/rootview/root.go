@@ -19,10 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/meta/topology"
 )
 
-var (
-	errTenureCommandUnsupported   = errors.New("coordinator/rootview: coordinator tenure command unsupported")
-	errHandoverCommandUnsupported = errors.New("coordinator/rootview: coordinator handover command unsupported")
-)
+var errGrantCommandUnsupported = errors.New("coordinator/rootview: coordinator grant command unsupported")
 
 // RootStorage persists control-plane mutations into durable metadata truth and
 // exposes the reconstructed rooted snapshot back to Coordinator.
@@ -30,10 +27,9 @@ type RootStorage interface {
 	Load() (Snapshot, error)
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
+	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 	Refresh() error
-	IsLeader() bool
+	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	Close() error
 }
@@ -51,10 +47,9 @@ type rootRuntimeBackend interface {
 	ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error)
 	TailNotify() <-chan struct{}
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
-	IsLeader() bool
+	CanSubmitRootWrites() bool
 	LeaderID() uint64
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
+	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 	Close() error
 }
 
@@ -69,14 +64,13 @@ type rootTailBackend interface {
 	ObserveCommitted() (rootstorage.ObservedCommitted, error)
 }
 
-type rootLeaderBackend interface {
-	IsLeader() bool
+type rootSubmitBackend interface {
+	CanSubmitRootWrites() bool
 	LeaderID() uint64
 }
 
 type rootCoordinatorProtocolBackend interface {
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
+	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
 type rootCloseBackend interface {
@@ -87,7 +81,7 @@ type rootBackendAdapter struct {
 	rootBackend
 	refresh  rootRefreshBackend
 	tail     rootTailBackend
-	leader   rootLeaderBackend
+	submit   rootSubmitBackend
 	protocol rootCoordinatorProtocolBackend
 	closer   rootCloseBackend
 }
@@ -127,32 +121,25 @@ func (a rootBackendAdapter) ObserveCommitted() (rootstorage.ObservedCommitted, e
 	return a.tail.ObserveCommitted()
 }
 
-func (a rootBackendAdapter) IsLeader() bool {
-	if a.leader == nil {
-		return true
+func (a rootBackendAdapter) CanSubmitRootWrites() bool {
+	if a.submit != nil {
+		return a.submit.CanSubmitRootWrites()
 	}
-	return a.leader.IsLeader()
+	return true
 }
 
 func (a rootBackendAdapter) LeaderID() uint64 {
-	if a.leader == nil {
-		return 0
+	if a.submit != nil {
+		return a.submit.LeaderID()
 	}
-	return a.leader.LeaderID()
+	return 0
 }
 
-func (a rootBackendAdapter) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+func (a rootBackendAdapter) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	if a.protocol == nil {
-		return rootstate.EunomiaState{}, errTenureCommandUnsupported
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, errGrantCommandUnsupported
 	}
-	return a.protocol.ApplyTenure(ctx, cmd)
-}
-
-func (a rootBackendAdapter) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	if a.protocol == nil {
-		return rootstate.EunomiaState{}, errHandoverCommandUnsupported
-	}
-	return a.protocol.ApplyHandover(ctx, cmd)
+	return a.protocol.ApplyGrant(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -178,8 +165,8 @@ func adaptRootBackend(root rootBackend) (rootRuntimeBackend, rootBackendCapabili
 	if tail, ok := root.(rootTailBackend); ok {
 		adapter.tail = tail
 	}
-	if leader, ok := root.(rootLeaderBackend); ok {
-		adapter.leader = leader
+	if submit, ok := root.(rootSubmitBackend); ok {
+		adapter.submit = submit
 	}
 	if protocol, ok := root.(rootCoordinatorProtocolBackend); ok {
 		adapter.protocol = protocol
@@ -277,11 +264,11 @@ func (s *RootStore) SubscribeTail(after rootstorage.TailToken) *rootstorage.Tail
 	return rootstorage.NewWatchedTailSubscription(after, s.ObserveTail, s.root.TailNotify(), s.WaitForTail)
 }
 
-func (s *RootStore) IsLeader() bool {
+func (s *RootStore) CanSubmitRootWrites() bool {
 	if s == nil || s.root == nil {
 		return true
 	}
-	return s.root.IsLeader()
+	return s.root.CanSubmitRootWrites()
 }
 
 func (s *RootStore) LeaderID() uint64 {
@@ -318,28 +305,21 @@ func (s *RootStore) SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent
 	})
 }
 
-func (s *RootStore) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+func (s *RootStore) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	if s == nil || s.root == nil {
-		return rootstate.EunomiaState{}, nil
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.EunomiaState{}, errTenureCommandUnsupported
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, errGrantCommandUnsupported
 	}
-	return s.applyAndReload(func() (rootstate.EunomiaState, error) {
-		return s.root.ApplyTenure(ctx, cmd)
+	var cert rootproto.GrantCertificate
+	state, err := s.applyAndReload(func() (rootstate.EunomiaState, error) {
+		var protocolState rootstate.EunomiaState
+		var applyErr error
+		protocolState, cert, applyErr = s.root.ApplyGrant(ctx, cmd)
+		return protocolState, applyErr
 	})
-}
-
-func (s *RootStore) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	if s == nil || s.root == nil {
-		return rootstate.EunomiaState{}, nil
-	}
-	if !s.supportsProtocol {
-		return rootstate.EunomiaState{}, errHandoverCommandUnsupported
-	}
-	return s.applyAndReload(func() (rootstate.EunomiaState, error) {
-		return s.root.ApplyHandover(ctx, cmd)
-	})
+	return state, cert, err
 }
 
 // Close releases storage resources.
@@ -369,6 +349,7 @@ func (s *RootStore) reload() error {
 	out := SnapshotFromRoot(snapshot)
 	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
@@ -397,25 +378,28 @@ func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (
 	if eunomiaStatePresent(protocolState) {
 		// Meta-root returns the authoritative Eunomia state even for HELD
 		// rejections. Merge it before returning the error so a losing
-		// coordinator stops campaigning on a stale local tenure mirror.
+		// coordinator stops campaigning on a stale local grant mirror.
 		s.mergeEunomiaState(protocolState)
 	}
 	if err != nil {
 		return protocolState, err
 	}
-	return protocolState, s.reload()
+	if err := s.reload(); err != nil {
+		return protocolState, err
+	}
+	if eunomiaStatePresent(protocolState) {
+		s.mergeEunomiaState(protocolState)
+	}
+	return protocolState, nil
 }
 
 func eunomiaStatePresent(state rootstate.EunomiaState) bool {
-	return state.Tenure.Present() ||
-		state.Legacy.Present() ||
-		state.Handover.HolderID != "" ||
-		state.Handover.LegacyEra != 0 ||
-		state.Handover.SuccessorEra != 0 ||
-		state.Handover.Stage != rootproto.HandoverStageUnspecified
+	return state.ActiveGrant.Present() ||
+		len(state.RetiredGrants) > 0 ||
+		len(state.GrantInheritances) > 0
 }
 
-// mergeEunomiaState overlays the Tenure/Legacy/Handover from an
+// mergeEunomiaState overlays the committed authority grant lifecycle from an
 // authoritative Apply response onto the cached snapshot. Other fields
 // (descriptors, allocator fences) are left untouched — the subsequent reload
 // or a later tail advance refreshes them.
@@ -423,10 +407,16 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	if s == nil {
 		return
 	}
+	incoming := Snapshot{
+		ActiveGrant:       state.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
+	}
 	s.mu.Lock()
-	s.snapshot.Tenure = state.Tenure
-	s.snapshot.Legacy = state.Legacy
-	s.snapshot.Handover = state.Handover
+	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
+	s.snapshot.ActiveGrant = merged.ActiveGrant
+	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), merged.RetiredGrants...)
+	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), merged.GrantInheritances...)
 	s.mu.Unlock()
 }
 
@@ -442,6 +432,7 @@ func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, toke
 	out.RootToken = token
 	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 }
@@ -466,6 +457,7 @@ func (s *RootStore) applyTailAdvance(advance rootstorage.TailAdvance) {
 	out.RootToken = token
 	out.CatchUpState = state
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 }

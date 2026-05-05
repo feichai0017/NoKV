@@ -25,8 +25,7 @@ const (
 	MetadataRoot_Append_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Append"
 	MetadataRoot_FenceAllocator_FullMethodName   = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
 	MetadataRoot_Status_FullMethodName           = "/nokv.meta.v1.MetadataRoot/Status"
-	MetadataRoot_ApplyTenure_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ApplyTenure"
-	MetadataRoot_ApplyHandover_FullMethodName    = "/nokv.meta.v1.MetadataRoot/ApplyHandover"
+	MetadataRoot_ApplyGrant_FullMethodName       = "/nokv.meta.v1.MetadataRoot/ApplyGrant"
 	MetadataRoot_ObserveCommitted_FullMethodName = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
 	MetadataRoot_ObserveTail_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ObserveTail"
 	MetadataRoot_WaitTail_FullMethodName         = "/nokv.meta.v1.MetadataRoot/WaitTail"
@@ -40,8 +39,7 @@ type MetadataRootClient interface {
 	Append(ctx context.Context, in *MetadataRootAppendRequest, opts ...grpc.CallOption) (*MetadataRootAppendResponse, error)
 	FenceAllocator(ctx context.Context, in *MetadataRootFenceAllocatorRequest, opts ...grpc.CallOption) (*MetadataRootFenceAllocatorResponse, error)
 	Status(ctx context.Context, in *MetadataRootStatusRequest, opts ...grpc.CallOption) (*MetadataRootStatusResponse, error)
-	ApplyTenure(ctx context.Context, in *MetadataRootApplyTenureRequest, opts ...grpc.CallOption) (*MetadataRootApplyTenureResponse, error)
-	ApplyHandover(ctx context.Context, in *MetadataRootApplyHandoverRequest, opts ...grpc.CallOption) (*MetadataRootApplyHandoverResponse, error)
+	ApplyGrant(ctx context.Context, in *MetadataRootApplyGrantRequest, opts ...grpc.CallOption) (*MetadataRootApplyGrantResponse, error)
 	ObserveCommitted(ctx context.Context, in *MetadataRootObserveCommittedRequest, opts ...grpc.CallOption) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(ctx context.Context, in *MetadataRootObserveTailRequest, opts ...grpc.CallOption) (*MetadataRootObserveTailResponse, error)
 	WaitTail(ctx context.Context, in *MetadataRootWaitTailRequest, opts ...grpc.CallOption) (*MetadataRootWaitTailResponse, error)
@@ -95,20 +93,10 @@ func (c *metadataRootClient) Status(ctx context.Context, in *MetadataRootStatusR
 	return out, nil
 }
 
-func (c *metadataRootClient) ApplyTenure(ctx context.Context, in *MetadataRootApplyTenureRequest, opts ...grpc.CallOption) (*MetadataRootApplyTenureResponse, error) {
+func (c *metadataRootClient) ApplyGrant(ctx context.Context, in *MetadataRootApplyGrantRequest, opts ...grpc.CallOption) (*MetadataRootApplyGrantResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyTenureResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyTenure_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *metadataRootClient) ApplyHandover(ctx context.Context, in *MetadataRootApplyHandoverRequest, opts ...grpc.CallOption) (*MetadataRootApplyHandoverResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyHandoverResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyHandover_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyGrantResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyGrant_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +141,7 @@ type MetadataRootServer interface {
 	Append(context.Context, *MetadataRootAppendRequest) (*MetadataRootAppendResponse, error)
 	FenceAllocator(context.Context, *MetadataRootFenceAllocatorRequest) (*MetadataRootFenceAllocatorResponse, error)
 	Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error)
-	ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error)
-	ApplyHandover(context.Context, *MetadataRootApplyHandoverRequest) (*MetadataRootApplyHandoverResponse, error)
+	ApplyGrant(context.Context, *MetadataRootApplyGrantRequest) (*MetadataRootApplyGrantResponse, error)
 	ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(context.Context, *MetadataRootObserveTailRequest) (*MetadataRootObserveTailResponse, error)
 	WaitTail(context.Context, *MetadataRootWaitTailRequest) (*MetadataRootWaitTailResponse, error)
@@ -179,11 +166,8 @@ func (UnimplementedMetadataRootServer) FenceAllocator(context.Context, *Metadata
 func (UnimplementedMetadataRootServer) Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
 }
-func (UnimplementedMetadataRootServer) ApplyTenure(context.Context, *MetadataRootApplyTenureRequest) (*MetadataRootApplyTenureResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyTenure not implemented")
-}
-func (UnimplementedMetadataRootServer) ApplyHandover(context.Context, *MetadataRootApplyHandoverRequest) (*MetadataRootApplyHandoverResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyHandover not implemented")
+func (UnimplementedMetadataRootServer) ApplyGrant(context.Context, *MetadataRootApplyGrantRequest) (*MetadataRootApplyGrantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyGrant not implemented")
 }
 func (UnimplementedMetadataRootServer) ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveCommitted not implemented")
@@ -286,38 +270,20 @@ func _MetadataRoot_Status_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_ApplyTenure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyTenureRequest)
+func _MetadataRoot_ApplyGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyGrantRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyTenure(ctx, in)
+		return srv.(MetadataRootServer).ApplyGrant(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_ApplyTenure_FullMethodName,
+		FullMethod: MetadataRoot_ApplyGrant_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyTenure(ctx, req.(*MetadataRootApplyTenureRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _MetadataRoot_ApplyHandover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyHandoverRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyHandover(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MetadataRoot_ApplyHandover_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyHandover(ctx, req.(*MetadataRootApplyHandoverRequest))
+		return srv.(MetadataRootServer).ApplyGrant(ctx, req.(*MetadataRootApplyGrantRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -400,12 +366,8 @@ var MetadataRoot_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataRoot_Status_Handler,
 		},
 		{
-			MethodName: "ApplyTenure",
-			Handler:    _MetadataRoot_ApplyTenure_Handler,
-		},
-		{
-			MethodName: "ApplyHandover",
-			Handler:    _MetadataRoot_ApplyHandover_Handler,
+			MethodName: "ApplyGrant",
+			Handler:    _MetadataRoot_ApplyGrant_Handler,
 		},
 		{
 			MethodName: "ObserveCommitted",

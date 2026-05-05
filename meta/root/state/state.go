@@ -1,6 +1,6 @@
 // Package state holds the compact applied root state of the metadata
-// kernel (State, Tenure/Legacy/Handover, pending peer/range
-// changes) and the ApplyEventToState / ApplyEventToSnapshot functions
+// kernel (State, grant lifecycle, pending peer/range changes) and the
+// ApplyEventToState / ApplyEventToSnapshot functions
 // that drive a rooted event log into that state.
 //
 // This package is the only place where the meaning of a typed rooted
@@ -34,45 +34,14 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch    uint64
-	MembershipEpoch uint64
-	LastCommitted   Cursor
-	IDFence         uint64
-	TSOFence        uint64
-	Tenure          Tenure
-	Legacy          Legacy
-	Handover        Handover
-}
-
-// Tenure is the compact control-plane owner lease stored in root
-// truth. It is separate from raft leadership: it gates coordinator-only duties
-// such as TSO, ID allocation, and scheduler ownership in separated deployments.
-type Tenure struct {
-	HolderID        string
-	ExpiresUnixNano int64
-	Era             uint64
-	IssuedAt        Cursor
-	Mandate         uint32
-	LineageDigest   string
-}
-
-type Legacy struct {
-	HolderID  string
-	Era       uint64
-	Mandate   uint32
-	Frontiers rootproto.MandateFrontiers
-	SealedAt  Cursor
-}
-
-type Handover struct {
-	HolderID     string
-	LegacyEra    uint64
-	SuccessorEra uint64
-	LegacyDigest string
-	Stage        rootproto.HandoverStage
-	ConfirmedAt  Cursor
-	ClosedAt     Cursor
-	ReattachedAt Cursor
+	ClusterEpoch      uint64
+	MembershipEpoch   uint64
+	LastCommitted     Cursor
+	IDFence           uint64
+	TSOFence          uint64
+	ActiveGrant       rootproto.AuthorityGrant
+	RetiredGrants     []rootproto.GrantRetirement
+	GrantInheritances []rootproto.GrantInheritance
 }
 
 type StoreMembershipState uint8
@@ -171,10 +140,6 @@ func SubtreeAuthorityID(mount string, rootInode, era uint64) string {
 	return fmt.Sprintf("%s/%d#%d", mount, rootInode, era)
 }
 
-func (l Tenure) ActiveAt(nowUnixNano int64) bool {
-	return l.HolderID != "" && l.ExpiresUnixNano > nowUnixNano
-}
-
 type PendingPeerChangeKind uint8
 
 const (
@@ -233,6 +198,10 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	state := snapshot.State
+	state.ActiveGrant.Duties = append([]rootproto.DutyGrant(nil), state.ActiveGrant.Duties...)
+	state.ActiveGrant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), state.ActiveGrant.PredecessorRetirements...)
+	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
+	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	out := Snapshot{
 		State:               state,
 		Stores:              CloneStoreMemberships(snapshot.Stores),
@@ -447,12 +416,6 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > state.TSOFence {
 			state.TSOFence = event.AllocatorFence.Minimum
 		}
-	case rootevent.KindTenure:
-		applyTenureToState(state, cursor, event)
-	case rootevent.KindLegacy:
-		applyLegacyToState(state, cursor, event)
-	case rootevent.KindHandover:
-		applyHandoverToState(state, cursor, event)
 	case rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
@@ -463,6 +426,12 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		rootevent.KindQuotaFenceUpdated:
 		// Filesystem namespace authority events advance the root cursor but do
 		// not mutate cluster topology or store membership epochs.
+	case rootevent.KindGrantIssued:
+		applyGrantIssuedToState(state, cursor, event)
+	case rootevent.KindGrantSealed, rootevent.KindGrantRetired:
+		applyGrantRetirementToState(state, cursor, event)
+	case rootevent.KindGrantInherited:
+		applyGrantInheritanceToState(state, cursor, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
@@ -483,92 +452,82 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	state.LastCommitted = cursor
 }
 
-func applyLegacyToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.Legacy == nil {
+func applyGrantIssuedToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.Grant == nil {
 		return
 	}
-	seal := event.Legacy
-	sealedAt := coalesceCursor(seal.SealedAt, cursor)
-	mandate := seal.Mandate
-	if mandate == 0 {
-		mandate = state.Tenure.Mandate
-		if mandate == 0 {
-			mandate = rootproto.MandateDefault
+	grant := *event.Grant
+	grant.Duties = append([]rootproto.DutyGrant(nil), event.Grant.Duties...)
+	grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), event.Grant.PredecessorRetirements...)
+	if grant.IssuedAt.Term == 0 && grant.IssuedAt.Index == 0 {
+		grant.IssuedAt = cursor
+	}
+	if grant.IssuedRootToken.Term == 0 && grant.IssuedRootToken.Index == 0 && grant.IssuedRootToken.Revision == 0 {
+		grant.IssuedRootToken = rootproto.AuthorityRootToken{Term: cursor.Term, Index: cursor.Index}
+	}
+	state.ActiveGrant = grant
+	for _, duty := range grant.Duties {
+		if duty.Bound.Kind != rootproto.DutyBoundMonotone {
+			continue
+		}
+		switch duty.DutyID {
+		case rootproto.DutyAllocID:
+			if duty.Bound.MonotoneUpper > state.IDFence {
+				state.IDFence = duty.Bound.MonotoneUpper
+			}
+		case rootproto.DutyTSO:
+			if duty.Bound.MonotoneUpper > state.TSOFence {
+				state.TSOFence = duty.Bound.MonotoneUpper
+			}
 		}
 	}
-	state.Legacy = Legacy{
-		HolderID:  seal.HolderID,
-		Era:       seal.Era,
-		Mandate:   mandate,
-		Frontiers: seal.Frontiers,
-		SealedAt:  sealedAt,
-	}
-	state.Handover = Handover{}
 }
 
-func applyHandoverToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.Handover == nil {
+func applyGrantRetirementToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.GrantRetirement == nil {
 		return
 	}
-	handover := event.Handover
-	confirmedAt := coalesceCursor(handover.ConfirmedAt, cursor)
-	closedAt := coalesceCursor(handover.ClosedAt, cursor)
-	reattachedAt := coalesceCursor(handover.ReattachedAt, cursor)
-	state.Handover = Handover{
-		HolderID:     handover.HolderID,
-		LegacyEra:    handover.LegacyEra,
-		SuccessorEra: handover.SuccessorEra,
-		LegacyDigest: handover.LegacyDigest,
-		Stage:        handover.Stage,
-		ConfirmedAt:  confirmedAt,
-		ClosedAt:     closedAt,
-		ReattachedAt: reattachedAt,
+	retirement := *event.GrantRetirement
+	retirement.Bounds = append([]rootproto.DutyGrant(nil), event.GrantRetirement.Bounds...)
+	if retirement.RetiredAt.Term == 0 && retirement.RetiredAt.Index == 0 {
+		retirement.RetiredAt = cursor
+	}
+	if retirement.Mode == rootproto.GrantRetirementUnspecified && event.Kind == rootevent.KindGrantSealed {
+		retirement.Mode = rootproto.GrantRetirementSealedExact
+	}
+	if retirement.Mode == rootproto.GrantRetirementUnspecified && event.Kind == rootevent.KindGrantRetired {
+		retirement.Mode = rootproto.GrantRetirementExpiredBound
+	}
+	replaced := false
+	for i := range state.RetiredGrants {
+		if state.RetiredGrants[i].GrantID == retirement.GrantID {
+			state.RetiredGrants[i] = retirement
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		state.RetiredGrants = append(state.RetiredGrants, retirement)
+	}
+	if state.ActiveGrant.GrantID == retirement.GrantID {
+		state.ActiveGrant = rootproto.AuthorityGrant{}
 	}
 }
 
-func applyTenureToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.Tenure == nil {
+func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.GrantInheritance == nil {
 		return
 	}
-	lease := event.Tenure
-	issuedAt := state.Tenure.IssuedAt
-	issuedAt = coalesceCursor(lease.IssuedAt, issuedAt)
-	if issuedAt.Term == 0 && issuedAt.Index == 0 {
-		issuedAt = cursor
+	inheritance := *event.GrantInheritance
+	if inheritance.InheritedAt.Term == 0 && inheritance.InheritedAt.Index == 0 {
+		inheritance.InheritedAt = cursor
 	}
-	if lease.Era == 0 || lease.Era != state.Tenure.Era {
-		issuedAt = cursor
+	state.GrantInheritances = append(state.GrantInheritances, inheritance)
+	for i := range state.RetiredGrants {
+		if state.RetiredGrants[i].GrantID == inheritance.PredecessorGrantID {
+			state.RetiredGrants[i].InheritedByGrantID = inheritance.SuccessorGrantID
+		}
 	}
-	mandate := lease.Mandate
-	if mandate == 0 {
-		mandate = rootproto.MandateDefault
-	}
-	lineageDigest := lease.LineageDigest
-	if lineageDigest == "" && lease.Era == state.Tenure.Era {
-		lineageDigest = state.Tenure.LineageDigest
-	}
-	state.Tenure = Tenure{
-		HolderID:        lease.HolderID,
-		ExpiresUnixNano: lease.ExpiresUnixNano,
-		Era:             lease.Era,
-		IssuedAt:        issuedAt,
-		Mandate:         mandate,
-		LineageDigest:   lineageDigest,
-	}
-	frontiers := lease.Frontiers
-	if frontier := frontiers.Frontier(rootproto.MandateAllocID); frontier > state.IDFence {
-		state.IDFence = frontier
-	}
-	if frontier := frontiers.Frontier(rootproto.MandateTSO); frontier > state.TSOFence {
-		state.TSOFence = frontier
-	}
-}
-
-func coalesceCursor(eventCursor, fallback Cursor) Cursor {
-	if eventCursor.Term != 0 || eventCursor.Index != 0 {
-		return Cursor{Term: eventCursor.Term, Index: eventCursor.Index}
-	}
-	return fallback
 }
 
 // NextCursor returns the next ordered root cursor.

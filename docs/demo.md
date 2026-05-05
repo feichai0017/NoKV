@@ -44,7 +44,7 @@ Meta-root (`2380/2381/2382`) is exposed so host-side tools like
 `nokv-config` can query rooted state directly for debugging.
 
 **For production, don't expose meta-root publicly.** The gRPC API accepts
-`ApplyTenure` and `ApplyHandover` which are lease-gated but still
+`ApplyGrant`, which can issue, retire, and inherit authority grants. It is
 structurally sensitive. To opt out, delete the `ports:` block under
 `meta-root-1`, `meta-root-2`, `meta-root-3` in `docker-compose.yml`. The
 cluster keeps working since coordinator and fsmeta dial meta-root over the
@@ -58,10 +58,10 @@ host-side client experiments, don't expose publicly.
 Run them straight from the terminal:
 
 - **Stop the active coordinator** — `docker stop nokv-coordinator-1`. The
-  Eunomia lease moves to a standby in 1–3 s; watch the era bump on the
+  Eunomia grant moves to a standby in 1–3 s; watch the era bump on the
   surviving coordinators' `/debug/vars`.
 - **Stop the raft leader meta-root** — `docker stop nokv-meta-root-1`. Raft
-  election lands on a surviving peer; coord lease may churn through one
+  election lands on a surviving peer; the coordinator grant may churn through one
   era before settling (~17 s total recovery).
 - **Start the stopped container** — `docker start nokv-coordinator-1`. It
   rejoins quietly as a standby.
@@ -70,5 +70,5 @@ Run them straight from the terminal:
 
 - [docs/config.md](config.md) — `raft_config.example.json` schema (two-layer
   model: address directory vs bootstrap seed)
-- [docs/coordinator.md](coordinator.md) — Eunomia lease lifecycle
+- [docs/coordinator.md](coordinator.md) — Eunomia grant lifecycle
 - [docs/rooted_truth.md](rooted_truth.md) — meta-root internals

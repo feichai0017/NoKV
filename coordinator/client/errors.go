@@ -26,7 +26,7 @@ var (
 )
 
 const errNotLeaderPrefix = "coordinator not leader"
-const errLeaseNotHeldPrefix = "coordinator lease not held"
+const errGrantNotHeldPrefix = "coordinator grant not held"
 
 // IsEmptyAddress reports whether err represents an empty coordinator address set.
 func IsEmptyAddress(err error) bool {
@@ -60,12 +60,12 @@ func IsNotLeader(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errNotLeaderPrefix)
 }
 
-// IsLeaseNotHeld reports whether err is a coordinator rejecting a
-// lease-gated write because it is not the current Tenure holder.
+// IsGrantNotHeld reports whether err is a coordinator rejecting a
+// grant-gated write because it is not the current grant holder.
 // Treated as retryable: another endpoint in the client's pool may hold the
-// lease.
-func IsLeaseNotHeld(err error) bool {
-	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errLeaseNotHeldPrefix)
+// grant.
+func IsGrantNotHeld(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errGrantNotHeldPrefix)
 }
 
 // LeaderHint extracts leader_id=N from not-leader coordinator errors when present.

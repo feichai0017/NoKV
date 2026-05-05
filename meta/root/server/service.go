@@ -39,8 +39,7 @@ type tailBackend interface {
 }
 
 type leaseBackend interface {
-	ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error)
-	ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error)
+	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -124,46 +123,33 @@ func (s *Service) Status(context.Context, *metapb.MetadataRootStatusRequest) (*m
 	return &metapb.MetadataRootStatusResponse{IsLeader: true}, nil
 }
 
-func (s *Service) ApplyTenure(ctx context.Context, req *metapb.MetadataRootApplyTenureRequest) (*metapb.MetadataRootApplyTenureResponse, error) {
+func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyGrantRequest) (*metapb.MetadataRootApplyGrantResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyTenureResponse{}, nil
+		return &metapb.MetadataRootApplyGrantResponse{}, nil
 	}
 	backend, err := s.coordinatorProtocolBackend()
 	if err != nil {
 		return nil, err
 	}
-	cmd := metawire.RootTenureCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyTenure(ctx, cmd)
+	cmd := metawire.RootGrantCommandFromProto(req.GetCommand())
+	protocolState, cert, err := backend.ApplyGrant(ctx, cmd)
 	if err != nil {
 		if errors.Is(err, rootstate.ErrPrimacy) {
-			return &metapb.MetadataRootApplyTenureResponse{
+			return &metapb.MetadataRootApplyGrantResponse{
 				State:  metawire.RootEunomiaStateToProto(protocolState),
-				Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD,
+				Status: metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_HELD,
 			}, nil
 		}
-		return nil, coordinatorLeaseApplyRPCError(cmd.Kind, err)
+		return nil, coordinatorGrantApplyRPCError(cmd.Kind, err)
 	}
-	return &metapb.MetadataRootApplyTenureResponse{
-		State:  metawire.RootEunomiaStateToProto(protocolState),
-		Status: metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED,
-	}, nil
-}
-
-func (s *Service) ApplyHandover(ctx context.Context, req *metapb.MetadataRootApplyHandoverRequest) (*metapb.MetadataRootApplyHandoverResponse, error) {
-	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyHandoverResponse{}, nil
+	applyStatus := metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_GRANTED
+	if cmd.Kind == rootproto.GrantActSeal || cmd.Kind == rootproto.GrantActRetireExpired || cmd.Kind == rootproto.GrantActInherit {
+		applyStatus = metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_RETIRED
 	}
-	backend, err := s.coordinatorProtocolBackend()
-	if err != nil {
-		return nil, err
-	}
-	cmd := metawire.RootHandoverCommandFromProto(req.GetCommand())
-	protocolState, err := backend.ApplyHandover(ctx, cmd)
-	if err != nil {
-		return nil, coordinatorHandoverApplyRPCError(cmd.Kind, err)
-	}
-	return &metapb.MetadataRootApplyHandoverResponse{
-		State: metawire.RootEunomiaStateToProto(protocolState),
+	return &metapb.MetadataRootApplyGrantResponse{
+		State:       metawire.RootEunomiaStateToProto(protocolState),
+		Status:      applyStatus,
+		Certificate: metawire.RootGrantCertificateToProto(cert),
 	}, nil
 }
 
@@ -269,50 +255,21 @@ func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
 	return backend, nil
 }
 
-func coordinatorLeaseApplyRPCError(kind rootproto.TenureAct, err error) error {
+func coordinatorGrantApplyRPCError(kind rootproto.GrantAct, err error) error {
 	switch kind {
-	case rootproto.TenureActIssue:
+	case rootproto.GrantActIssue:
 		switch {
-		case errors.Is(err, rootstate.ErrInvalidTenure):
+		case errors.Is(err, rootstate.ErrInvalidGrant):
 			return statusInvalidArgument(err.Error())
 		case errors.Is(err, rootstate.ErrInheritance):
 			return rpcError(err)
 		}
-	case rootproto.TenureActRelease:
+	case rootproto.GrantActSeal, rootproto.GrantActRetireExpired, rootproto.GrantActInherit:
 		switch {
 		case errors.Is(err, rootstate.ErrPrimacy),
-			errors.Is(err, rootstate.ErrInvalidTenure):
+			errors.Is(err, rootstate.ErrInvalidGrant),
+			errors.Is(err, rootstate.ErrFinality):
 			return statusFailedPrecondition(err)
-		}
-	}
-	return rpcError(err)
-}
-
-func coordinatorHandoverApplyRPCError(kind rootproto.HandoverAct, err error) error {
-	if errors.Is(err, rootstate.ErrInvalidTenure) {
-		return statusInvalidArgument(err.Error())
-	}
-	switch kind {
-	case rootproto.HandoverActSeal:
-		if errors.Is(err, rootstate.ErrPrimacy) {
-			return rpcError(err)
-		}
-	case rootproto.HandoverActConfirm:
-		if errors.Is(err, rootstate.ErrFinality) {
-			return statusInvalidArgument(err.Error())
-		}
-		if errors.Is(err, rootstate.ErrPrimacy) {
-			return rpcError(err)
-		}
-	case rootproto.HandoverActClose:
-		if errors.Is(err, rootstate.ErrPrimacy) ||
-			errors.Is(err, rootstate.ErrFinality) {
-			return rpcError(err)
-		}
-	case rootproto.HandoverActReattach:
-		if errors.Is(err, rootstate.ErrPrimacy) ||
-			errors.Is(err, rootstate.ErrFinality) {
-			return rpcError(err)
 		}
 	}
 	return rpcError(err)

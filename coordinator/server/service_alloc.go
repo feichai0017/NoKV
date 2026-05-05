@@ -8,7 +8,6 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc/codes"
@@ -180,6 +179,35 @@ func (s *Service) currentTSOFenceLocked() uint64 {
 	return maxUint64(s.tso.Current(), s.tsoWindowHigh)
 }
 
+func (s *Service) installGrantAllocatorWindowsLocked(grant rootproto.AuthorityGrant) (bool, bool) {
+	if s == nil || !grant.Present() {
+		return false, false
+	}
+	s.grantMu.RLock()
+	holderID := s.coordinatorID
+	s.grantMu.RUnlock()
+	if holderID == "" || grant.HolderID != holderID {
+		return false, false
+	}
+	idUpper, idGranted := grantMonotoneUpper(grant, rootproto.DutyAllocID)
+	if idGranted && idUpper > s.idWindowHigh {
+		s.idWindowHigh = idUpper
+	}
+	tsoUpper, tsoGranted := grantMonotoneUpper(grant, rootproto.DutyTSO)
+	if tsoGranted && tsoUpper > s.tsoWindowHigh {
+		s.tsoWindowHigh = tsoUpper
+	}
+	return idGranted, tsoGranted
+}
+
+func grantMonotoneUpper(grant rootproto.AuthorityGrant, duty rootproto.DutyID) (uint64, bool) {
+	dutyGrant, ok := grant.Duty(duty)
+	if !ok || dutyGrant.Bound.Kind != rootproto.DutyBoundMonotone {
+		return 0, false
+	}
+	return dutyGrant.Bound.MonotoneUpper, true
+}
+
 func (s *Service) fenceIDFromStorage(fence uint64) {
 	if s == nil {
 		return
@@ -234,7 +262,7 @@ func maxUint64(a, b uint64) uint64 {
 // AllocID allocates one or more globally unique ids.
 func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
@@ -243,12 +271,14 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	if count == 0 {
 		count = 1
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.MandateAllocID); err != nil {
+	done, err := s.beginDutyAdmission(ctx, rootproto.DutyAllocID)
+	if err != nil {
 		return nil, err
 	}
+	defer done()
 	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -256,21 +286,25 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease, seal := s.currentTenureView()
-	witness := s.monotoneReplyEvidence(rootproto.MandateAllocID, lease, allocationConsumedFrontier(first, count))
+	consumedFrontier := allocationConsumedFrontier(first, count)
+	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	if err != nil {
+		return nil, err
+	}
 	return &coordpb.AllocIDResponse{
-		FirstId:           first,
-		Count:             count,
-		Era:               witness.Era,
-		ConsumedFrontier:  witness.ConsumedFrontier,
-		ObservedLegacyEra: seal.Era,
+		FirstId:                 first,
+		Count:                   count,
+		Era:                     proof.Grant.Era,
+		ConsumedFrontier:        consumedFrontier,
+		ObservedRetiredEraFloor: proof.ObservedRetiredEraFloor,
+		AuthorityEvidence:       proof.Evidence,
 	}, nil
 }
 
 // Tso allocates one or more timestamps.
 func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
@@ -279,12 +313,14 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	if count == 0 {
 		count = 1
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
-	if err := s.requireDutyAdmission(ctx, rootproto.MandateTSO); err != nil {
+	done, err := s.beginDutyAdmission(ctx, rootproto.DutyTSO)
+	if err != nil {
 		return nil, err
 	}
+	defer done()
 	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
@@ -292,19 +328,19 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 		}
 		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
 	}
-	lease, seal := s.currentTenureView()
-	witness := s.monotoneReplyEvidence(rootproto.MandateTSO, lease, allocationConsumedFrontier(first, got))
+	consumedFrontier := allocationConsumedFrontier(first, got)
+	proof, err := s.authorityEvidenceSnapshot(ctx, rootproto.DutyTSO, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
+	if err != nil {
+		return nil, err
+	}
 	return &coordpb.TsoResponse{
-		Timestamp:         first,
-		Count:             got,
-		Era:               witness.Era,
-		ConsumedFrontier:  witness.ConsumedFrontier,
-		ObservedLegacyEra: seal.Era,
+		Timestamp:               first,
+		Count:                   got,
+		Era:                     proof.Grant.Era,
+		ConsumedFrontier:        consumedFrontier,
+		ObservedRetiredEraFloor: proof.ObservedRetiredEraFloor,
+		AuthorityEvidence:       proof.Evidence,
 	}, nil
-}
-
-func (s *Service) monotoneReplyEvidence(mandate uint32, lease rootstate.Tenure, consumedFrontier uint64) rootproto.MandateWitness {
-	return rootproto.NewMandateWitness(mandate, lease.Era, consumedFrontier)
 }
 
 func (s *Service) metadataReplyEra(era uint64) uint64 {

@@ -16,9 +16,9 @@ func TestRootStateErrorsExposeStableKinds(t *testing.T) {
 		kind nokverrors.Kind
 	}{
 		{rootstate.ErrPrimacy, nokverrors.KindConflict},
-		{rootstate.ErrInvalidTenure, nokverrors.KindInvalidArgument},
+		{rootstate.ErrInvalidGrant, nokverrors.KindInvalidArgument},
 		{rootstate.ErrInheritance, nokverrors.KindProtocolViolation},
-		{rootstate.ErrMandate, nokverrors.KindProtocolViolation},
+		{rootstate.ErrDuty, nokverrors.KindProtocolViolation},
 		{rootstate.ErrSilence, nokverrors.KindProtocolViolation},
 		{rootstate.ErrFinality, nokverrors.KindConflict},
 	}

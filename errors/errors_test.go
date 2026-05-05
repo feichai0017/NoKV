@@ -80,6 +80,7 @@ func TestContextAndGRPCStatusKinds(t *testing.T) {
 	require.Equal(t, KindUnavailable, KindOf(status.Error(codes.FailedPrecondition, "coordinator root unavailable")))
 	require.Equal(t, KindStaleEpoch, KindOf(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
 	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator not leader (leader_id=2)")))
+	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator grant not held")))
 	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator lease not held")))
 	require.Equal(t, KindProtocolViolation, KindOf(status.Error(codes.FailedPrecondition, "invalid protocol state")))
 	require.Equal(t, KindAborted, KindOf(status.Error(codes.FailedPrecondition, New(KindAborted, "fsmeta: mount is retired").Error())))

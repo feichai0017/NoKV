@@ -1,8 +1,10 @@
 package protocol
 
 import (
-	"fmt"
-	"math/bits"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"os"
 	"strings"
 )
 
@@ -12,386 +14,285 @@ type Cursor struct {
 	Index uint64
 }
 
-const (
-	MandateAllocID uint32 = 1 << iota
-	MandateTSO
-	MandateGetRegionByKey
-	MandateLeaseStart
-)
-
-const MandateDefault = MandateAllocID | MandateTSO | MandateGetRegionByKey
-
-type MandateFrontier struct {
-	Mandate  uint32
-	Frontier uint64
-}
-
-const mandateMaskAll = MandateAllocID | MandateTSO | MandateGetRegionByKey | MandateLeaseStart
-
-var mandateOrder = [...]uint32{
-	MandateAllocID,
-	MandateTSO,
-	MandateGetRegionByKey,
-	MandateLeaseStart,
-}
-
-// MandateFrontiers is the protocol-level duty frontier algebra carried
-// across rooted handoff, verifier, and audit boundaries.
-type MandateFrontiers struct {
-	values  [len(mandateOrder)]uint64
-	present uint32
-}
-
-type InheritanceCoverage struct {
-	Mandate          uint32
-	RequiredFrontier uint64
-	ActualFrontier   uint64
-	Covered          bool
-}
-
-type InheritanceStatus struct {
-	Checks []InheritanceCoverage
-}
-
-type AuthorityHandoffRecord struct {
-	HolderID        string
-	ExpiresUnixNano int64
-	Era             uint64
-	IssuedAt        Cursor
-	Mandate         uint32
-	LineageDigest   string
-	Frontiers       MandateFrontiers
-}
-
-type MandateWitness struct {
-	Mandate          uint32
-	Era              uint64
-	ConsumedFrontier uint64
-}
-
-type HandoverStage uint8
+type DutyID string
 
 const (
-	HandoverStageUnspecified HandoverStage = iota
-	HandoverStageConfirmed
-	HandoverStageClosed
-	HandoverStageReattached
+	DutyAllocID         DutyID = "alloc_id"
+	DutyTSO             DutyID = "tso"
+	DutyRegionLookup    DutyID = "region_lookup"
+	DutyLeaseStart      DutyID = "lease_start"
+	DutyFSMetaNamespace DutyID = "fsmeta_namespace"
+	DutyQuotaFence      DutyID = "quota_fence"
 )
+
+type DutyScopeKind uint8
 
 const (
-	MandateWitnessEraAttached   uint64 = 0
-	MandateWitnessEraSuppressed uint64 = ^uint64(0)
+	DutyScopeUnspecified DutyScopeKind = iota
+	DutyScopeGlobal
+	DutyScopeMount
+	DutyScopeSubtree
+	DutyScopeRegionRange
 )
 
-func (s HandoverStage) String() string {
-	switch s {
-	case HandoverStageUnspecified:
-		return "unspecified"
-	case HandoverStageConfirmed:
-		return "confirmed"
-	case HandoverStageClosed:
-		return "closed"
-	case HandoverStageReattached:
-		return "reattached"
-	default:
-		return "unknown"
-	}
+type DutyScope struct {
+	Kind        DutyScopeKind
+	MountID     string
+	SubtreeRoot uint64
+	StartKey    []byte
+	EndKey      []byte
 }
 
-type HandoverWitness struct {
-	LegacyEra                 uint64
-	LegacyDigest              string
-	SuccessorPresent          bool
-	Inheritance               InheritanceStatus
-	SuccessorLineageSatisfied bool
-	SealedEraRetired          bool
-	Stage                     HandoverStage
-}
-
-type HandoverStatus struct {
-	Stage HandoverStage
-}
-
-type TenureAct uint8
+type DutyBoundKind uint8
 
 const (
-	TenureActUnknown TenureAct = iota
-	TenureActIssue
-	TenureActRelease
+	DutyBoundUnspecified DutyBoundKind = iota
+	DutyBoundMonotone
+	DutyBoundVersion
+	DutyBoundBudget
+	DutyBoundEpoch
 )
 
-type TenureCommand struct {
-	Kind               TenureAct
+type DutyBound struct {
+	Kind                      DutyBoundKind
+	MonotoneUpper             uint64
+	VersionRootToken          AuthorityRootToken
+	DescriptorRevisionCeiling uint64
+	MaxRootLag                uint64
+	Budget                    uint64
+	Epoch                     uint64
+}
+
+type DutyGrant struct {
+	DutyID DutyID
+	Scope  DutyScope
+	Bound  DutyBound
+}
+
+type AuthorityGrant struct {
+	GrantID                string
+	HolderID               string
+	Era                    uint64
+	ExpiresUnixNano        int64
+	IssuedAt               Cursor
+	IssuedRootToken        AuthorityRootToken
+	Duties                 []DutyGrant
+	PredecessorRetirements []GrantRetirement
+}
+
+type GrantRetirementMode uint8
+
+const (
+	GrantRetirementUnspecified GrantRetirementMode = iota
+	GrantRetirementSealedExact
+	GrantRetirementExpiredBound
+)
+
+type GrantRetirement struct {
+	GrantID            string
 	HolderID           string
-	ExpiresUnixNano    int64
-	NowUnixNano        int64
-	LineageDigest      string
-	InheritedFrontiers MandateFrontiers
+	Era                uint64
+	Mode               GrantRetirementMode
+	Bounds             []DutyGrant
+	RetiredAt          Cursor
+	InheritedByGrantID string
 }
 
-type HandoverAct uint8
+type GrantInheritance struct {
+	PredecessorGrantID string
+	SuccessorGrantID   string
+	InheritedAt        Cursor
+}
+
+type GrantCertificate struct {
+	Grant       AuthorityGrant
+	SignerKeyID string
+	Signature   []byte
+}
+
+type AuthorityUsage struct {
+	DutyID DutyID
+	Scope  DutyScope
+	Usage  DutyBound
+}
+
+type AuthorityEvidence struct {
+	Certificate             GrantCertificate
+	Usage                   AuthorityUsage
+	ObservedRetirements     []GrantRetirement
+	ObservedRetiredEraFloor uint64
+}
+
+type GrantAct uint8
 
 const (
-	HandoverActUnknown HandoverAct = iota
-	HandoverActSeal
-	HandoverActConfirm
-	HandoverActClose
-	HandoverActReattach
+	GrantActUnknown GrantAct = iota
+	GrantActIssue
+	GrantActSeal
+	GrantActRetireExpired
+	GrantActInherit
 )
 
-type HandoverCommand struct {
-	Kind        HandoverAct
-	HolderID    string
-	NowUnixNano int64
-	Frontiers   MandateFrontiers
+type GrantCommand struct {
+	Kind                GrantAct
+	HolderID            string
+	GrantID             string
+	ExpiresUnixNano     int64
+	NowUnixNano         int64
+	RequestedDuties     []DutyGrant
+	ExactUsages         []AuthorityUsage
+	PredecessorGrantIDs []string
 }
 
-func MandateName(mandate uint32) string {
-	switch mandate {
-	case MandateAllocID:
-		return "alloc_id"
-	case MandateTSO:
-		return "tso"
-	case MandateGetRegionByKey:
-		return "get_region_by_key"
-	case MandateLeaseStart:
-		return "lease_start"
-	default:
-		return fmt.Sprintf("mandate_%d", mandate)
-	}
+const (
+	GrantSignerKeyID              = "nokv-eunomia-root-ed25519-v1"
+	GrantSigningPrivateKeyEnv     = "NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY"
+	GrantVerificationPublicKeyEnv = "NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY"
+	GrantAllowEphemeralKeysEnv    = "NOKV_EUNOMIA_GRANT_ALLOW_EPHEMERAL_KEYS"
+)
+
+type grantKeyMaterial struct {
+	private ed25519.PrivateKey
+	public  ed25519.PublicKey
 }
 
-func NewMandateFrontiers(entries ...MandateFrontier) MandateFrontiers {
-	var frontiers MandateFrontiers
-	for _, entry := range entries {
-		frontiers = frontiers.WithFrontier(entry.Mandate, entry.Frontier)
-	}
-	return frontiers
-}
+var rootGrantKeys = loadGrantKeyMaterial()
 
-func MandateFrontiersFromMap(values map[uint32]uint64) MandateFrontiers {
-	var frontiers MandateFrontiers
-	for mandate, frontier := range values {
-		frontiers = frontiers.WithFrontier(mandate, frontier)
-	}
-	return frontiers
-}
-
-func (f MandateFrontiers) Frontier(mandate uint32) uint64 {
-	idx, ok := mandateIndex(mandate)
-	if !ok {
-		return 0
-	}
-	return f.values[idx]
-}
-
-func (f MandateFrontiers) Len() int {
-	return bits.OnesCount32(f.present & mandateMaskAll)
-}
-
-func (f MandateFrontiers) Entries() []MandateFrontier {
-	if f.Len() == 0 {
+func SignGrantBytes(payload []byte) []byte {
+	if len(rootGrantKeys.private) != ed25519.PrivateKeySize {
 		return nil
 	}
-	out := make([]MandateFrontier, 0, f.Len())
-	for _, mandate := range OrderedMandateMasks(0, f) {
-		out = append(out, MandateFrontier{
-			Mandate:  mandate,
-			Frontier: f.Frontier(mandate),
-		})
-	}
-	return out
+	return ed25519.Sign(rootGrantKeys.private, payload)
 }
 
-func (f MandateFrontiers) AsMap() map[uint32]uint64 {
-	if f.Len() == 0 {
-		return map[uint32]uint64{}
+func VerifyGrantBytes(payload, signature []byte) bool {
+	if len(rootGrantKeys.public) != ed25519.PublicKeySize {
+		return false
 	}
-	out := make(map[uint32]uint64, f.Len())
-	for _, mandate := range OrderedMandateMasks(0, f) {
-		out[mandate] = f.Frontier(mandate)
-	}
-	return out
+	return ed25519.Verify(rootGrantKeys.public, payload, signature)
 }
 
-func (f MandateFrontiers) WithFrontier(mandate uint32, frontier uint64) MandateFrontiers {
-	idx, ok := mandateIndex(mandate)
-	if !ok {
-		return f
-	}
-	f.values[idx] = frontier
-	f.present |= mandate
-	return f
-}
-
-func OrderedMandateMasks(mandate uint32, frontiers MandateFrontiers) []uint32 {
-	seen := (frontiers.present | mandate) & mandateMaskAll
-	out := make([]uint32, 0, bits.OnesCount32(seen))
-	for _, mask := range mandateOrder {
-		if seen&mask == 0 {
-			continue
+func loadGrantKeyMaterial() grantKeyMaterial {
+	private := parseEd25519PrivateKeyEnv(GrantSigningPrivateKeyEnv)
+	public := parseEd25519PublicKeyEnv(GrantVerificationPublicKeyEnv)
+	if private == nil && public == nil {
+		if !allowEphemeralGrantKeys() {
+			panic("meta/root/protocol: " + GrantSigningPrivateKeyEnv +
+				" and/or " + GrantVerificationPublicKeyEnv +
+				" must be provided; set " + GrantAllowEphemeralKeysEnv +
+				"=1 only for local dev/test")
 		}
-		out = append(out, mask)
-	}
-	return out
-}
-
-func NewMandateWitness(mandate uint32, era, consumedFrontier uint64) MandateWitness {
-	return MandateWitness{
-		Mandate:          mandate,
-		Era:              era,
-		ConsumedFrontier: consumedFrontier,
-	}
-}
-
-func NewSuppressedMandateWitness(mandate uint32) MandateWitness {
-	return MandateWitness{
-		Mandate:          mandate,
-		Era:              MandateWitnessEraSuppressed,
-		ConsumedFrontier: 0,
-	}
-}
-
-func NewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, era uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) (AuthorityHandoffRecord, error) {
-	holderID = strings.TrimSpace(holderID)
-	lineageDigest = strings.TrimSpace(lineageDigest)
-	if holderID == "" {
-		if expiresUnixNano == 0 && era == 0 && issuedAt == (Cursor{}) && mandate == 0 && lineageDigest == "" && frontiers.Len() == 0 {
-			return AuthorityHandoffRecord{}, nil
+		generatedPublic, generatedPrivate, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			panic("meta/root/protocol: generate local grant signing key: " + err.Error())
 		}
-		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: holder id is required")
+		return grantKeyMaterial{private: generatedPrivate, public: generatedPublic}
 	}
-	if era == 0 {
-		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: era is required")
+	if public == nil && private != nil {
+		public = private.Public().(ed25519.PublicKey)
 	}
-	resolvedMandate := mandate & mandateMaskAll
-	if resolvedMandate == 0 {
-		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: duty mask is required")
-	}
-	if frontiers.present&resolvedMandate != resolvedMandate {
-		return AuthorityHandoffRecord{}, fmt.Errorf("authority handoff record: frontiers must cover all duty mask bits")
-	}
-	return AuthorityHandoffRecord{
-		HolderID:        holderID,
-		ExpiresUnixNano: expiresUnixNano,
-		Era:             era,
-		IssuedAt:        issuedAt,
-		Mandate:         resolvedMandate,
-		LineageDigest:   lineageDigest,
-		Frontiers:       frontiers,
-	}, nil
+	return grantKeyMaterial{private: private, public: public}
 }
 
-func MustNewAuthorityHandoffRecord(holderID string, expiresUnixNano int64, era uint64, issuedAt Cursor, mandate uint32, lineageDigest string, frontiers MandateFrontiers) AuthorityHandoffRecord {
-	record, err := NewAuthorityHandoffRecord(holderID, expiresUnixNano, era, issuedAt, mandate, lineageDigest, frontiers)
+func allowEphemeralGrantKeys() bool {
+	if strings.TrimSpace(os.Getenv(GrantAllowEphemeralKeysEnv)) != "" {
+		return true
+	}
+	return len(os.Args) > 0 && strings.HasSuffix(os.Args[0], ".test")
+}
+
+func parseEd25519PrivateKeyEnv(name string) ed25519.PrivateKey {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	decoded := mustDecodeGrantKeyEnv(name, raw)
+	switch len(decoded) {
+	case ed25519.SeedSize:
+		return ed25519.NewKeyFromSeed(decoded)
+	case ed25519.PrivateKeySize:
+		return ed25519.PrivateKey(decoded)
+	default:
+		panic(name + " must be base64 Ed25519 seed or private key")
+	}
+}
+
+func parseEd25519PublicKeyEnv(name string) ed25519.PublicKey {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	decoded := mustDecodeGrantKeyEnv(name, raw)
+	if len(decoded) != ed25519.PublicKeySize {
+		panic(name + " must be base64 Ed25519 public key")
+	}
+	return ed25519.PublicKey(decoded)
+}
+
+func mustDecodeGrantKeyEnv(name, raw string) []byte {
+	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		panic(err)
+		panic(name + " must be base64: " + err.Error())
 	}
-	return record
+	return decoded
 }
 
-func (s InheritanceStatus) Covered() bool {
-	for _, check := range s.Checks {
-		if !check.Covered {
-			return false
+func NewGlobalMonotoneDuty(duty DutyID, upper uint64) DutyGrant {
+	return DutyGrant{
+		DutyID: duty,
+		Scope:  DutyScope{Kind: DutyScopeGlobal},
+		Bound:  DutyBound{Kind: DutyBoundMonotone, MonotoneUpper: upper},
+	}
+}
+
+func NewGlobalVersionDuty(duty DutyID, token AuthorityRootToken, descriptorRevisionCeiling, maxRootLag uint64) DutyGrant {
+	return DutyGrant{
+		DutyID: duty,
+		Scope:  DutyScope{Kind: DutyScopeGlobal},
+		Bound: DutyBound{
+			Kind:                      DutyBoundVersion,
+			VersionRootToken:          token,
+			DescriptorRevisionCeiling: descriptorRevisionCeiling,
+			MaxRootLag:                maxRootLag,
+		},
+	}
+}
+
+func (g AuthorityGrant) Present() bool {
+	return strings.TrimSpace(g.GrantID) != "" && strings.TrimSpace(g.HolderID) != "" && g.Era != 0
+}
+
+func (g AuthorityGrant) ActiveAt(nowUnixNano int64) bool {
+	return g.Present() && g.ExpiresUnixNano > nowUnixNano
+}
+
+func (g AuthorityGrant) Duty(duty DutyID) (DutyGrant, bool) {
+	for _, entry := range g.Duties {
+		if entry.DutyID == duty {
+			return entry, true
 		}
 	}
-	return true
+	return DutyGrant{}, false
 }
 
-func (s InheritanceStatus) CoveredMandate(mandate uint32) bool {
-	for _, check := range s.Checks {
-		if mandate&check.Mandate == 0 {
-			continue
-		}
-		if !check.Covered {
-			return false
-		}
+func (r GrantRetirement) Present() bool {
+	return strings.TrimSpace(r.GrantID) != "" && r.Era != 0 && r.Mode != GrantRetirementUnspecified
+}
+
+func DutyName(duty DutyID) string {
+	if strings.TrimSpace(string(duty)) == "" {
+		return "unspecified"
 	}
-	return true
+	return string(duty)
 }
 
-func (s InheritanceStatus) FirstGap() (InheritanceCoverage, bool) {
-	for _, check := range s.Checks {
-		if !check.Covered {
-			return check, true
-		}
-	}
-	return InheritanceCoverage{}, false
+type AuthorityRootToken struct {
+	Term     uint64
+	Index    uint64
+	Revision uint64
 }
 
-func (w HandoverWitness) FinalitySatisfied() bool {
-	return w.LegacyEra != 0 &&
-		w.SuccessorPresent &&
-		w.SuccessorLineageSatisfied &&
-		w.Inheritance.Covered() &&
-		w.SealedEraRetired
-}
-
-func (w HandoverWitness) SuccessorMonotoneCovered() bool {
-	return w.SuccessorPresent &&
-		w.Inheritance.CoveredMandate(MandateAllocID|MandateTSO)
-}
-
-func (w HandoverWitness) SuccessorDescriptorCovered() bool {
-	return w.SuccessorPresent &&
-		w.Inheritance.CoveredMandate(MandateGetRegionByKey)
-}
-
-func (w HandoverWitness) ReplyEraLegal(era uint64) bool {
-	if era == MandateWitnessEraAttached {
-		return true
-	}
-	if era == MandateWitnessEraSuppressed {
-		return false
-	}
-	if w.LegacyEra == 0 {
-		return true
-	}
-	if era == w.LegacyEra {
-		return false
-	}
-	return w.FinalitySatisfied()
-}
-
-func (w HandoverWitness) WithStage(stage HandoverStage) HandoverWitness {
-	w.Stage = stage
-	return w
-}
-
-func (r AuthorityHandoffRecord) Present() bool {
-	return r.HolderID != ""
-}
-
-func HandoverStageAtLeast(stage, target HandoverStage) bool {
-	switch target {
-	case HandoverStageUnspecified:
-		return true
-	case HandoverStageConfirmed:
-		return stage == HandoverStageConfirmed ||
-			stage == HandoverStageClosed ||
-			stage == HandoverStageReattached
-	case HandoverStageClosed:
-		return stage == HandoverStageClosed ||
-			stage == HandoverStageReattached
-	case HandoverStageReattached:
-		return stage == HandoverStageReattached
-	default:
-		return false
-	}
-}
-
-func mandateIndex(mandate uint32) (int, bool) {
-	switch mandate {
-	case MandateAllocID:
-		return 0, true
-	case MandateTSO:
-		return 1, true
-	case MandateGetRegionByKey:
-		return 2, true
-	case MandateLeaseStart:
-		return 3, true
-	default:
-		return 0, false
-	}
-}
+const (
+	AuthorityEraAttached   uint64 = 0
+	AuthorityEraSuppressed uint64 = ^uint64(0)
+)

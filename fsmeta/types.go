@@ -12,7 +12,7 @@
 //     "metadata backend", not "another distributed filesystem".
 //
 //   - fsmeta does not live under meta/. meta/root is NoKV's own rooted cluster
-//     truth: region descriptors, tenure, handover, and allocator fences.
+//     truth: region descriptors, authority grants, and allocator fences.
 //     User-facing filesystem metadata is application data: a consumer of NoKV,
 //     not part of NoKV's internal truth.
 //

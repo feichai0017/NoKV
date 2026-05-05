@@ -386,7 +386,7 @@ Optional future fields:
 
 Should be served only when:
 
-- the node is rooted leader
+- the coordinator-side root backend can submit root writes
 - and the serving catalog has incorporated at least the requested `RootToken`
 
 If this is not true, the server should reject rather than silently downgrade.
@@ -747,10 +747,10 @@ In all cases, successful replies carry the current answerability witness:
 
 These do **not** have a degraded fallback.
 
-- the local coordinator must first campaign / renew the rooted lease
-- the rooted lease must still be active for the local holder
-- the rooted era must not already be sealed
-- the rooted duty mask must admit the requested action
+- the local coordinator must first campaign / renew the rooted grant
+- the rooted grant must still be active for the local holder
+- the rooted era must not already be retired
+- the grant duty list and bound must admit the requested action
 
 If any of those fail, the request is rejected instead of falling back to stale
 local state. This is the current boundary between:
@@ -758,28 +758,27 @@ local state. This is the current boundary between:
 - read-path degradation
 - write-path fail-stop admission
 
-#### Lifecycle mutations (`Seal`, `Confirm`, `Close`, `Reattach`)
+#### Lifecycle mutations (`Seal`, `RetireExpired`, `Inherit`)
 
 Lifecycle mutations are stricter than hot-path duty admission:
 
 - they always re-read rooted state from storage before mutating
-- they reject any stale-holder / expired-lease / sealed-era view
+- they reject any stale-holder / expired-grant / retired-era view
 - they treat finality as a rooted safety condition, not a best-effort hint
 
-That is why seal / confirm / close / reattach do not use the cached mirror
+That is why seal / expire-retire / inherit do not use the cached mirror
 admission path.
 
 ### 8.5 Operational diagnostics
 
 `DiagnosticsSnapshot()` now exports both:
 
-- the current degraded serving state (`root`, `lease`, `audit`, `handover_witness`)
+- the current degraded serving state (`root`, `grant`, `audit`, `authority`)
 - cumulative Eunomia counters under `eunomia_metrics`
 
 `eunomia_metrics` is grouped into:
 
-- `tenure_era_transitions_total`
-- `handover_stage_transitions_total`
+- `grant_era_transitions_total`
 - `gate_rejections_total`
 - `guarantee_violations_total`
 
@@ -814,11 +813,11 @@ Read responses should conceptually expose:
 
 ### 9.2 Write-side API direction
 
-Leader-only writes should remain leader-only.
+Root-write RPCs should remain gated by root write access.
 
 Write requests should continue to require:
 
-- rooted leadership
+- `CanSubmitRootWrites()` at the coordinator-side root backend
 - expected cluster epoch where applicable
 
 Write responses should eventually expose:

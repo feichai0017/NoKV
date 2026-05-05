@@ -1,15 +1,95 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func (s *Service) resetAuthorityServing() {
+	if s == nil {
+		return
+	}
+	s.authorityMu.Lock()
+	s.authorityState = authorityServing
+	s.authorityInflight = 0
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID) (func(), error) {
+	if s == nil || !s.coordinatorGrantEnabled() {
+		return func() {}, nil
+	}
+	if err := s.rejectIfAuthorityClosed(); err != nil {
+		return nil, err
+	}
+	if err := s.ensureGrant(ctx); err != nil {
+		return nil, translateGrantError(err)
+	}
+	if s.grantInheritanceCandidate() {
+		if err := s.InheritRetiredGrants(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.eunomiaGate(gateDutyAdmission, duty); err != nil {
+		return nil, err
+	}
+	done, err := s.beginAuthorityServing(ctx, duty)
+	if err != nil {
+		return nil, err
+	}
+	return done, nil
+}
+
+func (s *Service) beginAuthorityServing(ctx context.Context, duty rootproto.DutyID) (func(), error) {
+	if s == nil || !s.coordinatorGrantEnabled() {
+		return func() {}, nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, status.FromContextError(err).Err()
+		}
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	switch s.authorityState {
+	case authorityServing:
+		s.authorityInflight++
+		return func() { s.finishAuthorityServing() }, nil
+	case authorityDraining:
+		return nil, statusGrant(fmt.Errorf("%w: authority is draining", rootstate.ErrSilence))
+	case authoritySealed:
+		return nil, statusGrant(fmt.Errorf("%w: authority is sealed", rootstate.ErrSilence))
+	default:
+		return nil, statusGrant(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, s.authorityState))
+	}
+}
+
+func (s *Service) finishAuthorityServing() {
+	if s == nil || !s.coordinatorGrantEnabled() {
+		return
+	}
+	s.authorityMu.Lock()
+	if s.authorityInflight > 0 {
+		s.authorityInflight--
+	}
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) authorityServingSnapshot() (authorityServingState, uint64) {
+	if s == nil {
+		return authorityServing, 0
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	return s.authorityState, s.authorityInflight
+}
 
 func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
 	if expected == 0 {
@@ -50,68 +130,42 @@ func (s *Service) currentDescriptorRevision() uint64 {
 type gateKind uint8
 
 const (
-	gateLegacyFormation gateKind = iota
-	gateHandoverMutation
-	gateMandateAdmission
+	gateDutyAdmission gateKind = iota
 )
 
-// eunomiaGate picks the tenure-view source based on kind.
-//
-// Mandate admission (hot path, once per AllocID/TSO/GetRegionByKey) uses the
-// cached mirror: it must be cheap. The cache is kept honest by the rooted
-// refresh loop and by publish paths that overwrite it on every committed
-// rooted event.
-//
-// Lifecycle mutations (seal, close, reattach) are infrequent and safety
-// critical, so they re-read from storage to avoid a tiny window where
-// the cached mirror has not yet absorbed a concurrent publish.
-func (s *Service) eunomiaGate(kind gateKind, mandate uint32) error {
-	if s == nil || !s.coordinatorLeaseEnabled() || s.storage == nil {
+// eunomiaGate checks the cached grant mirror on authority-bearing hot paths.
+// The mirror is kept current by rooted-tail refresh and by ApplyGrant responses.
+func (s *Service) eunomiaGate(kind gateKind, duty rootproto.DutyID) error {
+	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
 		return nil
 	}
-	switch kind {
-	case gateMandateAdmission:
-		return s.eunomiaGateCached(kind, mandate)
+	return s.eunomiaGateCached(kind, duty)
+}
+
+func (s *Service) rejectIfAuthorityClosed() error {
+	if s == nil || !s.coordinatorGrantEnabled() {
+		return nil
+	}
+	s.authorityMu.Lock()
+	state := s.authorityState
+	s.authorityMu.Unlock()
+	switch state {
+	case authorityServing:
+		return nil
+	case authorityDraining:
+		return statusGrant(fmt.Errorf("%w: authority is draining", rootstate.ErrSilence))
+	case authoritySealed:
+		return statusGrant(fmt.Errorf("%w: authority is sealed", rootstate.ErrSilence))
 	default:
-		return s.eunomiaGateRooted(kind, mandate)
+		return statusGrant(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, state))
 	}
 }
 
-// eunomiaGateCached validates against the in-memory mirror. Cheap but
-// can race with a just-landed rooted publish; only safe for read-path
-// mandate admission where a one-tick staleness is tolerable.
-func (s *Service) eunomiaGateCached(kind gateKind, mandate uint32) error {
-	current, seal := s.currentTenureView()
-	return s.validateGateTenure(kind, mandate, current, seal)
+func (s *Service) eunomiaGateCached(kind gateKind, duty rootproto.DutyID) error {
+	return s.validateGateGrant(kind, duty, s.currentGrant())
 }
 
-// eunomiaGateRooted validates against a freshly loaded rooted
-// snapshot. Used for control-plane mutations where stale-read would
-// violate finality.
-func (s *Service) eunomiaGateRooted(kind gateKind, mandate uint32) error {
-	current, seal, err := s.currentTenureViewFromStorage()
-	if err != nil {
-		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
-	}
-	return s.validateGateTenure(kind, mandate, current, seal)
-}
-
-func (s *Service) currentTenureViewFromStorage() (rootstate.Tenure, rootstate.Legacy, error) {
-	if s == nil || s.storage == nil {
-		return rootstate.Tenure{}, rootstate.Legacy{}, nil
-	}
-	if err := rootfailpoints.InjectBeforeTenureStorageRead(); err != nil {
-		return rootstate.Tenure{}, rootstate.Legacy{}, err
-	}
-	snapshot, err := s.storage.Load()
-	if err != nil {
-		return rootstate.Tenure{}, rootstate.Legacy{}, err
-	}
-	s.refreshLeaseMirror(snapshot)
-	return snapshot.Tenure, snapshot.Legacy, nil
-}
-
-func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current rootstate.Tenure, seal rootstate.Legacy) error {
+func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {
 	if s == nil {
 		return nil
 	}
@@ -121,52 +175,32 @@ func (s *Service) validateGateTenure(kind gateKind, mandate uint32, current root
 	}
 	nowUnixNano := nowFn().UnixNano()
 
-	s.leaseMu.RLock()
+	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
-	s.leaseMu.RUnlock()
+	s.grantMu.RUnlock()
 	if holderID == "" {
 		return nil
 	}
 
-	if current.HolderID == "" {
+	if !grant.Present() {
 		s.eunomiaMetrics.recordGateRejection(kind)
 		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
-		return statusTenure(fmt.Errorf("%w: no rooted tenure", rootstate.ErrPrimacy))
+		return statusGrant(fmt.Errorf("%w: no rooted grant", rootstate.ErrPrimacy))
 	}
-	if current.HolderID != holderID {
+	if grant.HolderID != holderID {
 		s.eunomiaMetrics.recordGateRejection(kind)
 		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
-		return statusTenure(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, current.HolderID, holderID))
+		return statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, grant.HolderID, holderID))
 	}
-	if !current.ActiveAt(nowUnixNano) {
+	if !grant.ActiveAt(nowUnixNano) {
 		s.eunomiaMetrics.recordGateRejection(kind)
 		s.eunomiaMetrics.recordGuaranteeViolation(guaranteePrimacy)
-		return statusTenure(fmt.Errorf("%w: rooted lease expired era=%d", rootstate.ErrInvalidTenure, current.Era))
+		return statusGrant(fmt.Errorf("%w: rooted grant expired era=%d", rootstate.ErrInvalidGrant, grant.Era))
 	}
-
-	switch kind {
-	case gateLegacyFormation:
-		if rootstate.TenureSealed(current, seal) {
+	if duty != "" {
+		if _, ok := grant.Duty(duty); !ok {
 			s.eunomiaMetrics.recordGateRejection(kind)
-			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeFinality)
-			return statusTenure(fmt.Errorf("%w: era=%d already sealed", rootstate.ErrFinality, current.Era))
-		}
-	case gateHandoverMutation:
-		if rootstate.TenureSealed(current, seal) {
-			s.eunomiaMetrics.recordGateRejection(kind)
-			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
-			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
-		}
-	case gateMandateAdmission:
-		currentMandate := current.Mandate
-		if mandate != 0 && currentMandate&mandate != mandate {
-			s.eunomiaMetrics.recordGateRejection(kind)
-			return statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d era=%d", rootstate.ErrMandate, mandate, currentMandate, current.Era))
-		}
-		if rootstate.TenureSealed(current, seal) {
-			s.eunomiaMetrics.recordGateRejection(kind)
-			s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
-			return statusTenure(fmt.Errorf("%w: era=%d legacy_era=%d", rootstate.ErrSilence, current.Era, seal.Era))
+			return statusGrant(fmt.Errorf("%w: required_duty=%s era=%d", rootstate.ErrDuty, rootproto.DutyName(duty), grant.Era))
 		}
 	}
 	return nil

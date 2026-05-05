@@ -1,12 +1,9 @@
 package server
 
 import (
-	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 )
 
@@ -47,13 +44,9 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	}
 	snapshotRetention := rootSnapshot.SnapshotRetentionIndex()
 
-	nowUnixNano, _, holderID, renewIn, clockSkew := s.leaseCampaignBounds()
-	lease, _ := s.currentTenureView()
-	report := coordaudit.BuildReport(rootSnapshot, holderID, nowUnixNano)
-	leaseFrontiers := eunomia.Frontiers(rootstate.State{
-		IDFence:  rootSnapshot.Allocator.IDCurrent,
-		TSOFence: rootSnapshot.Allocator.TSCurrent,
-	}, report.RootDescriptorRevision)
+	nowUnixNano, _, holderID, renewIn, clockSkew := s.grantCampaignBounds()
+	grant := rootSnapshot.ActiveGrant
+	latestRetirement := diagnosticsLatestRetirement(rootSnapshot.RetiredGrants)
 
 	s.allocMu.Lock()
 	idCurrent := s.ids.Current()
@@ -66,6 +59,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	lastReload := s.lastRootReload
 	lastReloadErr := s.lastRootError
 	s.statusMu.RUnlock()
+	authorityState, authorityInflight := s.authorityServingSnapshot()
 
 	regionCount := 0
 	regionDetails := []map[string]any{}
@@ -107,19 +101,19 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 			"tso_window_high": tsoWindowHigh,
 		},
 		"root": map[string]any{
-			"configured":            s.storage != nil,
-			"served_token":          diagnosticsTailToken(state.servedToken),
-			"current_token":         diagnosticsTailToken(state.currentToken),
-			"root_lag":              state.rootLag,
-			"catch_up_state":        catchUpStateToProto(state.catchUpState).String(),
-			"degraded_mode":         state.degraded.String(),
-			"served_by_leader":      state.servedByLeader,
-			"storage_is_leader":     s.storage == nil || s.storage.IsLeader(),
-			"storage_leader_id":     diagnosticsLeaderID(s.storage),
-			"last_reload_unix_nano": lastReload,
-			"last_reload_error":     lastReloadErr,
-			"read_state_load_error": loadErr,
-			"snapshot_epochs":       len(rootSnapshot.SnapshotEpochs),
+			"configured":                     s.storage != nil,
+			"served_token":                   diagnosticsTailToken(state.servedToken),
+			"current_token":                  diagnosticsTailToken(state.currentToken),
+			"root_lag":                       state.rootLag,
+			"catch_up_state":                 catchUpStateToProto(state.catchUpState).String(),
+			"degraded_mode":                  state.degraded.String(),
+			"served_by_leader":               state.servedByLeader,
+			"storage_can_submit_root_writes": s.storage == nil || s.storage.CanSubmitRootWrites(),
+			"storage_leader_id":              diagnosticsLeaderID(s.storage),
+			"last_reload_unix_nano":          lastReload,
+			"last_reload_error":              lastReloadErr,
+			"read_state_load_error":          loadErr,
+			"snapshot_epochs":                len(rootSnapshot.SnapshotEpochs),
 			"snapshot_retention": map[string]any{
 				"active":             snapshotRetention.Active(),
 				"min_read_version":   snapshotRetention.GlobalFloor,
@@ -127,57 +121,65 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 				"enforcement_target": "mvcc_gc",
 			},
 		},
-		"lease": map[string]any{
-			"enabled":            s.coordinatorLeaseEnabled(),
+		"grant": map[string]any{
+			"enabled":            s.coordinatorGrantEnabled(),
 			"coordinator_id":     holderID,
-			"ttl_nanos":          s.currentLeaseTTL(),
+			"ttl_nanos":          s.currentGrantTTL(),
 			"renew_before_nanos": renewIn.Nanoseconds(),
 			"clock_skew_nanos":   clockSkew.Nanoseconds(),
-			"holder_id":          lease.HolderID,
-			"expires_unix_nano":  lease.ExpiresUnixNano,
-			"active":             lease.ActiveAt(nowUnixNano),
-			"held_by_self":       lease.HolderID != "" && lease.HolderID == holderID,
-			"usable_by_self":     leaseUsableBy(lease, holderID, nowUnixNano, clockSkew.Nanoseconds()),
-			"era":                lease.Era,
+			"holder_id":          grant.HolderID,
+			"expires_unix_nano":  grant.ExpiresUnixNano,
+			"active":             grant.ActiveAt(nowUnixNano),
+			"held_by_self":       grant.HolderID != "" && grant.HolderID == holderID,
+			"usable_by_self":     grantUsableBy(grant, holderID, nowUnixNano, clockSkew.Nanoseconds()),
+			"era":                grant.Era,
 			"issued_at": map[string]any{
-				"term":  lease.IssuedAt.Term,
-				"index": lease.IssuedAt.Index,
+				"term":  grant.IssuedAt.Term,
+				"index": grant.IssuedAt.Index,
 			},
-			"mandate":   lease.Mandate,
-			"frontiers": diagnosticsCoordinatorFrontiers(leaseFrontiers),
+			"duties": diagnosticsDutyGrants(grant.Duties),
 		},
-		"handoff": diagnosticsAuthorityHandoff(report.Handoff),
-		"seal": map[string]any{
-			"holder_id":          rootSnapshot.Legacy.HolderID,
-			"era":                rootSnapshot.Legacy.Era,
-			"mandate":            rootSnapshot.Legacy.Mandate,
-			"consumed_frontiers": diagnosticsCoordinatorFrontiers(rootSnapshot.Legacy.Frontiers),
-			"sealed_at": map[string]any{
-				"term":  rootSnapshot.Legacy.SealedAt.Term,
-				"index": rootSnapshot.Legacy.SealedAt.Index,
+		"authority": map[string]any{
+			"serving_state": authorityState.String(),
+			"in_flight":     authorityInflight,
+			"active_grant": map[string]any{
+				"grant_id":           grant.GrantID,
+				"holder_id":          grant.HolderID,
+				"era":                grant.Era,
+				"expires_unix_nano":  grant.ExpiresUnixNano,
+				"active":             grant.ActiveAt(nowUnixNano),
+				"held_by_self":       grant.HolderID != "" && grant.HolderID == holderID,
+				"issued_root_token":  diagnosticsAuthorityRootToken(grant.IssuedRootToken),
+				"duties":             diagnosticsDutyGrants(grant.Duties),
+				"predecessor_grants": diagnosticsGrantRetirements(grant.PredecessorRetirements),
 			},
+			"retired_grants":      diagnosticsGrantRetirements(rootSnapshot.RetiredGrants),
+			"grant_inheritances":  diagnosticsGrantInheritances(rootSnapshot.GrantInheritances),
+			"remaining_id_bound":  diagnosticsRemainingMonotoneBound(grant, rootproto.DutyAllocID, idCurrent),
+			"remaining_tso_bound": diagnosticsRemainingMonotoneBound(grant, rootproto.DutyTSO, tsoCurrent),
+		},
+		"retirement": map[string]any{
+			"grant_id":   latestRetirement.GrantID,
+			"holder_id":  latestRetirement.HolderID,
+			"era":        latestRetirement.Era,
+			"mode":       diagnosticsGrantRetirementMode(latestRetirement.Mode),
+			"bounds":     diagnosticsDutyGrants(latestRetirement.Bounds),
+			"retired_at": diagnosticsCursor(latestRetirement.RetiredAt),
+			"inherited":  latestRetirement.InheritedByGrantID != "",
 		},
 		"audit": map[string]any{
-			"legacy_era":                   report.HandoverWitness.LegacyEra,
-			"legacy_digest":                report.HandoverWitness.LegacyDigest,
-			"successor_present":            report.HandoverWitness.SuccessorPresent,
-			"successor_frontier_coverage":  diagnosticsCoordinatorCoverage(report.HandoverWitness.Inheritance),
-			"successor_lineage_satisfied":  report.HandoverWitness.SuccessorLineageSatisfied,
-			"successor_monotone_covered":   report.HandoverWitness.SuccessorMonotoneCovered(),
-			"successor_descriptor_covered": report.HandoverWitness.SuccessorDescriptorCovered(),
-			"sealed_era_retired":           report.HandoverWitness.SealedEraRetired,
-			"finality_satisfied":           report.HandoverWitness.FinalitySatisfied(),
-			"handover_stage":               report.Handover.Stage.String(),
-			"finality_defect":              string(report.Anomalies.FinalityDefect),
-			"handover_recorded": map[string]any{
-				"holder_id":     rootSnapshot.Handover.HolderID,
-				"legacy_era":    rootSnapshot.Handover.LegacyEra,
-				"successor_era": rootSnapshot.Handover.SuccessorEra,
-				"legacy_digest": rootSnapshot.Handover.LegacyDigest,
-			},
+			"sealed_exact_completed":    diagnosticsHasInheritedRetirement(rootSnapshot.RetiredGrants, rootproto.GrantRetirementSealedExact),
+			"expired_bound_inherited":   diagnosticsHasInheritedRetirement(rootSnapshot.RetiredGrants, rootproto.GrantRetirementExpiredBound),
+			"retired_not_inherited":     diagnosticsHasPendingRetirement(rootSnapshot.RetiredGrants),
+			"invalid_successor_bound":   diagnosticsInvalidSuccessorBound(grant, rootSnapshot.RetiredGrants),
+			"active_grant_id":           grant.GrantID,
+			"active_era":                grant.Era,
+			"latest_retirement_mode":    diagnosticsGrantRetirementMode(latestRetirement.Mode),
+			"latest_retired_grant_id":   latestRetirement.GrantID,
+			"latest_retired_era":        latestRetirement.Era,
+			"latest_inherited_by_grant": latestRetirement.InheritedByGrantID,
 		},
-		"handover_witness": diagnosticsHandoverWitness(report.HandoverWitness),
-		"eunomia_metrics":  s.eunomiaMetrics.snapshot(),
+		"eunomia_metrics": s.eunomiaMetrics.snapshot(),
 	}
 }
 
@@ -196,79 +198,204 @@ func diagnosticsLeaderID(storage rootview.RootStorage) uint64 {
 	return storage.LeaderID()
 }
 
-func diagnosticsCoordinatorCoverage(status rootproto.InheritanceStatus) []map[string]any {
-	if len(status.Checks) == 0 {
+func diagnosticsCursor(cursor rootproto.Cursor) map[string]any {
+	return map[string]any{
+		"term":  cursor.Term,
+		"index": cursor.Index,
+	}
+}
+
+func diagnosticsAuthorityRootToken(token rootproto.AuthorityRootToken) map[string]any {
+	return map[string]any{
+		"term":     token.Term,
+		"index":    token.Index,
+		"revision": token.Revision,
+	}
+}
+
+func diagnosticsDutyGrants(duties []rootproto.DutyGrant) []map[string]any {
+	if len(duties) == 0 {
 		return []map[string]any{}
 	}
-	out := make([]map[string]any, 0, len(status.Checks))
-	for _, check := range status.Checks {
+	out := make([]map[string]any, 0, len(duties))
+	for _, duty := range duties {
 		out = append(out, map[string]any{
-			"mandate":           check.Mandate,
-			"duty_name":         rootproto.MandateName(check.Mandate),
-			"required_frontier": check.RequiredFrontier,
-			"actual_frontier":   check.ActualFrontier,
-			"covered":           check.Covered,
+			"duty_id": rootproto.DutyName(duty.DutyID),
+			"scope":   diagnosticsDutyScope(duty.Scope),
+			"bound":   diagnosticsDutyBound(duty.Bound),
 		})
 	}
 	return out
 }
 
-func diagnosticsAuthorityHandoff(record rootproto.AuthorityHandoffRecord) map[string]any {
+func diagnosticsDutyScope(scope rootproto.DutyScope) map[string]any {
 	return map[string]any{
-		"holder_id":         record.HolderID,
-		"expires_unix_nano": record.ExpiresUnixNano,
-		"era":               record.Era,
-		"mandate":           record.Mandate,
-		"lineage_digest":    record.LineageDigest,
-		"issued_at": map[string]any{
-			"term":  record.IssuedAt.Term,
-			"index": record.IssuedAt.Index,
-		},
-		"frontiers": diagnosticsCoordinatorFrontiers(record.Frontiers),
+		"kind":         diagnosticsDutyScopeKind(scope.Kind),
+		"mount_id":     scope.MountID,
+		"subtree_root": scope.SubtreeRoot,
+		"start_key":    string(scope.StartKey),
+		"end_key":      string(scope.EndKey),
 	}
 }
 
-func diagnosticsCoordinatorFrontiers(frontiers rootproto.MandateFrontiers) []map[string]any {
-	if frontiers.Len() == 0 {
+func diagnosticsDutyScopeKind(kind rootproto.DutyScopeKind) string {
+	switch kind {
+	case rootproto.DutyScopeGlobal:
+		return "global"
+	case rootproto.DutyScopeMount:
+		return "mount"
+	case rootproto.DutyScopeSubtree:
+		return "subtree"
+	case rootproto.DutyScopeRegionRange:
+		return "region_range"
+	default:
+		return "unspecified"
+	}
+}
+
+func diagnosticsDutyBound(bound rootproto.DutyBound) map[string]any {
+	out := map[string]any{"kind": diagnosticsDutyBoundKind(bound.Kind)}
+	switch bound.Kind {
+	case rootproto.DutyBoundMonotone:
+		out["monotone_upper"] = bound.MonotoneUpper
+	case rootproto.DutyBoundVersion:
+		out["root_token"] = diagnosticsAuthorityRootToken(bound.VersionRootToken)
+		out["descriptor_revision_ceiling"] = bound.DescriptorRevisionCeiling
+		out["max_root_lag"] = bound.MaxRootLag
+	case rootproto.DutyBoundBudget:
+		out["budget"] = bound.Budget
+	case rootproto.DutyBoundEpoch:
+		out["epoch"] = bound.Epoch
+	}
+	return out
+}
+
+func diagnosticsDutyBoundKind(kind rootproto.DutyBoundKind) string {
+	switch kind {
+	case rootproto.DutyBoundMonotone:
+		return "monotone"
+	case rootproto.DutyBoundVersion:
+		return "version"
+	case rootproto.DutyBoundBudget:
+		return "budget"
+	case rootproto.DutyBoundEpoch:
+		return "epoch"
+	default:
+		return "unspecified"
+	}
+}
+
+func diagnosticsGrantRetirements(retirements []rootproto.GrantRetirement) []map[string]any {
+	if len(retirements) == 0 {
 		return []map[string]any{}
 	}
-	entries := frontiers.Entries()
-	out := make([]map[string]any, 0, len(entries))
-	for _, entry := range entries {
+	out := make([]map[string]any, 0, len(retirements))
+	for _, retirement := range retirements {
 		out = append(out, map[string]any{
-			"mandate":   entry.Mandate,
-			"duty_name": rootproto.MandateName(entry.Mandate),
-			"frontier":  entry.Frontier,
+			"grant_id":              retirement.GrantID,
+			"holder_id":             retirement.HolderID,
+			"era":                   retirement.Era,
+			"mode":                  diagnosticsGrantRetirementMode(retirement.Mode),
+			"bounds":                diagnosticsDutyGrants(retirement.Bounds),
+			"retired_at":            diagnosticsCursor(retirement.RetiredAt),
+			"inherited_by_grant_id": retirement.InheritedByGrantID,
 		})
 	}
 	return out
 }
 
-func diagnosticsHandoverWitness(witness rootproto.HandoverWitness) map[string]any {
-	return map[string]any{
-		"legacy_era":                  witness.LegacyEra,
-		"legacy_digest":               witness.LegacyDigest,
-		"successor_present":           witness.SuccessorPresent,
-		"successor_frontier_coverage": diagnosticsCoordinatorCoverage(witness.Inheritance),
-		"successor_lineage_satisfied": witness.SuccessorLineageSatisfied,
-		"sealed_era_retired":          witness.SealedEraRetired,
-		"handover_stage":              witness.Stage.String(),
-		"finality_satisfied":          witness.FinalitySatisfied(),
+func diagnosticsGrantInheritances(inheritances []rootproto.GrantInheritance) []map[string]any {
+	if len(inheritances) == 0 {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(inheritances))
+	for _, inheritance := range inheritances {
+		out = append(out, map[string]any{
+			"predecessor_grant_id": inheritance.PredecessorGrantID,
+			"successor_grant_id":   inheritance.SuccessorGrantID,
+			"inherited_at":         diagnosticsCursor(inheritance.InheritedAt),
+		})
+	}
+	return out
+}
+
+func diagnosticsGrantRetirementMode(mode rootproto.GrantRetirementMode) string {
+	switch mode {
+	case rootproto.GrantRetirementSealedExact:
+		return "sealed_exact"
+	case rootproto.GrantRetirementExpiredBound:
+		return "expired_bound"
+	default:
+		return "unspecified"
 	}
 }
 
-func leaseUsableBy(lease rootstate.Tenure, holderID string, nowUnixNano int64, clockSkewNanos int64) bool {
-	if lease.HolderID == "" || lease.HolderID != holderID {
+func diagnosticsLatestRetirement(retirements []rootproto.GrantRetirement) rootproto.GrantRetirement {
+	var latest rootproto.GrantRetirement
+	for _, retirement := range retirements {
+		if retirement.Era > latest.Era {
+			latest = retirement
+		}
+	}
+	return latest
+}
+
+func diagnosticsRemainingMonotoneBound(grant rootproto.AuthorityGrant, duty rootproto.DutyID, current uint64) uint64 {
+	dutyGrant, ok := grant.Duty(duty)
+	if !ok || dutyGrant.Bound.Kind != rootproto.DutyBoundMonotone || dutyGrant.Bound.MonotoneUpper <= current {
+		return 0
+	}
+	return dutyGrant.Bound.MonotoneUpper - current
+}
+
+func diagnosticsHasInheritedRetirement(retirements []rootproto.GrantRetirement, mode rootproto.GrantRetirementMode) bool {
+	for _, retirement := range retirements {
+		if retirement.Mode == mode && retirement.InheritedByGrantID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func diagnosticsHasPendingRetirement(retirements []rootproto.GrantRetirement) bool {
+	for _, retirement := range retirements {
+		if retirement.Present() && retirement.InheritedByGrantID == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func diagnosticsInvalidSuccessorBound(grant rootproto.AuthorityGrant, retirements []rootproto.GrantRetirement) bool {
+	if !grant.Present() {
 		return false
 	}
-	return lease.ExpiresUnixNano > nowUnixNano+clockSkewNanos
+	for _, retirement := range retirements {
+		if retirement.InheritedByGrantID != "" {
+			continue
+		}
+		for _, bound := range retirement.Bounds {
+			duty, ok := grant.Duty(bound.DutyID)
+			if !ok || !authorityBoundCovers(duty.Bound, bound.Bound) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
-func (s *Service) currentLeaseTTL() int64 {
+func grantUsableBy(grant rootproto.AuthorityGrant, holderID string, nowUnixNano int64, clockSkewNanos int64) bool {
+	if grant.HolderID == "" || grant.HolderID != holderID {
+		return false
+	}
+	return grant.ExpiresUnixNano > nowUnixNano+clockSkewNanos
+}
+
+func (s *Service) currentGrantTTL() int64 {
 	if s == nil {
 		return 0
 	}
-	s.leaseMu.RLock()
-	defer s.leaseMu.RUnlock()
-	return s.leaseTTL.Nanoseconds()
+	s.grantMu.RLock()
+	defer s.grantMu.RUnlock()
+	return s.grantTTL.Nanoseconds()
 }

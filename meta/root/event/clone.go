@@ -1,5 +1,7 @@
 package event
 
+import rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+
 // CloneEvent returns a detached rooted metadata event copy.
 func CloneEvent(in Event) Event {
 	out := in
@@ -11,19 +13,20 @@ func CloneEvent(in Event) Event {
 		cp := *in.AllocatorFence
 		out.AllocatorFence = &cp
 	}
-	if in.Tenure != nil {
-		cp := *in.Tenure
-		cp.Frontiers = in.Tenure.Frontiers
-		out.Tenure = &cp
+	if in.Grant != nil {
+		cp := *in.Grant
+		cp.Duties = append([]rootproto.DutyGrant(nil), in.Grant.Duties...)
+		cp.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), in.Grant.PredecessorRetirements...)
+		out.Grant = &cp
 	}
-	if in.Legacy != nil {
-		cp := *in.Legacy
-		cp.Frontiers = in.Legacy.Frontiers
-		out.Legacy = &cp
+	if in.GrantRetirement != nil {
+		cp := *in.GrantRetirement
+		cp.Bounds = append([]rootproto.DutyGrant(nil), in.GrantRetirement.Bounds...)
+		out.GrantRetirement = &cp
 	}
-	if in.Handover != nil {
-		cp := *in.Handover
-		out.Handover = &cp
+	if in.GrantInheritance != nil {
+		cp := *in.GrantInheritance
+		out.GrantInheritance = &cp
 	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch

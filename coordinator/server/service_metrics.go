@@ -4,7 +4,6 @@ import (
 	"errors"
 	"sync/atomic"
 
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
@@ -18,15 +17,9 @@ const (
 )
 
 type eunomiaMetrics struct {
-	tenureEraTransitionsTotal atomic.Uint64
+	grantEraTransitionsTotal atomic.Uint64
 
-	handoverStageConfirmedTotal  atomic.Uint64
-	handoverStageClosedTotal     atomic.Uint64
-	handoverStageReattachedTotal atomic.Uint64
-
-	gateLegacyFormationRejectedTotal  atomic.Uint64
-	gateHandoverMutationRejectedTotal atomic.Uint64
-	gateMandateAdmissionRejectedTotal atomic.Uint64
+	gateDutyAdmissionRejectedTotal atomic.Uint64
 
 	guaranteePrimacyTotal     atomic.Uint64
 	guaranteeInheritanceTotal atomic.Uint64
@@ -36,16 +29,9 @@ type eunomiaMetrics struct {
 
 func (m *eunomiaMetrics) snapshot() map[string]any {
 	return map[string]any{
-		"tenure_era_transitions_total": m.tenureEraTransitionsTotal.Load(),
-		"handover_stage_transitions_total": map[string]any{
-			"confirmed":  m.handoverStageConfirmedTotal.Load(),
-			"closed":     m.handoverStageClosedTotal.Load(),
-			"reattached": m.handoverStageReattachedTotal.Load(),
-		},
+		"grant_era_transitions_total": m.grantEraTransitionsTotal.Load(),
 		"gate_rejections_total": map[string]any{
-			"legacy_formation":  m.gateLegacyFormationRejectedTotal.Load(),
-			"handover_mutation": m.gateHandoverMutationRejectedTotal.Load(),
-			"mandate_admission": m.gateMandateAdmissionRejectedTotal.Load(),
+			"duty_admission": m.gateDutyAdmissionRejectedTotal.Load(),
 		},
 		"guarantee_violations_total": map[string]any{
 			"primacy":     m.guaranteePrimacyTotal.Load(),
@@ -56,35 +42,17 @@ func (m *eunomiaMetrics) snapshot() map[string]any {
 	}
 }
 
-func (m *eunomiaMetrics) recordTenureEraTransition(before, after uint64) {
+func (m *eunomiaMetrics) recordGrantEraTransition(before, after uint64) {
 	if after == 0 || before == after {
 		return
 	}
-	m.tenureEraTransitionsTotal.Add(1)
-}
-
-func (m *eunomiaMetrics) recordHandoverStageTransition(before, after rootproto.HandoverStage) {
-	if after == before {
-		return
-	}
-	switch after {
-	case rootproto.HandoverStageConfirmed:
-		m.handoverStageConfirmedTotal.Add(1)
-	case rootproto.HandoverStageClosed:
-		m.handoverStageClosedTotal.Add(1)
-	case rootproto.HandoverStageReattached:
-		m.handoverStageReattachedTotal.Add(1)
-	}
+	m.grantEraTransitionsTotal.Add(1)
 }
 
 func (m *eunomiaMetrics) recordGateRejection(kind gateKind) {
 	switch kind {
-	case gateLegacyFormation:
-		m.gateLegacyFormationRejectedTotal.Add(1)
-	case gateHandoverMutation:
-		m.gateHandoverMutationRejectedTotal.Add(1)
-	case gateMandateAdmission:
-		m.gateMandateAdmissionRejectedTotal.Add(1)
+	case gateDutyAdmission:
+		m.gateDutyAdmissionRejectedTotal.Add(1)
 	}
 }
 

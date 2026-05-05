@@ -3055,15 +3055,16 @@ type GetRegionByKeyResponse struct {
 	// era identifies the detached/rooted authority instance that
 	// served this reply when coordinator lease evidence is available.
 	Era uint64 `protobuf:"varint,12,opt,name=era,proto3" json:"era,omitempty"`
-	// observed_legacy_era carries the latest rooted sealed era
+	// observed_retired_era_floor carries the latest rooted sealed era
 	// observed by the serving coordinator when it constructed this reply.
-	ObservedLegacyEra uint64 `protobuf:"varint,15,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
+	ObservedRetiredEraFloor uint64 `protobuf:"varint,15,opt,name=observed_retired_era_floor,json=observedRetiredEraFloor,proto3" json:"observed_retired_era_floor,omitempty"`
 	// serving_class reports the client-visible serving contract used for this reply.
 	ServingClass ServingClass `protobuf:"varint,13,opt,name=serving_class,json=servingClass,proto3,enum=nokv.coordinator.v1.ServingClass" json:"serving_class,omitempty"`
 	// sync_health reports the rooted catch-up health that justified this reply.
-	SyncHealth    SyncHealth `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SyncHealth        SyncHealth                  `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
+	AuthorityEvidence *meta.RootAuthorityEvidence `protobuf:"bytes,16,opt,name=authority_evidence,json=authorityEvidence,proto3" json:"authority_evidence,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyResponse) Reset() {
@@ -3180,9 +3181,9 @@ func (x *GetRegionByKeyResponse) GetEra() uint64 {
 	return 0
 }
 
-func (x *GetRegionByKeyResponse) GetObservedLegacyEra() uint64 {
+func (x *GetRegionByKeyResponse) GetObservedRetiredEraFloor() uint64 {
 	if x != nil {
-		return x.ObservedLegacyEra
+		return x.ObservedRetiredEraFloor
 	}
 	return 0
 }
@@ -3199,6 +3200,13 @@ func (x *GetRegionByKeyResponse) GetSyncHealth() SyncHealth {
 		return x.SyncHealth
 	}
 	return SyncHealth_SYNC_HEALTH_UNSPECIFIED
+}
+
+func (x *GetRegionByKeyResponse) GetAuthorityEvidence() *meta.RootAuthorityEvidence {
+	if x != nil {
+		return x.AuthorityEvidence
+	}
+	return nil
 }
 
 type AllocIDRequest struct {
@@ -3251,11 +3259,12 @@ type AllocIDResponse struct {
 	Count   uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// era and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	Era               uint64 `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
-	ConsumedFrontier  uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedLegacyEra uint64 `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Era                     uint64                      `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
+	ConsumedFrontier        uint64                      `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedRetiredEraFloor uint64                      `protobuf:"varint,5,opt,name=observed_retired_era_floor,json=observedRetiredEraFloor,proto3" json:"observed_retired_era_floor,omitempty"`
+	AuthorityEvidence       *meta.RootAuthorityEvidence `protobuf:"bytes,6,opt,name=authority_evidence,json=authorityEvidence,proto3" json:"authority_evidence,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *AllocIDResponse) Reset() {
@@ -3316,11 +3325,18 @@ func (x *AllocIDResponse) GetConsumedFrontier() uint64 {
 	return 0
 }
 
-func (x *AllocIDResponse) GetObservedLegacyEra() uint64 {
+func (x *AllocIDResponse) GetObservedRetiredEraFloor() uint64 {
 	if x != nil {
-		return x.ObservedLegacyEra
+		return x.ObservedRetiredEraFloor
 	}
 	return 0
+}
+
+func (x *AllocIDResponse) GetAuthorityEvidence() *meta.RootAuthorityEvidence {
+	if x != nil {
+		return x.AuthorityEvidence
+	}
+	return nil
 }
 
 type TsoRequest struct {
@@ -3373,11 +3389,12 @@ type TsoResponse struct {
 	Count     uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
 	// era and consumed_frontier together form the protocol-level
 	// legality witness for monotone detached replies.
-	Era               uint64 `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
-	ConsumedFrontier  uint64 `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
-	ObservedLegacyEra uint64 `protobuf:"varint,5,opt,name=observed_legacy_era,json=observedLegacyEra,proto3" json:"observed_legacy_era,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Era                     uint64                      `protobuf:"varint,3,opt,name=era,proto3" json:"era,omitempty"`
+	ConsumedFrontier        uint64                      `protobuf:"varint,4,opt,name=consumed_frontier,json=consumedFrontier,proto3" json:"consumed_frontier,omitempty"`
+	ObservedRetiredEraFloor uint64                      `protobuf:"varint,5,opt,name=observed_retired_era_floor,json=observedRetiredEraFloor,proto3" json:"observed_retired_era_floor,omitempty"`
+	AuthorityEvidence       *meta.RootAuthorityEvidence `protobuf:"bytes,6,opt,name=authority_evidence,json=authorityEvidence,proto3" json:"authority_evidence,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *TsoResponse) Reset() {
@@ -3438,11 +3455,18 @@ func (x *TsoResponse) GetConsumedFrontier() uint64 {
 	return 0
 }
 
-func (x *TsoResponse) GetObservedLegacyEra() uint64 {
+func (x *TsoResponse) GetObservedRetiredEraFloor() uint64 {
 	if x != nil {
-		return x.ObservedLegacyEra
+		return x.ObservedRetiredEraFloor
 	}
 	return 0
+}
+
+func (x *TsoResponse) GetAuthorityEvidence() *meta.RootAuthorityEvidence {
+	if x != nil {
+		return x.AuthorityEvidence
+	}
+	return nil
 }
 
 var File_coordinator_coordinator_proto protoreflect.FileDescriptor
@@ -3619,7 +3643,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
 	"maxRootLag\x88\x01\x01\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
-	"\r_max_root_lag\"\xfc\x06\n" +
+	"\r_max_root_lag\"\xdd\a\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -3633,28 +3657,31 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x13descriptor_revision\x18\n" +
 	" \x01(\x04R\x12descriptorRevision\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\v \x01(\x04R\x1arequiredDescriptorRevision\x12\x10\n" +
-	"\x03era\x18\f \x01(\x04R\x03era\x12.\n" +
-	"\x13observed_legacy_era\x18\x0f \x01(\x04R\x11observedLegacyEra\x12F\n" +
+	"\x03era\x18\f \x01(\x04R\x03era\x12;\n" +
+	"\x1aobserved_retired_era_floor\x18\x0f \x01(\x04R\x17observedRetiredEraFloor\x12F\n" +
 	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
 	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
-	"syncHealth\"&\n" +
+	"syncHealth\x12R\n" +
+	"\x12authority_evidence\x18\x10 \x01(\v2#.nokv.meta.v1.RootAuthorityEvidenceR\x11authorityEvidence\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb1\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\x92\x02\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
 	"\bfirst_id\x18\x01 \x01(\x04R\afirstId\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x10\n" +
 	"\x03era\x18\x03 \x01(\x04R\x03era\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12.\n" +
-	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra\"\"\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12;\n" +
+	"\x1aobserved_retired_era_floor\x18\x05 \x01(\x04R\x17observedRetiredEraFloor\x12R\n" +
+	"\x12authority_evidence\x18\x06 \x01(\v2#.nokv.meta.v1.RootAuthorityEvidenceR\x11authorityEvidence\"\"\n" +
 	"\n" +
 	"TsoRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"\xb0\x01\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\"\x91\x02\n" +
 	"\vTsoResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x04R\ttimestamp\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x04R\x05count\x12\x10\n" +
 	"\x03era\x18\x03 \x01(\x04R\x03era\x12+\n" +
-	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12.\n" +
-	"\x13observed_legacy_era\x18\x05 \x01(\x04R\x11observedLegacyEra*j\n" +
+	"\x11consumed_frontier\x18\x04 \x01(\x04R\x10consumedFrontier\x12;\n" +
+	"\x1aobserved_retired_era_floor\x18\x05 \x01(\x04R\x17observedRetiredEraFloor\x12R\n" +
+	"\x12authority_evidence\x18\x06 \x01(\v2#.nokv.meta.v1.RootAuthorityEvidenceR\x11authorityEvidence*j\n" +
 	"\n" +
 	"StoreState\x12\x17\n" +
 	"\x13STORE_STATE_UNKNOWN\x10\x00\x12\x12\n" +
@@ -3829,6 +3856,7 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(*meta.RootPendingPeerChange)(nil),     // 61: nokv.meta.v1.RootPendingPeerChange
 	(*meta.RootPendingRangeChange)(nil),    // 62: nokv.meta.v1.RootPendingRangeChange
 	(*meta.RegionDescriptor)(nil),          // 63: nokv.meta.v1.RegionDescriptor
+	(*meta.RootAuthorityEvidence)(nil),     // 64: nokv.meta.v1.RootAuthorityEvidence
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	0,  // 0: nokv.coordinator.v1.StoreInfo.state:type_name -> nokv.coordinator.v1.StoreState
@@ -3880,45 +3908,48 @@ var file_coordinator_coordinator_proto_depIdxs = []int32{
 	11, // 46: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
 	12, // 47: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
 	13, // 48: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
-	14, // 49: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	16, // 50: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
-	18, // 51: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
-	21, // 52: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
-	23, // 53: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
-	26, // 54: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
-	30, // 55: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
-	32, // 56: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
-	34, // 57: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
-	38, // 58: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	40, // 59: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	44, // 60: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	46, // 61: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	48, // 62: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	51, // 63: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	53, // 64: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	55, // 65: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	37, // 66: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	17, // 67: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
-	19, // 68: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
-	22, // 69: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
-	24, // 70: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
-	27, // 71: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
-	31, // 72: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
-	33, // 73: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
-	35, // 74: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
-	39, // 75: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	41, // 76: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	45, // 77: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	47, // 78: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	49, // 79: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	52, // 80: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	54, // 81: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	56, // 82: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	66, // [66:83] is the sub-list for method output_type
-	49, // [49:66] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	64, // 49: nokv.coordinator.v1.GetRegionByKeyResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	64, // 50: nokv.coordinator.v1.AllocIDResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	64, // 51: nokv.coordinator.v1.TsoResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	14, // 52: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	16, // 53: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
+	18, // 54: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
+	21, // 55: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
+	23, // 56: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
+	26, // 57: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
+	30, // 58: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
+	32, // 59: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
+	34, // 60: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
+	38, // 61: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	40, // 62: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	44, // 63: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	46, // 64: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	48, // 65: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	51, // 66: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	53, // 67: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	55, // 68: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	37, // 69: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	17, // 70: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
+	19, // 71: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
+	22, // 72: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
+	24, // 73: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
+	27, // 74: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
+	31, // 75: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
+	33, // 76: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
+	35, // 77: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
+	39, // 78: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	41, // 79: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	45, // 80: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	47, // 81: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	49, // 82: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	52, // 83: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	54, // 84: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	56, // 85: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	69, // [69:86] is the sub-list for method output_type
+	52, // [52:69] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }

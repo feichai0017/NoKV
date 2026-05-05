@@ -53,7 +53,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	// transferred leadership), clear the stale claims so another store's
 	// subsequent report wins.
 	s.cluster.RecordRegionLeaders(req.GetStoreId(), req.GetLeaderRegionIds())
-	operations := s.leaseScopedStoreOperations(ctx, req.GetStoreId())
+	operations := s.grantScopedStoreOperations(ctx, req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: operations,
@@ -360,7 +360,7 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	if err != nil {
 		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	s.writeMu.Lock()
@@ -457,7 +457,7 @@ func (s *Service) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionReq
 	if regionID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
 	}
-	if err := s.requireLeaderForWrite(); err != nil {
+	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
 	}
 	removed := s.cluster.HasRegion(regionID)

@@ -17,7 +17,6 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -32,23 +31,18 @@ import (
 
 type protocolMatrixStorage struct {
 	campaignErr error
-	confirmErr  error
-	closeErr    error
-	reattachErr error
 	leader      bool
 	leaderID    uint64
 	snapshot    rootview.Snapshot
 	campaigns   int
-	confirms    int
-	closes      int
 	reattaches  int
 }
 
 func (s *protocolMatrixStorage) protocolState() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
-		Tenure:   s.snapshot.Tenure,
-		Legacy:   s.snapshot.Legacy,
-		Handover: s.snapshot.Handover,
+		ActiveGrant:       s.snapshot.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
 	}
 }
 
@@ -70,126 +64,136 @@ func (s *protocolMatrixStorage) SaveAllocatorState(_ context.Context, idCurrent,
 	return nil
 }
 
-func (s *protocolMatrixStorage) ApplyTenure(_ context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
-	case rootproto.TenureActIssue:
+	case rootproto.GrantActIssue:
 		s.campaigns++
 		if s.campaignErr != nil {
-			return rootstate.EunomiaState{}, s.campaignErr
+			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, s.campaignErr
 		}
-		if err := rootstate.ValidateTenureClaim(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
-			return s.protocolState(), err
+		if s.snapshot.ActiveGrant.Present() && s.snapshot.ActiveGrant.HolderID != holderID && s.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
+			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		if err := rootstate.ValidateInheritance(s.snapshot.Tenure, s.snapshot.Legacy, cmd.InheritedFrontiers); err != nil {
-			return s.protocolState(), err
+		era := s.snapshot.ActiveGrant.Era + 1
+		for _, retired := range s.snapshot.RetiredGrants {
+			if retired.Era >= era {
+				era = retired.Era + 1
+			}
 		}
-		era := rootstate.NextTenureEra(s.snapshot.Tenure, s.snapshot.Legacy, cmd.HolderID, cmd.NowUnixNano)
-		s.snapshot.Tenure = rootstate.Tenure{
-			HolderID:        cmd.HolderID,
-			ExpiresUnixNano: cmd.ExpiresUnixNano,
-			Era:             era,
-			Mandate:         rootproto.MandateDefault,
-			LineageDigest:   cmd.LineageDigest,
+		grantID := cmd.GrantID
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, era)
 		}
-		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > s.snapshot.Allocator.IDCurrent {
-			s.snapshot.Allocator.IDCurrent = idFence
+		predecessors := pendingGrantRetirementsForTest(s.snapshot, cmd.NowUnixNano)
+		s.snapshot.ActiveGrant = rootproto.AuthorityGrant{
+			GrantID:                grantID,
+			HolderID:               holderID,
+			Era:                    era,
+			ExpiresUnixNano:        cmd.ExpiresUnixNano,
+			IssuedRootToken:        rootproto.AuthorityRootToken{Term: s.snapshot.RootToken.Cursor.Term, Index: s.snapshot.RootToken.Cursor.Index, Revision: s.snapshot.RootToken.Revision},
+			Duties:                 append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
+			PredecessorRetirements: append([]rootproto.GrantRetirement(nil), predecessors...),
 		}
-		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
-			s.snapshot.Allocator.TSCurrent = tsoFence
+		s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), predecessors...)
+		for _, duty := range cmd.RequestedDuties {
+			if duty.Bound.Kind != rootproto.DutyBoundMonotone {
+				continue
+			}
+			switch duty.DutyID {
+			case rootproto.DutyAllocID:
+				if duty.Bound.MonotoneUpper > s.snapshot.Allocator.IDCurrent {
+					s.snapshot.Allocator.IDCurrent = duty.Bound.MonotoneUpper
+				}
+			case rootproto.DutyTSO:
+				if duty.Bound.MonotoneUpper > s.snapshot.Allocator.TSCurrent {
+					s.snapshot.Allocator.TSCurrent = duty.Bound.MonotoneUpper
+				}
+			}
 		}
-	case rootproto.TenureActRelease:
-		if err := rootstate.ValidateTenureYield(s.snapshot.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
-			return s.protocolState(), err
+		s.advanceRootToken()
+		return s.protocolState(), rootproto.GrantCertificate{Grant: s.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test")}, nil
+	case rootproto.GrantActSeal:
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != strings.TrimSpace(cmd.HolderID) {
+			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		s.snapshot.Tenure = rootstate.Tenure{
-			HolderID:        cmd.HolderID,
-			ExpiresUnixNano: cmd.NowUnixNano,
-			Era:             s.snapshot.Tenure.Era,
-			IssuedAt:        s.snapshot.Tenure.IssuedAt,
-			Mandate:         s.snapshot.Tenure.Mandate,
-			LineageDigest:   s.snapshot.Tenure.LineageDigest,
+		s.snapshot.RetiredGrants = append(s.snapshot.RetiredGrants, rootproto.GrantRetirement{
+			GrantID:  s.snapshot.ActiveGrant.GrantID,
+			HolderID: s.snapshot.ActiveGrant.HolderID,
+			Era:      s.snapshot.ActiveGrant.Era,
+			Mode:     rootproto.GrantRetirementSealedExact,
+			Bounds:   dutyGrantsFromUsagesForProtocolTest(cmd.ExactUsages),
+		})
+		s.snapshot.ActiveGrant = rootproto.AuthorityGrant{}
+		s.advanceRootToken()
+		return s.protocolState(), rootproto.GrantCertificate{}, nil
+	case rootproto.GrantActInherit:
+		s.reattaches++
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		if idFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateAllocID); idFence > s.snapshot.Allocator.IDCurrent {
-			s.snapshot.Allocator.IDCurrent = idFence
+		successor := s.snapshot.ActiveGrant.GrantID
+		for _, predecessor := range cmd.PredecessorGrantIDs {
+			for i := range s.snapshot.RetiredGrants {
+				if s.snapshot.RetiredGrants[i].GrantID == predecessor {
+					s.snapshot.RetiredGrants[i].InheritedByGrantID = successor
+					s.snapshot.GrantInheritances = append(s.snapshot.GrantInheritances, rootproto.GrantInheritance{
+						PredecessorGrantID: predecessor,
+						SuccessorGrantID:   successor,
+					})
+				}
+			}
 		}
-		if tsoFence := cmd.InheritedFrontiers.Frontier(rootproto.MandateTSO); tsoFence > s.snapshot.Allocator.TSCurrent {
-			s.snapshot.Allocator.TSCurrent = tsoFence
-		}
+		s.advanceRootToken()
+		return s.protocolState(), rootproto.GrantCertificate{}, nil
 	default:
-		return rootstate.EunomiaState{}, rootstate.ErrInvalidTenure
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
-	return s.protocolState(), nil
 }
 
-func (s *protocolMatrixStorage) ApplyHandover(_ context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	switch cmd.Kind {
-	case rootproto.HandoverActSeal:
-		if err := rootstate.ValidateLegacyFormation(s.snapshot.Tenure, cmd.HolderID); err != nil {
-			return s.protocolState(), err
-		}
-		mandate := s.snapshot.Tenure.Mandate
-		if mandate == 0 {
-			mandate = rootproto.MandateDefault
-		}
-		s.snapshot.Legacy = rootstate.Legacy{
-			HolderID:  cmd.HolderID,
-			Era:       s.snapshot.Tenure.Era,
-			Mandate:   mandate,
-			Frontiers: cmd.Frontiers,
-		}
-	case rootproto.HandoverActConfirm:
-		s.confirms++
-		if s.confirmErr != nil {
-			return rootstate.EunomiaState{}, s.confirmErr
-		}
-		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.snapshot.Tenure.HolderID {
-			return s.protocolState(), rootstate.ErrPrimacy
-		}
-		auditStatus, err := eunomia.ValidateHandoverConfirmation(
-			s.snapshot.Tenure,
-			eunomia.Frontiers(rootstate.State{
-				IDFence:  s.snapshot.Allocator.IDCurrent,
-				TSOFence: s.snapshot.Allocator.TSCurrent,
-			}, rootstate.MaxDescriptorRevision(s.snapshot.Descriptors)),
-			s.snapshot.Legacy,
-			cmd.NowUnixNano,
-		)
-		if err != nil {
-			return s.protocolState(), err
-		}
-		s.snapshot.Handover = rootstate.Handover{
-			HolderID:     cmd.HolderID,
-			LegacyEra:    auditStatus.LegacyEra,
-			SuccessorEra: s.snapshot.Tenure.Era,
-			LegacyDigest: auditStatus.LegacyDigest,
-			Stage:        rootproto.HandoverStageConfirmed,
-		}
-	case rootproto.HandoverActClose:
-		s.closes++
-		if s.closeErr != nil {
-			return rootstate.EunomiaState{}, s.closeErr
-		}
-		if err := eunomia.ValidateHandoverFinality(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.protocolState(), err
-		}
-		s.snapshot.Handover.Stage = rootproto.HandoverStageClosed
-	case rootproto.HandoverActReattach:
-		s.reattaches++
-		if s.reattachErr != nil {
-			return rootstate.EunomiaState{}, s.reattachErr
-		}
-		if err := eunomia.ValidateHandoverReattach(s.snapshot.Tenure, s.snapshot.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.protocolState(), err
-		}
-		s.snapshot.Handover.Stage = rootproto.HandoverStageReattached
-	default:
-		return rootstate.EunomiaState{}, rootstate.ErrFinality
+func (s *protocolMatrixStorage) advanceRootToken() {
+	if s.snapshot.RootToken.Cursor.Term == 0 {
+		s.snapshot.RootToken.Cursor.Term = 1
 	}
-	return s.protocolState(), nil
+	s.snapshot.RootToken.Cursor.Index++
+	s.snapshot.RootToken.Revision++
+}
+
+func pendingGrantRetirementsForTest(snapshot rootview.Snapshot, nowUnixNano int64) []rootproto.GrantRetirement {
+	var out []rootproto.GrantRetirement
+	if snapshot.ActiveGrant.Present() {
+		mode := rootproto.GrantRetirementSealedExact
+		if !snapshot.ActiveGrant.ActiveAt(nowUnixNano) {
+			mode = rootproto.GrantRetirementExpiredBound
+		}
+		out = append(out, rootproto.GrantRetirement{
+			GrantID:  snapshot.ActiveGrant.GrantID,
+			HolderID: snapshot.ActiveGrant.HolderID,
+			Era:      snapshot.ActiveGrant.Era,
+			Mode:     mode,
+			Bounds:   append([]rootproto.DutyGrant(nil), snapshot.ActiveGrant.Duties...),
+		})
+	}
+	for _, retired := range snapshot.RetiredGrants {
+		if retired.InheritedByGrantID == "" {
+			out = append(out, retired)
+		}
+	}
+	return out
+}
+
+func dutyGrantsFromUsagesForProtocolTest(usages []rootproto.AuthorityUsage) []rootproto.DutyGrant {
+	out := make([]rootproto.DutyGrant, 0, len(usages))
+	for _, usage := range usages {
+		out = append(out, rootproto.DutyGrant{DutyID: usage.DutyID, Scope: usage.Scope, Bound: usage.Usage})
+	}
+	return out
 }
 
 func (s *protocolMatrixStorage) Refresh() error { return nil }
-func (s *protocolMatrixStorage) IsLeader() bool { return s == nil || s.leader || s.leaderID == 0 }
+func (s *protocolMatrixStorage) CanSubmitRootWrites() bool {
+	return s == nil || s.leader || s.leaderID == 0
+}
 func (s *protocolMatrixStorage) LeaderID() uint64 {
 	if s == nil {
 		return 0
@@ -278,338 +282,144 @@ func openCoordinatorClient(t *testing.T, order []string, servers map[string]coor
 	return cli
 }
 
-func TestDetachedProtocolFaultMatrix(t *testing.T) {
-	type faultCase struct {
-		name     string
-		store    *protocolMatrixStorage
-		run      func(t *testing.T, svc *coordserver.Service)
-		diagKeys map[string]any
+func TestDetachedGrantFaultMatrix(t *testing.T) {
+	activeExpiry := time.Now().Add(20 * time.Second).UnixNano()
+	descriptor := topology.Descriptor{RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7}
+	grant := func(holder string, era uint64, duties ...rootproto.DutyGrant) rootproto.AuthorityGrant {
+		return rootproto.AuthorityGrant{
+			GrantID:         fmt.Sprintf("%s/%d", holder, era),
+			HolderID:        holder,
+			Era:             era,
+			ExpiresUnixNano: activeExpiry,
+			Duties:          duties,
+		}
 	}
 
-	newService := func(store *protocolMatrixStorage) *coordserver.Service {
+	t.Run("other_active_grant_rejects_local_detached_duty", func(t *testing.T) {
+		store := &protocolMatrixStorage{
+			leader: true,
+			snapshot: rootview.Snapshot{
+				ActiveGrant: grant("c2", 1, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)),
+			},
+		}
 		svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-		svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+		svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 		require.NoError(t, svc.ReloadFromStorage())
-		return svc
-	}
 
-	baseDescriptors := map[uint64]topology.Descriptor{
-		1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
-	}
-	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()
-	sealWithDescriptor7 := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       2,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-	}
-	sealWithDescriptor7Digest := rootstate.DigestOfLegacy(sealWithDescriptor7)
-	sealWithDescriptor9 := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       2,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
-	}
-	sealWithDescriptor9Digest := rootstate.DigestOfLegacy(sealWithDescriptor9)
+		_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		require.Error(t, err)
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
 
-	cases := []faultCase{
-		// F.revived_holder + F.root_unreach — once the predecessor era has
-		// sealed and no covered successor is present, the old holder must fail-stop
-		// for monotone duties instead of continuing on cached authority.
-		{
-			name: "sealed_era_cannot_continue_monotone_without_successor",
-			store: &protocolMatrixStorage{
-				leader:      true,
-				campaignErr: rootstate.ErrPrimacy,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             2,
-						Mandate:         rootproto.MandateDefault,
-					},
-					Legacy: rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault},
-				},
+	t.Run("metadata_descriptor_outside_grant_renews", func(t *testing.T) {
+		store := &protocolMatrixStorage{
+			leader: true,
+			snapshot: rootview.Snapshot{
+				ActiveGrant: grant("c1", 1,
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 120),
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 6, 0),
+				),
+				Descriptors: map[uint64]topology.Descriptor{1: descriptor},
 			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-				require.Error(t, err)
-				require.Equal(t, codes.FailedPrecondition, status.Code(err))
-			},
-			diagKeys: map[string]any{
-				"finality_satisfied": false,
-				"handover_stage":     "unspecified",
-			},
-		},
-		// F.root_unreach — metadata answers must also fail-stop once the rooted
-		// authority path has sealed but no successor coverage has landed.
-		{
-			name: "sealed_era_cannot_continue_metadata_without_successor",
-			store: &protocolMatrixStorage{
-				leader:      true,
-				campaignErr: rootstate.ErrPrimacy,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             2,
-						Mandate:         rootproto.MandateDefault,
-					},
-					Legacy:      rootstate.Legacy{HolderID: "c1", Era: 2, Mandate: rootproto.MandateDefault, Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 0, TSOFence: 0}, 7)},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-				require.Error(t, err)
-				require.Equal(t, codes.FailedPrecondition, status.Code(err))
-			},
-			diagKeys: map[string]any{
-				"finality_satisfied": false,
-				"handover_stage":     "unspecified",
-			},
-		},
-		// F.successor_campaign + F.budget_exhaustion — a successor era may
-		// campaign, but it cannot confirm handover before covering the predecessor's
-		// sealed monotone frontier.
-		{
-			name: "confirm_rejected_before_monotone_coverage",
-			store: &protocolMatrixStorage{
-				leader: true,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             3,
-						Mandate:         rootproto.MandateDefault,
-						LineageDigest:   sealWithDescriptor7Digest,
-					},
-					Legacy: sealWithDescriptor7,
-					Allocator: rootview.AllocatorState{
-						IDCurrent: 11,
-						TSCurrent: 34,
-					},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmHandover()
-				require.ErrorIs(t, err, rootstate.ErrFinality)
-			},
-			diagKeys: map[string]any{
-				"successor_present":            true,
-				"successor_lineage_satisfied":  true,
-				"successor_monotone_covered":   false,
-				"successor_descriptor_covered": true,
-				"finality_satisfied":           false,
-				"handover_stage":               "unspecified",
-			},
-		},
-		// F.successor_campaign + F.descriptor_publish_race — successor coverage is
-		// incomplete until descriptor publication catches up with the sealed frontier.
-		{
-			name: "confirm_rejected_before_descriptor_coverage",
-			store: &protocolMatrixStorage{
-				leader: true,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             3,
-						Mandate:         rootproto.MandateDefault,
-						LineageDigest:   sealWithDescriptor9Digest,
-					},
-					Legacy: sealWithDescriptor9,
-					Allocator: rootview.AllocatorState{
-						IDCurrent: 12,
-						TSCurrent: 34,
-					},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ConfirmHandover()
-				require.ErrorIs(t, err, rootstate.ErrFinality)
-			},
-			diagKeys: map[string]any{
-				"successor_present":            true,
-				"successor_monotone_covered":   true,
-				"successor_descriptor_covered": false,
-				"finality_satisfied":           false,
-				"handover_stage":               "unspecified",
-			},
-		},
-		// F.lease_expiry + F.successor_campaign — even with a successor lease in
-		// place, detached service is not yet reattached until explicit close lands.
-		{
-			name: "reattach_rejected_before_close",
-			store: &protocolMatrixStorage{
-				leader: true,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             3,
-						Mandate:         rootproto.MandateDefault,
-						LineageDigest:   sealWithDescriptor7Digest,
-					},
-					Legacy: sealWithDescriptor7,
-					Allocator: rootview.AllocatorState{
-						IDCurrent: 12,
-						TSCurrent: 34,
-					},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachHandover()
-				require.ErrorIs(t, err, rootstate.ErrFinality)
-			},
-			diagKeys: map[string]any{
-				"handover_stage": "unspecified",
-			},
-		},
-		// F.revived_holder + F.successor_campaign — a successor whose lineage no
-		// longer matches the sealed predecessor digest cannot reattach.
-		{
-			name: "reattach_rejected_on_lineage_mismatch",
-			store: &protocolMatrixStorage{
-				leader: true,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             3,
-						Mandate:         rootproto.MandateDefault,
-						LineageDigest:   "other-digest",
-					},
-					Legacy: sealWithDescriptor7,
-					Allocator: rootview.AllocatorState{
-						IDCurrent: 12,
-						TSCurrent: 34,
-					},
-					Handover: rootstate.Handover{
-						HolderID:     "c1",
-						LegacyEra:    2,
-						SuccessorEra: 3,
-						LegacyDigest: sealWithDescriptor7Digest,
-						Stage:        rootproto.HandoverStageClosed,
-					},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				err := svc.ReattachHandover()
-				require.ErrorIs(t, err, rootstate.ErrFinality)
-			},
-			diagKeys: map[string]any{
-				"handover_stage":              "unspecified",
-				"successor_lineage_satisfied": false,
-			},
-		},
-		// F.successor_campaign — once lineage, coverage, close, and reattach all
-		// line up, the successor can continue detached duties with the new era.
-		{
-			name: "successor_can_confirm_and_reattach_end_to_end",
-			store: &protocolMatrixStorage{
-				leader: true,
-				snapshot: rootview.Snapshot{
-					Tenure: rootstate.Tenure{
-						HolderID:        "c1",
-						ExpiresUnixNano: activeLeaseExpiry,
-						Era:             3,
-						Mandate:         rootproto.MandateDefault,
-						LineageDigest:   sealWithDescriptor7Digest,
-					},
-					Legacy: sealWithDescriptor7,
-					Allocator: rootview.AllocatorState{
-						IDCurrent: 12,
-						TSCurrent: 34,
-					},
-					Descriptors: baseDescriptors,
-				},
-			},
-			run: func(t *testing.T, svc *coordserver.Service) {
-				require.NoError(t, svc.ConfirmHandover())
-				require.NoError(t, svc.CloseHandover())
-				require.NoError(t, svc.ReattachHandover())
-				allocResp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-				require.NoError(t, err)
-				require.Equal(t, uint64(3), allocResp.GetEra())
-				resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-				require.NoError(t, err)
-				require.Equal(t, uint64(3), resp.GetEra())
-			},
-			diagKeys: map[string]any{
-				"finality_satisfied": true,
-				"handover_stage":     "reattached",
-			},
-		},
-	}
+		}
+		cluster := catalog.NewCluster()
+		cluster.ReplaceRootSnapshot(rootstate.Snapshot{Descriptors: store.snapshot.Descriptors}, store.snapshot.RootToken)
+		svc := coordserver.NewService(cluster, idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+		svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
+		require.NoError(t, svc.ReloadFromStorage())
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := newService(tc.store)
-			tc.run(t, svc)
-			diag := svc.DiagnosticsSnapshot()["audit"].(map[string]any)
-			for key, expected := range tc.diagKeys {
-				require.Equalf(t, expected, diag[key], "diag_key=%s audit=%v", key, diag)
-			}
-		})
-	}
+		resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), resp.GetRegionDescriptor().GetRegionId())
+		require.Equal(t, uint64(7), resp.GetDescriptorRevision())
+		require.NotNil(t, resp.GetAuthorityEvidence())
+		require.Equal(t, 1, store.campaigns)
+	})
+
+	t.Run("successor_inherits_retired_grant_bound", func(t *testing.T) {
+		retired := rootproto.GrantRetirement{
+			GrantID:  "c1/1",
+			HolderID: "c1",
+			Era:      1,
+			Mode:     rootproto.GrantRetirementExpiredBound,
+			Bounds:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
+		}
+		store := &protocolMatrixStorage{
+			leader: true,
+			snapshot: rootview.Snapshot{
+				ActiveGrant:   grant("c2", 2, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40)),
+				RetiredGrants: []rootproto.GrantRetirement{retired},
+			},
+		}
+		svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(21), tso.NewAllocator(100), store)
+		svc.ConfigureAuthorityGrant("c2", 10*time.Second, 3*time.Second)
+		require.NoError(t, svc.ReloadFromStorage())
+		require.NoError(t, svc.InheritRetiredGrants(context.Background()))
+
+		diag := svc.DiagnosticsSnapshot()["audit"].(map[string]any)
+		require.Equal(t, true, diag["expired_bound_inherited"])
+		require.Equal(t, false, diag["retired_not_inherited"])
+	})
 }
 
-func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
-	// F.delayed_reply — a predecessor reply leaves before seal, then arrives only
-	// after the client has already observed the successor era.
-	activeLeaseExpiry := time.Now().Add(20 * time.Second).UnixNano()
-
+func TestDetachedLateReplyAfterRetiredGrantRejectedByClientVerifier(t *testing.T) {
+	activeExpiry := time.Now().Add(20 * time.Second).UnixNano()
+	c1Grant := rootproto.AuthorityGrant{
+		GrantID:         "c1/1",
+		HolderID:        "c1",
+		ExpiresUnixNano: activeExpiry,
+		Era:             1,
+		Duties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 120),
+			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 0, 0),
+		},
+	}
 	staleStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
-				HolderID:        "c1",
-				ExpiresUnixNano: activeLeaseExpiry,
-				Era:             1,
-				Mandate:         rootproto.MandateDefault,
-			},
+			ActiveGrant: c1Grant,
 		},
 	}
 	staleSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), staleStore)
-	staleSvc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	staleSvc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, staleSvc.ReloadFromStorage())
 
 	oldResp, err := staleSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), oldResp.GetEra())
+	require.NotNil(t, oldResp.GetAuthorityEvidence())
 
-	require.NoError(t, staleSvc.SealTenure())
-	seal := staleStore.snapshot.Legacy
-	legacyDigest := rootstate.DigestOfLegacy(seal)
-
+	retired := rootproto.GrantRetirement{
+		GrantID:            c1Grant.GrantID,
+		HolderID:           c1Grant.HolderID,
+		Era:                c1Grant.Era,
+		Mode:               rootproto.GrantRetirementExpiredBound,
+		Bounds:             append([]rootproto.DutyGrant(nil), c1Grant.Duties...),
+		InheritedByGrantID: "c2/2",
+	}
 	successorStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			Tenure: rootstate.Tenure{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "c2/2",
 				HolderID:        "c2",
-				ExpiresUnixNano: activeLeaseExpiry,
+				ExpiresUnixNano: activeExpiry,
 				Era:             2,
-				Mandate:         rootproto.MandateDefault,
-				LineageDigest:   legacyDigest,
+				Duties: []rootproto.DutyGrant{
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40),
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 140),
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 0, 0),
+				},
+				PredecessorRetirements: []rootproto.GrantRetirement{retired},
 			},
-			Legacy: seal,
-			Allocator: rootview.AllocatorState{
-				IDCurrent: seal.Frontiers.Frontier(rootproto.MandateAllocID),
-				TSCurrent: seal.Frontiers.Frontier(rootproto.MandateTSO),
-			},
+			RetiredGrants: []rootproto.GrantRetirement{retired},
 		},
 	}
-	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(seal.Frontiers.Frontier(rootproto.MandateAllocID)+1), tso.NewAllocator(100), successorStore)
-	successorSvc.ConfigureTenure("c2", 10*time.Second, 3*time.Second)
+	successorSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(21), tso.NewAllocator(100), successorStore)
+	successorSvc.ConfigureAuthorityGrant("c2", 10*time.Second, 3*time.Second)
 	require.NoError(t, successorSvc.ReloadFromStorage())
-	require.NoError(t, successorSvc.ConfirmHandover())
-	require.NoError(t, successorSvc.CloseHandover())
-	require.NoError(t, successorSvc.ReattachHandover())
 
 	freshResp1, err := successorSvc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
@@ -624,16 +434,8 @@ func TestDetachedLateReplyAfterSealRejectedByClientVerifier(t *testing.T) {
 			{err: status.Error(codes.Unavailable, "fresh primary temporarily unavailable")},
 		},
 	}
-	lateReply := &allocSequenceServer{
-		steps: []allocStep{
-			{resp: oldResp},
-		},
-	}
-	freshSecondary := &allocSequenceServer{
-		steps: []allocStep{
-			{resp: freshResp2},
-		},
-	}
+	lateReply := &allocSequenceServer{steps: []allocStep{{resp: oldResp}}}
+	freshSecondary := &allocSequenceServer{steps: []allocStep{{resp: freshResp2}}}
 
 	cli := openCoordinatorClient(t, []string{"fresh-primary", "late-reply", "fresh-secondary"}, map[string]coordpb.CoordinatorServer{
 		"fresh-primary":   freshPrimary,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestSeparatedModeCoordinatorCrashAndRecoveryPreservesAllocatorFence(t *test
 			return false
 		}
 		return state.IDFence >= next.GetFirstId() &&
-			state.Tenure.HolderID == "c1" &&
+			state.ActiveGrant.HolderID == "c1" &&
 			state.IDFence >= lastID
 	}, 8*time.Second, 50*time.Millisecond)
 }
@@ -104,7 +105,7 @@ func TestSeparatedModeCoordinatorRecoveryLatency(t *testing.T) {
 		len(durations), avg, p50, p95, p99)
 }
 
-func TestSeparatedModeRoutingServesAcrossMultipleCoordinatorsWhileAllocatorStaysSingleton(t *testing.T) {
+func TestSeparatedModeRoutingAuthorityStaysWithGrantHolder(t *testing.T) {
 	rootCluster := pdtestcluster.OpenReplicated(t)
 	targets := exposeRemoteRoots(t, rootCluster)
 	rootCluster.WaitLeader()
@@ -134,18 +135,18 @@ func TestSeparatedModeRoutingServesAcrossMultipleCoordinatorsWhileAllocatorStays
 			if err := svc.RefreshFromStorage(); err != nil {
 				return false
 			}
-			resp, getErr := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
-			return getErr == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == 731
+			_, getErr := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
+			return getErr != nil && strings.Contains(getErr.Error(), "coordinator grant not held")
 		}, 8*time.Second, 50*time.Millisecond)
 	}
 
 	_, err = readOnlyA.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator lease not held")
+	require.Contains(t, err.Error(), "coordinator grant not held")
 
 	_, err = readOnlyB.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator lease not held")
+	require.Contains(t, err.Error(), "coordinator grant not held")
 }
 
 func separatedModeDescriptor(id uint64, start, end []byte) topology.Descriptor {
@@ -165,21 +166,21 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 	targets := exposeRemoteRoots(t, rootCluster)
 	rootCluster.WaitLeader()
 
-	leaseTTL := time.Second
+	grantTTL := time.Second
 	renewIn := 200 * time.Millisecond
 
-	first, firstStore := openSeparatedCoordinatorWithLease(t, targets, "c1", leaseTTL, renewIn)
+	first, firstStore := openSeparatedCoordinatorWithGrant(t, targets, "c1", grantTTL, renewIn)
 	alloc, err := first.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 8})
 	require.NoError(t, err)
 	lastID := alloc.GetFirstId() + alloc.GetCount() - 1
 	require.NoError(t, firstStore.Close())
 
-	second, secondStore := openSeparatedCoordinatorWithLease(t, targets, "c2", leaseTTL, renewIn)
+	second, secondStore := openSeparatedCoordinatorWithGrant(t, targets, "c2", grantTTL, renewIn)
 	t.Cleanup(func() { require.NoError(t, secondStore.Close()) })
 
 	_, err = second.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator lease not held")
+	require.Contains(t, err.Error(), "coordinator grant not held")
 
 	var next *coordpb.AllocIDResponse
 	require.Eventually(t, func() bool {
@@ -198,7 +199,7 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 		if currentErr != nil {
 			return false
 		}
-		return state.Tenure.HolderID == "c2" &&
+		return state.ActiveGrant.HolderID == "c2" &&
 			state.IDFence >= lastID &&
 			state.IDFence >= next.GetFirstId()
 	}, 8*time.Second, 50*time.Millisecond)
@@ -227,10 +228,10 @@ func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 		svc, store := openSeparatedCoordinator(t, targets, "c1")
 
 		// Each iteration tears down the previous coordinator and opens
-		// a fresh one; the meta/root tenure lifecycle (seal previous,
+		// a fresh one; the meta/root grant lifecycle (seal previous,
 		// campaign new) is exactly the chaos this test exercises. A
 		// single AllocID call can land in the brief window between an
-		// old tenure's seal and the new tenure's campaign and observe
+		// old grant's seal and the new grant's campaign and observe
 		// 'metadata root not leader'. Production clients retry; mirror
 		// that here so the test asserts the steady-state monotonicity
 		// invariant rather than the absence of transient leader-change
@@ -270,9 +271,9 @@ func TestSeparatedModeCoordinatorChaosMonotonicAllocID(t *testing.T) {
 			require.Eventually(t, func() bool {
 				state, err := rootCluster.Roots[leaderID].Current()
 				return err == nil &&
-					state.Tenure.HolderID == "c1" &&
+					state.ActiveGrant.HolderID == "c1" &&
 					state.IDFence >= prevLastID
-			}, 8*time.Second, 50*time.Millisecond, "iteration %d lease campaign did not inherit previous allocator fence", i)
+			}, 8*time.Second, 50*time.Millisecond, "iteration %d grant campaign did not inherit previous allocator fence", i)
 		}
 	}
 
@@ -437,10 +438,10 @@ func exposeRemoteRoots(t *testing.T, cluster *pdtestcluster.Cluster) map[uint64]
 }
 
 func openSeparatedCoordinator(t *testing.T, targets map[uint64]string, coordinatorID string) (*coordserver.Service, *rootview.RootStore) {
-	return openSeparatedCoordinatorWithLease(t, targets, coordinatorID, 10*time.Second, 3*time.Second)
+	return openSeparatedCoordinatorWithGrant(t, targets, coordinatorID, 10*time.Second, 3*time.Second)
 }
 
-func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, coordinatorID string, leaseTTL, renewIn time.Duration) (*coordserver.Service, *rootview.RootStore) {
+func openSeparatedCoordinatorWithGrant(t *testing.T, targets map[uint64]string, coordinatorID string, grantTTL, renewIn time.Duration) (*coordserver.Service, *rootview.RootStore) {
 	t.Helper()
 	store, err := rootview.OpenRootRemoteStore(rootview.RemoteRootConfig{
 		Targets: targets,
@@ -458,6 +459,6 @@ func openSeparatedCoordinatorWithLease(t *testing.T, targets map[uint64]string, 
 		tso.NewAllocator(bootstrap.TSStart),
 		store,
 	)
-	svc.ConfigureTenure(coordinatorID, leaseTTL, renewIn)
+	svc.ConfigureAuthorityGrant(coordinatorID, grantTTL, renewIn)
 	return svc, store
 }

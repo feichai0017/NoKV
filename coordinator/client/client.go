@@ -10,7 +10,9 @@ import (
 	coordprotocol "github.com/feichai0017/NoKV/coordinator/protocol"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -203,7 +205,7 @@ func (c *GRPCClient) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegion
 // GetRegionByKey forwards region lookup RPC.
 func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	// Region lookup is a metadata authority read: standby coordinators can
-	// reject it with lease-not-held, so it must fail over like TSO/AllocID even
+	// reject it with grant-not-held, so it must fail over like TSO/AllocID even
 	// though the RPC does not mutate user metadata.
 	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
 		return coord.GetRegionByKey(ctx, req)
@@ -397,9 +399,9 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 		if len(endpoints) == 0 {
 			return zero, errNoReachableAddress
 		}
-		// Not-leader / lease-not-held replies mean the client reached a coordinator,
+		// Not-leader / grant-not-held replies mean the client reached a coordinator,
 		// but not the current authority. If every endpoint misses authority, retry
-		// the whole set briefly so rooted leadership and tenure can converge.
+		// the whole set briefly so root write access and grant ownership can converge.
 		allAuthorityMiss := true
 		for i, endpoint := range endpoints {
 			resp, err := call(endpoint.coord)
@@ -456,8 +458,8 @@ func isAuthorityMiss(err error) bool {
 }
 
 type witnessEraFloor struct {
-	maxSeen    uint64
-	sealedSeen uint64
+	maxSeen     uint64
+	retiredSeen uint64
 }
 
 type metadataAttachedFloor struct {
@@ -477,7 +479,7 @@ func (c *GRPCClient) validateAllocIDResponse(req *coordpb.AllocIDRequest, resp *
 	if resp == nil {
 		return fmt.Errorf("%w: alloc id response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("alloc_id", normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.allocGen)
+	return c.validateMonotoneWitness("alloc_id", rootproto.DutyAllocID, normalizedCount(requestedAllocIDCount(req)), resp.GetFirstId(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedRetiredEraFloor(), resp.GetAuthorityEvidence(), &c.allocGen)
 }
 
 func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyRequest, resp *coordpb.GetRegionByKeyResponse) error {
@@ -692,11 +694,11 @@ func (c *GRPCClient) validateTSOResponse(req *coordpb.TsoRequest, resp *coordpb.
 	if resp == nil {
 		return fmt.Errorf("%w: tso response is nil", errInvalidWitness)
 	}
-	return c.validateMonotoneWitness("tso", normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedLegacyEra(), &c.tsoGen)
+	return c.validateMonotoneWitness("tso", rootproto.DutyTSO, normalizedCount(requestedTSOCount(req)), resp.GetTimestamp(), resp.GetCount(), resp.GetEra(), resp.GetConsumedFrontier(), resp.GetObservedRetiredEraFloor(), resp.GetAuthorityEvidence(), &c.tsoGen)
 }
 
-func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first, gotCount, era, consumedFrontier, observedLegacyEra uint64, floor *witnessEraFloor) error {
-	if era == rootproto.MandateWitnessEraSuppressed {
+func (c *GRPCClient) validateMonotoneWitness(kind string, duty rootproto.DutyID, requestedCount, first, gotCount, era, consumedFrontier, observedRetiredEraFloor uint64, evidence *metapb.RootAuthorityEvidence, floor *witnessEraFloor) error {
+	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: %s reply evidence suppressed", errInvalidWitness, kind)
 	}
 	if gotCount != requestedCount {
@@ -709,15 +711,18 @@ func (c *GRPCClient) validateMonotoneWitness(kind string, requestedCount, first,
 	if consumedFrontier != expectedFrontier {
 		return fmt.Errorf("%w: %s consumed_frontier=%d expected=%d", errInvalidWitness, kind, consumedFrontier, expectedFrontier)
 	}
-	return c.advanceWitnessEraFloor(kind, era, observedLegacyEra, floor)
+	if err := validateAuthorityEvidence(kind, duty, era, observedRetiredEraFloor, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier}, evidence); err != nil {
+		return err
+	}
+	return c.advanceWitnessEraFloor(kind, era, observedRetiredEraFloor, floor)
 }
 
 func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResponse) error {
 	era := resp.GetEra()
-	if era == rootproto.MandateWitnessEraSuppressed {
+	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: get_region_by_key reply evidence suppressed", errInvalidWitness)
 	}
-	if era == rootproto.MandateWitnessEraAttached {
+	if era == rootproto.AuthorityEraAttached {
 		if resp.GetServingClass() != coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE ||
 			resp.GetSyncHealth() != coordpb.SyncHealth_SYNC_HEALTH_HEALTHY ||
 			!resp.GetServedByLeader() ||
@@ -735,7 +740,75 @@ func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResp
 		}
 		return c.advanceAttachedMetadataFloor(resp)
 	}
-	return c.advanceWitnessEraFloor("get_region_by_key", era, resp.GetObservedLegacyEra(), &c.metadataGen)
+	if err := validateAuthorityEvidence("get_region_by_key", rootproto.DutyRegionLookup, era, resp.GetObservedRetiredEraFloor(), rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()}, resp.GetAuthorityEvidence()); err != nil {
+		return err
+	}
+	return c.advanceWitnessEraFloor("get_region_by_key", era, resp.GetObservedRetiredEraFloor(), &c.metadataGen)
+}
+
+func validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observedRetiredEraFloor uint64, required rootproto.DutyBound, pbEvidence *metapb.RootAuthorityEvidence) error {
+	if era == rootproto.AuthorityEraAttached {
+		if duty != rootproto.DutyRegionLookup {
+			return fmt.Errorf("%w: %s attached era is only valid for metadata witnesses", errInvalidWitness, kind)
+		}
+		if pbEvidence != nil {
+			return fmt.Errorf("%w: %s attached reply carries authority evidence", errInvalidWitness, kind)
+		}
+		return nil
+	}
+	evidence := metawire.RootAuthorityEvidenceFromProto(pbEvidence)
+	cert := evidence.Certificate
+	if !cert.Grant.Present() {
+		return fmt.Errorf("%w: %s authority evidence missing grant certificate", errInvalidWitness, kind)
+	}
+	if cert.SignerKeyID != rootproto.GrantSignerKeyID {
+		return fmt.Errorf("%w: %s authority evidence signer=%s", errInvalidWitness, kind, cert.SignerKeyID)
+	}
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(cert.Grant))
+	if err != nil {
+		return fmt.Errorf("%w: %s authority evidence marshal: %v", errInvalidWitness, kind, err)
+	}
+	if !rootproto.VerifyGrantBytes(payload, cert.Signature) {
+		return fmt.Errorf("%w: %s authority evidence signature mismatch", errInvalidWitness, kind)
+	}
+	if cert.Grant.Era != era {
+		return fmt.Errorf("%w: %s grant_era=%d reply_era=%d", errInvalidWitness, kind, cert.Grant.Era, era)
+	}
+	if cert.Grant.ExpiresUnixNano <= time.Now().UnixNano() {
+		return fmt.Errorf("%w: %s authority evidence expired", errInvalidWitness, kind)
+	}
+	if evidence.Usage.DutyID != duty {
+		return fmt.Errorf("%w: %s evidence_duty=%s required=%s", errInvalidWitness, kind, evidence.Usage.DutyID, duty)
+	}
+	grantDuty, ok := cert.Grant.Duty(duty)
+	if !ok ||
+		!authorityEvidenceBoundCovers(grantDuty.Bound, evidence.Usage.Usage) ||
+		!authorityEvidenceBoundCovers(evidence.Usage.Usage, required) {
+		return fmt.Errorf("%w: %s usage outside grant", errInvalidWitness, kind)
+	}
+	if observedRetiredEraFloor != 0 && evidence.ObservedRetiredEraFloor < observedRetiredEraFloor {
+		return fmt.Errorf("%w: %s observed_retired_floor=%d reply_observed=%d", errInvalidWitness, kind, evidence.ObservedRetiredEraFloor, observedRetiredEraFloor)
+	}
+	return nil
+}
+
+func authorityEvidenceBoundCovers(grant, usage rootproto.DutyBound) bool {
+	if grant.Kind != usage.Kind {
+		return false
+	}
+	switch usage.Kind {
+	case rootproto.DutyBoundMonotone:
+		return usage.MonotoneUpper <= grant.MonotoneUpper
+	case rootproto.DutyBoundVersion:
+		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
+			usage.MaxRootLag <= grant.MaxRootLag
+	case rootproto.DutyBoundBudget:
+		return usage.Budget <= grant.Budget
+	case rootproto.DutyBoundEpoch:
+		return usage.Epoch <= grant.Epoch
+	default:
+		return false
+	}
 }
 
 func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyResponse) error {
@@ -770,21 +843,20 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 	return nil
 }
 
-func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedLegacyEra uint64, floor *witnessEraFloor) error {
+func (c *GRPCClient) advanceWitnessEraFloor(kind string, era, observedRetiredEraFloor uint64, floor *witnessEraFloor) error {
 	c.verifyMu.Lock()
 	defer c.verifyMu.Unlock()
-	if era == rootproto.MandateWitnessEraSuppressed {
+	if era == rootproto.AuthorityEraSuppressed {
 		return fmt.Errorf("%w: %s era suppressed", errInvalidWitness, kind)
 	}
-	if observedLegacyEra > floor.sealedSeen {
-		floor.sealedSeen = observedLegacyEra
-	}
-	if floor.sealedSeen != 0 && era <= floor.sealedSeen {
-		return fmt.Errorf("%w: %s era=%d sealed_floor=%d", errStaleWitnessEra, kind, era, floor.sealedSeen)
+	nextRetiredSeen := max(observedRetiredEraFloor, floor.retiredSeen)
+	if nextRetiredSeen != 0 && era <= nextRetiredSeen {
+		return fmt.Errorf("%w: %s era=%d retired_floor=%d", errStaleWitnessEra, kind, era, nextRetiredSeen)
 	}
 	if era < floor.maxSeen {
 		return fmt.Errorf("%w: %s era=%d max_seen=%d", errStaleWitnessEra, kind, era, floor.maxSeen)
 	}
+	floor.retiredSeen = nextRetiredSeen
 	if era > floor.maxSeen {
 		floor.maxSeen = era
 	}

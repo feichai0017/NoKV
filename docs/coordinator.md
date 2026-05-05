@@ -74,38 +74,142 @@ actions.
 
 ### Minimal Eunomia vocabulary
 
-The rooted handoff protocol is intentionally small. Docs and operator-facing
+The rooted authority protocol is intentionally small. Docs and operator-facing
 surfaces should use the same vocabulary as the implementation and the
 Eunomia research note:
 
-- `Tenure` — the currently active authority record
-- `Legacy` — the retired predecessor era plus the frontier it already consumed
-- `Handover` — the rooted handoff record for the current successor
-- `Era` — the monotonic authority era
-- `Witness` — the operator-visible proof bundle that explains whether the
-  current handoff state is safe
+- `AuthorityGrant` — the active root-issued bounded authority record
+- `Duty` — a named service responsibility such as `alloc_id`, `tso`, or `region_lookup`
+- `DutyBound` — the root-known upper bound for a duty, for example an ID fence,
+  TSO fence, descriptor revision ceiling, budget, or epoch
+- `GrantRetirement` — the predecessor grant retired either by graceful exact
+  usage or by expiry-time upper bound
+- `GrantInheritance` — the successor grant's rooted acknowledgement that it
+  covers the predecessor retirement bound
+- `AuthorityEvidence` — the reply-carried proof bundle: root-signed grant
+  certificate, duty usage, and observed retired-era floor
 
 The four guarantees discussed by the docs and runtime metrics are:
 
-- `Primacy` — at most one authority era is active
-- `Inheritance` — the successor must cover the predecessor's published work
-- `Silence` — a sealed predecessor must not keep serving
-- `Finality` — a handoff must not remain permanently half-finished
+- `Primacy` — at most one active grant may serve a duty scope
+- `Bounded Inheritance` — the successor must cover every pending predecessor
+  retirement bound before it can be considered complete
+- `Silence` — a retired predecessor era must not keep serving
+- `Finality` — every retired grant should become inherited or explicitly visible
+  as pending audit state
 
 The mapping to concrete implementation types is direct:
 
 | Doc term | Implementation term |
 |---|---|
-| `Tenure` | `Tenure` |
-| `Legacy` | `Legacy` |
-| `Handover` | `Handover` |
-| `Era` | `Era` / `era` |
-| `Witness` | `HandoverWitness` / continuation witness fields |
-| `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
+| `AuthorityGrant` | `AuthorityGrant` / `RootAuthorityGrant` |
+| `Duty` | `DutyID` / `DutyGrant` |
+| `DutyBound` | `DutyBound` / `RootDutyBound` |
+| `GrantRetirement` | `GrantRetirement` / `RootGrantRetirement` |
+| `GrantInheritance` | `GrantInheritance` / `RootGrantInheritance` |
+| `AuthorityEvidence` | `AuthorityEvidence` / `RootAuthorityEvidence` |
 
-Do not reintroduce `Lease` / `Seal` as public aliases. They are useful
-informally, but keeping them in formal docs creates two names for the same
-rooted objects and makes Eunomia harder to explain.
+Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. V2 is a
+grant protocol: graceful shutdown records exact usage, while crash-before-seal
+is handled by retiring the predecessor at its root-known grant bound.
+
+Grant certificates use Ed25519. Processes that sign grant certificates read
+`NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` as a base64 Ed25519 seed or private
+key. Verifier-only processes may use `NOKV_EUNOMIA_GRANT_VERIFY_PUBLIC_KEY` as
+the base64 public key. If neither variable is set, production processes fail
+closed. Tests and local single-process development may opt into a process-local
+ephemeral key with `NOKV_EUNOMIA_GRANT_ALLOW_EPHEMERAL_KEYS=1`; distributed
+deployments must not use ephemeral keys because certificates signed in one
+process cannot be verified after restart or by another process.
+
+### Eunomia production-hardening backlog
+
+The current grant protocol gives NoKV a bounded authority model for the
+implemented duties, but several engineering items remain before treating it as
+a production security boundary. Track these as protocol work, not as
+compatibility shims.
+
+#### P0: certificate ownership and verifier durability
+
+- Root-issued certificate cache: `ApplyGrant(Issue)` returns a committed
+  `GrantCertificate`. The coordinator should persist that certificate in its
+  local grant view and attach it to every `AuthorityEvidence` reply. A
+  coordinator must not re-sign the grant certificate; the private signing key
+  belongs to meta-root, a root-quorum signer, or KMS.
+- Verifier-only coordinator mode: a coordinator with cached root-issued
+  certificates and only public verification material should still serve
+  authority RPCs. Missing certificates or locally synthesized certificates must
+  fail closed.
+- Durable client verifier store: production clients need a pluggable
+  `AuthorityVerifierStore`. Tests can keep using an in-memory store, but
+  production clients should persist monotonic floors before accepting later
+  replies from newer eras.
+- Verifier state format: store compact protobuf records, not ad hoc JSON. The
+  record key should include `cluster_id`, `duty`, and `scope`; the value should
+  include `max_seen_era`, `retired_era_floor`, `retired_grant_ids`,
+  `max_root_token`, `max_descriptor_revision`, and per-duty usage frontier.
+  File-backed stores should use temp-write, fsync, and rename.
+
+#### P1: clock and evidence time
+
+- Add `served_unix_nano` to `AuthorityEvidence`. A verifier should check that
+  the served timestamp is within the grant expiry and within a configured
+  maximum reply age.
+- Coordinators should stop serving a grant at `expiry - max_clock_skew` and
+  renew before that local deadline. Root expiry remains the authority boundary;
+  the local skew margin is an admission policy.
+- Diagnostics should expose the skew policy, grant remaining time, renew
+  deadline, and whether admission is open, draining, or expired.
+
+#### P2: production key management
+
+- Split signing and verification behind `GrantSigner`, `GrantVerifier`, and
+  `KeySetProvider` interfaces. Environment variables should remain a dev/test
+  provider, not the production design.
+- Production deployments should use KMS/HSM-backed signing or a root quorum
+  signer. Clients and coordinators should receive only public verification
+  material unless they are part of the root signing service.
+- Support key rotation by carrying a `key_id` in certificates and serving an
+  active-plus-retired verification key set until all grants signed by retired
+  keys have expired and their verifier floors are durable.
+
+#### P3: duty extension contract
+
+Every new duty must register a complete `DutySpec`; adding a string name is not
+enough. The spec must define:
+
+- scope semantics, such as global, mount, subtree, or region range
+- bound type, such as monotone, version, budget, or epoch
+- reply usage extraction and the "usage is covered by evidence" rule
+- graceful seal frontier and expired-bound retirement rule
+- client verifier rule and audit checker rule
+
+The initial closed set is `alloc_id`, `tso`, and `region_lookup`. Unknown or
+unregistered duties should be rejected by root, coordinator admission, client
+verification, and audit.
+
+#### P4: tests and audit
+
+- Root tests: deterministic root certificate bytes, tamper rejection, key-id
+  lookup, rotation window, and missing signer failure.
+- Coordinator tests: cached root-issued certificate survives reload; a
+  verifier-only coordinator can serve; no locally re-signed certificates appear
+  in replies.
+- Client tests: durable verifier floors survive restart and still reject delayed
+  old-era replies; floor updates happen only after full evidence validation.
+- Clock tests: fast coordinator clock, slow coordinator clock, delayed reply,
+  and near-expiry renew admission.
+- Audit tests: every reply usage is covered by its evidence usage, every
+  evidence usage is inside the grant bound, retired floors are monotonic, and
+  metadata replies obey root-token and descriptor-revision rules.
+
+Recommended implementation order:
+
+1. Root-issued certificate cache in coordinator grant view.
+2. Durable verifier-state protobuf plus file/local-meta store.
+3. `served_unix_nano` and clock-skew admission policy.
+4. Key provider and key rotation.
+5. `DutySpec` registry and audit integration.
 
 ---
 
@@ -129,8 +233,8 @@ plane deployment; it simply has no control plane.
   (replicated raft quorum, the only backend NoKV ships)
 - one or more `nokv coordinator` processes connect through the remote
   metadata-root gRPC API
-- `Tenure` gates singleton Coordinator duties: `AllocID`, `Tso`,
-  and scheduler operation planning
+- `AuthorityGrant` gates singleton Coordinator duties: `AllocID`, `Tso`,
+  and authoritative route lookup
 - route reads still come from Coordinator's rebuildable in-memory view and
   expose `Freshness`, `RootToken`, `CatchUpState`, and `DegradedMode`
 
@@ -145,8 +249,8 @@ Product assumptions:
 
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
-- coordinators are stateless relative to rooted truth; only the
-  `Tenure` differentiates active vs standby
+- coordinators are stateless relative to rooted truth; only the active
+  `AuthorityGrant` differentiates active vs standby
 - no dynamic metadata-root membership
 - no production-grade dynamic coordinator membership manager
 
@@ -178,10 +282,10 @@ Persistence ownership:
 1. `meta-root` workdirs own durable rooted truth and replicated metadata-root
    raft state.
 2. `coordinator` runtime view is rebuildable from remote `meta/root`.
-3. allocator fences and `Tenure` are rooted events, not local
+3. allocator fences and `AuthorityGrant` lifecycle records are rooted events, not local
    coordinator files.
 
-`--coordinator-id` must be a stable configured identity. It is used for lease
+`--coordinator-id` must be a stable configured identity. It is used for grant
 ownership and operator debugging; it should not be generated randomly on each
 restart.
 
@@ -329,25 +433,28 @@ Related CLI behavior:
 
 ## 8. Service Semantics
 
-`Coordinator` intentionally separates rooted truth leadership from the outer gRPC
-service surface.
+`Coordinator` intentionally separates root write access, meta-root Raft
+leadership, and Eunomia authority holding.
 
 In `3 coordinator + replicated meta`:
 
 - all three `coordinator` processes may listen and serve RPC
-- only the rooted leader may commit truth writes
+- only the coordinator whose root backend can submit root writes may commit truth
+  mutations
 - followers refresh rooted state and serve read/view traffic
 
 In separated mode:
 
-- `meta-root` leadership determines which root endpoint accepts truth writes
-- `Tenure` determines which Coordinator may serve singleton duties
+- `meta-root` leadership determines which root endpoint commits truth writes
+- the coordinator-side root client may still report `CanSubmitRootWrites=true`
+  because it routes writes to that meta-root leader
+- `AuthorityGrant` determines which Coordinator may serve singleton duties
 - non-holder Coordinators may still serve route reads if their rooted view
   satisfies the caller's freshness contract
 
-### Leader-only writes
+### Root-write RPCs
 
-These RPCs require rooted leadership:
+These RPCs require `CanSubmitRootWrites()` at the coordinator-side root backend:
 
 - `RegionHeartbeat`
 - `PublishRootEvent`
@@ -355,11 +462,12 @@ These RPCs require rooted leadership:
 - `AllocID`
 - `Tso`
 
-Followers return `FailedPrecondition` with `coordinator not leader` semantics, and
-clients are expected to retry against another Coordinator endpoint.
+Backends that cannot submit root writes return `FailedPrecondition` with
+`coordinator not leader` semantics, and clients retry against another
+Coordinator endpoint.
 
-In separated mode, `AllocID`, `Tso`, and scheduler operation planning also
-require the local Coordinator to hold `Tenure`.
+In separated mode, `AllocID`, `Tso`, and authoritative `GetRegionByKey`
+responses require the local Coordinator to hold a covering `AuthorityGrant`.
 
 ### Any-node reads
 
@@ -383,8 +491,9 @@ protocol surface:
 
 ### Client behavior
 
-`coordinator/client` accepts multiple Coordinator addresses. Write RPCs retry across Coordinator nodes and
-converge on the rooted leader. Read RPCs may use any available Coordinator endpoint.
+`coordinator/client` accepts multiple Coordinator addresses. Write RPCs retry
+across Coordinator nodes and converge on an endpoint whose root backend can
+submit root writes. Read RPCs may use any available Coordinator endpoint.
 
 ---
 
@@ -423,8 +532,8 @@ Current product assumptions:
 
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
-- coordinators are stateless relative to rooted truth; only the
-  `Tenure` differentiates active vs standby
+- coordinators are stateless relative to rooted truth; only the active
+  `AuthorityGrant` differentiates active vs standby
 - no dynamic metadata-root membership
 
 For local bootstrap, use:
@@ -463,7 +572,7 @@ For local bootstrap, use:
 - Coordinator persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
-  - `Tenure` ownership for separated singleton duties
+  - `AuthorityGrant` ownership for separated singleton duties
 - Coordinator is not the durable owner of a store's local raft/region truth. Store
   restart truth remains in `raftstore/localmeta`, while Coordinator keeps routing and
   scheduling state rebuilt from `meta/root`.

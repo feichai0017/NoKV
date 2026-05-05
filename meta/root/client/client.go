@@ -214,39 +214,25 @@ func (c *Client) LeaderID() uint64 {
 	return statusResp.GetLeaderId()
 }
 
-func (c *Client) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
-	if !validTenureAct(cmd.Kind) {
-		return rootstate.EunomiaState{}, rootstate.ErrInvalidTenure
+func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	if !validGrantAct(cmd.Kind) {
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyTenureResponse, error) {
-		return rpc.ApplyTenure(ctx, &metapb.MetadataRootApplyTenureRequest{
-			Command: metawire.RootTenureCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyGrantResponse, error) {
+		return rpc.ApplyGrant(ctx, &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.EunomiaState{}, err
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 	}
 	protocolState := metawire.RootEunomiaStateFromProto(resp.GetState())
-	if cmd.Kind == rootproto.TenureActIssue &&
-		resp.GetStatus() == metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD {
-		return protocolState, rootstate.ErrPrimacy
+	cert := metawire.RootGrantCertificateFromProto(resp.GetCertificate())
+	if cmd.Kind == rootproto.GrantActIssue &&
+		resp.GetStatus() == metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_HELD {
+		return protocolState, cert, rootstate.ErrPrimacy
 	}
-	return protocolState, nil
-}
-
-func (c *Client) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	if !validHandoverAct(cmd.Kind) {
-		return rootstate.EunomiaState{}, rootstate.ErrFinality
-	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyHandoverResponse, error) {
-		return rpc.ApplyHandover(ctx, &metapb.MetadataRootApplyHandoverRequest{
-			Command: metawire.RootHandoverCommandToProto(cmd),
-		})
-	})
-	if err != nil {
-		return rootstate.EunomiaState{}, err
-	}
-	return metawire.RootEunomiaStateFromProto(resp.GetState()), nil
+	return protocolState, cert, nil
 }
 
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
@@ -416,21 +402,12 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 	return conn, nil
 }
 
-func validTenureAct(kind rootproto.TenureAct) bool {
+func validGrantAct(kind rootproto.GrantAct) bool {
 	switch kind {
-	case rootproto.TenureActIssue, rootproto.TenureActRelease:
-		return true
-	default:
-		return false
-	}
-}
-
-func validHandoverAct(kind rootproto.HandoverAct) bool {
-	switch kind {
-	case rootproto.HandoverActSeal,
-		rootproto.HandoverActConfirm,
-		rootproto.HandoverActClose,
-		rootproto.HandoverActReattach:
+	case rootproto.GrantActIssue,
+		rootproto.GrantActSeal,
+		rootproto.GrantActRetireExpired,
+		rootproto.GrantActInherit:
 		return true
 	default:
 		return false

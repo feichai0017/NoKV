@@ -12,15 +12,15 @@ func TestCoordinatorFailpointMask(t *testing.T) {
 	if Current() != None {
 		t.Fatalf("Current()=%v, want None", Current())
 	}
-	if err := InjectAfterApplyHandoverBeforeReload(); err != nil {
+	if err := InjectAfterSealGrantBeforeReload(); err != nil {
 		t.Fatalf("disabled failpoint returned error: %v", err)
 	}
 
-	Set(AfterApplyHandoverBeforeReload)
-	if Current() != AfterApplyHandoverBeforeReload {
-		t.Fatalf("Current()=%v, want AfterApplyHandoverBeforeReload", Current())
+	Set(AfterSealGrantBeforeReload)
+	if Current() != AfterSealGrantBeforeReload {
+		t.Fatalf("Current()=%v, want AfterSealGrantBeforeReload", Current())
 	}
-	if err := InjectAfterApplyHandoverBeforeReload(); !errors.Is(err, ErrAfterApplyHandoverBeforeReload) {
-		t.Fatalf("expected handover failpoint error, got %v", err)
+	if err := InjectAfterSealGrantBeforeReload(); !errors.Is(err, ErrAfterSealGrantBeforeReload) {
+		t.Fatalf("expected grant failpoint error, got %v", err)
 	}
 }

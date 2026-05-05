@@ -28,9 +28,9 @@ enum RootEventKind {
   ROOT_EVENT_KIND_PEER_REMOVED = 15;
   ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED = 18;
   ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED = 19;
-  ROOT_EVENT_KIND_TENURE = 20;
-  ROOT_EVENT_KIND_LEGACY = 21;
-  ROOT_EVENT_KIND_HANDOVER = 22;
+  ROOT_EVENT_KIND_GRANT_ISSUED = 20;
+  ROOT_EVENT_KIND_GRANT_SEALED = 21;
+  ROOT_EVENT_KIND_GRANT_RETIRED = 22;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED = 23;
   ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED = 24;
   ROOT_EVENT_KIND_MOUNT_REGISTERED = 25;
@@ -39,6 +39,7 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED = 28;
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
   ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
+  ROOT_EVENT_KIND_GRANT_INHERITED = 31;
 }
 
 message RootCursor {
@@ -52,9 +53,9 @@ message RootState {
   RootCursor last_committed = 4;
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
-  RootTenure tenure = 7;
-  RootLegacy legacy = 8;
-  RootHandover handover = 9;
+  RootAuthorityGrant active_grant = 7;
+  repeated RootGrantRetirement retired_grants = 8;
+  repeated RootGrantInheritance grant_inheritances = 9;
 }
 
 message RootCheckpoint {
@@ -150,45 +151,105 @@ message RootAllocatorFence {
   uint64 minimum = 1;
 }
 
-message RootTenure {
-  string holder_id = 1;
-  int64 expires_unix_nano = 2;
+enum RootDutyScopeKind {
+  ROOT_DUTY_SCOPE_KIND_UNSPECIFIED = 0;
+  ROOT_DUTY_SCOPE_KIND_GLOBAL = 1;
+  ROOT_DUTY_SCOPE_KIND_MOUNT = 2;
+  ROOT_DUTY_SCOPE_KIND_SUBTREE = 3;
+  ROOT_DUTY_SCOPE_KIND_REGION_RANGE = 4;
+}
+
+message RootDutyScope {
+  RootDutyScopeKind kind = 1;
+  string mount_id = 2;
+  uint64 subtree_root = 3;
+  bytes start_key = 4;
+  bytes end_key = 5;
+}
+
+message RootMonotoneBound {
+  uint64 upper = 1;
+}
+
+message RootVersionBound {
+  RootTailToken root_token = 1;
+  uint64 descriptor_revision_ceiling = 2;
+  uint64 max_root_lag = 3;
+}
+
+message RootBudgetBound {
+  uint64 budget = 1;
+}
+
+message RootEpochBound {
+  uint64 epoch = 1;
+}
+
+message RootDutyBound {
+  oneof bound {
+    RootMonotoneBound monotone = 1;
+    RootVersionBound version = 2;
+    RootBudgetBound budget = 3;
+    RootEpochBound epoch = 4;
+  }
+}
+
+message RootDutyGrant {
+  string duty_id = 1;
+  RootDutyScope scope = 2;
+  RootDutyBound bound = 3;
+}
+
+message RootAuthorityGrant {
+  string grant_id = 1;
+  string holder_id = 2;
   uint64 era = 3;
-  RootCursor issued_at = 4;
-  uint32 mandate = 5;
-  string lineage_digest = 6;
-  repeated RootMandateFrontier inherited_frontiers = 7;
+  int64 expires_unix_nano = 4;
+  RootCursor issued_at = 5;
+  RootTailToken issued_root_token = 6;
+  repeated RootDutyGrant duties = 7;
+  repeated RootGrantRetirement predecessor_retirements = 8;
 }
 
-message RootMandateFrontier {
-  uint32 mandate = 1;
-  uint64 frontier = 2;
+enum RootGrantRetirementMode {
+  ROOT_GRANT_RETIREMENT_MODE_UNSPECIFIED = 0;
+  ROOT_GRANT_RETIREMENT_MODE_SEALED_EXACT = 1;
+  ROOT_GRANT_RETIREMENT_MODE_EXPIRED_BOUND = 2;
 }
 
-message RootLegacy {
-  string holder_id = 1;
-  uint64 era = 2;
-  uint32 mandate = 3;
-  repeated RootMandateFrontier frontiers = 4;
-  RootCursor sealed_at = 8;
+message RootGrantRetirement {
+  string grant_id = 1;
+  string holder_id = 2;
+  uint64 era = 3;
+  RootGrantRetirementMode mode = 4;
+  repeated RootDutyGrant bounds = 5;
+  RootCursor retired_at = 6;
+  string inherited_by_grant_id = 7;
 }
 
-enum RootHandoverStage {
-  ROOT_HANDOVER_STAGE_UNSPECIFIED = 0;
-  ROOT_HANDOVER_STAGE_CONFIRMED = 1;
-  ROOT_HANDOVER_STAGE_CLOSED = 2;
-  ROOT_HANDOVER_STAGE_REATTACHED = 3;
+message RootGrantInheritance {
+  string predecessor_grant_id = 1;
+  string successor_grant_id = 2;
+  RootCursor inherited_at = 3;
 }
 
-message RootHandover {
-  string holder_id = 1;
-  uint64 legacy_era = 2;
-  uint64 successor_era = 3;
-  string legacy_digest = 4;
-  RootHandoverStage stage = 5;
-  RootCursor confirmed_at = 6;
-  RootCursor closed_at = 7;
-  RootCursor reattached_at = 8;
+message RootGrantCertificate {
+  RootAuthorityGrant grant = 1;
+  string signer_key_id = 2;
+  bytes signature = 3;
+}
+
+message RootAuthorityUsage {
+  string duty_id = 1;
+  RootDutyScope scope = 2;
+  RootDutyBound usage = 3;
+}
+
+message RootAuthorityEvidence {
+  RootGrantCertificate certificate = 1;
+  RootAuthorityUsage usage = 2;
+  repeated RootGrantRetirement observed_retirements = 3;
+  uint64 observed_retired_era_floor = 4;
 }
 
 message RootRegionDescriptor {
@@ -268,9 +329,9 @@ message RootEvent {
     RootRangeSplit range_split = 6;
     RootRangeMerge range_merge = 7;
     RootPeerChange peer_change = 8;
-    RootTenure tenure = 9;
-    RootLegacy legacy = 10;
-    RootHandover handover = 11;
+    RootAuthorityGrant grant = 9;
+    RootGrantRetirement grant_retirement = 10;
+    RootGrantInheritance grant_inheritance = 11;
     RootSnapshotEpoch snapshot_epoch = 12;
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
@@ -315,63 +376,46 @@ message MetadataRootStatusResponse {
   uint64 leader_id = 2;
 }
 
-enum RootTenureAct {
-  ROOT_TENURE_ACT_UNSPECIFIED = 0;
-  ROOT_TENURE_ACT_ISSUE = 1;
-  ROOT_TENURE_ACT_RELEASE = 2;
-}
-
-message RootTenureCommand {
-  RootTenureAct kind = 1;
-  string holder_id = 2;
-  int64 expires_unix_nano = 3;
-  int64 now_unix_nano = 4;
-  string lineage_digest = 5;
-  repeated RootMandateFrontier inherited_frontiers = 6;
-}
-
-enum RootHandoverAct {
-  ROOT_HANDOVER_ACT_UNSPECIFIED = 0;
-  ROOT_HANDOVER_ACT_SEAL = 1;
-  ROOT_HANDOVER_ACT_CONFIRM = 2;
-  ROOT_HANDOVER_ACT_CLOSE = 3;
-  ROOT_HANDOVER_ACT_REATTACH = 4;
-}
-
-message RootHandoverCommand {
-  RootHandoverAct kind = 1;
-  string holder_id = 2;
-  int64 now_unix_nano = 3;
-  repeated RootMandateFrontier frontiers = 4;
-}
-
 message RootEunomiaState {
-  RootTenure tenure = 1;
-  RootLegacy legacy = 2;
-  RootHandover handover = 3;
+  RootAuthorityGrant active_grant = 1;
+  repeated RootGrantRetirement retired_grants = 2;
+  repeated RootGrantInheritance grant_inheritances = 3;
 }
 
-enum RootTenureApplyStatus {
-  ROOT_TENURE_APPLY_STATUS_UNSPECIFIED = 0;
-  ROOT_TENURE_APPLY_STATUS_GRANTED = 1;
-  ROOT_TENURE_APPLY_STATUS_HELD = 2;
+enum RootGrantAct {
+  ROOT_GRANT_ACT_UNSPECIFIED = 0;
+  ROOT_GRANT_ACT_ISSUE = 1;
+  ROOT_GRANT_ACT_SEAL = 2;
+  ROOT_GRANT_ACT_RETIRE_EXPIRED = 3;
+  ROOT_GRANT_ACT_INHERIT = 4;
 }
 
-message MetadataRootApplyTenureRequest {
-  RootTenureCommand command = 1;
+message RootGrantCommand {
+  RootGrantAct kind = 1;
+  string holder_id = 2;
+  string grant_id = 3;
+  int64 expires_unix_nano = 4;
+  int64 now_unix_nano = 5;
+  repeated RootDutyGrant requested_duties = 6;
+  repeated RootAuthorityUsage exact_usages = 7;
+  repeated string predecessor_grant_ids = 8;
 }
 
-message MetadataRootApplyTenureResponse {
+enum RootGrantApplyStatus {
+  ROOT_GRANT_APPLY_STATUS_UNSPECIFIED = 0;
+  ROOT_GRANT_APPLY_STATUS_GRANTED = 1;
+  ROOT_GRANT_APPLY_STATUS_HELD = 2;
+  ROOT_GRANT_APPLY_STATUS_RETIRED = 3;
+}
+
+message MetadataRootApplyGrantRequest {
+  RootGrantCommand command = 1;
+}
+
+message MetadataRootApplyGrantResponse {
   RootEunomiaState state = 1;
-  RootTenureApplyStatus status = 2;
-}
-
-message MetadataRootApplyHandoverRequest {
-  RootHandoverCommand command = 1;
-}
-
-message MetadataRootApplyHandoverResponse {
-  RootEunomiaState state = 1;
+  RootGrantApplyStatus status = 2;
+  RootGrantCertificate certificate = 3;
 }
 
 message RootTailToken {
@@ -428,8 +472,7 @@ service MetadataRoot {
   rpc Append(MetadataRootAppendRequest) returns (MetadataRootAppendResponse);
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
-  rpc ApplyTenure(MetadataRootApplyTenureRequest) returns (MetadataRootApplyTenureResponse);
-  rpc ApplyHandover(MetadataRootApplyHandoverRequest) returns (MetadataRootApplyHandoverResponse);
+  rpc ApplyGrant(MetadataRootApplyGrantRequest) returns (MetadataRootApplyGrantResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

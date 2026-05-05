@@ -21,16 +21,19 @@ import (
 // GetRegionByKey returns region metadata for the specified key.
 func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
 	}
+	if err := s.rejectIfAuthorityClosed(); err != nil {
+		return nil, err
+	}
 	state, err := s.currentReadState()
 	// Region lookup is an authority-bearing metadata read. A coordinator that
-	// already owns the tenure should renew it before rejecting clients with a
+	// already owns the grant should renew it before rejecting clients with a
 	// stale local read-state view.
-	renewed, renewErr := s.renewMetadataTenureIfNeeded(ctx, state, err)
+	renewed, renewErr := s.ensureMetadataGrantIfNeeded(ctx, state, err)
 	if renewErr != nil {
 		return nil, renewErr
 	}
@@ -41,10 +44,18 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	if err != nil {
 		return nil, err
 	}
+	done, err := s.beginAuthorityServing(ctx, rootproto.DutyRegionLookup)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
 	if !ok {
 		resp := admission.responseBase()
 		resp.NotFound = true
+		if err := s.attachMetadataAuthorityEvidence(ctx, resp); err != nil {
+			return nil, err
+		}
 		return resp, nil
 	}
 	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
@@ -56,6 +67,9 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	resp := admission.responseBase()
 	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
 	resp.DescriptorRevision = desc.RootEpoch
+	if err := s.attachMetadataAuthorityEvidence(ctx, resp); err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 
@@ -71,20 +85,19 @@ func pendingRangeChangeError(change rootstate.PendingRangeChange) string {
 }
 
 type readState struct {
-	servedToken    rootstorage.TailToken
-	currentToken   rootstorage.TailToken
-	rootLag        uint64
-	catchUpState   rootview.CatchUpState
-	degraded       coordpb.DegradedMode
-	servedByLeader bool
-	era            uint64
-	legacyEra      uint64
-	leasePresent   bool
-	leaseActive    bool
-	leaseSealed    bool
-	leaseMandate   uint32
-	leaseHolderID  string
-	leaseExpiresAt int64
+	servedToken     rootstorage.TailToken
+	currentToken    rootstorage.TailToken
+	rootLag         uint64
+	catchUpState    rootview.CatchUpState
+	degraded        coordpb.DegradedMode
+	servedByLeader  bool
+	era             uint64
+	retiredEraFloor uint64
+	grantPresent    bool
+	grantActive     bool
+	grantHasLookup  bool
+	grantHolderID   string
+	grantExpiresAt  int64
 }
 
 type metadataAnswerability struct {
@@ -116,10 +129,22 @@ func (a metadataAnswerability) responseBase() *coordpb.GetRegionByKeyResponse {
 		CatchUpState:               catchUpStateToProto(a.state.catchUpState),
 		RequiredDescriptorRevision: a.requiredDescriptorRevision,
 		Era:                        a.state.era,
-		ObservedLegacyEra:          a.state.legacyEra,
+		ObservedRetiredEraFloor:    a.state.retiredEraFloor,
 		ServingClass:               a.servingClass,
 		SyncHealth:                 a.syncHealth,
 	}
+}
+
+func (s *Service) attachMetadataAuthorityEvidence(ctx context.Context, resp *coordpb.GetRegionByKeyResponse) error {
+	if s == nil || resp == nil || resp.GetEra() == rootproto.AuthorityEraAttached || resp.GetEra() == rootproto.AuthorityEraSuppressed {
+		return nil
+	}
+	evidence, err := s.authorityEvidence(ctx, rootproto.DutyRegionLookup, rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: resp.GetDescriptorRevision()})
+	if err != nil {
+		return err
+	}
+	resp.AuthorityEvidence = evidence
+	return nil
 }
 
 func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest, state readState, loadErr error) (metadataAnswerability, error) {
@@ -136,15 +161,18 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 		}
 		admission.state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 	}
-	if loadErr == nil && s != nil && s.coordinatorLeaseEnabled() && admission.state.leasePresent {
-		if admission.state.leaseMandate&rootproto.MandateGetRegionByKey == 0 {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: required_mandate=%d rooted_mandate=%d era=%d", rootstate.ErrMandate, rootproto.MandateGetRegionByKey, admission.state.leaseMandate, admission.state.era))
+	if loadErr == nil && s != nil && s.coordinatorGrantEnabled() && admission.state.grantPresent {
+		s.grantMu.RLock()
+		holderID := strings.TrimSpace(s.coordinatorID)
+		s.grantMu.RUnlock()
+		if holderID != "" && strings.TrimSpace(admission.state.grantHolderID) != holderID {
+			return metadataAnswerability{}, statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, admission.state.grantHolderID, holderID))
 		}
-		if !admission.state.leaseActive {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: rooted lease expired era=%d", rootstate.ErrInvalidTenure, admission.state.era))
+		if !admission.state.grantHasLookup {
+			return metadataAnswerability{}, statusGrant(fmt.Errorf("%w: required_duty=%s era=%d", rootstate.ErrDuty, rootproto.DutyName(rootproto.DutyRegionLookup), admission.state.era))
 		}
-		if admission.state.leaseSealed {
-			return metadataAnswerability{}, statusTenure(fmt.Errorf("%w: era=%d sealed_era=%d", rootstate.ErrPrimacy, admission.state.era, admission.state.era))
+		if !admission.state.grantActive {
+			return metadataAnswerability{}, statusGrant(fmt.Errorf("%w: rooted grant expired era=%d", rootstate.ErrInvalidGrant, admission.state.era))
 		}
 	}
 	if !rootTokenSatisfied(admission.state.servedToken, admission.requiredRootToken) {
@@ -158,6 +186,11 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 	servingClass, syncHealth, err := s.admitReadServing(admission.freshness, admission.state)
 	if err != nil {
 		return metadataAnswerability{}, err
+	}
+	if loadErr == nil && s != nil && s.coordinatorGrantEnabled() &&
+		servingClass == coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE &&
+		(!admission.state.grantPresent || admission.state.era == rootproto.AuthorityEraAttached || !admission.state.grantHasLookup || !admission.state.grantActive) {
+		return metadataAnswerability{}, statusGrant(fmt.Errorf("%w: required_duty=%s", rootstate.ErrDuty, rootproto.DutyName(rootproto.DutyRegionLookup)))
 	}
 	admission.servingClass = servingClass
 	admission.syncHealth = syncHealth
@@ -178,7 +211,7 @@ func (s *Service) currentReadState() (readState, error) {
 	}
 	state := readState{
 		degraded:       coordpb.DegradedMode_DEGRADED_MODE_HEALTHY,
-		servedByLeader: s.storage == nil || s.storage.IsLeader(),
+		servedByLeader: s.storage == nil || s.storage.CanSubmitRootWrites(),
 		servedToken:    servedToken,
 		currentToken:   servedToken,
 		catchUpState:   rootview.CatchUpStateFresh,
@@ -198,21 +231,22 @@ func (s *Service) currentReadState() (readState, error) {
 		state.catchUpState = rootview.CatchUpStateUnavailable
 		return state, err
 	}
-	if snapshot.Tenure.Era != 0 && strings.TrimSpace(snapshot.Tenure.HolderID) != "" {
-		state.leasePresent = true
-		state.leaseActive = snapshot.Tenure.ActiveAt(nowUnixNano)
-		state.leaseSealed = rootstate.TenureSealed(snapshot.Tenure, snapshot.Legacy)
-		state.leaseMandate = snapshot.Tenure.Mandate
-		state.leaseHolderID = snapshot.Tenure.HolderID
-		state.leaseExpiresAt = snapshot.Tenure.ExpiresUnixNano
+	if snapshot.ActiveGrant.Era != 0 && strings.TrimSpace(snapshot.ActiveGrant.HolderID) != "" {
+		state.grantPresent = true
+		state.grantActive = snapshot.ActiveGrant.ActiveAt(nowUnixNano)
+		_, state.grantHasLookup = snapshot.ActiveGrant.Duty(rootproto.DutyRegionLookup)
+		state.grantHolderID = snapshot.ActiveGrant.HolderID
+		state.grantExpiresAt = snapshot.ActiveGrant.ExpiresUnixNano
 	}
-	if snapshot.Legacy.Present() {
-		state.legacyEra = snapshot.Legacy.Era
+	for _, retirement := range snapshot.RetiredGrants {
+		if retirement.Era > state.retiredEraFloor {
+			state.retiredEraFloor = retirement.Era
+		}
 	}
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState
-	state.era = s.metadataReplyEra(snapshot.Tenure.Era)
+	state.era = s.metadataReplyEra(snapshot.ActiveGrant.Era)
 	if s.cachedRootSnapshotStale() {
 		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
 			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
@@ -233,19 +267,18 @@ func (s *Service) currentReadState() (readState, error) {
 	return state, nil
 }
 
-// renewMetadataTenureIfNeeded only refreshes tenure already held by this
-// coordinator. It must not campaign over another holder just because a metadata
-// read arrived during that holder's active tenure.
-func (s *Service) renewMetadataTenureIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
-	if loadErr != nil || s == nil || !s.coordinatorLeaseEnabled() || !state.leasePresent {
+// ensureMetadataGrantIfNeeded obtains or refreshes a region_lookup grant for
+// authoritative metadata reads. It must not campaign over another live holder.
+func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readState, loadErr error) (bool, error) {
+	if s == nil || !s.coordinatorGrantEnabled() {
 		return false, nil
 	}
-	s.leaseMu.RLock()
+	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
-	renewIn := s.leaseRenewIn
-	clockSkew := s.leaseClockSkew
-	s.leaseMu.RUnlock()
-	if holderID == "" || strings.TrimSpace(state.leaseHolderID) != holderID {
+	renewIn := s.grantRenewIn
+	clockSkew := s.grantClockSkew
+	s.grantMu.RUnlock()
+	if holderID == "" {
 		return false, nil
 	}
 	nowFn := s.now
@@ -253,12 +286,31 @@ func (s *Service) renewMetadataTenureIfNeeded(ctx context.Context, state readSta
 		nowFn = time.Now
 	}
 	nowUnixNano := nowFn().UnixNano()
-	if state.leaseExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
-		state.leaseExpiresAt > nowUnixNano+clockSkew.Nanoseconds() {
+	current := s.currentGrant()
+	currentHasLookup := false
+	if current.Present() && strings.TrimSpace(current.HolderID) == holderID {
+		_, currentHasLookup = current.Duty(rootproto.DutyRegionLookup)
+	}
+	if loadErr != nil {
+		if !currentHasLookup || !current.ActiveAt(nowUnixNano) {
+			return false, nil
+		}
+		if err := s.ensureGrant(ctx); err != nil {
+			return false, translateGrantError(err)
+		}
+		return true, nil
+	}
+	if state.grantPresent && strings.TrimSpace(state.grantHolderID) != holderID {
 		return false, nil
 	}
-	if err := s.ensureTenure(ctx); err != nil {
-		return false, translateTenureError(err)
+	if state.grantPresent &&
+		state.grantExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
+		state.grantExpiresAt > nowUnixNano+clockSkew.Nanoseconds() &&
+		!s.coordinatorGrantNeedsRenewal(current) {
+		return false, nil
+	}
+	if err := s.ensureGrant(ctx); err != nil {
+		return false, translateGrantError(err)
 	}
 	return true, nil
 }

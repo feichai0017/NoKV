@@ -70,10 +70,10 @@ func (*remoteRootBackend) TailNotify() <-chan struct{} {
 	return nil
 }
 
-func (b *remoteRootBackend) IsLeader() bool {
+func (b *remoteRootBackend) CanSubmitRootWrites() bool {
 	// A remote coordinator is not co-located with one root raft peer. Writes are
 	// routed by the remote client to the current metadata-root leader, so the
-	// coordinator-side RootStorage should not reject writes based on whichever
-	// endpoint happens to be preferred locally.
+	// coordinator-side RootStorage reports whether it can submit routed root
+	// writes, not whether this coordinator is the authority holder.
 	return b.Client != nil
 }
