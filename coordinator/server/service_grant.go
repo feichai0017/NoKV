@@ -246,7 +246,7 @@ func (s *Service) sealGrant(ctx context.Context) error {
 	if holderID == "" || grant.HolderID != holderID {
 		return statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, grant.HolderID, holderID))
 	}
-	_, _, err = s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
+	protocolState, _, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:        rootproto.GrantActSeal,
 		HolderID:    holderID,
 		GrantID:     grant.GrantID,
@@ -261,6 +261,7 @@ func (s *Service) sealGrant(ctx context.Context) error {
 		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
+	s.publishEunomiaState(protocolState)
 	if err := coordfailpoints.InjectAfterSealGrantBeforeReload(); err != nil {
 		return err
 	}
@@ -297,7 +298,7 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 	if len(pending) == 0 {
 		return nil
 	}
-	_, _, err = s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
+	protocolState, _, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:                rootproto.GrantActInherit,
 		HolderID:            holderID,
 		PredecessorGrantIDs: pending,
@@ -308,6 +309,7 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 		}
 		return err
 	}
+	s.publishEunomiaState(protocolState)
 	return s.reloadAndFenceAllocators(true)
 }
 
@@ -392,6 +394,7 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
 		return err
 	}
+	s.publishEunomiaState(protocolState)
 	s.eunomiaMetrics.recordGrantEraTransition(currentEra, protocolState.ActiveGrant.Era)
 	return s.reloadAndFenceAllocators(true)
 }

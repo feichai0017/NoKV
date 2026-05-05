@@ -349,6 +349,7 @@ func (s *RootStore) reload() error {
 	out := SnapshotFromRoot(snapshot)
 	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 	return nil
@@ -383,7 +384,13 @@ func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (
 	if err != nil {
 		return protocolState, err
 	}
-	return protocolState, s.reload()
+	if err := s.reload(); err != nil {
+		return protocolState, err
+	}
+	if eunomiaStatePresent(protocolState) {
+		s.mergeEunomiaState(protocolState)
+	}
+	return protocolState, nil
 }
 
 func eunomiaStatePresent(state rootstate.EunomiaState) bool {
@@ -419,6 +426,7 @@ func (s *RootStore) replaceObserved(observed rootstorage.ObservedCommitted, toke
 	out.RootToken = token
 	out.CatchUpState = CatchUpStateFresh
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 }
@@ -443,6 +451,7 @@ func (s *RootStore) applyTailAdvance(advance rootstorage.TailAdvance) {
 	out.RootToken = token
 	out.CatchUpState = state
 	s.mu.Lock()
+	out = PreserveNewerAuthorityState(out, s.snapshot)
 	s.snapshot = out
 	s.mu.Unlock()
 }

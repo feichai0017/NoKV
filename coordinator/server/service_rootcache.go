@@ -23,6 +23,11 @@ func (s *Service) reloadRootedView(refresh bool) (rootview.Snapshot, error) {
 		return rootview.Snapshot{}, err
 	}
 	s.publishRootSnapshot(snapshot)
+	s.rootViewMu.RLock()
+	if s.rootView.loaded {
+		snapshot = rootview.CloneSnapshot(s.rootView.snapshot)
+	}
+	s.rootViewMu.RUnlock()
 	return snapshot, nil
 }
 
@@ -69,9 +74,9 @@ func (s *Service) shouldReplaceRootSnapshotLocked(snapshot rootview.Snapshot) bo
 	return !current.AdvancedSince(snapshot.RootToken)
 }
 
-func (s *Service) cacheRootSnapshot(snapshot rootview.Snapshot, refreshedAt time.Time) bool {
+func (s *Service) cacheRootSnapshot(snapshot rootview.Snapshot, refreshedAt time.Time) (rootview.Snapshot, bool) {
 	if s == nil {
-		return false
+		return rootview.Snapshot{}, false
 	}
 	if refreshedAt.IsZero() {
 		nowFn := s.now
@@ -80,28 +85,73 @@ func (s *Service) cacheRootSnapshot(snapshot rootview.Snapshot, refreshedAt time
 		}
 		refreshedAt = nowFn()
 	}
+	authoritySnapshot := s.currentAuthoritySnapshot()
 	s.rootViewMu.Lock()
 	updated := false
+	snapshot = rootview.PreserveNewerAuthorityState(snapshot, authoritySnapshot)
 	if s.shouldReplaceRootSnapshotLocked(snapshot) {
+		if s.rootView.loaded {
+			snapshot = rootview.PreserveNewerAuthorityState(snapshot, s.rootView.snapshot)
+		}
 		s.rootView.snapshot = rootview.CloneSnapshot(snapshot)
 		s.rootView.loaded = true
 		s.rootView.refreshedAt = refreshedAt
 		updated = true
 	}
+	cached := rootview.CloneSnapshot(s.rootView.snapshot)
 	s.rootViewMu.Unlock()
-	return updated
+	return cached, updated
 }
 
 func (s *Service) refreshCurrentRootSnapshot(snapshot rootview.Snapshot) bool {
 	if s == nil {
 		return false
 	}
-	if !s.cacheRootSnapshot(snapshot, time.Time{}) {
+	cached, updated := s.cacheRootSnapshot(snapshot, time.Time{})
+	if !updated {
 		return false
 	}
-	s.refreshGrantMirror(snapshot)
+	s.refreshGrantMirror(cached)
 	s.setLastRootReload(nil)
 	return true
+}
+
+func (s *Service) currentAuthoritySnapshot() rootview.Snapshot {
+	if s == nil {
+		return rootview.Snapshot{}
+	}
+	s.grantMu.RLock()
+	defer s.grantMu.RUnlock()
+	return rootview.Snapshot{
+		ActiveGrant:       s.grantView.grant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.grantView.retirements...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.grantView.inheritances...),
+	}
+}
+
+func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
+	if s == nil || !serviceEunomiaStatePresent(state) {
+		return
+	}
+	snapshot := rootview.Snapshot{
+		ActiveGrant:       state.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
+	}
+	s.refreshGrantMirror(snapshot)
+	s.rootViewMu.Lock()
+	if s.rootView.loaded {
+		s.rootView.snapshot.ActiveGrant = snapshot.ActiveGrant
+		s.rootView.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
+		s.rootView.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
+	}
+	s.rootViewMu.Unlock()
+}
+
+func serviceEunomiaStatePresent(state rootstate.EunomiaState) bool {
+	return state.ActiveGrant.Present() ||
+		len(state.RetiredGrants) > 0 ||
+		len(state.GrantInheritances) > 0
 }
 
 func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {

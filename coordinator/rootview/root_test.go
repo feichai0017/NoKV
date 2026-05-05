@@ -484,6 +484,47 @@ func TestRootStoreMergesGrantStateFromHeldRejection(t *testing.T) {
 	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
 }
 
+func TestRootStorePreservesAppliedGrantAcrossStaleObservedReload(t *testing.T) {
+	stale := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "stale-grant",
+				HolderID:        "coord-2",
+				Era:             1,
+				ExpiresUnixNano: 1_000,
+			},
+		},
+	}
+	authoritative := rootstate.EunomiaState{
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:         "grant-2",
+			HolderID:        "coord-1",
+			Era:             2,
+			ExpiresUnixNano: 2_000,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 11},
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 20)},
+		},
+	}
+	fake := &fakeRootBackend{
+		snapshot:         stale,
+		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:      false,
+		isLeader:         true,
+		applyGrantResult: authoritative,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActIssue})
+	require.NoError(t, err)
+	require.Equal(t, authoritative, state)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "coord-1", loaded.ActiveGrant.HolderID)
+	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
+}
+
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	store, err := OpenRootStore(fakeBasicRoot{
 		snapshot: rootstate.Snapshot{Descriptors: map[uint64]topology.Descriptor{}},

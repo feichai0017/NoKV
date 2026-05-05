@@ -81,6 +81,75 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 	}
 }
 
+// PreserveNewerAuthorityState carries the locally authoritative grant lifecycle
+// forward when an observed root snapshot is older than a just-applied grant
+// response. Descriptors and allocator fences still come from observed; only the
+// Eunomia authority mirror is protected against stale replacement.
+func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
+	out := CloneSnapshot(observed)
+	if !authorityStateNewer(current, observed) {
+		return out
+	}
+	out.ActiveGrant = current.ActiveGrant
+	out.RetiredGrants = append([]rootproto.GrantRetirement(nil), current.RetiredGrants...)
+	out.GrantInheritances = append([]rootproto.GrantInheritance(nil), current.GrantInheritances...)
+	return out
+}
+
+func authorityStateNewer(current, observed Snapshot) bool {
+	currentGeneration := authorityGeneration(current)
+	observedGeneration := authorityGeneration(observed)
+	if currentGeneration > observedGeneration {
+		return true
+	}
+	if currentGeneration < observedGeneration {
+		return false
+	}
+	if observedRetiresGrant(observed, current.ActiveGrant) {
+		return false
+	}
+	currentCursor := authorityCursor(current)
+	observedCursor := authorityCursor(observed)
+	return rootstate.CursorAfter(currentCursor, observedCursor)
+}
+
+func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) bool {
+	if !grant.Present() {
+		return false
+	}
+	for _, retirement := range observed.RetiredGrants {
+		if retirement.GrantID == grant.GrantID && retirement.Era == grant.Era {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityGeneration(snapshot Snapshot) uint64 {
+	generation := snapshot.ActiveGrant.Era
+	for _, retirement := range snapshot.RetiredGrants {
+		if retirement.Era > generation {
+			generation = retirement.Era
+		}
+	}
+	return generation
+}
+
+func authorityCursor(snapshot Snapshot) rootstate.Cursor {
+	cursor := snapshot.ActiveGrant.IssuedAt
+	for _, retirement := range snapshot.RetiredGrants {
+		if rootstate.CursorAfter(retirement.RetiredAt, cursor) {
+			cursor = retirement.RetiredAt
+		}
+	}
+	for _, inheritance := range snapshot.GrantInheritances {
+		if rootstate.CursorAfter(inheritance.InheritedAt, cursor) {
+			cursor = inheritance.InheritedAt
+		}
+	}
+	return cursor
+}
+
 func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 	return Snapshot{
 		ClusterEpoch: snapshot.State.ClusterEpoch,

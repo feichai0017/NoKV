@@ -326,6 +326,31 @@ func (f *fakeStorage) LeaderID() uint64 {
 	return f.leaderID
 }
 
+type staleGrantReloadStorage struct {
+	*fakeStorage
+	staleSnapshot rootview.Snapshot
+	applied       bool
+}
+
+func (s *staleGrantReloadStorage) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	state, cert, err := s.fakeStorage.ApplyGrant(ctx, cmd)
+	if err == nil {
+		s.applied = true
+	}
+	return state, cert, err
+}
+
+func (s *staleGrantReloadStorage) Load() (rootview.Snapshot, error) {
+	s.loadCalls++
+	if s.loadErr != nil {
+		return rootview.Snapshot{}, s.loadErr
+	}
+	if s.applied {
+		return rootview.CloneSnapshot(s.staleSnapshot), nil
+	}
+	return rootview.CloneSnapshot(s.snapshot), nil
+}
+
 type fakeSyncStorage struct {
 	fakeStorage
 	snapshot rootview.Snapshot
@@ -2372,6 +2397,52 @@ func TestServiceInheritRetiredGrants(t *testing.T) {
 	require.Equal(t, 1, store.reattachCalls)
 	require.Equal(t, "c2/2", store.snapshot.RetiredGrants[0].InheritedByGrantID)
 	require.Len(t, store.snapshot.GrantInheritances, 1)
+}
+
+func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {
+	stale := rootview.Snapshot{
+		RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 10}, Revision: 10},
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:         "c2/1",
+			HolderID:        "c2",
+			Era:             1,
+			ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
+			Duties: []rootproto.DutyGrant{
+				rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
+				rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100),
+			},
+		},
+	}
+	store := &staleGrantReloadStorage{
+		fakeStorage: &fakeStorage{
+			leader: true,
+			snapshot: rootview.Snapshot{
+				RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 11}, Revision: 11},
+				ActiveGrant: rootproto.AuthorityGrant{
+					GrantID:         "expired/1",
+					HolderID:        "expired",
+					Era:             1,
+					ExpiresUnixNano: 1,
+					Duties: []rootproto.DutyGrant{
+						rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
+						rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100),
+					},
+				},
+				Allocator: rootview.AllocatorState{IDCurrent: 10, TSCurrent: 100},
+			},
+		},
+		staleSnapshot: stale,
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Second, 300*time.Millisecond)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+
+	resp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), resp.GetTimestamp())
+	require.Equal(t, "c1", svc.currentGrant().HolderID)
+	require.Equal(t, uint64(2), svc.currentGrant().Era)
+	require.Equal(t, 1, store.campaignCalls)
 }
 
 func TestServiceGrantRetryDelayBacksOff(t *testing.T) {
