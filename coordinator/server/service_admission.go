@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"google.golang.org/grpc/codes"
@@ -26,6 +25,9 @@ func (s *Service) resetAuthorityServing() {
 func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID) (func(), error) {
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return func() {}, nil
+	}
+	if err := s.rejectIfAuthorityClosed(); err != nil {
+		return nil, err
 	}
 	if err := s.ensureGrant(ctx); err != nil {
 		return nil, translateGrantError(err)
@@ -51,7 +53,7 @@ func (s *Service) beginAuthorityServing(ctx context.Context, duty rootproto.Duty
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
-			return nil, status.Error(codes.Canceled, err.Error())
+			return nil, status.FromContextError(err).Err()
 		}
 	}
 	s.authorityMu.Lock()
@@ -140,23 +142,27 @@ func (s *Service) eunomiaGate(kind gateKind, duty rootproto.DutyID) error {
 	return s.eunomiaGateCached(kind, duty)
 }
 
-func (s *Service) eunomiaGateCached(kind gateKind, duty rootproto.DutyID) error {
-	return s.validateGateGrant(kind, duty, s.currentGrant())
+func (s *Service) rejectIfAuthorityClosed() error {
+	if s == nil || !s.coordinatorGrantEnabled() {
+		return nil
+	}
+	s.authorityMu.Lock()
+	state := s.authorityState
+	s.authorityMu.Unlock()
+	switch state {
+	case authorityServing:
+		return nil
+	case authorityDraining:
+		return statusGrant(fmt.Errorf("%w: authority is draining", rootstate.ErrSilence))
+	case authoritySealed:
+		return statusGrant(fmt.Errorf("%w: authority is sealed", rootstate.ErrSilence))
+	default:
+		return statusGrant(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, state))
+	}
 }
 
-func (s *Service) currentGrantFromStorage() (rootproto.AuthorityGrant, error) {
-	if s == nil || s.storage == nil {
-		return rootproto.AuthorityGrant{}, nil
-	}
-	if err := rootfailpoints.InjectBeforeGrantStorageRead(); err != nil {
-		return rootproto.AuthorityGrant{}, err
-	}
-	snapshot, err := s.storage.Load()
-	if err != nil {
-		return rootproto.AuthorityGrant{}, err
-	}
-	s.refreshGrantMirror(snapshot)
-	return snapshot.ActiveGrant, nil
+func (s *Service) eunomiaGateCached(kind gateKind, duty rootproto.DutyID) error {
+	return s.validateGateGrant(kind, duty, s.currentGrant())
 }
 
 func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {

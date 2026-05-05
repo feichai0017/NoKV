@@ -129,6 +129,13 @@ func (s *Service) DrainAndSealGrant(ctx context.Context) error {
 		return nil
 	}
 	if err := s.sealGrant(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			_ = s.reloadAndFenceAllocators(true)
+		}
+		if s.localGrantAlreadySealed() {
+			s.markAuthoritySealed()
+			return nil
+		}
 		s.markAuthorityServing()
 		return err
 	}
@@ -153,15 +160,23 @@ func (s *Service) waitAuthorityInflightDrained(ctx context.Context) error {
 }
 
 func (s *Service) localGrantAlreadySealed() bool {
-	grant := s.currentGrant()
-	if !grant.Present() {
-		return false
-	}
 	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
+	grant := s.grantView.Grant()
 	retirements := s.grantView.Retirements()
 	s.grantMu.RUnlock()
-	if holderID == "" || strings.TrimSpace(grant.HolderID) != holderID {
+	if holderID == "" {
+		return false
+	}
+	if !grant.Present() {
+		for _, retirement := range retirements {
+			if strings.TrimSpace(retirement.HolderID) == holderID && retirement.Present() {
+				return true
+			}
+		}
+		return false
+	}
+	if strings.TrimSpace(grant.HolderID) != holderID {
 		return false
 	}
 	for _, retirement := range retirements {
@@ -404,8 +419,34 @@ func (s *Service) coordinatorGrantStillValid(holderID string, nowUnixNano int64,
 		!current.ActiveAt(nowUnixNano) {
 		return false
 	}
-	return current.ExpiresUnixNano > nowUnixNano+renewIn.Nanoseconds() &&
-		current.ExpiresUnixNano > nowUnixNano+clockSkew.Nanoseconds()
+	if current.ExpiresUnixNano <= nowUnixNano+renewIn.Nanoseconds() ||
+		current.ExpiresUnixNano <= nowUnixNano+clockSkew.Nanoseconds() {
+		return false
+	}
+	return !s.coordinatorGrantNeedsRenewal(current)
+}
+
+func (s *Service) coordinatorGrantNeedsRenewal(grant rootproto.AuthorityGrant) bool {
+	if s == nil || !grant.Present() {
+		return true
+	}
+	if lookup, ok := grant.Duty(rootproto.DutyRegionLookup); ok &&
+		(lookup.Bound.Kind != rootproto.DutyBoundVersion || lookup.Bound.DescriptorRevisionCeiling < s.currentDescriptorRevision()) {
+		return true
+	}
+	s.allocMu.Lock()
+	idCurrent := s.ids.Current()
+	tsoCurrent := s.tso.Current()
+	s.allocMu.Unlock()
+	if idDuty, ok := grant.Duty(rootproto.DutyAllocID); ok &&
+		(idDuty.Bound.Kind != rootproto.DutyBoundMonotone || idDuty.Bound.MonotoneUpper <= idCurrent) {
+		return true
+	}
+	if tsoDuty, ok := grant.Duty(rootproto.DutyTSO); ok &&
+		(tsoDuty.Bound.Kind != rootproto.DutyBoundMonotone || tsoDuty.Bound.MonotoneUpper <= tsoCurrent) {
+		return true
+	}
+	return false
 }
 
 func (s *Service) coordinatorGrantLoopInterval() time.Duration {

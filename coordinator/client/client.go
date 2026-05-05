@@ -748,6 +748,9 @@ func (c *GRPCClient) validateMetadataWitnessEra(resp *coordpb.GetRegionByKeyResp
 
 func validateAuthorityEvidence(kind string, duty rootproto.DutyID, era, observedRetiredEraFloor uint64, required rootproto.DutyBound, pbEvidence *metapb.RootAuthorityEvidence) error {
 	if era == rootproto.AuthorityEraAttached {
+		if duty != rootproto.DutyRegionLookup {
+			return fmt.Errorf("%w: %s attached era is only valid for metadata witnesses", errInvalidWitness, kind)
+		}
 		if pbEvidence != nil {
 			return fmt.Errorf("%w: %s attached reply carries authority evidence", errInvalidWitness, kind)
 		}

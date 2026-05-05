@@ -21,10 +21,13 @@ import (
 // GetRegionByKey returns region metadata for the specified key.
 func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
+	}
+	if err := s.rejectIfAuthorityClosed(); err != nil {
+		return nil, err
 	}
 	state, err := s.currentReadState()
 	// Region lookup is an authority-bearing metadata read. A coordinator that
@@ -279,8 +282,10 @@ func (s *Service) renewMetadataGrantIfNeeded(ctx context.Context, state readStat
 		nowFn = time.Now
 	}
 	nowUnixNano := nowFn().UnixNano()
+	current := s.currentGrant()
 	if state.grantExpiresAt > nowUnixNano+renewIn.Nanoseconds() &&
-		state.grantExpiresAt > nowUnixNano+clockSkew.Nanoseconds() {
+		state.grantExpiresAt > nowUnixNano+clockSkew.Nanoseconds() &&
+		!s.coordinatorGrantNeedsRenewal(current) {
 		return false, nil
 	}
 	if err := s.ensureGrant(ctx); err != nil {

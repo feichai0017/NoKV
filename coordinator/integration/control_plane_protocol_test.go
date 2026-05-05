@@ -31,9 +31,6 @@ import (
 
 type protocolMatrixStorage struct {
 	campaignErr error
-	confirmErr  error
-	closeErr    error
-	reattachErr error
 	leader      bool
 	leaderID    uint64
 	snapshot    rootview.Snapshot
@@ -309,7 +306,7 @@ func TestDetachedGrantFaultMatrix(t *testing.T) {
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 
-	t.Run("metadata_descriptor_outside_grant_rejected", func(t *testing.T) {
+	t.Run("metadata_descriptor_outside_grant_renews", func(t *testing.T) {
 		store := &protocolMatrixStorage{
 			leader: true,
 			snapshot: rootview.Snapshot{
@@ -327,9 +324,12 @@ func TestDetachedGrantFaultMatrix(t *testing.T) {
 		svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 		require.NoError(t, svc.ReloadFromStorage())
 
-		_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
-		require.Error(t, err)
-		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+		resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), resp.GetRegionDescriptor().GetRegionId())
+		require.Equal(t, uint64(7), resp.GetDescriptorRevision())
+		require.NotNil(t, resp.GetAuthorityEvidence())
+		require.Equal(t, 1, store.campaigns)
 	})
 
 	t.Run("successor_inherits_retired_grant_bound", func(t *testing.T) {

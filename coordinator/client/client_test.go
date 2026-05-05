@@ -48,7 +48,8 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		_ = listener.Close()
 	})
 
-	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
+	svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), newClientRootStorage(true))
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
 	grpcServer := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(grpcServer, svc)
 	go func() {
@@ -173,7 +174,8 @@ func TestGRPCClientWriteFailoverAcrossPDs(t *testing.T) {
 	go func() { _ = followerGRPC.Serve(followerListener) }()
 	t.Cleanup(followerGRPC.GracefulStop)
 
-	leaderSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100))
+	leaderSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), newClientRootStorage(true))
+	leaderSvc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
 	leaderGRPC := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(leaderGRPC, leaderSvc)
 	go func() { _ = leaderGRPC.Serve(leaderListener) }()
@@ -226,6 +228,166 @@ func (f *followerStorage) Refresh() error   { return nil }
 func (f *followerStorage) Close() error     { return nil }
 func (f *followerStorage) IsLeader() bool   { return false }
 func (f *followerStorage) LeaderID() uint64 { return 2 }
+
+type clientRootStorage struct {
+	mu       sync.Mutex
+	leader   bool
+	leaderID uint64
+	snapshot rootview.Snapshot
+}
+
+func newClientRootStorage(leader bool) *clientRootStorage {
+	return &clientRootStorage{
+		leader:   leader,
+		leaderID: 1,
+		snapshot: rootview.Snapshot{
+			CatchUpState:        rootview.CatchUpStateFresh,
+			Stores:              make(map[uint64]rootstate.StoreMembership),
+			SnapshotEpochs:      make(map[string]rootstate.SnapshotEpoch),
+			Mounts:              make(map[string]rootstate.MountRecord),
+			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
+			Quotas:              make(map[string]rootstate.QuotaFence),
+			Descriptors:         make(map[uint64]topology.Descriptor),
+			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
+			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+		},
+	}
+}
+
+func (s *clientRootStorage) Load() (rootview.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rootview.CloneSnapshot(s.snapshot), nil
+}
+
+func (s *clientRootStorage) AppendRootEvent(_ context.Context, event rootevent.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyEventLocked(event)
+	return nil
+}
+
+func (s *clientRootStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idCurrent > s.snapshot.Allocator.IDCurrent {
+		s.snapshot.Allocator.IDCurrent = idCurrent
+	}
+	if tsCurrent > s.snapshot.Allocator.TSCurrent {
+		s.snapshot.Allocator.TSCurrent = tsCurrent
+	}
+	return nil
+}
+
+func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	holderID := strings.TrimSpace(cmd.HolderID)
+	switch cmd.Kind {
+	case rootproto.GrantActIssue:
+		active := s.snapshot.ActiveGrant
+		if active.Present() && active.HolderID != holderID && active.ActiveAt(cmd.NowUnixNano) {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		era := active.Era + 1
+		for _, retirement := range s.snapshot.RetiredGrants {
+			if retirement.Era >= era {
+				era = retirement.Era + 1
+			}
+		}
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, era)
+		}
+		grant := rootproto.AuthorityGrant{
+			GrantID:         grantID,
+			HolderID:        holderID,
+			Era:             era,
+			ExpiresUnixNano: cmd.ExpiresUnixNano,
+			IssuedRootToken: rootproto.AuthorityRootToken{
+				Term:     s.snapshot.RootToken.Cursor.Term,
+				Index:    s.snapshot.RootToken.Cursor.Index,
+				Revision: s.snapshot.RootToken.Revision,
+			},
+			Duties: append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
+		}
+		s.applyEventLocked(rootevent.GrantIssued(grant))
+		return s.protocolStateLocked(), clientGrantCertificateForTest(s.snapshot.ActiveGrant), nil
+	case rootproto.GrantActSeal:
+		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		retirement := rootproto.GrantRetirement{
+			GrantID:  s.snapshot.ActiveGrant.GrantID,
+			HolderID: s.snapshot.ActiveGrant.HolderID,
+			Era:      s.snapshot.ActiveGrant.Era,
+			Mode:     rootproto.GrantRetirementSealedExact,
+			Bounds:   clientDutyGrantsFromUsages(cmd.ExactUsages),
+		}
+		if len(retirement.Bounds) == 0 {
+			retirement.Bounds = append([]rootproto.DutyGrant(nil), s.snapshot.ActiveGrant.Duties...)
+		}
+		s.applyEventLocked(rootevent.GrantSealed(retirement))
+		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
+	case rootproto.GrantActInherit:
+		successor := s.snapshot.ActiveGrant.GrantID
+		for _, predecessor := range cmd.PredecessorGrantIDs {
+			s.applyEventLocked(rootevent.GrantInherited(rootproto.GrantInheritance{
+				PredecessorGrantID: predecessor,
+				SuccessorGrantID:   successor,
+			}))
+		}
+		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
+	default:
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
+	}
+}
+
+func (s *clientRootStorage) Refresh() error   { return nil }
+func (s *clientRootStorage) Close() error     { return nil }
+func (s *clientRootStorage) IsLeader() bool   { return s.leader }
+func (s *clientRootStorage) LeaderID() uint64 { return s.leaderID }
+
+func (s *clientRootStorage) applyEventLocked(event rootevent.Event) {
+	rooted := s.snapshot.RootSnapshot()
+	cursor := rootstate.NextCursor(rooted.State.LastCommitted)
+	rootstate.ApplyEventToSnapshot(&rooted, cursor, event)
+	nextRevision := s.snapshot.RootToken.Revision + 1
+	s.snapshot = rootview.SnapshotFromRoot(rooted)
+	s.snapshot.RootToken.Revision = nextRevision
+}
+
+func (s *clientRootStorage) protocolStateLocked() rootstate.EunomiaState {
+	return rootstate.EunomiaState{
+		ActiveGrant:       s.snapshot.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
+	}
+}
+
+func clientGrantCertificateForTest(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
+	payload, _ := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}
+}
+
+func clientDutyGrantsFromUsages(usages []rootproto.AuthorityUsage) []rootproto.DutyGrant {
+	out := make([]rootproto.DutyGrant, 0, len(usages))
+	for _, usage := range usages {
+		if usage.DutyID == "" {
+			continue
+		}
+		out = append(out, rootproto.DutyGrant{
+			DutyID: usage.DutyID,
+			Scope:  usage.Scope,
+			Bound:  usage.Usage,
+		})
+	}
+	return out
+}
 
 func TestGRPCClientDoesNotRetryReadOnNotLeaderWriteError(t *testing.T) {
 	err := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")
@@ -393,6 +555,44 @@ func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, IsInvalidWitness(err))
 	require.Contains(t, err.Error(), "consumed_frontier=10 expected=11")
+}
+
+func TestGRPCClientRejectsAttachedEraForMonotoneAuthority(t *testing.T) {
+	t.Run("alloc_id", func(t *testing.T) {
+		cli := newScriptedCoordinatorClient(t, []string{"alloc-attached"}, map[string]*scriptedCoordinatorServer{
+			"alloc-attached": {
+				allocResponses: []*coordpb.AllocIDResponse{{
+					FirstId:          100,
+					Count:            1,
+					Era:              rootproto.AuthorityEraAttached,
+					ConsumedFrontier: 100,
+				}},
+			},
+		})
+
+		_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+		require.Error(t, err)
+		require.True(t, IsInvalidWitness(err))
+		require.Contains(t, err.Error(), "attached era is only valid for metadata witnesses")
+	})
+
+	t.Run("tso", func(t *testing.T) {
+		cli := newScriptedCoordinatorClient(t, []string{"tso-attached"}, map[string]*scriptedCoordinatorServer{
+			"tso-attached": {
+				tsoResponses: []*coordpb.TsoResponse{{
+					Timestamp:        200,
+					Count:            1,
+					Era:              rootproto.AuthorityEraAttached,
+					ConsumedFrontier: 200,
+				}},
+			},
+		})
+
+		_, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+		require.Error(t, err)
+		require.True(t, IsInvalidWitness(err))
+		require.Contains(t, err.Error(), "attached era is only valid for metadata witnesses")
+	})
 }
 
 func TestGRPCClientRetriesStaleWitnessEraAcrossEndpoints(t *testing.T) {

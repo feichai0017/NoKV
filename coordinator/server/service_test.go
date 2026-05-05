@@ -33,20 +33,13 @@ type fakeStorage struct {
 	saveCalls     int
 	loadCalls     int
 	campaignCalls int
-	releaseCalls  int
 	sealCalls     int
-	confirmCalls  int
-	closeCalls    int
 	reattachCalls int
 	eventErr      error
 	saveErr       error
 	loadErr       error
 	campaignErr   error
-	regrantErr    error
 	sealErr       error
-	confirmErr    error
-	closeErr      error
-	reattachErr   error
 	lastID        uint64
 	lastTS        uint64
 	leader        bool
@@ -2288,6 +2281,67 @@ func TestServiceDrainAndSealBlocksNewAuthorityRequests(t *testing.T) {
 	require.Equal(t, rootproto.GrantRetirementSealedExact, store.snapshot.RetiredGrants[0].Mode)
 }
 
+func TestServiceRejectsDrainingAdmissionBeforeGrantRenewal(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "c1/1",
+				HolderID:        "c1",
+				Era:             1,
+				ExpiresUnixNano: now.Add(10 * time.Millisecond).UnixNano(),
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Second, 500*time.Millisecond)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+	svc.authorityMu.Lock()
+	svc.authorityState = authorityDraining
+	svc.authorityMu.Unlock()
+
+	_, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyAllocID)
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+	require.Zero(t, store.campaignCalls)
+}
+
+func TestServiceRejectsDrainingMetadataBeforeGrantRenewal(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "c1/1",
+				HolderID:        "c1",
+				Era:             1,
+				ExpiresUnixNano: now.Add(10 * time.Millisecond).UnixNano(),
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 1, 0)},
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Second, 500*time.Millisecond)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+	svc.authorityMu.Lock()
+	svc.authorityState = authorityDraining
+	svc.authorityMu.Unlock()
+
+	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("k"),
+		Freshness: coordpb.Freshness_FRESHNESS_BOUNDED,
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+	require.Zero(t, store.campaignCalls)
+}
+
 func TestServiceInheritRetiredGrants(t *testing.T) {
 	retired := rootproto.GrantRetirement{
 		GrantID:  "c1/1",
@@ -2502,7 +2556,7 @@ func TestServiceGetRegionByKeyFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
 	require.Contains(t, err.Error(), "required_duty=region_lookup")
 }
 
-func TestServiceGetRegionByKeyFailsWhenDescriptorOutsideGrant(t *testing.T) {
+func TestServiceGetRegionByKeyRenewsWhenDescriptorOutsideGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -2527,13 +2581,15 @@ func TestServiceGetRegionByKeyFailsWhenDescriptorOutsideGrant(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("m"),
 		Freshness: coordpb.Freshness_FRESHNESS_BEST_EFFORT,
 	})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), "rooted grant does not cover duty=region_lookup")
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, uint64(7), resp.GetDescriptorRevision())
+	require.NotNil(t, resp.GetAuthorityEvidence())
+	require.Equal(t, 1, store.campaignCalls)
 }
 
 func TestServiceStoreHeartbeatSuppressesOperationsWithoutGrant(t *testing.T) {

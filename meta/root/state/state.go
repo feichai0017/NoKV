@@ -530,13 +530,6 @@ func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.E
 	}
 }
 
-func coalesceCursor(eventCursor, fallback Cursor) Cursor {
-	if eventCursor.Term != 0 || eventCursor.Index != 0 {
-		return Cursor{Term: eventCursor.Term, Index: eventCursor.Index}
-	}
-	return fallback
-}
-
 // NextCursor returns the next ordered root cursor.
 func NextCursor(prev Cursor) Cursor {
 	term := prev.Term

@@ -20,7 +20,7 @@ func (s *Service) authorityEvidence(ctx context.Context, duty rootproto.DutyID, 
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, status.FromContextError(err).Err()
 	}
 	snapshot, err := s.currentRootSnapshotCoveringAuthority(duty, usage)
 	if err != nil {
