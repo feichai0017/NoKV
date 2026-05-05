@@ -60,12 +60,8 @@ func (f *fakeMetadataRootClient) Status(ctx context.Context, req *metapb.Metadat
 	return nil, status.Error(codes.Unimplemented, "status")
 }
 
-func (f *fakeMetadataRootClient) ApplyTenure(context.Context, *metapb.MetadataRootApplyTenureRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyTenureResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "lease")
-}
-
-func (f *fakeMetadataRootClient) ApplyHandover(context.Context, *metapb.MetadataRootApplyHandoverRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyHandoverResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "handover")
+func (f *fakeMetadataRootClient) ApplyGrant(context.Context, *metapb.MetadataRootApplyGrantRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyGrantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "grant")
 }
 
 func (f *fakeMetadataRootClient) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest, ...grpc.CallOption) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -110,10 +106,8 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.True(t, ok)
 	require.WithinDuration(t, time.Now().Add(25*time.Millisecond), deadline, 150*time.Millisecond)
 
-	require.True(t, validTenureAct(1))
-	require.False(t, validTenureAct(99))
-	require.True(t, validHandoverAct(1))
-	require.False(t, validHandoverAct(99))
+	require.True(t, validGrantAct(1))
+	require.False(t, validGrantAct(99))
 
 	leaderID, ok := leaderHint(status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=23)"))
 	require.True(t, ok)

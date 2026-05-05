@@ -1,6 +1,6 @@
 # Rooted Truth — `meta/root`
 
-The `meta/root/` tree implements NoKV's **rooted truth kernel**: a typed, append-only event log whose committed tail is the single source of truth for cluster-level metadata (coordinator leases, allocator fences, region lifecycle, pending peer/range changes).
+The `meta/root/` tree implements NoKV's **rooted truth kernel**: a typed, append-only event log whose committed tail is the single source of truth for cluster-level metadata (root-issued authority grants, allocator fences, region lifecycle, pending peer/range changes).
 
 > If the distributed system has a "brain", it does **not** live in the coordinator. It lives here. The coordinator is a service+view on top of this log.
 
@@ -8,7 +8,7 @@ The `meta/root/` tree implements NoKV's **rooted truth kernel**: a typed, append
 
 ## 1. Why a separate truth layer
 
-In a typical multi-raft system, the metadata used by the control plane (routes, TSO, leases, scheduling decisions) is either:
+In a typical multi-raft system, the metadata used by the control plane (routes, TSO, authority grants, scheduling decisions) is either:
 
 1. Stored inside one of the raft groups (mixed with user data)
 2. Owned by a single coordinator node (coordinator becomes the bottleneck)
@@ -20,7 +20,7 @@ The benefits are concrete:
 
 - **Coordinator is stateless at restart** — the only persistent thing about a coordinator is its configured holder ID; everything else is rebuilt from `meta/root` on boot
 - **The log can be swapped** between local (single-node) and replicated (embedded-raft) backends without changing coordinator code
-- **Authority handoff is auditable** — every tenure issue / legacy seal / handover event is a committed log record with a cursor
+- **Authority transfer is auditable** — every grant issue, retirement, and inheritance is a committed log record with a cursor
 
 ---
 
@@ -29,8 +29,8 @@ The benefits are concrete:
 ```
 meta/
 ├── root/
-│   ├── protocol/       # Pure protocol types (Cursor, Frontiers, Handoff, Witness, ...)
-│   ├── event/          # Typed events (KindStoreJoined, KindTenure, ...)
+│   ├── protocol/       # Pure protocol types (Cursor, Duty, Grant, Evidence, ...)
+│   ├── event/          # Typed events (KindStoreJoined, KindGrantIssued, ...)
 │   ├── state/          # Compact applied state (State, Snapshot, ApplyEventToSnapshot)
 │   ├── materialize/    # Helpers that build Snapshot from raw events
 │   ├── storage/        # Virtual log file layout + checkpoint format
@@ -55,9 +55,9 @@ type State struct {
     LastCommitted      Cursor         // highest committed (term, index)
     IDFence            uint64         // globally fenced ID allocator floor
     TSOFence           uint64         // globally fenced TSO allocator floor
-    Tenure   Tenure
-    Legacy    Legacy
-    Handover Handover
+    ActiveGrant        AuthorityGrant
+    RetiredGrants      []GrantRetirement
+    GrantInheritances  []GrantInheritance
 }
 ```
 
@@ -118,26 +118,28 @@ Historical single-process "local" backend has been removed.
 
 ---
 
-## 6. Coordinator commands — how tenure/legacy/handover flow in
+## 6. Coordinator commands — how grants flow in
 
 In addition to "raw" events, backends expose command APIs for control-plane-specific operations:
 
 ```go
-ApplyTenure(ctx, cmd TenureCommand)
-    (EunomiaState, error)
-
-ApplyHandover(ctx, cmd HandoverCommand)
-    (EunomiaState, error)
+ApplyGrant(ctx, cmd GrantCommand)
+    (EunomiaState, GrantCertificate, error)
 ```
 
 These are **validated, typed writes** that internally:
 
-1. Validate the command against current state (e.g., `Seal` requires an active `Tenure`, `Confirm` requires prior `Legacy`)
-2. Emit the appropriate `KindTenure` / `KindLegacy` / `KindHandover` event
+1. Validate the command against current state: issue, graceful exact seal,
+   expiry-bound retirement, or inheritance
+2. Emit the appropriate `KindGrantIssued` / `KindGrantSealed` /
+   `KindGrantRetired` / `KindGrantInherited` event
 3. Append through the normal log path
-4. Return the new `EunomiaState = { Tenure, Legacy, Handover }`
+4. Return the new `EunomiaState = { ActiveGrant, RetiredGrants, GrantInheritances }`
+   and, for issue, a root-signed deterministic `GrantCertificate`
 
-Command-level validation lives in [`meta/root/state/eunomia.go`](../meta/root/state/eunomia.go).
+Crash-before-seal is handled conservatively: root never fabricates an exact
+served frontier. After expiry, the successor retires the predecessor using the
+predecessor grant's root-known upper bound and then inherits that bound.
 
 ---
 
@@ -173,7 +175,7 @@ On coordinator boot:
 1. Open the replicated backend (each peer via `rootreplicated.Open`, or connect through `coordinator/rootview` for the client side)
 2. Call `Snapshot()` — backend replays/bootstraps internally
 3. Build a `TailSubscription` from the snapshot's `LastCommitted`
-4. Start the tenure campaign loop, which will eventually `ApplyTenure(Issue)` when it's leader
+4. Start the grant campaign loop, which will eventually `ApplyGrant(Issue)` when it's leader
 
 If the backend file is corrupted, the coordinator fails fast — it does **not** try to reconstruct rooted state from raftstore local metadata. The two are deliberately partitioned.
 
@@ -198,7 +200,7 @@ This is what keeps `coordinator/` deployable separately from the rooted log, if 
 | [`meta/root/protocol/types.go`](../meta/root/protocol/types.go) | Pure protocol types (no persistence logic) |
 | [`meta/root/event/types.go`](../meta/root/event/types.go) | Typed event constructors |
 | [`meta/root/state/state.go`](../meta/root/state/state.go) | `State`, `Snapshot`, `ApplyEventToSnapshot` |
-| [`meta/root/state/eunomia.go`](../meta/root/state/eunomia.go) | Tenure/Legacy/Handover validation + digest |
+| [`meta/root/state/eunomia.go`](../meta/root/state/eunomia.go) | Grant lifecycle projection |
 | [`meta/root/state/transition.go`](../meta/root/state/transition.go) | Cross-event transition rules |
 | [`meta/root/storage/virtual_log.go`](../meta/root/storage/virtual_log.go) | Tail subscription + checkpoint primitives |
 | [`meta/root/replicated/store.go`](../meta/root/replicated/store.go) | The only backend: 3-peer raft-replicated meta-root |

@@ -2,7 +2,6 @@ package replicated
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -10,70 +9,70 @@ import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
-func campaignLease(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, lineageDigest string) (rootstate.Tenure, error) {
-	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
-		Kind:               rootproto.TenureActIssue,
-		HolderID:           holderID,
-		ExpiresUnixNano:    expiresUnixNano,
-		NowUnixNano:        nowUnixNano,
-		LineageDigest:      lineageDigest,
-		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+func issueGrant(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64) (rootproto.AuthorityGrant, rootproto.GrantCertificate, error) {
+	state, cert, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        holderID,
+		ExpiresUnixNano: expiresUnixNano,
+		NowUnixNano:     nowUnixNano,
+		RequestedDuties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, idFence),
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, tsoFence),
+			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, descriptorRevision, 0),
+		},
 	})
-	return state.Tenure, err
+	return state.ActiveGrant, cert, err
 }
 
-func releaseLease(store *Store, holderID string, nowUnixNano int64, idFence, tsoFence uint64) (rootstate.Tenure, error) {
-	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
-		Kind:               rootproto.TenureActRelease,
-		HolderID:           holderID,
-		NowUnixNano:        nowUnixNano,
-		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, 0),
+func issueGrantWithDuties(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        holderID,
+		ExpiresUnixNano: expiresUnixNano,
+		NowUnixNano:     nowUnixNano,
+		RequestedDuties: duties,
 	})
-	return state.Tenure, err
+	return state.ActiveGrant, err
 }
 
-func sealLease(store *Store, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
-	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActSeal,
+func sealGrant(store *Store, holderID, grantID string, usages []rootproto.AuthorityUsage) (rootproto.GrantRetirement, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:        rootproto.GrantActSeal,
 		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
-		Frontiers:   frontiers,
+		GrantID:     grantID,
+		ExactUsages: usages,
 	})
-	return state.Legacy, err
+	if len(state.RetiredGrants) == 0 {
+		return rootproto.GrantRetirement{}, err
+	}
+	return state.RetiredGrants[len(state.RetiredGrants)-1], err
 }
 
-func confirmHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
-	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActConfirm,
-		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
-	})
-	return state.Handover, err
-}
-
-func closeHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
-	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActClose,
-		HolderID:    holderID,
+func retireExpiredGrant(store *Store, grantID string, nowUnixNano int64) (rootproto.GrantRetirement, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:        rootproto.GrantActRetireExpired,
+		GrantID:     grantID,
 		NowUnixNano: nowUnixNano,
 	})
-	return state.Handover, err
+	if len(state.RetiredGrants) == 0 {
+		return rootproto.GrantRetirement{}, err
+	}
+	return state.RetiredGrants[len(state.RetiredGrants)-1], err
 }
 
-func reattachHandover(store *Store, holderID string, nowUnixNano int64) (rootstate.Handover, error) {
-	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActReattach,
-		HolderID:    holderID,
-		NowUnixNano: nowUnixNano,
+func inheritGrant(store *Store, holderID string, predecessors ...string) (rootstate.EunomiaState, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:                rootproto.GrantActInherit,
+		HolderID:            holderID,
+		PredecessorGrantIDs: predecessors,
 	})
-	return state.Handover, err
+	return state, err
 }
 
 func TestReplicatedStoreAppendAndReopen(t *testing.T) {
@@ -292,21 +291,24 @@ func TestReplicatedStoreFenceAllocator(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestReplicatedStoreCampaignTenure(t *testing.T) {
+func TestReplicatedStoreIssueGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	followerID := uint64(1)
 	if followerID == leaderID {
 		followerID = 2
 	}
 
-	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
+	grant, cert, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 123, 456, 1)
 	require.NoError(t, err)
-	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Era)
-	require.Equal(t, uint32(rootproto.MandateDefault), lease.Mandate)
-	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
+	require.Equal(t, "c1", grant.HolderID)
+	require.Equal(t, uint64(1), grant.Era)
+	require.Equal(t, "c1/1", grant.GrantID)
+	require.NotEqual(t, rootstate.Cursor{}, grant.IssuedAt)
+	require.Equal(t, grant, cert.Grant)
+	require.Equal(t, rootproto.GrantSignerKeyID, cert.SignerKeyID)
+	require.NotEmpty(t, cert.Signature)
 
-	_, err = campaignLease(stores[leaderID], "c2", 1_500, 200, 200, 500, 1, "")
+	_, _, err = issueGrant(stores[leaderID], "c2", 1_500, 200, 200, 500, 1)
 	require.Error(t, err)
 
 	require.Eventually(t, func() bool {
@@ -317,84 +319,88 @@ func TestReplicatedStoreCampaignTenure(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return current.Tenure.HolderID == "c1" &&
-			current.Tenure.Era == 1 &&
+		return current.ActiveGrant.HolderID == "c1" &&
+			current.ActiveGrant.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestReplicatedStoreConfirmHandover(t *testing.T) {
+func TestReplicatedStoreSealAndInheritGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	desc := testDescriptor(1, []byte("a"), []byte("z"))
 	desc.RootEpoch = 56
 	_, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 
-	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
+	grant, _, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 10, 20, 56)
 	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	seal, err := sealGrant(stores[leaderID], "c1", grant.GrantID, []rootproto.AuthorityUsage{
+		{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 10}},
+		{DutyID: rootproto.DutyTSO, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 20}},
+		{DutyID: rootproto.DutyRegionLookup, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: 56}},
+	})
 	require.NoError(t, err)
-	lease, err := campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
-	require.NoError(t, err)
+	require.Equal(t, grant.GrantID, seal.GrantID)
+	require.Equal(t, rootproto.GrantRetirementSealedExact, seal.Mode)
 
-	handover, err := confirmHandover(stores[leaderID], "c1", 260)
+	successor, err := issueGrantWithDuties(stores[leaderID], "c1", 1_200, 250, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 12),
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 34),
+		rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 56, 0),
+	})
 	require.NoError(t, err)
-	require.Equal(t, seal.Era, handover.LegacyEra)
-	require.Equal(t, lease.Era, handover.SuccessorEra)
-	require.Equal(t, rootstate.DigestOfLegacy(seal), handover.LegacyDigest)
-	require.Equal(t, rootproto.HandoverStageConfirmed, handover.Stage)
+	require.Equal(t, uint64(2), successor.Era)
+	require.Len(t, successor.PredecessorRetirements, 1)
+	require.Equal(t, seal.GrantID, successor.PredecessorRetirements[0].GrantID)
+
+	state, err := inheritGrant(stores[leaderID], "c1", seal.GrantID)
+	require.NoError(t, err)
+	require.Len(t, state.GrantInheritances, 1)
+	require.Equal(t, seal.GrantID, state.GrantInheritances[0].PredecessorGrantID)
+	require.Equal(t, successor.GrantID, state.GrantInheritances[0].SuccessorGrantID)
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, handover, current.Handover)
+	require.Equal(t, successor.GrantID, current.RetiredGrants[0].InheritedByGrantID)
 }
 
-func TestReplicatedStoreReattachHandover(t *testing.T) {
+func TestReplicatedStoreRejectsSuccessorWithoutRetirementCoverage(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
-	desc := testDescriptor(1, []byte("a"), []byte("z"))
-	desc.RootEpoch = 56
-	_, err := stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
+
+	grant, _, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 100, 200, 1)
+	require.NoError(t, err)
+	_, err = sealGrant(stores[leaderID], "c1", grant.GrantID, nil)
 	require.NoError(t, err)
 
-	_, err = campaignLease(stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
-	require.NoError(t, err)
-	seal, err := sealLease(stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
-	require.NoError(t, err)
-	_, err = campaignLease(stores[leaderID], "c1", 1_200, 250, 12, 34, 56, rootstate.DigestOfLegacy(seal))
-	require.NoError(t, err)
+	_, err = issueGrantWithDuties(stores[leaderID], "c2", 1_500, 300, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 99),
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200),
+		rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 1, 0),
+	})
+	require.ErrorIs(t, err, rootstate.ErrInheritance)
 
-	_, err = reattachHandover(stores[leaderID], "c1", 255)
-	require.ErrorIs(t, err, rootstate.ErrFinality)
-
-	confirmed, err := confirmHandover(stores[leaderID], "c1", 260)
+	successor, err := issueGrantWithDuties(stores[leaderID], "c2", 1_500, 300, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 100),
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200),
+		rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 1, 0),
+	})
 	require.NoError(t, err)
-	closed, err := closeHandover(stores[leaderID], "c1", 265)
-	require.NoError(t, err)
-	reattached, err := reattachHandover(stores[leaderID], "c1", 270)
-	require.NoError(t, err)
-	require.Equal(t, closed.SuccessorEra, reattached.SuccessorEra)
-	require.Equal(t, closed.LegacyEra, reattached.LegacyEra)
-	require.Equal(t, closed.LegacyDigest, reattached.LegacyDigest)
-	require.Equal(t, rootproto.HandoverStageReattached, reattached.Stage)
-
-	current, err := stores[leaderID].Current()
-	require.NoError(t, err)
-	require.Equal(t, reattached, current.Handover)
-	require.Equal(t, rootproto.HandoverStageConfirmed, confirmed.Stage)
+	require.Equal(t, "c2", successor.HolderID)
+	require.Len(t, successor.PredecessorRetirements, 1)
 }
 
-func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
+func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {
 	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
 	followerID := uint64(1)
 	if followerID == leaderID {
 		followerID = 2
 	}
 
-	lease, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
+	grant, _, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 123, 456, 1)
 	require.NoError(t, err)
-	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Era)
-	require.NotEqual(t, rootstate.Cursor{}, lease.IssuedAt)
+	require.Equal(t, "c1", grant.HolderID)
+	require.Equal(t, uint64(1), grant.Era)
+	require.NotEqual(t, rootstate.Cursor{}, grant.IssuedAt)
 
 	require.Eventually(t, func() bool {
 		if err := stores[followerID].Refresh(); err != nil {
@@ -402,13 +408,11 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 		}
 		current, err := stores[followerID].Current()
 		return err == nil &&
-			current.Tenure.HolderID == "c1" &&
-			current.Tenure.Era == 1 &&
+			current.ActiveGrant.HolderID == "c1" &&
+			current.ActiveGrant.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
-
-	initialIssued := lease.IssuedAt
 
 	drivers[leaderID].PauseTicks()
 	defer drivers[leaderID].ResumeTicks()
@@ -417,11 +421,11 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 		return drivers[followerID].IsLeader()
 	}, 5*time.Second, 50*time.Millisecond)
 
-	renewed, err := campaignLease(stores[followerID], "c1", 2_000, 500, 200, 600, 1, "")
+	renewed, _, err := issueGrant(stores[followerID], "c1", 2_000, 500, 200, 600, 1)
 	require.NoError(t, err)
 	require.Equal(t, "c1", renewed.HolderID)
-	require.Equal(t, uint64(1), renewed.Era)
-	require.Equal(t, initialIssued, renewed.IssuedAt)
+	require.Equal(t, uint64(2), renewed.Era)
+	require.Len(t, renewed.PredecessorRetirements, 1)
 
 	for _, id := range []uint64{1, 2, 3} {
 		require.Eventually(t, func() bool {
@@ -430,30 +434,32 @@ func TestReplicatedStoreTenureFenceSurvivesLeaderChange(t *testing.T) {
 			}
 			current, err := stores[id].Current()
 			return err == nil &&
-				current.Tenure.HolderID == "c1" &&
-				current.Tenure.Era == 1 &&
-				current.Tenure.IssuedAt == initialIssued &&
+				current.ActiveGrant.HolderID == "c1" &&
+				current.ActiveGrant.Era == 2 &&
 				current.IDFence == 200 &&
 				current.TSOFence == 600
 		}, 5*time.Second, 50*time.Millisecond)
 	}
 }
 
-func TestReplicatedStoreReleaseTenure(t *testing.T) {
+func TestReplicatedStoreRetireExpiredGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 
-	_, err := campaignLease(stores[leaderID], "c1", 1_000, 100, 123, 456, 1, "")
+	grant, _, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 123, 456, 1)
 	require.NoError(t, err)
 
-	lease, err := releaseLease(stores[leaderID], "c1", 200, 300, 500)
-	require.NoError(t, err)
-	require.Equal(t, "c1", lease.HolderID)
-	require.Equal(t, uint64(1), lease.Era)
-	require.Equal(t, int64(200), lease.ExpiresUnixNano)
+	_, err = retireExpiredGrant(stores[leaderID], grant.GrantID, 999)
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
 
-	_, err = releaseLease(stores[leaderID], "c2", 250, 300, 500)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, rootstate.ErrPrimacy))
+	retired, err := retireExpiredGrant(stores[leaderID], grant.GrantID, 1_001)
+	require.NoError(t, err)
+	require.Equal(t, grant.GrantID, retired.GrantID)
+	require.Equal(t, rootproto.GrantRetirementExpiredBound, retired.Mode)
+	require.Equal(t, grant.Duties, retired.Bounds)
+
+	current, err := stores[leaderID].Current()
+	require.NoError(t, err)
+	require.False(t, current.ActiveGrant.Present())
 }
 
 func testDescriptor(id uint64, start, end []byte) topology.Descriptor {

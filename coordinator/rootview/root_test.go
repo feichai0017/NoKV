@@ -24,11 +24,8 @@ type fakeLoadStore struct {
 func (f fakeLoadStore) Load() (Snapshot, error)                                  { return CloneSnapshot(f.snapshot), f.err }
 func (f fakeLoadStore) AppendRootEvent(context.Context, rootevent.Event) error   { return nil }
 func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error { return nil }
-func (f fakeLoadStore) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
-	return rootstate.EunomiaState{}, nil
-}
-func (f fakeLoadStore) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	return rootstate.EunomiaState{}, nil
+func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
 func (f fakeLoadStore) Refresh() error   { return nil }
 func (f fakeLoadStore) IsLeader() bool   { return true }
@@ -47,8 +44,7 @@ type fakeRootBackend struct {
 	observeErr          error
 	waitErr             error
 	observeCommittedErr error
-	applyLeaseErr       error
-	applyClosureErr     error
+	applyGrantErr       error
 	snapshotErr         error
 	refreshCount        int
 	appendCalls         int
@@ -57,8 +53,8 @@ type fakeRootBackend struct {
 	isLeader            bool
 	leaderID            uint64
 	tailNotifyCh        chan struct{}
-	applyLeaseResult    rootstate.EunomiaState
-	applyClosureResult  rootstate.EunomiaState
+	applyGrantResult    rootstate.EunomiaState
+	applyGrantCert      rootproto.GrantCertificate
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -151,30 +147,17 @@ func (f *fakeRootBackend) ObserveCommitted() (rootstorage.ObservedCommitted, err
 func (f *fakeRootBackend) IsLeader() bool   { return f.isLeader }
 func (f *fakeRootBackend) LeaderID() uint64 { return f.leaderID }
 
-func (f *fakeRootBackend) ApplyTenure(_ context.Context, _ rootproto.TenureCommand) (rootstate.EunomiaState, error) {
-	if f.applyLeaseErr != nil {
-		return f.applyLeaseResult, f.applyLeaseErr
+func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	if f.applyGrantErr != nil {
+		return f.applyGrantResult, rootproto.GrantCertificate{}, f.applyGrantErr
 	}
-	f.snapshot.State.Tenure = f.applyLeaseResult.Tenure
-	f.snapshot.State.Legacy = f.applyLeaseResult.Legacy
-	f.snapshot.State.Handover = f.applyLeaseResult.Handover
+	f.snapshot.State.ActiveGrant = f.applyGrantResult.ActiveGrant
+	f.snapshot.State.RetiredGrants = append([]rootproto.GrantRetirement(nil), f.applyGrantResult.RetiredGrants...)
+	f.snapshot.State.GrantInheritances = append([]rootproto.GrantInheritance(nil), f.applyGrantResult.GrantInheritances...)
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
-	return f.applyLeaseResult, nil
-}
-
-func (f *fakeRootBackend) ApplyHandover(_ context.Context, _ rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	if f.applyClosureErr != nil {
-		return rootstate.EunomiaState{}, f.applyClosureErr
-	}
-	f.snapshot.State.Tenure = f.applyClosureResult.Tenure
-	f.snapshot.State.Legacy = f.applyClosureResult.Legacy
-	f.snapshot.State.Handover = f.applyClosureResult.Handover
-	if f.useObserved {
-		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
-	}
-	return f.applyClosureResult, nil
+	return f.applyGrantResult, f.applyGrantCert, nil
 }
 
 func (f *fakeRootBackend) Close() error {
@@ -230,7 +213,8 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			desc1.RegionID: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: desc1.RegionID, Left: desc1, Right: desc2},
 		},
 		Allocator: AllocatorState{IDCurrent: 20, TSCurrent: 30},
-		Tenure: rootstate.Tenure{
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:         "grant-7",
 			HolderID:        "coord",
 			Era:             7,
 			ExpiresUnixNano: 999,
@@ -249,7 +233,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			LastCommitted: rootstate.Cursor{Term: 3, Index: 10},
 			IDFence:       40,
 			TSOFence:      50,
-			Tenure:        snapshot.Tenure,
+			ActiveGrant:   snapshot.ActiveGrant,
 		},
 		Stores: map[uint64]rootstate.StoreMembership{
 			7: {StoreID: 7, State: rootstate.StoreMembershipActive, JoinedAt: rootstate.Cursor{Term: 2, Index: 3}},
@@ -339,12 +323,9 @@ func TestRemoteConfigAndNilStoreHelpers(t *testing.T) {
 	require.Zero(t, store.LeaderID())
 	require.NoError(t, store.AppendRootEvent(context.Background(), rootevent.Event{}))
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 1, 2))
-	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
+	grantState, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
 	require.NoError(t, err)
-	require.Equal(t, rootstate.EunomiaState{}, leaseState)
-	closureState, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
-	require.NoError(t, err)
-	require.Equal(t, rootstate.EunomiaState{}, closureState)
+	require.Equal(t, rootstate.EunomiaState{}, grantState)
 	require.NoError(t, store.Close())
 }
 
@@ -407,16 +388,13 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			rootstorage.TailToken{Cursor: rootstate.Cursor{}, Revision: 1},
 			rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
 		),
-		applyLeaseResult: rootstate.EunomiaState{
-			Tenure: rootstate.Tenure{HolderID: "coord-2", Era: 2, ExpiresUnixNano: 999},
-		},
-		applyClosureResult: rootstate.EunomiaState{
-			Handover: rootstate.Handover{
-				HolderID:     "coord-2",
-				LegacyEra:    2,
-				SuccessorEra: 3,
-				LegacyDigest: "seal",
-				Stage:        rootproto.HandoverStageClosed,
+		applyGrantResult: rootstate.EunomiaState{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "grant-2",
+				HolderID:        "coord-2",
+				Era:             2,
+				ExpiresUnixNano: 999,
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 50)},
 			},
 		},
 	}
@@ -453,36 +431,37 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 	require.NoError(t, store.SaveAllocatorState(context.Background(), 55, 66))
 	require.Equal(t, []rootstate.AllocatorKind{rootstate.AllocatorKindID, rootstate.AllocatorKindTSO}, fake.fenceCalls)
 
-	leaseState, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
+	leaseState, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActIssue})
 	require.NoError(t, err)
-	require.Equal(t, "coord-2", leaseState.Tenure.HolderID)
+	require.Equal(t, "coord-2", leaseState.ActiveGrant.HolderID)
 
-	closureState, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
+	sealState, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActSeal, GrantID: "grant-2"})
 	require.NoError(t, err)
-	require.Equal(t, rootproto.HandoverStageClosed, closureState.Handover.Stage)
+	require.Equal(t, "coord-2", sealState.ActiveGrant.HolderID)
 
 	require.NoError(t, store.Close())
 	require.True(t, fake.closeCalled)
 }
 
-func TestRootStoreMergesTenureStateFromHeldRejection(t *testing.T) {
+func TestRootStoreMergesGrantStateFromHeldRejection(t *testing.T) {
 	initial := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			Tenure: rootstate.Tenure{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "stale-grant",
 				HolderID:        "stale",
 				Era:             1,
 				ExpiresUnixNano: 100,
-				Mandate:         rootproto.MandateDefault,
 			},
 		},
 	}
 	authoritative := rootstate.EunomiaState{
-		Tenure: rootstate.Tenure{
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:         "grant-2",
 			HolderID:        "coord-1",
 			Era:             2,
 			ExpiresUnixNano: 1_000,
-			Mandate:         rootproto.MandateDefault,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
 		},
 	}
 	fake := &fakeRootBackend{
@@ -490,19 +469,19 @@ func TestRootStoreMergesTenureStateFromHeldRejection(t *testing.T) {
 		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: initial}},
 		useObserved:      true,
 		isLeader:         true,
-		applyLeaseErr:    rootstate.ErrPrimacy,
-		applyLeaseResult: authoritative,
+		applyGrantErr:    rootstate.ErrPrimacy,
+		applyGrantResult: authoritative,
 	}
 	store, err := OpenRootStore(fake)
 	require.NoError(t, err)
 
-	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{Kind: rootproto.TenureActIssue})
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActIssue})
 	require.ErrorIs(t, err, rootstate.ErrPrimacy)
 	require.Equal(t, authoritative, state)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "coord-1", loaded.Tenure.HolderID)
-	require.Equal(t, uint64(2), loaded.Tenure.Era)
+	require.Equal(t, "coord-1", loaded.ActiveGrant.HolderID)
+	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
 }
 
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
@@ -511,10 +490,8 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.ApplyTenure(context.Background(), rootproto.TenureCommand{})
-	require.ErrorIs(t, err, errTenureCommandUnsupported)
-	_, err = store.ApplyHandover(context.Background(), rootproto.HandoverCommand{})
-	require.ErrorIs(t, err, errHandoverCommandUnsupported)
+	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
+	require.ErrorIs(t, err, errGrantCommandUnsupported)
 }
 
 func mustRestoreDescriptorsNil(t *testing.T) int {

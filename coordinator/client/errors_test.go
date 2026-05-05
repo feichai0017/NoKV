@@ -22,11 +22,11 @@ func TestCoordinatorClientErrorsExposeStableKinds(t *testing.T) {
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(notLeader))
 	require.True(t, nokverrors.Retryable(notLeader))
 
-	leaseNotHeld := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix)
-	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(leaseNotHeld))
-	require.True(t, nokverrors.Retryable(leaseNotHeld))
+	grantNotHeld := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(grantNotHeld))
+	require.True(t, nokverrors.Retryable(grantNotHeld))
 
-	leaseExpired := status.Error(codes.FailedPrecondition, errLeaseNotHeldPrefix+": "+nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid tenure: rooted lease expired era=7").Error())
-	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(leaseExpired))
-	require.True(t, nokverrors.Retryable(leaseExpired))
+	grantExpired := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid grant: rooted grant expired era=7").Error())
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(grantExpired))
+	require.True(t, nokverrors.Retryable(grantExpired))
 }

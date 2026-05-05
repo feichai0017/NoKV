@@ -74,38 +74,44 @@ actions.
 
 ### Minimal Eunomia vocabulary
 
-The rooted handoff protocol is intentionally small. Docs and operator-facing
+The rooted authority protocol is intentionally small. Docs and operator-facing
 surfaces should use the same vocabulary as the implementation and the
 Eunomia research note:
 
-- `Tenure` — the currently active authority record
-- `Legacy` — the retired predecessor era plus the frontier it already consumed
-- `Handover` — the rooted handoff record for the current successor
-- `Era` — the monotonic authority era
-- `Witness` — the operator-visible proof bundle that explains whether the
-  current handoff state is safe
+- `AuthorityGrant` — the active root-issued bounded authority record
+- `Duty` — a named service responsibility such as `alloc_id`, `tso`, or `region_lookup`
+- `DutyBound` — the root-known upper bound for a duty, for example an ID fence,
+  TSO fence, descriptor revision ceiling, budget, or epoch
+- `GrantRetirement` — the predecessor grant retired either by graceful exact
+  usage or by expiry-time upper bound
+- `GrantInheritance` — the successor grant's rooted acknowledgement that it
+  covers the predecessor retirement bound
+- `AuthorityEvidence` — the reply-carried proof bundle: root-signed grant
+  certificate, duty usage, and observed retired-era floor
 
 The four guarantees discussed by the docs and runtime metrics are:
 
-- `Primacy` — at most one authority era is active
-- `Inheritance` — the successor must cover the predecessor's published work
-- `Silence` — a sealed predecessor must not keep serving
-- `Finality` — a handoff must not remain permanently half-finished
+- `Primacy` — at most one active grant may serve a duty scope
+- `Bounded Inheritance` — the successor must cover every pending predecessor
+  retirement bound before it can be considered complete
+- `Silence` — a retired predecessor era must not keep serving
+- `Finality` — every retired grant should become inherited or explicitly visible
+  as pending audit state
 
 The mapping to concrete implementation types is direct:
 
 | Doc term | Implementation term |
 |---|---|
-| `Tenure` | `Tenure` |
-| `Legacy` | `Legacy` |
-| `Handover` | `Handover` |
-| `Era` | `Era` / `era` |
-| `Witness` | `HandoverWitness` / continuation witness fields |
-| `Frontiers` | `MandateFrontiers` / `frontiers` / `consumed_frontiers` |
+| `AuthorityGrant` | `AuthorityGrant` / `RootAuthorityGrant` |
+| `Duty` | `DutyID` / `DutyGrant` |
+| `DutyBound` | `DutyBound` / `RootDutyBound` |
+| `GrantRetirement` | `GrantRetirement` / `RootGrantRetirement` |
+| `GrantInheritance` | `GrantInheritance` / `RootGrantInheritance` |
+| `AuthorityEvidence` | `AuthorityEvidence` / `RootAuthorityEvidence` |
 
-Do not reintroduce `Lease` / `Seal` as public aliases. They are useful
-informally, but keeping them in formal docs creates two names for the same
-rooted objects and makes Eunomia harder to explain.
+Do not reintroduce `Tenure` / `Legacy` / `Handover` as public aliases. V2 is a
+grant protocol: graceful shutdown records exact usage, while crash-before-seal
+is handled by retiring the predecessor at its root-known grant bound.
 
 ---
 
@@ -129,8 +135,8 @@ plane deployment; it simply has no control plane.
   (replicated raft quorum, the only backend NoKV ships)
 - one or more `nokv coordinator` processes connect through the remote
   metadata-root gRPC API
-- `Tenure` gates singleton Coordinator duties: `AllocID`, `Tso`,
-  and scheduler operation planning
+- `AuthorityGrant` gates singleton Coordinator duties: `AllocID`, `Tso`,
+  and authoritative route lookup
 - route reads still come from Coordinator's rebuildable in-memory view and
   expose `Freshness`, `RootToken`, `CatchUpState`, and `DegradedMode`
 
@@ -145,8 +151,8 @@ Product assumptions:
 
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
-- coordinators are stateless relative to rooted truth; only the
-  `Tenure` differentiates active vs standby
+- coordinators are stateless relative to rooted truth; only the active
+  `AuthorityGrant` differentiates active vs standby
 - no dynamic metadata-root membership
 - no production-grade dynamic coordinator membership manager
 
@@ -178,10 +184,10 @@ Persistence ownership:
 1. `meta-root` workdirs own durable rooted truth and replicated metadata-root
    raft state.
 2. `coordinator` runtime view is rebuildable from remote `meta/root`.
-3. allocator fences and `Tenure` are rooted events, not local
+3. allocator fences and `AuthorityGrant` lifecycle records are rooted events, not local
    coordinator files.
 
-`--coordinator-id` must be a stable configured identity. It is used for lease
+`--coordinator-id` must be a stable configured identity. It is used for grant
 ownership and operator debugging; it should not be generated randomly on each
 restart.
 
@@ -341,7 +347,7 @@ In `3 coordinator + replicated meta`:
 In separated mode:
 
 - `meta-root` leadership determines which root endpoint accepts truth writes
-- `Tenure` determines which Coordinator may serve singleton duties
+- `AuthorityGrant` determines which Coordinator may serve singleton duties
 - non-holder Coordinators may still serve route reads if their rooted view
   satisfies the caller's freshness contract
 
@@ -358,8 +364,8 @@ These RPCs require rooted leadership:
 Followers return `FailedPrecondition` with `coordinator not leader` semantics, and
 clients are expected to retry against another Coordinator endpoint.
 
-In separated mode, `AllocID`, `Tso`, and scheduler operation planning also
-require the local Coordinator to hold `Tenure`.
+In separated mode, `AllocID`, `Tso`, and authoritative `GetRegionByKey`
+responses require the local Coordinator to hold a covering `AuthorityGrant`.
 
 ### Any-node reads
 
@@ -423,8 +429,8 @@ Current product assumptions:
 
 - exactly three meta-root replicas
 - meta-root is the only place durable rooted truth lives
-- coordinators are stateless relative to rooted truth; only the
-  `Tenure` differentiates active vs standby
+- coordinators are stateless relative to rooted truth; only the active
+  `AuthorityGrant` differentiates active vs standby
 - no dynamic metadata-root membership
 
 For local bootstrap, use:
@@ -463,7 +469,7 @@ For local bootstrap, use:
 - Coordinator persistence is intentionally limited to rooted control-plane truth:
   - region descriptor publish/tombstone events
   - allocator durability (`AllocID`, `TSO`)
-  - `Tenure` ownership for separated singleton duties
+  - `AuthorityGrant` ownership for separated singleton duties
 - Coordinator is not the durable owner of a store's local raft/region truth. Store
   restart truth remains in `raftstore/localmeta`, while Coordinator keeps routing and
   scheduling state rebuilt from `meta/root`.

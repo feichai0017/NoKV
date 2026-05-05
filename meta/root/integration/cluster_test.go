@@ -10,7 +10,6 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	roottestcluster "github.com/feichai0017/NoKV/meta/root/testcluster"
 	"github.com/feichai0017/NoKV/meta/topology"
@@ -65,9 +64,9 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 	_, err := cluster.Stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
 
-	lease, err := campaignLease(cluster.Stores[leaderID], "c1", 1_000, 100, 10, 20, 56, "")
+	grant, err := issueGrant(cluster.Stores[leaderID], "c1", 1_000, 100, 12, 34, 56)
 	require.NoError(t, err)
-	seal, err := sealLease(cluster.Stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 56))
+	retirement, err := sealGrant(cluster.Stores[leaderID], "c1", grant.GrantID, 200, 12, 34, 56)
 	require.NoError(t, err)
 
 	newLeaderID := cluster.FollowerIDs(leaderID)[0]
@@ -75,10 +74,10 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 	newLeaderID = cluster.WaitLeader(leaderID)
 	cluster.RefreshStore(newLeaderID)
 
-	successor, err := campaignLease(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56, rootstate.DigestOfLegacy(seal))
+	successor, err := issueGrant(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56)
 	require.NoError(t, err)
-	require.Greater(t, successor.Era, seal.Era)
-	require.Equal(t, lease.Era, seal.Era)
+	require.Greater(t, successor.Era, retirement.Era)
+	require.Equal(t, grant.Era, retirement.Era)
 
 	require.Eventually(t, func() bool {
 		for _, id := range []uint64{1, 2, 3} {
@@ -89,10 +88,11 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			if current.Tenure.HolderID != "c2" ||
-				current.Tenure.Era != successor.Era ||
-				current.Legacy.Era != seal.Era ||
-				current.Legacy.HolderID != "c1" ||
+			if current.ActiveGrant.HolderID != "c2" ||
+				current.ActiveGrant.Era != successor.Era ||
+				len(current.RetiredGrants) != 1 ||
+				current.RetiredGrants[0].Era != retirement.Era ||
+				current.RetiredGrants[0].HolderID != "c1" ||
 				current.IDFence != 12 ||
 				current.TSOFence != 34 {
 				return false
@@ -109,55 +109,67 @@ func TestMetaRootPartialSealRecoversFromCommittedLog(t *testing.T) {
 	desc := testDescriptor(99, []byte("a"), []byte("z"), 64)
 	_, err := cluster.Stores[leaderID].Append(context.Background(), rootevent.RegionDescriptorPublished(desc))
 	require.NoError(t, err)
-	lease, err := campaignLease(cluster.Stores[leaderID], "c1", 1_000, 100, 10, 20, 64, "")
+	grant, err := issueGrant(cluster.Stores[leaderID], "c1", 1_000, 100, 12, 34, 64)
 	require.NoError(t, err)
 
 	rootfailpoints.Set(rootfailpoints.AfterAppendCommittedBeforeCheckpoint)
 	t.Cleanup(func() { rootfailpoints.Set(rootfailpoints.None) })
 
-	_, err = sealLease(cluster.Stores[leaderID], "c1", 200, eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 64))
+	_, err = sealGrant(cluster.Stores[leaderID], "c1", grant.GrantID, 200, 12, 34, 64)
 	require.ErrorIs(t, err, rootfailpoints.ErrAfterAppendCommittedBeforeCheckpoint)
 
 	current, err := cluster.Stores[leaderID].Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), current.Legacy.Era)
+	require.Empty(t, current.RetiredGrants)
 
 	rootfailpoints.Set(rootfailpoints.None)
 	reopened := cluster.ReopenStore(leaderID)
 	current, err = reopened.Current()
 	require.NoError(t, err)
-	require.Equal(t, lease.Era, current.Legacy.Era)
-	require.Equal(t, "c1", current.Legacy.HolderID)
+	require.Len(t, current.RetiredGrants, 1)
+	require.Equal(t, grant.Era, current.RetiredGrants[0].Era)
+	require.Equal(t, "c1", current.RetiredGrants[0].HolderID)
 
-	successor, err := campaignLease(reopened, "c2", 1_400, 300, 12, 34, 64, rootstate.DigestOfLegacy(current.Legacy))
+	successor, err := issueGrant(reopened, "c2", 1_400, 300, 12, 34, 64)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), successor.Era)
 }
 
-func campaignLease(store interface {
-	ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error)
-}, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64, lineageDigest string) (rootstate.Tenure, error) {
-	state, err := store.ApplyTenure(context.Background(), rootproto.TenureCommand{
-		Kind:               rootproto.TenureActIssue,
-		HolderID:           holderID,
-		ExpiresUnixNano:    expiresUnixNano,
-		NowUnixNano:        nowUnixNano,
-		LineageDigest:      lineageDigest,
-		InheritedFrontiers: eunomia.Frontiers(rootstate.State{IDFence: idFence, TSOFence: tsoFence}, descriptorRevision),
+func issueGrant(store interface {
+	ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
+}, holderID string, expiresUnixNano, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64) (rootproto.AuthorityGrant, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
+		HolderID:        holderID,
+		ExpiresUnixNano: expiresUnixNano,
+		NowUnixNano:     nowUnixNano,
+		RequestedDuties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, idFence),
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, tsoFence),
+			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, descriptorRevision, 0),
+		},
 	})
-	return state.Tenure, err
+	return state.ActiveGrant, err
 }
 
-func sealLease(store interface {
-	ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error)
-}, holderID string, nowUnixNano int64, frontiers rootproto.MandateFrontiers) (rootstate.Legacy, error) {
-	state, err := store.ApplyHandover(context.Background(), rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActSeal,
+func sealGrant(store interface {
+	ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
+}, holderID, grantID string, nowUnixNano int64, idFence, tsoFence, descriptorRevision uint64) (rootproto.GrantRetirement, error) {
+	state, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{
+		Kind:        rootproto.GrantActSeal,
 		HolderID:    holderID,
+		GrantID:     grantID,
 		NowUnixNano: nowUnixNano,
-		Frontiers:   frontiers,
+		ExactUsages: []rootproto.AuthorityUsage{
+			{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: idFence}},
+			{DutyID: rootproto.DutyTSO, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: tsoFence}},
+			{DutyID: rootproto.DutyRegionLookup, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: descriptorRevision}},
+		},
 	})
-	return state.Legacy, err
+	if err != nil || len(state.RetiredGrants) == 0 {
+		return rootproto.GrantRetirement{}, err
+	}
+	return state.RetiredGrants[len(state.RetiredGrants)-1], nil
 }
 
 func testDescriptor(id uint64, start, end []byte, rootEpoch uint64) topology.Descriptor {

@@ -5,8 +5,7 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
@@ -45,58 +44,44 @@ func TestCloneEventDetachesPayload(t *testing.T) {
 	require.Equal(t, byte('a'), cloned.RegionDescriptor.Descriptor.StartKey[0])
 }
 
-func TestTenureEvent(t *testing.T) {
-	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)
-	event := rootevent.TenureGranted("c1", 1_000, 1, 7, "pred", frontiers)
-	cloned := rootevent.CloneEvent(event)
+func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
+	grant := rootproto.AuthorityGrant{
+		GrantID:  "c1/1",
+		HolderID: "c1",
+		Era:      1,
+		Duties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
+		},
+		PredecessorRetirements: []rootproto.GrantRetirement{
+			{GrantID: "old/1", Era: 1, Mode: rootproto.GrantRetirementExpiredBound},
+		},
+	}
+	issued := rootevent.GrantIssued(grant)
+	issuedClone := rootevent.CloneEvent(issued)
+	issued.Grant.Duties[0].Bound.MonotoneUpper = 99
+	require.Equal(t, rootevent.KindGrantIssued, issuedClone.Kind)
+	require.Equal(t, uint64(10), issuedClone.Grant.Duties[0].Bound.MonotoneUpper)
 
-	event.Tenure.HolderID = "c2"
-	require.Equal(t, rootevent.KindTenure, cloned.Kind)
-	require.Equal(t, "c1", cloned.Tenure.HolderID)
-	require.Equal(t, int64(1_000), cloned.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(1), cloned.Tenure.Era)
-	require.Equal(t, uint32(7), cloned.Tenure.Mandate)
-	require.Equal(t, frontiers, cloned.Tenure.Frontiers)
-	require.Equal(t, "pred", cloned.Tenure.LineageDigest)
-}
+	retirement := rootproto.GrantRetirement{
+		GrantID:  "c1/1",
+		HolderID: "c1",
+		Era:      1,
+		Bounds: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 20),
+		},
+	}
+	sealed := rootevent.GrantSealed(retirement)
+	sealedClone := rootevent.CloneEvent(sealed)
+	sealed.GrantRetirement.Bounds[0].Bound.MonotoneUpper = 200
+	require.Equal(t, rootevent.KindGrantSealed, sealedClone.Kind)
+	require.Equal(t, rootproto.GrantRetirementSealedExact, sealedClone.GrantRetirement.Mode)
+	require.Equal(t, uint64(20), sealedClone.GrantRetirement.Bounds[0].Bound.MonotoneUpper)
 
-func TestHandoverConfirmedEvent(t *testing.T) {
-	event := rootevent.HandoverConfirmed("c1", 7, 8, "seal-digest")
-	cloned := rootevent.CloneEvent(event)
-
-	event.Handover.HolderID = "c2"
-	require.Equal(t, rootevent.KindHandover, cloned.Kind)
-	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
-	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
-	require.Equal(t, rootevent.HandoverStageConfirmed, cloned.Handover.Stage)
-}
-
-func TestHandoverClosedEvent(t *testing.T) {
-	event := rootevent.HandoverClosed("c1", 7, 8, "seal-digest")
-	cloned := rootevent.CloneEvent(event)
-
-	event.Handover.HolderID = "c2"
-	require.Equal(t, rootevent.KindHandover, cloned.Kind)
-	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
-	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
-	require.Equal(t, rootevent.HandoverStageClosed, cloned.Handover.Stage)
-}
-
-func TestHandoverReattachedEvent(t *testing.T) {
-	event := rootevent.HandoverReattached("c1", 7, 8, "seal-digest")
-	cloned := rootevent.CloneEvent(event)
-
-	event.Handover.HolderID = "c2"
-	require.Equal(t, rootevent.KindHandover, cloned.Kind)
-	require.Equal(t, "c1", cloned.Handover.HolderID)
-	require.Equal(t, uint64(7), cloned.Handover.LegacyEra)
-	require.Equal(t, uint64(8), cloned.Handover.SuccessorEra)
-	require.Equal(t, "seal-digest", cloned.Handover.LegacyDigest)
-	require.Equal(t, rootevent.HandoverStageReattached, cloned.Handover.Stage)
+	inherited := rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "c1/1", SuccessorGrantID: "c2/2"})
+	inheritedClone := rootevent.CloneEvent(inherited)
+	inherited.GrantInheritance.SuccessorGrantID = "mutated"
+	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
+	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {
@@ -153,26 +138,6 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(12), quota.QuotaFence.LimitInodes)
 	require.Equal(t, uint64(2), quota.QuotaFence.Era)
 	require.Equal(t, uint64(99), quota.QuotaFence.Frontier)
-}
-
-func TestTenureReleasedAndSealed(t *testing.T) {
-	frontiers := eunomia.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0)
-	released := rootevent.TenureReleased("c1", 2_000, 3, 5, "digest", frontiers)
-	sealed := rootevent.TenureSealed("c1", 3, 5, frontiers)
-
-	require.Equal(t, rootevent.KindTenure, released.Kind)
-	require.Equal(t, "c1", released.Tenure.HolderID)
-	require.Equal(t, int64(2_000), released.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(3), released.Tenure.Era)
-	require.Equal(t, uint32(5), released.Tenure.Mandate)
-	require.Equal(t, "digest", released.Tenure.LineageDigest)
-	require.Equal(t, frontiers, released.Tenure.Frontiers)
-
-	require.Equal(t, rootevent.KindLegacy, sealed.Kind)
-	require.Equal(t, "c1", sealed.Legacy.HolderID)
-	require.Equal(t, uint64(3), sealed.Legacy.Era)
-	require.Equal(t, uint32(5), sealed.Legacy.Mandate)
-	require.Equal(t, frontiers, sealed.Legacy.Frontiers)
 }
 
 func TestRegionLifecycleConstructors(t *testing.T) {

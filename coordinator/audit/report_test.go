@@ -7,116 +7,105 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildReport(t *testing.T) {
-	seal := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       2,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
-	}
-	legacyDigest := rootstate.DigestOfLegacy(seal)
+func TestBuildReportSurfacesSealedExactCompleted(t *testing.T) {
 	snapshot := rootview.Snapshot{
 		CatchUpState: rootview.CatchUpStateFresh,
-		Allocator: rootview.AllocatorState{
-			IDCurrent: 12,
-			TSCurrent: 34,
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:  "g2",
+			HolderID: "c2",
+			Era:      2,
+			Duties: []rootproto.DutyGrant{
+				rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
+				rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 30),
+			},
 		},
-		Tenure: rootstate.Tenure{
-			HolderID:        "c1",
-			ExpiresUnixNano: 2_000,
-			Era:             3,
-			Mandate:         rootproto.MandateDefault,
-			LineageDigest:   legacyDigest,
+		RetiredGrants: []rootproto.GrantRetirement{
+			{
+				GrantID:            "g1",
+				HolderID:           "c1",
+				Era:                1,
+				Mode:               rootproto.GrantRetirementSealedExact,
+				Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+				InheritedByGrantID: "g2",
+			},
 		},
-		Legacy: seal,
-		Handover: rootstate.Handover{
-			HolderID:     "c1",
-			LegacyEra:    2,
-			SuccessorEra: 3,
-			LegacyDigest: legacyDigest,
-			Stage:        rootproto.HandoverStageReattached,
-		},
-		Descriptors: map[uint64]topology.Descriptor{
-			1: {RegionID: 1, RootEpoch: 7},
-		},
-	}
-
-	report := coordaudit.BuildReport(snapshot, "c1", 1_000)
-	require.Equal(t, uint64(7), report.RootDescriptorRevision)
-	require.Equal(t, "fresh", report.CatchUpState)
-	require.Equal(t, "c1", report.CurrentHolderID)
-	require.Equal(t, uint64(3), report.CurrentEra)
-	require.True(t, report.HandoverWitness.FinalitySatisfied())
-	require.Equal(t, rootproto.HandoverStageReattached, report.Handover.Stage)
-	require.Equal(t, coordaudit.AuthorityCompletionSealedCompleted, report.AuthorityCompletion)
-	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
-}
-
-func TestBuildReportSurfacesClosureGaps(t *testing.T) {
-	seal := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       2,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 9),
-		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
-	}
-	legacyDigest := rootstate.DigestOfLegacy(seal)
-	snapshot := rootview.Snapshot{
-		CatchUpState: rootview.CatchUpStateFresh,
-		Allocator: rootview.AllocatorState{
-			IDCurrent: 12,
-			TSCurrent: 34,
-		},
-		Tenure: rootstate.Tenure{
-			HolderID:        "c2",
-			ExpiresUnixNano: 2_000,
-			Era:             3,
-			Mandate:         rootproto.MandateDefault,
-			LineageDigest:   legacyDigest,
-		},
-		Legacy: seal,
-		Descriptors: map[uint64]topology.Descriptor{
-			1: {RegionID: 1, RootEpoch: 9},
-		},
+		GrantInheritances: []rootproto.GrantInheritance{{PredecessorGrantID: "g1", SuccessorGrantID: "g2"}},
+		Descriptors:       map[uint64]topology.Descriptor{1: {RegionID: 1, RootEpoch: 7}},
 	}
 
 	report := coordaudit.BuildReport(snapshot, "c2", 1_000)
-	require.Equal(t, rootproto.HandoverStageUnspecified, report.Handover.Stage)
-	require.False(t, report.Anomalies.SuccessorLineageMismatch)
-	require.False(t, report.Anomalies.UncoveredMonotoneFrontier)
-	require.False(t, report.Anomalies.UncoveredDescriptorRevision)
-	require.False(t, report.Anomalies.SealedEraStillLive)
-	require.Equal(t, coordaudit.AuthorityCompletionSealedPending, report.AuthorityCompletion)
-	require.Equal(t, coordaudit.FinalityDefectMissingConfirm, report.Anomalies.FinalityDefect)
+	require.Equal(t, uint64(7), report.RootDescriptorRevision)
+	require.Equal(t, "fresh", report.CatchUpState)
+	require.Equal(t, "c2", report.CurrentHolderID)
+	require.Equal(t, uint64(2), report.CurrentEra)
+	require.Equal(t, uint64(1), report.RetiredEraFloor)
+	require.Equal(t, coordaudit.AuthorityCompletionSealedExactCompleted, report.AuthorityCompletion)
+	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
 
-func TestBuildReportSurfacesExpiredTakeoverWithoutLegacy(t *testing.T) {
+func TestBuildReportSurfacesExpiredBoundInherited(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		Tenure: rootstate.Tenure{
-			HolderID:        "c2",
-			ExpiresUnixNano: 2_000,
-			Era:             2,
-			Mandate:         rootproto.MandateDefault,
+		ActiveGrant: rootproto.AuthorityGrant{GrantID: "g2", HolderID: "c2", Era: 2},
+		RetiredGrants: []rootproto.GrantRetirement{
+			{
+				GrantID:            "g1",
+				HolderID:           "c1",
+				Era:                1,
+				Mode:               rootproto.GrantRetirementExpiredBound,
+				Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+				InheritedByGrantID: "g2",
+			},
 		},
 	}, "c2", 1_000)
 
-	require.Equal(t, coordaudit.AuthorityCompletionExpiredWithoutLegacy, report.AuthorityCompletion)
+	require.Equal(t, coordaudit.AuthorityCompletionExpiredBoundInherited, report.AuthorityCompletion)
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
+}
+
+func TestBuildReportSurfacesRetiredNotInherited(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		RetiredGrants: []rootproto.GrantRetirement{
+			{GrantID: "g1", HolderID: "c1", Era: 1, Mode: rootproto.GrantRetirementExpiredBound},
+		},
+	}, "c2", 1_000)
+
+	require.Equal(t, coordaudit.AuthorityCompletionRetiredNotInherited, report.AuthorityCompletion)
+	require.True(t, report.Anomalies.RetiredGrantNotInherited)
+	require.Equal(t, coordaudit.FinalityDefectRetiredNotInherited, report.Anomalies.FinalityDefect)
+}
+
+func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		ActiveGrant: rootproto.AuthorityGrant{
+			GrantID:  "g2",
+			HolderID: "c2",
+			Era:      2,
+			Duties:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 5)},
+		},
+		RetiredGrants: []rootproto.GrantRetirement{
+			{
+				GrantID:  "g1",
+				HolderID: "c1",
+				Era:      1,
+				Mode:     rootproto.GrantRetirementExpiredBound,
+				Bounds:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+			},
+		},
+	}, "c2", 1_000)
+
+	require.True(t, report.Anomalies.InvalidSuccessorBound)
+	require.Equal(t, coordaudit.FinalityDefectInvalidSuccessorBound, report.Anomalies.FinalityDefect)
 }
 
 func TestBuildLeaseStartCoverageReport(t *testing.T) {
 	report := coordaudit.BuildLeaseStartCoverageReport(
 		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
 		eunomia.LeaseView{HolderID: "C", LeaseStart: 103},
-		eunomia.NewReadSummary(
-			eunomia.ServedRead{Key: "k", Timestamp: 105},
-		),
+		eunomia.NewReadSummary(eunomia.ServedRead{Key: "k", Timestamp: 105}),
 	)
 
 	require.True(t, report.Anomalies.LeaseStartCoverageViolation)
@@ -126,9 +115,7 @@ func TestBuildLeaseStartCoverageReport(t *testing.T) {
 	report = coordaudit.BuildLeaseStartCoverageReport(
 		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
 		eunomia.LeaseView{HolderID: "C", LeaseStart: 106},
-		eunomia.NewReadSummary(
-			eunomia.ServedRead{Key: "k", Timestamp: 105},
-		),
+		eunomia.NewReadSummary(eunomia.ServedRead{Key: "k", Timestamp: 105}),
 	)
 
 	require.False(t, report.Anomalies.LeaseStartCoverageViolation)

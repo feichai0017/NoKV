@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/meta/topology"
@@ -55,9 +56,9 @@ type Snapshot struct {
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 	Allocator           AllocatorState
-	Tenure              rootstate.Tenure
-	Legacy              rootstate.Legacy
-	Handover            rootstate.Handover
+	ActiveGrant         rootproto.AuthorityGrant
+	RetiredGrants       []rootproto.GrantRetirement
+	GrantInheritances   []rootproto.GrantInheritance
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -74,9 +75,9 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 		Allocator:           snapshot.Allocator,
-		Tenure:              snapshot.Tenure,
-		Legacy:              snapshot.Legacy,
-		Handover:            snapshot.Handover,
+		ActiveGrant:         snapshot.ActiveGrant,
+		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
 	}
 }
 
@@ -100,22 +101,22 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		Tenure:   snapshot.State.Tenure,
-		Legacy:   snapshot.State.Legacy,
-		Handover: snapshot.State.Handover,
+		ActiveGrant:       snapshot.State.ActiveGrant,
+		RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
+		GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
 	}
 }
 
 func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 	return rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:  s.ClusterEpoch,
-			LastCommitted: s.RootToken.Cursor,
-			IDFence:       s.Allocator.IDCurrent,
-			TSOFence:      s.Allocator.TSCurrent,
-			Tenure:        s.Tenure,
-			Legacy:        s.Legacy,
-			Handover:      s.Handover,
+			ClusterEpoch:      s.ClusterEpoch,
+			LastCommitted:     s.RootToken.Cursor,
+			IDFence:           s.Allocator.IDCurrent,
+			TSOFence:          s.Allocator.TSCurrent,
+			ActiveGrant:       s.ActiveGrant,
+			RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
+			GrantInheritances: append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),

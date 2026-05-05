@@ -175,11 +175,11 @@ Restart semantics:
   topology: coordinator always connects to an external 3-peer meta-root
   cluster via gRPC.
 - Required flags:
-  - `--coordinator-id` (stable lease owner id)
+  - `--coordinator-id` (stable grant holder id)
   - `--root-peer nodeID=addr` (exactly 3 meta-root gRPC endpoints)
 - Common flags:
   - `--addr` (default `127.0.0.1:2379`)
-  - `--lease-ttl`, `--lease-renew-before` (default `10s` / `3s`)
+  - `--grant-ttl`, `--grant-renew-before` (default `10s` / `3s`)
   - `--root-refresh` (default `200ms`)
   - `--id-start`, `--ts-start` (allocator seeds; only used when the meta-root cluster has no allocator state yet)
   - `--config` + `--scope host|docker` (resolves `--addr` from `raft_config.json`)
@@ -247,7 +247,7 @@ nokv meta-root \
   - Includes:
     - `root_mode`
     - rooted read-state summary
-    - lease state
+    - grant state
     - allocator window state
 
 ---

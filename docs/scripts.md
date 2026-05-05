@@ -112,7 +112,7 @@ This split is deliberate:
 - Notes:
   - `--root-peer` values are metadata-root gRPC service addresses, not raft transport
   - exactly 3 `--root-peer` values are required (mirrors the Truth-plane quorum)
-  - `--coordinator-id` is required (stable lease owner id)
+  - `--coordinator-id` is required (stable grant holder id)
   - forwards shutdown signals to `nokv coordinator`
 
 ## Migration Workflow

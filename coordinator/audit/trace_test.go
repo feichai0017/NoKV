@@ -7,56 +7,32 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
 
-func TestEvaluateReplyTrace(t *testing.T) {
-	seal := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       2,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-		SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
-	}
-	legacyDigest := rootstate.DigestOfLegacy(seal)
+func TestEvaluateReplyTraceFlagsRetiredGrantReply(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		CatchUpState: rootview.CatchUpStateFresh,
-		Allocator: rootview.AllocatorState{
-			IDCurrent: 12,
-			TSCurrent: 34,
+		RetiredGrants: []rootproto.GrantRetirement{
+			{GrantID: "g1", HolderID: "c1", Era: 1, Mode: rootproto.GrantRetirementSealedExact, InheritedByGrantID: "g2"},
 		},
-		Tenure: rootstate.Tenure{
-			HolderID:        "c1",
-			ExpiresUnixNano: 2_000,
-			Era:             3,
-			Mandate:         rootproto.MandateDefault,
-			LineageDigest:   legacyDigest,
-		},
-		Legacy: seal,
-		Handover: rootstate.Handover{
-			HolderID:     "c1",
-			LegacyEra:    2,
-			SuccessorEra: 3,
-			LegacyDigest: legacyDigest,
-			Stage:        rootproto.HandoverStageReattached,
-		},
-		Descriptors: map[uint64]topology.Descriptor{
-			1: {RegionID: 1, RootEpoch: 7},
-		},
-	}, "c1", 1_000)
+	}, "c2", 1_000)
 
 	anomalies := coordaudit.EvaluateReplyTrace(report, []coordaudit.ReplyTraceRecord{
-		{Duty: "allocid", Era: 2, Accepted: true},
-		{Duty: "allocid", Era: 1, Accepted: true},
-		{Duty: "allocid", Era: 2, Accepted: false},
-		{Duty: "allocid", Era: 3, Accepted: true},
+		{Duty: "alloc_id", GrantID: "g1", Era: 1, Accepted: true},
+		{Duty: "alloc_id", GrantID: "g2", Era: 2, Accepted: true},
 	})
 	require.Len(t, anomalies, 1)
-	require.Equal(t, "post_seal_accepted_reply", anomalies[0].Kind)
-	require.Equal(t, uint64(2), anomalies[0].Era)
+	require.Equal(t, "accepted_retired_grant_reply", anomalies[0].Kind)
+	require.Equal(t, uint64(1), anomalies[0].Era)
+}
+
+func TestEvaluateReplyTraceFlagsReplyOutsideGrant(t *testing.T) {
+	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
+		{Duty: "alloc_id", Era: 1, UsageUpper: 11, GrantUpper: 10, Accepted: true},
+		{Duty: "alloc_id", Era: 1, UsageUpper: 10, GrantUpper: 10, Accepted: true},
+	})
+	require.Len(t, anomalies, 1)
+	require.Equal(t, "reply_outside_grant", anomalies[0].Kind)
 }
 
 func TestEvaluateReplyTraceFlagsAcceptedReplyBehindSuccessor(t *testing.T) {

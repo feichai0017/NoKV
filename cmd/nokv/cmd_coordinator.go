@@ -38,9 +38,9 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value (used only when the meta-root cluster has no allocator state)")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value (used only when the meta-root cluster has no allocator state)")
 	rootRefresh := fs.Duration("root-refresh", 200*time.Millisecond, "refresh interval for rooted coordinator state")
-	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for lease-gated control plane (required)")
-	leaseTTL := fs.Duration("lease-ttl", 10*time.Second, "coordinator lease ttl")
-	leaseRenewBefore := fs.Duration("lease-renew-before", 3*time.Second, "renew/campaign before lease expiry")
+	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for grant-gated control plane (required)")
+	grantTTL := fs.Duration("grant-ttl", 10*time.Second, "coordinator grant ttl")
+	grantRenewBefore := fs.Duration("grant-renew-before", 3*time.Second, "renew/campaign before grant expiry")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator listen address")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator address: host|docker")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
@@ -123,7 +123,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
-	svc.ConfigureTenure(coordinatorIDValue, *leaseTTL, *leaseRenewBefore)
+	svc.ConfigureAuthorityGrant(coordinatorIDValue, *grantTTL, *grantRenewBefore)
 	installCoordinatorExpvar(svc)
 
 	grpcServer := grpc.NewServer()
@@ -143,7 +143,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from remote metadata root\n", loadedRegions)
 	_, _ = fmt.Fprintf(w, "Coordinator allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
-	_, _ = fmt.Fprintf(w, "Coordinator lease owner: id=%s ttl=%s renew_before=%s\n", coordinatorIDValue, leaseTTL.String(), leaseRenewBefore.String())
+	_, _ = fmt.Fprintf(w, "Coordinator grant holder: id=%s ttl=%s renew_before=%s\n", coordinatorIDValue, grantTTL.String(), grantRenewBefore.String())
 	_, _ = fmt.Fprintf(w, "Coordinator service listening on %s\n", lis.Addr().String())
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Coordinator metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
@@ -151,7 +151,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	ctx, cancel := coordinatorNotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go svc.RunTenureLoop(ctx)
+	go svc.RunGrantLoop(ctx)
 	go func() {
 		subscription := rootStore.SubscribeTail(rootstorage.TailToken{})
 		if subscription == nil {
@@ -185,7 +185,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		return nil
 	case <-ctx.Done():
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = svc.DrainAndSealTenure(shutdownCtx)
+		_ = svc.DrainAndSealGrant(shutdownCtx)
 		shutdownCancel()
 		grpcServer.GracefulStop()
 		serveErr := <-serveErrCh

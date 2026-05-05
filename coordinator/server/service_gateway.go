@@ -53,7 +53,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	// transferred leadership), clear the stale claims so another store's
 	// subsequent report wins.
 	s.cluster.RecordRegionLeaders(req.GetStoreId(), req.GetLeaderRegionIds())
-	operations := s.leaseScopedStoreOperations(ctx, req.GetStoreId())
+	operations := s.grantScopedStoreOperations(ctx, req.GetStoreId())
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: operations,

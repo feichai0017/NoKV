@@ -64,12 +64,12 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		if event.AllocatorFence != nil && event.AllocatorFence.Minimum > snapshot.State.TSOFence {
 			snapshot.State.TSOFence = event.AllocatorFence.Minimum
 		}
-	case rootevent.KindTenure:
-		applyTenureToState(&snapshot.State, cursor, event)
-	case rootevent.KindLegacy:
-		applyLegacyToState(&snapshot.State, cursor, event)
-	case rootevent.KindHandover:
-		applyHandoverToState(&snapshot.State, cursor, event)
+	case rootevent.KindGrantIssued:
+		applyGrantIssuedToState(&snapshot.State, cursor, event)
+	case rootevent.KindGrantSealed, rootevent.KindGrantRetired:
+		applyGrantRetirementToState(&snapshot.State, cursor, event)
+	case rootevent.KindGrantInherited:
+		applyGrantInheritanceToState(&snapshot.State, cursor, event)
 	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
 		snapshot.State.ClusterEpoch++
 		desc := event.RegionDescriptor.Descriptor.Clone()

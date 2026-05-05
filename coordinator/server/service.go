@@ -1,5 +1,5 @@
 // Package server implements the Coordinator gRPC service — the control-plane
-// entry point for route lookup, TSO, ID allocation, lease management, and
+// entry point for route lookup, TSO, ID allocation, grant management, and
 // rooted topology mutations.
 //
 // This package owns the SERVICE layer. It consumes rooted truth from
@@ -25,7 +25,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 )
 
@@ -34,7 +34,7 @@ import (
 // Lock order:
 //  1. writeMu
 //  2. allocMu
-//  3. leaseMu
+//  3. grantMu
 //
 // Never acquire these locks in reverse order.
 type Service struct {
@@ -50,13 +50,13 @@ type Service struct {
 	tsoWindowSize     uint64
 	allocMu           sync.Mutex
 	writeMu           sync.Mutex
-	leaseMu           sync.RWMutex
+	grantMu           sync.RWMutex
 	coordinatorID     string
-	leaseTTL          time.Duration
-	leaseRenewIn      time.Duration
-	leaseClockSkew    time.Duration
+	grantTTL          time.Duration
+	grantRenewIn      time.Duration
+	grantClockSkew    time.Duration
 	now               func() time.Time
-	leaseView         coordinatorLeaseView
+	grantView         coordinatorGrantView
 	authorityMu       sync.Mutex
 	authorityState    authorityServingState
 	authorityInflight uint64
@@ -94,10 +94,10 @@ func (s authorityServingState) String() string {
 	}
 }
 
-type coordinatorLeaseView struct {
-	tenure   rootstate.Tenure
-	legacy   rootstate.Legacy
-	handover rootstate.Handover
+type coordinatorGrantView struct {
+	grant        rootproto.AuthorityGrant
+	retirements  []rootproto.GrantRetirement
+	inheritances []rootproto.GrantInheritance
 }
 
 type coordinatorRootSnapshotView struct {
@@ -107,47 +107,39 @@ type coordinatorRootSnapshotView struct {
 	refreshedAt time.Time
 }
 
-func (v *coordinatorLeaseView) Reset() {
+func (v *coordinatorGrantView) Reset() {
 	if v == nil {
 		return
 	}
-	v.tenure = rootstate.Tenure{}
-	v.legacy = rootstate.Legacy{}
-	v.handover = rootstate.Handover{}
+	v.grant = rootproto.AuthorityGrant{}
+	v.retirements = nil
+	v.inheritances = nil
 }
 
-func (v *coordinatorLeaseView) Refresh(snapshot rootview.Snapshot) {
+func (v *coordinatorGrantView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
-	v.tenure = snapshot.Tenure
-	v.legacy = snapshot.Legacy
-	v.handover = snapshot.Handover
+	v.grant = snapshot.ActiveGrant
+	v.retirements = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
+	v.inheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
 }
 
-func (v coordinatorLeaseView) Current() (rootstate.Tenure, rootstate.Legacy) {
-	return v.tenure, v.legacy
+func (v coordinatorGrantView) Grant() rootproto.AuthorityGrant {
+	return v.grant
 }
 
-func (v coordinatorLeaseView) Tenure() rootstate.Tenure {
-	return v.tenure
-}
-
-func (v coordinatorLeaseView) Legacy() rootstate.Legacy {
-	return v.legacy
-}
-
-func (v coordinatorLeaseView) Handover() rootstate.Handover {
-	return v.handover
+func (v coordinatorGrantView) Retirements() []rootproto.GrantRetirement {
+	return append([]rootproto.GrantRetirement(nil), v.retirements...)
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
-const defaultTenureTTL = 10 * time.Second
-const defaultTenureRenewIn = 3 * time.Second
-const defaultTenureClockSkew = 500 * time.Millisecond
-const defaultTenureRetryMin = 200 * time.Millisecond
-const maxTenureRetry = 60 * time.Second
-const defaultTenureReleaseTimeout = 2 * time.Second
+const defaultGrantTTL = 10 * time.Second
+const defaultGrantRenewIn = 3 * time.Second
+const defaultGrantClockSkew = 500 * time.Millisecond
+const defaultGrantRetryMin = 200 * time.Millisecond
+const maxGrantRetry = 60 * time.Second
+const defaultGrantReleaseTimeout = 2 * time.Second
 const defaultRootSnapshotRefreshInterval = 250 * time.Millisecond
 const defaultStoreHeartbeatTTL = 10 * time.Second
 
@@ -181,42 +173,42 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 	return svc
 }
 
-// ConfigureTenure enables the explicit coordinator owner lease gate.
+// ConfigureAuthorityGrant enables the explicit coordinator owner grant gate.
 // Empty holderID disables the gate and keeps the current in-memory-only behavior.
-func (s *Service) ConfigureTenure(holderID string, ttl, renewIn time.Duration) {
+func (s *Service) ConfigureAuthorityGrant(holderID string, ttl, renewIn time.Duration) {
 	if s == nil {
 		return
 	}
-	s.leaseMu.Lock()
-	defer s.leaseMu.Unlock()
+	s.grantMu.Lock()
+	defer s.grantMu.Unlock()
 	s.coordinatorID = holderID
 	s.resetAuthorityServing()
 	if holderID == "" {
-		s.leaseTTL = 0
-		s.leaseRenewIn = 0
-		s.leaseClockSkew = 0
-		s.leaseView.Reset()
+		s.grantTTL = 0
+		s.grantRenewIn = 0
+		s.grantClockSkew = 0
+		s.grantView.Reset()
 		return
 	}
 	if ttl <= 0 {
-		ttl = defaultTenureTTL
+		ttl = defaultGrantTTL
 	}
 	if renewIn <= 0 || renewIn >= ttl {
-		renewIn = defaultTenureRenewIn
+		renewIn = defaultGrantRenewIn
 		if renewIn >= ttl {
 			renewIn = ttl / 2
 		}
 	}
-	clockSkew := defaultTenureClockSkew
+	clockSkew := defaultGrantClockSkew
 	if clockSkew >= renewIn && renewIn > 0 {
 		clockSkew = renewIn / 2
 	}
 	if clockSkew <= 0 {
 		clockSkew = time.Millisecond
 	}
-	s.leaseTTL = ttl
-	s.leaseRenewIn = renewIn
-	s.leaseClockSkew = clockSkew
+	s.grantTTL = ttl
+	s.grantRenewIn = renewIn
+	s.grantClockSkew = clockSkew
 }
 
 // ConfigureAllocatorWindows overrides the rooted allocator refill window sizes.

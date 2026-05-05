@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 )
@@ -33,19 +34,24 @@ func (s *Service) reloadAndFenceAllocators(refresh bool) error {
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
-	s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
-	s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
+	idGranted, tsoGranted := s.installGrantAllocatorWindowsLocked(snapshot.ActiveGrant)
+	if !idGranted {
+		s.fenceIDFromStorage(snapshot.Allocator.IDCurrent)
+	}
+	if !tsoGranted {
+		s.fenceTSOFromStorage(snapshot.Allocator.TSCurrent)
+	}
 	s.setLastRootReload(nil)
 	return nil
 }
 
-func (s *Service) refreshLeaseMirror(snapshot rootview.Snapshot) {
+func (s *Service) refreshGrantMirror(snapshot rootview.Snapshot) {
 	if s == nil {
 		return
 	}
-	s.leaseMu.Lock()
-	s.leaseView.Refresh(snapshot)
-	s.leaseMu.Unlock()
+	s.grantMu.Lock()
+	s.grantView.Refresh(snapshot)
+	s.grantMu.Unlock()
 }
 
 func (s *Service) rootSnapshotRefreshWindow() time.Duration {
@@ -93,7 +99,7 @@ func (s *Service) refreshCurrentRootSnapshot(snapshot rootview.Snapshot) bool {
 	if !s.cacheRootSnapshot(snapshot, time.Time{}) {
 		return false
 	}
-	s.refreshLeaseMirror(snapshot)
+	s.refreshGrantMirror(snapshot)
 	s.setLastRootReload(nil)
 	return true
 }
@@ -107,6 +113,11 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 	}
 	if s.cluster != nil {
 		s.cluster.ReplaceRootSnapshot(rootstate.Snapshot{
+			State: rootstate.State{
+				ActiveGrant:       snapshot.ActiveGrant,
+				RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+				GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+			},
 			Stores:              snapshot.Stores,
 			Subtrees:            snapshot.Subtrees,
 			Mounts:              snapshot.Mounts,

@@ -31,9 +31,6 @@ const (
 	KindPeerRemoved
 	KindPeerAdditionCancelled
 	KindPeerRemovalCancelled
-	KindTenure
-	KindLegacy
-	KindHandover
 	KindSnapshotEpochPublished
 	KindSnapshotEpochRetired
 	KindMountRegistered
@@ -42,6 +39,10 @@ const (
 	KindSubtreeHandoffStarted
 	KindSubtreeHandoffCompleted
 	KindQuotaFenceUpdated
+	KindGrantIssued
+	KindGrantSealed
+	KindGrantRetired
+	KindGrantInherited
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -110,49 +111,6 @@ type AllocatorFence struct {
 
 type RootCursor = rootproto.Cursor
 
-// Tenure records the current control-plane owner lease.
-type Tenure struct {
-	HolderID        string
-	ExpiresUnixNano int64
-	Era             uint64
-	IssuedAt        RootCursor
-	Mandate         uint32
-	LineageDigest   string
-	Frontiers       rootproto.MandateFrontiers
-}
-
-// Legacy records one rooted handover point for the current control-plane
-// authority era.
-type Legacy struct {
-	HolderID  string
-	Era       uint64
-	Mandate   uint32
-	Frontiers rootproto.MandateFrontiers
-	SealedAt  RootCursor
-}
-
-type HandoverStage = rootproto.HandoverStage
-
-const (
-	HandoverStageUnspecified = rootproto.HandoverStageUnspecified
-	HandoverStageConfirmed   = rootproto.HandoverStageConfirmed
-	HandoverStageClosed      = rootproto.HandoverStageClosed
-	HandoverStageReattached  = rootproto.HandoverStageReattached
-)
-
-// Handover records one rooted handover lifecycle entry for a sealed
-// predecessor era and its successor authority instance.
-type Handover struct {
-	HolderID     string
-	LegacyEra    uint64
-	SuccessorEra uint64
-	LegacyDigest string
-	Stage        HandoverStage
-	ConfirmedAt  RootCursor
-	ClosedAt     RootCursor
-	ReattachedAt RootCursor
-}
-
 // RegionDescriptorRecord carries one descriptor snapshot into the root log.
 type RegionDescriptorRecord struct {
 	Descriptor topology.Descriptor
@@ -196,9 +154,9 @@ type Event struct {
 
 	StoreMembership  *StoreMembership
 	AllocatorFence   *AllocatorFence
-	Tenure           *Tenure
-	Legacy           *Legacy
-	Handover         *Handover
+	Grant            *rootproto.AuthorityGrant
+	GrantRetirement  *rootproto.GrantRetirement
+	GrantInheritance *rootproto.GrantInheritance
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
@@ -208,6 +166,26 @@ type Event struct {
 	RangeSplit       *RangeSplit
 	RangeMerge       *RangeMerge
 	PeerChange       *PeerChange
+}
+
+func GrantIssued(grant rootproto.AuthorityGrant) Event {
+	return Event{Kind: KindGrantIssued, Grant: &grant}
+}
+
+func GrantSealed(retirement rootproto.GrantRetirement) Event {
+	retirement.Mode = rootproto.GrantRetirementSealedExact
+	return Event{Kind: KindGrantSealed, GrantRetirement: &retirement}
+}
+
+func GrantRetired(retirement rootproto.GrantRetirement) Event {
+	if retirement.Mode == rootproto.GrantRetirementUnspecified {
+		retirement.Mode = rootproto.GrantRetirementExpiredBound
+	}
+	return Event{Kind: KindGrantRetired, GrantRetirement: &retirement}
+}
+
+func GrantInherited(inheritance rootproto.GrantInheritance) Event {
+	return Event{Kind: KindGrantInherited, GrantInheritance: &inheritance}
 }
 
 func MountRegistered(mountID string, rootInode uint64, schemaVersion uint32) Event {
@@ -330,65 +308,6 @@ func IDAllocatorFenced(min uint64) Event {
 
 func TSOAllocatorFenced(min uint64) Event {
 	return Event{Kind: KindTSOAllocatorFenced, AllocatorFence: &AllocatorFence{Minimum: min}}
-}
-
-func TenureGranted(holderID string, expiresUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
-	return newTenureEvent(holderID, expiresUnixNano, era, mandate, lineageDigest, frontiers)
-}
-
-func TenureReleased(holderID string, releasedUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
-	return newTenureEvent(holderID, releasedUnixNano, era, mandate, lineageDigest, frontiers)
-}
-
-func newTenureEvent(holderID string, expiresUnixNano int64, era uint64, mandate uint32, lineageDigest string, frontiers rootproto.MandateFrontiers) Event {
-	return Event{
-		Kind: KindTenure,
-		Tenure: &Tenure{
-			HolderID:        holderID,
-			ExpiresUnixNano: expiresUnixNano,
-			Era:             era,
-			Mandate:         mandate,
-			LineageDigest:   lineageDigest,
-			Frontiers:       frontiers,
-		},
-	}
-}
-
-func TenureSealed(holderID string, era uint64, mandate uint32, frontiers rootproto.MandateFrontiers) Event {
-	return Event{
-		Kind: KindLegacy,
-		Legacy: &Legacy{
-			HolderID:  holderID,
-			Era:       era,
-			Mandate:   mandate,
-			Frontiers: frontiers,
-		},
-	}
-}
-
-func HandoverConfirmed(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageConfirmed)
-}
-
-func HandoverClosed(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageClosed)
-}
-
-func HandoverReattached(holderID string, legacyEra, successorEra uint64, legacyDigest string) Event {
-	return newHandoverEvent(holderID, legacyEra, successorEra, legacyDigest, HandoverStageReattached)
-}
-
-func newHandoverEvent(holderID string, legacyEra, successorEra uint64, legacyDigest string, stage HandoverStage) Event {
-	return Event{
-		Kind: KindHandover,
-		Handover: &Handover{
-			HolderID:     holderID,
-			LegacyEra:    legacyEra,
-			SuccessorEra: successorEra,
-			LegacyDigest: legacyDigest,
-			Stage:        stage,
-		},
-	}
 }
 
 func RegionBootstrapped(desc topology.Descriptor) Event {

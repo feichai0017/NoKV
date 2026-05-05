@@ -41,41 +41,43 @@ func TestDescriptorRoundTripPreservesAndDetachesData(t *testing.T) {
 }
 
 func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
-	frontiers := rootproto.NewMandateFrontiers(
-		rootproto.MandateFrontier{Mandate: rootproto.MandateAllocID, Frontier: 10},
-		rootproto.MandateFrontier{Mandate: rootproto.MandateTSO, Frontier: 20},
-	)
+	issued := rootproto.Cursor{Term: 2, Index: 8}
+	retired := rootproto.Cursor{Term: 2, Index: 9}
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-1",
+		HolderID:        "coord-1",
+		Era:             5,
+		ExpiresUnixNano: 12345,
+		IssuedAt:        issued,
+		IssuedRootToken: rootproto.AuthorityRootToken{Term: 2, Index: 8},
+		Duties: []rootproto.DutyGrant{
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
+			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{Term: 2, Index: 8}, 20, 3),
+		},
+	}
+	retirement := rootproto.GrantRetirement{
+		GrantID:   "grant-0",
+		HolderID:  "coord-0",
+		Era:       4,
+		Mode:      rootproto.GrantRetirementExpiredBound,
+		Bounds:    []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 9)},
+		RetiredAt: retired,
+	}
+	inheritance := rootproto.GrantInheritance{
+		PredecessorGrantID: "grant-0",
+		SuccessorGrantID:   "grant-1",
+		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
+	}
+	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:    7,
-		MembershipEpoch: 3,
-		LastCommitted:   rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:         100,
-		TSOFence:        200,
-		Tenure: rootstate.Tenure{
-			HolderID:        "coord-1",
-			ExpiresUnixNano: 12345,
-			Era:             5,
-			IssuedAt:        rootproto.Cursor{Term: 2, Index: 8},
-			Mandate:         rootproto.MandateDefault,
-			LineageDigest:   "pred",
-		},
-		Legacy: rootstate.Legacy{
-			HolderID:  "coord-1",
-			Era:       5,
-			Mandate:   rootproto.MandateAllocID | rootproto.MandateTSO,
-			Frontiers: frontiers,
-			SealedAt:  rootproto.Cursor{Term: 2, Index: 9},
-		},
-		Handover: rootstate.Handover{
-			HolderID:     "coord-1",
-			LegacyEra:    5,
-			SuccessorEra: 6,
-			LegacyDigest: "seal",
-			Stage:        rootproto.HandoverStageClosed,
-			ConfirmedAt:  rootproto.Cursor{Term: 2, Index: 10},
-			ClosedAt:     rootproto.Cursor{Term: 2, Index: 11},
-			ReattachedAt: rootproto.Cursor{Term: 2, Index: 12},
-		},
+		ClusterEpoch:      7,
+		MembershipEpoch:   3,
+		LastCommitted:     rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:           100,
+		TSOFence:          200,
+		ActiveGrant:       grant,
+		RetiredGrants:     []rootproto.GrantRetirement{retirement},
+		GrantInheritances: []rootproto.GrantInheritance{inheritance},
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -83,56 +85,51 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, state, RootStateFromProto(RootStateToProto(state)))
 	require.Equal(t, rootstate.State{}, RootStateFromProto(nil))
 
-	require.Nil(t, RootTenureToProto(rootstate.Tenure{}))
-	require.Nil(t, RootLegacyToProto(rootstate.Legacy{}))
-	require.Nil(t, RootHandoverToProto(rootstate.Handover{}))
-	require.Equal(t, state.Tenure, RootTenureFromProto(RootTenureToProto(state.Tenure)))
-	require.Equal(t, state.Legacy, RootLegacyFromProto(RootLegacyToProto(state.Legacy)))
-	require.Equal(t, state.Handover, RootHandoverFromProto(RootHandoverToProto(state.Handover)))
-
-	require.Nil(t, RootMandateFrontiersToProto(rootproto.MandateFrontiers{}))
-	filtered := RootMandateFrontiersFromProto([]*metapb.RootMandateFrontier{
-		nil,
-		{Mandate: 0, Frontier: 1},
-		{Mandate: rootproto.MandateAllocID, Frontier: 10},
-		{Mandate: rootproto.MandateTSO, Frontier: 20},
-	})
-	require.Equal(t, frontiers, filtered)
+	require.Nil(t, RootAuthorityGrantToProto(rootproto.AuthorityGrant{}))
+	require.Equal(t, grant, RootAuthorityGrantFromProto(RootAuthorityGrantToProto(grant)))
+	require.Nil(t, RootGrantRetirementToProto(rootproto.GrantRetirement{}))
+	require.Equal(t, retirement, RootGrantRetirementFromProto(RootGrantRetirementToProto(retirement)))
+	require.Nil(t, RootGrantInheritanceToProto(rootproto.GrantInheritance{}))
+	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
 
 	protocolState := rootstate.EunomiaState{
-		Tenure:   state.Tenure,
-		Legacy:   state.Legacy,
-		Handover: state.Handover,
+		ActiveGrant:       state.ActiveGrant,
+		RetiredGrants:     state.RetiredGrants,
+		GrantInheritances: state.GrantInheritances,
 	}
 	require.Equal(t, protocolState, RootEunomiaStateFromProto(RootEunomiaStateToProto(protocolState)))
 	require.Equal(t, rootstate.EunomiaState{}, RootEunomiaStateFromProto(nil))
 
-	leaseCmd := rootproto.TenureCommand{
-		Kind:               rootproto.TenureActRelease,
-		HolderID:           "coord-1",
-		ExpiresUnixNano:    23456,
-		NowUnixNano:        12345,
-		LineageDigest:      "pred",
-		InheritedFrontiers: frontiers,
+	grantCmd := rootproto.GrantCommand{
+		Kind:                rootproto.GrantActIssue,
+		HolderID:            "coord-1",
+		GrantID:             "grant-1",
+		ExpiresUnixNano:     23456,
+		NowUnixNano:         12345,
+		RequestedDuties:     grant.Duties,
+		PredecessorGrantIDs: []string{"grant-0"},
 	}
-	require.Equal(t, leaseCmd, RootTenureCommandFromProto(RootTenureCommandToProto(leaseCmd)))
-	require.Equal(t, rootproto.TenureCommand{}, RootTenureCommandFromProto(nil))
+	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
+	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
 
-	closureCmd := rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActReattach,
-		HolderID:    "coord-1",
-		NowUnixNano: 999,
-		Frontiers:   frontiers,
+	cert := rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   []byte("sig"),
 	}
-	require.Equal(t, closureCmd, RootHandoverCommandFromProto(RootHandoverCommandToProto(closureCmd)))
-	require.Equal(t, rootproto.HandoverCommand{}, RootHandoverCommandFromProto(nil))
+	require.Equal(t, cert, RootGrantCertificateFromProto(RootGrantCertificateToProto(cert)))
+	evidence := rootproto.AuthorityEvidence{
+		Certificate:             cert,
+		Usage:                   rootproto.AuthorityUsage{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 9}},
+		ObservedRetirements:     []rootproto.GrantRetirement{retirement},
+		ObservedRetiredEraFloor: 4,
+	}
+	require.Equal(t, evidence, RootAuthorityEvidenceFromProto(RootAuthorityEvidenceToProto(evidence)))
 
-	require.Equal(t, metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED, rootHandoverStageToProto(rootproto.HandoverStageUnspecified))
-	require.Equal(t, rootproto.HandoverStageUnspecified, rootHandoverStageFromProto(metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED))
-	require.Equal(t, metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED, rootTenureActToProto(rootproto.TenureActUnknown))
-	require.Equal(t, rootproto.TenureActUnknown, rootTenureActFromProto(metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED))
-	require.Equal(t, metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED, rootHandoverActToProto(rootproto.HandoverActUnknown))
-	require.Equal(t, rootproto.HandoverActUnknown, rootHandoverActFromProto(metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED))
+	require.Equal(t, metapb.RootGrantAct_ROOT_GRANT_ACT_UNSPECIFIED, RootGrantActToProto(rootproto.GrantActUnknown))
+	require.Equal(t, rootproto.GrantActUnknown, RootGrantActFromProto(metapb.RootGrantAct_ROOT_GRANT_ACT_UNSPECIFIED))
+	require.Equal(t, metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_UNSPECIFIED, RootGrantRetirementModeToProto(rootproto.GrantRetirementUnspecified))
+	require.Equal(t, rootproto.GrantRetirementUnspecified, RootGrantRetirementModeFromProto(metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_UNSPECIFIED))
 }
 
 func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
@@ -276,16 +273,27 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	right := testWireDescriptor(32, []byte("f"), []byte("m"))
 	merged := testWireDescriptor(33, []byte("a"), []byte("m"))
 	base := desc.Clone()
-	frontiers := rootproto.NewMandateFrontiers(
-		rootproto.MandateFrontier{Mandate: rootproto.MandateAllocID, Frontier: 10},
-	)
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-1",
+		HolderID:        "coord",
+		Era:             7,
+		ExpiresUnixNano: 123,
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+	}
+	retirement := rootproto.GrantRetirement{
+		GrantID:  grant.GrantID,
+		HolderID: grant.HolderID,
+		Era:      grant.Era,
+		Mode:     rootproto.GrantRetirementSealedExact,
+		Bounds:   grant.Duties,
+	}
 
 	events := []rootevent.Event{
 		rootevent.StoreJoined(1),
 		rootevent.IDAllocatorFenced(10),
-		rootevent.TenureGranted("coord", 123, 7, rootproto.MandateAllocID, "pred", frontiers),
-		rootevent.TenureSealed("coord", 7, rootproto.MandateAllocID, frontiers),
-		rootevent.HandoverClosed("coord", 7, 8, "seal"),
+		rootevent.GrantIssued(grant),
+		rootevent.GrantSealed(retirement),
+		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
 		rootevent.SnapshotEpochPublished("vol", 42, 99),
 		rootevent.SnapshotEpochRetired("vol", 42, 99),
 		rootevent.MountRegistered("vol", 1, 1),
@@ -316,16 +324,10 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	got := RootEventFromProto(pb)
 	require.Equal(t, []byte("f"), got.RangeSplit.SplitKey)
 
-	require.Nil(t, rootEventTenureToProto(nil))
-	require.Nil(t, rootEventLegacyToProto(nil))
-	require.Nil(t, rootEventHandoverToProto(nil))
 	require.Nil(t, rootEventSnapshotEpochToProto(nil))
 	require.Nil(t, rootEventMountToProto(nil))
 	require.Nil(t, rootEventSubtreeAuthorityToProto(nil))
 	require.Nil(t, rootEventQuotaFenceToProto(nil))
-	require.Nil(t, rootEventTenureFromProto(nil))
-	require.Nil(t, rootEventLegacyFromProto(nil))
-	require.Nil(t, rootEventHandoverFromProto(nil))
 	require.Nil(t, rootEventSnapshotEpochFromProto(nil))
 	require.Nil(t, rootEventMountFromProto(nil))
 	require.Nil(t, rootEventSubtreeAuthorityFromProto(nil))
@@ -351,9 +353,10 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindPeerRemoved,
 		rootevent.KindPeerAdditionCancelled,
 		rootevent.KindPeerRemovalCancelled,
-		rootevent.KindTenure,
-		rootevent.KindLegacy,
-		rootevent.KindHandover,
+		rootevent.KindGrantIssued,
+		rootevent.KindGrantSealed,
+		rootevent.KindGrantRetired,
+		rootevent.KindGrantInherited,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,

@@ -5,8 +5,6 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
@@ -26,124 +24,6 @@ func TestApplyEventToStateAdvancesEpochsAndCursor(t *testing.T) {
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 3}, rootevent.PeerAdditionPlanned(10, 2, 201, testDescriptor(10, []byte("a"), []byte("z"))))
 	require.Equal(t, uint64(2), st.ClusterEpoch)
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 3}, st.LastCommitted)
-}
-
-func TestApplyTenureToState(t *testing.T) {
-	var st rootstate.State
-	event := rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0))
-
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, event)
-
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.LastCommitted)
-	require.Equal(t, "c1", st.Tenure.HolderID)
-	require.Equal(t, int64(1_000), st.Tenure.ExpiresUnixNano)
-	require.Equal(t, uint64(1), st.Tenure.Era)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
-	require.Equal(t, uint32(rootproto.MandateDefault), st.Tenure.Mandate)
-	require.Equal(t, "pred", st.Tenure.LineageDigest)
-	require.Equal(t, uint64(10), st.IDFence)
-	require.Equal(t, uint64(20), st.TSOFence)
-	require.True(t, st.Tenure.ActiveAt(999))
-	require.False(t, st.Tenure.ActiveAt(1_000))
-}
-
-func TestApplyHandoverConfirmedToState(t *testing.T) {
-	var st rootstate.State
-	event := rootevent.HandoverConfirmed("c1", 7, 8, "seal-digest")
-
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 9}, event)
-
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.LastCommitted)
-	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(7), st.Handover.LegacyEra)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
-	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
-	require.Equal(t, rootproto.HandoverStageConfirmed, st.Handover.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 9}, st.Handover.ConfirmedAt)
-}
-
-func TestApplyHandoverClosedToState(t *testing.T) {
-	var st rootstate.State
-	event := rootevent.HandoverClosed("c1", 7, 8, "seal-digest")
-
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
-
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
-	require.Equal(t, uint64(7), st.Handover.LegacyEra)
-	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
-	require.Equal(t, rootproto.HandoverStageClosed, st.Handover.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ClosedAt)
-}
-
-func TestApplyHandoverReattachToState(t *testing.T) {
-	var st rootstate.State
-	event := rootevent.HandoverReattached("c1", 7, 8, "seal-digest")
-
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 2, Index: 10}, event)
-
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.LastCommitted)
-	require.Equal(t, "c1", st.Handover.HolderID)
-	require.Equal(t, uint64(8), st.Handover.SuccessorEra)
-	require.Equal(t, uint64(7), st.Handover.LegacyEra)
-	require.Equal(t, "seal-digest", st.Handover.LegacyDigest)
-	require.Equal(t, rootproto.HandoverStageReattached, st.Handover.Stage)
-	require.Equal(t, rootstate.Cursor{Term: 2, Index: 10}, st.Handover.ReattachedAt)
-}
-
-func TestApplyTenurePreservesIssuedAtForSameEra(t *testing.T) {
-	var st rootstate.State
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.TenureGranted("c1", 1_000, 1, rootproto.MandateDefault, "pred", eunomia.Frontiers(rootstate.State{IDFence: 10, TSOFence: 20}, 0)))
-	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.TenureGranted("c1", 2_000, 1, rootproto.MandateDefault, "", eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 30}, 0)))
-
-	require.Equal(t, uint64(1), st.Tenure.Era)
-	require.Equal(t, rootstate.Cursor{Term: 1, Index: 1}, st.Tenure.IssuedAt)
-	require.Equal(t, uint64(20), st.IDFence)
-	require.Equal(t, uint64(30), st.TSOFence)
-	require.Equal(t, "pred", st.Tenure.LineageDigest)
-}
-
-func TestApplyLegacyToStateDefaultsMandateAndClearsHandover(t *testing.T) {
-	st := rootstate.State{
-		Tenure: rootstate.Tenure{HolderID: "c1", Era: 7, Mandate: rootproto.MandateTSO},
-		Handover: rootstate.Handover{
-			HolderID:     "c1",
-			LegacyEra:    6,
-			SuccessorEra: 7,
-			LegacyDigest: "old",
-			Stage:        rootproto.HandoverStageConfirmed,
-		},
-	}
-	cursor := rootstate.Cursor{Term: 2, Index: 8}
-	rootstate.ApplyEventToState(&st, cursor, rootevent.TenureSealed("c1", 7, 0, eunomia.Frontiers(rootstate.State{TSOFence: 51}, 0)))
-
-	require.Equal(t, rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       7,
-		Mandate:   rootproto.MandateTSO,
-		Frontiers: eunomia.Frontiers(rootstate.State{TSOFence: 51}, 0),
-		SealedAt:  cursor,
-	}, st.Legacy)
-	require.Equal(t, rootstate.Handover{}, st.Handover)
-	require.Equal(t, cursor, st.LastCommitted)
-}
-
-func TestStateProtocolHelpers(t *testing.T) {
-	witness := rootproto.NewMandateWitness(rootproto.MandateTSO, 8, 51)
-	require.Equal(t, rootproto.MandateTSO, witness.Mandate)
-	require.Equal(t, uint64(8), witness.Era)
-	require.Equal(t, uint64(51), witness.ConsumedFrontier)
-
-	seal := rootstate.Legacy{
-		HolderID:  "c1",
-		Era:       7,
-		Mandate:   rootproto.MandateDefault,
-		Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 20, TSOFence: 40}, 60),
-	}
-	require.Equal(t, uint64(20), seal.Frontiers.Frontier(rootproto.MandateAllocID))
-	require.Equal(t, uint64(40), seal.Frontiers.Frontier(rootproto.MandateTSO))
-	require.Equal(t, uint64(60), seal.Frontiers.Frontier(rootproto.MandateGetRegionByKey))
 }
 
 func TestCursorHelpers(t *testing.T) {

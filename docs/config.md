@@ -181,7 +181,7 @@ a source of defaults:
   MUST be different ports on the same host.
 - **`coordinator.addr` / `docker_addr`**: may be a single endpoint or
   comma-separated for multi-coord HA (`coord1:2379,coord2:2379,coord3:2379`).
-  Gateways and stores use this list to failover on lease-not-held errors.
+  Gateways and stores use this list to failover on grant-not-held errors.
 - **`stores[i]`**: `addr` is what other processes dial; `listen_addr` is what
   the store binds locally. Usually the same on host scope; different on
   docker scope (`0.0.0.0:20160` vs `nokv-store-1:20160`).

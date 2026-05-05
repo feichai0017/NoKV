@@ -244,7 +244,9 @@ func KindOfGRPCStatus(err error) Kind {
 	if kind := kindFromMessage(message); kind != KindUnknown {
 		return kind
 	}
-	if strings.Contains(message, "not leader") || strings.Contains(message, "lease not held") {
+	if strings.Contains(message, "not leader") ||
+		strings.Contains(message, "grant not held") ||
+		strings.Contains(message, "lease not held") {
 		return KindNotLeader
 	}
 	if strings.Contains(message, "root unavailable") {

@@ -130,7 +130,7 @@ func TestRunCoordinatorCmdStartsAndStops(t *testing.T) {
 	require.NoError(t, runCoordinatorCmd(&buf, args))
 	require.Contains(t, buf.String(), "Coordinator service listening on")
 	require.Contains(t, buf.String(), "Coordinator metrics endpoint listening on http://")
-	require.Contains(t, buf.String(), "Coordinator lease owner: id=c1")
+	require.Contains(t, buf.String(), "Coordinator grant holder: id=c1")
 }
 
 func TestRunCoordinatorCmdRestoresRegionsFromRemoteRoot(t *testing.T) {
@@ -155,12 +155,12 @@ func TestRunCoordinatorCmdRestoresRegionsFromRemoteRoot(t *testing.T) {
 	args := append([]string{
 		"-addr", "127.0.0.1:0",
 		"-coordinator-id", "c1",
-		"-lease-ttl", "15s",
-		"-lease-renew-before", "5s",
+		"-grant-ttl", "15s",
+		"-grant-renew-before", "5s",
 	}, rootPeerArgsFromTargets(targets)...)
 	require.NoError(t, runCoordinatorCmd(&buf, args))
 	require.Contains(t, buf.String(), "Coordinator restored 1 region(s) from remote metadata root")
-	require.Contains(t, buf.String(), "Coordinator lease owner: id=c1 ttl=15s renew_before=5s")
+	require.Contains(t, buf.String(), "Coordinator grant holder: id=c1 ttl=15s renew_before=5s")
 }
 
 func TestRunCoordinatorCmdInvalidMetricsAddr(t *testing.T) {

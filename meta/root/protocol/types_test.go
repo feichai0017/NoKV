@@ -6,196 +6,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMandateFrontiersHelpers(t *testing.T) {
-	frontiers := NewMandateFrontiers(
-		MandateFrontier{Mandate: MandateAllocID, Frontier: 10},
-		MandateFrontier{Mandate: MandateGetRegionByKey, Frontier: 30},
-	)
+func TestAuthorityGrantPresenceAndDutyLookup(t *testing.T) {
+	grant := AuthorityGrant{}
+	require.False(t, grant.Present())
 
-	require.Equal(t, uint64(10), frontiers.Frontier(MandateAllocID))
-	require.Zero(t, frontiers.Frontier(MandateTSO))
-	require.Equal(t, 2, frontiers.Len())
-	require.Equal(t,
-		[]MandateFrontier{
-			{Mandate: MandateAllocID, Frontier: 10},
-			{Mandate: MandateGetRegionByKey, Frontier: 30},
+	grant = AuthorityGrant{
+		GrantID:         "g1",
+		HolderID:        "c1",
+		Era:             1,
+		ExpiresUnixNano: 2_000,
+		Duties: []DutyGrant{
+			NewGlobalMonotoneDuty(DutyAllocID, 10),
+			NewGlobalVersionDuty(DutyRegionLookup, AuthorityRootToken{Term: 1, Index: 2}, 7, 0),
 		},
-		frontiers.Entries(),
-	)
-	require.Equal(t, map[uint32]uint64{
-		MandateAllocID:        10,
-		MandateGetRegionByKey: 30,
-	}, frontiers.AsMap())
+	}
+	require.True(t, grant.Present())
+	require.True(t, grant.ActiveAt(1_999))
+	require.False(t, grant.ActiveAt(2_000))
 
-	require.Equal(
-		t,
-		[]uint32{MandateAllocID, MandateTSO, MandateGetRegionByKey},
-		OrderedMandateMasks(MandateTSO, frontiers),
-	)
-
-	unchanged := frontiers.WithFrontier(1<<30, 99)
-	require.Equal(t, frontiers, unchanged)
-
-	fromMap := MandateFrontiersFromMap(map[uint32]uint64{
-		MandateTSO:            20,
-		MandateGetRegionByKey: 30,
-		MandateLeaseStart:     40,
-	})
-	require.Equal(t, uint64(20), fromMap.Frontier(MandateTSO))
-	require.Equal(t, 3, fromMap.Len())
-	require.Equal(t, "alloc_id", MandateName(MandateAllocID))
-	require.Equal(t, "mandate_999", MandateName(999))
-
-	idx, ok := mandateIndex(MandateLeaseStart)
+	alloc, ok := grant.Duty(DutyAllocID)
 	require.True(t, ok)
-	require.Equal(t, 3, idx)
-	_, ok = mandateIndex(1 << 30)
+	require.Equal(t, DutyBoundMonotone, alloc.Bound.Kind)
+	require.Equal(t, uint64(10), alloc.Bound.MonotoneUpper)
+
+	_, ok = grant.Duty(DutyTSO)
 	require.False(t, ok)
 }
 
-func TestAuthorityHandoffRecordValidation(t *testing.T) {
-	empty, err := NewAuthorityHandoffRecord("", 0, 0, Cursor{}, 0, "", MandateFrontiers{})
-	require.NoError(t, err)
-	require.False(t, empty.Present())
-
-	_, err = NewAuthorityHandoffRecord("", 1, 1, Cursor{Term: 1, Index: 1}, MandateAllocID, "", MandateFrontiers{})
-	require.ErrorContains(t, err, "holder id is required")
-
-	_, err = NewAuthorityHandoffRecord("holder", 1, 0, Cursor{}, MandateAllocID, "", NewMandateFrontiers(MandateFrontier{
-		Mandate:  MandateAllocID,
-		Frontier: 10,
-	}))
-	require.ErrorContains(t, err, "era is required")
-
-	_, err = NewAuthorityHandoffRecord("holder", 1, 1, Cursor{}, 0, "", MandateFrontiers{})
-	require.ErrorContains(t, err, "duty mask is required")
-
-	_, err = NewAuthorityHandoffRecord(
-		"holder",
-		1,
-		1,
-		Cursor{Term: 1, Index: 2},
-		MandateAllocID|MandateTSO,
-		"pred",
-		NewMandateFrontiers(MandateFrontier{Mandate: MandateAllocID, Frontier: 10}),
-	)
-	require.ErrorContains(t, err, "frontiers must cover all duty mask bits")
-
-	record, err := NewAuthorityHandoffRecord(
-		" holder ",
-		100,
-		7,
-		Cursor{Term: 2, Index: 5},
-		MandateAllocID|MandateTSO|(1<<30),
-		" pred ",
-		NewMandateFrontiers(
-			MandateFrontier{Mandate: MandateAllocID, Frontier: 10},
-			MandateFrontier{Mandate: MandateTSO, Frontier: 20},
-		),
-	)
-	require.NoError(t, err)
-	require.True(t, record.Present())
-	require.Equal(t, "holder", record.HolderID)
-	require.Equal(t, "pred", record.LineageDigest)
-	require.Equal(t, MandateAllocID|MandateTSO, record.Mandate)
-
-	require.Panics(t, func() {
-		_ = MustNewAuthorityHandoffRecord("holder", 0, 0, Cursor{}, MandateAllocID, "", MandateFrontiers{})
-	})
+func TestGrantRetirementPresence(t *testing.T) {
+	require.False(t, GrantRetirement{}.Present())
+	require.False(t, GrantRetirement{GrantID: "g1", Era: 1}.Present())
+	require.True(t, GrantRetirement{GrantID: "g1", Era: 1, Mode: GrantRetirementExpiredBound}.Present())
 }
 
-func TestCoverageAndHandoverWitnessHelpers(t *testing.T) {
-	coverage := InheritanceStatus{
-		Checks: []InheritanceCoverage{
-			{
-				Mandate:          MandateAllocID,
-				RequiredFrontier: 10,
-				ActualFrontier:   12,
-				Covered:          true,
-			},
-			{
-				Mandate:          MandateTSO,
-				RequiredFrontier: 20,
-				ActualFrontier:   19,
-				Covered:          false,
-			},
-			{
-				Mandate:          MandateGetRegionByKey,
-				RequiredFrontier: 30,
-				ActualFrontier:   30,
-				Covered:          true,
-			},
-		},
-	}
-
-	require.False(t, coverage.Covered())
-	require.False(t, coverage.CoveredMandate(MandateAllocID|MandateTSO))
-	require.True(t, coverage.CoveredMandate(MandateGetRegionByKey))
-	gap, ok := coverage.FirstGap()
-	require.True(t, ok)
-	require.Equal(t, MandateTSO, gap.Mandate)
-
-	allCovered := InheritanceStatus{
-		Checks: []InheritanceCoverage{
-			{Mandate: MandateAllocID, Covered: true},
-			{Mandate: MandateTSO, Covered: true},
-			{Mandate: MandateGetRegionByKey, Covered: true},
-		},
-	}
-	witness := HandoverWitness{
-		LegacyEra:                 9,
-		LegacyDigest:              "seal",
-		SuccessorPresent:          true,
-		Inheritance:               allCovered,
-		SuccessorLineageSatisfied: true,
-		SealedEraRetired:          true,
-	}
-	require.True(t, witness.FinalitySatisfied())
-	require.True(t, witness.SuccessorMonotoneCovered())
-	require.True(t, witness.SuccessorDescriptorCovered())
-	require.True(t, witness.ReplyEraLegal(0))
-	require.False(t, witness.ReplyEraLegal(MandateWitnessEraSuppressed))
-	require.False(t, witness.ReplyEraLegal(witness.LegacyEra))
-	require.True(t, witness.ReplyEraLegal(witness.LegacyEra+1))
-	require.Equal(t, HandoverStageClosed, witness.WithStage(HandoverStageClosed).Stage)
-
-	witness.SuccessorPresent = false
-	require.False(t, witness.FinalitySatisfied())
-	require.False(t, witness.SuccessorMonotoneCovered())
-	require.False(t, witness.SuccessorDescriptorCovered())
-
-	attached := NewMandateWitness(MandateAllocID, 3, 99)
-	require.Equal(t, uint64(3), attached.Era)
-	suppressed := NewSuppressedMandateWitness(MandateTSO)
-	require.Equal(t, MandateWitnessEraSuppressed, suppressed.Era)
-
-	require.Equal(t, "unknown", HandoverStage(99).String())
-	require.True(t, HandoverStageAtLeast(HandoverStageClosed, HandoverStageConfirmed))
-	require.False(t, HandoverStageAtLeast(HandoverStageConfirmed, HandoverStageClosed))
-}
-
-func TestAuthorityCertificateValidation(t *testing.T) {
-	frontiers := NewMandateFrontiers(
-		MandateFrontier{Mandate: MandateAllocID, Frontier: 20},
-		MandateFrontier{Mandate: MandateTSO, Frontier: 30},
-	)
-	cert, err := NewAuthorityCertificate(
-		"c1",
-		7,
-		MandateAllocID|MandateTSO,
-		2_000,
-		AuthorityRootToken{Term: 1, Index: 5, Revision: 6},
-		"lineage",
-		6,
-		"legacy",
-		11,
-		frontiers,
-	)
-	require.NoError(t, err)
-	require.NoError(t, cert.Validate(MandateAllocID, 7, 1_000, 6, "legacy"))
-	require.ErrorContains(t, cert.Validate(MandateGetRegionByKey, 7, 1_000, 6, "legacy"), "required_mandate")
-	require.ErrorContains(t, cert.Validate(MandateAllocID, 8, 1_000, 6, "legacy"), "reply_era")
-	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 2_000, 6, "legacy"), "expired")
-	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 1_000, 7, "legacy"), "reply_observed_legacy_era")
-	require.ErrorContains(t, cert.Validate(MandateAllocID, 7, 1_000, 6, "other"), "legacy digest mismatch")
+func TestDutyNameAndAuthorityEraConstants(t *testing.T) {
+	require.Equal(t, "alloc_id", DutyName(DutyAllocID))
+	require.Equal(t, "custom", DutyName(DutyID("custom")))
+	require.Equal(t, "unspecified", DutyName(""))
+	require.Equal(t, uint64(0), AuthorityEraAttached)
+	require.Equal(t, ^uint64(0), AuthorityEraSuppressed)
 }

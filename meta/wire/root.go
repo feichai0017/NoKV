@@ -21,14 +21,14 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:    state.ClusterEpoch,
-		MembershipEpoch: state.MembershipEpoch,
-		LastCommitted:   RootCursorToProto(state.LastCommitted),
-		IdFence:         state.IDFence,
-		TsoFence:        state.TSOFence,
-		Tenure:          RootTenureToProto(state.Tenure),
-		Legacy:          RootLegacyToProto(state.Legacy),
-		Handover:        RootHandoverToProto(state.Handover),
+		ClusterEpoch:      state.ClusterEpoch,
+		MembershipEpoch:   state.MembershipEpoch,
+		LastCommitted:     RootCursorToProto(state.LastCommitted),
+		IdFence:           state.IDFence,
+		TsoFence:          state.TSOFence,
+		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
+		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
 	}
 }
 
@@ -37,134 +37,159 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:    pbState.ClusterEpoch,
-		MembershipEpoch: pbState.MembershipEpoch,
-		LastCommitted:   RootCursorFromProto(pbState.LastCommitted),
-		IDFence:         pbState.IdFence,
-		TSOFence:        pbState.TsoFence,
-		Tenure:          RootTenureFromProto(pbState.GetTenure()),
-		Legacy:          RootLegacyFromProto(pbState.GetLegacy()),
-		Handover:        RootHandoverFromProto(pbState.GetHandover()),
+		ClusterEpoch:      pbState.ClusterEpoch,
+		MembershipEpoch:   pbState.MembershipEpoch,
+		LastCommitted:     RootCursorFromProto(pbState.LastCommitted),
+		IDFence:           pbState.IdFence,
+		TSOFence:          pbState.TsoFence,
+		ActiveGrant:       RootAuthorityGrantFromProto(pbState.GetActiveGrant()),
+		RetiredGrants:     RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
+		GrantInheritances: RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
 	}
 }
 
-func RootTenureToProto(lease rootstate.Tenure) *metapb.RootTenure {
-	if !lease.Present() {
+func RootAuthorityGrantToProto(grant rootproto.AuthorityGrant) *metapb.RootAuthorityGrant {
+	if !grant.Present() {
 		return nil
 	}
-	return &metapb.RootTenure{
-		HolderId:        lease.HolderID,
-		ExpiresUnixNano: lease.ExpiresUnixNano,
-		Era:             lease.Era,
-		IssuedAt:        RootCursorToProto(lease.IssuedAt),
-		Mandate:         lease.Mandate,
-		LineageDigest:   lease.LineageDigest,
+	return &metapb.RootAuthorityGrant{
+		GrantId:                grant.GrantID,
+		HolderId:               grant.HolderID,
+		Era:                    grant.Era,
+		ExpiresUnixNano:        grant.ExpiresUnixNano,
+		IssuedAt:               RootCursorToProto(grant.IssuedAt),
+		IssuedRootToken:        RootTailTokenFromAuthorityToken(grant.IssuedRootToken),
+		Duties:                 RootDutyGrantsToProto(grant.Duties),
+		PredecessorRetirements: RootGrantRetirementsToProto(grant.PredecessorRetirements),
 	}
 }
 
-func RootTenureFromProto(lease *metapb.RootTenure) rootstate.Tenure {
-	if lease == nil {
-		return rootstate.Tenure{}
+func RootAuthorityGrantFromProto(grant *metapb.RootAuthorityGrant) rootproto.AuthorityGrant {
+	if grant == nil {
+		return rootproto.AuthorityGrant{}
 	}
-	return rootstate.Tenure{
-		HolderID:        lease.GetHolderId(),
-		ExpiresUnixNano: lease.GetExpiresUnixNano(),
-		Era:             lease.GetEra(),
-		IssuedAt:        RootCursorFromProto(lease.GetIssuedAt()),
-		Mandate:         lease.GetMandate(),
-		LineageDigest:   lease.GetLineageDigest(),
+	return rootproto.AuthorityGrant{
+		GrantID:                grant.GetGrantId(),
+		HolderID:               grant.GetHolderId(),
+		Era:                    grant.GetEra(),
+		ExpiresUnixNano:        grant.GetExpiresUnixNano(),
+		IssuedAt:               RootCursorFromProto(grant.GetIssuedAt()),
+		IssuedRootToken:        AuthorityTokenFromRootTailToken(grant.GetIssuedRootToken()),
+		Duties:                 RootDutyGrantsFromProto(grant.GetDuties()),
+		PredecessorRetirements: RootGrantRetirementsFromProto(grant.GetPredecessorRetirements()),
 	}
 }
 
-func RootLegacyToProto(seal rootstate.Legacy) *metapb.RootLegacy {
-	if !seal.Present() {
+func RootGrantRetirementToProto(retirement rootproto.GrantRetirement) *metapb.RootGrantRetirement {
+	if !retirement.Present() {
 		return nil
 	}
-	return &metapb.RootLegacy{
-		HolderId:  seal.HolderID,
-		Era:       seal.Era,
-		Mandate:   seal.Mandate,
-		Frontiers: RootMandateFrontiersToProto(seal.Frontiers),
-		SealedAt:  RootCursorToProto(seal.SealedAt),
+	return &metapb.RootGrantRetirement{
+		GrantId:            retirement.GrantID,
+		HolderId:           retirement.HolderID,
+		Era:                retirement.Era,
+		Mode:               RootGrantRetirementModeToProto(retirement.Mode),
+		Bounds:             RootDutyGrantsToProto(retirement.Bounds),
+		RetiredAt:          RootCursorToProto(retirement.RetiredAt),
+		InheritedByGrantId: retirement.InheritedByGrantID,
 	}
 }
 
-func RootLegacyFromProto(seal *metapb.RootLegacy) rootstate.Legacy {
-	if seal == nil {
-		return rootstate.Legacy{}
+func RootGrantRetirementFromProto(retirement *metapb.RootGrantRetirement) rootproto.GrantRetirement {
+	if retirement == nil {
+		return rootproto.GrantRetirement{}
 	}
-	return rootstate.Legacy{
-		HolderID:  seal.GetHolderId(),
-		Era:       seal.GetEra(),
-		Mandate:   seal.GetMandate(),
-		Frontiers: RootMandateFrontiersFromProto(seal.GetFrontiers()),
-		SealedAt:  RootCursorFromProto(seal.GetSealedAt()),
+	return rootproto.GrantRetirement{
+		GrantID:            retirement.GetGrantId(),
+		HolderID:           retirement.GetHolderId(),
+		Era:                retirement.GetEra(),
+		Mode:               RootGrantRetirementModeFromProto(retirement.GetMode()),
+		Bounds:             RootDutyGrantsFromProto(retirement.GetBounds()),
+		RetiredAt:          RootCursorFromProto(retirement.GetRetiredAt()),
+		InheritedByGrantID: retirement.GetInheritedByGrantId(),
 	}
 }
 
-func RootHandoverToProto(handover rootstate.Handover) *metapb.RootHandover {
-	if !handover.Present() {
+func RootGrantRetirementsToProto(retirements []rootproto.GrantRetirement) []*metapb.RootGrantRetirement {
+	if len(retirements) == 0 {
 		return nil
 	}
-	return &metapb.RootHandover{
-		HolderId:     handover.HolderID,
-		LegacyEra:    handover.LegacyEra,
-		SuccessorEra: handover.SuccessorEra,
-		LegacyDigest: handover.LegacyDigest,
-		Stage:        rootHandoverStageToProto(handover.Stage),
-		ConfirmedAt:  RootCursorToProto(handover.ConfirmedAt),
-		ClosedAt:     RootCursorToProto(handover.ClosedAt),
-		ReattachedAt: RootCursorToProto(handover.ReattachedAt),
-	}
-}
-
-func RootHandoverFromProto(handover *metapb.RootHandover) rootstate.Handover {
-	if handover == nil {
-		return rootstate.Handover{}
-	}
-	return rootstate.Handover{
-		HolderID:     handover.GetHolderId(),
-		LegacyEra:    handover.GetLegacyEra(),
-		SuccessorEra: handover.GetSuccessorEra(),
-		LegacyDigest: handover.GetLegacyDigest(),
-		Stage:        rootHandoverStageFromProto(handover.GetStage()),
-		ConfirmedAt:  RootCursorFromProto(handover.GetConfirmedAt()),
-		ClosedAt:     RootCursorFromProto(handover.GetClosedAt()),
-		ReattachedAt: RootCursorFromProto(handover.GetReattachedAt()),
-	}
-}
-
-func RootMandateFrontiersToProto(frontiers rootproto.MandateFrontiers) []*metapb.RootMandateFrontier {
-	if frontiers.Len() == 0 {
-		return nil
-	}
-	entries := frontiers.Entries()
-	out := make([]*metapb.RootMandateFrontier, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, &metapb.RootMandateFrontier{Mandate: entry.Mandate, Frontier: entry.Frontier})
+	out := make([]*metapb.RootGrantRetirement, 0, len(retirements))
+	for _, retirement := range retirements {
+		if pbRetirement := RootGrantRetirementToProto(retirement); pbRetirement != nil {
+			out = append(out, pbRetirement)
+		}
 	}
 	return out
 }
 
-func RootMandateFrontiersFromProto(frontiers []*metapb.RootMandateFrontier) rootproto.MandateFrontiers {
-	entries := make([]rootproto.MandateFrontier, 0, len(frontiers))
-	for _, entry := range frontiers {
-		if entry == nil || entry.GetMandate() == 0 {
-			continue
-		}
-		entries = append(entries, rootproto.MandateFrontier{
-			Mandate:  entry.GetMandate(),
-			Frontier: entry.GetFrontier(),
-		})
+func RootGrantRetirementsFromProto(retirements []*metapb.RootGrantRetirement) []rootproto.GrantRetirement {
+	if len(retirements) == 0 {
+		return nil
 	}
-	return rootproto.NewMandateFrontiers(entries...)
+	out := make([]rootproto.GrantRetirement, 0, len(retirements))
+	for _, retirement := range retirements {
+		if parsed := RootGrantRetirementFromProto(retirement); parsed.Present() {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func RootGrantInheritanceToProto(inheritance rootproto.GrantInheritance) *metapb.RootGrantInheritance {
+	if inheritance.PredecessorGrantID == "" || inheritance.SuccessorGrantID == "" {
+		return nil
+	}
+	return &metapb.RootGrantInheritance{
+		PredecessorGrantId: inheritance.PredecessorGrantID,
+		SuccessorGrantId:   inheritance.SuccessorGrantID,
+		InheritedAt:        RootCursorToProto(inheritance.InheritedAt),
+	}
+}
+
+func RootGrantInheritanceFromProto(inheritance *metapb.RootGrantInheritance) rootproto.GrantInheritance {
+	if inheritance == nil {
+		return rootproto.GrantInheritance{}
+	}
+	return rootproto.GrantInheritance{
+		PredecessorGrantID: inheritance.GetPredecessorGrantId(),
+		SuccessorGrantID:   inheritance.GetSuccessorGrantId(),
+		InheritedAt:        RootCursorFromProto(inheritance.GetInheritedAt()),
+	}
+}
+
+func RootGrantInheritancesToProto(inheritances []rootproto.GrantInheritance) []*metapb.RootGrantInheritance {
+	if len(inheritances) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootGrantInheritance, 0, len(inheritances))
+	for _, inheritance := range inheritances {
+		if pbInheritance := RootGrantInheritanceToProto(inheritance); pbInheritance != nil {
+			out = append(out, pbInheritance)
+		}
+	}
+	return out
+}
+
+func RootGrantInheritancesFromProto(inheritances []*metapb.RootGrantInheritance) []rootproto.GrantInheritance {
+	if len(inheritances) == 0 {
+		return nil
+	}
+	out := make([]rootproto.GrantInheritance, 0, len(inheritances))
+	for _, inheritance := range inheritances {
+		parsed := RootGrantInheritanceFromProto(inheritance)
+		if parsed.PredecessorGrantID != "" && parsed.SuccessorGrantID != "" {
+			out = append(out, parsed)
+		}
+	}
+	return out
 }
 
 func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaState {
 	return &metapb.RootEunomiaState{
-		Tenure:   RootTenureToProto(state.Tenure),
-		Legacy:   RootLegacyToProto(state.Legacy),
-		Handover: RootHandoverToProto(state.Handover),
+		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
+		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
 	}
 }
 
@@ -173,143 +198,38 @@ func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.Eunomia
 		return rootstate.EunomiaState{}
 	}
 	return rootstate.EunomiaState{
-		Tenure:   RootTenureFromProto(state.GetTenure()),
-		Legacy:   RootLegacyFromProto(state.GetLegacy()),
-		Handover: RootHandoverFromProto(state.GetHandover()),
+		ActiveGrant:       RootAuthorityGrantFromProto(state.GetActiveGrant()),
+		RetiredGrants:     RootGrantRetirementsFromProto(state.GetRetiredGrants()),
+		GrantInheritances: RootGrantInheritancesFromProto(state.GetGrantInheritances()),
 	}
 }
 
-func RootTenureCommandToProto(cmd rootproto.TenureCommand) *metapb.RootTenureCommand {
-	return &metapb.RootTenureCommand{
-		Kind:               rootTenureActToProto(cmd.Kind),
-		HolderId:           cmd.HolderID,
-		ExpiresUnixNano:    cmd.ExpiresUnixNano,
-		NowUnixNano:        cmd.NowUnixNano,
-		LineageDigest:      cmd.LineageDigest,
-		InheritedFrontiers: RootMandateFrontiersToProto(cmd.InheritedFrontiers),
+func RootGrantCommandToProto(cmd rootproto.GrantCommand) *metapb.RootGrantCommand {
+	return &metapb.RootGrantCommand{
+		Kind:                RootGrantActToProto(cmd.Kind),
+		HolderId:            cmd.HolderID,
+		GrantId:             cmd.GrantID,
+		ExpiresUnixNano:     cmd.ExpiresUnixNano,
+		NowUnixNano:         cmd.NowUnixNano,
+		RequestedDuties:     RootDutyGrantsToProto(cmd.RequestedDuties),
+		ExactUsages:         RootAuthorityUsagesToProto(cmd.ExactUsages),
+		PredecessorGrantIds: append([]string(nil), cmd.PredecessorGrantIDs...),
 	}
 }
 
-func RootTenureCommandFromProto(cmd *metapb.RootTenureCommand) rootproto.TenureCommand {
+func RootGrantCommandFromProto(cmd *metapb.RootGrantCommand) rootproto.GrantCommand {
 	if cmd == nil {
-		return rootproto.TenureCommand{}
+		return rootproto.GrantCommand{}
 	}
-	return rootproto.TenureCommand{
-		Kind:               rootTenureActFromProto(cmd.GetKind()),
-		HolderID:           cmd.GetHolderId(),
-		ExpiresUnixNano:    cmd.GetExpiresUnixNano(),
-		NowUnixNano:        cmd.GetNowUnixNano(),
-		LineageDigest:      cmd.GetLineageDigest(),
-		InheritedFrontiers: RootMandateFrontiersFromProto(cmd.GetInheritedFrontiers()),
-	}
-}
-
-func RootHandoverCommandToProto(cmd rootproto.HandoverCommand) *metapb.RootHandoverCommand {
-	return &metapb.RootHandoverCommand{
-		Kind:        rootHandoverActToProto(cmd.Kind),
-		HolderId:    cmd.HolderID,
-		NowUnixNano: cmd.NowUnixNano,
-		Frontiers:   RootMandateFrontiersToProto(cmd.Frontiers),
-	}
-}
-
-func RootHandoverCommandFromProto(cmd *metapb.RootHandoverCommand) rootproto.HandoverCommand {
-	if cmd == nil {
-		return rootproto.HandoverCommand{}
-	}
-	return rootproto.HandoverCommand{
-		Kind:        rootHandoverActFromProto(cmd.GetKind()),
-		HolderID:    cmd.GetHolderId(),
-		NowUnixNano: cmd.GetNowUnixNano(),
-		Frontiers:   RootMandateFrontiersFromProto(cmd.GetFrontiers()),
-	}
-}
-
-func rootEventTenureToProto(lease *rootevent.Tenure) *metapb.RootTenure {
-	if lease == nil {
-		return nil
-	}
-	return &metapb.RootTenure{
-		HolderId:           lease.HolderID,
-		ExpiresUnixNano:    lease.ExpiresUnixNano,
-		Era:                lease.Era,
-		IssuedAt:           RootCursorToProto(lease.IssuedAt),
-		Mandate:            lease.Mandate,
-		LineageDigest:      lease.LineageDigest,
-		InheritedFrontiers: RootMandateFrontiersToProto(lease.Frontiers),
-	}
-}
-
-func rootEventTenureFromProto(lease *metapb.RootTenure) *rootevent.Tenure {
-	if lease == nil {
-		return nil
-	}
-	return &rootevent.Tenure{
-		HolderID:        lease.GetHolderId(),
-		ExpiresUnixNano: lease.GetExpiresUnixNano(),
-		Era:             lease.GetEra(),
-		IssuedAt:        RootCursorFromProto(lease.GetIssuedAt()),
-		Mandate:         lease.GetMandate(),
-		LineageDigest:   lease.GetLineageDigest(),
-		Frontiers:       RootMandateFrontiersFromProto(lease.GetInheritedFrontiers()),
-	}
-}
-
-func rootEventLegacyToProto(seal *rootevent.Legacy) *metapb.RootLegacy {
-	if seal == nil {
-		return nil
-	}
-	return &metapb.RootLegacy{
-		HolderId:  seal.HolderID,
-		Era:       seal.Era,
-		Mandate:   seal.Mandate,
-		Frontiers: RootMandateFrontiersToProto(seal.Frontiers),
-		SealedAt:  RootCursorToProto(seal.SealedAt),
-	}
-}
-
-func rootEventLegacyFromProto(seal *metapb.RootLegacy) *rootevent.Legacy {
-	if seal == nil {
-		return nil
-	}
-	return &rootevent.Legacy{
-		HolderID:  seal.GetHolderId(),
-		Era:       seal.GetEra(),
-		Mandate:   seal.GetMandate(),
-		Frontiers: RootMandateFrontiersFromProto(seal.GetFrontiers()),
-		SealedAt:  RootCursorFromProto(seal.GetSealedAt()),
-	}
-}
-
-func rootEventHandoverToProto(handover *rootevent.Handover) *metapb.RootHandover {
-	if handover == nil {
-		return nil
-	}
-	return &metapb.RootHandover{
-		HolderId:     handover.HolderID,
-		LegacyEra:    handover.LegacyEra,
-		SuccessorEra: handover.SuccessorEra,
-		LegacyDigest: handover.LegacyDigest,
-		Stage:        rootHandoverStageToProto(handover.Stage),
-		ConfirmedAt:  RootCursorToProto(handover.ConfirmedAt),
-		ClosedAt:     RootCursorToProto(handover.ClosedAt),
-		ReattachedAt: RootCursorToProto(handover.ReattachedAt),
-	}
-}
-
-func rootEventHandoverFromProto(handover *metapb.RootHandover) *rootevent.Handover {
-	if handover == nil {
-		return nil
-	}
-	return &rootevent.Handover{
-		HolderID:     handover.GetHolderId(),
-		LegacyEra:    handover.GetLegacyEra(),
-		SuccessorEra: handover.GetSuccessorEra(),
-		LegacyDigest: handover.GetLegacyDigest(),
-		Stage:        rootHandoverStageFromProto(handover.GetStage()),
-		ConfirmedAt:  RootCursorFromProto(handover.GetConfirmedAt()),
-		ClosedAt:     RootCursorFromProto(handover.GetClosedAt()),
-		ReattachedAt: RootCursorFromProto(handover.GetReattachedAt()),
+	return rootproto.GrantCommand{
+		Kind:                RootGrantActFromProto(cmd.GetKind()),
+		HolderID:            cmd.GetHolderId(),
+		GrantID:             cmd.GetGrantId(),
+		ExpiresUnixNano:     cmd.GetExpiresUnixNano(),
+		NowUnixNano:         cmd.GetNowUnixNano(),
+		RequestedDuties:     RootDutyGrantsFromProto(cmd.GetRequestedDuties()),
+		ExactUsages:         RootAuthorityUsagesFromProto(cmd.GetExactUsages()),
+		PredecessorGrantIDs: append([]string(nil), cmd.GetPredecessorGrantIds()...),
 	}
 }
 
@@ -447,85 +367,313 @@ func rootEventQuotaFenceFromProto(fence *metapb.RootQuotaFence) *rootevent.Quota
 	return out
 }
 
-func rootHandoverStageToProto(stage rootproto.HandoverStage) metapb.RootHandoverStage {
-	switch stage {
-	case rootproto.HandoverStageUnspecified:
-		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED
-	case rootproto.HandoverStageConfirmed:
-		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED
-	case rootproto.HandoverStageClosed:
-		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED
-	case rootproto.HandoverStageReattached:
-		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED
-	default:
-		return metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED
+func RootTailTokenFromAuthorityToken(token rootproto.AuthorityRootToken) *metapb.RootTailToken {
+	if token.Term == 0 && token.Index == 0 && token.Revision == 0 {
+		return nil
+	}
+	return &metapb.RootTailToken{
+		Cursor:   RootCursorToProto(rootproto.Cursor{Term: token.Term, Index: token.Index}),
+		Revision: token.Revision,
 	}
 }
 
-func rootTenureActToProto(kind rootproto.TenureAct) metapb.RootTenureAct {
+func AuthorityTokenFromRootTailToken(token *metapb.RootTailToken) rootproto.AuthorityRootToken {
+	if token == nil {
+		return rootproto.AuthorityRootToken{}
+	}
+	cursor := RootCursorFromProto(token.GetCursor())
+	return rootproto.AuthorityRootToken{Term: cursor.Term, Index: cursor.Index, Revision: token.GetRevision()}
+}
+
+func RootDutyScopeToProto(scope rootproto.DutyScope) *metapb.RootDutyScope {
+	return &metapb.RootDutyScope{
+		Kind:        RootDutyScopeKindToProto(scope.Kind),
+		MountId:     scope.MountID,
+		SubtreeRoot: scope.SubtreeRoot,
+		StartKey:    append([]byte(nil), scope.StartKey...),
+		EndKey:      append([]byte(nil), scope.EndKey...),
+	}
+}
+
+func RootDutyScopeFromProto(scope *metapb.RootDutyScope) rootproto.DutyScope {
+	if scope == nil {
+		return rootproto.DutyScope{}
+	}
+	return rootproto.DutyScope{
+		Kind:        RootDutyScopeKindFromProto(scope.GetKind()),
+		MountID:     scope.GetMountId(),
+		SubtreeRoot: scope.GetSubtreeRoot(),
+		StartKey:    append([]byte(nil), scope.GetStartKey()...),
+		EndKey:      append([]byte(nil), scope.GetEndKey()...),
+	}
+}
+
+func RootDutyBoundToProto(bound rootproto.DutyBound) *metapb.RootDutyBound {
+	switch bound.Kind {
+	case rootproto.DutyBoundMonotone:
+		return &metapb.RootDutyBound{Bound: &metapb.RootDutyBound_Monotone{Monotone: &metapb.RootMonotoneBound{Upper: bound.MonotoneUpper}}}
+	case rootproto.DutyBoundVersion:
+		return &metapb.RootDutyBound{Bound: &metapb.RootDutyBound_Version{Version: &metapb.RootVersionBound{
+			RootToken:                 RootTailTokenFromAuthorityToken(bound.VersionRootToken),
+			DescriptorRevisionCeiling: bound.DescriptorRevisionCeiling,
+			MaxRootLag:                bound.MaxRootLag,
+		}}}
+	case rootproto.DutyBoundBudget:
+		return &metapb.RootDutyBound{Bound: &metapb.RootDutyBound_Budget{Budget: &metapb.RootBudgetBound{Budget: bound.Budget}}}
+	case rootproto.DutyBoundEpoch:
+		return &metapb.RootDutyBound{Bound: &metapb.RootDutyBound_Epoch{Epoch: &metapb.RootEpochBound{Epoch: bound.Epoch}}}
+	default:
+		return nil
+	}
+}
+
+func RootDutyBoundFromProto(bound *metapb.RootDutyBound) rootproto.DutyBound {
+	if bound == nil {
+		return rootproto.DutyBound{}
+	}
+	if monotone := bound.GetMonotone(); monotone != nil {
+		return rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: monotone.GetUpper()}
+	}
+	if version := bound.GetVersion(); version != nil {
+		return rootproto.DutyBound{
+			Kind:                      rootproto.DutyBoundVersion,
+			VersionRootToken:          AuthorityTokenFromRootTailToken(version.GetRootToken()),
+			DescriptorRevisionCeiling: version.GetDescriptorRevisionCeiling(),
+			MaxRootLag:                version.GetMaxRootLag(),
+		}
+	}
+	if budget := bound.GetBudget(); budget != nil {
+		return rootproto.DutyBound{Kind: rootproto.DutyBoundBudget, Budget: budget.GetBudget()}
+	}
+	if epoch := bound.GetEpoch(); epoch != nil {
+		return rootproto.DutyBound{Kind: rootproto.DutyBoundEpoch, Epoch: epoch.GetEpoch()}
+	}
+	return rootproto.DutyBound{}
+}
+
+func RootDutyGrantToProto(grant rootproto.DutyGrant) *metapb.RootDutyGrant {
+	if grant.DutyID == "" {
+		return nil
+	}
+	return &metapb.RootDutyGrant{
+		DutyId: string(grant.DutyID),
+		Scope:  RootDutyScopeToProto(grant.Scope),
+		Bound:  RootDutyBoundToProto(grant.Bound),
+	}
+}
+
+func RootDutyGrantFromProto(grant *metapb.RootDutyGrant) rootproto.DutyGrant {
+	if grant == nil {
+		return rootproto.DutyGrant{}
+	}
+	return rootproto.DutyGrant{
+		DutyID: rootproto.DutyID(grant.GetDutyId()),
+		Scope:  RootDutyScopeFromProto(grant.GetScope()),
+		Bound:  RootDutyBoundFromProto(grant.GetBound()),
+	}
+}
+
+func RootDutyGrantsToProto(grants []rootproto.DutyGrant) []*metapb.RootDutyGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootDutyGrant, 0, len(grants))
+	for _, grant := range grants {
+		if pbGrant := RootDutyGrantToProto(grant); pbGrant != nil {
+			out = append(out, pbGrant)
+		}
+	}
+	return out
+}
+
+func RootDutyGrantsFromProto(grants []*metapb.RootDutyGrant) []rootproto.DutyGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]rootproto.DutyGrant, 0, len(grants))
+	for _, grant := range grants {
+		parsed := RootDutyGrantFromProto(grant)
+		if parsed.DutyID != "" {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func RootAuthorityUsageToProto(usage rootproto.AuthorityUsage) *metapb.RootAuthorityUsage {
+	if usage.DutyID == "" {
+		return nil
+	}
+	return &metapb.RootAuthorityUsage{
+		DutyId: string(usage.DutyID),
+		Scope:  RootDutyScopeToProto(usage.Scope),
+		Usage:  RootDutyBoundToProto(usage.Usage),
+	}
+}
+
+func RootAuthorityUsageFromProto(usage *metapb.RootAuthorityUsage) rootproto.AuthorityUsage {
+	if usage == nil {
+		return rootproto.AuthorityUsage{}
+	}
+	return rootproto.AuthorityUsage{
+		DutyID: rootproto.DutyID(usage.GetDutyId()),
+		Scope:  RootDutyScopeFromProto(usage.GetScope()),
+		Usage:  RootDutyBoundFromProto(usage.GetUsage()),
+	}
+}
+
+func RootAuthorityUsagesToProto(usages []rootproto.AuthorityUsage) []*metapb.RootAuthorityUsage {
+	if len(usages) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootAuthorityUsage, 0, len(usages))
+	for _, usage := range usages {
+		if pbUsage := RootAuthorityUsageToProto(usage); pbUsage != nil {
+			out = append(out, pbUsage)
+		}
+	}
+	return out
+}
+
+func RootAuthorityUsagesFromProto(usages []*metapb.RootAuthorityUsage) []rootproto.AuthorityUsage {
+	if len(usages) == 0 {
+		return nil
+	}
+	out := make([]rootproto.AuthorityUsage, 0, len(usages))
+	for _, usage := range usages {
+		parsed := RootAuthorityUsageFromProto(usage)
+		if parsed.DutyID != "" {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func RootGrantCertificateToProto(cert rootproto.GrantCertificate) *metapb.RootGrantCertificate {
+	if !cert.Grant.Present() {
+		return nil
+	}
+	return &metapb.RootGrantCertificate{
+		Grant:       RootAuthorityGrantToProto(cert.Grant),
+		SignerKeyId: cert.SignerKeyID,
+		Signature:   append([]byte(nil), cert.Signature...),
+	}
+}
+
+func RootGrantCertificateFromProto(cert *metapb.RootGrantCertificate) rootproto.GrantCertificate {
+	if cert == nil {
+		return rootproto.GrantCertificate{}
+	}
+	return rootproto.GrantCertificate{
+		Grant:       RootAuthorityGrantFromProto(cert.GetGrant()),
+		SignerKeyID: cert.GetSignerKeyId(),
+		Signature:   append([]byte(nil), cert.GetSignature()...),
+	}
+}
+
+func RootAuthorityEvidenceToProto(evidence rootproto.AuthorityEvidence) *metapb.RootAuthorityEvidence {
+	if !evidence.Certificate.Grant.Present() {
+		return nil
+	}
+	return &metapb.RootAuthorityEvidence{
+		Certificate:             RootGrantCertificateToProto(evidence.Certificate),
+		Usage:                   RootAuthorityUsageToProto(evidence.Usage),
+		ObservedRetirements:     RootGrantRetirementsToProto(evidence.ObservedRetirements),
+		ObservedRetiredEraFloor: evidence.ObservedRetiredEraFloor,
+	}
+}
+
+func RootAuthorityEvidenceFromProto(evidence *metapb.RootAuthorityEvidence) rootproto.AuthorityEvidence {
+	if evidence == nil {
+		return rootproto.AuthorityEvidence{}
+	}
+	return rootproto.AuthorityEvidence{
+		Certificate:             RootGrantCertificateFromProto(evidence.GetCertificate()),
+		Usage:                   RootAuthorityUsageFromProto(evidence.GetUsage()),
+		ObservedRetirements:     RootGrantRetirementsFromProto(evidence.GetObservedRetirements()),
+		ObservedRetiredEraFloor: evidence.GetObservedRetiredEraFloor(),
+	}
+}
+
+func RootDutyScopeKindToProto(kind rootproto.DutyScopeKind) metapb.RootDutyScopeKind {
 	switch kind {
-	case rootproto.TenureActIssue:
-		return metapb.RootTenureAct_ROOT_TENURE_ACT_ISSUE
-	case rootproto.TenureActRelease:
-		return metapb.RootTenureAct_ROOT_TENURE_ACT_RELEASE
+	case rootproto.DutyScopeGlobal:
+		return metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_GLOBAL
+	case rootproto.DutyScopeMount:
+		return metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_MOUNT
+	case rootproto.DutyScopeSubtree:
+		return metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_SUBTREE
+	case rootproto.DutyScopeRegionRange:
+		return metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_REGION_RANGE
 	default:
-		return metapb.RootTenureAct_ROOT_TENURE_ACT_UNSPECIFIED
+		return metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_UNSPECIFIED
 	}
 }
 
-func rootTenureActFromProto(kind metapb.RootTenureAct) rootproto.TenureAct {
+func RootDutyScopeKindFromProto(kind metapb.RootDutyScopeKind) rootproto.DutyScopeKind {
 	switch kind {
-	case metapb.RootTenureAct_ROOT_TENURE_ACT_ISSUE:
-		return rootproto.TenureActIssue
-	case metapb.RootTenureAct_ROOT_TENURE_ACT_RELEASE:
-		return rootproto.TenureActRelease
+	case metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_GLOBAL:
+		return rootproto.DutyScopeGlobal
+	case metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_MOUNT:
+		return rootproto.DutyScopeMount
+	case metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_SUBTREE:
+		return rootproto.DutyScopeSubtree
+	case metapb.RootDutyScopeKind_ROOT_DUTY_SCOPE_KIND_REGION_RANGE:
+		return rootproto.DutyScopeRegionRange
 	default:
-		return rootproto.TenureActUnknown
+		return rootproto.DutyScopeUnspecified
 	}
 }
 
-func rootHandoverActToProto(kind rootproto.HandoverAct) metapb.RootHandoverAct {
+func RootGrantRetirementModeToProto(mode rootproto.GrantRetirementMode) metapb.RootGrantRetirementMode {
+	switch mode {
+	case rootproto.GrantRetirementSealedExact:
+		return metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_SEALED_EXACT
+	case rootproto.GrantRetirementExpiredBound:
+		return metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_EXPIRED_BOUND
+	default:
+		return metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_UNSPECIFIED
+	}
+}
+
+func RootGrantRetirementModeFromProto(mode metapb.RootGrantRetirementMode) rootproto.GrantRetirementMode {
+	switch mode {
+	case metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_SEALED_EXACT:
+		return rootproto.GrantRetirementSealedExact
+	case metapb.RootGrantRetirementMode_ROOT_GRANT_RETIREMENT_MODE_EXPIRED_BOUND:
+		return rootproto.GrantRetirementExpiredBound
+	default:
+		return rootproto.GrantRetirementUnspecified
+	}
+}
+
+func RootGrantActToProto(kind rootproto.GrantAct) metapb.RootGrantAct {
 	switch kind {
-	case rootproto.HandoverActSeal:
-		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_SEAL
-	case rootproto.HandoverActConfirm:
-		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CONFIRM
-	case rootproto.HandoverActClose:
-		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CLOSE
-	case rootproto.HandoverActReattach:
-		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_REATTACH
+	case rootproto.GrantActIssue:
+		return metapb.RootGrantAct_ROOT_GRANT_ACT_ISSUE
+	case rootproto.GrantActSeal:
+		return metapb.RootGrantAct_ROOT_GRANT_ACT_SEAL
+	case rootproto.GrantActRetireExpired:
+		return metapb.RootGrantAct_ROOT_GRANT_ACT_RETIRE_EXPIRED
+	case rootproto.GrantActInherit:
+		return metapb.RootGrantAct_ROOT_GRANT_ACT_INHERIT
 	default:
-		return metapb.RootHandoverAct_ROOT_HANDOVER_ACT_UNSPECIFIED
+		return metapb.RootGrantAct_ROOT_GRANT_ACT_UNSPECIFIED
 	}
 }
 
-func rootHandoverActFromProto(kind metapb.RootHandoverAct) rootproto.HandoverAct {
+func RootGrantActFromProto(kind metapb.RootGrantAct) rootproto.GrantAct {
 	switch kind {
-	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_SEAL:
-		return rootproto.HandoverActSeal
-	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CONFIRM:
-		return rootproto.HandoverActConfirm
-	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_CLOSE:
-		return rootproto.HandoverActClose
-	case metapb.RootHandoverAct_ROOT_HANDOVER_ACT_REATTACH:
-		return rootproto.HandoverActReattach
+	case metapb.RootGrantAct_ROOT_GRANT_ACT_ISSUE:
+		return rootproto.GrantActIssue
+	case metapb.RootGrantAct_ROOT_GRANT_ACT_SEAL:
+		return rootproto.GrantActSeal
+	case metapb.RootGrantAct_ROOT_GRANT_ACT_RETIRE_EXPIRED:
+		return rootproto.GrantActRetireExpired
+	case metapb.RootGrantAct_ROOT_GRANT_ACT_INHERIT:
+		return rootproto.GrantActInherit
 	default:
-		return rootproto.HandoverActUnknown
-	}
-}
-
-func rootHandoverStageFromProto(stage metapb.RootHandoverStage) rootproto.HandoverStage {
-	switch stage {
-	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_UNSPECIFIED:
-		return rootproto.HandoverStageUnspecified
-	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CONFIRMED:
-		return rootproto.HandoverStageConfirmed
-	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_CLOSED:
-		return rootproto.HandoverStageClosed
-	case metapb.RootHandoverStage_ROOT_HANDOVER_STAGE_REATTACHED:
-		return rootproto.HandoverStageReattached
-	default:
-		return rootproto.HandoverStageUnspecified
+		return rootproto.GrantActUnknown
 	}
 }
 
@@ -945,12 +1093,12 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_StoreMembership{StoreMembership: &metapb.RootStoreMembership{StoreId: event.StoreMembership.StoreID}}
 	case event.AllocatorFence != nil:
 		pbEvent.Payload = &metapb.RootEvent_AllocatorFence{AllocatorFence: &metapb.RootAllocatorFence{Minimum: event.AllocatorFence.Minimum}}
-	case event.Tenure != nil:
-		pbEvent.Payload = &metapb.RootEvent_Tenure{Tenure: rootEventTenureToProto(event.Tenure)}
-	case event.Legacy != nil:
-		pbEvent.Payload = &metapb.RootEvent_Legacy{Legacy: rootEventLegacyToProto(event.Legacy)}
-	case event.Handover != nil:
-		pbEvent.Payload = &metapb.RootEvent_Handover{Handover: rootEventHandoverToProto(event.Handover)}
+	case event.Grant != nil:
+		pbEvent.Payload = &metapb.RootEvent_Grant{Grant: RootAuthorityGrantToProto(*event.Grant)}
+	case event.GrantRetirement != nil:
+		pbEvent.Payload = &metapb.RootEvent_GrantRetirement{GrantRetirement: RootGrantRetirementToProto(*event.GrantRetirement)}
+	case event.GrantInheritance != nil:
+		pbEvent.Payload = &metapb.RootEvent_GrantInheritance{GrantInheritance: RootGrantInheritanceToProto(*event.GrantInheritance)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.Mount != nil:
@@ -1002,14 +1150,17 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if body := pbEvent.GetAllocatorFence(); body != nil {
 		event.AllocatorFence = &rootevent.AllocatorFence{Minimum: body.Minimum}
 	}
-	if body := pbEvent.GetTenure(); body != nil {
-		event.Tenure = rootEventTenureFromProto(body)
+	if body := pbEvent.GetGrant(); body != nil {
+		grant := RootAuthorityGrantFromProto(body)
+		event.Grant = &grant
 	}
-	if body := pbEvent.GetLegacy(); body != nil {
-		event.Legacy = rootEventLegacyFromProto(body)
+	if body := pbEvent.GetGrantRetirement(); body != nil {
+		retirement := RootGrantRetirementFromProto(body)
+		event.GrantRetirement = &retirement
 	}
-	if body := pbEvent.GetHandover(); body != nil {
-		event.Handover = rootEventHandoverFromProto(body)
+	if body := pbEvent.GetGrantInheritance(); body != nil {
+		inheritance := RootGrantInheritanceFromProto(body)
+		event.GrantInheritance = &inheritance
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
@@ -1099,12 +1250,14 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_CANCELLED
 	case rootevent.KindPeerRemovalCancelled:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED
-	case rootevent.KindTenure:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_TENURE
-	case rootevent.KindLegacy:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY
-	case rootevent.KindHandover:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER
+	case rootevent.KindGrantIssued:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_ISSUED
+	case rootevent.KindGrantSealed:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_SEALED
+	case rootevent.KindGrantRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_RETIRED
+	case rootevent.KindGrantInherited:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED
 	case rootevent.KindSnapshotEpochPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
@@ -1166,12 +1319,14 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPeerAdditionCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_CANCELLED:
 		return rootevent.KindPeerRemovalCancelled
-	case metapb.RootEventKind_ROOT_EVENT_KIND_TENURE:
-		return rootevent.KindTenure
-	case metapb.RootEventKind_ROOT_EVENT_KIND_LEGACY:
-		return rootevent.KindLegacy
-	case metapb.RootEventKind_ROOT_EVENT_KIND_HANDOVER:
-		return rootevent.KindHandover
+	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_ISSUED:
+		return rootevent.KindGrantIssued
+	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_SEALED:
+		return rootevent.KindGrantSealed
+	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_RETIRED:
+		return rootevent.KindGrantRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED:
+		return rootevent.KindGrantInherited
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:

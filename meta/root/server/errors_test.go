@@ -21,7 +21,7 @@ func TestRPCErrorMapsStableKinds(t *testing.T) {
 	}{
 		{
 			name: "invalid argument",
-			err:  rootstate.ErrInvalidTenure,
+			err:  rootstate.ErrInvalidGrant,
 			code: codes.InvalidArgument,
 			kind: nokverrors.KindInvalidArgument,
 		},
@@ -70,7 +70,7 @@ func TestStatusHelpersExposeKinds(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(invalid))
 	require.Equal(t, nokverrors.KindInvalidArgument, nokverrors.KindOf(invalid))
 
-	precondition := statusFailedPrecondition(rootstate.ErrInvalidTenure)
+	precondition := statusFailedPrecondition(rootstate.ErrInvalidGrant)
 	require.Equal(t, codes.FailedPrecondition, status.Code(precondition))
 	require.Equal(t, nokverrors.KindInvalidArgument, nokverrors.KindOf(precondition))
 

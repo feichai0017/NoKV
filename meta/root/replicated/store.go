@@ -2,6 +2,7 @@ package replicated
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -10,10 +11,11 @@ import (
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootmaterialize "github.com/feichai0017/NoKV/meta/root/materialize"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/meta/topology"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
+	"google.golang.org/protobuf/proto"
 )
 
 const defaultRetainedRecords = 64
@@ -286,180 +288,261 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	return rootstate.CommitInfo{Cursor: snapshot.State.LastCommitted, State: snapshot.State}, nil
 }
 
-func (s *Store) ApplyTenure(ctx context.Context, cmd rootproto.TenureCommand) (rootstate.EunomiaState, error) {
+func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	if s == nil {
-		return rootstate.EunomiaState{}, nil
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 	}
-	if err := rootfailpoints.InjectBeforeApplyTenure(); err != nil {
-		return rootstate.EunomiaState{}, err
+	switch cmd.Kind {
+	case rootproto.GrantActIssue:
+		if err := rootfailpoints.InjectBeforeApplyGrantIssue(); err != nil {
+			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+		}
+	case rootproto.GrantActSeal, rootproto.GrantActRetireExpired, rootproto.GrantActInherit:
+		if err := rootfailpoints.InjectBeforeApplyGrantRetirement(); err != nil {
+			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.EunomiaState{}, err
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootproto.TenureActIssue:
-		if err := rootstate.ValidateTenureClaim(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.LineageDigest, cmd.ExpiresUnixNano, cmd.NowUnixNano); err != nil {
-			return s.state.Eunomia(), err
-		}
-		if err := rootstate.ValidateInheritance(
-			s.state.Tenure,
-			s.state.Legacy,
-			cmd.InheritedFrontiers,
-		); err != nil {
-			return s.state.Eunomia(), err
-		}
-		era := rootstate.NextTenureEra(s.state.Tenure, s.state.Legacy, cmd.HolderID, cmd.NowUnixNano)
-		commit, err := s.appendLocked(ctx, rootevent.TenureGranted(
-			cmd.HolderID,
-			cmd.ExpiresUnixNano,
-			era,
-			rootproto.MandateDefault,
-			cmd.LineageDigest,
-			cmd.InheritedFrontiers,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
-	case rootproto.TenureActRelease:
-		if err := rootstate.ValidateTenureYield(s.state.Tenure, cmd.HolderID, cmd.NowUnixNano); err != nil {
-			return s.state.Eunomia(), err
-		}
-		current := s.state.Tenure
-		mandate := current.Mandate
-		if mandate == 0 {
-			mandate = rootproto.MandateDefault
-		}
-		commit, err := s.appendLocked(ctx, rootevent.TenureReleased(
-			cmd.HolderID,
-			cmd.NowUnixNano,
-			current.Era,
-			mandate,
-			current.LineageDigest,
-			cmd.InheritedFrontiers,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
+	case rootproto.GrantActIssue:
+		state, cert, err := s.issueGrantLocked(ctx, cmd)
+		return state, cert, err
+	case rootproto.GrantActSeal:
+		state, err := s.sealGrantLocked(ctx, cmd)
+		return state, rootproto.GrantCertificate{}, err
+	case rootproto.GrantActRetireExpired:
+		state, err := s.retireExpiredGrantLocked(ctx, cmd)
+		return state, rootproto.GrantCertificate{}, err
+	case rootproto.GrantActInherit:
+		state, err := s.inheritGrantLocked(ctx, cmd)
+		return state, rootproto.GrantCertificate{}, err
 	default:
-		return s.state.Eunomia(), rootstate.ErrInvalidTenure
+		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
 }
 
-func (s *Store) ApplyHandover(ctx context.Context, cmd rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	if s == nil {
-		return rootstate.EunomiaState{}, nil
+func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
+	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || len(cmd.RequestedDuties) == 0 {
+		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
-	if err := rootfailpoints.InjectBeforeApplyHandover(); err != nil {
-		return rootstate.EunomiaState{}, err
+	events := make([]rootevent.Event, 0, 3)
+	var predecessors []rootproto.GrantRetirement
+	for _, retirement := range s.state.RetiredGrants {
+		if strings.TrimSpace(retirement.InheritedByGrantID) != "" {
+			continue
+		}
+		if !dutyBoundsCovered(cmd.RequestedDuties, retirement.Bounds) {
+			return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInheritance
+		}
+		predecessors = append(predecessors, retirement)
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	active := s.state.ActiveGrant
+	if active.Present() {
+		if active.ActiveAt(cmd.NowUnixNano) && active.HolderID != holderID {
+			return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		}
+		mode := rootproto.GrantRetirementExpiredBound
+		bounds := append([]rootproto.DutyGrant(nil), active.Duties...)
+		if active.ActiveAt(cmd.NowUnixNano) && active.HolderID == holderID {
+			mode = rootproto.GrantRetirementSealedExact
+			bounds = exactUsageBounds(active, cmd.ExactUsages)
+		}
+		retirement := rootproto.GrantRetirement{
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
+			Mode:     mode,
+			Bounds:   bounds,
+		}
+		if !dutyBoundsCovered(cmd.RequestedDuties, retirement.Bounds) {
+			return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInheritance
+		}
+		predecessors = append(predecessors, retirement)
+		if mode == rootproto.GrantRetirementSealedExact {
+			events = append(events, rootevent.GrantSealed(retirement))
+		} else {
+			events = append(events, rootevent.GrantRetired(retirement))
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return rootstate.EunomiaState{}, err
+	era := nextGrantEra(s.state)
+	grant := rootproto.AuthorityGrant{
+		GrantID:                fmt.Sprintf("%s/%d", holderID, era),
+		HolderID:               holderID,
+		Era:                    era,
+		ExpiresUnixNano:        cmd.ExpiresUnixNano,
+		Duties:                 append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
+		PredecessorRetirements: predecessors,
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	events = append(events, rootevent.GrantIssued(grant))
+	commit, err := s.appendLocked(ctx, events...)
+	if err != nil {
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+	}
+	cert, err := signGrantCertificate(commit.State.ActiveGrant)
+	if err != nil {
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+	}
+	return commit.State.Eunomia(), cert, nil
+}
 
-	switch cmd.Kind {
-	case rootproto.HandoverActSeal:
-		current := s.state.Tenure
-		if s.state.Legacy.Era != 0 &&
-			s.state.Legacy.Era == current.Era &&
-			s.state.Legacy.HolderID == strings.TrimSpace(cmd.HolderID) {
-			return s.state.Eunomia(), nil
-		}
-		if err := rootstate.ValidateLegacyFormation(current, cmd.HolderID); err != nil {
-			return s.state.Eunomia(), err
-		}
-		mandate := current.Mandate
-		if mandate == 0 {
-			mandate = rootproto.MandateDefault
-		}
-		commit, err := s.appendLocked(ctx, rootevent.TenureSealed(
-			cmd.HolderID,
-			current.Era,
-			mandate,
-			cmd.Frontiers,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
-	case rootproto.HandoverActConfirm:
-		if strings.TrimSpace(cmd.HolderID) == "" || strings.TrimSpace(cmd.HolderID) != s.state.Tenure.HolderID {
-			return s.state.Eunomia(), rootstate.ErrPrimacy
-		}
-		auditStatus, err := eunomia.ValidateHandoverConfirmation(
-			s.state.Tenure,
-			eunomia.Frontiers(s.state, rootstate.MaxDescriptorRevision(s.descs)),
-			s.state.Legacy,
-			cmd.NowUnixNano,
-		)
-		if err != nil {
-			return s.state.Eunomia(), err
-		}
-		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageConfirmed) &&
-			s.state.Handover.LegacyEra == auditStatus.LegacyEra &&
-			s.state.Handover.SuccessorEra == s.state.Tenure.Era &&
-			s.state.Handover.LegacyDigest == auditStatus.LegacyDigest {
-			return s.state.Eunomia(), nil
-		}
-		commit, err := s.appendLocked(ctx, rootevent.HandoverConfirmed(
-			cmd.HolderID,
-			auditStatus.LegacyEra,
-			s.state.Tenure.Era,
-			auditStatus.LegacyDigest,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
-	case rootproto.HandoverActClose:
-		if err := eunomia.ValidateHandoverFinality(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Eunomia(), err
-		}
-		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageClosed) {
-			return s.state.Eunomia(), nil
-		}
-		commit, err := s.appendLocked(ctx, rootevent.HandoverClosed(
-			cmd.HolderID,
-			s.state.Handover.LegacyEra,
-			s.state.Handover.SuccessorEra,
-			s.state.Handover.LegacyDigest,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
-	case rootproto.HandoverActReattach:
-		if err := eunomia.ValidateHandoverReattach(s.state.Tenure, s.state.Handover, strings.TrimSpace(cmd.HolderID), cmd.NowUnixNano); err != nil {
-			return s.state.Eunomia(), err
-		}
-		if rootproto.HandoverStageAtLeast(s.state.Handover.Stage, rootproto.HandoverStageReattached) {
-			return s.state.Eunomia(), nil
-		}
-		commit, err := s.appendLocked(ctx, rootevent.HandoverReattached(
-			cmd.HolderID,
-			s.state.Handover.LegacyEra,
-			s.state.Handover.SuccessorEra,
-			s.state.Handover.LegacyDigest,
-		))
-		if err != nil {
-			return rootstate.EunomiaState{}, err
-		}
-		return commit.State.Eunomia(), nil
-	default:
-		return s.state.Eunomia(), rootstate.ErrFinality
+func (s *Store) sealGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
+	active := s.state.ActiveGrant
+	if !active.Present() {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
+	if strings.TrimSpace(cmd.HolderID) != active.HolderID {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	if cmd.GrantID != "" && cmd.GrantID != active.GrantID {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	bounds := exactUsageBounds(active, cmd.ExactUsages)
+	if !dutyBoundsCovered(active.Duties, bounds) {
+		return s.state.Eunomia(), rootstate.ErrInheritance
+	}
+	commit, err := s.appendLocked(ctx, rootevent.GrantSealed(rootproto.GrantRetirement{
+		GrantID:  active.GrantID,
+		HolderID: active.HolderID,
+		Era:      active.Era,
+		Mode:     rootproto.GrantRetirementSealedExact,
+		Bounds:   bounds,
+	}))
+	if err != nil {
+		return rootstate.EunomiaState{}, err
+	}
+	return commit.State.Eunomia(), nil
+}
+
+func (s *Store) retireExpiredGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
+	active := s.state.ActiveGrant
+	if !active.Present() {
+		return s.state.Eunomia(), nil
+	}
+	if cmd.GrantID != "" && cmd.GrantID != active.GrantID {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	if active.ExpiresUnixNano > cmd.NowUnixNano {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	commit, err := s.appendLocked(ctx, rootevent.GrantRetired(rootproto.GrantRetirement{
+		GrantID:  active.GrantID,
+		HolderID: active.HolderID,
+		Era:      active.Era,
+		Mode:     rootproto.GrantRetirementExpiredBound,
+		Bounds:   append([]rootproto.DutyGrant(nil), active.Duties...),
+	}))
+	if err != nil {
+		return rootstate.EunomiaState{}, err
+	}
+	return commit.State.Eunomia(), nil
+}
+
+func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
+	if !s.state.ActiveGrant.Present() {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	if strings.TrimSpace(cmd.HolderID) != s.state.ActiveGrant.HolderID {
+		return s.state.Eunomia(), rootstate.ErrPrimacy
+	}
+	successor := s.state.ActiveGrant.GrantID
+	events := make([]rootevent.Event, 0, len(cmd.PredecessorGrantIDs))
+	for _, predecessor := range cmd.PredecessorGrantIDs {
+		if strings.TrimSpace(predecessor) == "" {
+			continue
+		}
+		events = append(events, rootevent.GrantInherited(rootproto.GrantInheritance{
+			PredecessorGrantID: predecessor,
+			SuccessorGrantID:   successor,
+		}))
+	}
+	if len(events) == 0 {
+		return s.state.Eunomia(), nil
+	}
+	commit, err := s.appendLocked(ctx, events...)
+	if err != nil {
+		return rootstate.EunomiaState{}, err
+	}
+	return commit.State.Eunomia(), nil
+}
+
+func nextGrantEra(state rootstate.State) uint64 {
+	era := state.ActiveGrant.Era
+	for _, retirement := range state.RetiredGrants {
+		if retirement.Era > era {
+			era = retirement.Era
+		}
+	}
+	return era + 1
+}
+
+func exactUsageBounds(grant rootproto.AuthorityGrant, usages []rootproto.AuthorityUsage) []rootproto.DutyGrant {
+	if len(usages) == 0 {
+		return append([]rootproto.DutyGrant(nil), grant.Duties...)
+	}
+	out := make([]rootproto.DutyGrant, 0, len(usages))
+	for _, usage := range usages {
+		out = append(out, rootproto.DutyGrant{DutyID: usage.DutyID, Scope: usage.Scope, Bound: usage.Usage})
+	}
+	return out
+}
+
+func dutyBoundsCovered(grantBounds, usageBounds []rootproto.DutyGrant) bool {
+	for _, usage := range usageBounds {
+		grant, ok := findDutyGrant(grantBounds, usage.DutyID)
+		if !ok || !dutyBoundCovers(grant.Bound, usage.Bound) {
+			return false
+		}
+	}
+	return true
+}
+
+func findDutyGrant(grants []rootproto.DutyGrant, duty rootproto.DutyID) (rootproto.DutyGrant, bool) {
+	for _, grant := range grants {
+		if grant.DutyID == duty {
+			return grant, true
+		}
+	}
+	return rootproto.DutyGrant{}, false
+}
+
+func dutyBoundCovers(grant, usage rootproto.DutyBound) bool {
+	if grant.Kind != usage.Kind {
+		return false
+	}
+	switch usage.Kind {
+	case rootproto.DutyBoundMonotone:
+		return usage.MonotoneUpper <= grant.MonotoneUpper
+	case rootproto.DutyBoundVersion:
+		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
+			usage.MaxRootLag <= grant.MaxRootLag
+	case rootproto.DutyBoundBudget:
+		return usage.Budget <= grant.Budget
+	case rootproto.DutyBoundEpoch:
+		return usage.Epoch <= grant.Epoch
+	default:
+		return false
+	}
+}
+
+func signGrantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificate, error) {
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(metawire.RootAuthorityGrantToProto(grant))
+	if err != nil {
+		return rootproto.GrantCertificate{}, err
+	}
+	return rootproto.GrantCertificate{
+		Grant:       grant,
+		SignerKeyID: rootproto.GrantSignerKeyID,
+		Signature:   rootproto.SignGrantBytes(payload),
+	}, nil
 }
 
 func (s *Store) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind, min uint64) (uint64, error) {

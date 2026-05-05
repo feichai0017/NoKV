@@ -747,8 +747,8 @@ In all cases, successful replies carry the current answerability witness:
 
 These do **not** have a degraded fallback.
 
-- the local coordinator must first campaign / renew the rooted lease
-- the rooted lease must still be active for the local holder
+- the local coordinator must first campaign / renew the rooted grant
+- the rooted grant must still be active for the local holder
 - the rooted era must not already be sealed
 - the rooted duty mask must admit the requested action
 
@@ -763,7 +763,7 @@ local state. This is the current boundary between:
 Lifecycle mutations are stricter than hot-path duty admission:
 
 - they always re-read rooted state from storage before mutating
-- they reject any stale-holder / expired-lease / sealed-era view
+- they reject any stale-holder / expired-grant / retired-era view
 - they treat finality as a rooted safety condition, not a best-effort hint
 
 That is why seal / confirm / close / reattach do not use the cached mirror
@@ -773,7 +773,7 @@ admission path.
 
 `DiagnosticsSnapshot()` now exports both:
 
-- the current degraded serving state (`root`, `lease`, `audit`, `handover_witness`)
+- the current degraded serving state (`root`, `grant`, `audit`, `authority`)
 - cumulative Eunomia counters under `eunomia_metrics`
 
 `eunomia_metrics` is grouped into:

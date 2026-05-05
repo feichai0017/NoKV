@@ -28,13 +28,12 @@ type fakeServiceBackend struct {
 	observeCommittedErr error
 	observeTailErr      error
 	waitTailErr         error
-	applyLeaseErr       error
-	applyClosureErr     error
+	applyGrantErr       error
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
-	applyLeaseResult    rootstate.EunomiaState
-	applyClosureResult  rootstate.EunomiaState
+	applyGrantResult    rootstate.EunomiaState
+	applyGrantCert      rootproto.GrantCertificate
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -113,12 +112,8 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 	return f.waitAdvance, nil
 }
 
-func (f *fakeServiceBackend) ApplyTenure(context.Context, rootproto.TenureCommand) (rootstate.EunomiaState, error) {
-	return f.applyLeaseResult, f.applyLeaseErr
-}
-
-func (f *fakeServiceBackend) ApplyHandover(context.Context, rootproto.HandoverCommand) (rootstate.EunomiaState, error) {
-	return f.applyClosureResult, f.applyClosureErr
+func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
 }
 
 type basicServiceBackend struct {
@@ -408,33 +403,37 @@ func TestServiceObserveFallbackAndTailPaths(t *testing.T) {
 	})
 }
 
-func TestServiceApplyTenure(t *testing.T) {
-	leaseState := rootstate.EunomiaState{
-		Tenure: rootstate.Tenure{
-			HolderID:        "coord-1",
-			ExpiresUnixNano: 1234,
-			Era:             7,
-			Mandate:         rootproto.MandateDefault,
-		},
+func TestServiceApplyGrant(t *testing.T) {
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "grant-7",
+		HolderID:        "coord-1",
+		ExpiresUnixNano: 1234,
+		Era:             7,
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
 	}
-	cmd := rootproto.TenureCommand{
-		Kind:            rootproto.TenureActIssue,
+	grantState := rootstate.EunomiaState{
+		ActiveGrant: grant,
+	}
+	cert := rootproto.GrantCertificate{Grant: grant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("sig")}
+	cmd := rootproto.GrantCommand{
+		Kind:            rootproto.GrantActIssue,
 		HolderID:        "coord-1",
 		ExpiresUnixNano: 1234,
 		NowUnixNano:     1000,
+		RequestedDuties: grant.Duties,
 	}
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{})
+		resp, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
-			Command: metawire.RootTenureCommandToProto(cmd),
+		_, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
@@ -442,103 +441,67 @@ func TestServiceApplyTenure(t *testing.T) {
 	t.Run("held maps to response status", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:         true,
-			applyLeaseResult: leaseState,
-			applyLeaseErr:    rootstate.ErrPrimacy,
+			applyGrantResult: grantState,
+			applyGrantErr:    rootstate.ErrPrimacy,
 		})
-		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
-			Command: metawire.RootTenureCommandToProto(cmd),
+		resp, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_HELD, resp.Status)
-		require.Equal(t, leaseState, metawire.RootEunomiaStateFromProto(resp.State))
+		require.Equal(t, metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, grantState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 
 	t.Run("success", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:         true,
-			applyLeaseResult: leaseState,
+			applyGrantResult: grantState,
+			applyGrantCert:   cert,
 		})
-		resp, err := svc.ApplyTenure(context.Background(), &metapb.MetadataRootApplyTenureRequest{
-			Command: metawire.RootTenureCommandToProto(cmd),
+		resp, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootTenureApplyStatus_ROOT_TENURE_APPLY_STATUS_GRANTED, resp.Status)
-		require.Equal(t, leaseState, metawire.RootEunomiaStateFromProto(resp.State))
-	})
-}
-
-func TestServiceApplyHandover(t *testing.T) {
-	closureState := rootstate.EunomiaState{
-		Handover: rootstate.Handover{
-			HolderID:     "coord-1",
-			LegacyEra:    3,
-			SuccessorEra: 4,
-			LegacyDigest: "digest",
-			Stage:        rootproto.HandoverStageClosed,
-		},
-	}
-	cmd := rootproto.HandoverCommand{
-		Kind:        rootproto.HandoverActClose,
-		HolderID:    "coord-1",
-		NowUnixNano: 1000,
-	}
-
-	t.Run("nil service", func(t *testing.T) {
-		var svc *Service
-		resp, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{})
-		require.NoError(t, err)
-		require.NotNil(t, resp)
+		require.Equal(t, metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, grantState, metawire.RootEunomiaStateFromProto(resp.State))
+		require.Equal(t, cert, metawire.RootGrantCertificateFromProto(resp.Certificate))
 	})
 
-	t.Run("unimplemented", func(t *testing.T) {
-		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
-			Command: metawire.RootHandoverCommandToProto(cmd),
-		})
-		require.Equal(t, codes.Unimplemented, status.Code(err))
-	})
-
-	t.Run("success", func(t *testing.T) {
+	t.Run("seal returns retired status", func(t *testing.T) {
+		retiredState := rootstate.EunomiaState{
+			RetiredGrants: []rootproto.GrantRetirement{{GrantID: grant.GrantID, HolderID: grant.HolderID, Era: grant.Era, Mode: rootproto.GrantRetirementSealedExact}},
+		}
 		svc := NewService(&fakeServiceBackend{
-			isLeader:           true,
-			applyClosureResult: closureState,
+			isLeader:         true,
+			applyGrantResult: retiredState,
 		})
-		resp, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
-			Command: metawire.RootHandoverCommandToProto(cmd),
+		resp, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(rootproto.GrantCommand{Kind: rootproto.GrantActSeal, HolderID: "coord-1", GrantID: grant.GrantID}),
 		})
 		require.NoError(t, err)
-		require.Equal(t, closureState, metawire.RootEunomiaStateFromProto(resp.State))
+		require.Equal(t, metapb.RootGrantApplyStatus_ROOT_GRANT_APPLY_STATUS_RETIRED, resp.Status)
+		require.Equal(t, retiredState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 
 	t.Run("mapped failed precondition", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:        true,
-			applyClosureErr: rootstate.ErrFinality,
+			isLeader:      true,
+			applyGrantErr: rootstate.ErrFinality,
 		})
-		_, err := svc.ApplyHandover(context.Background(), &metapb.MetadataRootApplyHandoverRequest{
-			Command: metawire.RootHandoverCommandToProto(cmd),
+		_, err := svc.ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(rootproto.GrantCommand{Kind: rootproto.GrantActSeal, HolderID: "coord-1", GrantID: grant.GrantID}),
 		})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 }
 
 func TestCoordinatorApplyErrorMappings(t *testing.T) {
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInvalidTenure)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInheritance)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActIssue, rootstate.ErrInheritance)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActRelease, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActRelease, rootstate.ErrInvalidTenure)))
-	require.Equal(t, codes.Internal, status.Code(coordinatorLeaseApplyRPCError(rootproto.TenureActUnknown, errors.New("boom"))))
-
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActSeal, rootstate.ErrInvalidTenure)))
-	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActConfirm, rootstate.ErrFinality)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActSeal, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActConfirm, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActClose, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActClose, rootstate.ErrFinality)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActReattach, rootstate.ErrPrimacy)))
-	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActReattach, rootstate.ErrFinality)))
-	require.Equal(t, codes.Internal, status.Code(coordinatorHandoverApplyRPCError(rootproto.HandoverActUnknown, errors.New("boom"))))
+	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInvalidGrant)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInheritance)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActSeal, rootstate.ErrPrimacy)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActRetireExpired, rootstate.ErrInvalidGrant)))
+	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActInherit, rootstate.ErrFinality)))
+	require.Equal(t, codes.Internal, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActUnknown, errors.New("boom"))))
 }
 
 func testServerSnapshot() rootstate.Snapshot {

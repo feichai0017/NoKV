@@ -3,41 +3,31 @@ package audit
 import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 )
 
-// SnapshotAnomalies surfaces the most important finality/audit gaps in a form
-// suitable for CLI or standalone checker consumption.
+// SnapshotAnomalies surfaces the important grant/finality gaps in a form
+// suitable for diagnostics, CLI output, or standalone checker consumption.
 type FinalityDefect string
 type AuthorityCompletionState string
 
 const (
-	FinalityDefectNone                    FinalityDefect = ""
-	FinalityDefectSuccessorIncomplete     FinalityDefect = "successor_incomplete"
-	FinalityDefectMissingConfirm          FinalityDefect = "missing_confirm"
-	FinalityDefectMissingClose            FinalityDefect = "missing_close"
-	FinalityDefectCloseWithoutConfirm     FinalityDefect = "close_without_confirm"
-	FinalityDefectLineageMismatch         FinalityDefect = "lineage_mismatch"
-	FinalityDefectReattachWithoutConfirm  FinalityDefect = "reattach_without_confirm"
-	FinalityDefectReattachWithoutClose    FinalityDefect = "reattach_without_close"
-	FinalityDefectReattachLineageMismatch FinalityDefect = "reattach_lineage_mismatch"
-	FinalityDefectReattachIncomplete      FinalityDefect = "reattach_incomplete"
+	FinalityDefectNone                  FinalityDefect = ""
+	FinalityDefectRetiredNotInherited   FinalityDefect = "retired_not_inherited"
+	FinalityDefectInvalidSuccessorBound FinalityDefect = "invalid_successor_bound"
 )
 
 const (
-	AuthorityCompletionNone                 AuthorityCompletionState = ""
-	AuthorityCompletionSealedPending        AuthorityCompletionState = "sealed_handoff_pending"
-	AuthorityCompletionSealedCompleted      AuthorityCompletionState = "sealed_handoff_completed"
-	AuthorityCompletionExpiredWithoutLegacy AuthorityCompletionState = "expired_takeover_without_legacy"
+	AuthorityCompletionNone                  AuthorityCompletionState = ""
+	AuthorityCompletionSealedExactCompleted  AuthorityCompletionState = "sealed_exact_completed"
+	AuthorityCompletionExpiredBoundInherited AuthorityCompletionState = "expired_bound_inherited"
+	AuthorityCompletionRetiredNotInherited   AuthorityCompletionState = "retired_not_inherited"
 )
 
 type SnapshotAnomalies struct {
-	SuccessorLineageMismatch    bool
-	UncoveredMonotoneFrontier   bool
-	UncoveredDescriptorRevision bool
+	RetiredGrantNotInherited    bool
+	InvalidSuccessorBound       bool
 	LeaseStartCoverageViolation bool
-	SealedEraStillLive          bool
 	FinalityDefect              FinalityDefect
 }
 
@@ -49,122 +39,106 @@ type Report struct {
 	CatchUpState           string
 	CurrentHolderID        string
 	CurrentEra             uint64
-	Handoff                rootproto.AuthorityHandoffRecord
-	HandoverWitness        rootproto.HandoverWitness
-	Handover               rootproto.HandoverStatus
+	ActiveGrant            rootproto.AuthorityGrant
+	RetiredGrants          []rootproto.GrantRetirement
+	GrantInheritances      []rootproto.GrantInheritance
+	RetiredEraFloor        uint64
 	AuthorityCompletion    AuthorityCompletionState
 	Anomalies              SnapshotAnomalies
 }
 
-func evaluateSnapshot(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
-	descriptorRevision := rootstate.MaxDescriptorRevision(snapshot.Descriptors)
-	currentFrontiers := eunomia.Frontiers(rootstate.State{
-		IDFence:  snapshot.Allocator.IDCurrent,
-		TSOFence: snapshot.Allocator.TSCurrent,
-	}, descriptorRevision)
-	handoverWitness := eunomia.BuildHandoverWitness(snapshot.Tenure, currentFrontiers, snapshot.Legacy, nowUnixNano)
-	handover := eunomia.EvaluateHandoverStage(
-		snapshot.Tenure,
-		snapshot.Handover,
-		holderID,
-		nowUnixNano,
-	)
-	return Report{
+// BuildReport materializes one rooted snapshot into a grant-lifecycle audit
+// report. It treats a crash-before-seal takeover as complete only when the
+// expired_bound retirement has been inherited by a successor grant.
+func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
+	report := Report{
 		HolderID:               holderID,
 		NowUnixNano:            nowUnixNano,
-		RootDescriptorRevision: descriptorRevision,
+		RootDescriptorRevision: rootstate.MaxDescriptorRevision(snapshot.Descriptors),
 		CatchUpState:           snapshot.CatchUpState.String(),
-		CurrentHolderID:        snapshot.Tenure.HolderID,
-		CurrentEra:             snapshot.Tenure.Era,
-		Handoff:                eunomia.HandoffRecord(snapshot.Tenure, currentFrontiers),
-		HandoverWitness:        handoverWitness.WithStage(handover.Stage),
-		Handover:               handover,
+		CurrentHolderID:        snapshot.ActiveGrant.HolderID,
+		CurrentEra:             snapshot.ActiveGrant.Era,
+		ActiveGrant:            snapshot.ActiveGrant,
+		RetiredGrants:          append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+		GrantInheritances:      append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
 	}
-}
-
-func evaluateFinalityDefect(snapshot rootview.Snapshot, holderID string, nowUnixNano int64, witness rootproto.HandoverWitness, status rootproto.HandoverStatus) FinalityDefect {
-	current := snapshot.Tenure
-	handover := snapshot.Handover
-	if holderID == "" || holderID != current.HolderID || !current.ActiveAt(nowUnixNano) {
-		return FinalityDefectNone
-	}
-	if witness.LegacyEra != 0 && !witness.FinalitySatisfied() {
-		return FinalityDefectSuccessorIncomplete
-	}
-	confirmPresent := handover.Present() && handover.HolderID == holderID
-	if !confirmPresent {
-		if status.Stage == rootproto.HandoverStageUnspecified {
-			if witness.FinalitySatisfied() {
-				return FinalityDefectMissingConfirm
-			}
-			return FinalityDefectNone
+	for _, retirement := range report.RetiredGrants {
+		if retirement.Era > report.RetiredEraFloor {
+			report.RetiredEraFloor = retirement.Era
 		}
-		if rootproto.HandoverStageAtLeast(status.Stage, rootproto.HandoverStageReattached) {
-			return FinalityDefectReattachWithoutConfirm
+		if retirement.Present() && retirement.InheritedByGrantID == "" {
+			report.Anomalies.RetiredGrantNotInherited = true
 		}
-		if rootproto.HandoverStageAtLeast(status.Stage, rootproto.HandoverStageClosed) {
-			return FinalityDefectCloseWithoutConfirm
-		}
-		return FinalityDefectMissingConfirm
 	}
-	confirmMatchesCurrent := confirmPresent &&
-		handover.SuccessorEra > handover.LegacyEra &&
-		handover.SuccessorEra == current.Era
-	lineageSatisfied := confirmMatchesCurrent &&
-		current.LineageDigest == handover.LegacyDigest
-	closePresent := confirmPresent && rootproto.HandoverStageAtLeast(handover.Stage, rootproto.HandoverStageClosed)
-	reattachPresent := confirmPresent && rootproto.HandoverStageAtLeast(handover.Stage, rootproto.HandoverStageReattached)
-
-	if reattachPresent {
-		if !closePresent {
-			return FinalityDefectReattachWithoutClose
-		}
-		if !lineageSatisfied {
-			return FinalityDefectReattachLineageMismatch
-		}
-		if status.Stage != rootproto.HandoverStageReattached {
-			return FinalityDefectReattachIncomplete
-		}
-		return FinalityDefectNone
+	report.Anomalies.InvalidSuccessorBound = invalidSuccessorBound(report.ActiveGrant, report.RetiredGrants)
+	switch {
+	case report.Anomalies.InvalidSuccessorBound:
+		report.Anomalies.FinalityDefect = FinalityDefectInvalidSuccessorBound
+	case report.Anomalies.RetiredGrantNotInherited:
+		report.Anomalies.FinalityDefect = FinalityDefectRetiredNotInherited
+	default:
+		report.Anomalies.FinalityDefect = FinalityDefectNone
 	}
-	if closePresent {
-		if !lineageSatisfied {
-			return FinalityDefectLineageMismatch
-		}
-		return FinalityDefectNone
-	}
-	if !lineageSatisfied {
-		return FinalityDefectLineageMismatch
-	}
-	return FinalityDefectMissingClose
-}
-
-func evaluateAuthorityCompletion(snapshot rootview.Snapshot, witness rootproto.HandoverWitness) AuthorityCompletionState {
-	if snapshot.Legacy.Present() {
-		if witness.FinalitySatisfied() && rootproto.HandoverStageAtLeast(witness.Stage, rootproto.HandoverStageReattached) {
-			return AuthorityCompletionSealedCompleted
-		}
-		return AuthorityCompletionSealedPending
-	}
-	if snapshot.Tenure.Era > 1 {
-		return AuthorityCompletionExpiredWithoutLegacy
-	}
-	return AuthorityCompletionNone
-}
-
-// BuildReport materializes one rooted snapshot into a standalone audit report
-// that callers can serialize or render without duplicating anomaly logic.
-func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
-	report := evaluateSnapshot(snapshot, holderID, nowUnixNano)
-	finalityDefect := evaluateFinalityDefect(snapshot, holderID, nowUnixNano, report.HandoverWitness, report.Handover)
-	anomalies := SnapshotAnomalies{
-		SuccessorLineageMismatch:    report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorLineageSatisfied,
-		UncoveredMonotoneFrontier:   report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorMonotoneCovered(),
-		UncoveredDescriptorRevision: report.HandoverWitness.SuccessorPresent && !report.HandoverWitness.SuccessorDescriptorCovered(),
-		SealedEraStillLive:          report.HandoverWitness.LegacyEra != 0 && !report.HandoverWitness.SealedEraRetired,
-		FinalityDefect:              finalityDefect,
-	}
-	report.Anomalies = anomalies
-	report.AuthorityCompletion = evaluateAuthorityCompletion(snapshot, report.HandoverWitness)
+	report.AuthorityCompletion = evaluateAuthorityCompletion(report.RetiredGrants)
 	return report
+}
+
+func evaluateAuthorityCompletion(retirements []rootproto.GrantRetirement) AuthorityCompletionState {
+	var latest rootproto.GrantRetirement
+	for _, retirement := range retirements {
+		if retirement.Era > latest.Era {
+			latest = retirement
+		}
+	}
+	if !latest.Present() {
+		return AuthorityCompletionNone
+	}
+	if latest.InheritedByGrantID == "" {
+		return AuthorityCompletionRetiredNotInherited
+	}
+	switch latest.Mode {
+	case rootproto.GrantRetirementSealedExact:
+		return AuthorityCompletionSealedExactCompleted
+	case rootproto.GrantRetirementExpiredBound:
+		return AuthorityCompletionExpiredBoundInherited
+	default:
+		return AuthorityCompletionRetiredNotInherited
+	}
+}
+
+func invalidSuccessorBound(grant rootproto.AuthorityGrant, retirements []rootproto.GrantRetirement) bool {
+	if !grant.Present() {
+		return false
+	}
+	for _, retirement := range retirements {
+		if retirement.InheritedByGrantID != "" {
+			continue
+		}
+		for _, bound := range retirement.Bounds {
+			duty, ok := grant.Duty(bound.DutyID)
+			if !ok || !authorityBoundCovers(duty.Bound, bound.Bound) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func authorityBoundCovers(grant, usage rootproto.DutyBound) bool {
+	if grant.Kind != usage.Kind {
+		return false
+	}
+	switch usage.Kind {
+	case rootproto.DutyBoundMonotone:
+		return usage.MonotoneUpper <= grant.MonotoneUpper
+	case rootproto.DutyBoundVersion:
+		return usage.DescriptorRevisionCeiling <= grant.DescriptorRevisionCeiling &&
+			usage.MaxRootLag <= grant.MaxRootLag
+	case rootproto.DutyBoundBudget:
+		return usage.Budget <= grant.Budget
+	case rootproto.DutyBoundEpoch:
+		return usage.Epoch <= grant.Epoch
+	default:
+		return false
+	}
 }

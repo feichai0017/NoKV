@@ -12,15 +12,15 @@ type Mode uint32
 const (
 	// None disables all rooted control-plane failpoints.
 	None Mode = 0
-	// BeforeApplyTenure aborts a rooted coordinator lease mutation
+	// BeforeApplyGrantIssue aborts a rooted coordinator grant mutation
 	// before it enters the replicated metadata-root state machine.
-	BeforeApplyTenure Mode = 1 << iota
-	// BeforeApplyHandover aborts a rooted coordinator handover mutation
+	BeforeApplyGrantIssue Mode = 1 << iota
+	// BeforeApplyGrantRetirement aborts a rooted coordinator grant retirement mutation
 	// before it enters the replicated metadata-root state machine.
-	BeforeApplyHandover
-	// BeforeTenureStorageRead aborts the coordinator's storage-backed
+	BeforeApplyGrantRetirement
+	// BeforeGrantStorageRead aborts the coordinator's storage-backed
 	// eunomia gate before it reloads a rooted snapshot.
-	BeforeTenureStorageRead
+	BeforeGrantStorageRead
 	// AfterAppendCommittedBeforeCheckpoint aborts one rooted append after the
 	// replicated log commit is observed but before the checkpoint is advanced.
 	AfterAppendCommittedBeforeCheckpoint
@@ -29,9 +29,9 @@ const (
 var currentMode atomic.Uint32
 
 var (
-	ErrBeforeApplyTenure                    = errors.New("meta/root failpoint: before apply coordinator lease")
-	ErrBeforeApplyHandover                  = errors.New("meta/root failpoint: before apply coordinator handover")
-	ErrBeforeTenureStorageRead              = errors.New("meta/root failpoint: before coordinator lease storage read")
+	ErrBeforeApplyGrantIssue                = errors.New("meta/root failpoint: before apply coordinator grant")
+	ErrBeforeApplyGrantRetirement           = errors.New("meta/root failpoint: before apply coordinator grant retirement")
+	ErrBeforeGrantStorageRead               = errors.New("meta/root failpoint: before coordinator grant storage read")
 	ErrAfterAppendCommittedBeforeCheckpoint = errors.New("meta/root failpoint: after append committed before checkpoint")
 )
 
@@ -50,29 +50,29 @@ func enabled(mode Mode) bool {
 	return Current()&mode != 0
 }
 
-// InjectBeforeApplyTenure returns the configured injected failure for
-// rooted lease apply operations.
-func InjectBeforeApplyTenure() error {
-	if enabled(BeforeApplyTenure) {
-		return ErrBeforeApplyTenure
+// InjectBeforeApplyGrantIssue returns the configured injected failure for
+// rooted grant issue apply operations.
+func InjectBeforeApplyGrantIssue() error {
+	if enabled(BeforeApplyGrantIssue) {
+		return ErrBeforeApplyGrantIssue
 	}
 	return nil
 }
 
-// InjectBeforeApplyHandover returns the configured injected failure
-// for rooted handover apply operations.
-func InjectBeforeApplyHandover() error {
-	if enabled(BeforeApplyHandover) {
-		return ErrBeforeApplyHandover
+// InjectBeforeApplyGrantRetirement returns the configured injected failure
+// for rooted grant retirement apply operations.
+func InjectBeforeApplyGrantRetirement() error {
+	if enabled(BeforeApplyGrantRetirement) {
+		return ErrBeforeApplyGrantRetirement
 	}
 	return nil
 }
 
-// InjectBeforeTenureStorageRead returns the configured injected
-// failure for storage-backed coordinator lease view refreshes.
-func InjectBeforeTenureStorageRead() error {
-	if enabled(BeforeTenureStorageRead) {
-		return ErrBeforeTenureStorageRead
+// InjectBeforeGrantStorageRead returns the configured injected
+// failure for storage-backed coordinator grant view refreshes.
+func InjectBeforeGrantStorageRead() error {
+	if enabled(BeforeGrantStorageRead) {
+		return ErrBeforeGrantStorageRead
 	}
 	return nil
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/stretchr/testify/require"
 
@@ -20,22 +19,14 @@ import (
 
 func TestServiceDiagnosticsSnapshotIncludesEunomiaMetrics(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-	svc.eunomiaMetrics.recordTenureEraTransition(1, 2)
-	svc.eunomiaMetrics.recordHandoverStageTransition(rootproto.HandoverStageUnspecified, rootproto.HandoverStageConfirmed)
-	svc.eunomiaMetrics.recordGateRejection(gateMandateAdmission)
+	svc.eunomiaMetrics.recordGrantEraTransition(1, 2)
+	svc.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
 	svc.eunomiaMetrics.recordGuaranteeViolation(guaranteeInheritance)
 
 	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
-	require.Equal(t, uint64(1), metrics["tenure_era_transitions_total"])
+	require.Equal(t, uint64(1), metrics["grant_era_transitions_total"])
 	require.Equal(t, map[string]any{
-		"confirmed":  uint64(1),
-		"closed":     uint64(0),
-		"reattached": uint64(0),
-	}, metrics["handover_stage_transitions_total"])
-	require.Equal(t, map[string]any{
-		"legacy_formation":  uint64(0),
-		"handover_mutation": uint64(0),
-		"mandate_admission": uint64(1),
+		"duty_admission": uint64(1),
 	}, metrics["gate_rejections_total"])
 	require.Equal(t, map[string]any{
 		"primacy":     uint64(0),
@@ -45,44 +36,33 @@ func TestServiceDiagnosticsSnapshotIncludesEunomiaMetrics(t *testing.T) {
 	}, metrics["guarantee_violations_total"])
 }
 
-func TestServiceValidatePreActionLeaseRecordsPostSealMetric(t *testing.T) {
+func TestServiceValidateGrantRecordsDutyRejectionMetric(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 100) }
 
-	err := svc.validateGateTenure(
-		gateMandateAdmission,
-		rootproto.MandateAllocID,
-		rootstate.Tenure{
-			HolderID:        "c1",
-			ExpiresUnixNano: time.Unix(0, 200).UnixNano(),
-			Era:             3,
-			Mandate:         rootproto.MandateDefault,
-		},
-		rootstate.Legacy{
-			HolderID:  "c1",
-			Era:       3,
-			Mandate:   rootproto.MandateDefault,
-			Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 5, TSOFence: 9}, 0),
-		},
-	)
+	err := svc.validateGateGrant(gateDutyAdmission, rootproto.DutyAllocID, rootproto.AuthorityGrant{
+		GrantID:         "g1",
+		HolderID:        "c1",
+		ExpiresUnixNano: time.Unix(0, 200).UnixNano(),
+		Era:             3,
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 10)},
+	})
 	require.Error(t, err)
 
 	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
 	require.Equal(t, map[string]any{
-		"legacy_formation":  uint64(0),
-		"handover_mutation": uint64(0),
-		"mandate_admission": uint64(1),
+		"duty_admission": uint64(1),
 	}, metrics["gate_rejections_total"])
 	require.Equal(t, map[string]any{
 		"primacy":     uint64(0),
 		"inheritance": uint64(0),
-		"silence":     uint64(1),
+		"silence":     uint64(0),
 		"finality":    uint64(0),
 	}, metrics["guarantee_violations_total"])
 }
 
-func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
+func TestServiceDiagnosticsMarksInheritedGrantFinality(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
@@ -90,49 +70,50 @@ func TestServiceFinalityMetricsTrackLifecycleStages(t *testing.T) {
 				IDCurrent: 12,
 				TSCurrent: 34,
 			},
-			Tenure: rootstate.Tenure{
+			ActiveGrant: rootproto.AuthorityGrant{
+				GrantID:         "c1/3",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
 				Era:             3,
-				Mandate:         rootproto.MandateDefault,
+				Duties: []rootproto.DutyGrant{
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
+					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40),
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 7, 0),
+				},
 			},
-			Legacy: rootstate.Legacy{
-				HolderID:  "c1",
-				Era:       2,
-				Mandate:   rootproto.MandateDefault,
-				Frontiers: eunomia.Frontiers(rootstate.State{IDFence: 12, TSOFence: 34}, 7),
-				SealedAt:  rootstate.Cursor{Term: 1, Index: 9},
+			RetiredGrants: []rootproto.GrantRetirement{
+				{
+					GrantID:            "c0/2",
+					HolderID:           "c0",
+					Era:                2,
+					Mode:               rootproto.GrantRetirementSealedExact,
+					Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 12)},
+					InheritedByGrantID: "c1/3",
+				},
 			},
 			Descriptors: rootCloneDescriptorsForTest(map[uint64]topology.Descriptor{
 				1: {RegionID: 1, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			}),
 		},
 	}
-	store.snapshot.Tenure.LineageDigest = rootstate.DigestOfLegacy(store.snapshot.Legacy)
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
-	require.NoError(t, svc.ConfirmHandover())
-	require.NoError(t, svc.CloseHandover())
-	require.NoError(t, svc.ReattachHandover())
-
-	metrics := svc.DiagnosticsSnapshot()["eunomia_metrics"].(map[string]any)
-	require.Equal(t, map[string]any{
-		"confirmed":  uint64(1),
-		"closed":     uint64(1),
-		"reattached": uint64(1),
-	}, metrics["handover_stage_transitions_total"])
+	audit := svc.DiagnosticsSnapshot()["audit"].(map[string]any)
+	require.Equal(t, true, audit["sealed_exact_completed"])
+	require.Equal(t, false, audit["retired_not_inherited"])
+	require.Equal(t, false, audit["invalid_successor_bound"])
 }
 
-func TestServiceEnsureTenureRecordsCoverageViolationMetric(t *testing.T) {
+func TestServiceEnsureGrantRecordsCoverageViolationMetric(t *testing.T) {
 	store := &fakeStorage{
 		leader:      true,
 		campaignErr: rootstate.ErrInheritance,
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
-	svc.ConfigureTenure("c1", 10*time.Second, 3*time.Second)
+	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
