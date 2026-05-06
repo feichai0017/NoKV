@@ -18,16 +18,17 @@ import (
 )
 
 type fakeRunner struct {
-	nextTS        uint64
-	data          map[string][]byte
-	mutations     [][]*kvrpcpb.Mutation
-	getCalls      int
-	scanVersions  []uint64
-	batchVersions []uint64
-	scanErrs      []error
-	batchErrs     []error
-	mutateErr     error
-	mutateErrs    []error
+	nextTS              uint64
+	data                map[string][]byte
+	mutations           [][]*kvrpcpb.Mutation
+	getCalls            int
+	scanVersions        []uint64
+	batchVersions       []uint64
+	scanErrs            []error
+	batchErrs           []error
+	mutateErr           error
+	mutateErrs          []error
+	actualCommitVersion uint64
 }
 
 type atomicMutateCall struct {
@@ -289,23 +290,23 @@ func TestExecutorGetQuotaUsageReturnsZeroForMissingCounter(t *testing.T) {
 	require.Equal(t, fsmeta.UsageRecord{}, usage)
 }
 
-func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, _, _, _ uint64) error {
+func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, _, commitVersion, _ uint64) (uint64, error) {
 	if len(r.mutateErrs) > 0 {
 		err := r.mutateErrs[0]
 		r.mutateErrs = r.mutateErrs[1:]
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if r.mutateErr != nil {
-		return r.mutateErr
+		return 0, r.mutateErr
 	}
 	cloned := make([]*kvrpcpb.Mutation, 0, len(mutations))
 	hasPrimary := len(mutations) == 0
 	for _, mut := range mutations {
 		if mut.GetAssertionNotExist() {
 			if _, ok := r.data[string(mut.GetKey())]; ok {
-				return fsmeta.ErrExists
+				return 0, fsmeta.ErrExists
 			}
 		}
 		if bytes.Equal(mut.GetKey(), primary) {
@@ -314,7 +315,7 @@ func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrp
 		cloned = append(cloned, cloneMutation(mut))
 	}
 	if !hasPrimary {
-		return fmt.Errorf("primary key %q not present in mutations", primary)
+		return 0, fmt.Errorf("primary key %q not present in mutations", primary)
 	}
 	for _, mut := range cloned {
 		switch mut.GetOp() {
@@ -325,7 +326,10 @@ func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrp
 		}
 	}
 	r.mutations = append(r.mutations, cloned)
-	return nil
+	if r.actualCommitVersion != 0 {
+		return r.actualCommitVersion, nil
+	}
+	return commitVersion, nil
 }
 
 func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
@@ -1385,6 +1389,30 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
+}
+
+func TestExecutorRenameSubtreeCompletesHandoffAtActualCommitVersion(t *testing.T) {
+	runner := newFakeRunner()
+	runner.actualCommitVersion = 99
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	publisher := &fakeSubtreePublisher{}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 99}}, publisher.completes)
 }
 
 func TestExecutorRenameSubtreeBlocksMutationWhenStartHandoffFails(t *testing.T) {

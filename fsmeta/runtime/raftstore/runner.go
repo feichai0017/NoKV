@@ -22,7 +22,7 @@ type atomicMutateFastPath interface {
 }
 
 type commitTimestampMutator interface {
-	MutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) error
+	MutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) (uint64, error)
 }
 
 type statsProvider interface {
@@ -130,8 +130,11 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	return out, nil
 }
 
-// Mutate delegates to raftstore's two-phase commit path.
-func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+// Mutate delegates to raftstore's two-phase commit path and returns the commit
+// timestamp that actually published the mutation. Real raftstore clients may
+// allocate commit_ts after prewrite; callers that publish root frontiers must
+// use the returned timestamp instead of the speculative one they passed in.
+func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error) {
 	if kv, ok := r.kv.(commitTimestampMutator); ok {
 		// The executor still passes a preallocated commitVersion for in-memory
 		// test runners. Real raftstore clients can allocate commit_ts after
@@ -140,7 +143,10 @@ func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 			return r.ReserveTimestamp(ctx, 1)
 		})
 	}
-	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
+	if err := r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL); err != nil {
+		return 0, err
+	}
+	return commitVersion, nil
 }
 
 // Stats returns runtime-adapter counters. Nested KV stats come from the real

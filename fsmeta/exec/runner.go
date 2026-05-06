@@ -30,13 +30,14 @@ type KV struct {
 // TxnRunner is the NoKV transaction surface required by fsmeta execution.
 //
 // ReserveTimestamp returns the first timestamp in a consecutive range of count
-// timestamps. Mutate must provide Percolator-style atomicity for all mutations.
+// timestamps. Mutate must provide Percolator-style atomicity for all mutations
+// and return the commit timestamp that made the mutation visible.
 type TxnRunner interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
-	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
 }
 
 // AtomicMutateFastPath is an optional TxnRunner extension. handled=false
@@ -355,7 +356,8 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		} else {
 			e.createFastPathSkipQuotaTotal.Add(1)
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
@@ -440,7 +442,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 			}
 			mutations = append(mutations, quotaMutations...)
 		}
-		if err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
 			return err
 		}
 		updated = inode
@@ -835,7 +837,8 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 			return err
 		}
 		mutations = append(mutations, quotaMutations...)
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -894,7 +897,8 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			}
 			mutations = append(mutations, quotaMutations...)
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -971,7 +975,8 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1016,7 +1021,8 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1048,7 +1054,8 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: ownerKey})
 		}
-		return e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -1118,7 +1125,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: deletes[key]})
 		}
 		primary := deletes[keys[0]]
-		if err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		if _, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
 			return err
 		}
 		expired = uint64(len(expiredSessions))
@@ -1157,12 +1164,19 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 			return err
 		}
 		handoffStarted = true
-		mutationErr := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		actualCommitVersion, mutationErr := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		// Real raftstore 2PC allocates commit_ts after prewrite. The handoff
+		// completion frontier is the data visibility boundary, so it must use the
+		// returned commit timestamp rather than the speculative timestamp used to
+		// open the rooted pending state.
+		if actualCommitVersion == 0 {
+			actualCommitVersion = commitVersion
+		}
 		// Once StartSubtreeHandoff is rooted, a Mutate error may still be
 		// ambiguous with respect to primary commit. Complete closes the rooted
 		// pending state; at worst this advances an empty era rather than leaving
 		// an unrecoverable handoff.
-		completeErr := e.completeSubtreeHandoff(ctx, req.Mount, authorityRoot, commitVersion)
+		completeErr := e.completeSubtreeHandoff(ctx, req.Mount, authorityRoot, actualCommitVersion)
 		if mutationErr != nil {
 			if completeErr != nil {
 				return errors.Join(mutationErr, fmt.Errorf("complete subtree handoff: %w", completeErr))
@@ -1172,7 +1186,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		if completeErr != nil {
 			return completeErr
 		}
-		committedAt = commitVersion
+		committedAt = actualCommitVersion
 		return nil
 	}); err != nil {
 		return err

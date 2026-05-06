@@ -1171,7 +1171,7 @@ func TestClientMutateWithCommitTimestampAllocatesAfterPrewrite(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = cli.Close() }()
 
-	err = cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+	actualCommitVersion, err := cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
 	}, 50, 3000, func(context.Context) (uint64, error) {
 		require.Equal(t, 1, prewrites)
@@ -1180,6 +1180,7 @@ func TestClientMutateWithCommitTimestampAllocatesAfterPrewrite(t *testing.T) {
 		return 77, nil
 	})
 	require.NoError(t, err)
+	require.Equal(t, uint64(77), actualCommitVersion)
 	require.Equal(t, 1, prewrites)
 	require.Equal(t, 1, allocs)
 	require.Equal(t, 1, commits)
@@ -1210,7 +1211,7 @@ func TestClientMutateWithCommitTimestampRollsBackAfterAllocationFailure(t *testi
 	defer func() { _ = cli.Close() }()
 
 	allocErr := errors.New("tso unavailable")
-	err = cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+	_, err = cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
 	}, 50, 3000, func(context.Context) (uint64, error) {
 		return 0, allocErr

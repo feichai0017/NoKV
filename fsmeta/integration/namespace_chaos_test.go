@@ -112,7 +112,9 @@ func TestFSMetadataRenameSubtreePublishesSingleHandoffOnRealCluster(t *testing.T
 	require.Equal(t, mount, publisher.mount)
 	require.Equal(t, fsmeta.RootInode, publisher.root)
 	require.NotZero(t, publisher.startFrontier)
-	require.Equal(t, publisher.startFrontier, publisher.completeFrontier)
+	// Real raftstore 2PC may allocate commit_ts after handoff start. The
+	// successor frontier must cover the predecessor frontier and may be later.
+	require.GreaterOrEqual(t, publisher.completeFrontier, publisher.startFrontier)
 }
 
 func assertNamespaceInvariants(t *testing.T, pairs []fsmeta.DentryAttrPair) {

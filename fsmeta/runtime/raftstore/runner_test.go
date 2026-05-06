@@ -37,13 +37,13 @@ type fakeCommitTimestampKV struct {
 	commitVersion uint64
 }
 
-func (f *fakeCommitTimestampKV) MutateWithCommitTimestamp(ctx context.Context, _ []byte, _ []*kvrpcpb.Mutation, _ uint64, _ uint64, allocateCommitVersion func(context.Context) (uint64, error)) error {
+func (f *fakeCommitTimestampKV) MutateWithCommitTimestamp(ctx context.Context, _ []byte, _ []*kvrpcpb.Mutation, _ uint64, _ uint64, allocateCommitVersion func(context.Context) (uint64, error)) (uint64, error) {
 	ts, err := allocateCommitVersion(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	f.commitVersion = ts
-	return nil
+	return ts, nil
 }
 
 type fakeRunnerTSO struct {
@@ -148,11 +148,12 @@ func TestRunnerMutateAllocatesCommitTimestampAfterPrewrite(t *testing.T) {
 	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 20, Count: 1}})
 	require.NoError(t, err)
 
-	err = runner.Mutate(context.Background(), []byte("p"), []*kvrpcpb.Mutation{{
+	actual, err := runner.Mutate(context.Background(), []byte("p"), []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Mutation_Put,
 		Key: []byte("p"),
 	}}, 10, 11, 3000)
 	require.NoError(t, err)
+	require.Equal(t, uint64(20), actual)
 	require.Equal(t, uint64(20), kv.commitVersion)
 }
 
