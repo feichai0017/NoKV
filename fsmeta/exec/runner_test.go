@@ -1156,6 +1156,26 @@ func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
 	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 0)
 }
 
+func TestExecutorReadDirExhaustsRetriesOnLiveLock(t *testing.T) {
+	runner := newFakeRunner()
+	for range maxReadContentionRetries + 1 {
+		runner.scanErrs = append(runner.scanErrs, txnLockedError("vol", 7, "a"))
+	}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	_, err = executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.Error(t, err)
+	require.Equal(t, []uint64{1, 2, 3, 4}, runner.scanVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", uint64(maxReadContentionRetries))
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 1)
+}
+
 func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)

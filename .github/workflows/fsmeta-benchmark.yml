@@ -3,6 +3,28 @@ name: Benchmark
 on:
   pull_request:
     branches: ["main"]
+    paths:
+      - ".github/workflows/fsmeta-benchmark.yml"
+      - "benchmark/**"
+      - "cmd/nokv/**"
+      - "cmd/nokv-fsmeta/**"
+      - "coordinator/**"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "engine/**"
+      - "errors/**"
+      - "fsmeta/**"
+      - "go.mod"
+      - "go.sum"
+      - "local/**"
+      - "Makefile"
+      - "meta/**"
+      - "pb/**"
+      - "proto/**"
+      - "raftstore/**"
+      - "scripts/run_fsmeta_benchmarks.sh"
+      - "txn/**"
+      - "utils/**"
   workflow_dispatch:
     inputs:
       profile:

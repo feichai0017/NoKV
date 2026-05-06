@@ -115,6 +115,9 @@ The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
 `NOKV_FSMETA_PROFILE=long` for the scheduled large-data profile, or set
 `NOKV_FSMETA_BENCH_MODE=derived-cache` to run the cache on/off slice with two
 temporary fsmeta gateways.
+`NOKV_FSMETA_ARTIFACTS_PER_ENTRY` has an effective minimum of 4 because the
+mixed workload always creates `prompt.md`, `plan.json`, `state.bin`, and
+`checkpoint.tmp` to exercise update, writer-session, and unlink paths.
 
 Direct run from inside the `benchmark/` Go module:
 

@@ -36,6 +36,9 @@ type MixedConfig struct {
 	Clients         int
 	Groups          int
 	EntriesPerGroup int
+	// ArtifactsPerRun has an effective floor of 4 because the mixed workload
+	// needs prompt.md, plan.json, state.bin, and checkpoint.tmp to exercise
+	// update, session, and unlink API paths in every run.
 	ArtifactsPerRun int
 	PageLimit       uint32
 	SessionTTL      time.Duration
@@ -548,7 +551,7 @@ func normalizeMixedConfig(cfg MixedConfig) MixedConfig {
 	if cfg.EntriesPerGroup <= 0 {
 		cfg.EntriesPerGroup = 8
 	}
-	if cfg.ArtifactsPerRun <= 0 {
+	if cfg.ArtifactsPerRun < 4 {
 		cfg.ArtifactsPerRun = 4
 	}
 	if cfg.PageLimit == 0 {

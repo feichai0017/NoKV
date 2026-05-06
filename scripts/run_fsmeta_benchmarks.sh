@@ -13,6 +13,9 @@ mount="${NOKV_FSMETA_MOUNT:-fsmeta-bench}"
 wait_attempts="${NOKV_FSMETA_WAIT_ATTEMPTS:-180}"
 wait_interval="${NOKV_FSMETA_WAIT_INTERVAL:-1}"
 output_dir="${NOKV_FSMETA_OUTPUT_DIR:-$ROOT/benchmark/data/fsmeta/results}"
+cache_tmp_dir=""
+plain_pid=""
+cached_pid=""
 
 case "$profile" in
 	medium)
@@ -105,6 +108,15 @@ run_bench() {
 	)
 }
 
+print_bench_summary() {
+	local output="$1"
+	if [[ ! -f "$output" ]]; then
+		return
+	fi
+	echo "fsmeta benchmark CSV summary:"
+	sed -n '1,120p' "$output"
+}
+
 run_compose_benchmarks() {
 	local workloads="${NOKV_FSMETA_WORKLOADS:-mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
@@ -127,38 +139,41 @@ run_compose_benchmarks() {
 		fi
 	fi
 	run_bench "$fsmeta_addr" "$workloads" "$output"
+	print_bench_summary "$output"
 	echo "wrote fsmeta benchmark summary: $output"
 	if [[ "${NOKV_FSMETA_COMPOSE_DOWN:-0}" == "1" ]]; then
 		docker compose down -v
 	fi
 }
 
+cleanup_cache_gateways() {
+	if [[ -n "$plain_pid" ]]; then
+		kill "$plain_pid" 2>/dev/null || true
+		wait "$plain_pid" 2>/dev/null || true
+	fi
+	if [[ -n "$cached_pid" ]]; then
+		kill "$cached_pid" 2>/dev/null || true
+		wait "$cached_pid" 2>/dev/null || true
+	fi
+	if [[ -z "${NOKV_FSMETA_CACHE_TMPDIR:-}" && -n "$cache_tmp_dir" ]]; then
+		rm -rf "$cache_tmp_dir"
+	fi
+}
+
 run_derived_cache_benchmarks() {
 	local plain_addr="${NOKV_FSMETA_PLAIN_ADDR:-127.0.0.1:8090}"
 	local cached_addr="${NOKV_FSMETA_CACHED_ADDR:-127.0.0.1:8091}"
-	local tmp_dir="${NOKV_FSMETA_CACHE_TMPDIR:-$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-cache.XXXXXX")}"
-	local plain_pid=""
-	local cached_pid=""
-	cleanup_cache_gateways() {
-		if [[ -n "$plain_pid" ]]; then
-			kill "$plain_pid" 2>/dev/null || true
-		fi
-		if [[ -n "$cached_pid" ]]; then
-			kill "$cached_pid" 2>/dev/null || true
-		fi
-		wait "$plain_pid" "$cached_pid" 2>/dev/null || true
-		if [[ -z "${NOKV_FSMETA_CACHE_TMPDIR:-}" ]]; then
-			rm -rf "$tmp_dir"
-		fi
-	}
+	cache_tmp_dir="${NOKV_FSMETA_CACHE_TMPDIR:-$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-cache.XXXXXX")}"
+	plain_pid=""
+	cached_pid=""
 	trap cleanup_cache_gateways EXIT
 
-	mkdir -p "$tmp_dir/plain" "$tmp_dir/cached" "$tmp_dir/negative" "$tmp_dir/dirpage"
+	mkdir -p "$cache_tmp_dir/plain" "$cache_tmp_dir/cached" "$cache_tmp_dir/negative" "$cache_tmp_dir/dirpage"
 	echo "starting plain fsmeta gateway on $plain_addr"
 	go run ./cmd/nokv-fsmeta \
 		--addr "$plain_addr" \
 		--coordinator-addr "$coord_addr" \
-		>"$tmp_dir/plain/fsmeta.log" 2>&1 &
+		>"$cache_tmp_dir/plain/fsmeta.log" 2>&1 &
 	plain_pid="$!"
 	wait_port "$plain_addr"
 
@@ -166,19 +181,23 @@ run_derived_cache_benchmarks() {
 	go run ./cmd/nokv-fsmeta \
 		--addr "$cached_addr" \
 		--coordinator-addr "$coord_addr" \
-		--negative-cache-dir "$tmp_dir/negative" \
-		--dirpage-cache-dir "$tmp_dir/dirpage" \
-		>"$tmp_dir/cached/fsmeta.log" 2>&1 &
+		--negative-cache-dir "$cache_tmp_dir/negative" \
+		--dirpage-cache-dir "$cache_tmp_dir/dirpage" \
+		>"$cache_tmp_dir/cached/fsmeta.log" 2>&1 &
 	cached_pid="$!"
 	wait_port "$cached_addr"
 
-	run_bench "$plain_addr" "hotspot-fanin,negative-lookup" "$output_dir/fsmeta_derived_cache_off_${run_id}.csv"
-	run_bench "$cached_addr" "hotspot-fanin,negative-lookup" "$output_dir/fsmeta_derived_cache_on_${run_id}.csv"
+	local plain_output="$output_dir/fsmeta_derived_cache_${profile}_off_${run_id}.csv"
+	local cached_output="$output_dir/fsmeta_derived_cache_${profile}_on_${run_id}.csv"
+	run_bench "$plain_addr" "hotspot-fanin,negative-lookup" "$plain_output"
+	print_bench_summary "$plain_output"
+	run_bench "$cached_addr" "hotspot-fanin,negative-lookup" "$cached_output"
+	print_bench_summary "$cached_output"
 	echo "done"
 }
 
 case "$mode" in
-	compose|mixed)
+	compose)
 		run_compose_benchmarks
 		;;
 	derived-cache|cache)

@@ -1988,7 +1988,7 @@ func TestCommitKeyAlreadyRolledBack(t *testing.T) {
 
 	err := commitKey(db, reader, key, lock, 20)
 	require.NotNil(t, err)
-	require.NotNil(t, err.GetAbort())
+	require.Contains(t, err.GetRetryable(), "transaction already rolled back")
 }
 
 func TestCommitKeyWritesAndCleansLock(t *testing.T) {
