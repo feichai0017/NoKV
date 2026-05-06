@@ -114,14 +114,6 @@ func createOperation(rng *rand.Rand, model *Model, names []string, nextInode *fs
 	}
 	inode := *nextInode
 	*nextInode++
-	if rng.Intn(100) < 15 && len(model.inodes) > 1 {
-		for existing := range model.inodes {
-			if existing != model.Root {
-				inode = existing
-				break
-			}
-		}
-	}
 	typ := fsmeta.InodeTypeFile
 	if rng.Intn(100) < 20 {
 		typ = fsmeta.InodeTypeDirectory

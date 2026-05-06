@@ -408,8 +408,11 @@ func HasKeyErrorKind(err error, kind Kind) bool {
 }
 
 // IsTxnContention reports whether every non-empty key error is retryable by
-// obtaining a fresh transaction timestamp. Mixed semantic failures are not
-// contention: retrying them would hide a protocol or user-visible error.
+// obtaining a fresh transaction timestamp. WriteConflict means another
+// transaction committed after this start_ts; callers must re-read at a fresh
+// timestamp before deciding the user-visible result.
+// Mixed semantic failures are not contention: retrying them would hide a
+// protocol or user-visible error.
 func IsTxnContention(err error) bool {
 	var carrier KeyErrorCarrier
 	if !stderrors.As(err, &carrier) {
@@ -420,7 +423,7 @@ func IsTxnContention(err error) bool {
 		switch KindOfKeyError(keyErr) {
 		case KindUnknown:
 			continue
-		case KindCommitTsExpired, KindLockConflict:
+		case KindCommitTsExpired, KindLockConflict, KindWriteConflict:
 			seen = true
 		default:
 			return false

@@ -21,21 +21,23 @@ func TestKindWrapPreservesCauseAndKind(t *testing.T) {
 	require.True(t, Retryable(err))
 }
 
-func TestTxnContentionRequiresOnlyLockOrCommitTsExpired(t *testing.T) {
+func TestTxnContentionRequiresOnlyRetryableTxnConflicts(t *testing.T) {
 	err := NewTxnKeyError(
 		&kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{Key: []byte("a")}},
 		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("b"), CommitTs: 2, MinCommitTs: 3}},
+		&kvrpcpb.KeyError{WriteConflict: &kvrpcpb.WriteConflict{Key: []byte("c"), ConflictTs: 5, StartTs: 3}},
 	)
 
 	require.True(t, IsTxnContention(err))
 	require.True(t, Retryable(err))
 	require.True(t, HasKeyErrorKind(err, KindLockConflict))
 	require.True(t, HasKeyErrorKind(err, KindCommitTsExpired))
+	require.True(t, HasKeyErrorKind(err, KindWriteConflict))
 	require.Equal(t, KindConflict, KindOf(err))
 
 	txnErr, ok := AsTxnKeyError(err)
 	require.True(t, ok)
-	require.Len(t, txnErr.Errors, 2)
+	require.Len(t, txnErr.Errors, 3)
 }
 
 func TestTxnContentionRejectsMixedSemanticFailure(t *testing.T) {

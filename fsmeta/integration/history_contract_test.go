@@ -26,7 +26,14 @@ func TestRaftstoreRuntimeFSMetaConcurrentHistoryOnSplitCluster(t *testing.T) {
 			}))
 			ops := fsmetacontract.GenerateScript(seed, steps)
 
-			err := fsmetacontract.RunConcurrentBatches(ctx, executor, model, ops, batchSize, fsmetacontract.HistoryOptions{})
+			// The real raftstore path has a finite transaction-contention retry
+			// budget. If that budget is exhausted, the API returns a retryable
+			// transaction error rather than a namespace-semantic result; keep
+			// both legal model outcomes so this test checks serialization without
+			// depending on a particular retry budget.
+			err := fsmetacontract.RunConcurrentBatches(ctx, executor, model, ops, batchSize, fsmetacontract.HistoryOptions{
+				AllowIndeterminateErrors: true,
+			})
 			require.NoError(t, err, "seed=%d steps=%d batch=%d", seed, steps, batchSize)
 		})
 	}

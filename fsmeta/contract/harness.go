@@ -25,6 +25,20 @@ type Executor interface {
 	ExpireWriteSessions(context.Context, fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
 }
 
+type plannedCreateInodeContextKey struct{}
+
+func withPlannedCreateInode(ctx context.Context, inode fsmeta.InodeID) context.Context {
+	if inode == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, plannedCreateInodeContextKey{}, inode)
+}
+
+func plannedCreateInode(ctx context.Context) (fsmeta.InodeID, bool) {
+	inode, ok := ctx.Value(plannedCreateInodeContextKey{}).(fsmeta.InodeID)
+	return inode, ok && inode != 0
+}
+
 // Run executes operations against the system under test and the reference
 // model, comparing every externally visible result.
 func Run(ctx context.Context, exec Executor, model *Model, ops []Operation) error {
@@ -64,7 +78,11 @@ func Run(ctx context.Context, exec Executor, model *Model, ops []Operation) erro
 func execute(ctx context.Context, exec Executor, model *Model, op Operation) Result {
 	switch op.Kind {
 	case OpCreate:
-		result, err := exec.Create(ctx, fsmeta.CreateRequest{
+		// The real API allocates Create inode IDs server-side. The contract
+		// harness still pins a model inode per generated operation so future
+		// Update/Link/Session operations can target a stable object even when
+		// concurrent duplicate-name creates race.
+		result, err := exec.Create(withPlannedCreateInode(ctx, op.Inode), fsmeta.CreateRequest{
 			Mount:  op.Mount,
 			Parent: op.Parent,
 			Name:   op.Name,

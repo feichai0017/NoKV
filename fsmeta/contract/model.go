@@ -30,7 +30,9 @@ const (
 )
 
 // Operation is one generated fsmeta request. Unused fields are ignored by the
-// selected Kind.
+// selected Kind. For OpCreate, Inode is the model-assigned server-side inode
+// used to keep later generated operations meaningful; it is not a public
+// CreateRequest field.
 type Operation struct {
 	Kind        OperationKind
 	Mount       fsmeta.MountID
