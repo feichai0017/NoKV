@@ -69,9 +69,20 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 	retirement, err := sealGrant(cluster.Stores[leaderID], "c1", grant.GrantID, 200, 12, 34, 56)
 	require.NoError(t, err)
 
-	newLeaderID := cluster.FollowerIDs(leaderID)[0]
+	followers := cluster.FollowerIDs(leaderID)
+	newLeaderID := followers[0]
+	passiveVoterID := followers[1]
+	cluster.PauseTicks(leaderID)
+	cluster.PauseTicks(passiveVoterID)
+	defer cluster.ResumeTicks(passiveVoterID)
+	defer cluster.ResumeTicks(leaderID)
+
+	// This test is about rooted grant lineage across a leader handoff, not
+	// randomized election scheduling. Keep the old leader and the spare voter
+	// from starting competing elections while the selected follower campaigns;
+	// message handling remains live, so the new leader still wins through Raft.
 	cluster.Campaign(newLeaderID)
-	newLeaderID = cluster.WaitLeader(leaderID)
+	require.Equal(t, newLeaderID, cluster.WaitLeader(leaderID))
 	cluster.RefreshStore(newLeaderID)
 
 	successor, err := issueGrant(cluster.Stores[newLeaderID], "c2", 1_400, 300, 12, 34, 56)
