@@ -11,6 +11,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,8 @@ type fakeRunner struct {
 	getCalls      int
 	scanVersions  []uint64
 	batchVersions []uint64
+	scanErrs      []error
+	batchErrs     []error
 	mutateErr     error
 	mutateErrs    []error
 }
@@ -49,6 +52,21 @@ func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64
 	got, ok := raw.(uint64)
 	require.Truef(t, ok, "stat %s has type %T", key, raw)
 	require.Equal(t, want, got)
+}
+
+func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
+	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
+	if err != nil {
+		panic(err)
+	}
+	return nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
+		Locked: &kvrpcpb.Locked{
+			PrimaryLock: key,
+			Key:         key,
+			LockVersion: 10,
+			LockTtl:     defaultLockTTL,
+		},
+	})
 }
 
 type fakeMountResolver struct {
@@ -174,6 +192,13 @@ func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool,
 
 func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
 	r.batchVersions = append(r.batchVersions, version)
+	if len(r.batchErrs) > 0 {
+		err := r.batchErrs[0]
+		r.batchErrs = r.batchErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	out := make(map[string][]byte, len(keys))
 	for _, key := range keys {
 		if value, ok := r.data[string(key)]; ok {
@@ -185,6 +210,13 @@ func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) 
 
 func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error) {
 	r.scanVersions = append(r.scanVersions, version)
+	if len(r.scanErrs) > 0 {
+		err := r.scanErrs[0]
+		r.scanErrs = r.scanErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
 		if bytes.Compare([]byte(key), startKey) >= 0 {
@@ -1105,6 +1137,25 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	}}, records)
 }
 
+func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
+	runner := newFakeRunner()
+	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, []uint64{1, 2}, runner.scanVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 0)
+}
+
 func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)
@@ -1153,6 +1204,31 @@ func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
 			},
 		},
 	}, pairs)
+}
+
+func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {
+	runner := newFakeRunner()
+	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:           "vol",
+		Parent:          7,
+		Limit:           8,
+		SnapshotVersion: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, []uint64{100, 100}, runner.scanVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 0)
 }
 
 func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {

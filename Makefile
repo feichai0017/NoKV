@@ -1,7 +1,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-architecture lint fmt clean docker-up docker-dev-up docker-down bench
+.PHONY: help build test test-short test-race test-coverage test-architecture lint fmt clean docker-up docker-dev-up docker-down bench fsmeta-bench
 .PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke test-soak-24h test-soak-72h
 .PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
@@ -43,6 +43,7 @@ help:
 	@echo "  make proto-check        - Verify proto format, lint, and generated code"
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
+	@echo "  make fsmeta-bench       - Run Docker Compose fsmeta workload matrix"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
 	@echo "  make test-tla-smoke     - Run bounded TLA protocol model checks"
@@ -339,6 +340,10 @@ docker-up:
 docker-dev-up:
 	@echo "Building local image and starting Docker Compose cluster..."
 	docker compose up -d --build
+
+fsmeta-bench:
+	@echo "Running fsmeta mixed API benchmark on Docker Compose..."
+	./scripts/run_fsmeta_benchmarks.sh
 
 # Stop Docker Compose cluster
 docker-down:

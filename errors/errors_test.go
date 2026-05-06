@@ -26,6 +26,7 @@ func TestTxnContentionRequiresOnlyRetryableTxnConflicts(t *testing.T) {
 		&kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{Key: []byte("a")}},
 		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("b"), CommitTs: 2, MinCommitTs: 3}},
 		&kvrpcpb.KeyError{WriteConflict: &kvrpcpb.WriteConflict{Key: []byte("c"), ConflictTs: 5, StartTs: 3}},
+		&kvrpcpb.KeyError{Retryable: "transaction start timestamp was rolled back"},
 	)
 
 	require.True(t, IsTxnContention(err))
@@ -33,11 +34,12 @@ func TestTxnContentionRequiresOnlyRetryableTxnConflicts(t *testing.T) {
 	require.True(t, HasKeyErrorKind(err, KindLockConflict))
 	require.True(t, HasKeyErrorKind(err, KindCommitTsExpired))
 	require.True(t, HasKeyErrorKind(err, KindWriteConflict))
+	require.True(t, HasKeyErrorKind(err, KindRetryable))
 	require.Equal(t, KindConflict, KindOf(err))
 
 	txnErr, ok := AsTxnKeyError(err)
 	require.True(t, ok)
-	require.Len(t, txnErr.Errors, 3)
+	require.Len(t, txnErr.Errors, 4)
 }
 
 func TestTxnContentionRejectsMixedSemanticFailure(t *testing.T) {

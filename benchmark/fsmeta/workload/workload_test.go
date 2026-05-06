@@ -158,14 +158,14 @@ func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteSummaryCSV(&buf, []SummaryRow{{
 		Workload:  CheckpointStorm,
-		Driver:    DriverGenericKV,
+		Driver:    DriverNativeFSMetadata,
 		RunID:     "run-1",
 		Operation: "create_checkpoint",
 		Count:     1,
 	}})
 	require.NoError(t, err)
 	require.Contains(t, buf.String(), "workload,driver,run_id,operation")
-	require.Contains(t, buf.String(), "checkpoint-storm,generic-kv,run-1,create_checkpoint")
+	require.Contains(t, buf.String(), "checkpoint-storm,native-fsmeta,run-1,create_checkpoint")
 }
 
 func dentryID(parent fsmeta.InodeID, name string) string {

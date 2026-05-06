@@ -719,8 +719,9 @@ func TestCommitRejectsCommitVersionNotAfterStartVersion(t *testing.T) {
 	}
 }
 
-// TestCommitMissingLockWithRollbackWriteAborts rejects commits after rollback.
-func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
+// TestCommitMissingLockWithRollbackWriteRequiresFreshTxn rejects this start_ts
+// while telling higher layers that re-running with a fresh transaction is safe.
+func TestCommitMissingLockWithRollbackWriteRequiresFreshTxn(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(32)
 	key := []byte("rolled-back")
@@ -737,7 +738,7 @@ func TestCommitMissingLockWithRollbackWriteAborts(t *testing.T) {
 		CommitVersion: 30,
 	})
 	require.NotNil(t, err)
-	require.NotEmpty(t, err.GetAbort())
+	require.Contains(t, err.GetRetryable(), "transaction already rolled back")
 }
 
 // TestCommitReturnsRetryableOnLockLookupError surfaces lock read failures.
@@ -1660,7 +1661,7 @@ func TestCheckTxnStatusTTLRollbackMakesForegroundCommitAbort(t *testing.T) {
 		CommitVersion: commitTs,
 	})
 	require.NotNil(t, commitErr)
-	require.Contains(t, commitErr.GetAbort(), "transaction already rolled back")
+	require.Contains(t, commitErr.GetRetryable(), "transaction already rolled back")
 }
 
 func TestCheckTxnStatusDoesNotExpireFromLogicalTSODistance(t *testing.T) {

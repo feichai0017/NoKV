@@ -2,6 +2,7 @@ package fsmetabench
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -14,11 +15,9 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
-	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -26,22 +25,25 @@ import (
 const benchEnvKey = "NOKV_FSMETA_BENCH"
 
 var (
-	fsmetaDrivers              = flag.String("fsmeta_drivers", workload.DriverNativeFSMetadata, "comma-separated drivers: native-fsmeta,generic-kv")
-	fsmetaAddr                 = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
-	fsmetaCoordAddr            = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for generic-kv driver")
-	fsmetaWorkloads            = flag.String("fsmeta_workloads", "checkpoint-storm,hotspot-fanin", "comma-separated workloads: checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
-	fsmetaMount                = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
-	fsmetaClients              = flag.Int("fsmeta_clients", 8, "concurrent clients")
-	fsmetaDirs                 = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
-	fsmetaFilesPerDir          = flag.Int("fsmeta_files_per_dir", 128, "checkpoint-storm files per directory")
-	fsmetaFiles                = flag.Int("fsmeta_files", 2048, "hotspot-fanin file count")
-	fsmetaReadsPerClient       = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin reads per client")
-	fsmetaPageLimit            = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
-	fsmetaReadDirPlus          = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
-	fsmetaWatchWindow          = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
-	fsmetaCreateAffinityShards = flag.Int("fsmeta_create_affinity_shards", 0, "diagnostic shard count for generic-kv inode allocation; native fsmeta uses the server allocator")
-	fsmetaTimeout              = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
-	fsmetaOutput               = flag.String("fsmeta_output", "", "summary CSV output path")
+	fsmetaAddr            = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
+	fsmetaCoordAddr       = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for mount bootstrap")
+	fsmetaWorkloads       = flag.String("fsmeta_workloads", "mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
+	fsmetaMount           = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
+	fsmetaClients         = flag.Int("fsmeta_clients", 8, "concurrent clients")
+	fsmetaDirs            = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
+	fsmetaFilesPerDir     = flag.Int("fsmeta_files_per_dir", 128, "checkpoint-storm files per directory")
+	fsmetaFiles           = flag.Int("fsmeta_files", 2048, "hotspot-fanin/watch/negative file count")
+	fsmetaReadsPerClient  = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin/negative reads per client")
+	fsmetaPageLimit       = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
+	fsmetaReadDirPlus     = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
+	fsmetaWatchWindow     = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
+	fsmetaMountWait       = flag.Duration("fsmeta_mount_wait", 30*time.Second, "maximum time to wait for fsmeta gateway to observe benchmark mount")
+	fsmetaGroups          = flag.Int("fsmeta_groups", 4, "mixed workload group directory count")
+	fsmetaEntriesPerGroup = flag.Int("fsmeta_entries_per_group", 8, "mixed workload published entry count per group")
+	fsmetaArtifactsPerRun = flag.Int("fsmeta_artifacts_per_entry", 4, "mixed workload artifact file count per entry")
+	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 2*time.Second, "mixed writer session TTL")
+	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
+	fsmetaOutput          = flag.String("fsmeta_output", "", "summary CSV output path")
 )
 
 func TestBenchmarkFSMeta(t *testing.T) {
@@ -54,17 +56,15 @@ func TestBenchmarkFSMeta(t *testing.T) {
 
 	runID := workload.NewRunID()
 	var results []workload.Result
-	for _, driverName := range parseDrivers(*fsmetaDrivers) {
-		cli, cleanup := openBenchmarkClient(t, ctx, driverName)
-		defer cleanup()
-		driverRunID := runID + "-" + driverName
-		for _, workloadName := range parseWorkloads(*fsmetaWorkloads) {
-			result, err := runBenchmarkWorkload(ctx, cli, driverName, workloadName, driverRunID)
-			if err != nil {
-				t.Fatalf("run %s/%s: %v", driverName, workloadName, err)
-			}
-			results = append(results, result)
+	cli, cleanup := openBenchmarkClient(t, ctx)
+	defer cleanup()
+	waitForFSMetaMount(t, ctx, cli)
+	for _, workloadName := range parseWorkloads(*fsmetaWorkloads) {
+		result, err := runBenchmarkWorkload(ctx, cli, workloadName, runID)
+		if err != nil {
+			t.Fatalf("run %s: %v", workloadName, err)
 		}
+		results = append(results, result)
 	}
 
 	rows := make([]workload.SummaryRow, 0)
@@ -123,62 +123,59 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	// the frontier advances during a long benchmark run.
 }
 
-func openBenchmarkClient(t *testing.T, ctx context.Context, driverName string) (workload.Client, func()) {
+func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.Client, func()) {
 	t.Helper()
-	switch driverName {
-	case workload.DriverNativeFSMetadata:
-		cli, err := fsmetaclient.NewGRPCClient(ctx, *fsmetaAddr)
-		if err != nil {
-			t.Fatalf("dial fsmeta: %v", err)
-		}
-		return cli, func() { _ = cli.Close() }
-	case workload.DriverGenericKV:
-		if strings.TrimSpace(*fsmetaCoordAddr) == "" {
-			t.Fatalf("fsmeta_coordinator_addr is required for %s", workload.DriverGenericKV)
-		}
-		coordRPC, err := coordclient.NewGRPCClient(ctx, *fsmetaCoordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			t.Fatalf("dial coordinator: %v", err)
-		}
-		kv, err := raftclient.New(raftclient.Config{
-			Context:        ctx,
-			StoreResolver:  coordRPC,
-			RegionResolver: coordRPC,
-			DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	cli, err := fsmetaclient.NewGRPCClient(ctx, *fsmetaAddr)
+	if err != nil {
+		t.Fatalf("dial fsmeta: %v", err)
+	}
+	return cli, func() { _ = cli.Close() }
+}
+
+func waitForFSMetaMount(t *testing.T, ctx context.Context, cli workload.Client) {
+	t.Helper()
+	watchCli, ok := cli.(workload.WatchClient)
+	if !ok || *fsmetaMountWait <= 0 {
+		return
+	}
+	deadline := time.Now().Add(*fsmetaMountWait)
+	var lastErr error
+	for {
+		stream, err := watchCli.WatchSubtree(ctx, fsmeta.WatchRequest{
+			Mount:     fsmeta.MountID(*fsmetaMount),
+			RootInode: fsmeta.RootInode,
 		})
-		if err != nil {
-			_ = coordRPC.Close()
-			t.Fatalf("open raftstore client: %v", err)
+		if err == nil {
+			_ = stream.Close()
+			return
 		}
-		runner, err := fsmetaraftstore.NewRunner(kv, coordRPC)
-		if err != nil {
-			_ = kv.Close()
-			_ = coordRPC.Close()
-			t.Fatalf("open raftstore runner: %v", err)
+		lastErr = err
+		if !isMountVisibilityPending(err) {
+			t.Fatalf("wait for fsmeta mount visibility: %v", err)
 		}
-		allocator, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, *fsmetaCreateAffinityShards)
-		if err != nil {
-			_ = kv.Close()
-			_ = coordRPC.Close()
-			t.Fatalf("open generic-kv inode allocator: %v", err)
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for fsmeta gateway to observe mount %q: %v", *fsmetaMount, lastErr)
 		}
-		cli, err := workload.NewGenericKVDriver(runner, allocator)
-		if err != nil {
-			_ = kv.Close()
-			_ = coordRPC.Close()
-			t.Fatalf("open generic-kv driver: %v", err)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for fsmeta mount visibility: %v", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
 		}
-		return cli, func() {
-			_ = kv.Close()
-			_ = coordRPC.Close()
-		}
-	default:
-		t.Fatalf("unknown fsmeta driver %q", driverName)
-		return nil, nil
 	}
 }
 
-func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, workloadName, runID string) (workload.Result, error) {
+func isMountVisibilityPending(err error) bool {
+	if errors.Is(err, fsmeta.ErrMountNotRegistered) {
+		return true
+	}
+	// The gRPC client preserves the global NotFound kind, but the concrete
+	// fsmeta sentinel can be lost when the gateway has not observed the mount
+	// root event yet. Treat only that exact mount-registration message as the
+	// Compose bootstrap propagation window.
+	return strings.Contains(err.Error(), fsmeta.ErrMountNotRegistered.Error())
+}
+
+func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName, runID string) (workload.Result, error) {
 	var (
 		result workload.Result
 		err    error
@@ -219,26 +216,22 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, driverName, 
 			ReadsPerClient: *fsmetaReadsPerClient,
 			Parent:         fsmeta.RootInode,
 		})
+	case workload.Mixed:
+		result, err = workload.RunMixed(ctx, cli, workload.MixedConfig{
+			Mount:           fsmeta.MountID(*fsmetaMount),
+			RunID:           runID,
+			Clients:         *fsmetaClients,
+			Groups:          *fsmetaGroups,
+			EntriesPerGroup: *fsmetaEntriesPerGroup,
+			ArtifactsPerRun: *fsmetaArtifactsPerRun,
+			PageLimit:       uint32(*fsmetaPageLimit),
+			SessionTTL:      *fsmetaSessionTTL,
+		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)
 	}
-	result.Driver = driverName
+	result.Driver = workload.DriverNativeFSMetadata
 	return result, err
-}
-
-func parseDrivers(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		name := strings.TrimSpace(part)
-		if name != "" {
-			out = append(out, name)
-		}
-	}
-	if len(out) == 0 {
-		return []string{workload.DriverNativeFSMetadata}
-	}
-	return out
 }
 
 func parseWorkloads(raw string) []string {

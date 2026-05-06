@@ -54,6 +54,13 @@ func keyErrorRetryable(err error) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Retryable: err.Error()}
 }
 
+func keyErrorTxnAlreadyRolledBack() *kvrpcpb.KeyError {
+	// A rollback marker proves this start_ts is dead, so the client must not
+	// keep committing the same transaction. Higher layers that can re-read and
+	// re-plan the operation may safely retry with a fresh timestamp.
+	return keyErrorRetryable(errTxnAlreadyRolledBack)
+}
+
 func keyErrorAlreadyExists(key []byte) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: kv.SafeCopy(nil, key)}}
 }
