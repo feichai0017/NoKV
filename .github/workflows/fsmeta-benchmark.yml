@@ -1,4 +1,4 @@
-name: FSMeta Benchmarks
+name: Benchmark
 
 on:
   pull_request:
