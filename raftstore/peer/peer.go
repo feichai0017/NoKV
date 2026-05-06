@@ -5,9 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"sync"
 	"sync/atomic"
+
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -61,6 +62,7 @@ type Peer struct {
 	readMu                    sync.Mutex
 	pendingReads              map[string]chan uint64
 	allowSnapshotInstallRetry bool
+	batcher                   *proposalBatcher
 }
 
 const defaultMaxInFlightApply = 8192
@@ -138,6 +140,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	} else {
 		peer.applyLimit = defaultMaxInFlightApply
 	}
+	peer.batcher = newProposalBatcher(peer, cfg.BatchMaxSize, cfg.BatchMaxWait)
 	return peer, nil
 }
 
@@ -229,13 +232,7 @@ func (p *Peer) Propose(data []byte) error {
 	if err := p.waitForApplyBacklog(); err != nil {
 		return err
 	}
-	p.mu.Lock()
-	err := p.node.Propose(data)
-	p.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return p.processReady()
+	return p.batcher.propose(data).Wait()
 }
 
 // ProposeCommand encodes the provided raft command request and submits it to
@@ -668,6 +665,7 @@ func (p *Peer) Close() error {
 	if p == nil {
 		return nil
 	}
+	p.batcher.close()
 	p.stopCancel()
 	if p.applyCloser != nil {
 		p.applyCloser.Close()
