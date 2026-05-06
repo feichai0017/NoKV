@@ -5,8 +5,24 @@ import (
 	"errors"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	"github.com/feichai0017/NoKV/fsmeta"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+)
+
+const (
+	fsmetaReasonMetadata     = "fsmeta_reason"
+	reasonQuotaExceeded      = "quota_exceeded"
+	reasonWatchOverflow      = "watch_overflow"
+	reasonWatchCursorExpired = "watch_cursor_expired"
+	reasonMountNotRegistered = "mount_not_registered"
+	reasonMountRetired       = "mount_retired"
+	reasonNamespaceExists    = "entry_exists"
+	reasonNamespaceNotFound  = "entry_not_found"
+	reasonInvalidFSMetaInput = "invalid_fsmeta_input"
+	reasonServiceUnavailable = "service_unavailable"
+	reasonContextCanceled    = "context_canceled"
+	reasonContextDeadline    = "context_deadline"
 )
 
 func rpcError(err error) error {
@@ -18,12 +34,59 @@ func rpcError(err error) error {
 	}
 	switch {
 	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, err.Error())
+		return nokverrors.RPCStatusError(nokverrors.KindAborted, codes.Canceled, err.Error(), map[string]string{
+			fsmetaReasonMetadata: reasonContextCanceled,
+		})
 	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, err.Error())
+		return nokverrors.RPCStatusError(nokverrors.KindUnavailable, codes.DeadlineExceeded, err.Error(), map[string]string{
+			fsmetaReasonMetadata: reasonContextDeadline,
+		})
 	default:
-		return status.Error(rpcCodeForKind(nokverrors.KindOf(err)), err.Error())
+		kind := nokverrors.KindOf(err)
+		return nokverrors.RPCStatusError(kind, rpcCodeForKind(kind), err.Error(), fsmetaErrorMetadata(err))
 	}
+}
+
+func rpcInvalidArgument(message string) error {
+	return nokverrors.RPCStatusError(nokverrors.KindInvalidArgument, codes.InvalidArgument, message, map[string]string{
+		fsmetaReasonMetadata: reasonInvalidFSMetaInput,
+	})
+}
+
+func rpcServiceUnavailable(message string) error {
+	return nokverrors.RPCStatusError(nokverrors.KindProtocolViolation, codes.FailedPrecondition, message, map[string]string{
+		fsmetaReasonMetadata: reasonServiceUnavailable,
+	})
+}
+
+func fsmetaErrorMetadata(err error) map[string]string {
+	reason := ""
+	switch {
+	case errors.Is(err, fsmeta.ErrQuotaExceeded):
+		reason = reasonQuotaExceeded
+	case errors.Is(err, fsmeta.ErrWatchOverflow):
+		reason = reasonWatchOverflow
+	case errors.Is(err, fsmeta.ErrWatchCursorExpired):
+		reason = reasonWatchCursorExpired
+	case errors.Is(err, fsmeta.ErrMountNotRegistered):
+		reason = reasonMountNotRegistered
+	case errors.Is(err, fsmeta.ErrMountRetired):
+		reason = reasonMountRetired
+	case errors.Is(err, fsmeta.ErrExists):
+		reason = reasonNamespaceExists
+	case errors.Is(err, fsmeta.ErrNotFound):
+		reason = reasonNamespaceNotFound
+	case errors.Is(err, fsmeta.ErrInvalidMountID), errors.Is(err, fsmeta.ErrInvalidInodeID),
+		errors.Is(err, fsmeta.ErrInvalidName), errors.Is(err, fsmeta.ErrInvalidSession),
+		errors.Is(err, fsmeta.ErrInvalidRequest), errors.Is(err, fsmeta.ErrInvalidKey),
+		errors.Is(err, fsmeta.ErrInvalidKeyKind), errors.Is(err, fsmeta.ErrInvalidValue),
+		errors.Is(err, fsmeta.ErrInvalidValueKind), errors.Is(err, fsmeta.ErrInvalidPageSize):
+		reason = reasonInvalidFSMetaInput
+	}
+	if reason == "" {
+		return nil
+	}
+	return map[string]string{fsmetaReasonMetadata: reason}
 }
 
 func rpcCodeForKind(kind nokverrors.Kind) codes.Code {

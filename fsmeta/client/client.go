@@ -3,8 +3,8 @@ package client
 import (
 	"context"
 	"fmt"
-	"strings"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 	"google.golang.org/grpc"
@@ -12,6 +12,16 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+)
+
+const (
+	fsmetaReasonMetadata = "fsmeta_reason"
+
+	reasonQuotaExceeded      = "quota_exceeded"
+	reasonWatchOverflow      = "watch_overflow"
+	reasonWatchCursorExpired = "watch_cursor_expired"
+	reasonMountNotRegistered = "mount_not_registered"
+	reasonMountRetired       = "mount_retired"
 )
 
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
@@ -358,21 +368,36 @@ func translateRPCError(err error) error {
 	case codes.AlreadyExists:
 		return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
 	case codes.NotFound:
+		if fsmetaReason(err) == reasonMountNotRegistered {
+			return fmt.Errorf("%w: %v", fsmeta.ErrMountNotRegistered, err)
+		}
 		return fmt.Errorf("%w: %v", fsmeta.ErrNotFound, err)
 	case codes.OutOfRange:
 		return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
-	case codes.ResourceExhausted:
-		msg := status.Convert(err).Message()
-		if strings.Contains(msg, fsmeta.ErrQuotaExceeded.Error()) {
-			return fmt.Errorf("%w: %v", fsmeta.ErrQuotaExceeded, err)
+	case codes.FailedPrecondition:
+		if fsmetaReason(err) == reasonMountRetired {
+			return fmt.Errorf("%w: %v", fsmeta.ErrMountRetired, err)
 		}
-		if strings.Contains(msg, fsmeta.ErrWatchOverflow.Error()) {
+		return err
+	case codes.ResourceExhausted:
+		switch fsmetaReason(err) {
+		case reasonQuotaExceeded:
+			return fmt.Errorf("%w: %v", fsmeta.ErrQuotaExceeded, err)
+		case reasonWatchOverflow:
 			return fmt.Errorf("%w: %v", fsmeta.ErrWatchOverflow, err)
 		}
 		return err
 	default:
 		return err
 	}
+}
+
+func fsmetaReason(err error) string {
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	if !ok {
+		return ""
+	}
+	return metadata[fsmetaReasonMetadata]
 }
 
 // WatchSession wraps a WatchSubscription with event-based ack helpers.

@@ -105,6 +105,21 @@ jobs:
                 return message.includes(`Could not resolve to a ${kind}`);
               }
 
+              function isTransientGitHubError(err) {
+                const status = Number(err && err.status);
+                const message = String(err && err.message ? err.message : err).toLowerCase();
+                return (
+                  status === 502 ||
+                  status === 503 ||
+                  status === 504 ||
+                  message.includes("couldn't respond to your request in time") ||
+                  message.includes('timeout') ||
+                  message.includes('timed out') ||
+                  message.includes('econnreset') ||
+                  message.includes('etimedout')
+                );
+              }
+
               async function resolveProjectForUser(owner, number) {
                 const res = await github.graphql(
                   `
@@ -345,26 +360,35 @@ jobs:
                 const ids = [];
                 let cursor = null;
                 while (true) {
-                  const res = await github.graphql(
-                    `
-                    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-                      repository(owner: $owner, name: $repo) {
-                        pullRequest(number: $number) {
-                          closingIssuesReferences(first: 50, after: $cursor) {
-                            nodes {
-                              id
-                            }
-                            pageInfo {
-                              hasNextPage
-                              endCursor
+                  let res;
+                  try {
+                    res = await github.graphql(
+                      `
+                      query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                        repository(owner: $owner, name: $repo) {
+                          pullRequest(number: $number) {
+                            closingIssuesReferences(first: 50, after: $cursor) {
+                              nodes {
+                                id
+                              }
+                              pageInfo {
+                                hasNextPage
+                                endCursor
+                              }
                             }
                           }
                         }
                       }
+                      `,
+                      { owner, repo, number: prNumber, cursor }
+                    );
+                  } catch (err) {
+                    if (isTransientGitHubError(err)) {
+                      core.warning(`Project linked-issue sync skipped due to transient GitHub API error: ${err.message}`);
+                      return [];
                     }
-                    `,
-                    { owner, repo, number: prNumber, cursor }
-                  );
+                    throw err;
+                  }
 
                   const page = res?.repository?.pullRequest?.closingIssuesReferences;
                   if (!page) {
@@ -427,12 +451,27 @@ jobs:
 
             await main().catch((err) => {
               const message = String(err && err.message ? err.message : err);
+              const lowerMessage = message.toLowerCase();
+              const status = Number(err && err.status);
               if (
                 message.includes('Could not resolve to a node') ||
                 message.includes('Resource not accessible by integration') ||
                 message.includes('insufficient scopes')
               ) {
                 core.warning(`Project automation skipped due to token scope: ${message}`);
+                return;
+              }
+              if (
+                status === 502 ||
+                status === 503 ||
+                status === 504 ||
+                lowerMessage.includes("couldn't respond to your request in time") ||
+                lowerMessage.includes('timeout') ||
+                lowerMessage.includes('timed out') ||
+                lowerMessage.includes('econnreset') ||
+                lowerMessage.includes('etimedout')
+              ) {
+                core.warning(`Project automation skipped due to transient GitHub API error: ${message}`);
                 return;
               }
               throw err;

@@ -1,6 +1,17 @@
 package transport
 
-import "errors"
+import (
+	"errors"
+
+	nokverrors "github.com/feichai0017/NoKV/errors"
+	"google.golang.org/grpc/codes"
+)
+
+const (
+	transportReasonMetadata = "raftstore_transport_reason"
+	reasonTransportInternal = "internal"
+	reasonTransportInjected = "failpoint_injected"
+)
 
 var (
 	// errPeerBlocked indicates that transport delivery to the target peer is currently blocked.
@@ -16,3 +27,19 @@ var (
 	// errNilTransport indicates that a nil transport was used.
 	errNilTransport = errors.New("raftstore: transport is nil")
 )
+
+func rpcTransportInternal(err error) error {
+	kind := nokverrors.KindOf(err)
+	if kind == nokverrors.KindUnknown {
+		kind = nokverrors.KindProtocolViolation
+	}
+	return nokverrors.RPCStatusError(kind, codes.Internal, err.Error(), map[string]string{
+		transportReasonMetadata: reasonTransportInternal,
+	})
+}
+
+func rpcTransportUnavailable(message string) error {
+	return nokverrors.RPCStatusError(nokverrors.KindUnavailable, codes.Unavailable, message, map[string]string{
+		transportReasonMetadata: reasonTransportInjected,
+	})
+}

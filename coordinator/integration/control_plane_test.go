@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	pdtestcluster "github.com/feichai0017/NoKV/coordinator/testcluster"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
@@ -84,7 +85,7 @@ func TestControlPlaneFollowerRejectsLeaderOnlyWrites(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "coordinator not leader")
+	require.True(t, coordclient.IsNotLeader(err), "error = %v", err)
 
 	_, err = leader.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(rootevent.RegionBootstrapped(controlPlaneDescriptor(195, []byte("b"), []byte("c")))),
@@ -114,12 +115,12 @@ func TestControlPlaneLeaderOnlyAllocatorsRejectFollowerWrites(t *testing.T) {
 	_, err = follower.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "coordinator not leader")
+	require.True(t, coordclient.IsNotLeader(err), "error = %v", err)
 
 	_, err = follower.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "coordinator not leader")
+	require.True(t, coordclient.IsNotLeader(err), "error = %v", err)
 }
 
 func publishControlPlaneDescriptorEvent(svc *coordserver.Service, desc topology.Descriptor) error {

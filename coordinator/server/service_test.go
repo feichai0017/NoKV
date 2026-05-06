@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/rootview"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -69,8 +70,12 @@ func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, codes.FailedPrecondition, status.Code(tc.err))
 			message := status.Convert(tc.err).Message()
-			require.Contains(t, message, errGrantPrefix)
+			require.Contains(t, message, diagnosticGrantNotHeld)
 			require.Contains(t, message, tc.contains)
+			require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(tc.err))
+			_, metadata, ok := nokverrors.RPCErrorInfo(tc.err)
+			require.True(t, ok)
+			require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 		})
 	}
 }
@@ -744,7 +749,10 @@ func TestServiceGetRegionByKeyStrongReadRejectsFollower(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errNotLeaderPrefix)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonNotLeader, metadata[coordinatorReasonMetadata])
 }
 
 func TestServiceGetRegionByKeyGrantModeIssuesLookupGrant(t *testing.T) {
@@ -1094,7 +1102,10 @@ func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errRootUnavailable)
+	require.Equal(t, nokverrors.KindUnavailable, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonRootUnavailable, metadata[coordinatorReasonMetadata])
 }
 
 func TestServiceGetRegionByKeyReportsRootLagging(t *testing.T) {
@@ -2362,7 +2373,10 @@ func TestServiceDrainAndSealBlocksNewAuthorityRequests(t *testing.T) {
 	_, err = svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 
 	doneAdmission.Done()
 	require.NoError(t, <-drainDone)
@@ -2399,7 +2413,10 @@ func TestServiceRejectsDrainingAdmissionBeforeGrantRenewal(t *testing.T) {
 	_, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyAllocID)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 	require.Zero(t, store.campaignCalls)
 }
 
@@ -2431,7 +2448,10 @@ func TestServiceRejectsDrainingMetadataBeforeGrantRenewal(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), "authority is draining")
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 	require.Zero(t, store.campaignCalls)
 }
 
@@ -2602,7 +2622,10 @@ func TestServiceSealGrantRejectsOtherHolder(t *testing.T) {
 	err := svc.SealGrant()
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errGrantPrefix)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 	require.Equal(t, 0, store.sealCalls)
 	require.Equal(t, "c2/2", store.snapshot.ActiveGrant.GrantID)
 }
@@ -2627,7 +2650,10 @@ func TestServiceDutyAdmissionRejectsOtherActiveGrant(t *testing.T) {
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, status.Convert(err).Message(), errGrantPrefix)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
 	require.Equal(t, 0, store.campaignCalls)
 }
 
@@ -2789,7 +2815,10 @@ func TestServiceRejectsWritesOnFollower(t *testing.T) {
 	err := publishDescriptorEvent(t, svc, testDescriptor(8, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.True(t, strings.Contains(err.Error(), errNotLeaderPrefix))
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, reasonNotLeader, metadata[coordinatorReasonMetadata])
 
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(rootevent.RegionTombstoned(8)),

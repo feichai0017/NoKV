@@ -10,6 +10,7 @@ var (
 	errNilMaintenanceProposer  = errors.New("raftstore/mvcc: nil maintenance proposer")
 	errNilLockResolver         = errors.New("raftstore/mvcc: nil lock resolver")
 	errNilCheckTxnStatusResult = errors.New("raftstore/mvcc: nil check txn status response")
+	errStop                    = errors.New("raftstore/mvcc: stop batch")
 )
 
 func errDecodeCFLock(key []byte, err error) error {

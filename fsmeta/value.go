@@ -5,6 +5,25 @@ import (
 	"fmt"
 )
 
+// fsmeta value layout:
+//
+//	common prefix:
+//	  magic[4] = "fsv\0"
+//	  version  = 0x01
+//	  kind byte
+//
+//	kind bodies:
+//	  inode   'i' : inode be64 | type byte | size be64 | mode be32 |
+//	                link_count be32 | created_unix_ns be64 |
+//	                updated_unix_ns be64 | opaque_len uvarint | opaque bytes
+//	  dentry  'd' : parent inode be64 | name_len uvarint | name bytes |
+//	                inode be64 | type byte
+//	  session 's' : session_len uvarint | session bytes | inode be64 |
+//	                expires_unix_ns be64
+//	  usage   'u' : bytes be64 | inodes be64
+//
+// Decode rejects unsupported versions and wrong value families at the public
+// decode entry points, keeping namespace corruption visible to callers.
 var valueMagic = []byte{'f', 's', 'v', 0}
 
 const valueSchemaVersion byte = 1

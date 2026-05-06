@@ -3,12 +3,12 @@ package server
 import (
 	"context"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ListTransitions returns the rooted transition view currently materialized
@@ -33,19 +33,19 @@ func (s *Service) ListTransitions(_ context.Context, _ *coordpb.ListTransitionsR
 // rooted view without mutating truth.
 func (s *Service) AssessRootEvent(_ context.Context, req *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
 	if req == nil || req.GetEvent() == nil {
-		return nil, status.Error(codes.InvalidArgument, "assess root event request missing event")
+		return nil, statusInvalidArgument("assess root event request missing event")
 	}
 	event := metawire.RootEventFromProto(req.GetEvent())
 	if event.Kind == rootevent.KindUnknown {
-		return nil, status.Error(codes.InvalidArgument, "assess root event requires known kind")
+		return nil, statusInvalidArgument("assess root event requires known kind")
 	}
 	event, err := s.normalizeRootEvent(event)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
+		return nil, statusInternalf("normalize root event: %v", err)
 	}
 	assessment, _, _, err := s.assessRootEventLifecycle(event)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, statusCatalog(nokverrors.KindOf(err), codes.FailedPrecondition, err, reasonCatalogPrecondition)
 	}
 	return &coordpb.AssessRootEventResponse{
 		Assessment: transitionAssessmentToProto(assessment),

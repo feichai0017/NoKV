@@ -1,12 +1,11 @@
 package fsmeta
 
-// V0 scope:
-//   - PlanRenameSubtree v0 only moves the subtree root dentry. Descendants refer
-//     to parent inode IDs, so they follow the moved root without key rewrites.
-//     POSIX overwrite and file-type checks belong to the executor that
-//     interprets current values.
-//   - mkdir and setxattr are left for later slices after the base
-//     transaction contract is stable.
+// fsmeta operation plans define semantic key boundaries only. The executor
+// owns value interpretation, conflict handling, and operation-specific checks;
+// the transaction runner owns timestamps, retries, and MVCC mutation encoding.
+//
+// RenameSubtree moves only the subtree-root dentry. Descendants reference
+// parent inode IDs, so they remain reachable without descendant key rewrites.
 
 // OperationKind identifies one metadata operation contract.
 type OperationKind string

@@ -357,17 +357,18 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 
 func TestGRPCServiceErrorMapping(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		code codes.Code
+		name   string
+		err    error
+		code   codes.Code
+		reason string
 	}{
-		{name: "exists", err: fsmeta.ErrExists, code: codes.AlreadyExists},
-		{name: "not found", err: fsmeta.ErrNotFound, code: codes.NotFound},
-		{name: "invalid", err: fsmeta.ErrInvalidName, code: codes.InvalidArgument},
-		{name: "quota exceeded", err: fsmeta.ErrQuotaExceeded, code: codes.ResourceExhausted},
-		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted},
-		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange},
-		{name: "mount retired", err: fsmeta.ErrMountRetired, code: codes.FailedPrecondition},
+		{name: "exists", err: fsmeta.ErrExists, code: codes.AlreadyExists, reason: reasonNamespaceExists},
+		{name: "not found", err: fsmeta.ErrNotFound, code: codes.NotFound, reason: reasonNamespaceNotFound},
+		{name: "invalid", err: fsmeta.ErrInvalidName, code: codes.InvalidArgument, reason: reasonInvalidFSMetaInput},
+		{name: "quota exceeded", err: fsmeta.ErrQuotaExceeded, code: codes.ResourceExhausted, reason: reasonQuotaExceeded},
+		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted, reason: reasonWatchOverflow},
+		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange, reason: reasonWatchCursorExpired},
+		{name: "mount retired", err: fsmeta.ErrMountRetired, code: codes.FailedPrecondition, reason: reasonMountRetired},
 		{name: "retry exhausted", err: nokverrors.New(nokverrors.KindRetryExhausted, "fsmeta: retry exhausted"), code: codes.Unavailable},
 		{name: "internal", err: errors.New("boom"), code: codes.Internal},
 	}
@@ -382,6 +383,12 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 			})
 			require.Error(t, err)
 			require.Equal(t, tt.code, status.Code(err))
+			if tt.reason != "" {
+				kind, metadata, ok := nokverrors.RPCErrorInfo(err)
+				require.True(t, ok)
+				require.Equal(t, nokverrors.KindOf(tt.err), kind)
+				require.Equal(t, tt.reason, metadata[fsmetaReasonMetadata])
+			}
 		})
 	}
 }

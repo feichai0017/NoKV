@@ -14,17 +14,15 @@ import (
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // GetRegionByKey returns region metadata for the specified key.
 func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.FromContextError(err).Err()
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "get region by key request is nil")
+		return nil, statusInvalidArgument("get region by key request is nil")
 	}
 	if err := s.rejectIfAuthorityClosed(); err != nil {
 		return nil, err
@@ -64,7 +62,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		return resp, nil
 	}
 	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
-		return nil, status.Error(codes.FailedPrecondition, pendingRangeChangeError(pending))
+		return nil, statusStaleEpoch(pendingRangeChangeError(pending), reasonRangeChangePending)
 	}
 	if err := admission.admitDescriptorRevision(desc.RootEpoch); err != nil {
 		return nil, err
@@ -117,7 +115,7 @@ type metadataAnswerability struct {
 
 func (a metadataAnswerability) admitDescriptorRevision(revision uint64) error {
 	if revision < a.requiredDescriptorRevision {
-		return status.Error(codes.FailedPrecondition, errRequiredDescriptorNotSatisfied)
+		return statusStaleEpoch(errRequiredDescriptorNotSatisfied, reasonRequiredDescriptor)
 	}
 	return nil
 }
@@ -167,7 +165,7 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 	}
 	if loadErr != nil {
 		if admission.freshness == coordpb.Freshness_FRESHNESS_STRONG || admission.freshness == coordpb.Freshness_FRESHNESS_BOUNDED {
-			return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootUnavailable)
+			return metadataAnswerability{}, statusRootUnavailable()
 		}
 		admission.state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
 	}
@@ -186,12 +184,12 @@ func (s *Service) admitMetadataAnswerability(req *coordpb.GetRegionByKeyRequest,
 		}
 	}
 	if !rootTokenSatisfied(admission.state.servedToken, admission.requiredRootToken) {
-		return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRequiredRootedTokenNotSatisfied)
+		return metadataAnswerability{}, statusStaleEpoch(errRequiredRootedTokenNotSatisfied, reasonRequiredRootedToken)
 	}
 	if admission.freshness == coordpb.Freshness_FRESHNESS_BOUNDED &&
 		admission.maxRootLag != nil &&
 		!boundedLagSatisfied(admission.state.rootLag, *admission.maxRootLag) {
-		return metadataAnswerability{}, status.Error(codes.FailedPrecondition, errRootLagExceedsBound)
+		return metadataAnswerability{}, statusStaleEpoch(errRootLagExceedsBound, reasonRootLagExceeded)
 	}
 	servingClass, syncHealth, err := s.admitReadServing(admission.freshness, admission.state)
 	if err != nil {
@@ -417,15 +415,15 @@ func (s *Service) admitReadServing(freshness coordpb.Freshness, state readState)
 			if !state.servedByLeader {
 				return servingClass, syncHealth, s.notLeaderError()
 			}
-			return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errRootLagExceedsStrongFreshness)
+			return servingClass, syncHealth, statusStaleEpoch(errRootLagExceedsStrongFreshness, reasonRootLagExceeded)
 		}
 	case coordpb.Freshness_FRESHNESS_BOUNDED:
 		if servingClass == coordpb.ServingClass_SERVING_CLASS_DEGRADED {
 			switch syncHealth {
 			case coordpb.SyncHealth_SYNC_HEALTH_ROOT_UNAVAILABLE:
-				return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errRootUnavailable)
+				return servingClass, syncHealth, statusRootUnavailable()
 			case coordpb.SyncHealth_SYNC_HEALTH_BOOTSTRAP_REQUIRED:
-				return servingClass, syncHealth, status.Error(codes.FailedPrecondition, errBootstrapRequiredBeforeBounded)
+				return servingClass, syncHealth, statusProtocol(errBootstrapRequiredBeforeBounded, reasonBootstrapRequired)
 			}
 		}
 	}

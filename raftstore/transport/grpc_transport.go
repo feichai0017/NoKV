@@ -12,11 +12,9 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -114,7 +112,7 @@ func (s *raftService) Step(ctx context.Context, msg *raftpb.Message) (*emptypb.E
 		return &emptypb.Empty{}, nil
 	}
 	if err := handler(myraft.Message(*msg)); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, rpcTransportInternal(err)
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -438,7 +436,7 @@ func (t *GRPCTransport) Send(ctx context.Context, msg myraft.Message) {
 		pbMsg := raftpb.Message(msg)
 		if failpoints.ShouldFailBeforeTransportSendRPC() {
 			cancel()
-			err = status.Error(codes.Unavailable, "raftstore: failpoint before transport send rpc")
+			err = rpcTransportUnavailable("raftstore: failpoint before transport send rpc")
 			metrics.recordSendFailure(err, attempt == attempts-1)
 			if attempt == attempts-1 {
 				return

@@ -2,17 +2,13 @@ package kv
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	nokverrors "github.com/feichai0017/NoKV/errors"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
 	"github.com/feichai0017/NoKV/raftstore/store"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Service exposes StoreKV gRPC handlers backed by a raftstore Store.
@@ -61,11 +57,11 @@ func txnHeartBeatRequestWithServiceTime(req *kvrpcpb.TxnHeartBeatRequest) *kvrpc
 func (s *Service) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	readReq := req.GetRequest()
 	if readReq == nil {
-		return nil, status.Error(codes.InvalidArgument, "get request missing payload")
+		return nil, rpcInvalidArgument("get request missing payload")
 	}
 	cmd := &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -96,11 +92,11 @@ func (s *Service) Get(ctx context.Context, req *kvrpcpb.KvGetRequest) (*kvrpcpb.
 func (s *Service) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) (*kvrpcpb.KvBatchGetResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	batch := req.GetRequest()
 	if batch == nil {
-		return nil, status.Error(codes.InvalidArgument, "batch get request missing payload")
+		return nil, rpcInvalidArgument("batch get request missing payload")
 	}
 	if len(batch.GetRequests()) == 0 {
 		return &kvrpcpb.KvBatchGetResponse{
@@ -145,14 +141,14 @@ func (s *Service) BatchGet(ctx context.Context, req *kvrpcpb.KvBatchGetRequest) 
 func (s *Service) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	scanReq := req.GetRequest()
 	if scanReq == nil {
-		return nil, status.Error(codes.InvalidArgument, "scan request missing payload")
+		return nil, rpcInvalidArgument("scan request missing payload")
 	}
 	if scanReq.GetReverse() {
-		return nil, status.Error(codes.Unimplemented, "StoreKV Scan reverse scans are not supported yet")
+		return nil, rpcUnsupported("StoreKV Scan reverse scans are not supported yet")
 	}
 	cmd := &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -183,10 +179,10 @@ func (s *Service) Scan(ctx context.Context, req *kvrpcpb.KvScanRequest) (*kvrpcp
 func (s *Service) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "prewrite request missing payload")
+		return nil, rpcInvalidArgument("prewrite request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -216,10 +212,10 @@ func (s *Service) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) 
 func (s *Service) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "commit request missing payload")
+		return nil, rpcInvalidArgument("commit request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -249,10 +245,10 @@ func (s *Service) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kv
 func (s *Service) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbackRequest) (*kvrpcpb.KvBatchRollbackResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "rollback request missing payload")
+		return nil, rpcInvalidArgument("rollback request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -282,10 +278,10 @@ func (s *Service) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbac
 func (s *Service) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockRequest) (*kvrpcpb.KvResolveLockResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "resolve lock request missing payload")
+		return nil, rpcInvalidArgument("resolve lock request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -315,10 +311,10 @@ func (s *Service) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockReq
 func (s *Service) CheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnStatusRequest) (*kvrpcpb.KvCheckTxnStatusResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "check txn status request missing payload")
+		return nil, rpcInvalidArgument("check txn status request missing payload")
 	}
 	checkReq := checkTxnStatusRequestWithServiceTime(req.GetRequest())
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
@@ -349,10 +345,10 @@ func (s *Service) CheckTxnStatus(ctx context.Context, req *kvrpcpb.KvCheckTxnSta
 func (s *Service) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "txn heartbeat request missing payload")
+		return nil, rpcInvalidArgument("txn heartbeat request missing payload")
 	}
 	heartBeatReq := txnHeartBeatRequestWithServiceTime(req.GetRequest())
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
@@ -383,10 +379,10 @@ func (s *Service) TxnHeartBeat(ctx context.Context, req *kvrpcpb.KvTxnHeartBeatR
 func (s *Service) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicMutateRequest) (*kvrpcpb.KvTryAtomicMutateResponse, error) {
 	header, err := buildHeader(req.GetContext())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		return nil, rpcInvalidArgument(err.Error())
 	}
 	if req.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "atomic mutate request missing payload")
+		return nil, rpcInvalidArgument("atomic mutate request missing payload")
 	}
 	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
 		Header: header,
@@ -440,11 +436,6 @@ func singleRaftResponse(op string, resp *raftcmdpb.RaftCmdResponse) (*raftcmdpb.
 	return resp.GetResponses()[0], nil
 }
 
-func raftPayloadError(op, detail string) error {
-	msg := fmt.Sprintf("raftstore/kv: %s response protocol violation: %s", op, detail)
-	return status.Error(codes.FailedPrecondition, nokverrors.New(nokverrors.KindProtocolViolation, msg).Error())
-}
-
 func buildHeader(ctx *kvrpcpb.Context) (*raftcmdpb.CmdHeader, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("context is required")
@@ -458,21 +449,4 @@ func buildHeader(ctx *kvrpcpb.Context) (*raftcmdpb.CmdHeader, error) {
 		header.StoreId = peer.GetStoreId()
 	}
 	return header, nil
-}
-
-func rpcStatus(err error) error {
-	if err == nil {
-		return nil
-	}
-	if _, ok := status.FromError(err); ok {
-		return err
-	}
-	switch {
-	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, err.Error())
-	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, err.Error())
-	default:
-		return status.Error(codes.Internal, err.Error())
-	}
 }

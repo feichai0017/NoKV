@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/meta/topology"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, error) {
@@ -262,10 +262,10 @@ func maxUint64(a, b uint64) uint64 {
 // AllocID allocates one or more globally unique ids.
 func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.FromContextError(err).Err()
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "alloc id request is nil")
+		return nil, statusInvalidArgument("alloc id request is nil")
 	}
 	count := req.GetCount()
 	if count == 0 {
@@ -282,9 +282,9 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 	first, err := s.reserveIDs(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, statusCatalog(nokverrors.KindInvalidArgument, codes.InvalidArgument, err, reasonInvalidRequest)
 		}
-		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
+		return nil, statusInternalf("persist allocator state: %v", err)
 	}
 	consumedFrontier := allocationConsumedFrontier(first, count)
 	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})
@@ -304,10 +304,10 @@ func (s *Service) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*co
 // Tso allocates one or more timestamps.
 func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.FromContextError(err).Err()
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "tso request is nil")
+		return nil, statusInvalidArgument("tso request is nil")
 	}
 	count := req.GetCount()
 	if count == 0 {
@@ -324,9 +324,9 @@ func (s *Service) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.Ts
 	first, got, err := s.reserveTSO(ctx, count)
 	if err != nil {
 		if errors.Is(err, idalloc.ErrInvalidBatch) {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, statusCatalog(nokverrors.KindInvalidArgument, codes.InvalidArgument, err, reasonInvalidRequest)
 		}
-		return nil, status.Error(codes.Internal, "persist allocator state: "+err.Error())
+		return nil, statusInternalf("persist allocator state: %v", err)
 	}
 	consumedFrontier := allocationConsumedFrontier(first, got)
 	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedFrontier})

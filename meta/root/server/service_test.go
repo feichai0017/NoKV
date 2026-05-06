@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -218,14 +219,22 @@ func TestServiceAppendPaths(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{isLeader: false, leaderID: 9})
 		_, err := svc.Append(context.Background(), &metapb.MetadataRootAppendRequest{})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
-		require.Contains(t, err.Error(), "leader_id=9")
+		require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+		_, metadata, ok := nokverrors.RPCErrorInfo(err)
+		require.True(t, ok)
+		require.Equal(t, reasonNotLeader, metadata[metaRootReasonMetadata])
+		require.Equal(t, "9", metadata[leaderIDMetadata])
 	})
 
 	t.Run("non leader without leader id", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{isLeader: false})
 		_, err := svc.Append(context.Background(), &metapb.MetadataRootAppendRequest{})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
-		require.Contains(t, err.Error(), "metadata root not leader")
+		require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+		_, metadata, ok := nokverrors.RPCErrorInfo(err)
+		require.True(t, ok)
+		require.Equal(t, reasonNotLeader, metadata[metaRootReasonMetadata])
+		require.Empty(t, metadata[leaderIDMetadata])
 	})
 
 	t.Run("invalid event kind", func(t *testing.T) {

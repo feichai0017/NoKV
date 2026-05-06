@@ -11,4 +11,6 @@ var (
 	ErrSegmentRetained = errors.New("wal: segment retained")
 	// ErrWALBackpressure indicates the WAL reached its configured hard cap.
 	ErrWALBackpressure = errors.New("wal: backpressure")
+
+	errStaleCatalog = errors.New("wal: stale catalog")
 )

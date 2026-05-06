@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
@@ -14,7 +15,6 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type rootedTailSubscriber interface {
@@ -24,10 +24,10 @@ type rootedTailSubscriber interface {
 // StoreHeartbeat records store-level stats.
 func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "store heartbeat request is nil")
+		return nil, statusInvalidArgument("store heartbeat request is nil")
 	}
 	err := s.cluster.UpsertStoreHeartbeat(catalog.StoreStats{
 		StoreID:           req.GetStoreId(),
@@ -41,12 +41,12 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, statusCatalog(nokverrors.KindInvalidArgument, codes.InvalidArgument, err, reasonCatalogInvalid)
 		}
 		if errors.Is(err, catalog.ErrStoreNotJoined) || errors.Is(err, catalog.ErrStoreRetired) {
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
+			return nil, statusCatalog(nokverrors.KindProtocolViolation, codes.FailedPrecondition, err, reasonCatalogPrecondition)
 		}
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, statusCatalog(nokverrors.KindUnknown, codes.Internal, err, reasonCatalogInternal)
 	}
 	// Record which regions this store claims raft leadership of. If the
 	// store previously claimed leaders it no longer owns (e.g. raft
@@ -63,10 +63,10 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 // GetStore returns the current runtime endpoint for one store.
 func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil || req.GetStoreId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "get store request missing store_id")
+		return nil, statusInvalidArgument("get store request missing store_id")
 	}
 	info, ok := s.cluster.StoreInfoByID(req.GetStoreId())
 	if !ok {
@@ -78,7 +78,7 @@ func (s *Service) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*
 // ListStores returns the current runtime store registry.
 func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	stores := s.cluster.StoreInfos()
 	out := make([]*coordpb.StoreInfo, 0, len(stores))
@@ -90,10 +90,10 @@ func (s *Service) ListStores(ctx context.Context, _ *coordpb.ListStoresRequest) 
 
 func (s *Service) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil || req.GetMountId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "get mount request missing mount_id")
+		return nil, statusInvalidArgument("get mount request missing mount_id")
 	}
 	mount, ok := s.cluster.MountByID(req.GetMountId())
 	if !ok {
@@ -104,7 +104,7 @@ func (s *Service) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*
 
 func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	mounts := s.cluster.MountSnapshot()
 	out := make([]*coordpb.MountInfo, 0, len(mounts))
@@ -116,7 +116,7 @@ func (s *Service) ListMounts(ctx context.Context, _ *coordpb.ListMountsRequest) 
 
 func (s *Service) ListSubtreeAuthorities(ctx context.Context, _ *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	subtrees := s.cluster.SubtreeAuthoritySnapshot()
 	out := make([]*coordpb.SubtreeAuthorityInfo, 0, len(subtrees))
@@ -128,14 +128,14 @@ func (s *Service) ListSubtreeAuthorities(ctx context.Context, _ *coordpb.ListSub
 
 func (s *Service) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+		return nil, statusInvalidArgument("get quota fence request missing subject")
 	}
 	subject := req.GetSubject()
 	if subject == nil || subject.GetMountId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "get quota fence request missing subject")
+		return nil, statusInvalidArgument("get quota fence request missing subject")
 	}
 	fence, ok := s.cluster.QuotaFenceBySubject(subject.GetMountId(), subject.GetSubtreeRoot())
 	if !ok {
@@ -146,7 +146,7 @@ func (s *Service) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceR
 
 func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	quotas := s.cluster.QuotaFenceSnapshot()
 	out := make([]*coordpb.QuotaFenceInfo, 0, len(quotas))
@@ -158,14 +158,14 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
 	if stream == nil {
-		return status.Error(codes.InvalidArgument, "watch root events stream is nil")
+		return statusInvalidArgument("watch root events stream is nil")
 	}
 	if s == nil || s.storage == nil {
-		return status.Error(codes.FailedPrecondition, "root storage is not configured")
+		return statusProtocol("root storage is not configured", reasonRootStorageUnavailable)
 	}
 	subscriber, ok := s.storage.(rootedTailSubscriber)
 	if !ok {
-		return status.Error(codes.FailedPrecondition, "root storage does not support tail subscriptions")
+		return statusProtocol("root storage does not support tail subscriptions", reasonRootStorageUnavailable)
 	}
 	var after rootstorage.TailToken
 	if req != nil {
@@ -173,16 +173,16 @@ func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream co
 	}
 	sub := subscriber.SubscribeTail(after)
 	if sub == nil {
-		return status.Error(codes.FailedPrecondition, "root tail subscription is not available")
+		return statusProtocol("root tail subscription is not available", reasonRootStorageUnavailable)
 	}
 	ctx := stream.Context()
 	for {
 		advance, err := sub.Next(ctx, 30*time.Second)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				return status.Error(codes.Canceled, err.Error())
+				return statusContext(err)
 			}
-			return status.Error(codes.Internal, err.Error())
+			return statusInternal(err.Error())
 		}
 		if !advance.Advanced() {
 			continue
@@ -335,10 +335,10 @@ func (s *Service) storeState(info catalog.StoreInfo) coordpb.StoreState {
 // RegionLiveness records one runtime heartbeat without mutating rooted truth.
 func (s *Service) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil || req.GetRegionId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "region liveness request missing region_id")
+		return nil, statusInvalidArgument("region liveness request missing region_id")
 	}
 	accepted := s.cluster.TouchRegionHeartbeat(req.GetRegionId())
 	return &coordpb.RegionLivenessResponse{Accepted: accepted}, nil
@@ -347,18 +347,18 @@ func (s *Service) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenes
 // PublishRootEvent records one explicit rooted topology truth event.
 func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil || req.GetEvent() == nil {
-		return nil, status.Error(codes.InvalidArgument, "publish root event request missing event")
+		return nil, statusInvalidArgument("publish root event request missing event")
 	}
 	event := metawire.RootEventFromProto(req.GetEvent())
 	if event.Kind == rootevent.KindUnknown {
-		return nil, status.Error(codes.InvalidArgument, "publish root event requires known kind")
+		return nil, statusInvalidArgument("publish root event requires known kind")
 	}
 	event, err := s.normalizeRootEvent(event)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "normalize root event: "+err.Error())
+		return nil, statusInternalf("normalize root event: %v", err)
 	}
 	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err
@@ -370,7 +370,7 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	}
 	assessment, validationSnapshot, storageBacked, err := s.assessRootEventLifecycle(event)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, statusCatalog(nokverrors.KindOf(err), codes.FailedPrecondition, err, reasonCatalogPrecondition)
 	}
 	resp := &coordpb.PublishRootEventResponse{
 		Assessment: transitionAssessmentToProto(assessment),
@@ -392,29 +392,29 @@ func (s *Service) PublishRootEvent(ctx context.Context, req *coordpb.PublishRoot
 	if err := validationErr; err != nil {
 		switch {
 		case errors.Is(err, catalog.ErrInvalidRegionID), errors.Is(err, catalog.ErrInvalidMountID):
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, statusCatalog(nokverrors.KindInvalidArgument, codes.InvalidArgument, err, reasonCatalogInvalid)
 		case errors.Is(err, catalog.ErrRegionHeartbeatStale), errors.Is(err, catalog.ErrRegionRangeOverlap),
 			errors.Is(err, catalog.ErrMountNotFound), errors.Is(err, catalog.ErrMountRetired), errors.Is(err, catalog.ErrMountConflict),
 			errors.Is(err, catalog.ErrSubtreeAuthorityNotFound), errors.Is(err, catalog.ErrSubtreeAuthorityConflict),
 			errors.Is(err, catalog.ErrSubtreeAuthorityHandoff), errors.Is(err, catalog.ErrQuotaFenceNotFound),
 			errors.Is(err, catalog.ErrQuotaFenceConflict):
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
+			return nil, statusCatalog(nokverrors.KindOf(err), codes.FailedPrecondition, err, reasonCatalogPrecondition)
 		default:
-			return nil, status.Error(codes.Internal, err.Error())
+			return nil, statusCatalog(nokverrors.KindProtocolViolation, codes.Internal, err, reasonCatalogInternal)
 		}
 	}
 	if s.storage != nil {
 		if err := s.storage.AppendRootEvent(ctx, event); err != nil {
-			return nil, status.Error(codes.Internal, "persist root event: "+err.Error())
+			return nil, statusInternalf("persist root event: %v", err)
 		}
 		if _, err := s.reloadRootedView(false); err != nil {
-			return nil, status.Error(codes.Internal, "reload rooted view: "+err.Error())
+			return nil, statusInternalf("reload rooted view: %v", err)
 		}
 		resp.Accepted = true
 		return resp, nil
 	}
 	if err := s.cluster.PublishRootEvent(event); err != nil {
-		return nil, status.Error(codes.Internal, "apply root event after persist: "+err.Error())
+		return nil, statusInternalf("apply root event after persist: %v", err)
 	}
 	resp.Accepted = true
 	return resp, nil
@@ -448,14 +448,14 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 // RemoveRegion deletes region metadata from the Coordinator in-memory catalog.
 func (s *Service) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, statusContext(err)
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "remove region request is nil")
+		return nil, statusInvalidArgument("remove region request is nil")
 	}
 	regionID := req.GetRegionId()
 	if regionID == 0 {
-		return nil, status.Error(codes.InvalidArgument, "remove region requires region_id > 0")
+		return nil, statusInvalidArgument("remove region requires region_id > 0")
 	}
 	if err := s.requireRootWriteAccess(); err != nil {
 		return nil, err

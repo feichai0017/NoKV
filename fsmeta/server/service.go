@@ -9,8 +9,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Executor is the fsmeta operation surface exported by the gRPC service.
@@ -81,7 +79,7 @@ func (s *Service) Create(ctx context.Context, req *fsmetapb.CreateRequest) (*fsm
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta create request is required")
+		return nil, rpcInvalidArgument("fsmeta create request is required")
 	}
 	result, err := s.executor.Create(ctx, createRequestFromProto(req))
 	if err != nil {
@@ -98,7 +96,7 @@ func (s *Service) UpdateInode(ctx context.Context, req *fsmetapb.UpdateInodeRequ
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta update inode request is required")
+		return nil, rpcInvalidArgument("fsmeta update inode request is required")
 	}
 	inode, err := s.executor.UpdateInode(ctx, updateInodeRequestFromProto(req))
 	if err != nil {
@@ -112,7 +110,7 @@ func (s *Service) Lookup(ctx context.Context, req *fsmetapb.LookupRequest) (*fsm
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta lookup request is required")
+		return nil, rpcInvalidArgument("fsmeta lookup request is required")
 	}
 	record, err := s.executor.Lookup(ctx, lookupRequestFromProto(req))
 	if err != nil {
@@ -126,7 +124,7 @@ func (s *Service) ReadDir(ctx context.Context, req *fsmetapb.ReadDirRequest) (*f
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta readdir request is required")
+		return nil, rpcInvalidArgument("fsmeta readdir request is required")
 	}
 	entries, err := s.executor.ReadDir(ctx, readDirRequestFromProto(req))
 	if err != nil {
@@ -144,7 +142,7 @@ func (s *Service) ReadDirPlus(ctx context.Context, req *fsmetapb.ReadDirRequest)
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta readdirplus request is required")
+		return nil, rpcInvalidArgument("fsmeta readdirplus request is required")
 	}
 	entries, err := s.executor.ReadDirPlus(ctx, readDirRequestFromProto(req))
 	if err != nil {
@@ -167,7 +165,7 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 	}
 	subscribe := first.GetSubscribe()
 	if subscribe == nil {
-		return status.Error(codes.InvalidArgument, "fsmeta watch first message must subscribe")
+		return rpcInvalidArgument("fsmeta watch first message must subscribe")
 	}
 	watchReq := watchRequestFromProto(subscribe)
 	sub, err := s.watcher.Subscribe(stream.Context(), watchReq)
@@ -195,7 +193,7 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 				sub.Ack(watchCursorFromProto(ack.GetCursor()))
 				continue
 			}
-			recvErr <- status.Error(codes.InvalidArgument, "fsmeta watch stream only accepts ack after subscribe")
+			recvErr <- rpcInvalidArgument("fsmeta watch stream only accepts ack after subscribe")
 			return
 		}
 	}()
@@ -224,7 +222,7 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta snapshot subtree request is required")
+		return nil, rpcInvalidArgument("fsmeta snapshot subtree request is required")
 	}
 	token, err := s.executor.SnapshotSubtree(ctx, snapshotSubtreeRequestFromProto(req))
 	if err != nil {
@@ -243,10 +241,10 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 
 func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.RetireSnapshotSubtreeRequest) (*fsmetapb.RetireSnapshotSubtreeResponse, error) {
 	if s == nil || s.snapshot == nil {
-		return nil, status.Error(codes.FailedPrecondition, "fsmeta snapshot publisher is not configured")
+		return nil, rpcServiceUnavailable("fsmeta snapshot publisher is not configured")
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta retire snapshot subtree request is required")
+		return nil, rpcInvalidArgument("fsmeta retire snapshot subtree request is required")
 	}
 	if err := s.snapshot.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
@@ -259,7 +257,7 @@ func (s *Service) GetQuotaUsage(ctx context.Context, req *fsmetapb.QuotaUsageReq
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta quota usage request is required")
+		return nil, rpcInvalidArgument("fsmeta quota usage request is required")
 	}
 	usage, err := s.executor.GetQuotaUsage(ctx, quotaUsageRequestFromProto(req))
 	if err != nil {
@@ -273,7 +271,7 @@ func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtree
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta rename subtree request is required")
+		return nil, rpcInvalidArgument("fsmeta rename subtree request is required")
 	}
 	if err := s.executor.RenameSubtree(ctx, renameSubtreeRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
@@ -286,7 +284,7 @@ func (s *Service) Link(ctx context.Context, req *fsmetapb.LinkRequest) (*fsmetap
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta link request is required")
+		return nil, rpcInvalidArgument("fsmeta link request is required")
 	}
 	if err := s.executor.Link(ctx, linkRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
@@ -299,7 +297,7 @@ func (s *Service) Unlink(ctx context.Context, req *fsmetapb.UnlinkRequest) (*fsm
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta unlink request is required")
+		return nil, rpcInvalidArgument("fsmeta unlink request is required")
 	}
 	if err := s.executor.Unlink(ctx, unlinkRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
@@ -312,7 +310,7 @@ func (s *Service) OpenWriteSession(ctx context.Context, req *fsmetapb.OpenWriteS
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta open write session request is required")
+		return nil, rpcInvalidArgument("fsmeta open write session request is required")
 	}
 	record, err := s.executor.OpenWriteSession(ctx, openWriteSessionRequestFromProto(req))
 	if err != nil {
@@ -326,7 +324,7 @@ func (s *Service) HeartbeatWriteSession(ctx context.Context, req *fsmetapb.Heart
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta heartbeat write session request is required")
+		return nil, rpcInvalidArgument("fsmeta heartbeat write session request is required")
 	}
 	record, err := s.executor.HeartbeatWriteSession(ctx, heartbeatWriteSessionRequestFromProto(req))
 	if err != nil {
@@ -340,7 +338,7 @@ func (s *Service) CloseWriteSession(ctx context.Context, req *fsmetapb.CloseWrit
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta close write session request is required")
+		return nil, rpcInvalidArgument("fsmeta close write session request is required")
 	}
 	if err := s.executor.CloseWriteSession(ctx, closeWriteSessionRequestFromProto(req)); err != nil {
 		return nil, rpcError(err)
@@ -353,7 +351,7 @@ func (s *Service) ExpireWriteSessions(ctx context.Context, req *fsmetapb.ExpireW
 		return nil, err
 	}
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "fsmeta expire write sessions request is required")
+		return nil, rpcInvalidArgument("fsmeta expire write sessions request is required")
 	}
 	result, err := s.executor.ExpireWriteSessions(ctx, expireWriteSessionsRequestFromProto(req))
 	if err != nil {
@@ -364,14 +362,14 @@ func (s *Service) ExpireWriteSessions(ctx context.Context, req *fsmetapb.ExpireW
 
 func (s *Service) requireExecutor() error {
 	if s == nil || s.executor == nil {
-		return status.Error(codes.FailedPrecondition, "fsmeta executor is not configured")
+		return rpcServiceUnavailable("fsmeta executor is not configured")
 	}
 	return nil
 }
 
 func (s *Service) requireWatcher() error {
 	if s == nil || s.watcher == nil {
-		return status.Error(codes.FailedPrecondition, "fsmeta watcher is not configured")
+		return rpcServiceUnavailable("fsmeta watcher is not configured")
 	}
 	return nil
 }

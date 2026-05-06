@@ -13,7 +13,6 @@ import (
 )
 
 var catalogMagic = [8]byte{'N', 'O', 'K', 'V', 'I', 'D', 'X', 1}
-var errStaleCatalog = errors.New("wal: stale catalog")
 
 type catalogEntry struct {
 	Type   RecordType

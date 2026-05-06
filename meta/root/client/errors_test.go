@@ -6,7 +6,6 @@ import (
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestMetadataRootClientErrorsExposeStableKinds(t *testing.T) {
@@ -17,7 +16,10 @@ func TestMetadataRootClientErrorsExposeStableKinds(t *testing.T) {
 	require.Equal(t, nokverrors.KindUnavailable, nokverrors.KindOf(errNoReachableEndpoint))
 	require.True(t, nokverrors.Retryable(errNoReachableEndpoint))
 
-	notLeader := status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=2)")
+	notLeader := nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, errMetadataRootNotLeader, map[string]string{
+		metaRootReasonMetadata: reasonNotLeader,
+		leaderIDMetadata:       "2",
+	})
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(notLeader))
 	require.True(t, nokverrors.Retryable(notLeader))
 }
