@@ -72,11 +72,18 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	dataset, err := createSharedDataset(ctx, native, cfg, dirs.datasets, rec)
-	if err != nil {
+	if err := createNamespaceGroupDirectories(ctx, native, cfg, dirs.groups, rec); err != nil {
 		return Result{}, err
 	}
-	if err := createNamespaceGroupDirectories(ctx, native, cfg, dirs.groups, rec); err != nil {
+
+	tasks := make([]mixedTask, 0, cfg.Groups*cfg.EntriesPerGroup)
+	for group := 0; group < cfg.Groups; group++ {
+		for run := 0; run < cfg.EntriesPerGroup; run++ {
+			tasks = append(tasks, mixedTask{group: group, run: run})
+		}
+	}
+	datasets, err := createDatasetSources(ctx, native, cfg, dirs.datasets, tasks, rec)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -116,12 +123,6 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	watchDone := make(chan error, 1)
 	go collectWatchEvents(watchCtx, stream, starts, cfg.Groups*cfg.EntriesPerGroup, rec, watchDone)
 
-	tasks := make([]mixedTask, 0, cfg.Groups*cfg.EntriesPerGroup)
-	for group := 0; group < cfg.Groups; group++ {
-		for run := 0; run < cfg.EntriesPerGroup; run++ {
-			tasks = append(tasks, mixedTask{group: group, run: run})
-		}
-	}
 	var next atomic.Int64
 	var wg sync.WaitGroup
 	for worker := 0; worker < cfg.Clients; worker++ {
@@ -133,7 +134,7 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 				if idx >= len(tasks) {
 					return
 				}
-				runMixedTask(ctx, native, cfg, dirs, dataset, tasks[idx], starts, renameGate, rec)
+				runMixedTask(ctx, native, cfg, dirs, datasets, tasks[idx], starts, renameGate, rec)
 			}
 		}()
 	}
@@ -202,31 +203,39 @@ func createDir(ctx context.Context, cli MixedClient, mount fsmeta.MountID, paren
 	return inode, nil
 }
 
-func createSharedDataset(ctx context.Context, cli MixedClient, cfg MixedConfig, parent fsmeta.InodeID, rec *recorder) (fsmeta.CreateResult, error) {
-	var dataset fsmeta.CreateResult
-	err := recordCall(rec, "create_dataset", func() error {
-		result, err := cli.Create(ctx, fsmeta.CreateRequest{
-			Mount:  cfg.Mount,
-			Parent: parent,
-			Name:   "shared-corpus.parquet",
-			Attrs: fsmeta.CreateAttrs{
-				Type: fsmeta.InodeTypeFile,
-				Mode: 0o644,
-				Size: 64 << 20,
-			},
+func createDatasetSources(ctx context.Context, cli MixedClient, cfg MixedConfig, parent fsmeta.InodeID, tasks []mixedTask, rec *recorder) (map[mixedTask]fsmeta.CreateResult, error) {
+	// The mixed profile is an API-breadth benchmark. Giving each task its own
+	// source inode keeps Link covered without turning CI into a single-inode
+	// link_count contention benchmark; dedicated hotspot workloads own that.
+	out := make(map[mixedTask]fsmeta.CreateResult, len(tasks))
+	for _, task := range tasks {
+		task := task
+		var dataset fsmeta.CreateResult
+		err := recordCall(rec, "create_dataset", func() error {
+			result, err := cli.Create(ctx, fsmeta.CreateRequest{
+				Mount:  cfg.Mount,
+				Parent: parent,
+				Name:   fmt.Sprintf("group-%02d-run-%04d.parquet", task.group, task.run),
+				Attrs: fsmeta.CreateAttrs{
+					Type: fsmeta.InodeTypeFile,
+					Mode: 0o644,
+					Size: 64 << 20,
+				},
+			})
+			if err == nil {
+				dataset = result
+			}
+			return err
 		})
-		if err == nil {
-			dataset = result
+		if err != nil {
+			return nil, err
 		}
-		return err
-	})
-	if err != nil {
-		return fsmeta.CreateResult{}, err
+		if dataset.Inode.Inode == 0 {
+			return nil, fmt.Errorf("create_dataset did not create dataset inode")
+		}
+		out[task] = dataset
 	}
-	if dataset.Inode.Inode == 0 {
-		return fsmeta.CreateResult{}, fmt.Errorf("create_dataset did not create dataset inode")
-	}
-	return dataset, nil
+	return out, nil
 }
 
 func createNamespaceGroupDirectories(ctx context.Context, cli MixedClient, cfg MixedConfig, parent fsmeta.InodeID, rec *recorder) error {
@@ -239,7 +248,7 @@ func createNamespaceGroupDirectories(ctx context.Context, cli MixedClient, cfg M
 	return nil
 }
 
-func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, dataset fsmeta.CreateResult, task mixedTask, starts *watchStarts, renameGate chan struct{}, rec *recorder) {
+func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, datasets map[mixedTask]fsmeta.CreateResult, task mixedTask, starts *watchStarts, renameGate chan struct{}, rec *recorder) {
 	stageName := fmt.Sprintf("group-%02d-run-%04d.stage", task.group, task.run)
 	finalName := fmt.Sprintf("group-%02d-run-%04d", task.group, task.run)
 
@@ -287,7 +296,11 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 		runWriterSessionLifecycle(ctx, cli, cfg, artifact, task, rec)
 	}
 	runCheckpointPublish(ctx, cli, cfg, dirs, task, renameGate, rec)
+	dataset, ok := datasets[task]
 	rec.recordCall("link_dataset", func() error {
+		if !ok {
+			return fmt.Errorf("missing dataset source for group=%d run=%d", task.group, task.run)
+		}
 		return cli.Link(ctx, fsmeta.LinkRequest{
 			Mount:      cfg.Mount,
 			FromParent: dataset.Dentry.Parent,

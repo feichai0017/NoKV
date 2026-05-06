@@ -400,7 +400,7 @@ func TestServiceCheckTxnStatusUsesServiceTimeWhenCurrentTimeZero(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Nil(t, commitResp.GetRegionError())
-	require.Contains(t, commitResp.GetResponse().GetError().GetAbort(), "transaction already rolled back")
+	require.Contains(t, commitResp.GetResponse().GetError().GetRetryable(), "transaction already rolled back")
 }
 
 func TestServiceRegionEpochMismatch(t *testing.T) {
