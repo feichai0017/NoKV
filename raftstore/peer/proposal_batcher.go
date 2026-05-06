@@ -27,8 +27,9 @@ type proposalBatcher struct {
 	ch      chan *proposalItem
 	maxSize int
 	maxWait time.Duration
-	stopCh  chan struct{}
 	wg      sync.WaitGroup
+	mu      sync.Mutex
+	closed  bool
 }
 
 func newProposalBatcher(p *Peer, maxSize int, maxWait time.Duration) *proposalBatcher {
@@ -43,7 +44,6 @@ func newProposalBatcher(p *Peer, maxSize int, maxWait time.Duration) *proposalBa
 		ch:      make(chan *proposalItem, maxSize*2),
 		maxSize: maxSize,
 		maxWait: maxWait,
-		stopCh:  make(chan struct{}),
 	}
 	b.wg.Add(1)
 	go b.run()
@@ -54,6 +54,12 @@ func newProposalBatcher(p *Peer, maxSize int, maxWait time.Duration) *proposalBa
 // whose Done channel receives the error once the proposal is flushed.
 func (b *proposalBatcher) propose(data []byte) *proposalResult {
 	r := &proposalResult{Done: make(chan error, 1)}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		r.complete(errPeerStopped)
+		return r
+	}
 	b.ch <- &proposalItem{data: data, result: r}
 	return r
 }
@@ -68,10 +74,19 @@ func (r *proposalResult) Wait() error {
 	return <-r.Done
 }
 
+func (r *proposalResult) complete(err error) {
+	r.Done <- err
+}
+
 // close signals the batcher goroutine to stop and waits for it to drain
 // all pending proposals.
 func (b *proposalBatcher) close() {
-	close(b.stopCh)
+	b.mu.Lock()
+	if !b.closed {
+		b.closed = true
+		close(b.ch)
+	}
+	b.mu.Unlock()
 	b.wg.Wait()
 }
 
@@ -79,41 +94,65 @@ func (b *proposalBatcher) run() {
 	defer b.wg.Done()
 	batch := make([]*proposalItem, 0, b.maxSize)
 	timer := time.NewTimer(b.maxWait)
-	defer timer.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
+	timerActive := false
+	defer func() {
+		if timerActive {
+			timer.Stop()
+		}
+	}()
+	resetTimer := func() {
+		if timerActive {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+		timer.Reset(b.maxWait)
+		timerActive = true
+	}
+	stopTimer := func() {
+		if !timerActive {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerActive = false
+	}
 
 	for {
 		select {
-		case item := <-b.ch:
+		case item, ok := <-b.ch:
+			if !ok {
+				stopTimer()
+				if len(batch) > 0 {
+					b.flush(batch)
+				}
+				return
+			}
 			batch = append(batch, item)
 			if len(batch) >= b.maxSize {
+				stopTimer()
 				b.flush(batch)
 				batch = batch[:0]
-				timer.Reset(b.maxWait)
 			} else if len(batch) == 1 {
 				// First item: start the wait timer.
-				timer.Reset(b.maxWait)
+				resetTimer()
 			}
 
 		case <-timer.C:
+			timerActive = false
 			if len(batch) > 0 {
 				b.flush(batch)
 				batch = batch[:0]
-			}
-			timer.Reset(b.maxWait)
-
-		case <-b.stopCh:
-			// Flush any partial batch that was already collected.
-			if len(batch) > 0 {
-				b.flush(batch)
-			}
-			// Drain any remaining items in the channel.
-			for {
-				select {
-				case item := <-b.ch:
-					b.flush([]*proposalItem{item})
-				default:
-					return
-				}
 			}
 		}
 	}
@@ -121,30 +160,33 @@ func (b *proposalBatcher) run() {
 
 func (b *proposalBatcher) flush(batch []*proposalItem) {
 	p := b.peer
+	succeeded := make([]*proposalItem, 0, len(batch))
 	p.mu.Lock()
 	// Propose all items under a single lock hold. node.Propose only
 	// appends to the pending list, so this is safe.
 	for _, item := range batch {
 		if err := p.node.Propose(item.data); err != nil {
-			item.result.Done <- err
+			item.result.complete(err)
+			continue
 		}
+		succeeded = append(succeeded, item)
 	}
 	p.mu.Unlock()
+	if len(succeeded) == 0 {
+		return
+	}
 
 	// Process Ready once for the entire batch. If this fails, propagate
 	// the error to any item that hasn't already received a per-propose error.
 	if err := p.processReady(); err != nil {
-		for _, item := range batch {
-			select {
-			case item.result.Done <- err:
-			default:
-			}
+		for _, item := range succeeded {
+			item.result.complete(err)
 		}
 		return
 	}
 
-	for _, item := range batch {
-		item.result.Done <- nil
+	for _, item := range succeeded {
+		item.result.complete(nil)
 	}
 }
 

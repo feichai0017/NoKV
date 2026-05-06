@@ -29,13 +29,13 @@ func (s *slowStorage) AppendWithHardState(entries []myraft.Entry, st myraft.Hard
 	if err := s.PeerStorage.Append(entries); err != nil {
 		return err
 	}
-	return s.PeerStorage.SetHardState(st)
+	return s.SetHardState(st)
 }
 
 func newBenchPeer(b *testing.B, batchSize int, batchWait time.Duration, fsyncDelay time.Duration) *Peer {
 	b.Helper()
 	memStore := myraft.NewMemoryStorage()
-	var storage raftlog.PeerStorage = raftlog.PeerStorage(memStore)
+	storage := raftlog.PeerStorage(memStore)
 	if fsyncDelay > 0 {
 		storage = &slowStorage{PeerStorage: storage, appendDelay: fsyncDelay}
 	}
@@ -87,14 +87,14 @@ func benchmarkPeerPropose(b *testing.B, batchSize int, batchWait time.Duration, 
 	wg.Add(concurrency)
 
 	b.ResetTimer()
-	for g := 0; g < concurrency; g++ {
+	for g := range concurrency {
 		n := perGoroutine
 		if g < extra {
 			n++
 		}
 		go func(n int) {
 			defer wg.Done()
-			for i := 0; i < n; i++ {
+			for range n {
 				if err := p.Propose(payload); err != nil {
 					b.Error(err)
 					return
@@ -110,7 +110,7 @@ func benchmarkPeerPropose(b *testing.B, batchSize int, batchWait time.Duration, 
 		b.Errorf("proposed %d, expected %d", count.Load(), total)
 	}
 	qps := float64(count.Load()) / b.Elapsed().Seconds()
-	fmt.Fprintf(b.Output(), "  %.0f proposals/sec\n", qps)
+	_, _ = fmt.Fprintf(b.Output(), "  %.0f proposals/sec\n", qps)
 }
 
 func BenchmarkPeerPropose(b *testing.B) {
