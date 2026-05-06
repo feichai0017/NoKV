@@ -40,8 +40,12 @@ func (r *fakeTxnRunner) Scan(context.Context, []byte, uint32, uint64) ([]fsmetae
 	return nil, nil
 }
 
-func (r *fakeTxnRunner) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) error {
-	return nil
+func (r *fakeTxnRunner) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (r *fakeTxnRunner) MutateAtCommit(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) (uint64, error) {
+	return 0, nil
 }
 
 type fakeQuotaLookup struct {

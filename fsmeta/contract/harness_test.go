@@ -146,14 +146,22 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 	return out, nil
 }
 
-func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) error {
+func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, startVersion, commitVersion, true)
+}
+
+func (r *versionedRunner) MutateAtCommit(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, startVersion, commitVersion, false)
+}
+
+func (r *versionedRunner) applyMutations(primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The contract fake has no lock table, so it models Percolator's
 	// min-commit push by placing late commits after any timestamp that was
 	// allocated while the transaction was in flight.
 	effectiveCommitVersion := commitVersion
-	if r.latestObservedTS >= effectiveCommitVersion {
+	if allowCommitPush && r.latestObservedTS >= effectiveCommitVersion {
 		effectiveCommitVersion = r.latestObservedTS + 1
 		if r.nextTS <= effectiveCommitVersion {
 			r.nextTS = effectiveCommitVersion + 1
@@ -161,7 +169,7 @@ func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []
 	}
 	for _, mut := range mutations {
 		if latest, ok := r.latestVersionLocked(mut.GetKey()); ok && latest > startVersion {
-			return versionedTxnError{errors: []*kvrpcpb.KeyError{{
+			return 0, versionedTxnError{errors: []*kvrpcpb.KeyError{{
 				CommitTsExpired: &kvrpcpb.CommitTsExpired{
 					Key:         append([]byte(nil), mut.GetKey()...),
 					CommitTs:    commitVersion,
@@ -171,15 +179,15 @@ func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []
 		}
 		if mut.GetAssertionNotExist() {
 			if _, ok := r.visibleLocked(mut.GetKey(), startVersion); ok {
-				return fsmeta.ErrExists
+				return 0, fsmeta.ErrExists
 			}
 			if _, ok := r.visibleLatestLocked(mut.GetKey()); ok {
-				return fsmeta.ErrExists
+				return 0, fsmeta.ErrExists
 			}
 		}
 		if bytes.Equal(mut.GetKey(), primary) && mut.GetOp() == kvrpcpb.Mutation_Delete {
 			if _, ok := r.visibleLatestLocked(mut.GetKey()); !ok {
-				return fsmeta.ErrNotFound
+				return 0, fsmeta.ErrNotFound
 			}
 		}
 	}
@@ -197,10 +205,10 @@ func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []
 				deleted: true,
 			})
 		default:
-			return fsmeta.ErrInvalidRequest
+			return 0, fsmeta.ErrInvalidRequest
 		}
 	}
-	return nil
+	return effectiveCommitVersion, nil
 }
 
 func TestVersionedRunnerDelaysPreallocatedCommitPastConcurrentRead(t *testing.T) {
@@ -242,19 +250,21 @@ func TestVersionedRunnerDelaysPreallocatedCommitPastConcurrentRead(t *testing.T)
 
 	seedStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	require.NoError(t, runner.Mutate(ctx, epsilonKey, []*kvrpcpb.Mutation{
+	_, err = runner.Mutate(ctx, epsilonKey, []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: epsilonKey, Value: epsilonValue},
 		{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValueOneLink},
-	}, seedStart, seedStart+1, 0))
+	}, seedStart, seedStart+1, 0)
+	require.NoError(t, err)
 
 	linkStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
 	readVersion, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	require.NoError(t, runner.Mutate(ctx, etaKey, []*kvrpcpb.Mutation{
+	_, err = runner.Mutate(ctx, etaKey, []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: etaKey, Value: etaValue, AssertionNotExist: true},
 		{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValueTwoLinks},
-	}, linkStart, linkStart+1, 0))
+	}, linkStart, linkStart+1, 0)
+	require.NoError(t, err)
 
 	_, ok, err := runner.Get(ctx, etaKey, readVersion)
 	require.NoError(t, err)
@@ -286,13 +296,14 @@ func TestVersionedRunnerRejectsStaleConcurrentMutation(t *testing.T) {
 	require.NoError(t, err)
 	staleStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	require.NoError(t, runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
+	_, err = runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
 		Op:    kvrpcpb.Mutation_Put,
 		Key:   key,
 		Value: []byte("first"),
-	}}, firstStart, firstStart+1, 0))
+	}}, firstStart, firstStart+1, 0)
+	require.NoError(t, err)
 
-	err = runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
+	_, err = runner.Mutate(ctx, key, []*kvrpcpb.Mutation{{
 		Op:    kvrpcpb.Mutation_Put,
 		Key:   key,
 		Value: []byte("stale"),

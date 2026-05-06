@@ -61,6 +61,13 @@ func keyErrorTxnAlreadyRolledBack() *kvrpcpb.KeyError {
 	return keyErrorRetryable(errTxnAlreadyRolledBack)
 }
 
+func keyErrorTxnLockLost() *kvrpcpb.KeyError {
+	// A missing lock with no committed write means this start_ts has no safe
+	// commit path left. Retrying the same Commit cannot make progress, but a
+	// semantic caller such as fsmeta can re-read and re-plan with fresh TSO.
+	return keyErrorRetryable(errLockNotFound)
+}
+
 func keyErrorAlreadyExists(key []byte) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: kv.SafeCopy(nil, key)}}
 }

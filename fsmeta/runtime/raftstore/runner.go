@@ -21,6 +21,10 @@ type atomicMutateFastPath interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
 }
 
+type commitTimestampMutator interface {
+	MutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) (uint64, error)
+}
+
 type statsProvider interface {
 	Stats() map[string]any
 }
@@ -126,9 +130,33 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	return out, nil
 }
 
-// Mutate delegates to raftstore's two-phase commit path.
-func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
-	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
+// Mutate delegates to raftstore's two-phase commit path and returns the commit
+// timestamp that actually published the mutation. Real raftstore clients may
+// allocate commit_ts after prewrite; callers that publish root frontiers must
+// use the returned timestamp instead of the speculative one they passed in.
+func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error) {
+	if kv, ok := r.kv.(commitTimestampMutator); ok {
+		// The executor still passes a preallocated commitVersion for in-memory
+		// test runners. Real raftstore clients can allocate commit_ts after
+		// prewrite, which avoids repeated CommitTsExpired under mixed reads.
+		return kv.MutateWithCommitTimestamp(ctx, primary, mutations, startVersion, lockTTL, func(ctx context.Context) (uint64, error) {
+			return r.ReserveTimestamp(ctx, 1)
+		})
+	}
+	if err := r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL); err != nil {
+		return 0, err
+	}
+	return commitVersion, nil
+}
+
+// MutateAtCommit uses the caller-provided commitVersion exactly. fsmeta uses
+// this for root-authority protocols that publish the commit frontier outside the
+// KV data path before the transaction can safely allocate a later timestamp.
+func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error) {
+	if err := r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL); err != nil {
+		return commitVersion, err
+	}
+	return commitVersion, nil
 }
 
 // Stats returns runtime-adapter counters. Nested KV stats come from the real

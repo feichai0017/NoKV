@@ -32,6 +32,20 @@ func (f *fakeRunnerKV) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uint
 	return nil
 }
 
+type fakeCommitTimestampKV struct {
+	fakeRunnerKV
+	commitVersion uint64
+}
+
+func (f *fakeCommitTimestampKV) MutateWithCommitTimestamp(ctx context.Context, _ []byte, _ []*kvrpcpb.Mutation, _ uint64, _ uint64, allocateCommitVersion func(context.Context) (uint64, error)) (uint64, error) {
+	ts, err := allocateCommitVersion(ctx)
+	if err != nil {
+		return 0, err
+	}
+	f.commitVersion = ts
+	return ts, nil
+}
+
 type fakeRunnerTSO struct {
 	resp *coordpb.TsoResponse
 	err  error
@@ -127,6 +141,20 @@ func TestRunnerTryAtomicMutateRecordsUnsupportedKV(t *testing.T) {
 	require.False(t, handled)
 	stats := runner.Stats()
 	require.Equal(t, uint64(1), stats["atomic_runner_unsupported_total"])
+}
+
+func TestRunnerMutateAllocatesCommitTimestampAfterPrewrite(t *testing.T) {
+	kv := &fakeCommitTimestampKV{}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 20, Count: 1}})
+	require.NoError(t, err)
+
+	actual, err := runner.Mutate(context.Background(), []byte("p"), []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Mutation_Put,
+		Key: []byte("p"),
+	}}, 10, 11, 3000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), actual)
+	require.Equal(t, uint64(20), kv.commitVersion)
 }
 
 var _ KVClient = (*fakeRunnerKV)(nil)

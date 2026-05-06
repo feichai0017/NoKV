@@ -655,7 +655,7 @@ func TestCommitMissingLock(t *testing.T) {
 	}
 	err := Commit(db, latches, commit)
 	require.NotNil(t, err)
-	require.Contains(t, err.GetAbort(), "lock not found")
+	require.Contains(t, err.GetRetryable(), "lock not found")
 }
 
 // TestCommitNilRequestReturnsNil verifies Commit ignores nil requests.

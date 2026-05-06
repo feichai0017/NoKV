@@ -1133,6 +1133,99 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterPrimaryCommitTsExpired(t *te
 	require.Equal(t, 1, rollbackHits)
 }
 
+func TestClientMutateWithCommitTimestampAllocatesAfterPrewrite(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var prewrites int
+	var commits int
+	var allocs int
+	svc.prewriteFn = func(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+		prewrites++
+		return svc.mockService.Prewrite(ctx, req)
+	}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		require.Equal(t, 1, prewrites)
+		require.Equal(t, 1, allocs)
+		require.Equal(t, uint64(77), req.GetRequest().GetCommitVersion())
+		commits++
+		return svc.mockService.Commit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	actualCommitVersion, err := cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 50, 3000, func(context.Context) (uint64, error) {
+		require.Equal(t, 1, prewrites)
+		require.Equal(t, 0, commits)
+		allocs++
+		return 77, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(77), actualCommitVersion)
+	require.Equal(t, 1, prewrites)
+	require.Equal(t, 1, allocs)
+	require.Equal(t, 1, commits)
+}
+
+func TestClientMutateWithCommitTimestampRollsBackAfterAllocationFailure(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	allocErr := errors.New("tso unavailable")
+	_, err = cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 50, 3000, func(context.Context) (uint64, error) {
+		return 0, allocErr
+	})
+	require.ErrorIs(t, err, allocErr)
+
+	cluster.mu.Lock()
+	_, pending := cluster.regions[1].pending[50]
+	rollbackHits := cluster.regions[1].rollbackHits
+	cluster.mu.Unlock()
+	require.False(t, pending, "prewrites must be rolled back when post-prewrite TSO allocation fails")
+	require.Equal(t, 1, rollbackHits)
+}
+
 func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{

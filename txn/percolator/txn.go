@@ -659,7 +659,7 @@ func planCommitKey(reader *Reader, key []byte, startVersion, commitVersion uint6
 			}
 			return nil, nil
 		}
-		return nil, keyErrorAbort(errLockNotFound)
+		return nil, keyErrorTxnLockLost()
 	}
 	if lock.Ts != startVersion {
 		return nil, keyErrorLocked(key, lock)
