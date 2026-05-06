@@ -4,11 +4,11 @@ import (
 	"context"
 	"net"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
@@ -136,17 +136,17 @@ func TestSeparatedModeRoutingAuthorityStaysWithGrantHolder(t *testing.T) {
 				return false
 			}
 			_, getErr := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
-			return getErr != nil && strings.Contains(getErr.Error(), "coordinator grant not held")
+			return getErr != nil && coordclient.IsGrantNotHeld(getErr)
 		}, 8*time.Second, 50*time.Millisecond)
 	}
 
 	_, err = readOnlyA.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator grant not held")
+	require.True(t, coordclient.IsGrantNotHeld(err), "error = %v", err)
 
 	_, err = readOnlyB.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator grant not held")
+	require.True(t, coordclient.IsGrantNotHeld(err), "error = %v", err)
 }
 
 func separatedModeDescriptor(id uint64, start, end []byte) topology.Descriptor {
@@ -180,7 +180,7 @@ func TestSeparatedModeCoordinatorContestedFailoverPreservesAllocatorFence(t *tes
 
 	_, err = second.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator grant not held")
+	require.True(t, coordclient.IsGrantNotHeld(err), "error = %v", err)
 
 	var next *coordpb.AllocIDResponse
 	require.Eventually(t, func() bool {

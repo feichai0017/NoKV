@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -36,6 +37,12 @@ const (
 	KindProtocolViolation
 	KindCorruption
 	KindAborted
+)
+
+const (
+	RPCErrorInfoDomain   = "nokv"
+	RPCErrorInfoReason   = "nokv_error"
+	RPCErrorKindMetadata = "nokv_kind"
 )
 
 func (k Kind) String() string {
@@ -240,22 +247,12 @@ func KindOfGRPCStatus(err error) Kind {
 	if code == codes.OK || code == codes.Unknown {
 		return KindUnknown
 	}
+	if kind, _, ok := RPCErrorInfo(err); ok && kind != KindUnknown {
+		return kind
+	}
 	message := status.Convert(err).Message()
 	if kind := kindFromMessage(message); kind != KindUnknown {
 		return kind
-	}
-	if strings.Contains(message, "not leader") ||
-		strings.Contains(message, "grant not held") ||
-		strings.Contains(message, "lease not held") {
-		return KindNotLeader
-	}
-	if strings.Contains(message, "root unavailable") {
-		return KindUnavailable
-	}
-	if strings.Contains(message, "root lag") ||
-		strings.Contains(message, "required rooted token") ||
-		strings.Contains(message, "required descriptor") {
-		return KindStaleEpoch
 	}
 	switch code {
 	case codes.InvalidArgument, codes.OutOfRange:
@@ -277,6 +274,49 @@ func KindOfGRPCStatus(err error) Kind {
 	default:
 		return KindUnknown
 	}
+}
+
+// RPCStatusError returns a gRPC status error with stable machine-readable NoKV
+// error metadata. The status message remains diagnostic; clients must branch on
+// the ErrorInfo metadata or KindOf rather than matching message text.
+func RPCStatusError(kind Kind, code codes.Code, message string, metadata map[string]string) error {
+	md := cloneStringMap(metadata)
+	md[RPCErrorKindMetadata] = kind.String()
+	st := status.New(code, message)
+	withDetails, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason:   RPCErrorInfoReason,
+		Domain:   RPCErrorInfoDomain,
+		Metadata: md,
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+// RPCErrorInfo extracts NoKV's stable gRPC ErrorInfo metadata when present.
+func RPCErrorInfo(err error) (Kind, map[string]string, bool) {
+	st, ok := status.FromError(err)
+	if !ok {
+		return KindUnknown, nil, false
+	}
+	for _, detail := range st.Details() {
+		info, ok := detail.(*errdetails.ErrorInfo)
+		if !ok || info.GetDomain() != RPCErrorInfoDomain || info.GetReason() != RPCErrorInfoReason {
+			continue
+		}
+		md := cloneStringMap(info.GetMetadata())
+		return ParseKind(md[RPCErrorKindMetadata]), md, true
+	}
+	return KindUnknown, nil, false
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in)+1)
+	for k := range in {
+		out[k] = in[k]
+	}
+	return out
 }
 
 func kindFromMessage(message string) Kind {

@@ -103,12 +103,12 @@ make fsmeta-bench
 The helper starts Docker Compose with a local image build, waits for fsmeta and
 coordinator ports, then writes a CSV under `benchmark/data/fsmeta/results/`.
 Compose enables both `--negative-cache-dir` and `--dirpage-cache-dir` on the
-fsmeta gateway. Default scale is a medium service run: 8 clients, 8 checkpoint
-directories × 128 files, 1024 hotspot/watch/negative keys, and a mixed workload
-with 4 groups × 16 entries × 6 artifacts. Override scale with environment
+fsmeta gateway. Default scale is the PR-oriented median service run: 12 clients,
+16 checkpoint directories x 256 files, 4096 hotspot/watch/negative keys, and a
+mixed workload with 8 groups x 64 entries x 8 artifacts. Override scale with environment
 variables such as `NOKV_FSMETA_CLIENTS`, `NOKV_FSMETA_GROUPS`,
 `NOKV_FSMETA_ENTRIES_PER_GROUP`, `NOKV_FSMETA_ARTIFACTS_PER_ENTRY`, and
-`NOKV_FSMETA_WORKLOADS`. The script also waits 15 seconds after ports open so a
+`NOKV_FSMETA_WORKLOADS`. The script also waits 20 seconds after ports open so a
 fresh Compose cluster can finish Raft leader election and coordinator grant
 publication; set `NOKV_FSMETA_STABILIZE_SECONDS=0` for an already-warm cluster.
 The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
@@ -165,8 +165,8 @@ It writes two CSV files named `fsmeta_derived_cache_off_*` and
 
 The summary CSV is written under `data/fsmeta/results/` unless
 `-fsmeta_output` is set. Rows include a `driver` column with the fixed value
-`native-fsmeta` so old plotting tools can keep the same schema. CI uploads these
-runtime outputs as artifacts instead of committing benchmark result packages.
+`native-fsmeta` to identify the service driver. CI uploads these runtime outputs
+as artifacts instead of committing benchmark result packages.
 
 ## Research Plotting
 
@@ -320,5 +320,5 @@ Run:
 
 ```bash
 cd benchmark
-go test ./namespace -bench . -benchmem
+go test ./plot ./fsmeta ./fsmeta/workload
 ```

@@ -7,8 +7,6 @@ import (
 
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const defaultApplyWatchBuffer = 256
@@ -58,15 +56,15 @@ func (o *applyWatchObserver) OnApply(evt storepkg.ApplyEvent) {
 
 func (s *Service) WatchApply(req *kvrpcpb.ApplyWatchRequest, stream kvrpcpb.StoreKV_WatchApplyServer) error {
 	if s == nil || s.store == nil {
-		return status.Error(codes.FailedPrecondition, "raftstore kv service is not initialized")
+		return rpcServiceNotInitialized()
 	}
 	if req == nil {
-		return status.Error(codes.InvalidArgument, "apply watch request is required")
+		return rpcInvalidArgument("apply watch request is required")
 	}
 	observer := newApplyWatchObserver(req)
 	reg, err := s.store.RegisterApplyObserver(observer, int(req.GetBuffer()))
 	if err != nil {
-		return status.Errorf(codes.FailedPrecondition, "%v", err)
+		return rpcProtocolPrecondition(err.Error())
 	}
 	defer reg.Close()
 

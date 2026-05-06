@@ -81,16 +81,23 @@ func TestContextAndGRPCStatusKinds(t *testing.T) {
 	require.Equal(t, KindAborted, KindOf(status.Error(codes.Canceled, "client canceled")))
 	require.Equal(t, KindResourceExhausted, KindOf(status.Error(codes.ResourceExhausted, "quota")))
 	require.Equal(t, KindUnavailable, KindOf(status.Error(codes.Unavailable, "down")))
-	require.Equal(t, KindUnavailable, KindOf(status.Error(codes.FailedPrecondition, "coordinator root unavailable")))
-	require.Equal(t, KindStaleEpoch, KindOf(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
-	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator not leader (leader_id=2)")))
-	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator grant not held")))
-	require.Equal(t, KindNotLeader, KindOf(status.Error(codes.FailedPrecondition, "coordinator lease not held")))
 	require.Equal(t, KindProtocolViolation, KindOf(status.Error(codes.FailedPrecondition, "invalid protocol state")))
 	require.Equal(t, KindAborted, KindOf(status.Error(codes.FailedPrecondition, New(KindAborted, "fsmeta: mount is retired").Error())))
 	require.Equal(t, KindResourceExhausted, KindOf(status.Error(codes.ResourceExhausted, New(KindResourceExhausted, "fsmeta: quota exceeded").Error())))
 
-	require.True(t, Retryable(status.Error(codes.FailedPrecondition, "coordinator not leader (leader_id=2)")))
-	require.True(t, Retryable(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
+	notLeader := RPCStatusError(KindNotLeader, codes.FailedPrecondition, "diagnostic not leader text", map[string]string{"leader_id": "2"})
+	require.Equal(t, KindNotLeader, KindOf(notLeader))
+	require.True(t, Retryable(notLeader))
+
+	stale := RPCStatusError(KindStaleEpoch, codes.FailedPrecondition, "diagnostic stale root text", nil)
+	require.Equal(t, KindStaleEpoch, KindOf(stale))
+	require.True(t, Retryable(stale))
+
+	unavailable := RPCStatusError(KindUnavailable, codes.FailedPrecondition, "diagnostic root unavailable text", nil)
+	require.Equal(t, KindUnavailable, KindOf(unavailable))
+	require.True(t, Retryable(unavailable))
+
+	require.Equal(t, KindProtocolViolation, KindOf(status.Error(codes.FailedPrecondition, "coordinator not leader")))
+	require.False(t, Retryable(status.Error(codes.FailedPrecondition, "root lag exceeds bound")))
 	require.False(t, Retryable(status.Error(codes.ResourceExhausted, "quota")))
 }

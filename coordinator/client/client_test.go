@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -34,6 +35,20 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func notLeaderErrorForTest(leaderID uint64) error {
+	metadata := map[string]string{coordinatorReasonMetadata: reasonNotLeader}
+	if leaderID != 0 {
+		metadata[leaderIDMetadata] = fmt.Sprintf("%d", leaderID)
+	}
+	return nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, "coordinator test not leader", metadata)
+}
+
+func grantNotHeldErrorForTest() error {
+	return nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, "coordinator test grant not held", map[string]string{
+		coordinatorReasonMetadata: reasonGrantNotHeld,
+	})
+}
 
 func TestNewGRPCClientEmptyAddress(t *testing.T) {
 	cli, err := NewGRPCClient(context.Background(), "")
@@ -393,7 +408,7 @@ func clientDutyGrantsFromUsages(usages []rootproto.AuthorityUsage) []rootproto.D
 }
 
 func TestGRPCClientDoesNotRetryReadOnNotLeaderWriteError(t *testing.T) {
-	err := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")
+	err := notLeaderErrorForTest(2)
 	require.True(t, retryableWrite(err))
 	require.False(t, retryableRead(err))
 	require.True(t, IsNotLeader(err))
@@ -415,7 +430,7 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 }
 
 func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {
-	err := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": meta/root/state: coordinator grant held")
+	err := grantNotHeldErrorForTest()
 	require.True(t, IsGrantNotHeld(err))
 	require.True(t, retryableWrite(err))
 	require.False(t, retryableRead(err))
@@ -423,7 +438,7 @@ func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {
 }
 
 func TestGRPCClientRetriesTSOAcrossGrantNotHeldEndpoint(t *testing.T) {
-	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	grantErr := grantNotHeldErrorForTest()
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
 			tsoErrors: []error{grantErr},
@@ -449,7 +464,7 @@ func TestGRPCClientRetriesTSOAcrossGrantNotHeldEndpoint(t *testing.T) {
 }
 
 func TestGRPCClientRetriesAllocIDAcrossGrantNotHeldEndpoint(t *testing.T) {
-	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	grantErr := grantNotHeldErrorForTest()
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
 			allocErrors: []error{grantErr},
@@ -475,7 +490,7 @@ func TestGRPCClientRetriesAllocIDAcrossGrantNotHeldEndpoint(t *testing.T) {
 }
 
 func TestGRPCClientRetriesGetRegionByKeyAcrossGrantNotHeldEndpoint(t *testing.T) {
-	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	grantErr := grantNotHeldErrorForTest()
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
 			getErrors: []error{grantErr},
@@ -515,7 +530,7 @@ func TestGRPCClientRetriesGetRegionByKeyAcrossGrantNotHeldEndpoint(t *testing.T)
 }
 
 func TestGRPCClientRetriesTSOAfterFullGrantMissRound(t *testing.T) {
-	grantErr := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+rootstate.ErrPrimacy.Error())
+	grantErr := grantNotHeldErrorForTest()
 	servers := map[string]*scriptedCoordinatorServer{
 		"standby": {
 			tsoErrors: []error{grantErr, grantErr},

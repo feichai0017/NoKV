@@ -10,6 +10,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	metaRootReasonMetadata = "meta_root_reason"
+	leaderIDMetadata       = "leader_id"
+	reasonNotLeader        = "not_leader"
+	reasonInvalidArgument  = "invalid_argument"
+	reasonPrecondition     = "failed_precondition"
+	reasonInternal         = "internal"
+	reasonContextCanceled  = "context_canceled"
+	reasonContextDeadline  = "context_deadline"
+	reasonUnimplemented    = "unimplemented"
+)
+
 func rpcError(err error) error {
 	if err == nil {
 		return nil
@@ -19,11 +31,18 @@ func rpcError(err error) error {
 	}
 	switch {
 	case stderrors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, err.Error())
+		return nokverrors.RPCStatusError(nokverrors.KindAborted, codes.Canceled, err.Error(), map[string]string{
+			metaRootReasonMetadata: reasonContextCanceled,
+		})
 	case stderrors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, err.Error())
+		return nokverrors.RPCStatusError(nokverrors.KindUnavailable, codes.DeadlineExceeded, err.Error(), map[string]string{
+			metaRootReasonMetadata: reasonContextDeadline,
+		})
 	default:
-		return status.Error(rpcCodeForKind(nokverrors.KindOf(err)), err.Error())
+		kind := nokverrors.KindOf(err)
+		return nokverrors.RPCStatusError(kind, rpcCodeForKind(kind), err.Error(), map[string]string{
+			metaRootReasonMetadata: reasonInternal,
+		})
 	}
 }
 
@@ -55,24 +74,36 @@ func rpcCodeForKind(kind nokverrors.Kind) codes.Code {
 }
 
 func statusInvalidArgument(message string) error {
-	return status.Error(codes.InvalidArgument, nokverrors.New(nokverrors.KindInvalidArgument, message).Error())
+	return nokverrors.RPCStatusError(nokverrors.KindInvalidArgument, codes.InvalidArgument, message, map[string]string{
+		metaRootReasonMetadata: reasonInvalidArgument,
+	})
 }
 
 func statusFailedPrecondition(err error) error {
 	if err == nil {
 		return nil
 	}
-	return status.Error(codes.FailedPrecondition, err.Error())
+	kind := nokverrors.KindOf(err)
+	if kind == nokverrors.KindUnknown {
+		kind = nokverrors.KindProtocolViolation
+	}
+	return nokverrors.RPCStatusError(kind, codes.FailedPrecondition, err.Error(), map[string]string{
+		metaRootReasonMetadata: reasonPrecondition,
+	})
 }
 
 func statusUnimplemented(message string) error {
-	return status.Error(codes.Unimplemented, message)
+	return nokverrors.RPCStatusError(nokverrors.KindProtocolViolation, codes.Unimplemented, message, map[string]string{
+		metaRootReasonMetadata: reasonUnimplemented,
+	})
 }
 
 func statusNotLeader(leaderID uint64) error {
 	message := "metadata root not leader"
+	metadata := map[string]string{metaRootReasonMetadata: reasonNotLeader}
 	if leaderID != 0 {
 		message = fmt.Sprintf("%s (leader_id=%d)", message, leaderID)
+		metadata[leaderIDMetadata] = fmt.Sprintf("%d", leaderID)
 	}
-	return status.Error(codes.FailedPrecondition, nokverrors.New(nokverrors.KindNotLeader, message).Error())
+	return nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, message, metadata)
 }

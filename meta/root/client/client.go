@@ -8,6 +8,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +30,12 @@ import (
 const defaultCallTimeout = 3 * time.Second
 
 const errMetadataRootNotLeader = "metadata root not leader"
-const errClientConnectionClosing = "grpc: the client connection is closing"
+
+const (
+	metaRootReasonMetadata = "meta_root_reason"
+	leaderIDMetadata       = "leader_id"
+	reasonNotLeader        = "not_leader"
+)
 
 // Client is a remote metadata-root backend client. It implements the same
 // authority surface consumed by coordinator/rootview.OpenRootRemoteStore.
@@ -447,24 +453,24 @@ func retryableRemoteError(err error, write bool) bool {
 }
 
 func transientConnectionClosing(err error) bool {
-	return err != nil && strings.Contains(err.Error(), errClientConnectionClosing)
+	// gRPC does not expose a non-deprecated replacement that distinguishes a
+	// local ClientConn shutdown from ordinary application-level Canceled. The
+	// retry path needs that distinction, so keep the transport sentinel here and
+	// keep protocol errors on nokverrors.Kind/RPC metadata elsewhere.
+	//nolint:staticcheck
+	return errors.Is(err, grpc.ErrClientConnClosing)
 }
 
 func leaderHint(err error) (uint64, bool) {
-	msg := err.Error()
-	idx := strings.Index(msg, "leader_id=")
-	if idx < 0 {
+	kind, metadata, ok := nokverrors.RPCErrorInfo(err)
+	if !ok || kind != nokverrors.KindNotLeader || metadata[metaRootReasonMetadata] != reasonNotLeader {
 		return 0, false
 	}
-	start := idx + len("leader_id=")
-	end := start
-	for end < len(msg) && msg[end] >= '0' && msg[end] <= '9' {
-		end++
-	}
-	if end == start {
+	raw := metadata[leaderIDMetadata]
+	if raw == "" {
 		return 0, false
 	}
-	id, parseErr := strconv.ParseUint(msg[start:end], 10, 64)
+	id, parseErr := strconv.ParseUint(raw, 10, 64)
 	if parseErr != nil || id == 0 {
 		return 0, false
 	}

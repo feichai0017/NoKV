@@ -232,7 +232,7 @@ Nightly policy:
 
 1. PR CI runs bounded smoke through `make test-correctness-smoke`, including
    `make test-history-smoke` and `make test-model-smoke`.
-2. PR benchmark CI also runs the medium `make fsmeta-bench` profile across all
+2. PR benchmark CI also runs the median `make fsmeta-bench` profile across all
    fsmeta workloads: mixed, checkpoint-storm, hotspot-fanin, watch-subtree, and
    negative-lookup. It uploads CSVs and Docker diagnostics as workflow artifacts.
 3. Nightly CI runs `make test-correctness-nightly`, which raises model seeds

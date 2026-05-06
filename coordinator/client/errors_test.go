@@ -6,7 +6,6 @@ import (
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestCoordinatorClientErrorsExposeStableKinds(t *testing.T) {
@@ -18,15 +17,27 @@ func TestCoordinatorClientErrorsExposeStableKinds(t *testing.T) {
 	require.True(t, nokverrors.Retryable(errStaleWitnessEra))
 	require.False(t, nokverrors.Retryable(errInvalidWitness))
 
-	notLeader := status.Error(codes.FailedPrecondition, errNotLeaderPrefix+" (leader_id=2)")
+	notLeader := nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, "coordinator not leader", map[string]string{
+		coordinatorReasonMetadata: reasonNotLeader,
+		leaderIDMetadata:          "2",
+	})
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(notLeader))
 	require.True(t, nokverrors.Retryable(notLeader))
+	require.True(t, IsNotLeader(notLeader))
+	leaderID, ok := LeaderHint(notLeader)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), leaderID)
 
-	grantNotHeld := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix)
+	grantNotHeld := nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, "coordinator grant not held", map[string]string{
+		coordinatorReasonMetadata: reasonGrantNotHeld,
+	})
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(grantNotHeld))
 	require.True(t, nokverrors.Retryable(grantNotHeld))
+	require.True(t, IsGrantNotHeld(grantNotHeld))
 
-	grantExpired := status.Error(codes.FailedPrecondition, errGrantNotHeldPrefix+": "+nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid grant: rooted grant expired era=7").Error())
+	grantExpired := nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, nokverrors.New(nokverrors.KindInvalidArgument, "meta/root/state: invalid grant: rooted grant expired era=7").Error(), map[string]string{
+		coordinatorReasonMetadata: reasonGrantNotHeld,
+	})
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(grantExpired))
 	require.True(t, nokverrors.Retryable(grantExpired))
 }

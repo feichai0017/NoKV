@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mode="${NOKV_FSMETA_BENCH_MODE:-compose}"
-profile="${NOKV_FSMETA_PROFILE:-medium}"
+profile="${NOKV_FSMETA_PROFILE:-median}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 coord_addr="${NOKV_FSMETA_COORDINATOR_ADDR:-127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392}"
 fsmeta_addr="${NOKV_FSMETA_ADDR:-127.0.0.1:8090}"
@@ -18,34 +18,34 @@ plain_pid=""
 cached_pid=""
 
 case "$profile" in
-	medium)
-		default_clients=8
-		default_dirs=8
-		default_files_per_dir=128
-		default_files=1024
-		default_reads=128
-		default_groups=4
-		default_entries_per_group=16
-		default_artifacts_per_entry=6
-		default_session_ttl=2s
-		default_timeout=10m
-		default_stabilize_seconds=15
-		;;
-	long)
+	median)
 		default_clients=12
 		default_dirs=16
 		default_files_per_dir=256
 		default_files=4096
-		default_reads=256
+		default_reads=512
 		default_groups=8
-		default_entries_per_group=32
+		default_entries_per_group=64
 		default_artifacts_per_entry=8
 		default_session_ttl=2s
-		default_timeout=90m
-		default_stabilize_seconds=30
+		default_timeout=25m
+		default_stabilize_seconds=20
+		;;
+	long)
+		default_clients=16
+		default_dirs=32
+		default_files_per_dir=512
+		default_files=16384
+		default_reads=1024
+		default_groups=16
+		default_entries_per_group=128
+		default_artifacts_per_entry=10
+		default_session_ttl=2s
+		default_timeout=120m
+		default_stabilize_seconds=45
 		;;
 	*)
-		echo "unknown NOKV_FSMETA_PROFILE=$profile; use medium or long" >&2
+		echo "unknown NOKV_FSMETA_PROFILE=$profile; use median or long" >&2
 		exit 2
 		;;
 esac

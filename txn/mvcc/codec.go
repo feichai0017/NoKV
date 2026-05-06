@@ -12,8 +12,19 @@ const (
 	writeCodecVersion byte = 1
 )
 
-// Readers reject unsupported codec versions. The current lock v1 layout is
-// allowed to change destructively before a production data-format guarantee.
+// Lock encoding layout:
+//
+//	version byte = 0x01
+//	primary_len uvarint
+//	primary key bytes
+//	start_ts uvarint
+//	start_time_unix_ms uvarint
+//	ttl_ms uvarint
+//	mutation_kind byte
+//	min_commit_ts uvarint
+//
+// TTL is measured from start_time_unix_ms. start_ts remains the MVCC logical
+// timestamp and must not be used as a physical clock.
 
 // Lock captures the metadata recorded in the lock column family during
 // prewrite.
@@ -106,6 +117,21 @@ type Write struct {
 	ExpiresAt  uint64
 }
 
+// Write encoding layout:
+//
+//	version byte = 0x01
+//	mutation_kind byte
+//	start_ts uvarint
+//	has_short_value byte
+//	if has_short_value == 1:
+//	  short_value_len uvarint
+//	  short_value bytes
+//	if short value or expires_at is present:
+//	  expires_at_unix_ms uvarint
+//
+// Missing expires_at means zero. That keeps ordinary non-TTL writes compact
+// while preserving TTL metadata for short-value writes.
+//
 // EncodeWrite serialises a write entry.
 func EncodeWrite(w Write) []byte {
 	buf := make([]byte, 0, 1+1+binary.MaxVarintLen64*3+len(w.ShortValue))
@@ -119,8 +145,6 @@ func EncodeWrite(w Write) []byte {
 	} else {
 		buf = append(buf, 0)
 	}
-	// Optional extension field used by short-value paths to preserve TTL metadata.
-	// Older decoders safely ignore trailing bytes.
 	if len(w.ShortValue) > 0 || w.ExpiresAt > 0 {
 		buf = binary.AppendUvarint(buf, w.ExpiresAt)
 	}

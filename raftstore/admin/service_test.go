@@ -3,12 +3,15 @@ package admin
 import (
 	"bytes"
 	"context"
+
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+
 	"io"
 	"sync"
 	"testing"
@@ -26,7 +29,9 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type noopTransport struct{}
@@ -300,28 +305,37 @@ func TestServiceValidationAndHelperMappings(t *testing.T) {
 	var nilSvc *Service
 	_, err := nilSvc.AddPeer(context.Background(), &adminpb.AddPeerRequest{})
 	require.ErrorContains(t, err, "raft admin service not configured")
+	requireAdminRPCError(t, err, codes.FailedPrecondition, nokverrors.KindProtocolViolation, reasonServiceNotConfigured)
 	_, err = nilSvc.RemovePeer(context.Background(), &adminpb.RemovePeerRequest{})
 	require.ErrorContains(t, err, "raft admin service not configured")
+	requireAdminRPCError(t, err, codes.FailedPrecondition, nokverrors.KindProtocolViolation, reasonServiceNotConfigured)
 
 	svc := &Service{store: new(store.Store)}
 	_, err = svc.AddPeer(context.Background(), &adminpb.AddPeerRequest{})
 	require.ErrorContains(t, err, "region_id, store_id, and peer_id are required")
+	requireAdminRPCError(t, err, codes.InvalidArgument, nokverrors.KindInvalidArgument, reasonInvalidRequest)
 	_, err = svc.RemovePeer(context.Background(), &adminpb.RemovePeerRequest{})
 	require.ErrorContains(t, err, "region_id and peer_id are required")
+	requireAdminRPCError(t, err, codes.InvalidArgument, nokverrors.KindInvalidArgument, reasonInvalidRequest)
 	_, err = svc.TransferLeader(context.Background(), &adminpb.TransferLeaderRequest{})
 	require.ErrorContains(t, err, "region_id and peer_id are required")
+	requireAdminRPCError(t, err, codes.InvalidArgument, nokverrors.KindInvalidArgument, reasonInvalidRequest)
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = svc.TransferLeader(canceled, &adminpb.TransferLeaderRequest{RegionId: 1, PeerId: 2})
 	require.ErrorContains(t, err, context.Canceled.Error())
+	requireAdminRPCError(t, err, codes.Canceled, nokverrors.KindAborted, reasonCanceled)
 	_, err = svc.RegionRuntimeStatus(canceled, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
 	require.ErrorContains(t, err, context.Canceled.Error())
+	requireAdminRPCError(t, err, codes.Canceled, nokverrors.KindAborted, reasonCanceled)
 	_, err = svc.ExecutionStatus(canceled, &adminpb.ExecutionStatusRequest{})
 	require.ErrorContains(t, err, context.Canceled.Error())
+	requireAdminRPCError(t, err, codes.Canceled, nokverrors.KindAborted, reasonCanceled)
 
 	_, err = svc.RegionRuntimeStatus(context.Background(), &adminpb.RegionRuntimeStatusRequest{})
 	require.ErrorContains(t, err, "region_id is required")
+	requireAdminRPCError(t, err, codes.InvalidArgument, nokverrors.KindInvalidArgument, reasonInvalidRequest)
 
 	resp, err := svc.RegionRuntimeStatus(context.Background(), &adminpb.RegionRuntimeStatusRequest{RegionId: 99})
 	require.NoError(t, err)
@@ -388,6 +402,16 @@ func TestServiceValidationAndHelperMappings(t *testing.T) {
 	require.True(t, matchesSnapshotRegion(header, payload))
 	payload.Peers[0].PeerID = 202
 	require.False(t, matchesSnapshotRegion(header, payload))
+}
+
+func requireAdminRPCError(t *testing.T, err error, code codes.Code, kind nokverrors.Kind, reason string) {
+	t.Helper()
+	require.Equal(t, code, status.Code(err))
+	require.Equal(t, kind, nokverrors.KindOf(err))
+	gotKind, metadata, ok := nokverrors.RPCErrorInfo(err)
+	require.True(t, ok)
+	require.Equal(t, kind, gotKind)
+	require.Equal(t, reason, metadata[adminReasonMetadata])
 }
 
 func TestServiceExportsAndInstallsRegionSnapshot(t *testing.T) {

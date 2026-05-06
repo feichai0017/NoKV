@@ -43,7 +43,7 @@ func TestCacheRememberHasInvalidate(t *testing.T) {
 	require.False(t, c.Has(versionedKey("beta", 1)))
 
 	// Invalidating any version of "alpha" bumps the group's generation,
-	// so the previously-remembered alpha@v1 becomes stale.
+	// so the previously-remembered alpha entry becomes stale.
 	c.Invalidate(versionedKey("alpha", 5))
 	require.False(t, c.Has(k), "Invalidate must stale every entry in the group")
 
