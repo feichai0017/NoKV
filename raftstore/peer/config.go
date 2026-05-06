@@ -2,6 +2,7 @@ package peer
 
 import (
 	"path/filepath"
+	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -33,6 +34,12 @@ type Config struct {
 	// state that was previously written by an unpublished install attempt. It is
 	// only intended for store-local install-before-publish retry paths.
 	AllowSnapshotInstallRetry bool
+	// BatchMaxSize is the number of proposals collected before flushing
+	// as a single Ready cycle. Defaults to 64 when zero.
+	BatchMaxSize int
+	// BatchMaxWait is the maximum time the batcher waits before flushing
+	// a non-full batch. Defaults to 1ms when zero.
+	BatchMaxWait time.Duration
 }
 
 // ResolveStorage chooses the backing log engine (in-memory, on-disk, or WAL).
