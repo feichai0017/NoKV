@@ -89,7 +89,10 @@ The layering constraints are:
 
 ### ReadDirPlus
 
-`ReadDirPlus` is the most direct shape advantage today: one dentry scan plus one `BatchGet` of inode attrs, all read under the same snapshot version. A generic-KV baseline has to do a point lookup per dentry after the scan, producing N+1.
+`ReadDirPlus` returns dentries and inode attrs under one snapshot version. The
+service performs the dentry scan and inode attr fetch as one metadata primitive,
+so callers do not have to stitch a directory page from a scan plus per-entry
+point reads.
 
 Strict semantics: if any inode is missing or fails to decode, the whole page returns an error. fsmeta does not return half-true directory pages.
 
@@ -248,21 +251,34 @@ NegativeCache / DirPage are active and the DirPage hit/miss/store counters.
 
 ## 9. Benchmarks
 
-The fsmeta benchmark lives in `benchmark/fsmeta`. The core comparison is two paths against the same NoKV cluster:
+The fsmeta benchmark lives in `benchmark/fsmeta` and drives the native
+`nokv-fsmeta` gRPC service against a running NoKV cluster. The default Docker
+Compose helper is:
 
-| Driver | Behavior |
-|---|---|
-| `native-fsmeta` | Calls the fsmeta typed API. |
-| `generic-kv` | Uses the same raftstore + txn/percolator substrate but stitches the metadata schema on the client. |
+```bash
+make fsmeta-bench
+```
 
-Stage 1 headline: `ReadDirPlus` average latency 12.0 ms vs 510.3 ms — about 42.5×. Result CSVs are in `benchmark/fsmeta/results/`.
+The Compose gateway enables both persistent DirPage and NegativeCache directories
+by default. The default script scale is intentionally larger than a smoke test:
+8 clients, 1024 checkpoint creates, 1024 hotspot/watch/negative keys, and a
+mixed fsmeta workflow with 64 published entries.
+After the ports are reachable, the script waits 15 seconds for Raft leadership
+and coordinator grants to settle. Override `NOKV_FSMETA_STABILIZE_SECONDS` when
+testing an already-warm cluster.
 
-The WatchSubtree evidence workload lives in the same benchmark package; `watch_notify` reaches sub-second p95 on a Docker Compose 3-node cluster.
+The main system workload is `mixed`. It is a combined fsmeta API workload rather
+than a synthetic KV loop: project bootstrap, staged publication, artifact and
+checkpoint creation, writer-session open/heartbeat/close, stale-session
+cleanup, shared-file links, temp unlink, snapshot/retire, watch delivery,
+quota reads, and `ReadDir` / `ReadDirPlus`.
 
-Derived-cache evidence uses the same harness:
+The same harness also keeps focused slices:
 
-- `hotspot-fanin` with `ReadDirPlus` measures the DirPage path when `nokv-fsmeta --dirpage-cache-dir ...` is enabled.
-- `negative-lookup` repeatedly probes missing dentries and measures the NegativeCache path when `nokv-fsmeta --negative-cache-dir ...` is enabled.
+- `checkpoint-storm` for dense checkpoint/artifact creation.
+- `hotspot-fanin` with `ReadDirPlus` for DirPage-heavy directory reads.
+- `watch-subtree` for watch notification latency.
+- `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
 
 ## 10. Non-goals
 

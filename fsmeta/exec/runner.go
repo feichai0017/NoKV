@@ -18,6 +18,7 @@ import (
 
 const defaultLockTTL uint64 = 3000
 const maxTxnContentionRetries = 3
+const maxReadContentionRetries = 3
 const txnContentionRetryBackoff = time.Millisecond
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
@@ -105,6 +106,8 @@ type Executor struct {
 	dirPages                             DirPageCache
 	lockTTL                              uint64
 	now                                  func() time.Time
+	readRetriesTotal                     atomic.Uint64
+	readRetryExhaustedTotal              atomic.Uint64
 	txnRetriesTotal                      atomic.Uint64
 	txnRetryExhaustedTotal               atomic.Uint64
 	createTotal                          atomic.Uint64
@@ -218,6 +221,8 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 func (e *Executor) Stats() map[string]any {
 	if e == nil {
 		return map[string]any{
+			"read_retries_total":                       uint64(0),
+			"read_retry_exhausted_total":               uint64(0),
 			"txn_retries_total":                        uint64(0),
 			"txn_retry_exhausted_total":                uint64(0),
 			"create_total":                             uint64(0),
@@ -231,6 +236,8 @@ func (e *Executor) Stats() map[string]any {
 		}
 	}
 	out := map[string]any{
+		"read_retries_total":                       e.readRetriesTotal.Load(),
+		"read_retry_exhausted_total":               e.readRetryExhaustedTotal.Load(),
 		"txn_retries_total":                        e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total":                e.txnRetryExhaustedTotal.Load(),
 		"create_total":                             e.createTotal.Load(),
@@ -539,11 +546,13 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	if err != nil {
 		return nil, err
 	}
-	version, err := e.readVersion(ctx, req.SnapshotVersion)
-	if err != nil {
-		return nil, err
-	}
-	return e.scanDentries(ctx, plan, version)
+	var out []fsmeta.DentryRecord
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		var err error
+		out, err = e.scanDentries(ctx, plan, version)
+		return err
+	})
+	return out, err
 }
 
 // ReadDirPlus returns one directory page fused with inode attributes at the
@@ -580,49 +589,51 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		}
 	}
 
-	version, err := e.readVersion(ctx, req.SnapshotVersion)
-	if err != nil {
-		return nil, err
-	}
-	dentries, err := e.scanDentries(ctx, plan, version)
-	if err != nil {
-		return nil, err
-	}
-	if len(dentries) == 0 {
-		if useDirPage {
-			_ = e.dirPages.MaterializeAsync(pageKey, frontier, nil)
-		}
-		return []fsmeta.DentryAttrPair{}, nil
-	}
-	inodeKeys := make([][]byte, 0, len(dentries))
-	for _, dentry := range dentries {
-		key, err := fsmeta.EncodeInodeKey(req.Mount, dentry.Inode)
+	var out []fsmeta.DentryAttrPair
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		dentries, err := e.scanDentries(ctx, plan, version)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		inodeKeys = append(inodeKeys, key)
-	}
-	inodeValues, err := e.runner.BatchGet(ctx, inodeKeys, version)
+		if len(dentries) == 0 {
+			out = []fsmeta.DentryAttrPair{}
+			return nil
+		}
+		inodeKeys := make([][]byte, 0, len(dentries))
+		for _, dentry := range dentries {
+			key, err := fsmeta.EncodeInodeKey(req.Mount, dentry.Inode)
+			if err != nil {
+				return err
+			}
+			inodeKeys = append(inodeKeys, key)
+		}
+		inodeValues, err := e.runner.BatchGet(ctx, inodeKeys, version)
+		if err != nil {
+			return err
+		}
+		pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
+		for i, dentry := range dentries {
+			value, ok := inodeValues[string(inodeKeys[i])]
+			if !ok {
+				return fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+			}
+			inode, err := fsmeta.DecodeInodeValue(value)
+			if err != nil {
+				return err
+			}
+			if inode.Inode != dentry.Inode {
+				return fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+			}
+			pairs = append(pairs, fsmeta.DentryAttrPair{
+				Dentry: dentry,
+				Inode:  inode,
+			})
+		}
+		out = pairs
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	out := make([]fsmeta.DentryAttrPair, 0, len(dentries))
-	for i, dentry := range dentries {
-		value, ok := inodeValues[string(inodeKeys[i])]
-		if !ok {
-			return nil, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
-		}
-		inode, err := fsmeta.DecodeInodeValue(value)
-		if err != nil {
-			return nil, err
-		}
-		if inode.Inode != dentry.Inode {
-			return nil, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
-		}
-		out = append(out, fsmeta.DentryAttrPair{
-			Dentry: dentry,
-			Inode:  inode,
-		})
 	}
 	if useDirPage {
 		// Materialize is best-effort: if Invalidate fired since we read,
@@ -1333,6 +1344,36 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 		}
 	}
 	return translateMutateError(last)
+}
+
+func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, run func(version uint64) error) error {
+	var last error
+	for attempt := 0; attempt <= maxReadContentionRetries; attempt++ {
+		version, err := e.readVersion(ctx, snapshotVersion)
+		if err != nil {
+			return err
+		}
+		err = run(version)
+		if err == nil {
+			return nil
+		}
+		if !isRetryableTxnContention(err) {
+			return err
+		}
+		last = err
+		if attempt == maxReadContentionRetries {
+			e.readRetryExhaustedTotal.Add(1)
+			break
+		}
+		// ReadDir and ReadDirPlus may race with live Percolator locks from
+		// concurrent namespace mutation. Retrying keeps the external API at the
+		// fsmeta level instead of leaking a transient MVCC lock to callers.
+		e.readRetriesTotal.Add(1)
+		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+	return last
 }
 
 func waitTxnContentionRetry(ctx context.Context, attempt int) error {

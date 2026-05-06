@@ -655,7 +655,7 @@ func planCommitKey(reader *Reader, key []byte, startVersion, commitVersion uint6
 		}
 		if write != nil {
 			if write.Kind == kvrpcpb.Mutation_Rollback {
-				return nil, keyErrorAbort(errTxnAlreadyRolledBack)
+				return nil, keyErrorTxnAlreadyRolledBack()
 			}
 			return nil, nil
 		}
@@ -674,7 +674,7 @@ func planCommitKeyWithLock(reader *Reader, key []byte, lock *mvcc.Lock, commitVe
 	}
 	if write != nil {
 		if write.Kind == kvrpcpb.Mutation_Rollback {
-			return nil, keyErrorAbort(errTxnAlreadyRolledBack)
+			return nil, keyErrorTxnAlreadyRolledBack()
 		}
 		return []versionedOp{{
 			cf:      kv.CFLock,

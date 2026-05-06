@@ -29,12 +29,22 @@
 x-nokv-image: &nokv-image
   build: .
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
+  # Compose is a local dev/test deployment. The seed is intentionally public
+  # and only keeps all local containers on one Eunomia grant key; production
+  # deployments must provide their own signing and verification keys.
+  environment:
+    NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY: "rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc="
 
 x-common: &common
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
   restart: unless-stopped
   stop_signal: SIGINT
   stop_grace_period: 30s
+  # Compose is a local dev/test deployment. The seed is intentionally public
+  # and only keeps all local containers on one Eunomia grant key; production
+  # deployments must provide their own signing and verification keys.
+  environment:
+    NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY: "rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc="
 
 services:
   # ---------- bootstrap (seed stores once, then exit) ----------
@@ -293,8 +303,12 @@ services:
     command:
       - "--addr=0.0.0.0:8090"
       - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
+      - "--negative-cache-dir=/var/lib/nokv/negative-cache"
       - "--dirpage-cache-dir=/var/lib/nokv/dirpage-cache"
       - "--metrics-addr=0.0.0.0:9400"
+    volumes:
+      - fsmeta-negative-cache:/var/lib/nokv/negative-cache
+      - fsmeta-dirpage-cache:/var/lib/nokv/dirpage-cache
     ports:
       - "8090:8090"   # FSMetadata gRPC
       - "9400:9400"   # expvar
@@ -326,3 +340,5 @@ volumes:
   store1-data:
   store2-data:
   store3-data:
+  fsmeta-negative-cache:
+  fsmeta-dirpage-cache:

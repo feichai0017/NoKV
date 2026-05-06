@@ -73,42 +73,65 @@ Key components:
   `data/ycsb/results`, and a text report is saved under
   `results/ycsb/ycsb_results_*.txt`.
 
-## FSMetadata Native-vs-Generic Evaluation
+## FSMetadata Service Evaluation
 
-The fsmeta benchmark compares two drivers against the same NoKV cluster and the
-same metadata workload:
+The fsmeta benchmark drives the native `nokv-fsmeta` gateway against a running
+NoKV cluster. It is a service benchmark for fsmeta's server-side API surface:
 
-- `native-fsmeta`: calls the `nokv-fsmeta` gRPC service. This path exercises
-  native metadata operations such as server-side create assertions and
+- `mixed`: combined fsmeta API workload, including staged publication,
+  artifact creation, checkpoint publish, writer sessions, snapshots, watch
+  delivery, quota reads, links, unlinks, and directory reads.
+- `checkpoint-storm`: dense checkpoint or artifact creation.
+- `hotspot-fanin`: many files under one directory plus repeated `ReadDir` /
   `ReadDirPlus`.
-- `generic-kv`: bypasses the fsmeta service and treats fsmeta as a plain KV
-  schema over raftstore. This path uses client-side read-then-write checks and
-  implements `ReadDirPlus` as scan plus N point reads.
+- `watch-subtree`: notification latency after namespace mutations.
+- `negative-lookup`: repeated missing dentry probes.
 
 Prerequisites:
 
-- a running NoKV coordinator and raftstore nodes
-- `nokv-fsmeta` running only when `native-fsmeta` is selected
-- the coordinator endpoint reachable by the benchmark when `generic-kv` is
-  selected
+- a running NoKV Docker Compose cluster, or equivalent coordinator/store/fsmeta
+  deployment
+- the `nokv-fsmeta` gRPC endpoint reachable from the benchmark process
+- the coordinator endpoint reachable for mount bootstrap
 
-Example (run from inside the `benchmark/` Go module — the repo root has a
-top-level `fsmeta/` package and won't resolve this path):
+Default Docker Compose run from the repository root:
+
+```bash
+make fsmeta-bench
+```
+
+The helper starts Docker Compose with a local image build, waits for fsmeta and
+coordinator ports, then writes a CSV under `benchmark/data/fsmeta/results/`.
+Compose enables both `--negative-cache-dir` and `--dirpage-cache-dir` on the
+fsmeta gateway. Default scale is a medium service run: 8 clients, 8 checkpoint
+directories × 128 files, 1024 hotspot/watch/negative keys, and a mixed workload
+with 4 groups × 16 entries × 6 artifacts. Override scale with environment
+variables such as `NOKV_FSMETA_CLIENTS`, `NOKV_FSMETA_GROUPS`,
+`NOKV_FSMETA_ENTRIES_PER_GROUP`, `NOKV_FSMETA_ARTIFACTS_PER_ENTRY`, and
+`NOKV_FSMETA_WORKLOADS`. The script also waits 15 seconds after ports open so a
+fresh Compose cluster can finish Raft leader election and coordinator grant
+publication; set `NOKV_FSMETA_STABILIZE_SECONDS=0` for an already-warm cluster.
+The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
+`NOKV_FSMETA_PROFILE=long` for the scheduled large-data profile, or set
+`NOKV_FSMETA_BENCH_MODE=derived-cache` to run the cache on/off slice with two
+temporary fsmeta gateways.
+`NOKV_FSMETA_ARTIFACTS_PER_ENTRY` has an effective minimum of 4 because the
+mixed workload always creates `prompt.md`, `plan.json`, `state.bin`, and
+`checkpoint.tmp` to exercise update, writer-session, and unlink paths.
+
+Direct run from inside the `benchmark/` Go module:
 
 ```bash
 cd benchmark
 NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args \
-  -fsmeta_drivers native-fsmeta,generic-kv \
   -fsmeta_addr 127.0.0.1:8090 \
-  -fsmeta_coordinator_addr 127.0.0.1:2379 \
-  -fsmeta_workloads checkpoint-storm,hotspot-fanin,negative-lookup \
+  -fsmeta_coordinator_addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
+  -fsmeta_workloads mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup \
   -fsmeta_readdirplus=true
 ```
 
 Native fsmeta now assigns Create inode IDs inside the fsmeta service using the
-coordinator `AllocID` authority and a shard-affine allocator. The
-`-fsmeta_create_affinity_shards` flag is only a diagnostic input for the
-generic-KV comparison driver; it does not affect the native fsmeta service.
+coordinator `AllocID` authority and a shard-affine allocator.
 
 For derived-cache runs, start `nokv-fsmeta` with:
 
@@ -128,7 +151,7 @@ the coordinator and stores are already up:
 
 ```bash
 NOKV_FSMETA_COORDINATOR_ADDR=127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
-  scripts/run_fsmeta_derived_cache_bench.sh
+  NOKV_FSMETA_BENCH_MODE=derived-cache scripts/run_fsmeta_benchmarks.sh
 ```
 
 The helper starts two fsmeta gateways against the same cluster:
@@ -141,12 +164,9 @@ It writes two CSV files named `fsmeta_derived_cache_off_*` and
 `fsmeta_derived_cache_on_*` under `data/fsmeta/results/`.
 
 The summary CSV is written under `data/fsmeta/results/` unless
-`-fsmeta_output` is set. Rows include a `driver` column so native and generic
-results can be plotted from one file.
-
-Curated result CSVs that are referenced by documentation live in
-`fsmeta/results/`. Local ad-hoc runs under `data/fsmeta/results/` are ignored by
-Git.
+`-fsmeta_output` is set. Rows include a `driver` column with the fixed value
+`native-fsmeta` so old plotting tools can keep the same schema. CI uploads these
+runtime outputs as artifacts instead of committing benchmark result packages.
 
 ## Research Plotting
 

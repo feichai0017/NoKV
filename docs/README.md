@@ -69,7 +69,7 @@ For the authority schema behind those primitives, read **[notes/2026-04-25-names
 | Positioning v5 (DFS / OSS / AI three-audience) | [notes/2026-04-24-fsmeta-positioning.md](notes/2026-04-24-fsmeta-positioning.md) |
 | Namespace authority events umbrella (Mount / SubtreeAuthority / SnapshotEpoch / QuotaFence schema) | [notes/2026-04-25-namespace-authority-events-umbrella.md](notes/2026-04-25-namespace-authority-events-umbrella.md) |
 | Snapshot subtree MVCC epoch | [notes/2026-04-25-snapshot-subtree-mvcc-epoch.md](notes/2026-04-25-snapshot-subtree-mvcc-epoch.md) |
-| Benchmark results | [fsmeta.md](fsmeta.md#9-benchmarks) · [`benchmark/fsmeta/results/`](../benchmark/fsmeta/results/) |
+| Benchmark results | [fsmeta.md](fsmeta.md#9-benchmarks) · CI artifacts under `benchmark/data/fsmeta/results/` |
 
 ### 🔬 Correctness models
 

@@ -55,6 +55,9 @@ make test-docker-chaos
 # Short soak smoke; use NOKV_SOAK_DURATION=24h or 72h for release hardening
 make test-soak-smoke
 
+# Docker Compose fsmeta benchmark over all service workloads
+make fsmeta-bench
+
 # Crash recovery scenarios
 RECOVERY_TRACE_METRICS=1 \
 go test ./... -run 'TestRecovery(FailsOnMissingSST|FailsOnCorruptSST|ManifestRewriteCrash|SlowFollowerSnapshotBacklog|SnapshotExportRoundTrip|WALReplayRestoresData)' -count=1 -v
@@ -229,11 +232,16 @@ Nightly policy:
 
 1. PR CI runs bounded smoke through `make test-correctness-smoke`, including
    `make test-history-smoke` and `make test-model-smoke`.
-2. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
+2. PR benchmark CI also runs the medium `make fsmeta-bench` profile across all
+   fsmeta workloads: mixed, checkpoint-storm, hotspot-fanin, watch-subtree, and
+   negative-lookup. It uploads CSVs and Docker diagnostics as workflow artifacts.
+3. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
    and steps, replays raftstore/fsmeta contract/history schedules with longer
    bounds, repeats crash-matrix boundaries, replays deterministic split-region
    fault simulation, and repeats failpoint-heavy coordinator/meta/raftstore suites.
-3. A nightly-only failure should still be triaged as a correctness issue unless
+4. Scheduled fsmeta benchmark CI runs `NOKV_FSMETA_PROFILE=long make fsmeta-bench`
+   for larger data volumes and longer timeout, then uploads the same artifacts.
+5. A nightly-only failure should still be triaged as a correctness issue unless
    the failure is clearly in the test harness.
 
 Black-box and soak policy:

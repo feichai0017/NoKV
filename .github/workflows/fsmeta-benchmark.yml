@@ -1,0 +1,125 @@
+name: Benchmark
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/fsmeta-benchmark.yml"
+      - "benchmark/**"
+      - "cmd/nokv/**"
+      - "cmd/nokv-fsmeta/**"
+      - "coordinator/**"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "engine/**"
+      - "errors/**"
+      - "fsmeta/**"
+      - "go.mod"
+      - "go.sum"
+      - "local/**"
+      - "Makefile"
+      - "meta/**"
+      - "pb/**"
+      - "proto/**"
+      - "raftstore/**"
+      - "scripts/run_fsmeta_benchmarks.sh"
+      - "txn/**"
+      - "utils/**"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Benchmark profile"
+        type: choice
+        required: true
+        default: "long"
+        options:
+          - medium
+          - long
+  schedule:
+    - cron: "19 17 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  fsmeta-medium:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'medium')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Run medium fsmeta workload matrix
+        env:
+          NOKV_FSMETA_PROFILE: medium
+          NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+        run: make fsmeta-bench
+
+      - name: Collect Docker diagnostics
+        if: always()
+        run: |
+          mkdir -p benchmark/data/fsmeta/ci
+          docker compose ps > benchmark/data/fsmeta/ci/docker-ps.txt || true
+          docker compose logs --no-color --tail=500 > benchmark/data/fsmeta/ci/docker-compose.log || true
+          docker stats --no-stream > benchmark/data/fsmeta/ci/docker-stats.txt || true
+
+      - name: Upload fsmeta benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsmeta-medium-${{ github.run_id }}
+          path: |
+            benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/ci/*.txt
+            benchmark/data/fsmeta/ci/*.log
+          if-no-files-found: ignore
+
+      - name: Stop Docker Compose cluster
+        if: always()
+        run: docker compose down -v || true
+
+  fsmeta-long:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'long')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Run long fsmeta workload matrix
+        env:
+          NOKV_FSMETA_PROFILE: long
+          NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+        run: make fsmeta-bench
+
+      - name: Collect Docker diagnostics
+        if: always()
+        run: |
+          mkdir -p benchmark/data/fsmeta/ci
+          docker compose ps > benchmark/data/fsmeta/ci/docker-ps.txt || true
+          docker compose logs --no-color --tail=1000 > benchmark/data/fsmeta/ci/docker-compose.log || true
+          docker stats --no-stream > benchmark/data/fsmeta/ci/docker-stats.txt || true
+
+      - name: Upload fsmeta benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsmeta-long-${{ github.run_id }}
+          path: |
+            benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/ci/*.txt
+            benchmark/data/fsmeta/ci/*.log
+          if-no-files-found: ignore
+
+      - name: Stop Docker Compose cluster
+        if: always()
+        run: docker compose down -v || true

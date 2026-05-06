@@ -24,7 +24,6 @@ const (
 	NegativeLookup  = "negative-lookup"
 
 	DriverNativeFSMetadata = "native-fsmeta"
-	DriverGenericKV        = "generic-kv"
 )
 
 var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload completed with operation errors")
