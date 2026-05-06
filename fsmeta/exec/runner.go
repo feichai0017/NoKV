@@ -31,13 +31,16 @@ type KV struct {
 //
 // ReserveTimestamp returns the first timestamp in a consecutive range of count
 // timestamps. Mutate must provide Percolator-style atomicity for all mutations
-// and return the commit timestamp that made the mutation visible.
+// and return the commit timestamp that made the mutation visible. MutateAtCommit
+// is reserved for operations whose commit timestamp is already part of an
+// external authority protocol, so the runner must not allocate a later commit_ts.
 type TxnRunner interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
+	MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
 }
 
 // AtomicMutateFastPath is an optional TxnRunner extension. handled=false
@@ -1164,14 +1167,11 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 			return err
 		}
 		handoffStarted = true
-		actualCommitVersion, mutationErr := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		// Real raftstore 2PC allocates commit_ts after prewrite. The handoff
-		// completion frontier is the data visibility boundary, so it must use the
-		// returned commit timestamp rather than the speculative timestamp used to
-		// open the rooted pending state.
-		if actualCommitVersion == 0 {
-			actualCommitVersion = commitVersion
-		}
+		actualCommitVersion, mutationErr := e.runner.MutateAtCommit(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		// Subtree handoff start publishes a rooted predecessor frontier before the
+		// data mutation runs. That external frontier must be the same commit_ts
+		// used by the data transaction; otherwise concurrent handoffs can observe a
+		// later completed frontier and reject the older pending handoff.
 		// Once StartSubtreeHandoff is rooted, a Mutate error may still be
 		// ambiguous with respect to primary commit. Complete closes the rooted
 		// pending state; at worst this advances an empty era rather than leaving

@@ -147,13 +147,21 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 }
 
 func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, startVersion, commitVersion, true)
+}
+
+func (r *versionedRunner) MutateAtCommit(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, startVersion, commitVersion, false)
+}
+
+func (r *versionedRunner) applyMutations(primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The contract fake has no lock table, so it models Percolator's
 	// min-commit push by placing late commits after any timestamp that was
 	// allocated while the transaction was in flight.
 	effectiveCommitVersion := commitVersion
-	if r.latestObservedTS >= effectiveCommitVersion {
+	if allowCommitPush && r.latestObservedTS >= effectiveCommitVersion {
 		effectiveCommitVersion = r.latestObservedTS + 1
 		if r.nextTS <= effectiveCommitVersion {
 			r.nextTS = effectiveCommitVersion + 1

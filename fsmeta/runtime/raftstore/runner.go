@@ -149,6 +149,16 @@ func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	return commitVersion, nil
 }
 
+// MutateAtCommit uses the caller-provided commitVersion exactly. fsmeta uses
+// this for root-authority protocols that publish the commit frontier outside the
+// KV data path before the transaction can safely allocate a later timestamp.
+func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error) {
+	if err := r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL); err != nil {
+		return commitVersion, err
+	}
+	return commitVersion, nil
+}
+
 // Stats returns runtime-adapter counters. Nested KV stats come from the real
 // raftstore client when available, keeping fsmeta expvar useful without making
 // optional observability part of KVClient.

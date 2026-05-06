@@ -291,6 +291,14 @@ func TestExecutorGetQuotaUsageReturnsZeroForMissingCounter(t *testing.T) {
 }
 
 func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, _, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, commitVersion, r.actualCommitVersion)
+}
+
+func (r *fakeRunner) MutateAtCommit(_ context.Context, primary []byte, mutations []*kvrpcpb.Mutation, _, commitVersion, _ uint64) (uint64, error) {
+	return r.applyMutations(primary, mutations, commitVersion, 0)
+}
+
+func (r *fakeRunner) applyMutations(primary []byte, mutations []*kvrpcpb.Mutation, commitVersion, overrideCommitVersion uint64) (uint64, error) {
 	if len(r.mutateErrs) > 0 {
 		err := r.mutateErrs[0]
 		r.mutateErrs = r.mutateErrs[1:]
@@ -326,8 +334,8 @@ func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*kvrp
 		}
 	}
 	r.mutations = append(r.mutations, cloned)
-	if r.actualCommitVersion != 0 {
-		return r.actualCommitVersion, nil
+	if overrideCommitVersion != 0 {
+		return overrideCommitVersion, nil
 	}
 	return commitVersion, nil
 }
@@ -1391,7 +1399,7 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
-func TestExecutorRenameSubtreeCompletesHandoffAtActualCommitVersion(t *testing.T) {
+func TestExecutorRenameSubtreePinsCommitVersionToHandoffFrontier(t *testing.T) {
 	runner := newFakeRunner()
 	runner.actualCommitVersion = 99
 	seedDentry(t, runner, "vol", 7, "old", 22)
@@ -1412,7 +1420,7 @@ func TestExecutorRenameSubtreeCompletesHandoffAtActualCommitVersion(t *testing.T
 	require.NoError(t, err)
 
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
-	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 99}}, publisher.completes)
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
 func TestExecutorRenameSubtreeBlocksMutationWhenStartHandoffFails(t *testing.T) {

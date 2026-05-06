@@ -44,6 +44,10 @@ func (r *fakeTxnRunner) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uin
 	return 0, nil
 }
 
+func (r *fakeTxnRunner) MutateAtCommit(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) (uint64, error) {
+	return 0, nil
+}
+
 type fakeQuotaLookup struct {
 	fences map[quotaSubject]*coordpb.QuotaFenceInfo
 	calls  int
