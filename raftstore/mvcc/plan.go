@@ -14,8 +14,6 @@ import (
 
 const defaultApplyBatchEntries = 4096
 
-var errStop = errors.New("raftstore/mvcc: stop batch")
-
 // PlanStats summarizes a non-destructive MVCC GC planning pass.
 type PlanStats struct {
 	ScannedKeys           uint64

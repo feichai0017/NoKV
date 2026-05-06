@@ -72,7 +72,7 @@ func (s *Segment) Open(opt *file.Options) error {
 // Returns io.EOF when the range falls outside the mapped region or beyond
 // the high-water mark. The high-water guarantee depends on the upper-layer
 // publish discipline: callers must not surface an offset to readers until
-// the corresponding Write has returned (Invariant V1 in slab-substrate note
+// the corresponding Write has returned (slab-substrate publish invariant in
 // §4.4). Within the high-water mark there can be holes (reserved-but-not-
 // yet-written ranges); the publish discipline is what keeps readers from
 // observing them.

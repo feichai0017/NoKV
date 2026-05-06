@@ -229,11 +229,11 @@ func (s *Service) sealGrant(ctx context.Context) error {
 	consumedTSOFrontier := s.tso.Current()
 	s.allocMu.Unlock()
 	if err := rootfailpoints.InjectBeforeGrantStorageRead(); err != nil {
-		return status.Error(codes.Internal, err.Error())
+		return statusInternal(err.Error())
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
-		return status.Error(codes.Internal, "load rooted snapshot: "+err.Error())
+		return statusInternalf("load rooted snapshot: %v", err)
 	}
 	s.refreshCurrentRootSnapshot(snapshot)
 	grant := snapshot.ActiveGrant
@@ -601,13 +601,13 @@ func translateGrantError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.Canceled) {
-		return status.Error(codes.Canceled, err.Error())
+		return statusContext(err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return status.Error(codes.DeadlineExceeded, err.Error())
+		return statusContext(err)
 	}
 	if errors.Is(err, rootstate.ErrPrimacy) || errors.Is(err, rootstate.ErrInheritance) {
 		return statusGrant(err)
 	}
-	return status.Error(codes.Internal, "campaign coordinator grant: "+err.Error())
+	return statusInternalf("campaign coordinator grant: %v", err)
 }

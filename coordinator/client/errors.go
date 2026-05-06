@@ -3,11 +3,8 @@ package client
 import (
 	"errors"
 	"strconv"
-	"strings"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var (
@@ -25,8 +22,12 @@ var (
 	errInvalidWitness = nokverrors.New(nokverrors.KindProtocolViolation, "coordinator client: invalid witness")
 )
 
-const errNotLeaderPrefix = "coordinator not leader"
-const errGrantNotHeldPrefix = "coordinator grant not held"
+const (
+	coordinatorReasonMetadata = "coordinator_reason"
+	leaderIDMetadata          = "leader_id"
+	reasonNotLeader           = "not_leader"
+	reasonGrantNotHeld        = "grant_not_held"
+)
 
 // IsEmptyAddress reports whether err represents an empty coordinator address set.
 func IsEmptyAddress(err error) bool {
@@ -57,7 +58,7 @@ func IsInvalidWitness(err error) bool {
 
 // IsNotLeader reports whether err is a coordinator not-leader write rejection.
 func IsNotLeader(err error) bool {
-	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errNotLeaderPrefix)
+	return nokverrors.KindOf(err) == nokverrors.KindNotLeader && coordinatorReason(err) == reasonNotLeader
 }
 
 // IsGrantNotHeld reports whether err is a coordinator rejecting a
@@ -65,33 +66,34 @@ func IsNotLeader(err error) bool {
 // Treated as retryable: another endpoint in the client's pool may hold the
 // grant.
 func IsGrantNotHeld(err error) bool {
-	return status.Code(err) == codes.FailedPrecondition && strings.Contains(err.Error(), errGrantNotHeldPrefix)
+	return nokverrors.KindOf(err) == nokverrors.KindNotLeader && coordinatorReason(err) == reasonGrantNotHeld
 }
 
-// LeaderHint extracts leader_id=N from not-leader coordinator errors when present.
+// LeaderHint extracts the stable leader_id metadata from not-leader coordinator
+// errors when present. The diagnostic error string is intentionally ignored.
 func LeaderHint(err error) (uint64, bool) {
 	if !IsNotLeader(err) {
 		return 0, false
 	}
-	msg := err.Error()
-	_, after, ok := strings.Cut(msg, "leader_id=")
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
 	if !ok {
 		return 0, false
 	}
-	raw := after
-	end := len(raw)
-	for i, r := range raw {
-		if r < '0' || r > '9' {
-			end = i
-			break
-		}
-	}
-	if end == 0 {
+	raw := metadata[leaderIDMetadata]
+	if raw == "" {
 		return 0, false
 	}
-	id, parseErr := strconv.ParseUint(raw[:end], 10, 64)
+	id, parseErr := strconv.ParseUint(raw, 10, 64)
 	if parseErr != nil || id == 0 {
 		return 0, false
 	}
 	return id, true
+}
+
+func coordinatorReason(err error) string {
+	_, metadata, ok := nokverrors.RPCErrorInfo(err)
+	if !ok {
+		return ""
+	}
+	return metadata[coordinatorReasonMetadata]
 }

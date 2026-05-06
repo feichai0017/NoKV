@@ -1,13 +1,12 @@
 package server
 
 import (
+	"fmt"
 	"reflect"
 
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type authorityProof struct {
@@ -21,15 +20,15 @@ func (a dutyAdmission) authorityEvidence(usage rootproto.DutyBound) (authorityPr
 		return authorityProof{}, nil
 	}
 	if !grantCertificateMatches(a.certificate, a.grant) {
-		return authorityProof{}, status.Error(codes.Internal, "root-issued grant certificate is missing or stale")
+		return authorityProof{}, statusProtocol("root-issued grant certificate is missing or stale", reasonGrantNotHeld)
 	}
 	if a.grant.ExpiresUnixNano <= a.servedUnixNano {
-		return authorityProof{}, status.Error(codes.FailedPrecondition, "admitted grant expired before evidence generation")
+		return authorityProof{}, statusGrant(fmt.Errorf("admitted grant expired before evidence generation"))
 	}
 	scope := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 	dutyGrant, ok := a.grant.DutyFor(a.duty, scope)
 	if !ok || !rootproto.DutyBoundCovers(dutyGrant.Bound, usage) {
-		return authorityProof{}, status.Errorf(codes.FailedPrecondition, "admitted grant does not cover duty=%s grant_id=%s era=%d", rootproto.DutyName(a.duty), a.grant.GrantID, a.grant.Era)
+		return authorityProof{}, statusGrant(fmt.Errorf("admitted grant does not cover duty=%s grant_id=%s era=%d", rootproto.DutyName(a.duty), a.grant.GrantID, a.grant.Era))
 	}
 	evidence := metawire.RootAuthorityEvidenceToProto(rootproto.AuthorityEvidence{
 		Certificate: a.certificate,

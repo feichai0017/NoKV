@@ -26,7 +26,6 @@ package dirpage
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"hash/crc32"
 )
@@ -37,7 +36,7 @@ const dirPageMagic uint32 = 0x4c535044
 
 // dirPageVersion is the current dirpage slab format. NoKV has not shipped a
 // stable dirpage cache format yet, so development-time incompatible changes
-// keep the clean v1 format instead of carrying migration branches.
+// update this format directly instead of carrying migration branches.
 const dirPageVersion uint16 = 1
 
 // recordHeaderFixed is the size of the magic + version prefix we read
@@ -148,13 +147,6 @@ func encodePage(dst []byte, hdr pageHeader, entries []Entry) []byte {
 	dst = append(dst, crcBuf[:]...)
 	return dst
 }
-
-var (
-	errPageTruncated   = errors.New("dirpage: record truncated")
-	errPageBadMagic    = errors.New("dirpage: bad magic")
-	errPageBadVersion  = errors.New("dirpage: unsupported version")
-	errPageBadChecksum = errors.New("dirpage: checksum mismatch")
-)
 
 // decodePage parses one page from buf. Returns the header, decoded
 // entries, and the number of bytes consumed (so callers iterating over

@@ -35,7 +35,7 @@ on:
         required: true
         default: "long"
         options:
-          - medium
+          - median
           - long
   schedule:
     - cron: "19 17 * * 0"
@@ -44,10 +44,11 @@ permissions:
   contents: read
 
 jobs:
-  fsmeta-medium:
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'medium')
+  fsmeta-median:
+    name: Benchmark / fsmeta median
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'median')
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
@@ -56,9 +57,9 @@ jobs:
         with:
           go-version: "1.26.2"
 
-      - name: Run medium fsmeta workload matrix
+      - name: Run median fsmeta workload matrix
         env:
-          NOKV_FSMETA_PROFILE: medium
+          NOKV_FSMETA_PROFILE: median
           NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
         run: make fsmeta-bench
 
@@ -74,7 +75,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fsmeta-medium-${{ github.run_id }}
+          name: fsmeta-median-${{ github.run_id }}
           path: |
             benchmark/data/fsmeta/results/*.csv
             benchmark/data/fsmeta/ci/*.txt
@@ -86,6 +87,7 @@ jobs:
         run: docker compose down -v || true
 
   fsmeta-long:
+    name: Benchmark / fsmeta long
     if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'long')
     runs-on: ubuntu-latest
     timeout-minutes: 180

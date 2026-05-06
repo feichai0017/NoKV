@@ -374,7 +374,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 
 // UpdateInode updates mutable inode attributes and applies the size quota delta
 // in the same transaction. The parent field is required because quota and
-// DirPage invalidation are directory-scoped in fsmeta v1.
+// DirPage invalidation are directory-scoped by parent inode and page token.
 func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
 	plan, err := fsmeta.PlanUpdateInode(req)
 	if err != nil {
@@ -405,7 +405,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		if dentry.Type != inode.Type {
 			return fsmeta.ErrInvalidValue
 		}
-		// v1 does not maintain an inode->parents reverse index. Updating a
+		// fsmeta does not maintain an inode->parents reverse index. Updating a
 		// hard-linked inode would require invalidating and quota-adjusting every
 		// parent, so reject it rather than silently corrupting accounting.
 		if inode.LinkCount != 1 {

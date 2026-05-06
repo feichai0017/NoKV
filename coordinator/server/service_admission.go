@@ -8,8 +8,6 @@ import (
 
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type dutyAdmission struct {
@@ -71,7 +69,7 @@ func (s *Service) beginAuthorityServing(ctx context.Context, duty rootproto.Duty
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
-			return nil, status.FromContextError(err).Err()
+			return nil, statusContext(err)
 		}
 	}
 	s.authorityMu.Lock()
@@ -115,12 +113,12 @@ func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
 	}
 	current, err := s.currentClusterEpoch()
 	if err != nil {
-		return status.Error(codes.Internal, "load current cluster era: "+err.Error())
+		return statusInternalf("load current cluster era: %v", err)
 	}
 	if current == expected {
 		return nil
 	}
-	return status.Error(codes.FailedPrecondition, fmt.Sprintf("pd/meta cluster era mismatch (expected=%d current=%d)", expected, current))
+	return statusProtocol(fmt.Sprintf("pd/meta cluster era mismatch (expected=%d current=%d)", expected, current), reasonClusterEraMismatch)
 }
 
 func (s *Service) currentClusterEpoch() (uint64, error) {

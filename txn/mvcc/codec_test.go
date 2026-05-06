@@ -67,8 +67,8 @@ func TestEncodeDecodeWriteRoundTrip(t *testing.T) {
 	require.Equal(t, write.ExpiresAt, got.ExpiresAt)
 }
 
-func TestDecodeWriteBackwardCompatibleWithoutExpiresAt(t *testing.T) {
-	// Old format: version, kind, startTs, hasShort, shortLen, shortValue.
+func TestDecodeWriteDefaultsMissingExpiresAtToZero(t *testing.T) {
+	// ExpiresAt is omitted when the write has no TTL metadata to preserve.
 	raw := make([]byte, 0, 32)
 	raw = append(raw, writeCodecVersion, byte(kvrpcpb.Mutation_Put))
 	raw = binary.AppendUvarint(raw, 7)

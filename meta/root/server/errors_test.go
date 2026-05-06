@@ -77,5 +77,8 @@ func TestStatusHelpersExposeKinds(t *testing.T) {
 	notLeader := statusNotLeader(23)
 	require.Equal(t, codes.FailedPrecondition, status.Code(notLeader))
 	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(notLeader))
-	require.Contains(t, notLeader.Error(), "leader_id=23")
+	_, metadata, ok := nokverrors.RPCErrorInfo(notLeader)
+	require.True(t, ok)
+	require.Equal(t, reasonNotLeader, metadata[metaRootReasonMetadata])
+	require.Equal(t, "23", metadata[leaderIDMetadata])
 }

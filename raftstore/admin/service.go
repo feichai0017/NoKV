@@ -12,8 +12,6 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
 	raftpb "go.etcd.io/raft/v3/raftpb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const snapshotStreamChunkSize = 64 << 10
@@ -40,13 +38,13 @@ func NewServiceWithSnapshot(st *store.Store, snapshot snapshotpkg.SnapshotStore)
 // AddPeer issues one raft configuration change on the region leader.
 func (s *Service) AddPeer(_ context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 || req.GetStoreId() == 0 || req.GetPeerId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "region_id, store_id, and peer_id are required")
+		return nil, rpcInvalidArgument("region_id, store_id, and peer_id are required")
 	}
 	if err := s.store.AddPeer(req.GetRegionId(), metaregion.Peer{StoreID: req.GetStoreId(), PeerID: req.GetPeerId()}); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+		return nil, rpcPrecondition(err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
@@ -58,13 +56,13 @@ func (s *Service) AddPeer(_ context.Context, req *adminpb.AddPeerRequest) (*admi
 // RemovePeer issues one raft configuration change removing the specified peer.
 func (s *Service) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
+		return nil, rpcInvalidArgument("region_id and peer_id are required")
 	}
 	if err := s.store.RemovePeer(req.GetRegionId(), req.GetPeerId()); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+		return nil, rpcPrecondition(err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
@@ -76,16 +74,16 @@ func (s *Service) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) 
 // TransferLeader requests leader transfer on the specified region.
 func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 || req.GetPeerId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "region_id and peer_id are required")
+		return nil, rpcInvalidArgument("region_id and peer_id are required")
 	}
 	if err := s.store.TransferLeader(req.GetRegionId(), req.GetPeerId()); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "%v", err)
+		return nil, rpcPrecondition(err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
@@ -98,7 +96,7 @@ func (s *Service) TransferLeader(ctx context.Context, req *adminpb.TransferLeade
 // encoded as one migration-only SST snapshot payload.
 func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportRegionSnapshotRequest) (*adminpb.ExportRegionSnapshotResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	region, header, reader, waitExport, err := s.startExportRegionSnapshot(ctx, req.GetRegionId())
 	if err != nil {
@@ -107,22 +105,22 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportR
 	defer func() { _ = reader.Close() }()
 	payload, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "export region snapshot payload: %v", err)
+		return nil, rpcInternalf("export region snapshot payload: %v", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	if err := waitExport(); err != nil {
-		return nil, status.Errorf(codes.Internal, "export sst region snapshot: %v", err)
+		return nil, rpcInternalf("export sst region snapshot: %v", err)
 	}
 	var snap raftpb.Snapshot
 	if err := snap.Unmarshal(header); err != nil {
-		return nil, status.Errorf(codes.Internal, "unmarshal region snapshot header: %v", err)
+		return nil, rpcInternalf("unmarshal region snapshot header: %v", err)
 	}
 	snap.Data = payload
 	data, err := (&snap).Marshal()
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "marshal region snapshot: %v", err)
+		return nil, rpcInternalf("marshal region snapshot: %v", err)
 	}
 	return &adminpb.ExportRegionSnapshotResponse{Snapshot: data, Region: localmeta.DescriptorToProto(region)}, nil
 }
@@ -132,7 +130,7 @@ func (s *Service) ExportRegionSnapshot(ctx context.Context, req *adminpb.ExportR
 func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotStreamRequest, stream adminpb.RaftAdmin_ExportRegionSnapshotStreamServer) error {
 	ctx := stream.Context()
 	if err := ctx.Err(); err != nil {
-		return status.Error(codes.Canceled, err.Error())
+		return rpcCanceled(err)
 	}
 	region, header, reader, waitExport, err := s.startExportRegionSnapshot(ctx, req.GetRegionId())
 	if err != nil {
@@ -143,7 +141,7 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 	first := true
 	for {
 		if err := ctx.Err(); err != nil {
-			return status.Error(codes.Canceled, err.Error())
+			return rpcCanceled(err)
 		}
 		n, readErr := reader.Read(buf)
 		if n > 0 || first {
@@ -161,11 +159,11 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 			break
 		}
 		if readErr != nil {
-			return status.Errorf(codes.Internal, "export region snapshot stream: %v", readErr)
+			return rpcInternalf("export region snapshot stream: %v", readErr)
 		}
 	}
 	if err := waitExport(); err != nil {
-		return status.Errorf(codes.Internal, "export sst region snapshot stream: %v", err)
+		return rpcInternalf("export sst region snapshot stream: %v", err)
 	}
 	return nil
 }
@@ -174,17 +172,17 @@ func (s *Service) ExportRegionSnapshotStream(req *adminpb.ExportRegionSnapshotSt
 // store. The local peer is bootstrapped on demand from the payload.
 func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportRegionSnapshotRequest) (*adminpb.ImportRegionSnapshotResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if len(req.GetSnapshot()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "snapshot is required")
+		return nil, rpcInvalidArgument("snapshot is required")
 	}
 	var snap raftpb.Snapshot
 	if err := snap.Unmarshal(req.GetSnapshot()); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "unmarshal region snapshot: %v", err)
+		return nil, rpcInvalidArgumentf("unmarshal region snapshot: %v", err)
 	}
 	meta, err := s.importRegionSnapshot(ctx, snap, nil)
 	if err != nil {
@@ -199,34 +197,34 @@ func (s *Service) ImportRegionSnapshot(ctx context.Context, req *adminpb.ImportR
 func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegionSnapshotStreamServer) error {
 	ctx := stream.Context()
 	if err := ctx.Err(); err != nil {
-		return status.Error(codes.Canceled, err.Error())
+		return rpcCanceled(err)
 	}
 	if s == nil || s.store == nil {
-		return status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if s.snapshot == nil {
-		return status.Error(codes.FailedPrecondition, "sst snapshot import is not configured")
+		return rpcSnapshotNotConfigured("sst snapshot import is not configured")
 	}
 	first, err := stream.Recv()
 	if err == io.EOF {
-		return status.Error(codes.InvalidArgument, "snapshot stream is empty")
+		return rpcInvalidArgument("snapshot stream is empty")
 	}
 	if err != nil {
 		return err
 	}
 	if len(first.GetSnapshotHeader()) == 0 {
-		return status.Error(codes.InvalidArgument, "snapshot_header is required")
+		return rpcInvalidArgument("snapshot_header is required")
 	}
 	if first.GetRegion() == nil {
-		return status.Error(codes.InvalidArgument, "region is required")
+		return rpcInvalidArgument("region is required")
 	}
 	var snap raftpb.Snapshot
 	if err := snap.Unmarshal(first.GetSnapshotHeader()); err != nil {
-		return status.Errorf(codes.InvalidArgument, "unmarshal region snapshot header: %v", err)
+		return rpcInvalidArgumentf("unmarshal region snapshot header: %v", err)
 	}
 	meta, err := localmeta.FromDescriptorProto(first.GetRegion())
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "decode region snapshot metadata: %v", err)
+		return rpcInvalidArgumentf("decode region snapshot metadata: %v", err)
 	}
 	pr, pw := io.Pipe()
 	resultCh := make(chan struct {
@@ -253,13 +251,13 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 		if outcome.err != nil {
 			return outcome.err
 		}
-		return status.Errorf(codes.Internal, "write region snapshot stream: %v", err)
+		return rpcInternalf("write region snapshot stream: %v", err)
 	}
 	for {
 		if err := ctx.Err(); err != nil {
 			_ = pw.CloseWithError(err)
 			<-resultCh
-			return status.Error(codes.Canceled, err.Error())
+			return rpcCanceled(err)
 		}
 		req, recvErr := stream.Recv()
 		if recvErr == io.EOF {
@@ -278,7 +276,7 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 			streamErr := fmt.Errorf("snapshot header repeated")
 			_ = pw.CloseWithError(streamErr)
 			<-resultCh
-			return status.Error(codes.InvalidArgument, "snapshot header may only appear in the first chunk")
+			return rpcInvalidArgument("snapshot header may only appear in the first chunk")
 		}
 		if err := writeChunk(req.GetChunk()); err != nil {
 			_ = pw.CloseWithError(err)
@@ -286,7 +284,7 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 			if outcome.err != nil {
 				return outcome.err
 			}
-			return status.Errorf(codes.Internal, "write region snapshot stream: %v", err)
+			return rpcInternalf("write region snapshot stream: %v", err)
 		}
 	}
 	outcome := <-resultCh
@@ -299,13 +297,13 @@ func (s *Service) ImportRegionSnapshotStream(stream adminpb.RaftAdmin_ImportRegi
 // RegionRuntimeStatus returns store-local runtime information for one region.
 func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if req.GetRegionId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "region_id is required")
+		return nil, rpcInvalidArgument("region_id is required")
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(req.GetRegionId())
 	if !ok {
@@ -327,11 +325,11 @@ func (s *Service) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRu
 // the store's admission, topology, and restart runtime state.
 func (s *Service) ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, status.Error(codes.Canceled, err.Error())
+		return nil, rpcCanceled(err)
 	}
 	_ = req
 	if s == nil || s.store == nil {
-		return nil, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return nil, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	lastAdmission := s.store.LastAdmission()
 	topology := s.store.TopologyExecutions()
@@ -513,7 +511,7 @@ func (s *Service) prepareExportRegionSnapshot(regionID uint64) (localmeta.Region
 	headerSnap.Data = nil
 	header, err := (&headerSnap).Marshal()
 	if err != nil {
-		return localmeta.RegionMeta{}, nil, status.Errorf(codes.Internal, "marshal region snapshot header: %v", err)
+		return localmeta.RegionMeta{}, nil, rpcInternalf("marshal region snapshot header: %v", err)
 	}
 	return runtime.Meta, header, nil
 }
@@ -540,28 +538,28 @@ func (s *Service) startExportRegionSnapshot(ctx context.Context, regionID uint64
 
 func (s *Service) exportRegionSnapshot(regionID uint64) (store.RegionRuntimeStatus, raftpb.Snapshot, error) {
 	if s == nil || s.store == nil {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Error(codes.FailedPrecondition, "raft admin service not configured")
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcServiceNotConfigured("raft admin service not configured")
 	}
 	if regionID == 0 {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Error(codes.InvalidArgument, "region_id is required")
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcInvalidArgument("region_id is required")
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(regionID)
 	if !ok || !runtime.Hosted {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Errorf(codes.NotFound, "region %d is not hosted on this store", regionID)
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcNotFoundf("region %d is not hosted on this store", regionID)
 	}
 	if !runtime.Leader {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Errorf(codes.FailedPrecondition, "region %d is not led by this store", regionID)
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcNotLeaderf("region %d is not led by this store", regionID)
 	}
 	peerRef, ok := s.store.Peer(runtime.LocalPeerID)
 	if !ok || peerRef == nil {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Errorf(codes.FailedPrecondition, "leader peer %d is not registered", runtime.LocalPeerID)
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcPreconditionf("leader peer %d is not registered", runtime.LocalPeerID)
 	}
 	snap, err := peerRef.Snapshot()
 	if err != nil {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Errorf(codes.Internal, "export region snapshot: %v", err)
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcInternalf("export region snapshot: %v", err)
 	}
 	if s.snapshot == nil {
-		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, status.Error(codes.FailedPrecondition, "sst snapshot export is not configured")
+		return store.RegionRuntimeStatus{}, raftpb.Snapshot{}, rpcSnapshotNotConfigured("sst snapshot export is not configured")
 	}
 	return runtime, raftpb.Snapshot(snap), nil
 }
@@ -598,16 +596,16 @@ func (s *Service) importRegionSnapshot(ctx context.Context, snap raftpb.Snapshot
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return localmeta.RegionMeta{}, status.Error(codes.Canceled, err.Error())
+		return localmeta.RegionMeta{}, rpcCanceled(err)
 	}
 	if s.snapshot == nil {
-		return localmeta.RegionMeta{}, status.Error(codes.FailedPrecondition, "sst snapshot import is not configured")
+		return localmeta.RegionMeta{}, rpcSnapshotNotConfigured("sst snapshot import is not configured")
 	}
 	var meta localmeta.RegionMeta
 	if streamed == nil {
 		metaFile, metaErr := snapshotpkg.ReadPayloadMeta(snap.Data)
 		if metaErr != nil {
-			return localmeta.RegionMeta{}, status.Errorf(codes.InvalidArgument, "decode sst snapshot payload: %v", metaErr)
+			return localmeta.RegionMeta{}, rpcInvalidArgumentf("decode sst snapshot payload: %v", metaErr)
 		}
 		meta = metaFile.Region
 	} else {
@@ -639,7 +637,7 @@ func (s *Service) importRegionSnapshot(ctx context.Context, snap raftpb.Snapshot
 		return result.Rollback, nil
 	})
 	if err != nil {
-		return localmeta.RegionMeta{}, status.Errorf(codes.FailedPrecondition, "%v", err)
+		return localmeta.RegionMeta{}, rpcPrecondition(err)
 	}
 	runtime, ok := s.store.RegionRuntimeStatus(installed.ID)
 	if !ok {

@@ -165,14 +165,7 @@ func waitForFSMetaMount(t *testing.T, ctx context.Context, cli workload.Client) 
 }
 
 func isMountVisibilityPending(err error) bool {
-	if errors.Is(err, fsmeta.ErrMountNotRegistered) {
-		return true
-	}
-	// The gRPC client preserves the global NotFound kind, but the concrete
-	// fsmeta sentinel can be lost when the gateway has not observed the mount
-	// root event yet. Treat only that exact mount-registration message as the
-	// Compose bootstrap propagation window.
-	return strings.Contains(err.Error(), fsmeta.ErrMountNotRegistered.Error())
+	return errors.Is(err, fsmeta.ErrMountNotRegistered)
 }
 
 func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName, runID string) (workload.Result, error) {

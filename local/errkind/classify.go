@@ -13,8 +13,10 @@ import (
 
 // Classify maps local DB and embedded-engine errors to the stable
 // cross-boundary error taxonomy. Engine and utils packages intentionally keep
-// their local sentinels and do not import the root errors package; callers
-// should use this at DB, RPC, or fsmeta/runtime/local boundaries.
+// their local sentinels and do not import the root errors package; public DB,
+// runtime, or RPC boundaries should classify them here before deciding retry,
+// abort, or corruption handling. Package-private control-flow sentinels stay
+// Unknown and must not escape as public API decisions.
 func Classify(err error) nokverrors.Kind {
 	if err == nil {
 		return nokverrors.KindUnknown

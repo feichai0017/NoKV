@@ -7,7 +7,6 @@ package rootview
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -18,8 +17,6 @@ import (
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/feichai0017/NoKV/meta/topology"
 )
-
-var errGrantCommandUnsupported = errors.New("coordinator/rootview: coordinator grant command unsupported")
 
 // RootStorage persists control-plane mutations into durable metadata truth and
 // exposes the reconstructed rooted snapshot back to Coordinator.

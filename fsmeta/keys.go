@@ -5,6 +5,24 @@ import (
 	"fmt"
 )
 
+// fsmeta key layout:
+//
+//	common prefix:
+//	  magic[4] = "fsm\0"
+//	  version  = 0x01
+//	  mount_len uvarint
+//	  mount bytes
+//	  kind byte
+//
+//	kind bodies:
+//	  mount   'm' : empty
+//	  inode   'i' : inode be64
+//	  dentry  'd' : parent inode be64 | name bytes
+//	  chunk   'c' : inode be64 | chunk index be64
+//	  session 's' : session bytes, or 0x00 | inode be64 for writer ownership
+//	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
+//
+// Big-endian integer fields preserve numeric order inside each key family.
 var keyMagic = []byte{'f', 's', 'm', 0}
 
 const keySchemaVersion byte = 1

@@ -282,6 +282,26 @@ func TestTypedClientErrorTranslation(t *testing.T) {
 		Name:   "missing",
 	})
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrMountNotRegistered})
+	defer cleanup()
+	_, err = cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "missing", Parent: fsmeta.RootInode, Name: "x"})
+	require.ErrorIs(t, err, fsmeta.ErrMountNotRegistered)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrMountRetired})
+	defer cleanup()
+	_, err = cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "retired", Parent: fsmeta.RootInode, Name: "x"})
+	require.ErrorIs(t, err, fsmeta.ErrMountRetired)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrQuotaExceeded})
+	defer cleanup()
+	_, err = cli.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol"})
+	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrWatchOverflow})
+	defer cleanup()
+	_, err = cli.ReadDir(context.Background(), fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode})
+	require.ErrorIs(t, err, fsmeta.ErrWatchOverflow)
 }
 
 func TestTypedClientPreservesUnknownStatus(t *testing.T) {

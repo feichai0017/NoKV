@@ -2,9 +2,12 @@ package client
 
 import (
 	"context"
+	stderrors "errors"
+	"strconv"
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -13,20 +16,24 @@ import (
 )
 
 func TestRetryableRemoteErrorConnectionClosing(t *testing.T) {
-	err := status.Error(codes.Canceled, errClientConnectionClosing)
+	err := clientConnClosingErrForTest()
 	require.True(t, retryableRemoteError(err, false))
 	require.True(t, retryableRemoteError(err, true))
 }
 
 func TestRetryableRemoteErrorWrappedConnectionClosing(t *testing.T) {
-	inner := status.Error(codes.Canceled, errClientConnectionClosing)
-	err := status.Error(codes.Internal, inner.Error())
+	err := stderrors.Join(clientConnClosingErrForTest(), status.Error(codes.Internal, "transport closing"))
 	require.True(t, retryableRemoteError(err, false))
 	require.True(t, retryableRemoteError(err, true))
 }
 
+func clientConnClosingErrForTest() error {
+	//nolint:staticcheck
+	return grpc.ErrClientConnClosing
+}
+
 func TestRetryableRemoteErrorMetadataRootNotLeaderIsWriteOnly(t *testing.T) {
-	err := status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=2)")
+	err := metadataRootNotLeaderErrorForTest(2)
 	require.False(t, retryableRemoteError(err, false))
 	require.True(t, retryableRemoteError(err, true))
 }
@@ -109,13 +116,23 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.True(t, validGrantAct(1))
 	require.False(t, validGrantAct(99))
 
-	leaderID, ok := leaderHint(status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=23)"))
+	leaderID, ok := leaderHint(metadataRootNotLeaderErrorForTest(23))
 	require.True(t, ok)
 	require.Equal(t, uint64(23), leaderID)
-	_, ok = leaderHint(status.Error(codes.FailedPrecondition, "metadata root not leader"))
+	_, ok = leaderHint(nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, errMetadataRootNotLeader, map[string]string{
+		metaRootReasonMetadata: reasonNotLeader,
+	}))
 	require.False(t, ok)
 
 	require.NoError(t, waitForReady(context.Background(), nil))
+}
+
+func metadataRootNotLeaderErrorForTest(leaderID uint64) error {
+	metadata := map[string]string{metaRootReasonMetadata: reasonNotLeader}
+	if leaderID != 0 {
+		metadata[leaderIDMetadata] = strconv.FormatUint(leaderID, 10)
+	}
+	return nokverrors.RPCStatusError(nokverrors.KindNotLeader, codes.FailedPrecondition, errMetadataRootNotLeader, metadata)
 }
 
 func TestInvokeRejectsNilCanceledAndEmptyClients(t *testing.T) {
@@ -147,7 +164,7 @@ func TestInvokeWriteRetriesToLeaderHint(t *testing.T) {
 				rpc: &fakeMetadataRootClient{
 					statusFunc: func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error) {
 						followerCalls++
-						return nil, status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=2)")
+						return nil, metadataRootNotLeaderErrorForTest(2)
 					},
 				},
 			},
@@ -184,7 +201,7 @@ func TestInvokeReadDoesNotRetryNotLeaderHint(t *testing.T) {
 				rpc: &fakeMetadataRootClient{
 					statusFunc: func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error) {
 						followerCalls++
-						return nil, status.Error(codes.FailedPrecondition, errMetadataRootNotLeader+" (leader_id=2)")
+						return nil, metadataRootNotLeaderErrorForTest(2)
 					},
 				},
 			},
@@ -205,7 +222,7 @@ func TestInvokeReadDoesNotRetryNotLeaderHint(t *testing.T) {
 		return rpc.Status(ctx, &metapb.MetadataRootStatusRequest{})
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), errMetadataRootNotLeader)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
 	require.Equal(t, 1, followerCalls)
 	require.Zero(t, leaderCalls)
 }
