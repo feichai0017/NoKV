@@ -1295,10 +1295,13 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 	return e.reserveReadVersion(ctx)
 }
 
-// reserveTxnVersions pre-allocates both start_ts and commit_ts in a single TSO
-// hop. In strict Percolator the commit_ts must be obtained AFTER prewrite to
-// guarantee snapshot isolation; here we rely on two server-side safety nets to
-// make pre-allocation safe in practice:
+// reserveTxnVersions reserves start_ts plus a speculative commit_ts in one TSO
+// hop. AtomicMutate and in-memory runners use the speculative commit version.
+// The real raftstore runner obtains commit_ts after prewrite for regular 2PC,
+// which is the strict Percolator boundary under read/write contention.
+//
+// When a path does use the speculative commit_ts, two server-side safety nets
+// keep pre-allocation from silently violating snapshot isolation:
 //
 //  1. When a concurrent reader at start_ts > our commit_ts encounters our
 //     prewrite lock, it pushes lock.MinCommitTs = reader_start_ts + 1 via
@@ -1306,11 +1309,9 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 //  2. commitKey rejects the commit with keyErrorCommitTsExpired when
 //     lock.MinCommitTs > commitVersion (see txn/percolator/txn.go:373-375).
 //
-// Together these force a retry-with-fresh-ts under contention — incorrect
-// pre-allocation is detected at commit time, never silently violated. The
-// optimization saves one TSO RPC per fsmeta operation under the common
-// contention-free path. CommitTsExpired is retried transparently by
-// withTxnRetry below.
+// Together these force a retry-with-fresh-ts under contention: incorrect
+// speculative commit_ts is detected at commit time, never silently accepted.
+// CommitTsExpired is retried transparently by withTxnRetry below.
 func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
 	startVersion, err := e.runner.ReserveTimestamp(ctx, 2)
 	if err != nil {

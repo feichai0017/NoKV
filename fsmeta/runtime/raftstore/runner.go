@@ -21,6 +21,10 @@ type atomicMutateFastPath interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
 }
 
+type commitTimestampMutator interface {
+	MutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) error
+}
+
 type statsProvider interface {
 	Stats() map[string]any
 }
@@ -128,6 +132,14 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 
 // Mutate delegates to raftstore's two-phase commit path.
 func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+	if kv, ok := r.kv.(commitTimestampMutator); ok {
+		// The executor still passes a preallocated commitVersion for in-memory
+		// test runners. Real raftstore clients can allocate commit_ts after
+		// prewrite, which avoids repeated CommitTsExpired under mixed reads.
+		return kv.MutateWithCommitTimestamp(ctx, primary, mutations, startVersion, lockTTL, func(ctx context.Context) (uint64, error) {
+			return r.ReserveTimestamp(ctx, 1)
+		})
+	}
 	return r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL)
 }
 

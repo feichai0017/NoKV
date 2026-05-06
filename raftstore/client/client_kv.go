@@ -383,6 +383,23 @@ func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey [
 // Mutate wraps TwoPhaseCommit with a ready-made mutation slice. The caller must
 // ensure the primary key is part of the mutation set.
 func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+	return c.mutateWithCommitTimestamp(ctx, primary, mutations, startVersion, lockTTL, func(context.Context) (uint64, error) {
+		return commitVersion, nil
+	})
+}
+
+// MutateWithCommitTimestamp runs a 2PC mutation and obtains commit_ts after all
+// prewrites have reached Raft. This is the strict Percolator timestamp boundary:
+// readers may push MinCommitTs while locks are live, so fsmeta uses this path to
+// avoid exhausting logical-operation retries under read/write contention.
+func (c *Client) MutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) error {
+	if allocateCommitVersion == nil {
+		return &ProtocolError{Operation: "mutate", Detail: "commit timestamp allocator required"}
+	}
+	return c.mutateWithCommitTimestamp(ctx, primary, mutations, startVersion, lockTTL, allocateCommitVersion)
+}
+
+func (c *Client) mutateWithCommitTimestamp(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) error {
 	if len(primary) == 0 {
 		return &ProtocolError{Operation: "mutate", Detail: "primary key required"}
 	}
@@ -399,7 +416,7 @@ func (c *Client) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 	if !mutationHasPrimary(cleaned, primary) {
 		return &ProtocolError{Operation: "mutate", Detail: fmt.Sprintf("primary key %q not present in mutations", primary)}
 	}
-	return c.TwoPhaseCommit(ctx, append([]byte(nil), primary...), cleaned, startVersion, commitVersion, lockTTL)
+	return c.twoPhaseCommit(ctx, append([]byte(nil), primary...), cleaned, startVersion, lockTTL, allocateCommitVersion)
 }
 
 // TryAtomicMutate attempts to materialize mutations as one region-local 1PC
@@ -535,6 +552,12 @@ func (c *Client) Delete(ctx context.Context, key []byte, startVersion, commitVer
 
 // TwoPhaseCommit runs Prewrite followed by Commit across the supplied mutations.
 func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error {
+	return c.twoPhaseCommit(ctx, primary, mutations, startVersion, lockTTL, func(context.Context) (uint64, error) {
+		return commitVersion, nil
+	})
+}
+
+func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, lockTTL uint64, allocateCommitVersion func(context.Context) (uint64, error)) error {
 	if len(mutations) == 0 {
 		return nil
 	}
@@ -575,6 +598,20 @@ func (c *Client) TwoPhaseCommit(ctx context.Context, primary []byte, mutations [
 			}
 			return err
 		}
+	}
+	commitVersion, err := allocateCommitVersion(ctx)
+	if err != nil {
+		if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("client: rollback after commit timestamp allocation failure: %w", rollbackErr))
+		}
+		return err
+	}
+	if commitVersion <= startVersion {
+		err := &ProtocolError{Operation: "two phase commit", Detail: fmt.Sprintf("commit version %d must be greater than start version %d", commitVersion, startVersion)}
+		if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("client: rollback after invalid commit timestamp: %w", rollbackErr))
+		}
+		return err
 	}
 	if err := c.commitKeysByRoute(ctx, [][]byte{append([]byte(nil), primary...)}, startVersion, commitVersion); err != nil {
 		if shouldRollbackAfterPrimaryCommitFailure(err) {

@@ -1040,6 +1040,31 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
+func TestExecutorRetriesLostTxnLock(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErrs = []error{
+		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+			Retryable: "percolator: lock not found",
+		}}},
+		nil,
+	}
+	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
+	executor, err := New(runner, WithInodeAllocator(allocator))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
+	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+}
+
 func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
