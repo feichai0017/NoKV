@@ -6,11 +6,13 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +41,77 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 	require.NotEmpty(t, events)
 	require.Equal(t, uint64(60), events[len(events)-1].RegionDescriptor.Descriptor.RegionID)
 	require.Equal(t, commit.Cursor, tail)
+}
+
+func TestNetworkDriverAppendWaitsForCommitAfterDeliveredSendError(t *testing.T) {
+	transports := map[uint64]*postDeliveryErrorTransport{}
+	for _, id := range []uint64{1, 2, 3} {
+		transport, err := NewGRPCTransport(id, "127.0.0.1:0")
+		require.NoError(t, err)
+		transports[id] = &postDeliveryErrorTransport{Transport: transport}
+	}
+	peerAddrs := map[uint64]string{}
+	for id, transport := range transports {
+		peerAddrs[id] = transport.Addr()
+	}
+	for _, transport := range transports {
+		transport.SetPeers(peerAddrs)
+	}
+
+	drivers := map[uint64]*NetworkDriver{}
+	for _, id := range []uint64{1, 2, 3} {
+		driver, err := NewNetworkDriver(NetworkConfig{
+			ID:           id,
+			WorkDir:      t.TempDir(),
+			PeerIDs:      []uint64{1, 2, 3},
+			Transport:    transports[id],
+			TickInterval: 250 * time.Millisecond,
+		})
+		require.NoError(t, err)
+		drivers[id] = driver
+	}
+	for _, driver := range drivers {
+		t.Cleanup(func() { _ = driver.Close() })
+	}
+
+	require.NoError(t, drivers[1].Campaign())
+	var leaderID uint64
+	require.Eventually(t, func() bool {
+		id := drivers[1].LeaderID()
+		if id == 0 {
+			return false
+		}
+		for _, driver := range drivers {
+			if driver.LeaderID() != id {
+				return false
+			}
+		}
+		leaderID = id
+		return true
+	}, 3*time.Second, 50*time.Millisecond)
+
+	stores := map[uint64]*Store{}
+	for _, id := range []uint64{1, 2, 3} {
+		store, err := Open(Config{Driver: drivers[id], MaxRetainedRecords: 4})
+		require.NoError(t, err)
+		stores[id] = store
+	}
+
+	transports[leaderID].failNextAppend.Store(true)
+	commit, err := stores[leaderID].Append(context.Background(), rootevent.StoreJoined(1))
+	require.NoError(t, err)
+	require.False(t, transports[leaderID].failNextAppend.Load())
+
+	require.Eventually(t, func() bool {
+		for _, id := range []uint64{1, 2, 3} {
+			_ = stores[id].Refresh()
+			current, err := stores[id].Current()
+			if err != nil || !reflect.DeepEqual(current, commit.State) {
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, 50*time.Millisecond)
 }
 
 func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
@@ -143,6 +216,29 @@ func TestNetworkDriverRestartsFromPersistedState(t *testing.T) {
 	snapshot, err := stores[leaderID].Snapshot()
 	require.NoError(t, err)
 	require.Contains(t, snapshot.Descriptors, uint64(88))
+}
+
+type postDeliveryErrorTransport struct {
+	Transport
+	failNextAppend atomic.Bool
+}
+
+func (t *postDeliveryErrorTransport) Send(msgs ...myraft.Message) error {
+	err := t.Transport.Send(msgs...)
+	if t.failNextAppend.Load() && containsLogAppend(msgs) {
+		t.failNextAppend.Store(false)
+		return context.DeadlineExceeded
+	}
+	return err
+}
+
+func containsLogAppend(msgs []myraft.Message) bool {
+	for _, msg := range msgs {
+		if msg.Type == myraft.MsgAppend && len(msg.Entries) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func reserveNetworkPeerAddrs(t *testing.T) map[uint64]string {

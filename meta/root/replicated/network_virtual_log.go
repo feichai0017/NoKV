@@ -103,9 +103,10 @@ func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstor
 			return 0, err
 		}
 		d.mu.Unlock()
-		if err := d.sendMessages(outbound); err != nil {
-			return 0, err
-		}
+		// Raft transport delivery is best-effort. A send RPC can report a
+		// transient peer timeout even after the peer accepted the message; the
+		// proposal result is determined by committed-cursor progress below.
+		_ = d.sendMessages(outbound)
 		d.mu.Lock()
 	}
 	d.mu.Unlock()

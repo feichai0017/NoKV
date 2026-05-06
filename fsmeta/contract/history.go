@@ -354,6 +354,9 @@ func isIndeterminateHistoryError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if nokverrors.IsTxnContention(err) {
+		return true
+	}
 	switch nokverrors.KindOf(err) {
 	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable, nokverrors.KindRegionRouting, nokverrors.KindNotLeader, nokverrors.KindRetryExhausted:
 		return true

@@ -14,19 +14,16 @@ import (
 )
 
 type scriptInodeAllocator struct {
-	mu     sync.Mutex
-	byName map[string][]fsmeta.InodeID
-	next   fsmeta.InodeID
+	mu   sync.Mutex
+	next fsmeta.InodeID
 }
 
 func newScriptInodeAllocator(ops []Operation) *scriptInodeAllocator {
-	alloc := &scriptInodeAllocator{byName: make(map[string][]fsmeta.InodeID), next: 1_000_000}
+	alloc := &scriptInodeAllocator{next: 1_000_000}
 	for _, op := range ops {
 		if op.Kind != OpCreate {
 			continue
 		}
-		key := createIDKey(op.Mount, op.Parent, op.Name)
-		alloc.byName[key] = append(alloc.byName[key], op.Inode)
 		if op.Inode >= alloc.next {
 			alloc.next = op.Inode + 1
 		}
@@ -34,26 +31,15 @@ func newScriptInodeAllocator(ops []Operation) *scriptInodeAllocator {
 	return alloc
 }
 
-func (a *scriptInodeAllocator) AllocateCreateInode(_ context.Context, mount fsmeta.MountID, parent fsmeta.InodeID, name string) (fsmeta.InodeID, error) {
+func (a *scriptInodeAllocator) AllocateCreateInode(ctx context.Context, _ fsmeta.MountID, _ fsmeta.InodeID, _ string) (fsmeta.InodeID, error) {
+	if inode, ok := plannedCreateInode(ctx); ok {
+		return inode, nil
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	key := createIDKey(mount, parent, name)
-	if ids := a.byName[key]; len(ids) > 0 {
-		id := ids[0]
-		if len(ids) == 1 {
-			delete(a.byName, key)
-		} else {
-			a.byName[key] = ids[1:]
-		}
-		return id, nil
-	}
 	id := a.next
 	a.next++
 	return id, nil
-}
-
-func createIDKey(mount fsmeta.MountID, parent fsmeta.InodeID, name string) string {
-	return fmt.Sprintf("%s/%d/%s", mount, parent, name)
 }
 
 func TestFSMetaExecutorConcurrentHistoryContract(t *testing.T) {
