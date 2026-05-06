@@ -1,6 +1,8 @@
 name: Benchmark
 
 on:
+  push:
+    branches: ["main"]
   pull_request:
     branches: ["main"]
     paths:
@@ -43,7 +45,7 @@ permissions:
 
 jobs:
   fsmeta-medium:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'medium')
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'medium')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -84,7 +86,7 @@ jobs:
         run: docker compose down -v || true
 
   fsmeta-long:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'long')
+    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'long')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
