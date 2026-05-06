@@ -220,7 +220,12 @@ func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
 	if err != nil {
 		return err
 	}
-	return d.sendMessages(outbound)
+	// Incoming raft messages are accepted once Step and Ready processing
+	// succeed. Outbound replies are transport best-effort; rejecting the inbound
+	// RPC because a nested reply send timed out can make an already-applied
+	// message look like it failed at the sender.
+	_ = d.sendMessages(outbound)
+	return nil
 }
 
 type networkNode struct {
