@@ -1891,30 +1891,7 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	v, err := lsm.Get(e.Key)
 	utils.Panic(err)
 	utils.CondPanic(!bytes.Equal(e.Value, v.Value), fmt.Errorf("lsm.Get(e.Key) value not equal !!!"))
-	// TODO: complete range-scan testing.
-	//retList := make([]*kv.Entry, 0)
-	// testRange := func(isAsc bool) {
-	// 	// Range ensures every written LSM entry is readable.
-	// 	iter := lsm.NewIterator(&index.Options{IsAsc: true})
-	// 	for iter.Rewind(); iter.Valid(); iter.Next() {
-	// 		e := iter.Item().Entry()
-	// 		retList = append(retList, e)
-	// 	}
-	// 	utils.CondPanic(len(retList) != len(caseList), fmt.Errorf("len(retList) != len(caseList)"))
-	// 	sort.Slice(retList, func(i, j int) bool {
-	// 		return utils.CompareInternalKeys(retList[i].Key, retList[j].Key) > 1
-	// 	})
-	// 	for i := 0; i < len(caseList); i++ {
-	// 		a, b := caseList[i], retList[i]
-	// 		if !equal(a.Key, b.Key) || !equal(a.Value, b.Value) || a.ExpiresAt != b.ExpiresAt {
-	// 			utils.Panic(fmt.Errorf("lsm.Get(e.Key) kv disagreement !!!"))
-	// 		}
-	// 	}
-	// }
-	// // Test ascending order.
-	// testRange(true)
-	// // Test descending order.
-	// testRange(false)
+	// Verified bounded range-scans in TestLSMBoundedRangeIteration (lsm_range_test.go).
 }
 
 // buildLSM is the test harness helper.
