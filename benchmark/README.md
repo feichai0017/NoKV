@@ -119,6 +119,16 @@ temporary fsmeta gateways.
 mixed workload always creates `prompt.md`, `plan.json`, `state.bin`, and
 `checkpoint.tmp` to exercise update, writer-session, and unlink paths.
 
+For server-side profiling, set `NOKV_FSMETA_CAPTURE_PROFILES=1`. The helper
+captures concurrent CPU profiles from fsmeta, stores, coordinators, and
+meta-root processes through their diagnostics ports, then packages CPU, heap,
+allocs, goroutine, and expvar snapshots under
+`benchmark/data/fsmeta/profiles/`. Main-push and scheduled long fsmeta CI runs
+enable this automatically; PR median runs keep it disabled to avoid adding
+diagnostic overhead to the gating path. Override capture length with
+`NOKV_FSMETA_PROFILE_SECONDS` or endpoints with `NOKV_FSMETA_PROFILE_TARGETS`
+using `name=host:port` comma-separated entries.
+
 Direct run from inside the `benchmark/` Go module:
 
 ```bash

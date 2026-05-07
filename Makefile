@@ -359,6 +359,7 @@ clean:
 	rm -rf ./testdata
 	rm -f coverage.out
 	rm -f *.pprof
+	rm -rf benchmark/data/fsmeta/profiles
 	rm -f benchmark.test
 	@echo "✓ Clean complete"
 
