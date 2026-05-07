@@ -93,6 +93,10 @@ func (e *fakeExecutor) GetQuotaUsage(context.Context, fsmeta.QuotaUsageRequest) 
 	return fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, nil
 }
 
+func (e *fakeExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
+	return e.err
+}
+
 func (e *fakeExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
 	return e.err
 }
@@ -292,6 +296,11 @@ func TestTypedClientErrorTranslation(t *testing.T) {
 	defer cleanup()
 	_, err = cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "retired", Parent: fsmeta.RootInode, Name: "x"})
 	require.ErrorIs(t, err, fsmeta.ErrMountRetired)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrCrossAuthorityRename})
+	defer cleanup()
+	err = cli.Rename(context.Background(), fsmeta.RenameRequest{Mount: "vol", FromParent: 1, FromName: "a", ToParent: 2, ToName: "b"})
+	require.ErrorIs(t, err, fsmeta.ErrCrossAuthorityRename)
 
 	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrQuotaExceeded})
 	defer cleanup()

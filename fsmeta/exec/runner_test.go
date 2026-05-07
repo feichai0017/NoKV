@@ -76,6 +76,12 @@ type fakeMountResolver struct {
 	calls   int
 }
 
+type fakeAuthorityResolver struct {
+	same  bool
+	err   error
+	calls int
+}
+
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
 	completes   []subtreePublishCall
@@ -164,6 +170,14 @@ func (r *fakeMountResolver) ResolveMount(_ context.Context, mount fsmeta.MountID
 		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	return record, nil
+}
+
+func (r *fakeAuthorityResolver) SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error) {
+	r.calls++
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.same, nil
 }
 
 func newFakeRunner() *fakeRunner {
@@ -1397,6 +1411,64 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
+}
+
+func TestExecutorRenameMovesDentryWithoutSubtreeHandoff(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	publisher := &fakeSubtreePublisher{}
+	authority := &fakeAuthorityResolver{same: true}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(
+		runner,
+		WithMountResolver(resolver),
+		WithSubtreeAuthorityResolver(authority),
+		WithSubtreeHandoffPublisher(publisher),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	require.Len(t, runner.mutations, 1)
+	require.Empty(t, publisher.starts)
+	require.Empty(t, publisher.completes)
+	require.Equal(t, 1, authority.calls)
+}
+
+func TestExecutorRenameRejectsCrossAuthority(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	authority := &fakeAuthorityResolver{same: false}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrCrossAuthorityRename)
+	require.Empty(t, runner.mutations)
+	require.Equal(t, 1, authority.calls)
 }
 
 func TestExecutorRenameSubtreePinsCommitVersionToHandoffFrontier(t *testing.T) {

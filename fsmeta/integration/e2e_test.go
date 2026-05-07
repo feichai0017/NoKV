@@ -77,7 +77,7 @@ func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 	_, err = cli.Create(ctx, req)
 	require.True(t, errors.Is(err, fsmeta.ErrExists), "duplicate create error = %v", err)
 
-	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
+	require.NoError(t, cli.Rename(ctx, fsmeta.RenameRequest{
 		Mount:      req.Mount,
 		FromParent: req.Parent,
 		FromName:   req.Name,
@@ -430,7 +430,7 @@ func TestFSMetadataStageCommitArtifactPublishOnRealCluster(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"manifest.json"}, dentryNames(staged))
 
-	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
+	require.NoError(t, cli.Rename(ctx, fsmeta.RenameRequest{
 		Mount:      mount,
 		FromParent: stagingInode,
 		FromName:   "run-tmp",

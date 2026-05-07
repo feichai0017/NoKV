@@ -16,6 +16,7 @@ const (
 	OperationLookup           OperationKind = "lookup"
 	OperationReadDir          OperationKind = "readdir"
 	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
+	OperationRename           OperationKind = "rename"
 	OperationRenameSubtree    OperationKind = "rename_subtree"
 	OperationLink             OperationKind = "link"
 	OperationUnlink           OperationKind = "unlink"
@@ -93,6 +94,14 @@ type ReadDirRequest struct {
 type SnapshotSubtreeRequest struct {
 	Mount     MountID
 	RootInode InodeID
+}
+
+type RenameRequest struct {
+	Mount      MountID
+	FromParent InodeID
+	FromName   string
+	ToParent   InodeID
+	ToName     string
 }
 
 type RenameSubtreeRequest struct {
@@ -263,6 +272,27 @@ func PlanSnapshotSubtree(req SnapshotSubtreeRequest) (OperationPlan, error) {
 		Mount:        req.Mount,
 		PrimaryKey:   cloneBytes(prefix),
 		ReadPrefixes: cloneKeySet(prefix),
+	}, nil
+}
+
+func PlanRename(req RenameRequest) (OperationPlan, error) {
+	if req.FromParent == req.ToParent && req.FromName == req.ToName {
+		return OperationPlan{}, ErrInvalidRequest
+	}
+	source, err := EncodeDentryKey(req.Mount, req.FromParent, req.FromName)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	dest, err := EncodeDentryKey(req.Mount, req.ToParent, req.ToName)
+	if err != nil {
+		return OperationPlan{}, err
+	}
+	return OperationPlan{
+		Kind:       OperationRename,
+		Mount:      req.Mount,
+		PrimaryKey: cloneBytes(source),
+		ReadKeys:   cloneKeySet(source, dest),
+		MutateKeys: cloneKeySet(source, dest),
 	}, nil
 }
 

@@ -21,6 +21,7 @@ type Executor interface {
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
+	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
@@ -264,6 +265,19 @@ func (s *Service) GetQuotaUsage(ctx context.Context, req *fsmetapb.QuotaUsageReq
 		return nil, rpcError(err)
 	}
 	return quotaUsageResponseToProto(usage), nil
+}
+
+func (s *Service) Rename(ctx context.Context, req *fsmetapb.RenameRequest) (*fsmetapb.RenameResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta rename request is required")
+	}
+	if err := s.executor.Rename(ctx, renameRequestFromProto(req)); err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.RenameResponse{}, nil
 }
 
 func (s *Service) RenameSubtree(ctx context.Context, req *fsmetapb.RenameSubtreeRequest) (*fsmetapb.RenameSubtreeResponse, error) {

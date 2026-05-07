@@ -157,7 +157,7 @@ func (c *fakeMixedClient) GetQuotaUsage(context.Context, fsmeta.QuotaUsageReques
 	return out, nil
 }
 
-func (c *fakeMixedClient) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
+func (c *fakeMixedClient) Rename(_ context.Context, req fsmeta.RenameRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fromID := dentryID(req.FromParent, req.FromName)

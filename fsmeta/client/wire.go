@@ -100,6 +100,16 @@ func quotaUsageFromProto(resp *fsmetapb.QuotaUsageResponse) fsmeta.UsageRecord {
 	return fsmeta.UsageRecord{Bytes: resp.GetBytes(), Inodes: resp.GetInodes()}
 }
 
+func renameRequestToProto(req fsmeta.RenameRequest) *fsmetapb.RenameRequest {
+	return &fsmetapb.RenameRequest{
+		Mount:      string(req.Mount),
+		FromParent: uint64(req.FromParent),
+		FromName:   req.FromName,
+		ToParent:   uint64(req.ToParent),
+		ToName:     req.ToName,
+	}
+}
+
 func renameSubtreeRequestToProto(req fsmeta.RenameSubtreeRequest) *fsmetapb.RenameSubtreeRequest {
 	return &fsmetapb.RenameSubtreeRequest{
 		Mount:      string(req.Mount),

@@ -17,11 +17,12 @@ import (
 const (
 	fsmetaReasonMetadata = "fsmeta_reason"
 
-	reasonQuotaExceeded      = "quota_exceeded"
-	reasonWatchOverflow      = "watch_overflow"
-	reasonWatchCursorExpired = "watch_cursor_expired"
-	reasonMountNotRegistered = "mount_not_registered"
-	reasonMountRetired       = "mount_retired"
+	reasonQuotaExceeded        = "quota_exceeded"
+	reasonWatchOverflow        = "watch_overflow"
+	reasonWatchCursorExpired   = "watch_cursor_expired"
+	reasonMountNotRegistered   = "mount_not_registered"
+	reasonMountRetired         = "mount_retired"
+	reasonCrossAuthorityRename = "cross_authority_rename"
 )
 
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
@@ -35,6 +36,7 @@ type Client interface {
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
+	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
 	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
@@ -194,6 +196,14 @@ func (c *GRPCClient) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageReq
 		return fsmeta.UsageRecord{}, translateRPCError(err)
 	}
 	return quotaUsageFromProto(resp), nil
+}
+
+func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
+	if err := c.requireRPC(); err != nil {
+		return err
+	}
+	_, err := c.rpc.Rename(ctx, renameRequestToProto(req))
+	return translateRPCError(err)
 }
 
 func (c *GRPCClient) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
@@ -375,8 +385,11 @@ func translateRPCError(err error) error {
 	case codes.OutOfRange:
 		return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
 	case codes.FailedPrecondition:
-		if fsmetaReason(err) == reasonMountRetired {
+		switch fsmetaReason(err) {
+		case reasonMountRetired:
 			return fmt.Errorf("%w: %v", fsmeta.ErrMountRetired, err)
+		case reasonCrossAuthorityRename:
+			return fmt.Errorf("%w: %v", fsmeta.ErrCrossAuthorityRename, err)
 		}
 		return err
 	case codes.ResourceExhausted:

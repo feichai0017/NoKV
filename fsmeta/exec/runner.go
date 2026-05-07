@@ -83,6 +83,13 @@ type SubtreeHandoffPublisher interface {
 	CompleteSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error
 }
 
+// SubtreeAuthorityResolver decides whether an ordinary data-plane rename stays
+// inside one rooted authority. Cross-authority moves must use RenameSubtree so
+// root can advance authority eras explicitly.
+type SubtreeAuthorityResolver interface {
+	SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error)
+}
+
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -106,6 +113,7 @@ type Executor struct {
 	mounts                               MountResolver
 	quotas                               QuotaResolver
 	subtrees                             SubtreeHandoffPublisher
+	authorities                          SubtreeAuthorityResolver
 	negCache                             NegativeCache
 	dirPages                             DirPageCache
 	lockTTL                              uint64
@@ -201,6 +209,14 @@ func WithDirPageCache(cache DirPageCache) Option {
 func WithSubtreeHandoffPublisher(publisher SubtreeHandoffPublisher) Option {
 	return func(e *Executor) {
 		e.subtrees = publisher
+	}
+}
+
+// WithSubtreeAuthorityResolver enables admission for ordinary Rename. Without
+// a resolver, the executor uses the current single-authority mount model.
+func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
+	return func(e *Executor) {
+		e.authorities = resolver
 	}
 }
 
@@ -1139,6 +1155,67 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
 }
 
+type renameMove struct {
+	mount      fsmeta.MountID
+	fromParent fsmeta.InodeID
+	fromName   string
+	toParent   fsmeta.InodeID
+	toName     string
+}
+
+func renameMoveFromRename(req fsmeta.RenameRequest) renameMove {
+	return renameMove{
+		mount:      req.Mount,
+		fromParent: req.FromParent,
+		fromName:   req.FromName,
+		toParent:   req.ToParent,
+		toName:     req.ToName,
+	}
+}
+
+func renameMoveFromRenameSubtree(req fsmeta.RenameSubtreeRequest) renameMove {
+	return renameMove{
+		mount:      req.Mount,
+		fromParent: req.FromParent,
+		fromName:   req.FromName,
+		toParent:   req.ToParent,
+		toName:     req.ToName,
+	}
+}
+
+// Rename moves one dentry inside the same subtree authority. It is deliberately
+// a data-plane transaction: no rooted handoff is published, so common staged
+// publish paths do not serialize through the control plane.
+func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
+	plan, err := fsmeta.PlanRename(req)
+	if err != nil {
+		return err
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return err
+	}
+	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
+		return err
+	}
+	move := renameMoveFromRename(req)
+	var movedSize uint64
+	var movedInode bool
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+		mutations, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
+		if err != nil {
+			return err
+		}
+		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
+	}); err != nil {
+		return err
+	}
+	e.invalidateNegative(plan.ReadKeys...)
+	e.invalidateNegative(plan.MutateKeys...)
+	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
+	return nil
+}
+
 // RenameSubtree moves the subtree root dentry from source to destination.
 // Descendants follow through inode parent links rather than key rewrites.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
@@ -1158,8 +1235,9 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	var movedInode bool
 	var committedAt uint64
 	var handoffStarted bool
+	move := renameMoveFromRenameSubtree(req)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		mutations, err := e.prepareRenameSubtreeMutations(ctx, plan, req, startVersion, &movedSize, &movedInode)
+		mutations, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
 		}
@@ -1194,19 +1272,17 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	if handoffStarted && committedAt == 0 {
 		return errSubtreeHandoffWithoutFrontier
 	}
-	// RenameSubtree (v0) only moves the subtree root dentry; ReadKeys[0]
-	// is the source dentry (now gone) and MutateKeys carry the destination
-	// dentry (now present). Invalidate both so neither key serves a stale
-	// negative memo, and bump the source + destination parents' dirpage
-	// epochs so cached ReadDirPlus on either parent observes the move.
-	// Subtree internal pages survive — only the root dentry moved.
+	// Only the subtree root dentry moves; descendants follow inode parent links.
+	// Invalidate both old and new dentry keys plus the two parent directory
+	// epochs so negative and materialized directory-page caches cannot serve the
+	// pre-rename view.
 	e.invalidateNegative(plan.ReadKeys...)
 	e.invalidateNegative(plan.MutateKeys...)
 	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
 	return nil
 }
 
-func (e *Executor) prepareRenameSubtreeMutations(ctx context.Context, plan fsmeta.OperationPlan, req fsmeta.RenameSubtreeRequest, startVersion uint64, movedSize *uint64, movedInode *bool) ([]*kvrpcpb.Mutation, error) {
+func (e *Executor) prepareRenameMutations(ctx context.Context, plan fsmeta.OperationPlan, move renameMove, startVersion uint64, movedSize *uint64, movedInode *bool) ([]*kvrpcpb.Mutation, error) {
 	record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 	if err != nil {
 		return nil, err
@@ -1216,15 +1292,15 @@ func (e *Executor) prepareRenameSubtreeMutations(ctx context.Context, plan fsmet
 	} else if !errors.Is(err, fsmeta.ErrNotFound) {
 		return nil, err
 	}
-	record.Parent = req.ToParent
-	record.Name = req.ToName
+	record.Parent = move.toParent
+	record.Name = move.toName
 	value, err := fsmeta.EncodeDentryValue(record)
 	if err != nil {
 		return nil, err
 	}
 	*movedSize = 0
 	*movedInode = false
-	if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
+	if inode, ok, err := e.readInode(ctx, move.mount, record.Inode, startVersion); err != nil {
 		return nil, err
 	} else if ok {
 		*movedSize = inode.Size
@@ -1244,8 +1320,8 @@ func (e *Executor) prepareRenameSubtreeMutations(ctx context.Context, plan fsmet
 	}
 	if *movedInode {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{
-			{Mount: req.Mount, Scope: req.FromParent, Bytes: -inodeSizeDelta(*movedSize), Inodes: -1},
-			{Mount: req.Mount, Scope: req.ToParent, Bytes: inodeSizeDelta(*movedSize), Inodes: 1},
+			{Mount: move.mount, Scope: move.fromParent, Bytes: -inodeSizeDelta(*movedSize), Inodes: -1},
+			{Mount: move.mount, Scope: move.toParent, Bytes: inodeSizeDelta(*movedSize), Inodes: 1},
 		}, startVersion)
 		if err != nil {
 			return nil, err
@@ -1272,6 +1348,20 @@ func (e *Executor) completeSubtreeHandoff(ctx context.Context, mount fsmeta.Moun
 func (e *Executor) requireActiveMount(ctx context.Context, mount fsmeta.MountID) error {
 	_, err := e.resolveActiveMount(ctx, mount)
 	return err
+}
+
+func (e *Executor) requireSameAuthority(ctx context.Context, mount fsmeta.MountID, fromParent, toParent fsmeta.InodeID) error {
+	if e == nil || e.authorities == nil {
+		return nil
+	}
+	same, err := e.authorities.SameAuthority(ctx, mount, fromParent, toParent)
+	if err != nil {
+		return err
+	}
+	if !same {
+		return fsmeta.ErrCrossAuthorityRename
+	}
+	return nil
 }
 
 func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID) (MountAdmission, error) {
