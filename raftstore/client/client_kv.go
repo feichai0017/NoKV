@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
@@ -582,6 +583,12 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	if err != nil {
 		return 0, err
 	}
+	// Read-side lock resolution is allowed to roll back an expired primary
+	// lock. Keep the primary alive while secondary prewrites and commit RPCs
+	// wait behind raft/store work, otherwise a live long transaction can lose
+	// its own lock and surface as retryable "lock not found".
+	stopHeartbeat := c.startTxnHeartbeat(ctx, primary, startVersion, lockTTL)
+	defer stopHeartbeat()
 	secondaryMutations := make([]*kvrpcpb.Mutation, 0, len(cleaned)-1)
 	primarySkipped := false
 	for _, mut := range cleaned {
@@ -720,6 +727,58 @@ func shouldRollbackAfterPrimaryCommitFailure(err error) bool {
 		}
 	}
 	return false
+}
+
+func txnHeartbeatInterval(lockTTL uint64) time.Duration {
+	if lockTTL == 0 {
+		return 0
+	}
+	interval := time.Duration(lockTTL) * time.Millisecond / 3
+	if interval <= 0 {
+		return time.Millisecond
+	}
+	return interval
+}
+
+// startTxnHeartbeat is best-effort liveness maintenance for a prewritten
+// primary. It deliberately does not turn transient heartbeat RPC failures into
+// transaction failures: commit remains the authority for the final outcome, and
+// heartbeat only prevents healthy long 2PC windows from expiring early.
+func (c *Client) startTxnHeartbeat(ctx context.Context, primary []byte, startVersion, lockTTL uint64) func() {
+	interval := txnHeartbeatInterval(lockTTL)
+	if interval <= 0 {
+		return func() {}
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			resp, err := c.TxnHeartBeat(heartbeatCtx, primary, startVersion, lockTTL)
+			if err != nil {
+				continue
+			}
+			if resp.GetError() != nil || resp.GetCommitVersion() != 0 {
+				return
+			}
+			switch resp.GetAction() {
+			case kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExpireRollback,
+				kvrpcpb.TxnHeartBeatAction_TxnHeartBeatLockNotExistRollback:
+				return
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) (*kvrpcpb.PrewriteResponse, *errorpb.RegionError, error) {
