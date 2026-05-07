@@ -27,7 +27,7 @@ jobs:
           else
             before="${{ github.event.before }}"
             if [[ "$before" =~ ^0+$ ]]; then
-              range="${{ github.sha }}"
+              range="${{ github.sha }}^..${{ github.sha }}"
             else
               range="$before..${{ github.sha }}"
             fi
