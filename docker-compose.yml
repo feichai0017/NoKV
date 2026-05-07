@@ -1,5 +1,6 @@
 # NoKV HA deployment: 3 meta-root + 3 coordinators + 3 stores + 1 fsmeta gateway.
-# Every running service exposes a /debug/vars expvar endpoint for dashboards.
+# Every running service exposes /debug/vars and /debug/pprof on its diagnostics
+# port for dashboards and benchmark profiling.
 #
 # Usage:
 #   docker compose up -d
@@ -23,8 +24,8 @@
 # write retries and lands on whichever standby has grabbed the grant.
 #
 # Every runtime binary (coordinator, store, fsmeta, meta-root) exposes expvar
-# at /debug/vars via its own --metrics-addr flag; ports 9380-9382 belong to
-# the three meta-root peers.
+# at /debug/vars and pprof at /debug/pprof via its own --metrics-addr flag;
+# ports 9380-9382 belong to the three meta-root peers.
 
 x-nokv-image: &nokv-image
   build: .

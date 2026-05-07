@@ -13,9 +13,14 @@ mount="${NOKV_FSMETA_MOUNT:-fsmeta-bench}"
 wait_attempts="${NOKV_FSMETA_WAIT_ATTEMPTS:-180}"
 wait_interval="${NOKV_FSMETA_WAIT_INTERVAL:-1}"
 output_dir="${NOKV_FSMETA_OUTPUT_DIR:-$ROOT/benchmark/data/fsmeta/results}"
+capture_profiles="${NOKV_FSMETA_CAPTURE_PROFILES:-0}"
+profile_seconds="${NOKV_FSMETA_PROFILE_SECONDS:-30}"
+profile_dir="${NOKV_FSMETA_PROFILE_DIR:-$ROOT/benchmark/data/fsmeta/profiles/fsmeta_${profile}_${run_id}}"
+profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=127.0.0.1:9400,store1=127.0.0.1:9200,store2=127.0.0.1:9201,store3=127.0.0.1:9202,coord1=127.0.0.1:9100,coord2=127.0.0.1:9101,coord3=127.0.0.1:9102,root1=127.0.0.1:9380,root2=127.0.0.1:9381,root3=127.0.0.1:9382}"
 cache_tmp_dir=""
 plain_pid=""
 cached_pid=""
+profile_pids=()
 
 case "$profile" in
 	median)
@@ -68,6 +73,11 @@ case "$output_dir" in
 esac
 mkdir -p "$output_dir"
 
+case "$profile_dir" in
+	/*) ;;
+	*) profile_dir="$ROOT/$profile_dir" ;;
+esac
+
 wait_port() {
 	local addr="$1"
 	local host="${addr%:*}"
@@ -108,6 +118,97 @@ run_bench() {
 	)
 }
 
+profiles_enabled() {
+	case "$capture_profiles" in
+		1|true|TRUE|yes|YES) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+write_profile_manifest() {
+	local workloads="$1"
+	cat >"$profile_dir/manifest.txt" <<EOF
+run_id=$run_id
+benchmark_profile=$profile
+workloads=$workloads
+clients=$clients
+dirs=$dirs
+files_per_dir=$files_per_dir
+files=$files
+reads_per_client=$reads
+groups=$groups
+entries_per_group=$entries_per_group
+artifacts_per_entry=$artifacts_per_entry
+session_ttl=$session_ttl
+profile_seconds=$profile_seconds
+targets=$profile_targets
+EOF
+}
+
+start_profile_capture() {
+	local workloads="$1"
+	if ! profiles_enabled; then
+		return
+	fi
+	mkdir -p "$profile_dir"
+	write_profile_manifest "$workloads"
+	echo "capturing fsmeta profile bundle in $profile_dir"
+	IFS=',' read -r -a targets <<<"$profile_targets"
+	for target in "${targets[@]}"; do
+		local name="${target%%=*}"
+		local addr="${target#*=}"
+		if [[ -z "$name" || -z "$addr" || "$name" == "$addr" ]]; then
+			echo "skip malformed profile target: $target" >&2
+			continue
+		fi
+		(
+			curl -fsS --max-time "$((profile_seconds + 15))" \
+				"http://$addr/debug/pprof/profile?seconds=$profile_seconds" \
+				-o "$profile_dir/${name}.cpu.pprof" \
+				>"$profile_dir/${name}.cpu.log" 2>&1 || \
+				echo "cpu profile capture failed for $name at $addr" >>"$profile_dir/${name}.cpu.log"
+		) &
+		profile_pids+=("$!")
+	done
+}
+
+fetch_profile_file() {
+	local url="$1"
+	local output="$2"
+	curl -fsS --max-time 15 "$url" -o "$output" >/dev/null 2>&1 || \
+		echo "profile fetch failed: $url" >"$output.error"
+}
+
+collect_profile_snapshots() {
+	if ! profiles_enabled; then
+		return
+	fi
+	IFS=',' read -r -a targets <<<"$profile_targets"
+	for target in "${targets[@]}"; do
+		local name="${target%%=*}"
+		local addr="${target#*=}"
+		if [[ -z "$name" || -z "$addr" || "$name" == "$addr" ]]; then
+			continue
+		fi
+		fetch_profile_file "http://$addr/debug/vars" "$profile_dir/${name}.vars.json"
+		fetch_profile_file "http://$addr/debug/pprof/goroutine?debug=2" "$profile_dir/${name}.goroutine.txt"
+		fetch_profile_file "http://$addr/debug/pprof/heap" "$profile_dir/${name}.heap.pprof"
+		fetch_profile_file "http://$addr/debug/pprof/allocs" "$profile_dir/${name}.allocs.pprof"
+	done
+}
+
+finish_profile_capture() {
+	if ! profiles_enabled; then
+		return
+	fi
+	for pid in "${profile_pids[@]}"; do
+		wait "$pid" || true
+	done
+	collect_profile_snapshots
+	tar -C "$(dirname "$profile_dir")" -czf "$profile_dir.tar.gz" "$(basename "$profile_dir")"
+	echo "wrote fsmeta profile bundle: $profile_dir.tar.gz"
+}
+
 print_bench_summary() {
 	local output="$1"
 	if [[ ! -f "$output" ]]; then
@@ -138,7 +239,15 @@ run_compose_benchmarks() {
 			sleep "$stabilize_seconds"
 		fi
 	fi
+	start_profile_capture "$workloads"
+	set +e
 	run_bench "$fsmeta_addr" "$workloads" "$output"
+	local bench_status=$?
+	set -e
+	finish_profile_capture
+	if [[ "$bench_status" -ne 0 ]]; then
+		exit "$bench_status"
+	fi
 	print_bench_summary "$output"
 	echo "wrote fsmeta benchmark summary: $output"
 	if [[ "${NOKV_FSMETA_COMPOSE_DOWN:-0}" == "1" ]]; then

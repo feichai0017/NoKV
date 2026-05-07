@@ -5,9 +5,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 )
 
-// StartExpvarServer starts an optional HTTP endpoint exposing /debug/vars.
+// StartExpvarServer starts an optional HTTP endpoint exposing /debug/vars and
+// /debug/pprof. The pprof surface is intentionally tied to the same opt-in
+// diagnostics listener as expvar so production deployments can keep both
+// disabled by leaving --metrics-addr empty.
 // An empty address disables the server and returns nil.
 //
 // CORS is permissive so a browser-based dashboard served from a different
@@ -27,12 +31,24 @@ func StartExpvarServer(addr string) (net.Listener, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/debug/vars", corsReadOnly(expvar.Handler()))
+	registerPprofHandlers(mux)
 	go func() {
 		if err := http.Serve(ln, mux); err != nil && err != http.ErrServerClosed {
 			log.Printf("expvar metrics server error: %v", err)
 		}
 	}()
 	return ln, nil
+}
+
+func registerPprofHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/pprof/", corsReadOnlyFunc(pprof.Index))
+	mux.HandleFunc("/debug/pprof/cmdline", corsReadOnlyFunc(pprof.Cmdline))
+	mux.HandleFunc("/debug/pprof/profile", corsReadOnlyFunc(pprof.Profile))
+	mux.HandleFunc("/debug/pprof/symbol", corsReadOnlyFunc(pprof.Symbol))
+	mux.HandleFunc("/debug/pprof/trace", corsReadOnlyFunc(pprof.Trace))
+	for _, name := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
+		mux.Handle("/debug/pprof/"+name, corsReadOnly(pprof.Handler(name)))
+	}
 }
 
 // corsReadOnly allows cross-origin GETs. Writes are not exposed on this
@@ -48,4 +64,8 @@ func corsReadOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func corsReadOnlyFunc(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return corsReadOnly(http.HandlerFunc(next)).ServeHTTP
 }

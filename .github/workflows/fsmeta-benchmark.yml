@@ -20,6 +20,7 @@ on:
       - "go.sum"
       - "local/**"
       - "Makefile"
+      - "metrics/**"
       - "meta/**"
       - "pb/**"
       - "proto/**"
@@ -78,6 +79,7 @@ jobs:
           name: fsmeta-median-${{ github.run_id }}
           path: |
             benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log
           if-no-files-found: ignore
@@ -102,6 +104,8 @@ jobs:
       - name: Run long fsmeta workload matrix
         env:
           NOKV_FSMETA_PROFILE: long
+          NOKV_FSMETA_CAPTURE_PROFILES: "1"
+          NOKV_FSMETA_PROFILE_SECONDS: "60"
           NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
         run: make fsmeta-bench
 
@@ -120,6 +124,7 @@ jobs:
           name: fsmeta-long-${{ github.run_id }}
           path: |
             benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log
           if-no-files-found: ignore
