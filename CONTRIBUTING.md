@@ -35,6 +35,18 @@ Use these branch prefixes:
 - Commit format: `<type>: <subject>`
 - Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 - Keep each commit focused on one logical change.
+- Sign every commit with the Developer Certificate of Origin trailer:
+
+```bash
+git commit -s -m "feat: add feature"
+```
+
+If a local commit is missing the trailer, amend or rebase before opening the PR:
+
+```bash
+git commit --amend -s --no-edit
+git rebase --signoff origin/main
+```
 
 ## Local Validation
 
@@ -65,6 +77,7 @@ make bench
 - Link related issue(s).
 - Include docs updates when behavior/config/CLI changes.
 - Keep PRs small enough for focused review.
+- Every non-merge commit must include a `Signed-off-by` trailer matching the Developer Certificate of Origin in [`DCO`](./DCO).
 
 ## Code Guidelines
 

@@ -1,0 +1,74 @@
+name: DCO
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  signoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check commit sign-offs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            range="${{ github.event.pull_request.base.sha }}..HEAD"
+          else
+            before="${{ github.event.before }}"
+            if [[ "$before" =~ ^0+$ ]]; then
+              range="${{ github.sha }}^..${{ github.sha }}"
+            else
+              range="$before..${{ github.sha }}"
+            fi
+          fi
+
+          if ! commits="$(git rev-list --no-merges "$range")"; then
+            echo "::error title=Invalid DCO commit range::Unable to resolve commit range $range."
+            exit 1
+          fi
+          if [[ -z "$commits" ]]; then
+            echo "No non-merge commits to check."
+            exit 0
+          fi
+
+          missing=0
+          while IFS= read -r commit; do
+            trailers="$(git show -s --format=%B "$commit" | git interpret-trailers --parse)"
+            if ! grep -Eiq '^Signed-off-by: .+ <[^>]+>$' <<<"$trailers"; then
+              echo "::error title=Missing DCO sign-off::Commit $commit is missing a Signed-off-by trailer."
+              git show -s --format='%h %s' "$commit"
+              missing=1
+            fi
+          done <<<"$commits"
+
+          if [[ "$missing" -ne 0 ]]; then
+            cat <<'EOF'
+
+          Add a Developer Certificate of Origin sign-off to every commit:
+
+            git commit -s -m "type: subject"
+
+          If the latest commit is missing a sign-off:
+
+            git commit --amend -s --no-edit
+
+          For a local branch with multiple commits:
+
+            git rebase --signoff origin/main
+
+          EOF
+            exit 1
+          fi
+
+          echo "All checked commits include Signed-off-by trailers."
