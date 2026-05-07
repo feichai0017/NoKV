@@ -893,6 +893,73 @@ func TestClientTxnHeartBeatRoutesPrimaryAndDelegatesPhysicalTime(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+func TestClientTwoPhaseCommitHeartbeatsPrimaryWhileCommitWaits(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	heartbeatChecked := make(chan error, 1)
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		select {
+		case err := <-heartbeatChecked:
+			if err != nil {
+				return nil, err
+			}
+		case <-time.After(time.Second):
+			return nil, fmt.Errorf("timed out waiting for transaction heartbeat")
+		}
+		return svc.mockService.Commit(ctx, req)
+	}
+	svc.txnHeartBeatFn = func(_ context.Context, req *kvrpcpb.KvTxnHeartBeatRequest) (*kvrpcpb.KvTxnHeartBeatResponse, error) {
+		var err error
+		if req.GetContext().GetRegionId() != 1 {
+			err = fmt.Errorf("heartbeat routed to region %d", req.GetContext().GetRegionId())
+		} else if string(req.GetRequest().GetPrimaryKey()) != "alfa" {
+			err = fmt.Errorf("heartbeat primary = %q", req.GetRequest().GetPrimaryKey())
+		} else if req.GetRequest().GetStartVersion() != 100 {
+			err = fmt.Errorf("heartbeat start version = %d", req.GetRequest().GetStartVersion())
+		} else if req.GetRequest().GetTtlExtension() != 30 {
+			err = fmt.Errorf("heartbeat ttl extension = %d", req.GetRequest().GetTtlExtension())
+		}
+		select {
+		case heartbeatChecked <- err:
+		default:
+		}
+		return &kvrpcpb.KvTxnHeartBeatResponse{
+			Response: &kvrpcpb.TxnHeartBeatResponse{
+				Action:  kvrpcpb.TxnHeartBeatAction_TxnHeartBeatTTLExtended,
+				LockTtl: 60,
+			},
+		}, nil
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("value")},
+	}, 100, 150, 30)
+	require.NoError(t, err)
+}
+
 func TestClientResolveLocksReturnsKeyError(t *testing.T) {
 	cluster := newMockCluster(clusterRegion{
 		meta: &metapb.RegionDescriptor{
