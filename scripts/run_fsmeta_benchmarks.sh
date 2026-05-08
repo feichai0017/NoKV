@@ -32,7 +32,7 @@ case "$profile" in
 		default_groups=8
 		default_entries_per_group=64
 		default_artifacts_per_entry=8
-		default_session_ttl=2s
+		default_session_ttl=10s
 		default_timeout=25m
 		default_stabilize_seconds=20
 		;;
@@ -45,7 +45,7 @@ case "$profile" in
 		default_groups=16
 		default_entries_per_group=128
 		default_artifacts_per_entry=10
-		default_session_ttl=2s
+		default_session_ttl=10s
 		default_timeout=120m
 		default_stabilize_seconds=45
 		;;

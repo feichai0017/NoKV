@@ -13,8 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -28,6 +31,12 @@ const (
 )
 
 var ErrWorkloadFailed = errors.New("benchmark/fsmeta/workload: workload completed with operation errors")
+
+const (
+	maxOperationAttempts = 4
+	operationRetryBase   = 10 * time.Millisecond
+	operationRetryMax    = 100 * time.Millisecond
+)
 
 // Client is the fsmeta operation surface needed by metadata workloads.
 // fsmeta/client.GRPCClient satisfies this interface.
@@ -579,10 +588,46 @@ func (r *recorder) snapshot() []Sample {
 	return out
 }
 
+// timeCall measures one logical metadata operation. Retryable transaction
+// contention is part of the user-visible latency for a real client, so the
+// benchmark retries it inside the same sample instead of counting scheduler
+// jitter as a permanent workload failure.
 func timeCall(fn func() error) (time.Duration, error) {
 	start := time.Now()
-	err := fn()
+	var err error
+	for attempt := 0; attempt < maxOperationAttempts; attempt++ {
+		err = fn()
+		if !shouldRetryOperation(err) || attempt+1 == maxOperationAttempts {
+			return time.Since(start), err
+		}
+		time.Sleep(operationRetryBackoff(attempt))
+	}
 	return time.Since(start), err
+}
+
+func shouldRetryOperation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	switch status.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded:
+		return false
+	}
+	return nokverrors.Retryable(err)
+}
+
+func operationRetryBackoff(attempt int) time.Duration {
+	backoff := operationRetryBase
+	for i := 0; i < attempt; i++ {
+		backoff *= 2
+		if backoff >= operationRetryMax {
+			return operationRetryMax
+		}
+	}
+	return backoff
 }
 
 func finishResult(name, runID string, started time.Time, samples []Sample) (Result, error) {

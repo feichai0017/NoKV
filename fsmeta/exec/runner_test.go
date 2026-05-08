@@ -1133,6 +1133,37 @@ func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
+func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
+	runner := newFakeRunner()
+	for range 9 {
+		runner.mutateErrs = append(runner.mutateErrs, fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+			Locked: &kvrpcpb.Locked{
+				PrimaryLock: []byte("dentry"),
+				Key:         []byte("dentry"),
+				LockVersion: 2,
+				LockTtl:     defaultLockTTL,
+			},
+		}}})
+	}
+	runner.mutateErrs = append(runner.mutateErrs, nil)
+	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
+	executor, err := New(runner, WithInodeAllocator(allocator))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
+	require.Equal(t, uint64(21), runner.nextTS)
+	require.Equal(t, uint64(9), executor.Stats()["txn_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+}
+
 func TestExecutorRetriesWriteConflict(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{

@@ -93,6 +93,14 @@ func TestContextAndGRPCStatusKinds(t *testing.T) {
 	require.Equal(t, KindStaleEpoch, KindOf(stale))
 	require.True(t, Retryable(stale))
 
+	lockConflict := RPCStatusError(KindLockConflict, codes.Aborted, "diagnostic live lock text", nil)
+	require.Equal(t, KindLockConflict, KindOf(lockConflict))
+	require.True(t, Retryable(lockConflict))
+
+	writeConflict := RPCStatusError(KindWriteConflict, codes.Aborted, "diagnostic write conflict text", nil)
+	require.Equal(t, KindWriteConflict, KindOf(writeConflict))
+	require.True(t, Retryable(writeConflict))
+
 	unavailable := RPCStatusError(KindUnavailable, codes.FailedPrecondition, "diagnostic root unavailable text", nil)
 	require.Equal(t, KindUnavailable, KindOf(unavailable))
 	require.True(t, Retryable(unavailable))

@@ -23,9 +23,11 @@ const (
 	// back a live metadata transaction.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
-	maxTxnContentionRetries   = 3
-	maxReadContentionRetries  = 3
-	txnContentionRetryBackoff = time.Millisecond
+	maxTxnContentionRetries  = 12
+	maxReadContentionRetries = 3
+
+	txnContentionRetryBaseBackoff = time.Millisecond
+	txnContentionRetryMaxBackoff  = 100 * time.Millisecond
 )
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
@@ -1460,6 +1462,11 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
+		// A live Percolator lock may survive ordinary RPC and raft scheduling
+		// jitter, especially when a close and session-cleanup delete touch the
+		// same lease key. fsmeta write APIs should absorb that transient
+		// contention within a bounded window instead of returning MVCC lock
+		// details.
 		e.txnRetriesTotal.Add(1)
 		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
 			return err
@@ -1499,7 +1506,7 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 }
 
 func waitTxnContentionRetry(ctx context.Context, attempt int) error {
-	delay := txnContentionRetryBackoff << attempt
+	delay := min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {

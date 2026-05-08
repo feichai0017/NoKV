@@ -108,7 +108,10 @@ fsmeta gateway. Default scale is the PR-oriented median service run: 12 clients,
 mixed workload with 8 groups x 64 entries x 8 artifacts. Override scale with environment
 variables such as `NOKV_FSMETA_CLIENTS`, `NOKV_FSMETA_GROUPS`,
 `NOKV_FSMETA_ENTRIES_PER_GROUP`, `NOKV_FSMETA_ARTIFACTS_PER_ENTRY`, and
-`NOKV_FSMETA_WORKLOADS`. The script also waits 20 seconds after ports open so a
+`NOKV_FSMETA_WORKLOADS`. The default writer-session TTL is 10 seconds so
+session cleanup measures stale lease behavior without racing ordinary
+open/heartbeat/close tails on shared CI runners. The script also waits 20
+seconds after ports open so a
 fresh Compose cluster can finish Raft leader election and coordinator grant
 publication; set `NOKV_FSMETA_STABILIZE_SECONDS=0` for an already-warm cluster.
 The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
