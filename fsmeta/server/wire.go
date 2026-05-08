@@ -1,6 +1,8 @@
 package server
 
 import (
+	"time"
+
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetapb "github.com/feichai0017/NoKV/pb/fsmeta"
 )
@@ -162,10 +164,10 @@ func openWriteSessionRequestFromProto(req *fsmetapb.OpenWriteSessionRequest) fsm
 		return fsmeta.OpenWriteSessionRequest{}
 	}
 	return fsmeta.OpenWriteSessionRequest{
-		Mount:         fsmeta.MountID(req.GetMount()),
-		Inode:         fsmeta.InodeID(req.GetInode()),
-		Session:       fsmeta.SessionID(req.GetSession()),
-		ExpiresUnixNs: req.GetExpiresUnixNs(),
+		Mount:   fsmeta.MountID(req.GetMount()),
+		Inode:   fsmeta.InodeID(req.GetInode()),
+		Session: fsmeta.SessionID(req.GetSession()),
+		TTL:     time.Duration(req.GetTtlNs()),
 	}
 }
 
@@ -174,10 +176,10 @@ func heartbeatWriteSessionRequestFromProto(req *fsmetapb.HeartbeatWriteSessionRe
 		return fsmeta.HeartbeatWriteSessionRequest{}
 	}
 	return fsmeta.HeartbeatWriteSessionRequest{
-		Mount:         fsmeta.MountID(req.GetMount()),
-		Inode:         fsmeta.InodeID(req.GetInode()),
-		Session:       fsmeta.SessionID(req.GetSession()),
-		ExpiresUnixNs: req.GetExpiresUnixNs(),
+		Mount:   fsmeta.MountID(req.GetMount()),
+		Inode:   fsmeta.InodeID(req.GetInode()),
+		Session: fsmeta.SessionID(req.GetSession()),
+		TTL:     time.Duration(req.GetTtlNs()),
 	}
 }
 

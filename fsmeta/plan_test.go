@@ -221,10 +221,9 @@ func TestPlansCloneKeys(t *testing.T) {
 
 func TestPlanOpenWriteSessionTouchesInodeAndSession(t *testing.T) {
 	plan, err := PlanOpenWriteSession(OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         44,
-		Session:       "client-1",
-		ExpiresUnixNs: 100,
+		Mount:   "vol",
+		Inode:   44,
+		Session: "client-1",
 	})
 	require.NoError(t, err)
 

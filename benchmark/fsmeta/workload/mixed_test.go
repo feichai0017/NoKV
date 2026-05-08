@@ -249,7 +249,7 @@ func (c *fakeMixedClient) OpenWriteSession(_ context.Context, req fsmeta.OpenWri
 	if _, ok := c.inodes[req.Inode]; !ok {
 		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: time.Now().Add(req.TTL).UnixNano()}
 	c.sessions[req.Session] = record
 	return record, nil
 }
@@ -261,7 +261,7 @@ func (c *fakeMixedClient) HeartbeatWriteSession(_ context.Context, req fsmeta.He
 	if !ok || record.Inode != req.Inode {
 		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
 	}
-	record.ExpiresUnixNs = req.ExpiresUnixNs
+	record.ExpiresUnixNs = time.Now().Add(req.TTL).UnixNano()
 	c.sessions[req.Session] = record
 	return record, nil
 }
@@ -299,19 +299,19 @@ type retryOpenMixedClient struct {
 	attempts      int
 	firstSession  fsmeta.SessionID
 	secondSession fsmeta.SessionID
-	firstExpires  int64
-	secondExpires int64
+	firstTTL      time.Duration
+	secondTTL     time.Duration
 }
 
 func (c *retryOpenMixedClient) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
 	c.attempts++
 	if c.attempts == 1 {
 		c.firstSession = req.Session
-		c.firstExpires = req.ExpiresUnixNs
+		c.firstTTL = req.TTL
 		return fsmeta.SessionRecord{}, nokverrors.RPCStatusError(nokverrors.KindLockConflict, codes.Aborted, "live lock", nil)
 	}
 	c.secondSession = req.Session
-	c.secondExpires = req.ExpiresUnixNs
+	c.secondTTL = req.TTL
 	return c.fakeMixedClient.OpenWriteSession(ctx, req)
 }
 
@@ -403,7 +403,7 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 	}
 }
 
-func TestWriterSessionOpenRefreshesExpiryAcrossRetry(t *testing.T) {
+func TestWriterSessionOpenUsesFreshLeaseIDAcrossRetry(t *testing.T) {
 	base := newFakeMixedClient()
 	created, err := base.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -423,7 +423,7 @@ func TestWriterSessionOpenRefreshesExpiryAcrossRetry(t *testing.T) {
 
 	require.Equal(t, 2, cli.attempts)
 	require.NotEqual(t, cli.firstSession, cli.secondSession)
-	require.GreaterOrEqual(t, cli.secondExpires, cli.firstExpires)
+	require.Equal(t, cli.firstTTL, cli.secondTTL)
 	require.False(t, hasRecordedErrors(rec.snapshot()))
 }
 

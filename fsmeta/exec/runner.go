@@ -963,10 +963,10 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if !e.expiryInFuture(req.ExpiresUnixNs) {
+	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
 		if err != nil {
@@ -978,7 +978,13 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		if inode.Type != fsmeta.InodeTypeFile {
 			return fsmeta.ErrInvalidRequest
 		}
-		now := e.clock().UnixNano()
+		nowTime := e.clock()
+		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+		if !ok {
+			return fsmeta.ErrInvalidRequest
+		}
+		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+		now := nowTime.UnixNano()
 		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
 			return err
 		} else if ok && sessionLive(existing, now) {
@@ -1007,7 +1013,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 				}
 			}
 		}
-		value, err := fsmeta.EncodeSessionValue(record)
+		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
 			return err
 		}
@@ -1015,8 +1021,11 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		record = candidate
+		return nil
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1033,12 +1042,18 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if !e.expiryInFuture(req.ExpiresUnixNs) {
+	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		now := e.clock().UnixNano()
+		nowTime := e.clock()
+		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+		if !ok {
+			return fsmeta.ErrInvalidRequest
+		}
+		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+		now := nowTime.UnixNano()
 		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
@@ -1053,7 +1068,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		if !ok || !sessionLive(owner, now) || owner.Session != req.Session || owner.Inode != req.Inode {
 			return fsmeta.ErrNotFound
 		}
-		value, err := fsmeta.EncodeSessionValue(record)
+		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
 			return err
 		}
@@ -1061,8 +1076,11 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		record = candidate
+		return nil
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1599,8 +1617,17 @@ func (e *Executor) readSessionByKey(ctx context.Context, key []byte, version uin
 	return record, true, nil
 }
 
-func (e *Executor) expiryInFuture(expiresUnixNs int64) bool {
-	return expiresUnixNs > e.clock().UnixNano()
+func sessionExpiryUnixNs(now time.Time, ttl time.Duration) (int64, bool) {
+	if ttl <= 0 {
+		return 0, false
+	}
+	const maxInt64 = int64(1<<63 - 1)
+	nowUnixNs := now.UnixNano()
+	ttlUnixNs := int64(ttl)
+	if nowUnixNs > maxInt64-ttlUnixNs {
+		return 0, false
+	}
+	return nowUnixNs + ttlUnixNs, true
 }
 
 func (e *Executor) clock() time.Time {

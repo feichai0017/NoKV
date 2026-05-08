@@ -144,19 +144,19 @@ func unlinkRequestToProto(req fsmeta.UnlinkRequest) *fsmetapb.UnlinkRequest {
 
 func openWriteSessionRequestToProto(req fsmeta.OpenWriteSessionRequest) *fsmetapb.OpenWriteSessionRequest {
 	return &fsmetapb.OpenWriteSessionRequest{
-		Mount:         string(req.Mount),
-		Inode:         uint64(req.Inode),
-		Session:       string(req.Session),
-		ExpiresUnixNs: req.ExpiresUnixNs,
+		Mount:   string(req.Mount),
+		Inode:   uint64(req.Inode),
+		Session: string(req.Session),
+		TtlNs:   uint64(req.TTL),
 	}
 }
 
 func heartbeatWriteSessionRequestToProto(req fsmeta.HeartbeatWriteSessionRequest) *fsmetapb.HeartbeatWriteSessionRequest {
 	return &fsmetapb.HeartbeatWriteSessionRequest{
-		Mount:         string(req.Mount),
-		Inode:         uint64(req.Inode),
-		Session:       string(req.Session),
-		ExpiresUnixNs: req.ExpiresUnixNs,
+		Mount:   string(req.Mount),
+		Inode:   uint64(req.Inode),
+		Session: string(req.Session),
+		TtlNs:   uint64(req.TTL),
 	}
 }
 

@@ -794,10 +794,10 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, opened)
@@ -810,18 +810,18 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.Contains(t, runner.data, string(ownerKey))
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-2",
-		ExpiresUnixNs: 250,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-2",
+		TTL:     150 * time.Nanosecond,
 	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 
 	heartbeat, err := executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 300,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     200 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(300), heartbeat.ExpiresUnixNs)
@@ -834,6 +834,69 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(sessionKey))
 	require.NotContains(t, runner.data, string(ownerKey))
+}
+
+func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, runner.mutations)
+
+	seedSession(t, runner, "vol", fsmeta.SessionRecord{Session: "writer-live", Inode: 22, ExpiresUnixNs: 500})
+	_, err = executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-live",
+		TTL:     -time.Nanosecond,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+}
+
+func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-1")
+	require.NoError(t, err)
+	runner.mutateErrs = []error{
+		nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
+			CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				Key:         sessionKey,
+				CommitTs:    2,
+				MinCommitTs: 4,
+			},
+		}),
+		nil,
+	}
+	clockCalls := 0
+	executor, err := New(runner, WithClock(func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return time.Unix(0, 100)
+		}
+		return time.Unix(0, 500)
+	}))
+	require.NoError(t, err)
+
+	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(600), opened.ExpiresUnixNs)
+	stored, ok, err := executor.readSessionByKey(context.Background(), sessionKey, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(600), stored.ExpiresUnixNs)
 }
 
 func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
@@ -852,10 +915,10 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-new",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-new",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(oldSessionKey))
@@ -885,10 +948,10 @@ func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-new",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-new",
+		TTL:     100 * time.Nanosecond,
 	})
 
 	require.NoError(t, err)
@@ -907,10 +970,10 @@ func TestExecutorOpenWriteSessionRejectsDirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
 	require.Empty(t, runner.mutations)
