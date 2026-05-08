@@ -20,6 +20,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
@@ -41,6 +42,8 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for grant-gated control plane (required)")
 	grantTTL := fs.Duration("grant-ttl", 10*time.Second, "coordinator grant ttl")
 	grantRenewBefore := fs.Duration("grant-renew-before", 3*time.Second, "renew/campaign before grant expiry")
+	grantCandidates := fs.String("grant-candidates", "", "comma-separated coordinator ids eligible for duty grants")
+	grantDuties := fs.String("grant-duties", "alloc_id,tso,region_lookup", "comma-separated duties eligible on this coordinator")
 	shutdownGrace := fs.Duration("shutdown-grace", 0, "maximum time to drain and seal coordinator grant before graceful shutdown (default: grant ttl, or 10s when grant ttl is disabled)")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator listen address")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator address: host|docker")
@@ -124,7 +127,11 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
-	svc.ConfigureAuthorityGrant(coordinatorIDValue, *grantTTL, *grantRenewBefore)
+	parsedDuties, err := parseCoordinatorGrantDuties(*grantDuties)
+	if err != nil {
+		return err
+	}
+	svc.ConfigureAuthorityGrantDuties(coordinatorIDValue, splitCommaList(*grantCandidates), parsedDuties, *grantTTL, *grantRenewBefore)
 	installCoordinatorExpvar(svc)
 
 	grpcServer := grpc.NewServer()
@@ -144,7 +151,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from remote metadata root\n", loadedRegions)
 	_, _ = fmt.Fprintf(w, "Coordinator allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
-	_, _ = fmt.Fprintf(w, "Coordinator grant holder: id=%s ttl=%s renew_before=%s\n", coordinatorIDValue, grantTTL.String(), grantRenewBefore.String())
+	_, _ = fmt.Fprintf(w, "Coordinator grant holder: id=%s ttl=%s renew_before=%s duties=%s candidates=%s\n", coordinatorIDValue, grantTTL.String(), grantRenewBefore.String(), strings.Join(dutyNames(parsedDuties), ","), strings.Join(splitCommaList(*grantCandidates), ","))
 	_, _ = fmt.Fprintf(w, "Coordinator service listening on %s\n", lis.Addr().String())
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Coordinator metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
@@ -230,6 +237,41 @@ func parseReplicatedRootPeers(values []string) (map[uint64]string, error) {
 		peers[id] = addr
 	}
 	return peers, nil
+}
+
+func splitCommaList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func parseCoordinatorGrantDuties(raw string) ([]rootproto.DutyID, error) {
+	parts := splitCommaList(raw)
+	out := make([]rootproto.DutyID, 0, len(parts))
+	for _, part := range parts {
+		duty := rootproto.DutyID(part)
+		switch duty {
+		case rootproto.DutyAllocID, rootproto.DutyTSO, rootproto.DutyRegionLookup:
+			out = append(out, duty)
+		default:
+			return nil, fmt.Errorf("unknown coordinator grant duty %q", part)
+		}
+	}
+	return out, nil
+}
+
+func dutyNames(duties []rootproto.DutyID) []string {
+	out := make([]string, 0, len(duties))
+	for _, duty := range duties {
+		out = append(out, rootproto.DutyName(duty))
+	}
+	return out
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {

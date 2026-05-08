@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	coordfailpoints "github.com/feichai0017/NoKV/coordinator/failpoints"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	"github.com/feichai0017/NoKV/coordinator/scheduling"
 	rootfailpoints "github.com/feichai0017/NoKV/meta/root/failpoints"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -38,7 +42,7 @@ func (s *Service) grantScopedStoreOperations(ctx context.Context, storeID uint64
 	if s.storage != nil && !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
-	if err := s.ensureGrant(ctx); err != nil {
+	if err := s.ensureGrant(ctx, rootproto.DutyRegionLookup); err != nil {
 		return nil
 	}
 	return s.storeControlOperations(storeID)
@@ -73,7 +77,7 @@ func (s *Service) RunGrantLoop(ctx context.Context) {
 		case <-timer.C:
 			next := s.coordinatorGrantLoopInterval()
 			if s.storage.CanSubmitRootWrites() {
-				if err := s.ensureGrant(ctx); err != nil {
+				if err := s.ensureConfiguredGrants(ctx); err != nil {
 					failures++
 					next = s.coordinatorGrantRetryDelay(failures)
 				} else {
@@ -108,24 +112,25 @@ func (s *Service) DrainAndSealGrant(ctx context.Context) error {
 	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
+	duties := s.localActiveAuthorityDuties()
+	if len(duties) == 0 {
+		duties = s.localGrantDuties()
+	}
 	if s.localGrantAlreadySealed() {
-		s.markAuthoritySealed()
+		s.markAuthoritySealed(duties)
 		return nil
 	}
-	s.authorityMu.Lock()
-	if s.authorityState == authoritySealed {
-		s.authorityMu.Unlock()
+	if s.allAuthorityDutiesSealed(duties) {
 		return nil
 	}
-	s.authorityState = authorityDraining
-	s.authorityMu.Unlock()
+	s.markAuthorityDraining(duties)
 
-	if err := s.waitAuthorityInflightDrained(ctx); err != nil {
-		s.markAuthorityServing()
+	if err := s.waitAuthorityInflightDrained(ctx, duties); err != nil {
+		s.markAuthorityServing(duties)
 		return err
 	}
 	if s.localGrantAlreadySealed() {
-		s.markAuthoritySealed()
+		s.markAuthoritySealed(duties)
 		return nil
 	}
 	if err := s.sealGrant(ctx); err != nil {
@@ -133,21 +138,21 @@ func (s *Service) DrainAndSealGrant(ctx context.Context) error {
 			_ = s.reloadAndFenceAllocators(true)
 		}
 		if s.localGrantAlreadySealed() {
-			s.markAuthoritySealed()
+			s.markAuthoritySealed(duties)
 			return nil
 		}
-		s.markAuthorityServing()
+		s.markAuthorityServing(duties)
 		return err
 	}
-	s.markAuthoritySealed()
+	s.markAuthoritySealed(duties)
 	return nil
 }
 
-func (s *Service) waitAuthorityInflightDrained(ctx context.Context) error {
+func (s *Service) waitAuthorityInflightDrained(ctx context.Context, duties []rootproto.DutyID) error {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		_, inflight := s.authorityServingSnapshot()
+		inflight := s.authorityInflightForDuties(duties)
 		if inflight == 0 {
 			return nil
 		}
@@ -162,49 +167,105 @@ func (s *Service) waitAuthorityInflightDrained(ctx context.Context) error {
 func (s *Service) localGrantAlreadySealed() bool {
 	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
-	grant := s.grantView.Grant()
+	grants := s.grantView.Grants()
 	retirements := s.grantView.Retirements()
 	s.grantMu.RUnlock()
 	if holderID == "" {
 		return false
 	}
-	if !grant.Present() {
-		for _, retirement := range retirements {
-			if strings.TrimSpace(retirement.HolderID) == holderID && retirement.Present() {
-				return true
-			}
-		}
-		return false
-	}
-	if strings.TrimSpace(grant.HolderID) != holderID {
-		return false
-	}
+	retiredByGrant := make(map[string]struct{}, len(retirements))
+	hasLocalRetirement := false
 	for _, retirement := range retirements {
-		if retirement.GrantID == grant.GrantID && retirement.Present() {
-			return true
+		if strings.TrimSpace(retirement.HolderID) != holderID || !retirement.Present() {
+			continue
+		}
+		hasLocalRetirement = true
+		retiredByGrant[retirement.GrantID] = struct{}{}
+	}
+	hasLocalActive := false
+	for _, grant := range grants {
+		if strings.TrimSpace(grant.HolderID) != holderID {
+			continue
+		}
+		hasLocalActive = true
+		if _, ok := retiredByGrant[grant.GrantID]; !ok {
+			return false
 		}
 	}
-	return false
+	if hasLocalActive {
+		return true
+	}
+	return hasLocalRetirement
 }
 
-func (s *Service) markAuthorityServing() {
+func (s *Service) markAuthorityServing(duties []rootproto.DutyID) {
 	if s == nil {
 		return
 	}
 	s.authorityMu.Lock()
-	if s.authorityState != authoritySealed {
-		s.authorityState = authorityServing
+	for _, duty := range duties {
+		slot := s.authorityDuties[duty]
+		if slot.state != authoritySealed {
+			slot.state = authorityServing
+		}
+		s.setAuthorityDutyLocked(duty, slot)
 	}
 	s.authorityMu.Unlock()
 }
 
-func (s *Service) markAuthoritySealed() {
+func (s *Service) markAuthorityDraining(duties []rootproto.DutyID) {
 	if s == nil {
 		return
 	}
 	s.authorityMu.Lock()
-	s.authorityState = authoritySealed
+	for _, duty := range duties {
+		slot := s.authorityDuties[duty]
+		if slot.state != authoritySealed {
+			slot.state = authorityDraining
+		}
+		s.setAuthorityDutyLocked(duty, slot)
+	}
 	s.authorityMu.Unlock()
+}
+
+func (s *Service) markAuthoritySealed(duties []rootproto.DutyID) {
+	if s == nil {
+		return
+	}
+	s.authorityMu.Lock()
+	for _, duty := range duties {
+		slot := s.authorityDuties[duty]
+		slot.state = authoritySealed
+		s.setAuthorityDutyLocked(duty, slot)
+	}
+	s.authorityMu.Unlock()
+}
+
+func (s *Service) allAuthorityDutiesSealed(duties []rootproto.DutyID) bool {
+	if s == nil || len(duties) == 0 {
+		return false
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	for _, duty := range duties {
+		if s.authorityDuties[duty].state != authoritySealed {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) authorityInflightForDuties(duties []rootproto.DutyID) uint64 {
+	if s == nil {
+		return 0
+	}
+	s.authorityMu.Lock()
+	defer s.authorityMu.Unlock()
+	var inflight uint64
+	for _, duty := range duties {
+		inflight += s.authorityDuties[duty].inflight
+	}
+	return inflight
 }
 
 func (s *Service) releaseGrant(ctx context.Context) error {
@@ -224,10 +285,6 @@ func (s *Service) sealGrant(ctx context.Context) error {
 	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
-	s.allocMu.Lock()
-	consumedIDFrontier := s.ids.Current()
-	consumedTSOFrontier := s.tso.Current()
-	s.allocMu.Unlock()
 	if err := rootfailpoints.InjectBeforeGrantStorageRead(); err != nil {
 		return statusInternal(err.Error())
 	}
@@ -236,26 +293,28 @@ func (s *Service) sealGrant(ctx context.Context) error {
 		return statusInternalf("load rooted snapshot: %v", err)
 	}
 	s.refreshCurrentRootSnapshot(snapshot)
-	grant := snapshot.ActiveGrant
-	if !grant.Present() {
-		return nil
-	}
 	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
 	s.grantMu.RUnlock()
-	if holderID == "" || grant.HolderID != holderID {
-		return statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, grant.HolderID, holderID))
+	for _, grant := range snapshot.ActiveGrants {
+		if !grant.Present() || strings.TrimSpace(grant.HolderID) != holderID {
+			continue
+		}
+		if err := s.sealGrantInstance(ctx, holderID, grant); err != nil {
+			return err
+		}
 	}
+	return s.reloadAndFenceAllocators(true)
+}
+
+func (s *Service) sealGrantInstance(ctx context.Context, holderID string, grant rootproto.AuthorityGrant) error {
+	exactUsages := s.exactUsagesForGrant(grant)
 	protocolState, _, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:        rootproto.GrantActSeal,
 		HolderID:    holderID,
 		GrantID:     grant.GrantID,
 		NowUnixNano: s.nowUnixNano(),
-		ExactUsages: []rootproto.AuthorityUsage{
-			{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedIDFrontier}},
-			{DutyID: rootproto.DutyTSO, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedTSOFrontier}},
-			{DutyID: rootproto.DutyRegionLookup, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: s.currentDescriptorRevision()}},
-		},
+		ExactUsages: exactUsages,
 	})
 	if err != nil {
 		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
@@ -265,7 +324,26 @@ func (s *Service) sealGrant(ctx context.Context) error {
 	if err := coordfailpoints.InjectAfterSealGrantBeforeReload(); err != nil {
 		return err
 	}
-	return s.reloadAndFenceAllocators(true)
+	return nil
+}
+
+func (s *Service) exactUsagesForGrant(grant rootproto.AuthorityGrant) []rootproto.AuthorityUsage {
+	s.allocMu.Lock()
+	consumedIDFrontier := s.ids.Current()
+	consumedTSOFrontier := s.tso.Current()
+	s.allocMu.Unlock()
+	out := make([]rootproto.AuthorityUsage, 0, len(grant.Duties))
+	for _, duty := range grant.Duties {
+		switch duty.DutyID {
+		case rootproto.DutyAllocID:
+			out = append(out, rootproto.AuthorityUsage{DutyID: duty.DutyID, Scope: duty.Scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedIDFrontier}})
+		case rootproto.DutyTSO:
+			out = append(out, rootproto.AuthorityUsage{DutyID: duty.DutyID, Scope: duty.Scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedTSOFrontier}})
+		case rootproto.DutyRegionLookup:
+			out = append(out, rootproto.AuthorityUsage{DutyID: duty.DutyID, Scope: duty.Scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: s.currentDescriptorRevision()}})
+		}
+	}
+	return out
 }
 
 func (s *Service) InheritRetiredGrants(ctx context.Context) error {
@@ -286,7 +364,7 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
 	s.grantMu.RUnlock()
-	if holderID == "" || strings.TrimSpace(snapshot.ActiveGrant.HolderID) != holderID || !snapshot.ActiveGrant.Present() {
+	if holderID == "" || !snapshotHasLocalGrant(snapshot, holderID) {
 		return nil
 	}
 	pending := make([]string, 0, len(snapshot.RetiredGrants))
@@ -317,8 +395,7 @@ func (s *Service) grantInheritanceCandidate() bool {
 	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
 		return false
 	}
-	grant := s.currentGrant()
-	return grant.Present()
+	return len(s.localActiveAuthorityDuties()) > 0
 }
 
 func grantInheritanceIgnorable(err error) bool {
@@ -334,17 +411,29 @@ func grantInheritanceIgnorable(err error) bool {
 	return code == codes.FailedPrecondition || code == codes.InvalidArgument
 }
 
-func (s *Service) ensureGrant(ctx context.Context) error {
+func (s *Service) ensureConfiguredGrants(ctx context.Context) error {
+	for _, duty := range s.localGrantDuties() {
+		if err := s.ensureGrant(ctx, duty); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) ensureGrant(ctx context.Context, duty rootproto.DutyID) error {
 	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
+		return nil
+	}
+	if duty == "" || !s.localCoordinatorOwnsDuty(duty) {
 		return nil
 	}
 	// Fast path: avoid serializing read traffic behind the campaign lock while
 	// the current grant is still outside the renew and clock-skew windows.
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.grantCampaignBounds()
-	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+	if s.coordinatorGrantStillValid(duty, holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
-	if err := s.activeOtherGrantError(holderID, nowUnixNano); err != nil {
+	if err := s.activeOtherGrantError(duty, holderID, nowUnixNano); err != nil {
 		return err
 	}
 
@@ -353,49 +442,35 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 	// Another request or the background renew loop may have refreshed grant
 	// while this caller waited for writeMu.
 	nowUnixNano, _, holderID, renewIn, clockSkew = s.grantCampaignBounds()
-	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+	if s.coordinatorGrantStillValid(duty, holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
-	if err := s.refreshCurrentGrantCertificateIfNeeded(ctx, holderID, nowUnixNano); err != nil {
+	if err := s.refreshCurrentGrantCertificateIfNeeded(ctx, duty, holderID, nowUnixNano); err != nil {
 		return err
 	}
-	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+	if s.coordinatorGrantStillValid(duty, holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
-	if err := s.activeOtherGrantError(holderID, nowUnixNano); err != nil {
+	if err := s.activeOtherGrantError(duty, holderID, nowUnixNano); err != nil {
 		return err
 	}
 
-	s.allocMu.Lock()
-	consumedIDFrontier := s.ids.Current()
-	consumedTSOFrontier := s.tso.Current()
-	idUpper, _ := addUint64(s.currentIDFenceLocked(), s.effectiveIDWindowSize())
-	tsoUpper, _ := addUint64(s.currentTSOFenceLocked(), s.effectiveTSOWindowSize())
-	s.allocMu.Unlock()
-	descriptorRevision := s.currentDescriptorRevision()
+	requestedDuty, exactUsage := s.grantDutyRequest(duty)
 	// Recompute time and expiry after sampling allocator fences so the grant
 	// command carries fresh bounds and does not campaign unnecessarily.
 	nowUnixNano, expiresUnixNano, holderID, renewIn, clockSkew := s.grantCampaignBounds()
-	if s.coordinatorGrantStillValid(holderID, nowUnixNano, renewIn, clockSkew) {
+	if s.coordinatorGrantStillValid(duty, holderID, nowUnixNano, renewIn, clockSkew) {
 		return nil
 	}
-	currentEra := s.currentGrant().Era
+	currentEra := s.currentGrant(duty).Era
 	protocolState, cert, err := s.storage.ApplyGrant(ctx, rootproto.GrantCommand{
 		Kind:            rootproto.GrantActIssue,
 		HolderID:        holderID,
-		GrantID:         nextCoordinatorGrantID(holderID, currentEra),
+		GrantID:         nextCoordinatorGrantID(holderID, duty, currentEra),
 		ExpiresUnixNano: expiresUnixNano,
 		NowUnixNano:     nowUnixNano,
-		RequestedDuties: []rootproto.DutyGrant{
-			rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, idUpper),
-			rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, tsoUpper),
-			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, descriptorRevision, 0),
-		},
-		ExactUsages: []rootproto.AuthorityUsage{
-			{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedIDFrontier}},
-			{DutyID: rootproto.DutyTSO, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumedTSOFrontier}},
-			{DutyID: rootproto.DutyRegionLookup, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: descriptorRevision}},
-		},
+		RequestedDuties: []rootproto.DutyGrant{requestedDuty},
+		ExactUsages:     []rootproto.AuthorityUsage{exactUsage},
 	})
 	if err != nil {
 		s.eunomiaMetrics.recordGuaranteeViolationForError(err)
@@ -403,20 +478,170 @@ func (s *Service) ensureGrant(ctx context.Context) error {
 	}
 	s.publishEunomiaState(protocolState)
 	s.cacheGrantCertificate(cert)
-	s.eunomiaMetrics.recordGrantEraTransition(currentEra, protocolState.ActiveGrant.Era)
+	if cert.Grant.Present() {
+		s.eunomiaMetrics.recordGrantEraTransition(currentEra, cert.Grant.Era)
+	}
 	return s.reloadAndFenceAllocators(true)
 }
 
-func nextCoordinatorGrantID(holderID string, currentEra uint64) string {
+func nextCoordinatorGrantID(holderID string, duty rootproto.DutyID, currentEra uint64) string {
 	holderID = strings.TrimSpace(holderID)
 	if holderID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%d", holderID, currentEra+1)
+	return fmt.Sprintf("%s/%s/%d", holderID, rootproto.DutyName(duty), currentEra+1)
 }
 
-func (s *Service) activeOtherGrantError(holderID string, nowUnixNano int64) error {
-	current := s.currentGrant()
+func (s *Service) grantDutyRequest(duty rootproto.DutyID) (rootproto.DutyGrant, rootproto.AuthorityUsage) {
+	scope := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	switch duty {
+	case rootproto.DutyAllocID:
+		s.allocMu.Lock()
+		consumed := s.ids.Current()
+		upper, _ := addUint64(s.currentIDFenceLocked(), s.effectiveIDWindowSize())
+		s.allocMu.Unlock()
+		return rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, upper),
+			rootproto.AuthorityUsage{DutyID: duty, Scope: scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumed}}
+	case rootproto.DutyTSO:
+		s.allocMu.Lock()
+		consumed := s.tso.Current()
+		upper, _ := addUint64(s.currentTSOFenceLocked(), s.effectiveTSOWindowSize())
+		s.allocMu.Unlock()
+		return rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, upper),
+			rootproto.AuthorityUsage{DutyID: duty, Scope: scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: consumed}}
+	case rootproto.DutyRegionLookup:
+		revision := s.currentRegionLookupRevision()
+		return rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, revision, 0),
+			rootproto.AuthorityUsage{DutyID: duty, Scope: scope, Usage: rootproto.DutyBound{Kind: rootproto.DutyBoundVersion, DescriptorRevisionCeiling: revision}}
+	default:
+		return rootproto.DutyGrant{}, rootproto.AuthorityUsage{}
+	}
+}
+
+func (s *Service) currentRegionLookupRevision() uint64 {
+	revision := s.currentDescriptorRevision()
+	snapshot, err := s.currentRootSnapshot()
+	if err == nil && snapshot.RootToken.Revision > revision {
+		revision = snapshot.RootToken.Revision
+	}
+	return revision
+}
+
+func (s *Service) localGrantDuties() []rootproto.DutyID {
+	if s == nil {
+		return nil
+	}
+	s.grantMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	candidates := append([]string(nil), s.grantCandidates...)
+	duties := append([]rootproto.DutyID(nil), s.grantDuties...)
+	s.grantMu.RUnlock()
+	if len(duties) == 0 {
+		duties = []rootproto.DutyID{rootproto.DutyAllocID, rootproto.DutyTSO, rootproto.DutyRegionLookup}
+	}
+	if holderID == "" {
+		return nil
+	}
+	if len(candidates) <= 1 {
+		return duties
+	}
+	out := make([]rootproto.DutyID, 0, len(duties))
+	for _, duty := range duties {
+		if preferredDutyHolder(duty, candidates) == holderID {
+			out = append(out, duty)
+		}
+	}
+	return out
+}
+
+func (s *Service) localCoordinatorOwnsDuty(duty rootproto.DutyID) bool {
+	return slices.Contains(s.localGrantDuties(), duty)
+}
+
+func (s *Service) localActiveAuthorityDuties() []rootproto.DutyID {
+	if s == nil {
+		return nil
+	}
+	s.grantMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	grants := s.grantView.Grants()
+	s.grantMu.RUnlock()
+	seen := make(map[rootproto.DutyID]struct{})
+	out := make([]rootproto.DutyID, 0, len(grants))
+	for _, grant := range grants {
+		if strings.TrimSpace(grant.HolderID) != holderID {
+			continue
+		}
+		for _, duty := range grant.Duties {
+			if duty.Scope.Kind != rootproto.DutyScopeGlobal {
+				continue
+			}
+			if _, ok := seen[duty.DutyID]; ok {
+				continue
+			}
+			seen[duty.DutyID] = struct{}{}
+			out = append(out, duty.DutyID)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return rootproto.DutyName(out[i]) < rootproto.DutyName(out[j])
+	})
+	return out
+}
+
+func preferredDutyHolder(duty rootproto.DutyID, candidates []string) string {
+	normalized := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		normalized = append(normalized, candidate)
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	sort.Strings(normalized)
+	var (
+		bestHolder string
+		bestScore  uint64
+	)
+	for _, candidate := range normalized {
+		h := fnv.New64a()
+		// The first scoped-duty release only enables the global scope. Keep a
+		// cluster salt in the rendezvous key so the default three-duty compose
+		// deployment spreads alloc_id, tso, and region_lookup instead of letting
+		// FNV's short duty strings cluster on one coordinator.
+		_, _ = h.Write([]byte("cluster"))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(rootproto.DutyName(duty)))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(candidate))
+		score := h.Sum64()
+		if bestHolder == "" || score > bestScore {
+			bestHolder = candidate
+			bestScore = score
+		}
+	}
+	return bestHolder
+}
+
+func snapshotHasLocalGrant(snapshot rootview.Snapshot, holderID string) bool {
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == holderID && grant.Present() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) activeOtherGrantError(duty rootproto.DutyID, holderID string, nowUnixNano int64) error {
+	current := s.currentGrant(duty)
 	currentHolder := strings.TrimSpace(current.HolderID)
 	localHolder := strings.TrimSpace(holderID)
 	if currentHolder == "" || currentHolder == localHolder || !current.ActiveAt(nowUnixNano) {
@@ -428,11 +653,11 @@ func (s *Service) activeOtherGrantError(holderID string, nowUnixNano int64) erro
 	return fmt.Errorf("%w: rooted holder=%s local_holder=%s expires_unix_nano=%d", rootstate.ErrPrimacy, currentHolder, localHolder, current.ExpiresUnixNano)
 }
 
-func (s *Service) coordinatorGrantStillValid(holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {
+func (s *Service) coordinatorGrantStillValid(duty rootproto.DutyID, holderID string, nowUnixNano int64, renewIn, clockSkew time.Duration) bool {
 	if s == nil {
 		return false
 	}
-	current := s.currentGrant()
+	current := s.currentGrant(duty)
 	if strings.TrimSpace(holderID) == "" ||
 		strings.TrimSpace(current.HolderID) != strings.TrimSpace(holderID) ||
 		!current.ActiveAt(nowUnixNano) {
@@ -453,13 +678,13 @@ func (s *Service) currentGrantCertificateValid(grant rootproto.AuthorityGrant) b
 		return false
 	}
 	s.grantMu.RLock()
-	cert := s.grantView.Certificate()
+	cert := s.grantView.CertificateFor(grant)
 	s.grantMu.RUnlock()
 	return grantCertificateMatches(cert, grant)
 }
 
-func (s *Service) refreshCurrentGrantCertificateIfNeeded(ctx context.Context, holderID string, nowUnixNano int64) error {
-	current := s.currentGrant()
+func (s *Service) refreshCurrentGrantCertificateIfNeeded(ctx context.Context, duty rootproto.DutyID, holderID string, nowUnixNano int64) error {
+	current := s.currentGrant(duty)
 	if !current.Present() ||
 		strings.TrimSpace(current.HolderID) != strings.TrimSpace(holderID) ||
 		!current.ActiveAt(nowUnixNano) ||
@@ -565,13 +790,14 @@ func (s *Service) coordinatorGrantEnabled() bool {
 	return s.coordinatorID != "" && s.grantTTL > 0
 }
 
-func (s *Service) currentGrant() rootproto.AuthorityGrant {
+func (s *Service) currentGrant(duty rootproto.DutyID) rootproto.AuthorityGrant {
 	if s == nil {
 		return rootproto.AuthorityGrant{}
 	}
 	s.grantMu.RLock()
 	defer s.grantMu.RUnlock()
-	return s.grantView.Grant()
+	grant, _ := s.grantView.GrantFor(duty, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	return grant
 }
 
 func (s *Service) grantCampaignBounds() (nowUnixNano, expiresUnixNano int64, holderID string, renewIn, clockSkew time.Duration) {

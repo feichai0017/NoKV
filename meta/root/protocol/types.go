@@ -66,6 +66,11 @@ type DutyGrant struct {
 	Bound  DutyBound
 }
 
+type DutyKey struct {
+	DutyID DutyID
+	Scope  DutyScope
+}
+
 type AuthorityGrant struct {
 	GrantID                string
 	HolderID               string
@@ -258,6 +263,22 @@ func NewGlobalMonotoneDuty(duty DutyID, upper uint64) DutyGrant {
 	}
 }
 
+func NewGlobalDutyKey(duty DutyID) DutyKey {
+	return DutyKey{DutyID: duty, Scope: DutyScope{Kind: DutyScopeGlobal}}
+}
+
+func (g DutyGrant) Key() DutyKey {
+	return DutyKey{DutyID: g.DutyID, Scope: g.Scope}
+}
+
+func (u AuthorityUsage) Key() DutyKey {
+	return DutyKey{DutyID: u.DutyID, Scope: u.Scope}
+}
+
+func DutyKeyEqual(left, right DutyKey) bool {
+	return left.DutyID == right.DutyID && ScopeEqual(left.Scope, right.Scope)
+}
+
 func NewGlobalVersionDuty(duty DutyID, token AuthorityRootToken, descriptorRevisionCeiling, maxRootLag uint64) DutyGrant {
 	return DutyGrant{
 		DutyID: duty,
@@ -295,6 +316,11 @@ func (g AuthorityGrant) DutyFor(duty DutyID, scope DutyScope) (DutyGrant, bool) 
 		}
 	}
 	return DutyGrant{}, false
+}
+
+func (g AuthorityGrant) CoversDutyKey(key DutyKey) bool {
+	_, ok := g.DutyFor(key.DutyID, key.Scope)
+	return ok
 }
 
 func (r GrantRetirement) Present() bool {

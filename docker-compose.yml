@@ -136,6 +136,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-1"
+      - "--grant-candidates=coord-1,coord-2,coord-3"
+      - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
     volumes:
@@ -160,6 +162,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-2"
+      - "--grant-candidates=coord-1,coord-2,coord-3"
+      - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
     volumes:
@@ -184,6 +188,8 @@ services:
       - "--addr=0.0.0.0:2379"
       - "--metrics-addr=0.0.0.0:9100"
       - "--coordinator-id=coord-3"
+      - "--grant-candidates=coord-1,coord-2,coord-3"
+      - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
     volumes:

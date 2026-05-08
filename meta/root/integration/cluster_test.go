@@ -99,8 +99,9 @@ func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			if current.ActiveGrant.HolderID != "c2" ||
-				current.ActiveGrant.Era != successor.Era ||
+			if len(current.ActiveGrants) != 1 ||
+				current.ActiveGrants[0].HolderID != "c2" ||
+				current.ActiveGrants[0].Era != successor.Era ||
 				len(current.RetiredGrants) != 1 ||
 				current.RetiredGrants[0].Era != retirement.Era ||
 				current.RetiredGrants[0].HolderID != "c1" ||
@@ -160,7 +161,10 @@ func issueGrant(store interface {
 			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, descriptorRevision, 0),
 		},
 	})
-	return state.ActiveGrant, err
+	if err != nil || len(state.ActiveGrants) == 0 {
+		return rootproto.AuthorityGrant{}, err
+	}
+	return state.ActiveGrants[0], nil
 }
 
 func sealGrant(store interface {

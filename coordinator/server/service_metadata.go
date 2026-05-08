@@ -24,7 +24,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	if req == nil {
 		return nil, statusInvalidArgument("get region by key request is nil")
 	}
-	if err := s.rejectIfAuthorityClosed(); err != nil {
+	if err := s.rejectIfAuthorityClosed(rootproto.DutyRegionLookup); err != nil {
 		return nil, err
 	}
 	state, err := s.currentReadState()
@@ -239,12 +239,13 @@ func (s *Service) currentReadState() (readState, error) {
 		state.catchUpState = rootview.CatchUpStateUnavailable
 		return state, err
 	}
-	if snapshot.ActiveGrant.Era != 0 && strings.TrimSpace(snapshot.ActiveGrant.HolderID) != "" {
+	if grant, ok := snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}); ok {
 		state.grantPresent = true
-		state.grantActive = snapshot.ActiveGrant.ActiveAt(nowUnixNano)
-		_, state.grantHasLookup = snapshot.ActiveGrant.Duty(rootproto.DutyRegionLookup)
-		state.grantHolderID = snapshot.ActiveGrant.HolderID
-		state.grantExpiresAt = snapshot.ActiveGrant.ExpiresUnixNano
+		state.grantActive = grant.ActiveAt(nowUnixNano)
+		state.grantHasLookup = true
+		state.grantHolderID = grant.HolderID
+		state.grantExpiresAt = grant.ExpiresUnixNano
+		state.era = s.metadataReplyEra(grant.Era)
 	}
 	state.retiredEraFloor = snapshot.RetiredEraFloor
 	for _, retirement := range snapshot.RetiredGrants {
@@ -255,7 +256,6 @@ func (s *Service) currentReadState() (readState, error) {
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState
-	state.era = s.metadataReplyEra(snapshot.ActiveGrant.Era)
 	if s.cachedRootSnapshotStale() {
 		if errText := s.lastRootReloadError(); strings.TrimSpace(errText) != "" {
 			state.degraded = coordpb.DegradedMode_DEGRADED_MODE_ROOT_UNAVAILABLE
@@ -295,7 +295,7 @@ func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readSta
 		nowFn = time.Now
 	}
 	nowUnixNano := nowFn().UnixNano()
-	current := s.currentGrant()
+	current := s.currentGrant(rootproto.DutyRegionLookup)
 	currentHasLookup := false
 	if current.Present() && strings.TrimSpace(current.HolderID) == holderID {
 		_, currentHasLookup = current.Duty(rootproto.DutyRegionLookup)
@@ -304,7 +304,7 @@ func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readSta
 		if !currentHasLookup || !current.ActiveAt(nowUnixNano) {
 			return false, nil
 		}
-		if err := s.ensureGrant(ctx); err != nil {
+		if err := s.ensureGrant(ctx, rootproto.DutyRegionLookup); err != nil {
 			return false, translateGrantError(err)
 		}
 		return true, nil
@@ -318,7 +318,7 @@ func (s *Service) ensureMetadataGrantIfNeeded(ctx context.Context, state readSta
 		!s.coordinatorGrantNeedsRenewal(current) {
 		return false, nil
 	}
-	if err := s.ensureGrant(ctx); err != nil {
+	if err := s.ensureGrant(ctx, rootproto.DutyRegionLookup); err != nil {
 		return false, translateGrantError(err)
 	}
 	return true, nil

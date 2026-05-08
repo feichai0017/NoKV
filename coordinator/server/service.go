@@ -17,6 +17,8 @@
 package server
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,29 +42,30 @@ import (
 type Service struct {
 	coordpb.UnimplementedCoordinatorServer
 
-	cluster           *catalog.Cluster
-	ids               *idalloc.IDAllocator
-	tso               *tso.Allocator
-	storage           rootview.RootStorage
-	idWindowHigh      uint64
-	idWindowSize      uint64
-	tsoWindowHigh     uint64
-	tsoWindowSize     uint64
-	allocMu           sync.Mutex
-	writeMu           sync.Mutex
-	grantMu           sync.RWMutex
-	coordinatorID     string
-	grantTTL          time.Duration
-	grantRenewIn      time.Duration
-	grantClockSkew    time.Duration
-	now               func() time.Time
-	grantView         coordinatorGrantView
-	authorityMu       sync.Mutex
-	authorityState    authorityServingState
-	authorityInflight uint64
-	rootViewMu        sync.RWMutex
-	rootView          coordinatorRootSnapshotView
-	rootViewTTL       time.Duration
+	cluster         *catalog.Cluster
+	ids             *idalloc.IDAllocator
+	tso             *tso.Allocator
+	storage         rootview.RootStorage
+	idWindowHigh    uint64
+	idWindowSize    uint64
+	tsoWindowHigh   uint64
+	tsoWindowSize   uint64
+	allocMu         sync.Mutex
+	writeMu         sync.Mutex
+	grantMu         sync.RWMutex
+	coordinatorID   string
+	grantTTL        time.Duration
+	grantRenewIn    time.Duration
+	grantClockSkew  time.Duration
+	grantCandidates []string
+	grantDuties     []rootproto.DutyID
+	now             func() time.Time
+	grantView       coordinatorGrantView
+	authorityMu     sync.Mutex
+	authorityDuties map[rootproto.DutyID]authorityDutyServing
+	rootViewMu      sync.RWMutex
+	rootView        coordinatorRootSnapshotView
+	rootViewTTL     time.Duration
 	// storeHeartbeatTTL holds the time.Duration value as an int64 so callers
 	// (storeState reads, ConfigureStoreHeartbeatTTL writes) avoid a data race
 	// without taking a lock on the read path.
@@ -94,9 +97,14 @@ func (s authorityServingState) String() string {
 	}
 }
 
+type authorityDutyServing struct {
+	state    authorityServingState
+	inflight uint64
+}
+
 type coordinatorGrantView struct {
-	grant           rootproto.AuthorityGrant
-	certificate     rootproto.GrantCertificate
+	grants          []rootproto.AuthorityGrant
+	certificates    map[string]rootproto.GrantCertificate
 	retirements     []rootproto.GrantRetirement
 	inheritances    []rootproto.GrantInheritance
 	retiredEraFloor uint64
@@ -113,8 +121,8 @@ func (v *coordinatorGrantView) Reset() {
 	if v == nil {
 		return
 	}
-	v.grant = rootproto.AuthorityGrant{}
-	v.certificate = rootproto.GrantCertificate{}
+	v.grants = nil
+	v.certificates = nil
 	v.retirements = nil
 	v.inheritances = nil
 	v.retiredEraFloor = 0
@@ -124,29 +132,64 @@ func (v *coordinatorGrantView) Refresh(snapshot rootview.Snapshot) {
 	if v == nil {
 		return
 	}
-	cert := v.certificate
-	if grantCertificateCoversGrant(cert, snapshot.ActiveGrant) {
-		v.grant = cert.Grant
-		v.certificate = cert
-	} else {
-		v.grant = snapshot.ActiveGrant
-		v.certificate = rootproto.GrantCertificate{}
+	certs := v.certificates
+	nextCerts := make(map[string]rootproto.GrantCertificate)
+	v.grants = make([]rootproto.AuthorityGrant, 0, len(snapshot.ActiveGrants))
+	for _, grant := range snapshot.ActiveGrants {
+		if cert, ok := certs[grant.GrantID]; ok && grantCertificateCoversGrant(cert, grant) {
+			v.grants = append(v.grants, cert.Grant)
+			nextCerts[grant.GrantID] = cert
+			continue
+		}
+		v.grants = append(v.grants, cloneGrantForView(grant))
 	}
+	v.certificates = nextCerts
 	v.retirements = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
 	v.inheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
 	v.retiredEraFloor = snapshot.RetiredEraFloor
 }
 
-func (v coordinatorGrantView) Grant() rootproto.AuthorityGrant {
-	return v.grant
+func (v coordinatorGrantView) Grants() []rootproto.AuthorityGrant {
+	out := make([]rootproto.AuthorityGrant, len(v.grants))
+	for i, grant := range v.grants {
+		out[i] = cloneGrantForView(grant)
+	}
+	return out
 }
 
-func (v coordinatorGrantView) Certificate() rootproto.GrantCertificate {
-	return v.certificate
+func (v coordinatorGrantView) GrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range v.grants {
+		if grant.CoversDutyKey(rootproto.DutyKey{DutyID: duty, Scope: scope}) {
+			return cloneGrantForView(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func (v coordinatorGrantView) GrantByID(grantID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range v.grants {
+		if grant.GrantID == grantID {
+			return cloneGrantForView(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func (v coordinatorGrantView) CertificateFor(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
+	if v.certificates == nil {
+		return rootproto.GrantCertificate{}
+	}
+	return v.certificates[grant.GrantID]
 }
 
 func (v coordinatorGrantView) Retirements() []rootproto.GrantRetirement {
 	return append([]rootproto.GrantRetirement(nil), v.retirements...)
+}
+
+func cloneGrantForView(grant rootproto.AuthorityGrant) rootproto.AuthorityGrant {
+	grant.Duties = append([]rootproto.DutyGrant(nil), grant.Duties...)
+	grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), grant.PredecessorRetirements...)
+	return grant
 }
 
 const defaultAllocatorWindowSize uint64 = 10_000
@@ -192,6 +235,10 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 // ConfigureAuthorityGrant enables the explicit coordinator owner grant gate.
 // Empty holderID disables the gate and keeps the current in-memory-only behavior.
 func (s *Service) ConfigureAuthorityGrant(holderID string, ttl, renewIn time.Duration) {
+	s.ConfigureAuthorityGrantDuties(holderID, nil, nil, ttl, renewIn)
+}
+
+func (s *Service) ConfigureAuthorityGrantDuties(holderID string, candidates []string, duties []rootproto.DutyID, ttl, renewIn time.Duration) {
 	if s == nil {
 		return
 	}
@@ -203,6 +250,8 @@ func (s *Service) ConfigureAuthorityGrant(holderID string, ttl, renewIn time.Dur
 		s.grantTTL = 0
 		s.grantRenewIn = 0
 		s.grantClockSkew = 0
+		s.grantCandidates = nil
+		s.grantDuties = nil
 		s.grantView.Reset()
 		return
 	}
@@ -225,6 +274,49 @@ func (s *Service) ConfigureAuthorityGrant(holderID string, ttl, renewIn time.Dur
 	s.grantTTL = ttl
 	s.grantRenewIn = renewIn
 	s.grantClockSkew = clockSkew
+	s.grantCandidates = normalizeGrantCandidates(holderID, candidates)
+	s.grantDuties = normalizeGrantDuties(duties)
+}
+
+func normalizeGrantCandidates(holderID string, candidates []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(candidates)+1)
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	for _, candidate := range candidates {
+		add(candidate)
+	}
+	add(holderID)
+	sort.Strings(out)
+	return out
+}
+
+func normalizeGrantDuties(duties []rootproto.DutyID) []rootproto.DutyID {
+	if len(duties) == 0 {
+		return nil
+	}
+	seen := map[rootproto.DutyID]struct{}{}
+	out := make([]rootproto.DutyID, 0, len(duties))
+	for _, duty := range duties {
+		if duty == "" {
+			continue
+		}
+		if _, ok := seen[duty]; ok {
+			continue
+		}
+		seen[duty] = struct{}{}
+		out = append(out, duty)
+	}
+	return out
 }
 
 // ConfigureAllocatorWindows overrides the rooted allocator refill window sizes.

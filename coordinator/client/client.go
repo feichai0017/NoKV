@@ -43,9 +43,10 @@ type Client interface {
 
 // GRPCClient is a thin wrapper around generated coordpb.CoordinatorClient.
 type GRPCClient struct {
-	mu        sync.Mutex
-	endpoints []grpcEndpoint
-	preferred int
+	mu              sync.Mutex
+	endpoints       []grpcEndpoint
+	preferred       int
+	preferredByDuty map[rootproto.DutyID]int
 
 	verifyMu             sync.Mutex
 	verifierStore        AuthorityVerifierStore
@@ -128,6 +129,7 @@ func NewGRPCClientWithOptions(ctx context.Context, addr string, clientOpts GRPCC
 	}
 	return &GRPCClient{
 		endpoints:            endpoints,
+		preferredByDuty:      make(map[rootproto.DutyID]int),
 		verifierStore:        store,
 		verifierClusterID:    clusterID,
 		authorityClockSkew:   clockSkew,
@@ -251,7 +253,7 @@ func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionB
 	// Region lookup is a metadata authority read: standby coordinators can
 	// reject it with grant-not-held, so it must fail over like TSO/AllocID even
 	// though the RPC does not mutate user metadata.
-	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
+	return invokeDutyRPCValidated(c, rootproto.DutyRegionLookup, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
 		return coord.GetRegionByKey(ctx, req)
 	}, func(resp *coordpb.GetRegionByKeyResponse) error {
 		return c.validateGetRegionByKeyResponse(req, resp)
@@ -330,7 +332,7 @@ func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRoot
 
 // AllocID forwards ID allocation RPC.
 func (c *GRPCClient) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
-	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.AllocIDResponse, error) {
+	return invokeDutyRPCValidated(c, rootproto.DutyAllocID, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.AllocIDResponse, error) {
 		return coord.AllocID(ctx, req)
 	}, func(resp *coordpb.AllocIDResponse) error {
 		return c.validateAllocIDResponse(req, resp)
@@ -339,7 +341,7 @@ func (c *GRPCClient) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (
 
 // Tso forwards TSO allocation RPC.
 func (c *GRPCClient) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
-	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.TsoResponse, error) {
+	return invokeDutyRPCValidated(c, rootproto.DutyTSO, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.TsoResponse, error) {
 		return coord.Tso(ctx, req)
 	}, func(resp *coordpb.TsoResponse) error {
 		return c.validateTSOResponse(req, resp)
@@ -405,6 +407,10 @@ func closeAllEndpoints(endpoints []grpcEndpoint) {
 }
 
 func (c *GRPCClient) orderedEndpoints() []grpcEndpoint {
+	return c.orderedEndpointsForDuty("")
+}
+
+func (c *GRPCClient) orderedEndpointsForDuty(duty rootproto.DutyID) []grpcEndpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.endpoints) == 0 {
@@ -412,6 +418,11 @@ func (c *GRPCClient) orderedEndpoints() []grpcEndpoint {
 	}
 	out := make([]grpcEndpoint, 0, len(c.endpoints))
 	start := c.preferred
+	if duty != "" {
+		if preferred, ok := c.preferredByDuty[duty]; ok {
+			start = preferred
+		}
+	}
 	if start < 0 || start >= len(c.endpoints) {
 		start = 0
 	}
@@ -422,24 +433,39 @@ func (c *GRPCClient) orderedEndpoints() []grpcEndpoint {
 }
 
 func (c *GRPCClient) markPreferred(addr string) {
+	c.markPreferredForDuty("", addr)
+}
+
+func (c *GRPCClient) markPreferredForDuty(duty rootproto.DutyID, addr string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i, endpoint := range c.endpoints {
 		if endpoint.addr == addr {
-			c.preferred = i
+			if duty == "" {
+				c.preferred = i
+			} else {
+				if c.preferredByDuty == nil {
+					c.preferredByDuty = make(map[rootproto.DutyID]int)
+				}
+				c.preferredByDuty[duty] = i
+			}
 			return
 		}
 	}
 }
 
 func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
+	return invokeDutyRPCValidated(c, "", retryable, call, validate)
+}
+
+func invokeDutyRPCValidated[T any](c *GRPCClient, duty rootproto.DutyID, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
 	var zero T
 	if c == nil {
 		return zero, errNoReachableAddress
 	}
 	var lastErr error
 	for round := range maxAuthorityMissRetryRounds {
-		endpoints := c.orderedEndpoints()
+		endpoints := c.orderedEndpointsForDuty(duty)
 		if len(endpoints) == 0 {
 			return zero, errNoReachableAddress
 		}
@@ -453,7 +479,7 @@ func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call f
 				err = validate(resp)
 			}
 			if err == nil {
-				c.markPreferred(endpoint.addr)
+				c.markPreferredForDuty(duty, endpoint.addr)
 				return resp, nil
 			}
 			lastErr = err

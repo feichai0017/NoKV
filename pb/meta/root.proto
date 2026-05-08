@@ -53,7 +53,7 @@ message RootState {
   RootCursor last_committed = 4;
   uint64 id_fence = 5;
   uint64 tso_fence = 6;
-  RootAuthorityGrant active_grant = 7;
+  repeated RootAuthorityGrant active_grants = 7;
   repeated RootGrantRetirement retired_grants = 8;
   repeated RootGrantInheritance grant_inheritances = 9;
   uint64 retired_era_floor = 10;
@@ -398,7 +398,7 @@ message MetadataRootStatusResponse {
 }
 
 message RootEunomiaState {
-  RootAuthorityGrant active_grant = 1;
+  repeated RootAuthorityGrant active_grants = 1;
   repeated RootGrantRetirement retired_grants = 2;
   repeated RootGrantInheritance grant_inheritances = 3;
   uint64 retired_era_floor = 4;

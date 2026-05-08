@@ -10,14 +10,14 @@ import (
 
 func TestEunomiaProjectionCarriesGrantLifecycle(t *testing.T) {
 	st := rootstate.State{
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:  "c2/2",
 			HolderID: "c2",
 			Era:      2,
 			Duties: []rootproto.DutyGrant{
 				rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
 			},
-		},
+		}},
 		RetiredGrants: []rootproto.GrantRetirement{
 			{
 				GrantID: "c1/1",
@@ -35,8 +35,9 @@ func TestEunomiaProjectionCarriesGrantLifecycle(t *testing.T) {
 
 	projected := st.Eunomia()
 
-	require.True(t, projected.ActiveGrant.Present())
-	require.Equal(t, "c2/2", projected.ActiveGrant.GrantID)
+	require.Len(t, projected.ActiveGrants, 1)
+	require.True(t, projected.ActiveGrants[0].Present())
+	require.Equal(t, "c2/2", projected.ActiveGrants[0].GrantID)
 	require.Len(t, projected.RetiredGrants, 1)
 	require.Equal(t, rootproto.GrantRetirementExpiredBound, projected.RetiredGrants[0].Mode)
 	require.Len(t, projected.GrantInheritances, 1)

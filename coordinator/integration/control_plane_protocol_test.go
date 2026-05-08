@@ -41,7 +41,7 @@ type protocolMatrixStorage struct {
 
 func (s *protocolMatrixStorage) protocolState() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
-		ActiveGrant:       s.snapshot.ActiveGrant,
+		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), s.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
 	}
@@ -72,17 +72,25 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 		if s.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, s.campaignErr
 		}
-		if s.snapshot.ActiveGrant.Present() &&
-			s.snapshot.ActiveGrant.GrantID == strings.TrimSpace(cmd.GrantID) &&
-			s.snapshot.ActiveGrant.HolderID == holderID &&
-			protocolTestDutiesCover(s.snapshot.ActiveGrant.Duties, cmd.RequestedDuties) {
-			return s.protocolState(), protocolTestGrantCertificate(s.snapshot.ActiveGrant), nil
+		active, _ := protocolTestActiveGrantForDuties(s.snapshot, cmd.RequestedDuties)
+		if active.Present() &&
+			active.GrantID == strings.TrimSpace(cmd.GrantID) &&
+			active.HolderID == holderID &&
+			protocolTestDutiesCover(active.Duties, cmd.RequestedDuties) {
+			return s.protocolState(), protocolTestGrantCertificate(active), nil
 		}
 		s.campaigns++
-		if s.snapshot.ActiveGrant.Present() && s.snapshot.ActiveGrant.HolderID != holderID && s.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
-			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+		for _, current := range s.snapshot.ActiveGrants {
+			if current.HolderID != holderID && current.ActiveAt(cmd.NowUnixNano) && protocolTestDutiesOverlap(current.Duties, cmd.RequestedDuties) {
+				return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
+			}
 		}
-		era := s.snapshot.ActiveGrant.Era + 1
+		var era uint64 = 1
+		for _, current := range s.snapshot.ActiveGrants {
+			if current.Era >= era {
+				era = current.Era + 1
+			}
+		}
 		for _, retired := range s.snapshot.RetiredGrants {
 			if retired.Era >= era {
 				era = retired.Era + 1
@@ -92,8 +100,8 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 		if grantID == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, era)
 		}
-		predecessors := pendingGrantRetirementsForTest(s.snapshot, cmd.NowUnixNano)
-		s.snapshot.ActiveGrant = rootproto.AuthorityGrant{
+		predecessors := pendingGrantRetirementsForTest(s.snapshot, cmd.NowUnixNano, cmd.RequestedDuties)
+		grant := rootproto.AuthorityGrant{
 			GrantID:                grantID,
 			HolderID:               holderID,
 			Era:                    era,
@@ -102,6 +110,10 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 			Duties:                 append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
 			PredecessorRetirements: append([]rootproto.GrantRetirement(nil), predecessors...),
 		}
+		for _, predecessor := range predecessors {
+			s.snapshot.ActiveGrants = protocolTestRemoveGrant(s.snapshot.ActiveGrants, predecessor.GrantID)
+		}
+		s.snapshot.ActiveGrants = protocolTestUpsertGrant(s.snapshot.ActiveGrants, grant)
 		s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), predecessors...)
 		for _, duty := range cmd.RequestedDuties {
 			if duty.Bound.Kind != rootproto.DutyBoundMonotone {
@@ -119,34 +131,35 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 			}
 		}
 		s.advanceRootToken()
-		return s.protocolState(), protocolTestGrantCertificate(s.snapshot.ActiveGrant), nil
+		return s.protocolState(), protocolTestGrantCertificate(grant), nil
 	case rootproto.GrantActSeal:
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != strings.TrimSpace(cmd.HolderID) {
+		active, ok := s.snapshot.ActiveGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok || active.HolderID != strings.TrimSpace(cmd.HolderID) {
 			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
 		s.snapshot.RetiredGrants = append(s.snapshot.RetiredGrants, rootproto.GrantRetirement{
-			GrantID:  s.snapshot.ActiveGrant.GrantID,
-			HolderID: s.snapshot.ActiveGrant.HolderID,
-			Era:      s.snapshot.ActiveGrant.Era,
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
 			Mode:     rootproto.GrantRetirementSealedExact,
 			Bounds:   dutyGrantsFromUsagesForProtocolTest(cmd.ExactUsages),
 		})
-		s.snapshot.ActiveGrant = rootproto.AuthorityGrant{}
+		s.snapshot.ActiveGrants = protocolTestRemoveGrant(s.snapshot.ActiveGrants, active.GrantID)
 		s.advanceRootToken()
 		return s.protocolState(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
 		s.reattaches++
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+		successor, ok := protocolTestActiveGrantForHolder(s.snapshot, holderID)
+		if !ok {
 			return s.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		successor := s.snapshot.ActiveGrant.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			for i := range s.snapshot.RetiredGrants {
 				if s.snapshot.RetiredGrants[i].GrantID == predecessor {
-					s.snapshot.RetiredGrants[i].InheritedByGrantID = successor
+					s.snapshot.RetiredGrants[i].InheritedByGrantID = successor.GrantID
 					s.snapshot.GrantInheritances = append(s.snapshot.GrantInheritances, rootproto.GrantInheritance{
 						PredecessorGrantID: predecessor,
-						SuccessorGrantID:   successor,
+						SuccessorGrantID:   successor.GrantID,
 					})
 				}
 			}
@@ -166,19 +179,22 @@ func (s *protocolMatrixStorage) advanceRootToken() {
 	s.snapshot.RootToken.Revision++
 }
 
-func pendingGrantRetirementsForTest(snapshot rootview.Snapshot, nowUnixNano int64) []rootproto.GrantRetirement {
+func pendingGrantRetirementsForTest(snapshot rootview.Snapshot, nowUnixNano int64, duties []rootproto.DutyGrant) []rootproto.GrantRetirement {
 	var out []rootproto.GrantRetirement
-	if snapshot.ActiveGrant.Present() {
+	for _, grant := range snapshot.ActiveGrants {
+		if !grant.Present() || !protocolTestDutiesOverlap(grant.Duties, duties) {
+			continue
+		}
 		mode := rootproto.GrantRetirementSealedExact
-		if !snapshot.ActiveGrant.ActiveAt(nowUnixNano) {
+		if !grant.ActiveAt(nowUnixNano) {
 			mode = rootproto.GrantRetirementExpiredBound
 		}
 		out = append(out, rootproto.GrantRetirement{
-			GrantID:  snapshot.ActiveGrant.GrantID,
-			HolderID: snapshot.ActiveGrant.HolderID,
-			Era:      snapshot.ActiveGrant.Era,
+			GrantID:  grant.GrantID,
+			HolderID: grant.HolderID,
+			Era:      grant.Era,
 			Mode:     mode,
-			Bounds:   append([]rootproto.DutyGrant(nil), snapshot.ActiveGrant.Duties...),
+			Bounds:   append([]rootproto.DutyGrant(nil), grant.Duties...),
 		})
 	}
 	for _, retired := range snapshot.RetiredGrants {
@@ -220,6 +236,56 @@ func protocolTestDutiesCover(grants, usages []rootproto.DutyGrant) bool {
 		}
 	}
 	return true
+}
+
+func protocolTestDutiesOverlap(left, right []rootproto.DutyGrant) bool {
+	for _, a := range left {
+		for _, b := range right {
+			if rootproto.DutyKeyEqual(a.Key(), b.Key()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func protocolTestActiveGrantForDuties(snapshot rootview.Snapshot, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		if protocolTestDutiesOverlap(grant.Duties, duties) {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func protocolTestActiveGrantForHolder(snapshot rootview.Snapshot, holderID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == strings.TrimSpace(holderID) {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func protocolTestUpsertGrant(grants []rootproto.AuthorityGrant, grant rootproto.AuthorityGrant) []rootproto.AuthorityGrant {
+	out := append([]rootproto.AuthorityGrant(nil), grants...)
+	for i := range out {
+		if out[i].GrantID == grant.GrantID {
+			out[i] = grant
+			return out
+		}
+	}
+	return append(out, grant)
+}
+
+func protocolTestRemoveGrant(grants []rootproto.AuthorityGrant, grantID string) []rootproto.AuthorityGrant {
+	out := grants[:0]
+	for _, grant := range grants {
+		if grant.GrantID != grantID {
+			out = append(out, grant)
+		}
+	}
+	return out
 }
 
 func (s *protocolMatrixStorage) Refresh() error { return nil }
@@ -331,7 +397,7 @@ func TestDetachedGrantFaultMatrix(t *testing.T) {
 		store := &protocolMatrixStorage{
 			leader: true,
 			snapshot: rootview.Snapshot{
-				ActiveGrant: grant("c2", 1, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)),
+				ActiveGrants: []rootproto.AuthorityGrant{grant("c2", 1, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20))},
 			},
 		}
 		svc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -347,11 +413,11 @@ func TestDetachedGrantFaultMatrix(t *testing.T) {
 		store := &protocolMatrixStorage{
 			leader: true,
 			snapshot: rootview.Snapshot{
-				ActiveGrant: grant("c1", 1,
+				ActiveGrants: []rootproto.AuthorityGrant{grant("c1", 1,
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 120),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 6, 0),
-				),
+				)},
 				Descriptors: map[uint64]topology.Descriptor{1: descriptor},
 			},
 		}
@@ -380,7 +446,7 @@ func TestDetachedGrantFaultMatrix(t *testing.T) {
 		store := &protocolMatrixStorage{
 			leader: true,
 			snapshot: rootview.Snapshot{
-				ActiveGrant:   grant("c2", 2, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40)),
+				ActiveGrants:  []rootproto.AuthorityGrant{grant("c2", 2, rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40))},
 				RetiredGrants: []rootproto.GrantRetirement{retired},
 			},
 		}
@@ -411,7 +477,7 @@ func TestDetachedLateReplyAfterRetiredGrantRejectedByClientVerifier(t *testing.T
 	staleStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: c1Grant,
+			ActiveGrants: []rootproto.AuthorityGrant{c1Grant},
 		},
 	}
 	staleSvc := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), staleStore)
@@ -434,7 +500,7 @@ func TestDetachedLateReplyAfterRetiredGrantRejectedByClientVerifier(t *testing.T
 	successorStore := &protocolMatrixStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/2",
 				HolderID:        "c2",
 				ExpiresUnixNano: activeExpiry,
@@ -445,7 +511,7 @@ func TestDetachedLateReplyAfterRetiredGrantRejectedByClientVerifier(t *testing.T
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 0, 0),
 				},
 				PredecessorRetirements: []rootproto.GrantRetirement{retired},
-			},
+			}},
 			RetiredGrants: []rootproto.GrantRetirement{retired},
 		},
 	}

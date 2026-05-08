@@ -26,7 +26,7 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		LastCommitted:     RootCursorToProto(state.LastCommitted),
 		IdFence:           state.IDFence,
 		TsoFence:          state.TSOFence,
-		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
+		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
 		RetiredEraFloor:   state.RetiredEraFloor,
@@ -43,7 +43,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		LastCommitted:     RootCursorFromProto(pbState.LastCommitted),
 		IDFence:           pbState.IdFence,
 		TSOFence:          pbState.TsoFence,
-		ActiveGrant:       RootAuthorityGrantFromProto(pbState.GetActiveGrant()),
+		ActiveGrants:      RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
 		RetiredGrants:     RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
 		RetiredEraFloor:   pbState.GetRetiredEraFloor(),
@@ -80,6 +80,32 @@ func RootAuthorityGrantFromProto(grant *metapb.RootAuthorityGrant) rootproto.Aut
 		Duties:                 RootDutyGrantsFromProto(grant.GetDuties()),
 		PredecessorRetirements: RootGrantRetirementsFromProto(grant.GetPredecessorRetirements()),
 	}
+}
+
+func RootAuthorityGrantsToProto(grants []rootproto.AuthorityGrant) []*metapb.RootAuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootAuthorityGrant, 0, len(grants))
+	for _, grant := range grants {
+		if pbGrant := RootAuthorityGrantToProto(grant); pbGrant != nil {
+			out = append(out, pbGrant)
+		}
+	}
+	return out
+}
+
+func RootAuthorityGrantsFromProto(grants []*metapb.RootAuthorityGrant) []rootproto.AuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]rootproto.AuthorityGrant, 0, len(grants))
+	for _, grant := range grants {
+		if parsed := RootAuthorityGrantFromProto(grant); parsed.Present() {
+			out = append(out, parsed)
+		}
+	}
+	return out
 }
 
 func RootGrantRetirementToProto(retirement rootproto.GrantRetirement) *metapb.RootGrantRetirement {
@@ -189,7 +215,7 @@ func RootGrantInheritancesFromProto(inheritances []*metapb.RootGrantInheritance)
 
 func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaState {
 	return &metapb.RootEunomiaState{
-		ActiveGrant:       RootAuthorityGrantToProto(state.ActiveGrant),
+		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
 		RetiredEraFloor:   state.RetiredEraFloor,
@@ -201,7 +227,7 @@ func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.Eunomia
 		return rootstate.EunomiaState{}
 	}
 	return rootstate.EunomiaState{
-		ActiveGrant:       RootAuthorityGrantFromProto(state.GetActiveGrant()),
+		ActiveGrants:      RootAuthorityGrantsFromProto(state.GetActiveGrants()),
 		RetiredGrants:     RootGrantRetirementsFromProto(state.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(state.GetGrantInheritances()),
 		RetiredEraFloor:   state.GetRetiredEraFloor(),

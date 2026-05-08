@@ -723,7 +723,7 @@ type RootState struct {
 	LastCommitted     *RootCursor             `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
 	IdFence           uint64                  `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
 	TsoFence          uint64                  `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
-	ActiveGrant       *RootAuthorityGrant     `protobuf:"bytes,7,opt,name=active_grant,json=activeGrant,proto3" json:"active_grant,omitempty"`
+	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
 	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
 	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
 	RetiredEraFloor   uint64                  `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
@@ -796,9 +796,9 @@ func (x *RootState) GetTsoFence() uint64 {
 	return 0
 }
 
-func (x *RootState) GetActiveGrant() *RootAuthorityGrant {
+func (x *RootState) GetActiveGrants() []*RootAuthorityGrant {
 	if x != nil {
-		return x.ActiveGrant
+		return x.ActiveGrants
 	}
 	return nil
 }
@@ -3766,7 +3766,7 @@ func (x *MetadataRootStatusResponse) GetLeaderId() uint64 {
 
 type RootEunomiaState struct {
 	state             protoimpl.MessageState  `protogen:"open.v1"`
-	ActiveGrant       *RootAuthorityGrant     `protobuf:"bytes,1,opt,name=active_grant,json=activeGrant,proto3" json:"active_grant,omitempty"`
+	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,1,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
 	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,2,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
 	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,3,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
 	RetiredEraFloor   uint64                  `protobuf:"varint,4,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
@@ -3804,9 +3804,9 @@ func (*RootEunomiaState) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{42}
 }
 
-func (x *RootEunomiaState) GetActiveGrant() *RootAuthorityGrant {
+func (x *RootEunomiaState) GetActiveGrants() []*RootAuthorityGrant {
 	if x != nil {
-		return x.ActiveGrant
+		return x.ActiveGrants
 	}
 	return nil
 }
@@ -4544,14 +4544,14 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"RootCursor\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
-	"\x05index\x18\x02 \x01(\x04R\x05index\"\xe2\x03\n" +
+	"\x05index\x18\x02 \x01(\x04R\x05index\"\xe4\x03\n" +
 	"\tRootState\x12#\n" +
 	"\rcluster_epoch\x18\x01 \x01(\x04R\fclusterEpoch\x12)\n" +
 	"\x10membership_epoch\x18\x02 \x01(\x04R\x0fmembershipEpoch\x12?\n" +
 	"\x0elast_committed\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\rlastCommitted\x12\x19\n" +
 	"\bid_fence\x18\x05 \x01(\x04R\aidFence\x12\x1b\n" +
-	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\x12C\n" +
-	"\factive_grant\x18\a \x01(\v2 .nokv.meta.v1.RootAuthorityGrantR\vactiveGrant\x12H\n" +
+	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\x12E\n" +
+	"\ractive_grants\x18\a \x03(\v2 .nokv.meta.v1.RootAuthorityGrantR\factiveGrants\x12H\n" +
 	"\x0eretired_grants\x18\b \x03(\v2!.nokv.meta.v1.RootGrantRetirementR\rretiredGrants\x12Q\n" +
 	"\x12grant_inheritances\x18\t \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12*\n" +
 	"\x11retired_era_floor\x18\n" +
@@ -4796,9 +4796,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x19MetadataRootStatusRequest\"V\n" +
 	"\x1aMetadataRootStatusResponse\x12\x1b\n" +
 	"\tis_leader\x18\x01 \x01(\bR\bisLeader\x12\x1b\n" +
-	"\tleader_id\x18\x02 \x01(\x04R\bleaderId\"\xa0\x02\n" +
-	"\x10RootEunomiaState\x12C\n" +
-	"\factive_grant\x18\x01 \x01(\v2 .nokv.meta.v1.RootAuthorityGrantR\vactiveGrant\x12H\n" +
+	"\tleader_id\x18\x02 \x01(\x04R\bleaderId\"\xa2\x02\n" +
+	"\x10RootEunomiaState\x12E\n" +
+	"\ractive_grants\x18\x01 \x03(\v2 .nokv.meta.v1.RootAuthorityGrantR\factiveGrants\x12H\n" +
 	"\x0eretired_grants\x18\x02 \x03(\v2!.nokv.meta.v1.RootGrantRetirementR\rretiredGrants\x12Q\n" +
 	"\x12grant_inheritances\x18\x03 \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12*\n" +
 	"\x11retired_era_floor\x18\x04 \x01(\x04R\x0fretiredEraFloor\"\x8b\x03\n" +
@@ -5031,7 +5031,7 @@ var file_meta_root_proto_goTypes = []any{
 }
 var file_meta_root_proto_depIdxs = []int32{
 	11,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
-	28,  // 1: nokv.meta.v1.RootState.active_grant:type_name -> nokv.meta.v1.RootAuthorityGrant
+	28,  // 1: nokv.meta.v1.RootState.active_grants:type_name -> nokv.meta.v1.RootAuthorityGrant
 	29,  // 2: nokv.meta.v1.RootState.retired_grants:type_name -> nokv.meta.v1.RootGrantRetirement
 	30,  // 3: nokv.meta.v1.RootState.grant_inheritances:type_name -> nokv.meta.v1.RootGrantInheritance
 	12,  // 4: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
@@ -5121,7 +5121,7 @@ var file_meta_root_proto_depIdxs = []int32{
 	11,  // 88: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
 	12,  // 89: nokv.meta.v1.MetadataRootAppendResponse.state:type_name -> nokv.meta.v1.RootState
 	8,   // 90: nokv.meta.v1.MetadataRootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.RootAllocatorKind
-	28,  // 91: nokv.meta.v1.RootEunomiaState.active_grant:type_name -> nokv.meta.v1.RootAuthorityGrant
+	28,  // 91: nokv.meta.v1.RootEunomiaState.active_grants:type_name -> nokv.meta.v1.RootAuthorityGrant
 	29,  // 92: nokv.meta.v1.RootEunomiaState.retired_grants:type_name -> nokv.meta.v1.RootGrantRetirement
 	30,  // 93: nokv.meta.v1.RootEunomiaState.grant_inheritances:type_name -> nokv.meta.v1.RootGrantInheritance
 	9,   // 94: nokv.meta.v1.RootGrantCommand.kind:type_name -> nokv.meta.v1.RootGrantAct

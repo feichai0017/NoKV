@@ -31,8 +31,7 @@ func (s *Service) resetAuthorityServing() {
 		return
 	}
 	s.authorityMu.Lock()
-	s.authorityState = authorityServing
-	s.authorityInflight = 0
+	s.authorityDuties = nil
 	s.authorityMu.Unlock()
 }
 
@@ -40,10 +39,10 @@ func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID)
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return dutyAdmission{done: func() {}}, nil
 	}
-	if err := s.rejectIfAuthorityClosed(); err != nil {
+	if err := s.rejectIfAuthorityClosed(duty); err != nil {
 		return dutyAdmission{}, err
 	}
-	if err := s.ensureGrant(ctx); err != nil {
+	if err := s.ensureGrant(ctx, duty); err != nil {
 		return dutyAdmission{}, translateGrantError(err)
 	}
 	if s.grantInheritanceCandidate() {
@@ -74,27 +73,31 @@ func (s *Service) beginAuthorityServing(ctx context.Context, duty rootproto.Duty
 	}
 	s.authorityMu.Lock()
 	defer s.authorityMu.Unlock()
-	switch s.authorityState {
+	slot := s.authorityDuties[duty]
+	switch slot.state {
 	case authorityServing:
-		s.authorityInflight++
-		return func() { s.finishAuthorityServing() }, nil
+		slot.inflight++
+		s.setAuthorityDutyLocked(duty, slot)
+		return func() { s.finishAuthorityServing(duty) }, nil
 	case authorityDraining:
 		return nil, statusGrant(fmt.Errorf("%w: authority is draining", rootstate.ErrSilence))
 	case authoritySealed:
 		return nil, statusGrant(fmt.Errorf("%w: authority is sealed", rootstate.ErrSilence))
 	default:
-		return nil, statusGrant(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, s.authorityState))
+		return nil, statusGrant(fmt.Errorf("%w: unknown authority state=%d", rootstate.ErrPrimacy, slot.state))
 	}
 }
 
-func (s *Service) finishAuthorityServing() {
+func (s *Service) finishAuthorityServing(duty rootproto.DutyID) {
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return
 	}
 	s.authorityMu.Lock()
-	if s.authorityInflight > 0 {
-		s.authorityInflight--
+	slot := s.authorityDuties[duty]
+	if slot.inflight > 0 {
+		slot.inflight--
 	}
+	s.setAuthorityDutyLocked(duty, slot)
 	s.authorityMu.Unlock()
 }
 
@@ -104,7 +107,22 @@ func (s *Service) authorityServingSnapshot() (authorityServingState, uint64) {
 	}
 	s.authorityMu.Lock()
 	defer s.authorityMu.Unlock()
-	return s.authorityState, s.authorityInflight
+	if len(s.authorityDuties) == 0 {
+		return authorityServing, 0
+	}
+	state := authorityServing
+	var inflight uint64
+	for _, slot := range s.authorityDuties {
+		inflight += slot.inflight
+		if slot.state == authorityDraining {
+			state = authorityDraining
+			continue
+		}
+		if slot.state == authoritySealed && state == authorityServing {
+			state = authoritySealed
+		}
+	}
+	return state, inflight
 }
 
 func (s *Service) requireExpectedClusterEpoch(expected uint64) error {
@@ -149,12 +167,12 @@ const (
 	gateDutyAdmission gateKind = iota
 )
 
-func (s *Service) rejectIfAuthorityClosed() error {
+func (s *Service) rejectIfAuthorityClosed(duty rootproto.DutyID) error {
 	if s == nil || !s.coordinatorGrantEnabled() {
 		return nil
 	}
 	s.authorityMu.Lock()
-	state := s.authorityState
+	state := s.authorityDuties[duty].state
 	s.authorityMu.Unlock()
 	switch state {
 	case authorityServing:
@@ -168,6 +186,17 @@ func (s *Service) rejectIfAuthorityClosed() error {
 	}
 }
 
+func (s *Service) setAuthorityDutyLocked(duty rootproto.DutyID, slot authorityDutyServing) {
+	if s.authorityDuties == nil {
+		s.authorityDuties = make(map[rootproto.DutyID]authorityDutyServing)
+	}
+	if slot.state == authorityServing && slot.inflight == 0 {
+		delete(s.authorityDuties, duty)
+		return
+	}
+	s.authorityDuties[duty] = slot
+}
+
 func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission, error) {
 	if s == nil {
 		return dutyAdmission{}, nil
@@ -178,23 +207,29 @@ func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission
 	holderID := strings.TrimSpace(s.coordinatorID)
 	clockSkew := s.grantClockSkew
 	s.grantMu.RUnlock()
-	if err := s.validateGateGrant(gateDutyAdmission, duty, view.grant); err != nil {
+	grant, ok := view.GrantFor(duty, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	if !ok {
+		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: required_duty=%s", rootstate.ErrDuty, rootproto.DutyName(duty)))
+	}
+	if err := s.validateGateGrant(gateDutyAdmission, duty, grant); err != nil {
 		return dutyAdmission{}, err
 	}
-	if view.grant.ExpiresUnixNano <= nowUnixNano+clockSkew.Nanoseconds() {
+	if grant.ExpiresUnixNano <= nowUnixNano+clockSkew.Nanoseconds() {
 		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
-		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: grant inside clock-skew window era=%d", rootstate.ErrInvalidGrant, view.grant.Era))
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: grant inside clock-skew window era=%d", rootstate.ErrInvalidGrant, grant.Era))
 	}
-	if holderID == "" || view.grant.HolderID != holderID {
-		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, view.grant.HolderID, holderID))
+	if holderID == "" || grant.HolderID != holderID {
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: rooted holder=%s local_holder=%s", rootstate.ErrPrimacy, grant.HolderID, holderID))
 	}
-	if !grantCertificateMatches(view.certificate, view.grant) {
+	cert := view.CertificateFor(grant)
+	if !grantCertificateMatches(cert, grant) {
 		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
-		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: missing root-issued grant certificate grant_id=%s era=%d", rootstate.ErrInvalidGrant, view.grant.GrantID, view.grant.Era))
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: missing root-issued grant certificate grant_id=%s era=%d", rootstate.ErrInvalidGrant, grant.GrantID, grant.Era))
 	}
 	return dutyAdmission{
-		grant:           view.grant,
-		certificate:     view.certificate,
+		grant:           grant,
+		certificate:     cert,
 		retirements:     append([]rootproto.GrantRetirement(nil), view.retirements...),
 		retiredEraFloor: view.retiredEraFloor,
 		duty:            duty,
