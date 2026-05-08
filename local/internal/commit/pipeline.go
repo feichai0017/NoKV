@@ -37,6 +37,7 @@ type Config struct {
 	WriteBatchMaxCount int
 	WriteBatchMaxSize  int64
 	WriteBatchWait     time.Duration
+	UserKeyShardRouter func(userKey []byte, shardCount int) int
 }
 
 // LSM is the narrow LSM surface the pipeline writes through. Implemented
@@ -300,20 +301,19 @@ func (p *Pipeline) dispatcher() {
 			closeAll()
 			return
 		}
-		shardID := shardForBatch(batch, n, &rrFallback)
+		shardID := shardForBatch(batch, n, &rrFallback, p.cfg.UserKeyShardRouter)
 		batch.ShardID = shardID
 		p.dispatch[shardID] <- batch
 	}
 }
 
-// shardForBatch picks the destination shard for a commit batch using
-// per-key affinity: hash the user key of the batch's first entry and
-// mod by the shard count. This keeps every write to the same key on the
-// same shard so percolator's same-startTS lock-on/lock-off and any
-// other "later same-version write wins" pattern stays correct.
+// shardForBatch picks the destination shard for a commit batch using the
+// configured user-key router. The default router hashes the whole user key;
+// fsmeta runtimes can inject a semantic-affinity router so keys that must be
+// atomically mutated together reach one local apply group.
 //
 // Empty batches (no key to hash) round-robin via *rr to keep load even.
-func shardForBatch(batch *CommitBatch, n int, rr *int) int {
+func shardForBatch(batch *CommitBatch, n int, rr *int, router func([]byte, int) int) int {
 	if n <= 1 {
 		return 0
 	}
@@ -330,7 +330,7 @@ func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 				if !ok || len(userKey) == 0 {
 					continue
 				}
-				return utils.ShardForUserKey(userKey, n)
+				return routeUserKeyToShard(userKey, n, router)
 			}
 		}
 	}
@@ -340,6 +340,16 @@ func shardForBatch(batch *CommitBatch, n int, rr *int) int {
 		*rr = 0
 	}
 	return id
+}
+
+func routeUserKeyToShard(userKey []byte, shardCount int, router func([]byte, int) int) int {
+	if router != nil {
+		shard := router(userKey, shardCount)
+		if shard >= 0 && shard < utils.NormalizeShardCount(shardCount) {
+			return shard
+		}
+	}
+	return utils.ShardForUserKey(userKey, shardCount)
 }
 
 // processor runs the per-batch CPU pipeline (collect -> applyRequests ->

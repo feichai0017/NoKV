@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -147,6 +148,8 @@ type atomicFastPathCounters struct {
 	fallbackTotal          atomic.Uint64
 	successTotal           atomic.Uint64
 	consecutiveFallbacks   atomic.Uint64
+	mu                     sync.Mutex
+	fallbacksByAffinity    map[string]uint64
 }
 
 // Option configures an Executor.
@@ -312,7 +315,7 @@ var atomicFastPathKinds = [...]fsmeta.OperationKind{
 func newAtomicFastPathCounters() map[fsmeta.OperationKind]*atomicFastPathCounters {
 	out := make(map[fsmeta.OperationKind]*atomicFastPathCounters, len(atomicFastPathKinds))
 	for _, kind := range atomicFastPathKinds {
-		out[kind] = &atomicFastPathCounters{}
+		out[kind] = &atomicFastPathCounters{fallbacksByAffinity: make(map[string]uint64)}
 	}
 	return out
 }
@@ -446,7 +449,8 @@ func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.Ope
 		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 		return err
 	}
-	if stats != nil && !stats.allowAttempt() {
+	affinity := atomicFastPathAffinity(primary, mutations)
+	if stats != nil && !stats.allowAttempt(affinity) {
 		stats.skipTotal.Add(1)
 		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 		return err
@@ -458,14 +462,13 @@ func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.Ope
 	if err != nil || handled {
 		if err == nil && stats != nil {
 			stats.successTotal.Add(1)
-			stats.consecutiveFallbacks.Store(0)
-			stats.backoffSkipTotal.Store(0)
+			stats.recordSuccess(affinity)
 		}
 		return err
 	}
 	if stats != nil {
 		stats.fallbackTotal.Add(1)
-		stats.consecutiveFallbacks.Add(1)
+		stats.recordFallback(affinity)
 	}
 	_, err = e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 	return err
@@ -476,14 +479,64 @@ const (
 	atomicFastPathProbeEvery   = 128
 )
 
-func (s *atomicFastPathCounters) allowAttempt() bool {
-	if s.consecutiveFallbacks.Load() < atomicFastPathBackoffAfter {
+func (s *atomicFastPathCounters) allowAttempt(affinity string) bool {
+	if s == nil {
+		return true
+	}
+	if s.affinityFallbacks(affinity) < atomicFastPathBackoffAfter {
 		return true
 	}
 	// Some plans are only conditionally co-located. Back off after repeated
-	// admission misses, but keep rare probes so a changed placement policy or
-	// key pattern can re-enable the fast path without restarting the gateway.
+	// admission misses for the same placement pattern, but do not let unrelated
+	// patterns force all operations of this kind back onto 2PC.
 	return s.backoffSkipTotal.Add(1)%atomicFastPathProbeEvery == 0
+}
+
+func (s *atomicFastPathCounters) affinityFallbacks(affinity string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fallbacksByAffinity[affinity]
+}
+
+func (s *atomicFastPathCounters) recordFallback(affinity string) {
+	s.mu.Lock()
+	next := s.fallbacksByAffinity[affinity] + 1
+	s.fallbacksByAffinity[affinity] = next
+	s.mu.Unlock()
+	s.consecutiveFallbacks.Store(next)
+}
+
+func (s *atomicFastPathCounters) recordSuccess(affinity string) {
+	s.mu.Lock()
+	delete(s.fallbacksByAffinity, affinity)
+	s.mu.Unlock()
+	s.consecutiveFallbacks.Store(0)
+}
+
+func atomicFastPathAffinity(primary []byte, mutations []*kvrpcpb.Mutation) string {
+	const virtualShards = 64
+	shards := make([]int, 0, 1+len(mutations))
+	if len(primary) > 0 {
+		shards = append(shards, fsmeta.ShardForUserKey(primary, virtualShards))
+	}
+	for _, mutation := range mutations {
+		if mutation == nil || len(mutation.GetKey()) == 0 {
+			continue
+		}
+		shards = append(shards, fsmeta.ShardForUserKey(mutation.GetKey(), virtualShards))
+	}
+	if len(shards) == 0 {
+		return "empty"
+	}
+	sort.Ints(shards)
+	out := make([]byte, 0, len(shards)*3)
+	for i, shard := range shards {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = fmt.Appendf(out, "%02d", shard)
+	}
+	return string(out)
 }
 
 func (e *Executor) mutateWithoutAtomicFastPath(ctx context.Context, kind fsmeta.OperationKind, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
@@ -1126,7 +1179,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 				return fsmeta.ErrExists
 			}
 			predicates = append(predicates, atomicExists(plan.ReadKeys[2]))
-			staleSessionKey, err := fsmeta.EncodeSessionKey(req.Mount, owner.Session)
+			staleSessionKey, err := fsmeta.EncodeSessionKey(req.Mount, owner.Inode, owner.Session)
 			if err != nil {
 				return err
 			}
@@ -1240,6 +1293,9 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		if !ok {
 			return fsmeta.ErrNotFound
 		}
+		if session.Inode != req.Inode {
+			return fsmeta.ErrNotFound
+		}
 		mutations := []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Delete, Key: cloneBytes(plan.MutateKeys[0])}}
 		ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, session.Inode)
 		if err != nil {
@@ -1277,7 +1333,11 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 			return err
 		}
 		deletes := make(map[string][]byte)
-		expiredSessions := make(map[fsmeta.SessionID]struct{})
+		type expiredSessionKey struct {
+			inode   fsmeta.InodeID
+			session fsmeta.SessionID
+		}
+		expiredSessions := make(map[expiredSessionKey]struct{})
 		for _, kv := range kvs {
 			if !bytes.HasPrefix(kv.Key, plan.PrimaryKey) {
 				break
@@ -1290,7 +1350,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 				continue
 			}
 			deletes[string(kv.Key)] = cloneBytes(kv.Key)
-			sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Session)
+			sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Inode, record.Session)
 			if err != nil {
 				return err
 			}
@@ -1302,7 +1362,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 				return err
 			} else if ok && bytes.Equal(value, kv.Value) {
 				deletes[string(sessionKey)] = sessionKey
-				expiredSessions[record.Session] = struct{}{}
+				expiredSessions[expiredSessionKey{inode: record.Inode, session: record.Session}] = struct{}{}
 			}
 			if value, ok, err := e.runner.Get(ctx, ownerKey, startVersion); err != nil {
 				return err

@@ -200,6 +200,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = local.MemTableEngineART
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.UserKeyShardRouter = fsmeta.ShardForUserKey
 	opt.AllowedModes = []workdirmode.Mode{
 		workdirmode.ModeStandalone,
 		workdirmode.ModeSeeded,

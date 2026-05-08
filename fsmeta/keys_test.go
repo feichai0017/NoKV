@@ -92,6 +92,39 @@ func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
 	require.False(t, bytes.HasPrefix(otherMount, prefix))
 }
 
+func TestShardForUserKeyKeepsWorkspaceMutationsLocal(t *testing.T) {
+	const shards = 4
+	createDentry, err := EncodeDentryKey("vol", RootInode, "workspace-a")
+	require.NoError(t, err)
+	targetShard := ShardForUserKey(createDentry, shards)
+
+	inode := findInodeOnShard(t, "vol", targetShard, shards)
+	createInode, err := EncodeInodeKey("vol", inode)
+	require.NoError(t, err)
+	require.Equal(t, targetShard, ShardForUserKey(createInode, shards))
+
+	childA, err := EncodeDentryKey("vol", inode, "scratch")
+	require.NoError(t, err)
+	childB, err := EncodeDentryKey("vol", inode, "checkpoint")
+	require.NoError(t, err)
+	require.Equal(t, targetShard, ShardForUserKey(childA, shards))
+	require.Equal(t, targetShard, ShardForUserKey(childB, shards))
+}
+
+func TestShardForUserKeyKeepsSessionIndexesWithInode(t *testing.T) {
+	const shards = 8
+	session, err := EncodeSessionKey("vol", 42, "writer-1")
+	require.NoError(t, err)
+	owner, err := EncodeInodeSessionKey("vol", 42)
+	require.NoError(t, err)
+	inode, err := EncodeInodeKey("vol", 42)
+	require.NoError(t, err)
+
+	targetShard := ShardForUserKey(inode, shards)
+	require.Equal(t, targetShard, ShardForUserKey(session, shards))
+	require.Equal(t, targetShard, ShardForUserKey(owner, shards))
+}
+
 func TestNameValidationRejectsUnsafePathComponents(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "a/b", "a\x00b"} {
 		_, err := EncodeDentryKey("vol", RootInode, name)
@@ -107,4 +140,17 @@ func TestKeyKindOfRejectsInvalidKeys(t *testing.T) {
 	require.NoError(t, err)
 	_, err = KeyKindOf(key)
 	require.ErrorIs(t, err, ErrInvalidKeyKind)
+}
+
+func findInodeOnShard(t *testing.T, mount MountID, shard int, shardCount int) InodeID {
+	t.Helper()
+	for inode := InodeID(2); inode < 10_000; inode++ {
+		key, err := EncodeInodeKey(mount, inode)
+		require.NoError(t, err)
+		if ShardForUserKey(key, shardCount) == shard {
+			return inode
+		}
+	}
+	t.Fatalf("no inode found for shard %d", shard)
+	return 0
 }

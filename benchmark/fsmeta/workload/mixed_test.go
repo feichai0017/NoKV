@@ -19,7 +19,7 @@ type fakeMixedClient struct {
 	mu        sync.Mutex
 	dentries  map[string]fsmeta.DentryRecord
 	inodes    map[fsmeta.InodeID]fsmeta.InodeRecord
-	sessions  map[fsmeta.SessionID]fsmeta.SessionRecord
+	sessions  map[fakeSessionKey]fsmeta.SessionRecord
 	snapshots map[uint64]fsmeta.SnapshotSubtreeToken
 	versions  map[uint64]struct{}
 	reads     []fsmeta.ReadDirRequest
@@ -28,11 +28,16 @@ type fakeMixedClient struct {
 	stream    *fakeWatchStream
 }
 
+type fakeSessionKey struct {
+	inode   fsmeta.InodeID
+	session fsmeta.SessionID
+}
+
 func newFakeMixedClient() *fakeMixedClient {
 	return &fakeMixedClient{
 		dentries:  make(map[string]fsmeta.DentryRecord),
 		inodes:    make(map[fsmeta.InodeID]fsmeta.InodeRecord),
-		sessions:  make(map[fsmeta.SessionID]fsmeta.SessionRecord),
+		sessions:  make(map[fakeSessionKey]fsmeta.SessionRecord),
 		snapshots: make(map[uint64]fsmeta.SnapshotSubtreeToken),
 		versions:  make(map[uint64]struct{}),
 		next:      100,
@@ -250,26 +255,31 @@ func (c *fakeMixedClient) OpenWriteSession(_ context.Context, req fsmeta.OpenWri
 		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
 	}
 	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: time.Now().Add(req.TTL).UnixNano()}
-	c.sessions[req.Session] = record
+	c.sessions[fakeSessionKey{inode: req.Inode, session: req.Session}] = record
 	return record, nil
 }
 
 func (c *fakeMixedClient) HeartbeatWriteSession(_ context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	record, ok := c.sessions[req.Session]
+	key := fakeSessionKey{inode: req.Inode, session: req.Session}
+	record, ok := c.sessions[key]
 	if !ok || record.Inode != req.Inode {
 		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
 	}
 	record.ExpiresUnixNs = time.Now().Add(req.TTL).UnixNano()
-	c.sessions[req.Session] = record
+	c.sessions[key] = record
 	return record, nil
 }
 
 func (c *fakeMixedClient) CloseWriteSession(_ context.Context, req fsmeta.CloseWriteSessionRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.sessions, req.Session)
+	key := fakeSessionKey{inode: req.Inode, session: req.Session}
+	if _, ok := c.sessions[key]; !ok {
+		return fsmeta.ErrNotFound
+	}
+	delete(c.sessions, key)
 	return nil
 }
 

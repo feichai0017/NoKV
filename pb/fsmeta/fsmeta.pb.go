@@ -2715,6 +2715,7 @@ type CloseWriteSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
 	Session       string                 `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
+	Inode         uint64                 `protobuf:"varint,3,opt,name=inode,proto3" json:"inode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2761,6 +2762,13 @@ func (x *CloseWriteSessionRequest) GetSession() string {
 		return x.Session
 	}
 	return ""
+}
+
+func (x *CloseWriteSessionRequest) GetInode() uint64 {
+	if x != nil {
+		return x.Inode
+	}
+	return 0
 }
 
 type CloseWriteSessionResponse struct {
@@ -3078,10 +3086,11 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\asession\x18\x03 \x01(\tR\asession\x12\x15\n" +
 	"\x06ttl_ns\x18\x04 \x01(\x04R\x05ttlNs\"X\n" +
 	"\x1dHeartbeatWriteSessionResponse\x127\n" +
-	"\asession\x18\x01 \x01(\v2\x1d.nokv.fsmeta.v1.SessionRecordR\asession\"J\n" +
+	"\asession\x18\x01 \x01(\v2\x1d.nokv.fsmeta.v1.SessionRecordR\asession\"`\n" +
 	"\x18CloseWriteSessionRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x18\n" +
-	"\asession\x18\x02 \x01(\tR\asession\"\x1b\n" +
+	"\asession\x18\x02 \x01(\tR\asession\x12\x14\n" +
+	"\x05inode\x18\x03 \x01(\x04R\x05inode\"\x1b\n" +
 	"\x19CloseWriteSessionResponse\"H\n" +
 	"\x1aExpireWriteSessionsRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x14\n" +

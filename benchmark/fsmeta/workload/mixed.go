@@ -464,7 +464,7 @@ func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedCo
 		return
 	}
 	rec.recordCall("close_write_session", func() error {
-		return cli.CloseWriteSession(ctx, fsmeta.CloseWriteSessionRequest{Mount: cfg.Mount, Session: session})
+		return cli.CloseWriteSession(ctx, fsmeta.CloseWriteSessionRequest{Mount: cfg.Mount, Inode: entry.Inode, Session: session})
 	})
 }
 

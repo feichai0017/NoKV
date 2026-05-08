@@ -223,6 +223,7 @@ func (db *DB) startWriteRuntime() {
 		WriteBatchMaxCount: db.opt.WriteBatchMaxCount,
 		WriteBatchMaxSize:  db.opt.WriteBatchMaxSize,
 		WriteBatchWait:     db.opt.WriteBatchWait,
+		UserKeyShardRouter: db.opt.UserKeyShardRouter,
 	}, db)
 	db.pipeline.Start()
 }
@@ -1064,7 +1065,7 @@ func (db *DB) groupInternalEntriesByShard(entries []*kv.Entry) [][]*kv.Entry {
 		if entry == nil {
 			continue
 		}
-		shardID := lsm.ShardForInternalKey(entry.Key, shardCount)
+		shardID := db.shardForInternalKey(entry.Key, shardCount)
 		if len(buckets[shardID]) == 0 {
 			order = append(order, shardID)
 		}
@@ -1075,6 +1076,21 @@ func (db *DB) groupInternalEntriesByShard(entries []*kv.Entry) [][]*kv.Entry {
 		groups = append(groups, buckets[shardID])
 	}
 	return groups
+}
+
+func (db *DB) shardForInternalKey(internalKey []byte, shardCount int) int {
+	if db == nil || db.opt == nil || db.opt.UserKeyShardRouter == nil {
+		return lsm.ShardForInternalKey(internalKey, shardCount)
+	}
+	_, userKey, _, ok := kv.SplitInternalKey(internalKey)
+	if !ok {
+		return 0
+	}
+	shard := db.opt.UserKeyShardRouter(userKey, shardCount)
+	if shard < 0 || shard >= utils.NormalizeShardCount(shardCount) {
+		return utils.ShardForUserKey(userKey, shardCount)
+	}
+	return shard
 }
 
 func releaseEntryGroups(groups [][]*kv.Entry) {

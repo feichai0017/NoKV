@@ -92,7 +92,13 @@ type Options struct {
 	// default; non-power-of-two values are rounded DOWN to the nearest
 	// power of two during Open (e.g. 6 → 4, 12 → 8).
 	LSMShardCount int
-	ManifestSync  bool
+	// UserKeyShardRouter optionally overrides the local data-plane shard for a
+	// user key. Nil keeps the generic full-key hash router. Runtime-specific
+	// routers must be deterministic and must not depend on mutable process
+	// state, because WAL recovery and AtomicMutate admission use the same
+	// placement boundary.
+	UserKeyShardRouter func(userKey []byte, shardCount int) int
+	ManifestSync       bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
