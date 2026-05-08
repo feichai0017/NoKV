@@ -143,6 +143,23 @@ func TestRunnerTryAtomicMutateRecordsUnsupportedKV(t *testing.T) {
 	require.Equal(t, uint64(1), stats["atomic_runner_unsupported_total"])
 }
 
+func TestRunnerStatsExposeTSOCoalescer(t *testing.T) {
+	runner, err := NewRunner(&fakeRunnerKV{}, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 10, Count: 1}})
+	require.NoError(t, err)
+
+	ts, err := runner.ReserveTimestamp(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), ts)
+
+	stats := runner.Stats()
+	tsoStats, ok := stats["tso"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), tsoStats["tso_coalesce_requests_total"])
+	require.Equal(t, uint64(1), tsoStats["tso_coalesce_batches_total"])
+	require.Equal(t, uint64(0), tsoStats["tso_direct_requests_total"])
+	require.Equal(t, uint64(1), tsoStats["tso_coalesce_allocated_total"])
+}
+
 func TestRunnerMutateAllocatesCommitTimestampAfterPrewrite(t *testing.T) {
 	kv := &fakeCommitTimestampKV{}
 	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 20, Count: 1}})
