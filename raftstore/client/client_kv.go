@@ -639,9 +639,13 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 				continue
 			}
 		}
-		if shouldRollbackAfterPrimaryCommitFailure(err) {
-			if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
-				return commitVersion, errors.Join(err, fmt.Errorf("client: rollback after primary commit failure: %w", rollbackErr))
+		if shouldRecoverAfterPrimaryCommitFailure(err) {
+			recoveredCommitVersion, recovered, recoverErr := c.recoverPrimaryCommitFailure(ctx, primary, prewritten, startVersion, commitVersion)
+			if recoverErr != nil {
+				return commitVersion, errors.Join(err, fmt.Errorf("client: recover after primary commit failure: %w", recoverErr))
+			}
+			if recovered {
+				return recoveredCommitVersion, nil
 			}
 		}
 		return commitVersion, err
@@ -780,9 +784,36 @@ func (c *Client) resolveCommittedSecondaries(ctx context.Context, keys [][]byte,
 	return err
 }
 
-func shouldRollbackAfterPrimaryCommitFailure(err error) bool {
-	_, ok := commitTsExpiredMin(err)
+func shouldRecoverAfterPrimaryCommitFailure(err error) bool {
+	_, ok := nokverrors.AsTxnKeyError(err)
 	return ok
+}
+
+func (c *Client) recoverPrimaryCommitFailure(ctx context.Context, primary []byte, prewritten map[uint64][][]byte, startVersion, commitVersion uint64) (uint64, bool, error) {
+	statusResp, err := c.CheckTxnStatus(ctx, primary, startVersion, commitVersion, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	if statusResp == nil {
+		return 0, false, &ProtocolError{Operation: "recover primary commit", Detail: fmt.Sprintf("nil check txn status response for primary %q", primary)}
+	}
+	if keyErr := statusResp.GetError(); keyErr != nil {
+		return 0, false, txnKeyError(keyErr)
+	}
+	if resolvedCommitVersion := statusResp.GetCommitVersion(); resolvedCommitVersion != 0 {
+		if err := c.resolveCommittedSecondaries(ctx, flattenPrewritten(prewritten), startVersion, resolvedCommitVersion); err != nil {
+			return resolvedCommitVersion, false, err
+		}
+		return resolvedCommitVersion, true, nil
+	}
+	// A KeyError response from Commit is a deterministic protocol rejection,
+	// not an unknown transport outcome. If the primary has no committed
+	// decision, clear this start_ts before returning so fsmeta can retry the
+	// semantic operation immediately instead of waiting for lock TTL expiry.
+	if err := c.rollbackPrewrites(ctx, prewritten, startVersion); err != nil {
+		return 0, false, err
+	}
+	return 0, false, nil
 }
 
 func commitTsExpiredMin(err error) (uint64, bool) {

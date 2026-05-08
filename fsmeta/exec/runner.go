@@ -121,26 +121,32 @@ type DirPageCache interface {
 
 // Executor interprets fsmeta operation plans against a TxnRunner.
 type Executor struct {
-	runner                               TxnRunner
-	inodes                               InodeAllocator
-	mounts                               MountResolver
-	quotas                               QuotaResolver
-	subtrees                             SubtreeHandoffPublisher
-	authorities                          SubtreeAuthorityResolver
-	negCache                             NegativeCache
-	dirPages                             DirPageCache
-	lockTTL                              uint64
-	now                                  func() time.Time
-	readRetriesTotal                     atomic.Uint64
-	readRetryExhaustedTotal              atomic.Uint64
-	txnRetriesTotal                      atomic.Uint64
-	txnRetryExhaustedTotal               atomic.Uint64
-	createTotal                          atomic.Uint64
-	createFastPathAttemptTotal           atomic.Uint64
-	createFastPathSkipQuotaTotal         atomic.Uint64
-	createFastPathRunnerUnsupportedTotal atomic.Uint64
-	createFastPathFallbackTotal          atomic.Uint64
-	createFastPathSuccessTotal           atomic.Uint64
+	runner                  TxnRunner
+	inodes                  InodeAllocator
+	mounts                  MountResolver
+	quotas                  QuotaResolver
+	subtrees                SubtreeHandoffPublisher
+	authorities             SubtreeAuthorityResolver
+	negCache                NegativeCache
+	dirPages                DirPageCache
+	lockTTL                 uint64
+	now                     func() time.Time
+	readRetriesTotal        atomic.Uint64
+	readRetryExhaustedTotal atomic.Uint64
+	txnRetriesTotal         atomic.Uint64
+	txnRetryExhaustedTotal  atomic.Uint64
+	createTotal             atomic.Uint64
+	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
+}
+
+type atomicFastPathCounters struct {
+	attemptTotal           atomic.Uint64
+	skipTotal              atomic.Uint64
+	backoffSkipTotal       atomic.Uint64
+	runnerUnsupportedTotal atomic.Uint64
+	fallbackTotal          atomic.Uint64
+	successTotal           atomic.Uint64
+	consecutiveFallbacks   atomic.Uint64
 }
 
 // Option configures an Executor.
@@ -239,8 +245,9 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 		return nil, errRunnerRequired
 	}
 	executor := &Executor{
-		runner:  runner,
-		lockTTL: defaultLockTTL,
+		runner:         runner,
+		lockTTL:        defaultLockTTL,
+		atomicFastPath: newAtomicFastPathCounters(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -254,33 +261,25 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 func (e *Executor) Stats() map[string]any {
 	if e == nil {
 		return map[string]any{
-			"read_retries_total":                       uint64(0),
-			"read_retry_exhausted_total":               uint64(0),
-			"txn_retries_total":                        uint64(0),
-			"txn_retry_exhausted_total":                uint64(0),
-			"create_total":                             uint64(0),
-			"create_fastpath_attempt_total":            uint64(0),
-			"create_fastpath_skip_quota_total":         uint64(0),
-			"create_fastpath_runner_unsupported_total": uint64(0),
-			"create_fastpath_fallback_total":           uint64(0),
-			"create_fastpath_success_total":            uint64(0),
-			"negative_cache_enabled":                   false,
-			"dirpage_cache_enabled":                    false,
+			"read_retries_total":         uint64(0),
+			"read_retry_exhausted_total": uint64(0),
+			"txn_retries_total":          uint64(0),
+			"txn_retry_exhausted_total":  uint64(0),
+			"create_total":               uint64(0),
+			"atomic_fastpath":            atomicFastPathStats(nil),
+			"negative_cache_enabled":     false,
+			"dirpage_cache_enabled":      false,
 		}
 	}
 	out := map[string]any{
-		"read_retries_total":                       e.readRetriesTotal.Load(),
-		"read_retry_exhausted_total":               e.readRetryExhaustedTotal.Load(),
-		"txn_retries_total":                        e.txnRetriesTotal.Load(),
-		"txn_retry_exhausted_total":                e.txnRetryExhaustedTotal.Load(),
-		"create_total":                             e.createTotal.Load(),
-		"create_fastpath_attempt_total":            e.createFastPathAttemptTotal.Load(),
-		"create_fastpath_skip_quota_total":         e.createFastPathSkipQuotaTotal.Load(),
-		"create_fastpath_runner_unsupported_total": e.createFastPathRunnerUnsupportedTotal.Load(),
-		"create_fastpath_fallback_total":           e.createFastPathFallbackTotal.Load(),
-		"create_fastpath_success_total":            e.createFastPathSuccessTotal.Load(),
-		"negative_cache_enabled":                   e.negCache != nil,
-		"dirpage_cache_enabled":                    e.dirPages != nil,
+		"read_retries_total":         e.readRetriesTotal.Load(),
+		"read_retry_exhausted_total": e.readRetryExhaustedTotal.Load(),
+		"txn_retries_total":          e.txnRetriesTotal.Load(),
+		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
+		"create_total":               e.createTotal.Load(),
+		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
+		"negative_cache_enabled":     e.negCache != nil,
+		"dirpage_cache_enabled":      e.dirPages != nil,
 	}
 	if stats, ok := e.runner.(statsProvider); ok {
 		out["runner"] = stats.Stats()
@@ -297,6 +296,60 @@ func (e *Executor) Stats() map[string]any {
 		out["inode_allocator"] = stats.Stats()
 	}
 	return out
+}
+
+var atomicFastPathKinds = [...]fsmeta.OperationKind{
+	fsmeta.OperationCreate,
+	fsmeta.OperationUpdateInode,
+	fsmeta.OperationRename,
+	fsmeta.OperationLink,
+	fsmeta.OperationUnlink,
+	fsmeta.OperationOpenWriteSession,
+	fsmeta.OperationHeartbeatSession,
+	fsmeta.OperationCloseSession,
+}
+
+func newAtomicFastPathCounters() map[fsmeta.OperationKind]*atomicFastPathCounters {
+	out := make(map[fsmeta.OperationKind]*atomicFastPathCounters, len(atomicFastPathKinds))
+	for _, kind := range atomicFastPathKinds {
+		out[kind] = &atomicFastPathCounters{}
+	}
+	return out
+}
+
+func atomicFastPathStats(counters map[fsmeta.OperationKind]*atomicFastPathCounters) map[string]any {
+	out := make(map[string]any, len(atomicFastPathKinds))
+	for _, kind := range atomicFastPathKinds {
+		var stats *atomicFastPathCounters
+		if counters != nil {
+			stats = counters[kind]
+		}
+		out[string(kind)] = atomicFastPathStatsFor(stats)
+	}
+	return out
+}
+
+func atomicFastPathStatsFor(stats *atomicFastPathCounters) map[string]uint64 {
+	if stats == nil {
+		return map[string]uint64{
+			"attempt_total":            0,
+			"skip_total":               0,
+			"backoff_skip_total":       0,
+			"runner_unsupported_total": 0,
+			"fallback_total":           0,
+			"success_total":            0,
+			"consecutive_fallbacks":    0,
+		}
+	}
+	return map[string]uint64{
+		"attempt_total":            stats.attemptTotal.Load(),
+		"skip_total":               stats.skipTotal.Load(),
+		"backoff_skip_total":       stats.backoffSkipTotal.Load(),
+		"runner_unsupported_total": stats.runnerUnsupportedTotal.Load(),
+		"fallback_total":           stats.fallbackTotal.Load(),
+		"success_total":            stats.successTotal.Load(),
+		"consecutive_fallbacks":    stats.consecutiveFallbacks.Load(),
+	}
 }
 
 // Create creates one dentry and its inode record in a single transaction.
@@ -353,10 +406,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 			AssertionNotExist: true,
 		},
 	}
-	predicates := []*kvrpcpb.AtomicPredicate{
-		{Key: cloneBytes(plan.MutateKeys[0]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
-		{Key: cloneBytes(plan.MutateKeys[1]), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
-	}
+	predicates := []*kvrpcpb.AtomicPredicate{atomicNotExists(plan.MutateKeys[0]), atomicNotExists(plan.MutateKeys[1])}
 	e.createTotal.Add(1)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
@@ -370,26 +420,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		}
 		all := append(cloneMutations(mutations), quotaMutations...)
 		if len(quotaMutations) == 0 {
-			if fast, ok := e.runner.(AtomicMutateFastPath); ok {
-				// Fast-path counters are per transaction attempt, not per logical
-				// Create, so contention retries and admission misses stay visible.
-				e.createFastPathAttemptTotal.Add(1)
-				handled, err := fast.TryAtomicMutate(ctx, plan.PrimaryKey, cloneAtomicPredicates(predicates), all, startVersion, commitVersion)
-				if err != nil || handled {
-					if err == nil {
-						e.createFastPathSuccessTotal.Add(1)
-					}
-					return err
-				}
-				e.createFastPathFallbackTotal.Add(1)
-			} else {
-				e.createFastPathRunnerUnsupportedTotal.Add(1)
-			}
-		} else {
-			e.createFastPathSkipQuotaTotal.Add(1)
+			// Fast-path counters are per transaction attempt, not per logical
+			// Create, so contention retries and admission misses stay visible.
+			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, all, startVersion, commitVersion, e.lockTTL)
-		return err
+		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, all, startVersion, commitVersion)
 	}); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
@@ -399,6 +434,79 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	e.invalidateNegative(plan.MutateKeys[0])
 	e.invalidateDirPages(req.Mount, req.Parent)
 	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
+}
+
+func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.OperationKind, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
+	stats := e.atomicFastPathCounters(kind)
+	fast, ok := e.runner.(AtomicMutateFastPath)
+	if !ok {
+		if stats != nil {
+			stats.runnerUnsupportedTotal.Add(1)
+		}
+		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
+	}
+	if stats != nil && !stats.allowAttempt() {
+		stats.skipTotal.Add(1)
+		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
+		return err
+	}
+	if stats != nil {
+		stats.attemptTotal.Add(1)
+	}
+	handled, err := fast.TryAtomicMutate(ctx, primary, cloneAtomicPredicates(predicates), cloneMutations(mutations), startVersion, commitVersion)
+	if err != nil || handled {
+		if err == nil && stats != nil {
+			stats.successTotal.Add(1)
+			stats.consecutiveFallbacks.Store(0)
+			stats.backoffSkipTotal.Store(0)
+		}
+		return err
+	}
+	if stats != nil {
+		stats.fallbackTotal.Add(1)
+		stats.consecutiveFallbacks.Add(1)
+	}
+	_, err = e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
+	return err
+}
+
+const (
+	atomicFastPathBackoffAfter = 16
+	atomicFastPathProbeEvery   = 128
+)
+
+func (s *atomicFastPathCounters) allowAttempt() bool {
+	if s.consecutiveFallbacks.Load() < atomicFastPathBackoffAfter {
+		return true
+	}
+	// Some plans are only conditionally co-located. Back off after repeated
+	// admission misses, but keep rare probes so a changed placement policy or
+	// key pattern can re-enable the fast path without restarting the gateway.
+	return s.backoffSkipTotal.Add(1)%atomicFastPathProbeEvery == 0
+}
+
+func (e *Executor) mutateWithoutAtomicFastPath(ctx context.Context, kind fsmeta.OperationKind, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
+	if stats := e.atomicFastPathCounters(kind); stats != nil {
+		stats.skipTotal.Add(1)
+	}
+	_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
+	return err
+}
+
+func (e *Executor) atomicFastPathCounters(kind fsmeta.OperationKind) *atomicFastPathCounters {
+	if e == nil {
+		return nil
+	}
+	return e.atomicFastPath[kind]
+}
+
+func atomicExists(key []byte) *kvrpcpb.AtomicPredicate {
+	return &kvrpcpb.AtomicPredicate{Key: cloneBytes(key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS}
+}
+
+func atomicNotExists(key []byte) *kvrpcpb.AtomicPredicate {
+	return &kvrpcpb.AtomicPredicate{Key: cloneBytes(key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS}
 }
 
 // UpdateInode updates mutable inode attributes and applies the size quota delta
@@ -474,8 +582,14 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 			}
 			mutations = append(mutations, quotaMutations...)
 		}
-		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
-			return err
+		if sizeDelta == 0 || len(mutations) == 1 {
+			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, []*kvrpcpb.AtomicPredicate{atomicExists(plan.MutateKeys[0])}, mutations, startVersion, commitVersion); err != nil {
+				return err
+			}
+		} else {
+			if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+				return err
+			}
 		}
 		updated = inode
 		return nil
@@ -879,8 +993,11 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 			return err
 		}
 		mutations = append(mutations, quotaMutations...)
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if len(quotaMutations) == 0 {
+			predicates := []*kvrpcpb.AtomicPredicate{atomicNotExists(plan.ReadKeys[1]), atomicExists(inodeKey)}
+			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+		}
+		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}); err != nil {
 		return err
 	}
@@ -911,6 +1028,7 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			Op:  kvrpcpb.Mutation_Delete,
 			Key: cloneBytes(plan.MutateKeys[0]),
 		}}
+		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.PrimaryKey)}
 		if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
@@ -918,6 +1036,7 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			if err != nil {
 				return err
 			}
+			predicates = append(predicates, atomicExists(inodeKey))
 			if inode.LinkCount <= 1 {
 				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: inodeKey})
 			} else {
@@ -939,8 +1058,10 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			}
 			mutations = append(mutations, quotaMutations...)
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if len(mutations) == len(predicates) {
+			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+		}
+		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}); err != nil {
 		return err
 	}
@@ -987,10 +1108,15 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		}
 		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
 		now := nowTime.UnixNano()
+		predicates := make([]*kvrpcpb.AtomicPredicate, 0, 2)
 		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
 			return err
 		} else if ok && sessionLive(existing, now) {
 			return fsmeta.ErrExists
+		} else if ok {
+			predicates = append(predicates, atomicExists(plan.ReadKeys[1]))
+		} else {
+			predicates = append(predicates, atomicNotExists(plan.ReadKeys[1]))
 		}
 		mutations := make([]*kvrpcpb.Mutation, 0, 3)
 		if owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[2], startVersion); err != nil {
@@ -999,6 +1125,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			if sessionLive(owner, now) {
 				return fsmeta.ErrExists
 			}
+			predicates = append(predicates, atomicExists(plan.ReadKeys[2]))
 			staleSessionKey, err := fsmeta.EncodeSessionKey(req.Mount, owner.Session)
 			if err != nil {
 				return err
@@ -1014,6 +1141,8 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 					mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: staleSessionKey})
 				}
 			}
+		} else {
+			predicates = append(predicates, atomicNotExists(plan.ReadKeys[2]))
 		}
 		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
@@ -1023,7 +1152,13 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		// Deleting an arbitrary stale session needs value-compare semantics that
+		// AtomicMutate does not expose; keep that rare cleanup case on 2PC.
+		if len(mutations) == 2 {
+			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+				return err
+			}
+		} else if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -1078,7 +1213,8 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
-		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0]), atomicExists(plan.ReadKeys[1])}
+		if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -1114,8 +1250,11 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: ownerKey})
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0])}
+		if len(mutations) > 1 {
+			predicates = append(predicates, atomicExists(ownerKey))
+		}
+		return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 	}); err != nil {
 		return err
 	}
@@ -1246,8 +1385,11 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		if err != nil {
 			return err
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if len(mutations) == 2 {
+			predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0]), atomicNotExists(plan.ReadKeys[1])}
+			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+		}
+		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}); err != nil {
 		return err
 	}
