@@ -278,7 +278,7 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 		rec.record("rename_run_publish", 0, err)
 		return
 	}
-	rec.recordCall("rename_run_publish", func() error {
+	if err := recordCall(rec, "rename_run_publish", func() error {
 		starts.put(key, time.Now())
 		return cli.Rename(ctx, fsmeta.RenameRequest{
 			Mount:      cfg.Mount,
@@ -287,7 +287,9 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 			ToParent:   dirs.runs,
 			ToName:     finalName,
 		})
-	})
+	}); err != nil {
+		return
+	}
 
 	rec.recordCall("lookup_run", func() error {
 		_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: dirs.runs, Name: finalName})
@@ -407,7 +409,7 @@ func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig,
 			return err
 		})
 	}
-	rec.recordCall("publish_checkpoint", func() error {
+	if err := recordCall(rec, "publish_checkpoint", func() error {
 		return cli.Rename(ctx, fsmeta.RenameRequest{
 			Mount:      cfg.Mount,
 			FromParent: dirs.scratch,
@@ -415,7 +417,9 @@ func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig,
 			ToParent:   dirs.checkpoints,
 			ToName:     finalName,
 		})
-	})
+	}); err != nil {
+		return
+	}
 	rec.recordCall("lookup_checkpoint", func() error {
 		_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: dirs.checkpoints, Name: finalName})
 		return err
