@@ -218,8 +218,19 @@ func Retryable(err error) bool {
 	if IsTxnContention(err) {
 		return true
 	}
+	// RPC boundaries preserve only the stable kind metadata, not the original
+	// KeyErrorCarrier. Keep transaction-contention kinds retryable after gRPC
+	// translation so clients do not need to parse diagnostic status text.
 	switch KindOf(err) {
-	case KindRetryable, KindUnavailable, KindRouteUnavailable, KindRegionRouting, KindStaleEpoch, KindNotLeader:
+	case KindCommitTsExpired,
+		KindLockConflict,
+		KindNotLeader,
+		KindRegionRouting,
+		KindRetryable,
+		KindRouteUnavailable,
+		KindStaleEpoch,
+		KindUnavailable,
+		KindWriteConflict:
 		return true
 	default:
 		return false

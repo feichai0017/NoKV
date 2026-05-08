@@ -102,6 +102,25 @@ func (s *scriptedKVService) TryAtomicMutate(ctx context.Context, req *kvrpcpb.Kv
 	return s.mockService.TryAtomicMutate(ctx, req)
 }
 
+func mutationKeyStrings(muts []*kvrpcpb.Mutation) []string {
+	out := make([]string, 0, len(muts))
+	for _, mut := range muts {
+		if mut == nil {
+			continue
+		}
+		out = append(out, string(mut.GetKey()))
+	}
+	return out
+}
+
+func keyStrings(keys [][]byte) []string {
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, string(key))
+	}
+	return out
+}
+
 func TestClientTryAtomicMutateStatsRecordRouteFallback(t *testing.T) {
 	cluster := newMockCluster(
 		clusterRegion{
@@ -1136,6 +1155,7 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *
 
 	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v1b")},
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
 	}, 30, 31, 3000)
 	require.ErrorContains(t, err, "secondary prewrite failed")
@@ -1146,6 +1166,203 @@ func TestClientTwoPhaseCommitRollsBackPrewritesAfterSecondaryPrewriteFailure(t *
 	cluster.mu.Unlock()
 	require.False(t, primaryPending, "primary prewrite must be rolled back")
 	require.Equal(t, 1, primaryRollbackHits)
+}
+
+func TestClientTwoPhaseCommitBatchesPrimaryRegionPrewriteAndCommit(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var prewriteBatches [][]string
+	var commitBatches [][]string
+	svc.prewriteFn = func(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+		prewriteBatches = append(prewriteBatches, mutationKeyStrings(req.GetRequest().GetMutations()))
+		return svc.mockService.Prewrite(ctx, req)
+	}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		commitBatches = append(commitBatches, keyStrings(req.GetRequest().GetKeys()))
+		return svc.mockService.Commit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v2")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("charlie"), Value: []byte("v3")},
+	}, 70, 71, 3000)
+	require.NoError(t, err)
+	require.Len(t, prewriteBatches, 1)
+	require.ElementsMatch(t, []string{"alfa", "bravo", "charlie"}, prewriteBatches[0])
+	require.Len(t, commitBatches, 1)
+	require.ElementsMatch(t, []string{"alfa", "bravo", "charlie"}, commitBatches[0])
+
+	cluster.mu.Lock()
+	region := cluster.regions[1]
+	_, pending := region.pending[70]
+	committed := map[string]clusterValue{
+		"alfa":    region.committed["alfa"],
+		"bravo":   region.committed["bravo"],
+		"charlie": region.committed["charlie"],
+	}
+	cluster.mu.Unlock()
+	require.False(t, pending)
+	require.Equal(t, uint64(71), committed["alfa"].commitVersion)
+	require.Equal(t, uint64(71), committed["bravo"].commitVersion)
+	require.Equal(t, uint64(71), committed["charlie"].commitVersion)
+}
+
+func TestClientTwoPhaseCommitBatchesPrimaryRegionBeforeSecondaryRegions(t *testing.T) {
+	cluster := newMockCluster(
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 1,
+				StartKey: []byte("a"),
+				EndKey:   []byte("m"),
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+			},
+			leaderStore: 1,
+		},
+		clusterRegion{
+			meta: &metapb.RegionDescriptor{
+				RegionId: 2,
+				StartKey: []byte("m"),
+				EndKey:   nil,
+				Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+			},
+			leaderStore: 1,
+		},
+	)
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var prewriteBatches [][]string
+	var commitBatches [][]string
+	svc.prewriteFn = func(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+		prewriteBatches = append(prewriteBatches, mutationKeyStrings(req.GetRequest().GetMutations()))
+		return svc.mockService.Prewrite(ctx, req)
+	}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		commitBatches = append(commitBatches, keyStrings(req.GetRequest().GetKeys()))
+		return svc.mockService.Commit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v2")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v3")},
+	}, 72, 73, 3000)
+	require.NoError(t, err)
+
+	require.Len(t, prewriteBatches, 2)
+	require.ElementsMatch(t, []string{"alfa", "bravo"}, prewriteBatches[0])
+	require.ElementsMatch(t, []string{"omega"}, prewriteBatches[1])
+	require.Len(t, commitBatches, 2)
+	require.ElementsMatch(t, []string{"alfa", "bravo"}, commitBatches[0])
+	require.ElementsMatch(t, []string{"omega"}, commitBatches[1])
+
+	cluster.mu.Lock()
+	primaryRegion := cluster.regions[1]
+	secondaryRegion := cluster.regions[2]
+	_, primaryPending := primaryRegion.pending[72]
+	_, secondaryPending := secondaryRegion.pending[72]
+	committed := map[string]clusterValue{
+		"alfa":  primaryRegion.committed["alfa"],
+		"bravo": primaryRegion.committed["bravo"],
+		"omega": secondaryRegion.committed["omega"],
+	}
+	cluster.mu.Unlock()
+	require.False(t, primaryPending)
+	require.False(t, secondaryPending)
+	require.Equal(t, uint64(73), committed["alfa"].commitVersion)
+	require.Equal(t, uint64(73), committed["bravo"].commitVersion)
+	require.Equal(t, uint64(73), committed["omega"].commitVersion)
+}
+
+func TestClientTwoPhaseCommitBatchesPrimaryRegionDeletes(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+		committed: map[string]clusterValue{
+			"alfa":  {value: []byte("dentry"), commitVersion: 60},
+			"bravo": {value: []byte("inode"), commitVersion: 60},
+		},
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var prewriteBatches [][]string
+	var commitBatches [][]string
+	svc.prewriteFn = func(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) (*kvrpcpb.KvPrewriteResponse, error) {
+		prewriteBatches = append(prewriteBatches, mutationKeyStrings(req.GetRequest().GetMutations()))
+		return svc.mockService.Prewrite(ctx, req)
+	}
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		commitBatches = append(commitBatches, keyStrings(req.GetRequest().GetKeys()))
+		return svc.mockService.Commit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Delete, Key: []byte("alfa")},
+		{Op: kvrpcpb.Mutation_Delete, Key: []byte("bravo")},
+	}, 70, 71, 3000)
+	require.NoError(t, err)
+	require.Len(t, prewriteBatches, 1)
+	require.ElementsMatch(t, []string{"alfa", "bravo"}, prewriteBatches[0])
+	require.Len(t, commitBatches, 1)
+	require.ElementsMatch(t, []string{"alfa", "bravo"}, commitBatches[0])
+
+	cluster.mu.Lock()
+	region := cluster.regions[1]
+	_, pending := region.pending[70]
+	_, dentryPresent := region.committed["alfa"]
+	_, inodePresent := region.committed["bravo"]
+	cluster.mu.Unlock()
+	require.False(t, pending)
+	require.False(t, dentryPresent)
+	require.False(t, inodePresent)
 }
 
 func TestClientTwoPhaseCommitRollsBackPrewritesAfterPrimaryCommitTsExpired(t *testing.T) {
@@ -1253,6 +1470,71 @@ func TestClientMutateWithCommitTimestampAllocatesAfterPrewrite(t *testing.T) {
 	require.Equal(t, 1, commits)
 }
 
+func TestClientMutateWithCommitTimestampRefreshesPushedMinCommitTs(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+		},
+		leaderStore: 1,
+	})
+	svc := &scriptedKVService{mockService: mockService{storeID: 1, cluster: cluster}}
+	var commits int
+	svc.commitFn = func(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kvrpcpb.KvCommitResponse, error) {
+		commits++
+		if commits == 1 {
+			require.Equal(t, uint64(51), req.GetRequest().GetCommitVersion())
+			return &kvrpcpb.KvCommitResponse{
+				Response: &kvrpcpb.CommitResponse{
+					Error: &kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{
+						Key:         []byte("alfa"),
+						CommitTs:    51,
+						MinCommitTs: 55,
+					}},
+				},
+			}, nil
+		}
+		require.Equal(t, uint64(77), req.GetRequest().GetCommitVersion())
+		return svc.mockService.Commit(ctx, req)
+	}
+	addr, stop := startBlockingStore(t, svc)
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	commitVersions := []uint64{51, 77}
+	var allocs int
+	actualCommitVersion, err := cli.MutateWithCommitTimestamp(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+	}, 50, 3000, func(context.Context) (uint64, error) {
+		version := commitVersions[allocs]
+		allocs++
+		return version, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(77), actualCommitVersion)
+	require.Equal(t, 2, allocs)
+	require.Equal(t, 2, commits)
+
+	cluster.mu.Lock()
+	_, pending := cluster.regions[1].pending[50]
+	committed := cluster.regions[1].committed["alfa"]
+	cluster.mu.Unlock()
+	require.False(t, pending)
+	require.Equal(t, []byte("v1"), committed.value)
+	require.Equal(t, uint64(77), committed.commitVersion)
+}
+
 func TestClientMutateWithCommitTimestampRollsBackAfterAllocationFailure(t *testing.T) {
 	cluster := newMockCluster(clusterRegion{
 		meta: &metapb.RegionDescriptor{
@@ -1341,16 +1623,23 @@ func TestClientTwoPhaseCommitResolvesSecondariesAfterSecondaryCommitFailure(t *t
 
 	err = cli.TwoPhaseCommit(context.Background(), []byte("alfa"), []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("alfa"), Value: []byte("v1")},
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("bravo"), Value: []byte("v1b")},
 		{Op: kvrpcpb.Mutation_Put, Key: []byte("omega"), Value: []byte("v2")},
 	}, 40, 41, 3000)
 	require.NoError(t, err)
 
 	cluster.mu.Lock()
+	primary := cluster.regions[1]
 	secondary := cluster.regions[2]
+	primaryCommitted := primary.committed["bravo"]
+	primaryResolveHits := primary.resolveHits
 	_, pending := secondary.pending[40]
 	committed := secondary.committed["omega"]
 	resolveHits := secondary.resolveHits
 	cluster.mu.Unlock()
+	require.Equal(t, []byte("v1b"), primaryCommitted.value)
+	require.Equal(t, uint64(41), primaryCommitted.commitVersion)
+	require.Zero(t, primaryResolveHits, "same-region secondaries committed with the primary must not be resolved as remote secondaries")
 	require.False(t, pending, "secondary locks must be resolved after primary commit")
 	require.Equal(t, []byte("v2"), committed.value)
 	require.Equal(t, uint64(41), committed.commitVersion)

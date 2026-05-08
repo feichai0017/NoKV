@@ -7,9 +7,11 @@ import (
 	"sync"
 	"testing"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 )
 
 type fakeClient struct {
@@ -205,6 +207,40 @@ func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, buf.String(), "workload,driver,run_id,operation")
 	require.Contains(t, buf.String(), "checkpoint-storm,native-fsmeta,run-1,create_checkpoint")
+}
+
+func TestTimeCallRetriesStableRetryableOperationError(t *testing.T) {
+	attempts := 0
+	_, err := timeCall(func() error {
+		attempts++
+		if attempts < 3 {
+			return nokverrors.RPCStatusError(nokverrors.KindLockConflict, codes.Aborted, "live lock", nil)
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+}
+
+func TestTimeCallDoesNotRetryPermanentOrCanceledError(t *testing.T) {
+	attempts := 0
+	_, err := timeCall(func() error {
+		attempts++
+		return fsmeta.ErrNotFound
+	})
+
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Equal(t, 1, attempts)
+
+	attempts = 0
+	_, err = timeCall(func() error {
+		attempts++
+		return context.Canceled
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, attempts)
 }
 
 func dentryID(parent fsmeta.InodeID, name string) string {

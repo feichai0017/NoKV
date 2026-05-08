@@ -565,21 +565,21 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		return 0, nil
 	}
 	cleaned := make([]*kvrpcpb.Mutation, 0, len(mutations))
-	var primaryMutation *kvrpcpb.Mutation
+	var primaryFound bool
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
 		}
 		cloned := cloneMutation(mut)
-		if primaryMutation == nil && bytesCompare(cloned.GetKey(), primary) == 0 {
-			primaryMutation = cloned
+		if !primaryFound && bytesCompare(cloned.GetKey(), primary) == 0 {
+			primaryFound = true
 		}
 		cleaned = append(cleaned, cloned)
 	}
-	if primaryMutation == nil {
+	if !primaryFound {
 		return 0, &ProtocolError{Operation: "two phase commit", Detail: fmt.Sprintf("primary key %q missing from mutations", primary)}
 	}
-	prewritten, err := c.prewriteMutationsByRoute(ctx, primary, startVersion, lockTTL, []*kvrpcpb.Mutation{primaryMutation})
+	prewritten, secondaryMutations, err := c.prewritePrimaryRegionMutations(ctx, primary, startVersion, lockTTL, cleaned)
 	if err != nil {
 		return 0, err
 	}
@@ -589,15 +589,6 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	// its own lock and surface as retryable "lock not found".
 	stopHeartbeat := c.startTxnHeartbeat(ctx, primary, startVersion, lockTTL)
 	defer stopHeartbeat()
-	secondaryMutations := make([]*kvrpcpb.Mutation, 0, len(cleaned)-1)
-	primarySkipped := false
-	for _, mut := range cleaned {
-		if !primarySkipped && bytesCompare(mut.GetKey(), primary) == 0 {
-			primarySkipped = true
-			continue
-		}
-		secondaryMutations = append(secondaryMutations, mut)
-	}
 	if len(secondaryMutations) > 0 {
 		secondaryPrewritten, err := c.prewriteMutationsByRoute(ctx, primary, startVersion, lockTTL, secondaryMutations)
 		mergePrewritten(prewritten, secondaryPrewritten)
@@ -624,7 +615,30 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 	}
 	// After commit_ts is allocated, callers that publish external frontiers need
 	// to know that timestamp even if a later RPC returns an ambiguous error.
-	if err := c.commitKeysByRoute(ctx, [][]byte{append([]byte(nil), primary...)}, startVersion, commitVersion); err != nil {
+	var secondaryKeys [][]byte
+	for attempt := 0; ; attempt++ {
+		secondaryKeys, err = c.commitPrimaryRegionKeys(ctx, primary, flattenPrewritten(prewritten), startVersion, commitVersion)
+		if err == nil {
+			break
+		}
+		if minCommitTs, ok := commitTsExpiredMin(err); ok && attempt+1 < c.retry.MaxAttempts {
+			nextCommitVersion, allocErr := allocateCommitVersion(ctx)
+			if allocErr != nil {
+				if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
+					return commitVersion, errors.Join(allocErr, fmt.Errorf("client: rollback after refreshed commit timestamp allocation failure: %w", rollbackErr))
+				}
+				return commitVersion, allocErr
+			}
+			// A reader may push MinCommitTs after this client has already
+			// allocated commit_ts but before the primary commit is accepted.
+			// While the primary lock is still undecided, refreshing commit_ts
+			// preserves Percolator's primary-decision rule and avoids leaking a
+			// live lock to the higher fsmeta retry loop.
+			if nextCommitVersion > commitVersion && nextCommitVersion >= minCommitTs {
+				commitVersion = nextCommitVersion
+				continue
+			}
+		}
 		if shouldRollbackAfterPrimaryCommitFailure(err) {
 			if rollbackErr := c.rollbackPrewrites(ctx, prewritten, startVersion); rollbackErr != nil {
 				return commitVersion, errors.Join(err, fmt.Errorf("client: rollback after primary commit failure: %w", rollbackErr))
@@ -632,7 +646,6 @@ func (c *Client) twoPhaseCommit(ctx context.Context, primary []byte, mutations [
 		}
 		return commitVersion, err
 	}
-	secondaryKeys := collectKeys(secondaryMutations)
 	if err := c.commitKeysByRoute(ctx, secondaryKeys, startVersion, commitVersion); err != nil {
 		if resolveErr := c.resolveCommittedSecondaries(ctx, secondaryKeys, startVersion, commitVersion); resolveErr != nil {
 			return commitVersion, errors.Join(err, fmt.Errorf("client: resolve committed secondaries: %w", resolveErr))
@@ -650,6 +663,57 @@ type mutationRouteBatch struct {
 type keyRouteBatch struct {
 	region regionSnapshot
 	keys   [][]byte
+}
+
+func (c *Client) prewritePrimaryRegionMutations(ctx context.Context, primary []byte, startVersion, ttl uint64, mutations []*kvrpcpb.Mutation) (map[uint64][][]byte, []*kvrpcpb.Mutation, error) {
+	pending := cloneMutations(mutations)
+	prewritten := make(map[uint64][][]byte)
+	var lastErr error
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		// Re-route on every retry: a split can move former same-region
+		// secondaries away from the primary between attempts.
+		groups, err := c.groupMutationsByRoute(ctx, pending)
+		if err != nil {
+			return prewritten, nil, err
+		}
+		group := mutationRouteBatchForPrimary(groups, primary)
+		if group == nil {
+			return prewritten, nil, &ProtocolError{Operation: "prewrite primary region", Detail: fmt.Sprintf("primary key %q missing from routed mutations", primary)}
+		}
+		resp, regionErr, err := c.prewriteRegionOnce(ctx, group.region, primary, startVersion, ttl, group.mutations)
+		if err != nil {
+			if isTransportUnavailable(err) {
+				lastErr = err
+				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
+					return prewritten, nil, err
+				}
+				continue
+			}
+			return prewritten, nil, err
+		}
+		if regionErr != nil {
+			lastErr = c.handleRegionError(group.region.desc.RegionID, regionErr)
+			if lastErr != nil {
+				return prewritten, nil, lastErr
+			}
+			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
+				return prewritten, nil, err
+			}
+			continue
+		}
+		if resp != nil && len(resp.GetErrors()) > 0 {
+			return prewritten, nil, nokverrors.NewTxnKeyError(resp.GetErrors()...)
+		}
+		prewritten[group.region.desc.RegionID] = append(prewritten[group.region.desc.RegionID], collectKeys(group.mutations)...)
+		return prewritten, removeMutationSet(pending, group.mutations), nil
+	}
+	if lastErr != nil {
+		return prewritten, nil, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return prewritten, nil, err
+	}
+	return prewritten, nil, &RetryExhaustedError{Operation: "prewrite primary region"}
 }
 
 func (c *Client) prewriteMutationsByRoute(ctx context.Context, primary []byte, startVersion, ttl uint64, mutations []*kvrpcpb.Mutation) (map[uint64][][]byte, error) {
@@ -717,16 +781,26 @@ func (c *Client) resolveCommittedSecondaries(ctx context.Context, keys [][]byte,
 }
 
 func shouldRollbackAfterPrimaryCommitFailure(err error) bool {
+	_, ok := commitTsExpiredMin(err)
+	return ok
+}
+
+func commitTsExpiredMin(err error) (uint64, bool) {
 	txnErr, ok := nokverrors.AsTxnKeyError(err)
 	if !ok {
-		return false
+		return 0, false
 	}
+	var minCommitTs uint64
 	for _, keyErr := range txnErr.Errors {
-		if keyErr != nil && keyErr.GetCommitTsExpired() != nil {
-			return true
+		expired := keyErr.GetCommitTsExpired()
+		if expired == nil {
+			continue
+		}
+		if expired.MinCommitTs > minCommitTs {
+			minCommitTs = expired.MinCommitTs
 		}
 	}
-	return false
+	return minCommitTs, minCommitTs != 0
 }
 
 func txnHeartbeatInterval(lockTTL uint64) time.Duration {
@@ -779,6 +853,56 @@ func (c *Client) startTxnHeartbeat(ctx context.Context, primary []byte, startVer
 		cancel()
 		<-done
 	}
+}
+
+func (c *Client) commitPrimaryRegionKeys(ctx context.Context, primary []byte, keys [][]byte, startVersion, commitVersion uint64) ([][]byte, error) {
+	pending := cloneKeys(keys)
+	var lastErr error
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		groups, err := c.groupKeysByRoute(ctx, pending)
+		if err != nil {
+			return nil, err
+		}
+		group := keyRouteBatchForPrimary(groups, primary)
+		if group == nil {
+			return nil, &ProtocolError{Operation: "commit primary region", Detail: fmt.Sprintf("primary key %q missing from routed keys", primary)}
+		}
+		// The first successful commit RPC must contain the primary key. Same-region
+		// secondaries are included only to remove an extra round trip; the primary
+		// write in this batch remains the Percolator decision record.
+		resp, regionErr, err := c.commitRegionOnce(ctx, group.region, group.keys, startVersion, commitVersion)
+		if err != nil {
+			if isTransportUnavailable(err) {
+				lastErr = err
+				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, err
+		}
+		if regionErr != nil {
+			lastErr = c.handleRegionError(group.region.desc.RegionID, regionErr)
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := txnKeyError(resp.GetError()); err != nil {
+			return nil, err
+		}
+		return removeKeySet(pending, group.keys), nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, &RetryExhaustedError{Operation: "commit primary region"}
 }
 
 func (c *Client) prewriteRegionOnce(ctx context.Context, region regionSnapshot, primary []byte, startVersion, ttl uint64, muts []*kvrpcpb.Mutation) (*kvrpcpb.PrewriteResponse, *errorpb.RegionError, error) {
@@ -1352,6 +1476,18 @@ func (c *Client) groupMutationsByRoute(ctx context.Context, mutations []*kvrpcpb
 	return groups, nil
 }
 
+func mutationRouteBatchForPrimary(groups map[uint64]*mutationRouteBatch, primary []byte) *mutationRouteBatch {
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		if mutationHasPrimary(group.mutations, primary) {
+			return group
+		}
+	}
+	return nil
+}
+
 func (c *Client) groupAtomicMutateByRoute(ctx context.Context, mutations []*kvrpcpb.Mutation, predicates []*kvrpcpb.AtomicPredicate) (map[uint64]*mutationRouteBatch, error) {
 	groups := make(map[uint64]*mutationRouteBatch)
 	addKey := func(key []byte) error {
@@ -1402,6 +1538,20 @@ func (c *Client) groupKeysByRoute(ctx context.Context, keys [][]byte) (map[uint6
 		group.keys = append(group.keys, append([]byte(nil), key...))
 	}
 	return groups, nil
+}
+
+func keyRouteBatchForPrimary(groups map[uint64]*keyRouteBatch, primary []byte) *keyRouteBatch {
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		for _, key := range group.keys {
+			if bytesCompare(key, primary) == 0 {
+				return group
+			}
+		}
+	}
+	return nil
 }
 
 func removeMutationSet(pending, completed []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
