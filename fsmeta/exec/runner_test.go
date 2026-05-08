@@ -1227,6 +1227,51 @@ func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
+func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
+	lockErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		Locked: &kvrpcpb.Locked{
+			PrimaryLock: []byte("dentry"),
+			Key:         []byte("dentry"),
+			LockVersion: 2,
+			LockTtl:     uint64(5 * time.Second / time.Millisecond),
+		},
+	}}}
+	budget := txnRetryBudget(lockErr, defaultLockTTL)
+
+	require.Equal(t, 5*time.Second+txnContentionRetryMaxBackoff, budget)
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
+	require.False(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
+}
+
+func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
+	writeConflictErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		WriteConflict: &kvrpcpb.WriteConflict{
+			Key:        []byte("dentry"),
+			ConflictTs: 4,
+			StartTs:    2,
+		},
+	}}}
+
+	require.Zero(t, txnRetryBudget(writeConflictErr, defaultLockTTL))
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
+	require.False(t, canRetryTxnContention(maxTxnContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
+}
+
+func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
+	err := nokverrors.New(nokverrors.KindLockConflict, "lock conflict translated across rpc boundary")
+
+	require.Equal(t, 25*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 25))
+}
+
+func TestTxnRetryBudgetCoversPercolatorRetryableStartTSLoss(t *testing.T) {
+	err := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		Retryable: "percolator: lock not found",
+	}}}
+
+	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries+1, time.Now(), err, 50))
+}
+
 func TestExecutorRetriesWriteConflict(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{

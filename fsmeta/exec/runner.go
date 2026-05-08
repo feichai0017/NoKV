@@ -23,13 +23,15 @@ const (
 	// back a live metadata transaction.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
-	// Write APIs should absorb transient live locks from raft/apply tail
-	// latency, but still surface abandoned locks well before the 30s lock TTL.
+	// Non-lock conflicts are retried by count because fresh timestamps normally
+	// make progress immediately. Live locks are bounded separately by the lock
+	// TTL so fsmeta does not leak ordinary Percolator lock waits to callers.
 	maxTxnContentionRetries  = 32
 	maxReadContentionRetries = 3
 
 	txnContentionRetryBaseBackoff = time.Millisecond
 	txnContentionRetryMaxBackoff  = 100 * time.Millisecond
+	maxTxnLockRetryBudget         = time.Hour
 )
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
@@ -1465,7 +1467,8 @@ func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, erro
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
-	for attempt := 0; attempt <= maxTxnContentionRetries; attempt++ {
+	started := time.Now()
+	for attempt := 0; ; attempt++ {
 		startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
 		if err != nil {
 			return err
@@ -1478,17 +1481,26 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 			return translateMutateError(err)
 		}
 		last = err
-		if attempt == maxTxnContentionRetries {
+		if !canRetryTxnContention(attempt, started, err, e.lockTTL) {
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
 		// A live Percolator lock may survive ordinary RPC and raft scheduling
 		// jitter, especially when a close and session-cleanup delete touch the
 		// same lease key. fsmeta write APIs should absorb that transient
-		// contention within a bounded window instead of returning MVCC lock
-		// details.
+		// contention up to the advertised lock TTL instead of returning MVCC
+		// lock details.
 		e.txnRetriesTotal.Add(1)
-		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+		delay := txnContentionRetryDelay(attempt)
+		if budget := txnRetryBudget(err, e.lockTTL); budget > 0 {
+			remaining := budget - time.Since(started)
+			if remaining <= 0 {
+				e.txnRetryExhaustedTotal.Add(1)
+				break
+			}
+			delay = min(delay, remaining)
+		}
+		if err := waitTxnContentionRetryDelay(ctx, delay); err != nil {
 			return err
 		}
 	}
@@ -1518,15 +1530,71 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 		// concurrent namespace mutation. Retrying keeps the external API at the
 		// fsmeta level instead of leaking a transient MVCC lock to callers.
 		e.readRetriesTotal.Add(1)
-		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
 			return err
 		}
 	}
 	return last
 }
 
-func waitTxnContentionRetry(ctx context.Context, attempt int) error {
-	delay := min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
+func canRetryTxnContention(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
+	if budget := txnRetryBudget(err, fallbackLockTTL); budget > 0 {
+		return time.Since(started) < budget
+	}
+	return attempt < maxTxnContentionRetries
+}
+
+func txnRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
+	switch {
+	case nokverrors.IsKind(err, nokverrors.KindLockConflict):
+	case nokverrors.IsKind(err, nokverrors.KindRetryable):
+		// Percolator uses Retryable for a dead start_ts, for example when
+		// commit finds that the prewrite lock was already rolled back. The
+		// fsmeta semantic operation can safely re-read and re-plan, but under
+		// raft/store congestion it needs the same bounded liveness window as a
+		// visible live-lock wait.
+	default:
+		return 0
+	}
+	ttlMillis := txnLockTTLMillis(err)
+	if ttlMillis == 0 {
+		ttlMillis = fallbackLockTTL
+	}
+	if ttlMillis == 0 {
+		return txnContentionRetryMaxBackoff
+	}
+	budget := time.Duration(ttlMillis) * time.Millisecond
+	if budget <= 0 || budget > maxTxnLockRetryBudget {
+		return maxTxnLockRetryBudget
+	}
+	return budget + txnContentionRetryMaxBackoff
+}
+
+func txnLockTTLMillis(err error) uint64 {
+	var carrier nokverrors.KeyErrorCarrier
+	if !errors.As(err, &carrier) {
+		return 0
+	}
+	var maxTTL uint64
+	for _, keyErr := range carrier.KeyErrors() {
+		if ttl := keyErr.GetLocked().GetLockTtl(); ttl > maxTTL {
+			maxTTL = ttl
+		}
+	}
+	return maxTTL
+}
+
+func txnContentionRetryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return txnContentionRetryBaseBackoff
+	}
+	if attempt >= 7 {
+		return txnContentionRetryMaxBackoff
+	}
+	return min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
+}
+
+func waitTxnContentionRetryDelay(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
