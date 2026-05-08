@@ -149,6 +149,7 @@ type HeartbeatWriteSessionRequest struct {
 
 type CloseWriteSessionRequest struct {
 	Mount   MountID
+	Inode   InodeID
 	Session SessionID
 }
 
@@ -364,7 +365,7 @@ func PlanOpenWriteSession(req OpenWriteSessionRequest) (OperationPlan, error) {
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	session, err := EncodeSessionKey(req.Mount, req.Session)
+	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -382,7 +383,7 @@ func PlanOpenWriteSession(req OpenWriteSessionRequest) (OperationPlan, error) {
 }
 
 func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest) (OperationPlan, error) {
-	session, err := EncodeSessionKey(req.Mount, req.Session)
+	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -400,7 +401,7 @@ func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest) (OperationPlan,
 }
 
 func PlanCloseWriteSession(req CloseWriteSessionRequest) (OperationPlan, error) {
-	session, err := EncodeSessionKey(req.Mount, req.Session)
+	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}

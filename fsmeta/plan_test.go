@@ -229,7 +229,7 @@ func TestPlanOpenWriteSessionTouchesInodeAndSession(t *testing.T) {
 
 	inode, err := EncodeInodeKey("vol", 44)
 	require.NoError(t, err)
-	session, err := EncodeSessionKey("vol", "client-1")
+	session, err := EncodeSessionKey("vol", 44, "client-1")
 	require.NoError(t, err)
 	owner, err := EncodeInodeSessionKey("vol", 44)
 	require.NoError(t, err)

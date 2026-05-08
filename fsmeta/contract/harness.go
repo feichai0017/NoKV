@@ -182,6 +182,7 @@ func execute(ctx context.Context, exec Executor, model *Model, op Operation) Res
 	case OpCloseSession:
 		err := exec.CloseWriteSession(ctx, fsmeta.CloseWriteSessionRequest{
 			Mount:   op.Mount,
+			Inode:   op.Inode,
 			Session: op.Session,
 		})
 		return Result{Err: err}

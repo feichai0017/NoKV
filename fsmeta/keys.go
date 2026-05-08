@@ -3,6 +3,8 @@ package fsmeta
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/feichai0017/NoKV/utils"
 )
 
 // fsmeta key layout:
@@ -19,7 +21,7 @@ import (
 //	  inode   'i' : inode be64
 //	  dentry  'd' : parent inode be64 | name bytes
 //	  chunk   'c' : inode be64 | chunk index be64
-//	  session 's' : session bytes, or 0x00 | inode be64 for writer ownership
+//	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
 //
 // Big-endian integer fields preserve numeric order inside each key family.
@@ -123,22 +125,28 @@ func EncodeChunkKey(mount MountID, inode InodeID, chunk ChunkIndex) ([]byte, err
 }
 
 // EncodeSessionKey returns the client/session state key.
-func EncodeSessionKey(mount MountID, session SessionID) ([]byte, error) {
+func EncodeSessionKey(mount MountID, inode InodeID, session SessionID) ([]byte, error) {
+	if err := validateInodeID(inode); err != nil {
+		return nil, err
+	}
 	if err := validateSessionID(session); err != nil {
 		return nil, err
 	}
-	return encodeKey(mount, KeyKindSession, []byte(session))
+	body := make([]byte, 9, 9+len(session))
+	binary.BigEndian.PutUint64(body[:8], uint64(inode))
+	body[8] = 0x01
+	body = append(body, string(session)...)
+	return encodeKey(mount, KeyKindSession, body)
 }
 
 // EncodeInodeSessionKey returns the exclusive writer-owner key for one inode.
-// Session IDs cannot contain NUL, so the 0x00 marker cannot collide with
-// EncodeSessionKey.
 func EncodeInodeSessionKey(mount MountID, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
 	var body [9]byte
-	binary.BigEndian.PutUint64(body[1:], uint64(inode))
+	binary.BigEndian.PutUint64(body[:8], uint64(inode))
+	body[8] = 0x00
 	return encodeKey(mount, KeyKindSession, body[:])
 }
 
@@ -188,6 +196,67 @@ func MountIDOfKey(key []byte) (MountID, bool) {
 func StringMountResolver(key []byte) (string, bool) {
 	mount, ok := MountIDOfKey(key)
 	return string(mount), ok
+}
+
+// ShardForUserKey is the fsmeta physical placement policy used by local DB
+// runtimes. It keeps semantically-related metadata keys on one local shard
+// without teaching the local engine fsmeta's key families.
+func ShardForUserKey(key []byte, shardCount int) int {
+	shardCount = utils.NormalizeShardCount(shardCount)
+	if shardCount <= 1 {
+		return 0
+	}
+	_, pos, err := decodeHeaderParts(key)
+	if err != nil || pos >= len(key) {
+		return utils.ShardForUserKey(key, shardCount)
+	}
+	kind := KeyKind(key[pos])
+	body := key[pos+1:]
+	switch kind {
+	case KeyKindMount:
+		mount, _, err := decodeHeaderParts(key)
+		if err != nil {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		return utils.ShardForUserKey([]byte(mount), shardCount)
+	case KeyKindInode:
+		if len(body) < 8 {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
+	case KeyKindDentry:
+		if len(body) < 8 {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		parent := InodeID(binary.BigEndian.Uint64(body[:8]))
+		if parent == RootInode && len(body) > 8 {
+			return utils.ShardForUserKey(body[8:], shardCount)
+		}
+		return shardForInodeAffinity(parent, shardCount)
+	case KeyKindChunk:
+		if len(body) < 8 {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
+	case KeyKindSession:
+		if len(body) < 9 {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
+	case KeyKindUsage:
+		if len(body) < 8 {
+			return utils.ShardForUserKey(key, shardCount)
+		}
+		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
+	default:
+		return utils.ShardForUserKey(key, shardCount)
+	}
+}
+
+func shardForInodeAffinity(inode InodeID, shardCount int) int {
+	var body [8]byte
+	binary.BigEndian.PutUint64(body[:], uint64(inode))
+	return utils.ShardForUserKey(body[:], shardCount)
 }
 
 func encodeKey(mount MountID, kind KeyKind, body []byte) ([]byte, error) {

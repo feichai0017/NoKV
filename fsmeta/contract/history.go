@@ -384,7 +384,7 @@ func cloneModel(in *Model) *Model {
 		NowUnixNs:   in.NowUnixNs,
 		dentries:    cloneDentries(in.dentries),
 		inodes:      cloneInodes(in.inodes),
-		sessions:    make(map[fsmeta.SessionID]fsmeta.SessionRecord, len(in.sessions)),
+		sessions:    make(map[sessionKey]fsmeta.SessionRecord, len(in.sessions)),
 		owners:      make(map[fsmeta.InodeID]fsmeta.SessionRecord, len(in.owners)),
 		snapshots:   make(map[uint64]snapshotState, len(in.snapshots)),
 		snapshotRef: make(map[int]uint64, len(in.snapshotRef)),
@@ -463,14 +463,19 @@ func modelFingerprint(m *Model) string {
 		inode := m.inodes[id]
 		fmt.Fprintf(&b, "i:%d=%s/%d/%d/%d/%x;", id, inode.Type, inode.Size, inode.Mode, inode.LinkCount, inode.OpaqueAttrs)
 	}
-	sessionIDs := make([]fsmeta.SessionID, 0, len(m.sessions))
-	for id := range m.sessions {
-		sessionIDs = append(sessionIDs, id)
+	sessionKeys := make([]sessionKey, 0, len(m.sessions))
+	for key := range m.sessions {
+		sessionKeys = append(sessionKeys, key)
 	}
-	slices.Sort(sessionIDs)
-	for _, id := range sessionIDs {
-		session := m.sessions[id]
-		fmt.Fprintf(&b, "s:%s=%d/%d;", id, session.Inode, session.ExpiresUnixNs)
+	sort.Slice(sessionKeys, func(i, j int) bool {
+		if sessionKeys[i].inode != sessionKeys[j].inode {
+			return sessionKeys[i].inode < sessionKeys[j].inode
+		}
+		return sessionKeys[i].session < sessionKeys[j].session
+	})
+	for _, key := range sessionKeys {
+		session := m.sessions[key]
+		fmt.Fprintf(&b, "s:%d/%s=%d;", key.inode, key.session, session.ExpiresUnixNs)
 	}
 	ownerIDs := make([]fsmeta.InodeID, 0, len(m.owners))
 	for id := range m.owners {

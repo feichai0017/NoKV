@@ -23,9 +23,9 @@ type IDAllocatorClient interface {
 }
 
 // ShardAffineInodeAllocator prefetches coordinator IDs and returns an inode ID
-// whose inode key hashes to the same local LSM shard as the dentry key when
-// possible. A miss is still correct: Create keeps the existing 1PC safety gate
-// and falls back to Percolator 2PC when local atomicity cannot be proven.
+// whose fsmeta placement shard matches the target dentry when possible. A miss
+// is still correct: Create keeps the existing 1PC safety gate and falls back to
+// Percolator 2PC when local atomicity cannot be proven.
 type ShardAffineInodeAllocator struct {
 	client    IDAllocatorClient
 	shards    int
@@ -175,7 +175,7 @@ func createDentryShard(mount fsmeta.MountID, parent fsmeta.InodeID, name string,
 	if err != nil {
 		return 0, err
 	}
-	return utils.ShardForUserKey(key, shards), nil
+	return fsmeta.ShardForUserKey(key, shards), nil
 }
 
 func createInodeShard(mount fsmeta.MountID, inode fsmeta.InodeID, shards int) (int, error) {
@@ -183,5 +183,5 @@ func createInodeShard(mount fsmeta.MountID, inode fsmeta.InodeID, shards int) (i
 	if err != nil {
 		return 0, err
 	}
-	return utils.ShardForUserKey(key, shards), nil
+	return fsmeta.ShardForUserKey(key, shards), nil
 }

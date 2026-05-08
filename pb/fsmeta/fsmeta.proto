@@ -274,6 +274,7 @@ message HeartbeatWriteSessionResponse {
 message CloseWriteSessionRequest {
   string mount = 1;
   string session = 2;
+  uint64 inode = 3;
 }
 
 message CloseWriteSessionResponse {}

@@ -37,12 +37,13 @@ func TestModelUnlinkKeepsSessionIndexesUntilSessionLifecycleRuns(t *testing.T) {
 
 	require.NoError(t, model.CheckInvariants())
 	require.NotContains(t, model.inodes, fsmeta.InodeID(10))
-	require.Contains(t, model.sessions, fsmeta.SessionID("writer-1"))
+	require.Contains(t, model.sessions, sessionKey{inode: 10, session: "writer-1"})
 	require.Contains(t, model.owners, fsmeta.InodeID(10))
 
 	require.NoError(t, model.Apply(Operation{
 		Kind:    OpCloseSession,
 		Mount:   "vol",
+		Inode:   10,
 		Session: "writer-1",
 	}).Err)
 	require.NoError(t, model.CheckInvariants())
@@ -119,8 +120,8 @@ func TestModelExpireStaleOwnerDoesNotRemoveReusedLiveSession(t *testing.T) {
 	result := model.Apply(Operation{Kind: OpExpireSessions, Mount: "vol", Limit: 16})
 
 	require.NoError(t, result.Err)
-	require.Equal(t, uint64(0), result.Expired)
-	require.Equal(t, fsmeta.InodeID(11), model.sessions["writer-1"].Inode)
+	require.Equal(t, uint64(1), result.Expired)
+	require.Equal(t, fsmeta.InodeID(11), model.sessions[sessionKey{inode: 11, session: "writer-1"}].Inode)
 	require.NotContains(t, model.owners, fsmeta.InodeID(10))
 	require.Contains(t, model.owners, fsmeta.InodeID(11))
 	require.NoError(t, model.CheckInvariants())
@@ -167,8 +168,8 @@ func TestModelOpenWithStaleOwnerDoesNotRemoveReusedLiveSession(t *testing.T) {
 		ExpiresNs: model.NowUnixNs + int64(time.Minute),
 	}).Err)
 
-	require.Equal(t, fsmeta.InodeID(11), model.sessions["writer-1"].Inode)
-	require.Equal(t, fsmeta.InodeID(10), model.sessions["writer-2"].Inode)
+	require.Equal(t, fsmeta.InodeID(11), model.sessions[sessionKey{inode: 11, session: "writer-1"}].Inode)
+	require.Equal(t, fsmeta.InodeID(10), model.sessions[sessionKey{inode: 10, session: "writer-2"}].Inode)
 	require.Equal(t, fsmeta.SessionID("writer-1"), model.owners[11].Session)
 	require.Equal(t, fsmeta.SessionID("writer-2"), model.owners[10].Session)
 	require.NoError(t, model.CheckInvariants())

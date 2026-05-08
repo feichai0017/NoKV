@@ -868,7 +868,7 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, opened)
 
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-1")
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-1")
 	require.NoError(t, err)
 	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
 	require.NoError(t, err)
@@ -896,7 +896,7 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(300), stored.ExpiresUnixNs)
 
-	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 22, Session: "writer-1"})
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(sessionKey))
 	require.NotContains(t, runner.data, string(ownerKey))
@@ -924,7 +924,7 @@ func TestExecutorWriteSessionLifecycleUsesAtomicMutate(t *testing.T) {
 		TTL:     200 * time.Nanosecond,
 	})
 	require.NoError(t, err)
-	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 22, Session: "writer-1"})
 	require.NoError(t, err)
 
 	require.Len(t, runner.atomicCalls, 3)
@@ -942,7 +942,7 @@ func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *test
 	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
 	require.NoError(t, err)
-	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-old")
+	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-old")
 	require.NoError(t, err)
 	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
 	require.NoError(t, err)
@@ -992,7 +992,7 @@ func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
 func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-1")
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-1")
 	require.NoError(t, err)
 	runner.mutateErrs = []error{
 		nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
@@ -1034,7 +1034,7 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
 	require.NoError(t, err)
-	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-old")
+	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-old")
 	require.NoError(t, err)
 	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
 	require.NoError(t, err)
@@ -1051,7 +1051,7 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(oldSessionKey))
-	newSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-new")
+	newSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-new")
 	require.NoError(t, err)
 	require.Contains(t, runner.data, string(newSessionKey))
 	require.Contains(t, runner.data, string(ownerKey))
@@ -1069,7 +1069,7 @@ func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
 	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
 	require.NoError(t, err)
 	runner.data[string(expiredOwnerKey)] = expiredValue
-	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
 	require.NoError(t, err)
 	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
 	require.NoError(t, err)
@@ -1121,11 +1121,11 @@ func TestExecutorExpireWriteSessionsDeletesBothIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
 
-	expiredSessionKey, err := fsmeta.EncodeSessionKey("vol", expired.Session)
+	expiredSessionKey, err := fsmeta.EncodeSessionKey("vol", expired.Inode, expired.Session)
 	require.NoError(t, err)
 	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
 	require.NoError(t, err)
-	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
 	require.NoError(t, err)
 	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
 	require.NoError(t, err)
@@ -1133,6 +1133,20 @@ func TestExecutorExpireWriteSessionsDeletesBothIndexes(t *testing.T) {
 	require.NotContains(t, runner.data, string(expiredOwnerKey))
 	require.Contains(t, runner.data, string(liveSessionKey))
 	require.Contains(t, runner.data, string(liveOwnerKey))
+}
+
+func TestExecutorExpireWriteSessionsCountsSessionPerInode(t *testing.T) {
+	runner := newFakeRunner()
+	first := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}
+	second := fsmeta.SessionRecord{Session: "writer-reused", Inode: 23, ExpiresUnixNs: 50}
+	seedSession(t, runner, "vol", first)
+	seedSession(t, runner, "vol", second)
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 2}, result)
 }
 
 func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T) {
@@ -1143,7 +1157,7 @@ func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T)
 	require.NoError(t, err)
 	liveValue, err := fsmeta.EncodeSessionValue(live)
 	require.NoError(t, err)
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", live.Session)
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
 	require.NoError(t, err)
 	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
 	require.NoError(t, err)
@@ -1842,6 +1856,45 @@ func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
 	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "backoff_skip_total", 3)
 }
 
+func TestExecutorAtomicFastPathBackoffIsAffinityScoped(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
+	authority := &fakeAuthorityResolver{same: true}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	require.NoError(t, err)
+
+	for i := range atomicFastPathBackoffAfter {
+		oldName := fmt.Sprintf("old-%d", i)
+		newName := fmt.Sprintf("new-%d", i)
+		seedDentry(t, runner.fakeRunner, "vol", 7, oldName, fsmeta.InodeID(100+i))
+		err := executor.Rename(context.Background(), fsmeta.RenameRequest{
+			Mount:      "vol",
+			FromParent: 7,
+			FromName:   oldName,
+			ToParent:   8,
+			ToName:     newName,
+		})
+		require.NoError(t, err)
+	}
+
+	from, to := findDifferentRenameAffinity(t, 7, 8)
+	seedDentry(t, runner.fakeRunner, "vol", from, "other-old", 999)
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: from,
+		FromName:   "other-old",
+		ToParent:   to,
+		ToName:     "other-new",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, atomicFastPathBackoffAfter+1)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationRename, "skip_total", 0)
+}
+
 func TestExecutorRenameRejectsCrossAuthority(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
@@ -2009,11 +2062,40 @@ func seedInode(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fs
 	runner.data[string(key)] = value
 }
 
+func findDifferentRenameAffinity(t *testing.T, baseFrom, baseTo fsmeta.InodeID) (fsmeta.InodeID, fsmeta.InodeID) {
+	t.Helper()
+	base := renameAffinity(t, baseFrom, baseTo)
+	for from := fsmeta.InodeID(9); from < 256; from++ {
+		for to := fsmeta.InodeID(9); to < 256; to++ {
+			if from == to {
+				continue
+			}
+			if renameAffinity(t, from, to) != base {
+				return from, to
+			}
+		}
+	}
+	t.Fatalf("no distinct rename affinity found")
+	return 0, 0
+}
+
+func renameAffinity(t *testing.T, from, to fsmeta.InodeID) string {
+	t.Helper()
+	source, err := fsmeta.EncodeDentryKey("vol", from, "old")
+	require.NoError(t, err)
+	destination, err := fsmeta.EncodeDentryKey("vol", to, "new")
+	require.NoError(t, err)
+	return atomicFastPathAffinity(source, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Delete, Key: source},
+		{Op: kvrpcpb.Mutation_Put, Key: destination},
+	})
+}
+
 func seedSession(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fsmeta.SessionRecord) {
 	t.Helper()
 	value, err := fsmeta.EncodeSessionValue(record)
 	require.NoError(t, err)
-	sessionKey, err := fsmeta.EncodeSessionKey(mount, record.Session)
+	sessionKey, err := fsmeta.EncodeSessionKey(mount, record.Inode, record.Session)
 	require.NoError(t, err)
 	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, record.Inode)
 	require.NoError(t, err)
