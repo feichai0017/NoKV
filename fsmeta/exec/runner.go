@@ -23,7 +23,9 @@ const (
 	// back a live metadata transaction.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
-	maxTxnContentionRetries  = 12
+	// Write APIs should absorb transient live locks from raft/apply tail
+	// latency, but still surface abandoned locks well before the 30s lock TTL.
+	maxTxnContentionRetries  = 32
 	maxReadContentionRetries = 3
 
 	txnContentionRetryBaseBackoff = time.Millisecond
