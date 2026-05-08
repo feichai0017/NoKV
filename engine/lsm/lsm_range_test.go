@@ -44,7 +44,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// --- Even keys (key00, key02, ..., key98) @ version 10 -> maxLevel ---
 	for i := 0; i < 100; i += 2 {
-		k := []byte(fmt.Sprintf("key%02d", i))
+		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 10, []byte("even"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
@@ -55,7 +55,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// --- Odd keys (key01, key03, ..., key99) @ version 20 -> maxLevel-1 ---
 	for i := 1; i < 100; i += 2 {
-		k := []byte(fmt.Sprintf("key%02d", i))
+		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 20, []byte("odd"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
@@ -66,7 +66,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// --- Newer versions of key50~key59 @ version 30 -> L0 ---
 	for i := 50; i < 60; i++ {
-		k := []byte(fmt.Sprintf("key%02d", i))
+		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 30, []byte("l0-new"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
@@ -76,7 +76,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// --- Newest versions of key90~key99 @ version 40 -> mutable MemTable ---
 	for i := 90; i < 100; i++ {
-		k := []byte(fmt.Sprintf("key%02d", i))
+		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 40, []byte("mem-new"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
@@ -184,8 +184,8 @@ func TestLSMBoundedRangeSeek(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	for i := 10; i <= 20; i++ {
-		k := []byte(fmt.Sprintf("key%02d", i))
-		e := kv.NewInternalEntry(kv.CFDefault, k, 100, []byte(fmt.Sprintf("val%02d", i)), 0, 0)
+		k := fmt.Appendf(nil, "key%02d", i)
+		e := kv.NewInternalEntry(kv.CFDefault, k, 100, fmt.Appendf(nil, "val%02d", i), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
 	}
@@ -223,8 +223,8 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	const n = 9
-	for i := 0; i < n; i++ {
-		k := []byte(fmt.Sprintf("key%02d", i))
+	for i := range n {
+		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 100, []byte("val"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
