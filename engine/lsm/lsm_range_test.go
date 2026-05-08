@@ -11,15 +11,16 @@ import (
 )
 
 // TestLSMBoundedRangeMultiLevel exercises bounded merge iteration with data
-// physically distributed across MemTable, L0 SSTable, and lower levels via
-// explicit compaction, plus a range tombstone that hides keys spanning multiple
-// tiers.
+// interleaved across physical tiers: even keys in the deepest level, odd keys
+// one level above, newer versions of a subset in L0, and the newest writes in
+// the mutable MemTable. A range tombstone hides a slice across multiple tiers.
 //
 // Invariants protected:
-//   - MergeIterator yields correct ascending/descending order across all tiers.
+//   - MergeIterator yields correct ascending/descending order when keys from
+//     different tiers interleave (even/odd alternation).
 //   - LowerBound/UpperBound correctly restrict the visible key range.
 //   - Range tombstones hide covered keys regardless of which tier they reside in.
-//   - Internal-key ordering (newer versions before older) is preserved.
+//   - Newer versions in upper tiers shadow older versions in lower tiers.
 func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -42,10 +43,10 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	}
 
-	// --- key00~key29 @ version 10 -> flush -> compact to maxLevel ---
-	for i := 0; i < 30; i++ {
+	// --- Even keys (key00, key02, ..., key98) @ version 10 -> maxLevel ---
+	for i := 0; i < 100; i += 2 {
 		k := []byte(fmt.Sprintf("key%02d", i))
-		e := kv.NewInternalEntry(kv.CFDefault, k, 10, []byte("deepest"), 0, 0)
+		e := kv.NewInternalEntry(kv.CFDefault, k, 10, []byte("even"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
 	}
@@ -53,10 +54,10 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	waitForL0(t, lsm)
 	compactL0To(maxLevel)
 
-	// --- key30~key59 @ version 20 -> flush -> compact to maxLevel-1 ---
-	for i := 30; i < 60; i++ {
+	// --- Odd keys (key01, key03, ..., key99) @ version 20 -> maxLevel-1 ---
+	for i := 1; i < 100; i += 2 {
 		k := []byte(fmt.Sprintf("key%02d", i))
-		e := kv.NewInternalEntry(kv.CFDefault, k, 20, []byte("mid"), 0, 0)
+		e := kv.NewInternalEntry(kv.CFDefault, k, 20, []byte("odd"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
 	}
@@ -64,27 +65,27 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	waitForL0(t, lsm)
 	compactL0To(maxLevel - 1)
 
-	// --- key60~key89 @ version 30 -> flush to L0 ---
-	for i := 60; i < 90; i++ {
+	// --- Newer versions of key50~key59 @ version 30 -> L0 ---
+	for i := 50; i < 60; i++ {
 		k := []byte(fmt.Sprintf("key%02d", i))
-		e := kv.NewInternalEntry(kv.CFDefault, k, 30, []byte("l0"), 0, 0)
+		e := kv.NewInternalEntry(kv.CFDefault, k, 30, []byte("l0-new"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
 	waitForL0(t, lsm)
 
-	// --- key90~key99 @ version 40 -> mutable MemTable ---
+	// --- Newest versions of key90~key99 @ version 40 -> mutable MemTable ---
 	for i := 90; i < 100; i++ {
 		k := []byte(fmt.Sprintf("key%02d", i))
-		e := kv.NewInternalEntry(kv.CFDefault, k, 40, []byte("mem"), 0, 0)
+		e := kv.NewInternalEntry(kv.CFDefault, k, 40, []byte("mem-new"), 0, 0)
 		require.NoError(t, lsm.Set(e))
 		e.DecrRef()
 	}
 
-	// Range tombstone [key40, key70) @ version 50.
-	// Covers key40~key59 (maxLevel-1) and key60~key69 (L0).
-	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key40"), 50, []byte("key70"), kv.BitRangeDelete, 0)
+	// Range tombstone [key30, key50) @ version 50.
+	// Hides key30~key49 across both maxLevel (even) and maxLevel-1 (odd).
+	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key30"), 50, []byte("key50"), kv.BitRangeDelete, 0)
 	require.NoError(t, lsm.Set(rtEntry))
 	rtEntry.DecrRef()
 
@@ -92,12 +93,10 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	defer rtv.Close()
 
 	// Verify tombstone coverage boundaries.
-	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key40"), 20))
-	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key59"), 20))
-	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key60"), 30))
-	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key69"), 30))
-	require.False(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key39"), 20))
-	require.False(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key70"), 30))
+	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key30"), 10))
+	require.True(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key49"), 20))
+	require.False(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key29"), 10))
+	require.False(t, rtv.IsKeyCovered(kv.CFDefault, []byte("key50"), 30))
 
 	// Bounded ascending scan [key10, key95).
 	lower := []byte("key10")
@@ -129,12 +128,13 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 		resultsAsc = append(resultsAsc, string(userKey))
 	}
 
-	// key10~key39 visible, key40~key69 hidden by tombstone, key70~key94 visible.
+	// Expected: key10~key29 (interleaved even/odd), key30~key49 hidden,
+	// key50~key94 visible (with newer versions from L0/Mem shadowing old ones).
 	var expectAsc []string
-	for i := 10; i < 40; i++ {
+	for i := 10; i < 30; i++ {
 		expectAsc = append(expectAsc, fmt.Sprintf("key%02d", i))
 	}
-	for i := 70; i < 95; i++ {
+	for i := 50; i < 95; i++ {
 		expectAsc = append(expectAsc, fmt.Sprintf("key%02d", i))
 	}
 	require.Equal(t, expectAsc, resultsAsc)
@@ -167,10 +167,10 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	}
 
 	var expectDesc []string
-	for i := 94; i >= 70; i-- {
+	for i := 94; i >= 50; i-- {
 		expectDesc = append(expectDesc, fmt.Sprintf("key%02d", i))
 	}
-	for i := 39; i >= 10; i-- {
+	for i := 29; i >= 10; i-- {
 		expectDesc = append(expectDesc, fmt.Sprintf("key%02d", i))
 	}
 	require.Equal(t, expectDesc, resultsDesc)
