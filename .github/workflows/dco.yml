@@ -11,6 +11,9 @@ permissions:
 
 jobs:
   signoff:
+    # Public PR/main checks are the DCO source of truth. The private mirror syncs
+    # public main in bulk and would otherwise re-scan historical public commits.
+    if: github.repository != 'feichai0017/NoKV-private'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
