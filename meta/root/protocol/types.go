@@ -17,12 +17,9 @@ type Cursor struct {
 type DutyID string
 
 const (
-	DutyAllocID         DutyID = "alloc_id"
-	DutyTSO             DutyID = "tso"
-	DutyRegionLookup    DutyID = "region_lookup"
-	DutyLeaseStart      DutyID = "lease_start"
-	DutyFSMetaNamespace DutyID = "fsmeta_namespace"
-	DutyQuotaFence      DutyID = "quota_fence"
+	DutyAllocID      DutyID = "alloc_id"
+	DutyTSO          DutyID = "tso"
+	DutyRegionLookup DutyID = "region_lookup"
 )
 
 type DutyScopeKind uint8

@@ -6,7 +6,6 @@ import (
 	coordaudit "github.com/feichai0017/NoKV/coordinator/audit"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	eunomia "github.com/feichai0017/NoKV/meta/root/protocol/eunomia"
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/stretchr/testify/require"
 )
@@ -123,25 +122,4 @@ func TestBuildReportSurfacesOrphanInheritance(t *testing.T) {
 
 	require.True(t, report.Anomalies.OrphanInheritance)
 	require.Equal(t, coordaudit.FinalityDefectOrphanInheritance, report.Anomalies.FinalityDefect)
-}
-
-func TestBuildLeaseStartCoverageReport(t *testing.T) {
-	report := coordaudit.BuildLeaseStartCoverageReport(
-		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
-		eunomia.LeaseView{HolderID: "C", LeaseStart: 103},
-		eunomia.NewReadSummary(eunomia.ServedRead{Key: "k", Timestamp: 105}),
-	)
-
-	require.True(t, report.Anomalies.LeaseStartCoverageViolation)
-	require.False(t, report.Coverage.Covered())
-	require.Len(t, report.Coverage.Violations(), 1)
-
-	report = coordaudit.BuildLeaseStartCoverageReport(
-		eunomia.LeaseView{HolderID: "A", LeaseStart: 100},
-		eunomia.LeaseView{HolderID: "C", LeaseStart: 106},
-		eunomia.NewReadSummary(eunomia.ServedRead{Key: "k", Timestamp: 105}),
-	)
-
-	require.False(t, report.Anomalies.LeaseStartCoverageViolation)
-	require.True(t, report.Coverage.Covered())
 }

@@ -26,11 +26,10 @@ const (
 )
 
 type SnapshotAnomalies struct {
-	RetiredGrantNotInherited    bool
-	InvalidSuccessorBound       bool
-	OrphanInheritance           bool
-	LeaseStartCoverageViolation bool
-	FinalityDefect              FinalityDefect
+	RetiredGrantNotInherited bool
+	InvalidSuccessorBound    bool
+	OrphanInheritance        bool
+	FinalityDefect           FinalityDefect
 }
 
 // Report is the standalone audit projection for one rooted snapshot.
