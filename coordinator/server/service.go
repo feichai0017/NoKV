@@ -9,8 +9,8 @@
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),
-// protocol/eunomia (authority handoff primitives), storage
-// (rooted adapter), audit (snapshot + trace audit).
+// storage (rooted adapter), audit (snapshot + trace audit), and the root
+// authority protocol consumed from meta/root/protocol.
 //
 // Design references: docs/coordinator.md, docs/control_and_execution_protocols.md,
 // docs/rooted_truth.md.
