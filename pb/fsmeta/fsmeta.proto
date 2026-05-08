@@ -249,7 +249,9 @@ message OpenWriteSessionRequest {
   string mount = 1;
   uint64 inode = 2;
   string session = 3;
-  int64 expires_unix_ns = 4;
+  // Requested lease duration. The fsmeta service derives expires_unix_ns from
+  // its own clock after admission and returns the committed SessionRecord.
+  uint64 ttl_ns = 4;
 }
 
 message OpenWriteSessionResponse {
@@ -260,7 +262,9 @@ message HeartbeatWriteSessionRequest {
   string mount = 1;
   uint64 inode = 2;
   string session = 3;
-  int64 expires_unix_ns = 4;
+  // Requested extension duration. The fsmeta service is the authority for the
+  // absolute expiry stored in SessionRecord.
+  uint64 ttl_ns = 4;
 }
 
 message HeartbeatWriteSessionResponse {

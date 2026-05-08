@@ -2484,11 +2484,13 @@ func (*UnlinkResponse) Descriptor() ([]byte, []int) {
 }
 
 type OpenWriteSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	Inode         uint64                 `protobuf:"varint,2,opt,name=inode,proto3" json:"inode,omitempty"`
-	Session       string                 `protobuf:"bytes,3,opt,name=session,proto3" json:"session,omitempty"`
-	ExpiresUnixNs int64                  `protobuf:"varint,4,opt,name=expires_unix_ns,json=expiresUnixNs,proto3" json:"expires_unix_ns,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Mount   string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	Inode   uint64                 `protobuf:"varint,2,opt,name=inode,proto3" json:"inode,omitempty"`
+	Session string                 `protobuf:"bytes,3,opt,name=session,proto3" json:"session,omitempty"`
+	// Requested lease duration. The fsmeta service derives expires_unix_ns from
+	// its own clock after admission and returns the committed SessionRecord.
+	TtlNs         uint64 `protobuf:"varint,4,opt,name=ttl_ns,json=ttlNs,proto3" json:"ttl_ns,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2544,9 +2546,9 @@ func (x *OpenWriteSessionRequest) GetSession() string {
 	return ""
 }
 
-func (x *OpenWriteSessionRequest) GetExpiresUnixNs() int64 {
+func (x *OpenWriteSessionRequest) GetTtlNs() uint64 {
 	if x != nil {
-		return x.ExpiresUnixNs
+		return x.TtlNs
 	}
 	return 0
 }
@@ -2596,11 +2598,13 @@ func (x *OpenWriteSessionResponse) GetSession() *SessionRecord {
 }
 
 type HeartbeatWriteSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	Inode         uint64                 `protobuf:"varint,2,opt,name=inode,proto3" json:"inode,omitempty"`
-	Session       string                 `protobuf:"bytes,3,opt,name=session,proto3" json:"session,omitempty"`
-	ExpiresUnixNs int64                  `protobuf:"varint,4,opt,name=expires_unix_ns,json=expiresUnixNs,proto3" json:"expires_unix_ns,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Mount   string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	Inode   uint64                 `protobuf:"varint,2,opt,name=inode,proto3" json:"inode,omitempty"`
+	Session string                 `protobuf:"bytes,3,opt,name=session,proto3" json:"session,omitempty"`
+	// Requested extension duration. The fsmeta service is the authority for the
+	// absolute expiry stored in SessionRecord.
+	TtlNs         uint64 `protobuf:"varint,4,opt,name=ttl_ns,json=ttlNs,proto3" json:"ttl_ns,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2656,9 +2660,9 @@ func (x *HeartbeatWriteSessionRequest) GetSession() string {
 	return ""
 }
 
-func (x *HeartbeatWriteSessionRequest) GetExpiresUnixNs() int64 {
+func (x *HeartbeatWriteSessionRequest) GetTtlNs() uint64 {
 	if x != nil {
-		return x.ExpiresUnixNs
+		return x.TtlNs
 	}
 	return 0
 }
@@ -3060,19 +3064,19 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x16\n" +
 	"\x06parent\x18\x02 \x01(\x04R\x06parent\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\"\x10\n" +
-	"\x0eUnlinkResponse\"\x87\x01\n" +
+	"\x0eUnlinkResponse\"v\n" +
 	"\x17OpenWriteSessionRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x14\n" +
 	"\x05inode\x18\x02 \x01(\x04R\x05inode\x12\x18\n" +
-	"\asession\x18\x03 \x01(\tR\asession\x12&\n" +
-	"\x0fexpires_unix_ns\x18\x04 \x01(\x03R\rexpiresUnixNs\"S\n" +
+	"\asession\x18\x03 \x01(\tR\asession\x12\x15\n" +
+	"\x06ttl_ns\x18\x04 \x01(\x04R\x05ttlNs\"S\n" +
 	"\x18OpenWriteSessionResponse\x127\n" +
-	"\asession\x18\x01 \x01(\v2\x1d.nokv.fsmeta.v1.SessionRecordR\asession\"\x8c\x01\n" +
+	"\asession\x18\x01 \x01(\v2\x1d.nokv.fsmeta.v1.SessionRecordR\asession\"{\n" +
 	"\x1cHeartbeatWriteSessionRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x14\n" +
 	"\x05inode\x18\x02 \x01(\x04R\x05inode\x12\x18\n" +
-	"\asession\x18\x03 \x01(\tR\asession\x12&\n" +
-	"\x0fexpires_unix_ns\x18\x04 \x01(\x03R\rexpiresUnixNs\"X\n" +
+	"\asession\x18\x03 \x01(\tR\asession\x12\x15\n" +
+	"\x06ttl_ns\x18\x04 \x01(\x04R\x05ttlNs\"X\n" +
 	"\x1dHeartbeatWriteSessionResponse\x127\n" +
 	"\asession\x18\x01 \x01(\v2\x1d.nokv.fsmeta.v1.SessionRecordR\asession\"J\n" +
 	"\x18CloseWriteSessionRequest\x12\x14\n" +

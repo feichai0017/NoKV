@@ -120,14 +120,14 @@ func (e *fakeExecutor) OpenWriteSession(_ context.Context, req fsmeta.OpenWriteS
 	if e.err != nil {
 		return fsmeta.SessionRecord{}, e.err
 	}
-	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: int64(req.TTL)}, nil
 }
 
 func (e *fakeExecutor) HeartbeatWriteSession(_ context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
 	if e.err != nil {
 		return fsmeta.SessionRecord{}, e.err
 	}
-	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: int64(req.TTL)}, nil
 }
 
 func (e *fakeExecutor) CloseWriteSession(context.Context, fsmeta.CloseWriteSessionRequest) error {
@@ -251,19 +251,19 @@ func TestTypedClientMutationRPCs(t *testing.T) {
 	}, updated)
 
 	session, err := cli.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         42,
-		Session:       "writer-1",
-		ExpiresUnixNs: 1000,
+		Mount:   "vol",
+		Inode:   42,
+		Session: "writer-1",
+		TTL:     time.Microsecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 42, ExpiresUnixNs: 1000}, session)
 
 	session, err = cli.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         42,
-		Session:       "writer-1",
-		ExpiresUnixNs: 2000,
+		Mount:   "vol",
+		Inode:   42,
+		Session: "writer-1",
+		TTL:     2 * time.Microsecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2000), session.ExpiresUnixNs)

@@ -436,10 +436,10 @@ func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedCo
 			candidate = fsmeta.SessionID(fmt.Sprintf("%s-retry-%02d", sessionPrefix, openAttempt))
 		}
 		_, err := cli.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
-			Mount:         cfg.Mount,
-			Inode:         entry.Inode,
-			Session:       candidate,
-			ExpiresUnixNs: time.Now().Add(cfg.SessionTTL).UnixNano(),
+			Mount:   cfg.Mount,
+			Inode:   entry.Inode,
+			Session: candidate,
+			TTL:     cfg.SessionTTL,
 		})
 		if err == nil {
 			session = candidate
@@ -450,10 +450,10 @@ func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedCo
 	}
 	if err := recordCall(rec, "heartbeat_write_session", func() error {
 		_, err := cli.HeartbeatWriteSession(ctx, fsmeta.HeartbeatWriteSessionRequest{
-			Mount:         cfg.Mount,
-			Inode:         entry.Inode,
-			Session:       session,
-			ExpiresUnixNs: time.Now().Add(2 * cfg.SessionTTL).UnixNano(),
+			Mount:   cfg.Mount,
+			Inode:   entry.Inode,
+			Session: session,
+			TTL:     2 * cfg.SessionTTL,
 		})
 		return err
 	}); err != nil {
@@ -507,10 +507,10 @@ func runStaleSessionCleanup(ctx context.Context, cli MixedClient, cfg MixedConfi
 	session := fsmeta.SessionID("stale-" + cfg.RunID)
 	rec.recordCall("open_stale_write_session", func() error {
 		_, err := cli.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
-			Mount:         cfg.Mount,
-			Inode:         stale.Inode.Inode,
-			Session:       session,
-			ExpiresUnixNs: time.Now().Add(cfg.StaleSessionTTL).UnixNano(),
+			Mount:   cfg.Mount,
+			Inode:   stale.Inode.Inode,
+			Session: session,
+			TTL:     cfg.StaleSessionTTL,
 		})
 		return err
 	})

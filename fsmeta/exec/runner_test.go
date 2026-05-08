@@ -794,10 +794,10 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, opened)
@@ -810,18 +810,18 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.Contains(t, runner.data, string(ownerKey))
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-2",
-		ExpiresUnixNs: 250,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-2",
+		TTL:     150 * time.Nanosecond,
 	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
 
 	heartbeat, err := executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 300,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     200 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(300), heartbeat.ExpiresUnixNs)
@@ -834,6 +834,69 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(sessionKey))
 	require.NotContains(t, runner.data, string(ownerKey))
+}
+
+func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+	require.Empty(t, runner.mutations)
+
+	seedSession(t, runner, "vol", fsmeta.SessionRecord{Session: "writer-live", Inode: 22, ExpiresUnixNs: 500})
+	_, err = executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-live",
+		TTL:     -time.Nanosecond,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+}
+
+func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	sessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-1")
+	require.NoError(t, err)
+	runner.mutateErrs = []error{
+		nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
+			CommitTsExpired: &kvrpcpb.CommitTsExpired{
+				Key:         sessionKey,
+				CommitTs:    2,
+				MinCommitTs: 4,
+			},
+		}),
+		nil,
+	}
+	clockCalls := 0
+	executor, err := New(runner, WithClock(func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return time.Unix(0, 100)
+		}
+		return time.Unix(0, 500)
+	}))
+	require.NoError(t, err)
+
+	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(600), opened.ExpiresUnixNs)
+	stored, ok, err := executor.readSessionByKey(context.Background(), sessionKey, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(600), stored.ExpiresUnixNs)
 }
 
 func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
@@ -852,10 +915,10 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-new",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-new",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(oldSessionKey))
@@ -885,10 +948,10 @@ func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-new",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-new",
+		TTL:     100 * time.Nanosecond,
 	})
 
 	require.NoError(t, err)
@@ -907,10 +970,10 @@ func TestExecutorOpenWriteSessionRejectsDirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         22,
-		Session:       "writer-1",
-		ExpiresUnixNs: 200,
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
 	})
 	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
 	require.Empty(t, runner.mutations)
@@ -1162,6 +1225,51 @@ func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 	require.Equal(t, uint64(21), runner.nextTS)
 	require.Equal(t, uint64(9), executor.Stats()["txn_retries_total"])
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+}
+
+func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
+	lockErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		Locked: &kvrpcpb.Locked{
+			PrimaryLock: []byte("dentry"),
+			Key:         []byte("dentry"),
+			LockVersion: 2,
+			LockTtl:     uint64(5 * time.Second / time.Millisecond),
+		},
+	}}}
+	budget := txnRetryBudget(lockErr, defaultLockTTL)
+
+	require.Equal(t, 5*time.Second+txnContentionRetryMaxBackoff, budget)
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
+	require.False(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
+}
+
+func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
+	writeConflictErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		WriteConflict: &kvrpcpb.WriteConflict{
+			Key:        []byte("dentry"),
+			ConflictTs: 4,
+			StartTs:    2,
+		},
+	}}}
+
+	require.Zero(t, txnRetryBudget(writeConflictErr, defaultLockTTL))
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
+	require.False(t, canRetryTxnContention(maxTxnContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
+}
+
+func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
+	err := nokverrors.New(nokverrors.KindLockConflict, "lock conflict translated across rpc boundary")
+
+	require.Equal(t, 25*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 25))
+}
+
+func TestTxnRetryBudgetCoversPercolatorRetryableStartTSLoss(t *testing.T) {
+	err := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
+		Retryable: "percolator: lock not found",
+	}}}
+
+	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))
+	require.True(t, canRetryTxnContention(maxTxnContentionRetries+1, time.Now(), err, 50))
 }
 
 func TestExecutorRetriesWriteConflict(t *testing.T) {

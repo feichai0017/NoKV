@@ -162,7 +162,7 @@ func (e *fakeExecutor) OpenWriteSession(_ context.Context, req fsmeta.OpenWriteS
 	if e.err != nil {
 		return fsmeta.SessionRecord{}, e.err
 	}
-	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: int64(req.TTL)}, nil
 }
 
 func (e *fakeExecutor) HeartbeatWriteSession(_ context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
@@ -170,7 +170,7 @@ func (e *fakeExecutor) HeartbeatWriteSession(_ context.Context, req fsmeta.Heart
 	if e.err != nil {
 		return fsmeta.SessionRecord{}, e.err
 	}
-	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}, nil
+	return fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: int64(req.TTL)}, nil
 }
 
 func (e *fakeExecutor) CloseWriteSession(_ context.Context, req fsmeta.CloseWriteSessionRequest) error {
@@ -357,23 +357,23 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 	require.Equal(t, uint64(8192), updateResp.GetInode().GetSize())
 
 	openResp, err := client.OpenWriteSession(context.Background(), &fsmetapb.OpenWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         42,
-		Session:       "writer-1",
-		ExpiresUnixNs: 1000,
+		Mount:   "vol",
+		Inode:   42,
+		Session: "writer-1",
+		TtlNs:   1000,
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.OpenWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", ExpiresUnixNs: 1000}, executor.openReq)
+	require.Equal(t, fsmeta.OpenWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", TTL: time.Microsecond}, executor.openReq)
 	require.Equal(t, "writer-1", openResp.GetSession().GetSession())
 
 	heartbeatResp, err := client.HeartbeatWriteSession(context.Background(), &fsmetapb.HeartbeatWriteSessionRequest{
-		Mount:         "vol",
-		Inode:         42,
-		Session:       "writer-1",
-		ExpiresUnixNs: 2000,
+		Mount:   "vol",
+		Inode:   42,
+		Session: "writer-1",
+		TtlNs:   2000,
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", ExpiresUnixNs: 2000}, executor.heartbeatReq)
+	require.Equal(t, fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", TTL: 2 * time.Microsecond}, executor.heartbeatReq)
 	require.Equal(t, int64(2000), heartbeatResp.GetSession().GetExpiresUnixNs())
 
 	_, err = client.CloseWriteSession(context.Background(), &fsmetapb.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})

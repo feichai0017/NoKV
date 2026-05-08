@@ -23,13 +23,15 @@ const (
 	// back a live metadata transaction.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
-	// Write APIs should absorb transient live locks from raft/apply tail
-	// latency, but still surface abandoned locks well before the 30s lock TTL.
+	// Non-lock conflicts are retried by count because fresh timestamps normally
+	// make progress immediately. Live locks are bounded separately by the lock
+	// TTL so fsmeta does not leak ordinary Percolator lock waits to callers.
 	maxTxnContentionRetries  = 32
 	maxReadContentionRetries = 3
 
 	txnContentionRetryBaseBackoff = time.Millisecond
 	txnContentionRetryMaxBackoff  = 100 * time.Millisecond
+	maxTxnLockRetryBudget         = time.Hour
 )
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
@@ -963,10 +965,10 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if !e.expiryInFuture(req.ExpiresUnixNs) {
+	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
 		if err != nil {
@@ -978,7 +980,13 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		if inode.Type != fsmeta.InodeTypeFile {
 			return fsmeta.ErrInvalidRequest
 		}
-		now := e.clock().UnixNano()
+		nowTime := e.clock()
+		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+		if !ok {
+			return fsmeta.ErrInvalidRequest
+		}
+		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+		now := nowTime.UnixNano()
 		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
 			return err
 		} else if ok && sessionLive(existing, now) {
@@ -1007,7 +1015,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 				}
 			}
 		}
-		value, err := fsmeta.EncodeSessionValue(record)
+		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
 			return err
 		}
@@ -1015,8 +1023,11 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		record = candidate
+		return nil
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1033,12 +1044,18 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if !e.expiryInFuture(req.ExpiresUnixNs) {
+	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: req.ExpiresUnixNs}
+	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		now := e.clock().UnixNano()
+		nowTime := e.clock()
+		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+		if !ok {
+			return fsmeta.ErrInvalidRequest
+		}
+		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+		now := nowTime.UnixNano()
 		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
@@ -1053,7 +1070,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		if !ok || !sessionLive(owner, now) || owner.Session != req.Session || owner.Inode != req.Inode {
 			return fsmeta.ErrNotFound
 		}
-		value, err := fsmeta.EncodeSessionValue(record)
+		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
 			return err
 		}
@@ -1061,8 +1078,11 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
-		_, err = e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		if _, err := e.runner.Mutate(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+			return err
+		}
+		record = candidate
+		return nil
 	}); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -1447,7 +1467,8 @@ func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, erro
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
-	for attempt := 0; attempt <= maxTxnContentionRetries; attempt++ {
+	started := time.Now()
+	for attempt := 0; ; attempt++ {
 		startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
 		if err != nil {
 			return err
@@ -1460,17 +1481,26 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 			return translateMutateError(err)
 		}
 		last = err
-		if attempt == maxTxnContentionRetries {
+		if !canRetryTxnContention(attempt, started, err, e.lockTTL) {
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
 		// A live Percolator lock may survive ordinary RPC and raft scheduling
 		// jitter, especially when a close and session-cleanup delete touch the
 		// same lease key. fsmeta write APIs should absorb that transient
-		// contention within a bounded window instead of returning MVCC lock
-		// details.
+		// contention up to the advertised lock TTL instead of returning MVCC
+		// lock details.
 		e.txnRetriesTotal.Add(1)
-		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+		delay := txnContentionRetryDelay(attempt)
+		if budget := txnRetryBudget(err, e.lockTTL); budget > 0 {
+			remaining := budget - time.Since(started)
+			if remaining <= 0 {
+				e.txnRetryExhaustedTotal.Add(1)
+				break
+			}
+			delay = min(delay, remaining)
+		}
+		if err := waitTxnContentionRetryDelay(ctx, delay); err != nil {
 			return err
 		}
 	}
@@ -1500,15 +1530,71 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 		// concurrent namespace mutation. Retrying keeps the external API at the
 		// fsmeta level instead of leaking a transient MVCC lock to callers.
 		e.readRetriesTotal.Add(1)
-		if err := waitTxnContentionRetry(ctx, attempt); err != nil {
+		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
 			return err
 		}
 	}
 	return last
 }
 
-func waitTxnContentionRetry(ctx context.Context, attempt int) error {
-	delay := min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
+func canRetryTxnContention(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
+	if budget := txnRetryBudget(err, fallbackLockTTL); budget > 0 {
+		return time.Since(started) < budget
+	}
+	return attempt < maxTxnContentionRetries
+}
+
+func txnRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
+	switch {
+	case nokverrors.IsKind(err, nokverrors.KindLockConflict):
+	case nokverrors.IsKind(err, nokverrors.KindRetryable):
+		// Percolator uses Retryable for a dead start_ts, for example when
+		// commit finds that the prewrite lock was already rolled back. The
+		// fsmeta semantic operation can safely re-read and re-plan, but under
+		// raft/store congestion it needs the same bounded liveness window as a
+		// visible live-lock wait.
+	default:
+		return 0
+	}
+	ttlMillis := txnLockTTLMillis(err)
+	if ttlMillis == 0 {
+		ttlMillis = fallbackLockTTL
+	}
+	if ttlMillis == 0 {
+		return txnContentionRetryMaxBackoff
+	}
+	budget := time.Duration(ttlMillis) * time.Millisecond
+	if budget <= 0 || budget > maxTxnLockRetryBudget {
+		return maxTxnLockRetryBudget
+	}
+	return budget + txnContentionRetryMaxBackoff
+}
+
+func txnLockTTLMillis(err error) uint64 {
+	var carrier nokverrors.KeyErrorCarrier
+	if !errors.As(err, &carrier) {
+		return 0
+	}
+	var maxTTL uint64
+	for _, keyErr := range carrier.KeyErrors() {
+		if ttl := keyErr.GetLocked().GetLockTtl(); ttl > maxTTL {
+			maxTTL = ttl
+		}
+	}
+	return maxTTL
+}
+
+func txnContentionRetryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return txnContentionRetryBaseBackoff
+	}
+	if attempt >= 7 {
+		return txnContentionRetryMaxBackoff
+	}
+	return min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
+}
+
+func waitTxnContentionRetryDelay(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -1599,8 +1685,17 @@ func (e *Executor) readSessionByKey(ctx context.Context, key []byte, version uin
 	return record, true, nil
 }
 
-func (e *Executor) expiryInFuture(expiresUnixNs int64) bool {
-	return expiresUnixNs > e.clock().UnixNano()
+func sessionExpiryUnixNs(now time.Time, ttl time.Duration) (int64, bool) {
+	if ttl <= 0 {
+		return 0, false
+	}
+	const maxInt64 = int64(1<<63 - 1)
+	nowUnixNs := now.UnixNano()
+	ttlUnixNs := int64(ttl)
+	if nowUnixNs > maxInt64-ttlUnixNs {
+		return 0, false
+	}
+	return nowUnixNs + ttlUnixNs, true
 }
 
 func (e *Executor) clock() time.Time {
