@@ -55,6 +55,19 @@ func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64
 	require.Equal(t, want, got)
 }
 
+func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.OperationKind, key string, want uint64) {
+	t.Helper()
+	raw, ok := stats["atomic_fastpath"]
+	require.True(t, ok, "missing atomic_fastpath stats")
+	byOp, ok := raw.(map[string]any)
+	require.Truef(t, ok, "atomic_fastpath has type %T", raw)
+	rawOp, ok := byOp[string(kind)]
+	require.Truef(t, ok, "missing atomic_fastpath stats for %s", kind)
+	opStats, ok := rawOp.(map[string]uint64)
+	require.Truef(t, ok, "atomic_fastpath[%s] has type %T", kind, rawOp)
+	require.Equal(t, want, opStats[key])
+}
+
 func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
 	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
 	if err != nil {
@@ -480,11 +493,11 @@ func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
 	require.NoError(t, err)
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireStatUint(t, stats, "create_fastpath_attempt_total", 1)
-	requireStatUint(t, stats, "create_fastpath_success_total", 1)
-	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
-	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
-	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "attempt_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "success_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "fallback_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "skip_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "runner_unsupported_total", 0)
 	require.Len(t, runner.atomicCalls, 1)
 	call := runner.atomicCalls[0]
 	require.Equal(t, plan.PrimaryKey, call.primary)
@@ -526,11 +539,11 @@ func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 	require.Len(t, runner.atomicCalls, 1)
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireStatUint(t, stats, "create_fastpath_attempt_total", 1)
-	requireStatUint(t, stats, "create_fastpath_success_total", 0)
-	requireStatUint(t, stats, "create_fastpath_fallback_total", 1)
-	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
-	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "attempt_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "success_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "fallback_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "skip_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "runner_unsupported_total", 0)
 	require.Len(t, base.mutations, 1)
 	require.Len(t, base.mutations[0], 2)
 }
@@ -550,11 +563,11 @@ func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
 
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireStatUint(t, stats, "create_fastpath_attempt_total", 0)
-	requireStatUint(t, stats, "create_fastpath_success_total", 0)
-	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
-	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 0)
-	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "attempt_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "success_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "fallback_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "skip_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "runner_unsupported_total", 1)
 	require.Len(t, runner.mutations, 1)
 }
 
@@ -580,15 +593,68 @@ func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	// atomic local apply group.
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireStatUint(t, stats, "create_fastpath_attempt_total", 0)
-	requireStatUint(t, stats, "create_fastpath_success_total", 0)
-	requireStatUint(t, stats, "create_fastpath_fallback_total", 0)
-	requireStatUint(t, stats, "create_fastpath_skip_quota_total", 1)
-	requireStatUint(t, stats, "create_fastpath_runner_unsupported_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "attempt_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "success_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "fallback_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "skip_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "runner_unsupported_total", 0)
 	require.Empty(t, runner.atomicCalls)
 	require.Len(t, base.mutations, 1)
 	require.Len(t, base.mutations[0], 3)
 	require.Equal(t, quotaKey, base.mutations[0][2].GetKey())
+}
+
+func TestExecutorUpdateInodeUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Mode: 0o644, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  7,
+		Inode:   22,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0o600), updated.Mode)
+	require.Len(t, runner.atomicCalls, 1)
+	require.Empty(t, base.mutations)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "success_total", 1)
+
+	stored, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(0o600), stored.Mode)
+}
+
+func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 1024, LinkCount: 1})
+	quotaKey, err := fsmeta.EncodeUsageKey("vol", 7)
+	require.NoError(t, err)
+	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
+	executor, err := New(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  7,
+		Inode:   22,
+		Name:    "file",
+		SetSize: true,
+		Size:    2048,
+	})
+	require.NoError(t, err)
+	require.Empty(t, runner.atomicCalls)
+	require.Len(t, base.mutations, 1)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "skip_total", 1)
 }
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
@@ -836,6 +902,69 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NotContains(t, runner.data, string(ownerKey))
 }
 
+func TestExecutorWriteSessionLifecycleUsesAtomicMutate(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	now := time.Unix(0, 100)
+	executor, err := New(runner, WithClock(func() time.Time { return now }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	_, err = executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     200 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, 3)
+	require.Empty(t, base.mutations)
+	stats := executor.Stats()
+	requireAtomicStatUint(t, stats, fsmeta.OperationOpenWriteSession, "success_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationHeartbeatSession, "success_total", 1)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCloseSession, "success_total", 1)
+}
+
+func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
+	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
+	require.NoError(t, err)
+	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", "writer-old")
+	require.NoError(t, err)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	require.NoError(t, err)
+	runner.data[string(oldSessionKey)] = oldValue
+	runner.data[string(ownerKey)] = oldValue
+	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+
+	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-new",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+
+	require.Empty(t, runner.atomicCalls)
+	require.Len(t, base.mutations, 1)
+	require.NotContains(t, runner.data, string(oldSessionKey))
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationOpenWriteSession, "skip_total", 1)
+}
+
 func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
@@ -1072,6 +1201,32 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint32(2), inode.LinkCount)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
+}
+
+func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Link(context.Background(), fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "file",
+		ToParent:   8,
+		ToName:     "alias",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, 1)
+	require.Empty(t, base.mutations)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationLink, "success_total", 1)
+	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(2), inode.LinkCount)
 }
 
 func TestExecutorLinkRejectsDirectory(t *testing.T) {
@@ -1495,6 +1650,25 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestExecutorUnlinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, 1)
+	require.Empty(t, base.mutations)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUnlink, "success_total", 1)
+	_, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
@@ -1597,6 +1771,75 @@ func TestExecutorRenameMovesDentryWithoutSubtreeHandoff(t *testing.T) {
 	require.Empty(t, publisher.starts)
 	require.Empty(t, publisher.completes)
 	require.Equal(t, 1, authority.calls)
+}
+
+func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	seedDentry(t, runner.fakeRunner, "vol", 7, "old", 22)
+	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	publisher := &fakeSubtreePublisher{}
+	authority := &fakeAuthorityResolver{same: true}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(
+		runner,
+		WithMountResolver(resolver),
+		WithSubtreeAuthorityResolver(authority),
+		WithSubtreeHandoffPublisher(publisher),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.atomicCalls, 1)
+	require.Empty(t, base.mutations)
+	require.Empty(t, publisher.starts)
+	require.Empty(t, publisher.completes)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationRename, "success_total", 1)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+}
+
+func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
+	authority := &fakeAuthorityResolver{same: true}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	require.NoError(t, err)
+
+	total := atomicFastPathBackoffAfter + 3
+	for i := range total {
+		oldName := fmt.Sprintf("old-%d", i)
+		newName := fmt.Sprintf("new-%d", i)
+		seedDentry(t, runner.fakeRunner, "vol", 7, oldName, fsmeta.InodeID(100+i))
+		err := executor.Rename(context.Background(), fsmeta.RenameRequest{
+			Mount:      "vol",
+			FromParent: 7,
+			FromName:   oldName,
+			ToParent:   8,
+			ToName:     newName,
+		})
+		require.NoError(t, err)
+	}
+
+	require.Len(t, runner.atomicCalls, atomicFastPathBackoffAfter)
+	stats := executor.Stats()
+	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "fallback_total", atomicFastPathBackoffAfter)
+	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "skip_total", 3)
+	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "backoff_skip_total", 3)
 }
 
 func TestExecutorRenameRejectsCrossAuthority(t *testing.T) {
