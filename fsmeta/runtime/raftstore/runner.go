@@ -39,7 +39,7 @@ type TSOClient interface {
 // semantics; fsmeta/exec remains the only interpreter of OperationPlan.
 type Runner struct {
 	kv                           KVClient
-	tso                          TSOClient
+	tso                          *tsoCoalescer
 	atomicRunnerUnsupportedTotal atomic.Uint64
 }
 
@@ -53,7 +53,7 @@ func NewRunner(kv KVClient, tso TSOClient) (*Runner, error) {
 	if tso == nil {
 		return nil, errTSOClientRequired
 	}
-	return &Runner{kv: kv, tso: tso}, nil
+	return &Runner{kv: kv, tso: newTSOCoalescer(tso, defaultTSOCoalescerConfig())}, nil
 }
 
 // ReserveTimestamp reserves count consecutive timestamps from coordinator TSO.
@@ -61,20 +61,7 @@ func (r *Runner) ReserveTimestamp(ctx context.Context, count uint64) (uint64, er
 	if count == 0 {
 		return 0, errTimestampCountRequired
 	}
-	resp, err := r.tso.Tso(ctx, &coordpb.TsoRequest{Count: count})
-	if err != nil {
-		return 0, err
-	}
-	if resp == nil {
-		return 0, errNilTSOResponse
-	}
-	if resp.GetCount() != count {
-		return 0, errTSOCountMismatch(resp.GetCount(), count)
-	}
-	if resp.GetTimestamp() == 0 {
-		return 0, errZeroTSOTimestamp
-	}
-	return resp.GetTimestamp(), nil
+	return r.tso.Reserve(ctx, count)
 }
 
 // Get returns the value visible at version.
@@ -140,7 +127,10 @@ func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 		// test runners. Real raftstore clients can allocate commit_ts after
 		// prewrite, which avoids repeated CommitTsExpired under mixed reads.
 		return kv.MutateWithCommitTimestamp(ctx, primary, mutations, startVersion, lockTTL, func(ctx context.Context) (uint64, error) {
-			return r.ReserveTimestamp(ctx, 1)
+			// Commit timestamp allocation happens while Percolator locks are
+			// live, so it bypasses the short coalescing window to keep lock
+			// tenure tight and reduce reader-pushed min_commit_ts churn.
+			return r.tso.ReserveImmediate(ctx, 1)
 		})
 	}
 	if err := r.kv.Mutate(ctx, primary, mutations, startVersion, commitVersion, lockTTL); err != nil {
@@ -170,6 +160,9 @@ func (r *Runner) Stats() map[string]any {
 	}
 	out := map[string]any{
 		"atomic_runner_unsupported_total": r.atomicRunnerUnsupportedTotal.Load(),
+	}
+	if r.tso != nil {
+		out["tso"] = r.tso.Stats()
 	}
 	if stats, ok := r.kv.(statsProvider); ok {
 		out["kv"] = stats.Stats()

@@ -32,7 +32,8 @@ case "$profile" in
 		default_groups=8
 		default_entries_per_group=64
 		default_artifacts_per_entry=8
-		default_session_ttl=10s
+		default_session_ttl=5m
+		default_stale_session_ttl=2s
 		default_timeout=25m
 		default_stabilize_seconds=20
 		;;
@@ -45,7 +46,8 @@ case "$profile" in
 		default_groups=16
 		default_entries_per_group=128
 		default_artifacts_per_entry=10
-		default_session_ttl=10s
+		default_session_ttl=5m
+		default_stale_session_ttl=2s
 		default_timeout=120m
 		default_stabilize_seconds=45
 		;;
@@ -64,6 +66,7 @@ groups="${NOKV_FSMETA_GROUPS:-$default_groups}"
 entries_per_group="${NOKV_FSMETA_ENTRIES_PER_GROUP:-$default_entries_per_group}"
 artifacts_per_entry="${NOKV_FSMETA_ARTIFACTS_PER_ENTRY:-$default_artifacts_per_entry}"
 session_ttl="${NOKV_FSMETA_SESSION_TTL:-$default_session_ttl}"
+stale_session_ttl="${NOKV_FSMETA_STALE_SESSION_TTL:-$default_stale_session_ttl}"
 timeout="${NOKV_FSMETA_TIMEOUT:-$default_timeout}"
 stabilize_seconds="${NOKV_FSMETA_STABILIZE_SECONDS:-$default_stabilize_seconds}"
 
@@ -113,6 +116,7 @@ run_bench() {
 			-fsmeta_entries_per_group "$entries_per_group" \
 			-fsmeta_artifacts_per_entry "$artifacts_per_entry" \
 			-fsmeta_session_ttl "$session_ttl" \
+			-fsmeta_stale_session_ttl "$stale_session_ttl" \
 			-fsmeta_timeout "$timeout" \
 			-fsmeta_output "$output"
 	)
@@ -140,6 +144,7 @@ groups=$groups
 entries_per_group=$entries_per_group
 artifacts_per_entry=$artifacts_per_entry
 session_ttl=$session_ttl
+stale_session_ttl=$stale_session_ttl
 profile_seconds=$profile_seconds
 targets=$profile_targets
 EOF

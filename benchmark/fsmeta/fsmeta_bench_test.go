@@ -41,7 +41,8 @@ var (
 	fsmetaGroups          = flag.Int("fsmeta_groups", 4, "mixed workload group directory count")
 	fsmetaEntriesPerGroup = flag.Int("fsmeta_entries_per_group", 8, "mixed workload published entry count per group")
 	fsmetaArtifactsPerRun = flag.Int("fsmeta_artifacts_per_entry", 4, "mixed workload artifact file count per entry; minimum 4")
-	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 10*time.Second, "mixed writer session TTL")
+	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 5*time.Minute, "mixed writer session TTL")
+	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 2*time.Second, "mixed stale-session cleanup TTL")
 	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
 	fsmetaOutput          = flag.String("fsmeta_output", "", "summary CSV output path")
 )
@@ -227,6 +228,7 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName
 			ArtifactsPerRun: *fsmetaArtifactsPerRun,
 			PageLimit:       uint32(*fsmetaPageLimit),
 			SessionTTL:      *fsmetaSessionTTL,
+			StaleSessionTTL: *fsmetaStaleSessionTTL,
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)
