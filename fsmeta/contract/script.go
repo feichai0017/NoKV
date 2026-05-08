@@ -170,7 +170,7 @@ func renameOperation(rng *rand.Rand, model *Model, names []string) Operation {
 		}
 	}
 	return Operation{
-		Kind:       OpRenameSubtree,
+		Kind:       OpRename,
 		Mount:      model.Mount,
 		FromParent: model.Root,
 		FromName:   fromName,

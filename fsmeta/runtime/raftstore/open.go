@@ -151,6 +151,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	execOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithMountResolver(mounts),
+		fsmetaexec.WithSubtreeAuthorityResolver(mounts),
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
 	}

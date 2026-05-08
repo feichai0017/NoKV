@@ -62,6 +62,20 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount fsmeta.MountID) (fs
 	return record, err
 }
 
+// SameAuthority reflects the current fsmeta deployment model: a registered
+// mount owns one rooted namespace authority. The executor calls this before
+// ordinary Rename so a future nested-authority resolver can reject
+// cross-authority moves without changing the data-plane rename path.
+func (c *mountCache) SameAuthority(ctx context.Context, mount fsmeta.MountID, fromParent, toParent fsmeta.InodeID) (bool, error) {
+	if fromParent == 0 || toParent == 0 {
+		return false, fsmeta.ErrInvalidInodeID
+	}
+	if _, err := c.ResolveMount(ctx, mount); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // markRetired forces the cached view of mount to retired. The monitor calls
 // this when it observes a rooted MountRetired event so admission flips before
 // the cached TTL expires.

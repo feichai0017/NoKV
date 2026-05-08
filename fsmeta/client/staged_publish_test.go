@@ -16,7 +16,7 @@ type stagedPublishFake struct {
 
 	calls        []string
 	created      fsmeta.CreateRequest
-	renamed      fsmeta.RenameSubtreeRequest
+	renamed      fsmeta.RenameRequest
 	unlinked     fsmeta.UnlinkRequest
 	unlinkCtxErr error
 }
@@ -34,7 +34,7 @@ func (f *stagedPublishFake) Create(_ context.Context, req fsmeta.CreateRequest) 
 	}, nil
 }
 
-func (f *stagedPublishFake) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
+func (f *stagedPublishFake) Rename(_ context.Context, req fsmeta.RenameRequest) error {
 	f.calls = append(f.calls, "rename")
 	f.renamed = req
 	return f.renameErr
@@ -66,7 +66,7 @@ func TestPublishStagedNamespaceEntryCommitsAfterPrepare(t *testing.T) {
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
 	}, cli.created)
 	require.Equal(t, fsmeta.InodeID(99), prepared.Inode.Inode)
-	require.Equal(t, fsmeta.RenameSubtreeRequest{
+	require.Equal(t, fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 7,
 		FromName:   ".stage-artifact",

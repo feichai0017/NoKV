@@ -19,20 +19,21 @@ import (
 )
 
 type fakeExecutor struct {
-	createReq    fsmeta.CreateRequest
-	createInode  fsmeta.InodeRecord
-	updateReq    fsmeta.UpdateInodeRequest
-	readDirReq   fsmeta.ReadDirRequest
-	snapshotReq  fsmeta.SnapshotSubtreeRequest
-	quotaReq     fsmeta.QuotaUsageRequest
-	renameReq    fsmeta.RenameSubtreeRequest
-	linkReq      fsmeta.LinkRequest
-	unlinkReq    fsmeta.UnlinkRequest
-	openReq      fsmeta.OpenWriteSessionRequest
-	heartbeatReq fsmeta.HeartbeatWriteSessionRequest
-	closeReq     fsmeta.CloseWriteSessionRequest
-	expireReq    fsmeta.ExpireWriteSessionsRequest
-	err          error
+	createReq        fsmeta.CreateRequest
+	createInode      fsmeta.InodeRecord
+	updateReq        fsmeta.UpdateInodeRequest
+	readDirReq       fsmeta.ReadDirRequest
+	snapshotReq      fsmeta.SnapshotSubtreeRequest
+	quotaReq         fsmeta.QuotaUsageRequest
+	renameReq        fsmeta.RenameRequest
+	renameSubtreeReq fsmeta.RenameSubtreeRequest
+	linkReq          fsmeta.LinkRequest
+	unlinkReq        fsmeta.UnlinkRequest
+	openReq          fsmeta.OpenWriteSessionRequest
+	heartbeatReq     fsmeta.HeartbeatWriteSessionRequest
+	closeReq         fsmeta.CloseWriteSessionRequest
+	expireReq        fsmeta.ExpireWriteSessionsRequest
+	err              error
 }
 
 func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
@@ -127,8 +128,13 @@ func (e *fakeExecutor) GetQuotaUsage(_ context.Context, req fsmeta.QuotaUsageReq
 	return fsmeta.UsageRecord{Bytes: 4096, Inodes: 2}, nil
 }
 
-func (e *fakeExecutor) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
+func (e *fakeExecutor) Rename(_ context.Context, req fsmeta.RenameRequest) error {
 	e.renameReq = req
+	return e.err
+}
+
+func (e *fakeExecutor) RenameSubtree(_ context.Context, req fsmeta.RenameSubtreeRequest) error {
+	e.renameSubtreeReq = req
 	return e.err
 }
 
@@ -250,7 +256,7 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 	require.Len(t, readDirResp.GetEntries(), 1)
 	require.Equal(t, "checkpoint", readDirResp.GetEntries()[0].GetName())
 
-	_, err = client.RenameSubtree(context.Background(), &fsmetapb.RenameSubtreeRequest{
+	_, err = client.Rename(context.Background(), &fsmetapb.RenameRequest{
 		Mount:      "vol",
 		FromParent: 1,
 		FromName:   "old",
@@ -258,13 +264,29 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 		ToName:     "new",
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.RenameSubtreeRequest{
+	require.Equal(t, fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 1,
 		FromName:   "old",
 		ToParent:   2,
 		ToName:     "new",
 	}, executor.renameReq)
+
+	_, err = client.RenameSubtree(context.Background(), &fsmetapb.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 3,
+		FromName:   "subtree-old",
+		ToParent:   4,
+		ToName:     "subtree-new",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 3,
+		FromName:   "subtree-old",
+		ToParent:   4,
+		ToName:     "subtree-new",
+	}, executor.renameSubtreeReq)
 
 	_, err = client.Link(context.Background(), &fsmetapb.LinkRequest{
 		Mount:      "vol",
@@ -369,6 +391,7 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted, reason: reasonWatchOverflow},
 		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange, reason: reasonWatchCursorExpired},
 		{name: "mount retired", err: fsmeta.ErrMountRetired, code: codes.FailedPrecondition, reason: reasonMountRetired},
+		{name: "cross authority rename", err: fsmeta.ErrCrossAuthorityRename, code: codes.FailedPrecondition, reason: reasonCrossAuthorityRename},
 		{name: "retry exhausted", err: nokverrors.New(nokverrors.KindRetryExhausted, "fsmeta: retry exhausted"), code: codes.Unavailable},
 		{name: "internal", err: errors.New("boom"), code: codes.Internal},
 	}

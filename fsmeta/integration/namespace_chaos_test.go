@@ -44,7 +44,7 @@ func TestFSMetadataNamespaceChaosSurvivesGatewayRestartAndMixedMutations(t *test
 		ToParent:   fsmeta.RootInode,
 		ToName:     "alpha-link",
 	}))
-	require.NoError(t, cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
+	require.NoError(t, cli.Rename(ctx, fsmeta.RenameRequest{
 		Mount:      mount,
 		FromParent: fsmeta.RootInode,
 		FromName:   "beta",

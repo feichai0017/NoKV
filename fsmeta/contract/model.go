@@ -19,6 +19,7 @@ const (
 	OpLookup           OperationKind = "lookup"
 	OpReadDirPlus      OperationKind = "readdir_plus"
 	OpSnapshotSubtree  OperationKind = "snapshot_subtree"
+	OpRename           OperationKind = "rename"
 	OpRenameSubtree    OperationKind = "rename_subtree"
 	OpLink             OperationKind = "link"
 	OpUnlink           OperationKind = "unlink"
@@ -136,7 +137,7 @@ func (m *Model) Apply(op Operation) Result {
 		return m.lookup(op)
 	case OpReadDirPlus:
 		return m.readDirPlus(op)
-	case OpRenameSubtree:
+	case OpRename, OpRenameSubtree:
 		return m.renameSubtree(op)
 	case OpLink:
 		return m.link(op)

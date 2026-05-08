@@ -16,6 +16,7 @@ type Executor interface {
 	Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	SnapshotSubtree(context.Context, fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
+	Rename(context.Context, fsmeta.RenameRequest) error
 	RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error
 	Link(context.Context, fsmeta.LinkRequest) error
 	Unlink(context.Context, fsmeta.UnlinkRequest) error
@@ -127,6 +128,15 @@ func execute(ctx context.Context, exec Executor, model *Model, op Operation) Res
 			RootInode: op.Parent,
 		})
 		return Result{Err: err, Token: token}
+	case OpRename:
+		err := exec.Rename(ctx, fsmeta.RenameRequest{
+			Mount:      op.Mount,
+			FromParent: op.FromParent,
+			FromName:   op.FromName,
+			ToParent:   op.ToParent,
+			ToName:     op.ToName,
+		})
+		return Result{Err: err}
 	case OpRenameSubtree:
 		err := exec.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
 			Mount:      op.Mount,

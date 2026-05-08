@@ -15,7 +15,7 @@ const stagedPublishCleanupTimeout = 5 * time.Second
 // publish. GRPCClient satisfies it.
 type StagedPublishClient interface {
 	Create(context.Context, fsmeta.CreateRequest) (fsmeta.CreateResult, error)
-	RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error
+	Rename(context.Context, fsmeta.RenameRequest) error
 	Unlink(context.Context, fsmeta.UnlinkRequest) error
 }
 
@@ -56,7 +56,7 @@ func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, r
 		return err
 	}
 	rename := req.renameRequest()
-	if _, err := fsmeta.PlanRenameSubtree(rename); err != nil {
+	if _, err := fsmeta.PlanRename(rename); err != nil {
 		return err
 	}
 
@@ -78,7 +78,7 @@ func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, r
 			return err
 		}
 	}
-	return cli.RenameSubtree(ctx, rename)
+	return cli.Rename(ctx, rename)
 }
 
 func (r StagedPublishRequest) createRequest() fsmeta.CreateRequest {
@@ -90,8 +90,8 @@ func (r StagedPublishRequest) createRequest() fsmeta.CreateRequest {
 	}
 }
 
-func (r StagedPublishRequest) renameRequest() fsmeta.RenameSubtreeRequest {
-	return fsmeta.RenameSubtreeRequest{
+func (r StagedPublishRequest) renameRequest() fsmeta.RenameRequest {
+	return fsmeta.RenameRequest{
 		Mount:      r.Mount,
 		FromParent: r.StageParent,
 		FromName:   r.StageName,

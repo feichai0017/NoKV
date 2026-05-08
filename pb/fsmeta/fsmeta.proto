@@ -199,6 +199,16 @@ message QuotaUsageResponse {
   uint64 inodes = 2;
 }
 
+message RenameRequest {
+  string mount = 1;
+  uint64 from_parent = 2;
+  string from_name = 3;
+  uint64 to_parent = 4;
+  string to_name = 5;
+}
+
+message RenameResponse {}
+
 message RenameSubtreeRequest {
   string mount = 1;
   uint64 from_parent = 2;
@@ -275,6 +285,7 @@ service FSMetadata {
   rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
   rpc RetireSnapshotSubtree(RetireSnapshotSubtreeRequest) returns (RetireSnapshotSubtreeResponse);
   rpc GetQuotaUsage(QuotaUsageRequest) returns (QuotaUsageResponse);
+  rpc Rename(RenameRequest) returns (RenameResponse);
   rpc RenameSubtree(RenameSubtreeRequest) returns (RenameSubtreeResponse);
   rpc Link(LinkRequest) returns (LinkResponse);
   rpc Unlink(UnlinkRequest) returns (UnlinkResponse);

@@ -11,18 +11,19 @@ import (
 )
 
 const (
-	fsmetaReasonMetadata     = "fsmeta_reason"
-	reasonQuotaExceeded      = "quota_exceeded"
-	reasonWatchOverflow      = "watch_overflow"
-	reasonWatchCursorExpired = "watch_cursor_expired"
-	reasonMountNotRegistered = "mount_not_registered"
-	reasonMountRetired       = "mount_retired"
-	reasonNamespaceExists    = "entry_exists"
-	reasonNamespaceNotFound  = "entry_not_found"
-	reasonInvalidFSMetaInput = "invalid_fsmeta_input"
-	reasonServiceUnavailable = "service_unavailable"
-	reasonContextCanceled    = "context_canceled"
-	reasonContextDeadline    = "context_deadline"
+	fsmetaReasonMetadata       = "fsmeta_reason"
+	reasonQuotaExceeded        = "quota_exceeded"
+	reasonWatchOverflow        = "watch_overflow"
+	reasonWatchCursorExpired   = "watch_cursor_expired"
+	reasonMountNotRegistered   = "mount_not_registered"
+	reasonMountRetired         = "mount_retired"
+	reasonCrossAuthorityRename = "cross_authority_rename"
+	reasonNamespaceExists      = "entry_exists"
+	reasonNamespaceNotFound    = "entry_not_found"
+	reasonInvalidFSMetaInput   = "invalid_fsmeta_input"
+	reasonServiceUnavailable   = "service_unavailable"
+	reasonContextCanceled      = "context_canceled"
+	reasonContextDeadline      = "context_deadline"
 )
 
 func rpcError(err error) error {
@@ -72,6 +73,8 @@ func fsmetaErrorMetadata(err error) map[string]string {
 		reason = reasonMountNotRegistered
 	case errors.Is(err, fsmeta.ErrMountRetired):
 		reason = reasonMountRetired
+	case errors.Is(err, fsmeta.ErrCrossAuthorityRename):
+		reason = reasonCrossAuthorityRename
 	case errors.Is(err, fsmeta.ErrExists):
 		reason = reasonNamespaceExists
 	case errors.Is(err, fsmeta.ErrNotFound):

@@ -21,7 +21,7 @@ type MixedClient interface {
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
-	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
+	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	Link(ctx context.Context, req fsmeta.LinkRequest) error
 	Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 	OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error)
@@ -122,7 +122,6 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
 	starts := newWatchStarts()
-	renameGate := make(chan struct{}, 1)
 	watchDone := make(chan error, 1)
 	go collectWatchEvents(watchCtx, stream, starts, cfg.Groups*cfg.EntriesPerGroup, rec, watchDone)
 
@@ -137,7 +136,7 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 				if idx >= len(tasks) {
 					return
 				}
-				runMixedTask(ctx, native, cfg, dirs, datasets, tasks[idx], starts, renameGate, rec)
+				runMixedTask(ctx, native, cfg, dirs, datasets, tasks[idx], starts, rec)
 			}
 		}()
 	}
@@ -251,7 +250,7 @@ func createNamespaceGroupDirectories(ctx context.Context, cli MixedClient, cfg M
 	return nil
 }
 
-func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, datasets map[mixedTask]fsmeta.CreateResult, task mixedTask, starts *watchStarts, renameGate chan struct{}, rec *recorder) {
+func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, datasets map[mixedTask]fsmeta.CreateResult, task mixedTask, starts *watchStarts, rec *recorder) {
 	stageName := fmt.Sprintf("group-%02d-run-%04d.stage", task.group, task.run)
 	finalName := fmt.Sprintf("group-%02d-run-%04d", task.group, task.run)
 
@@ -278,15 +277,13 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 		return
 	}
 	rec.recordCall("rename_run_publish", func() error {
-		return runSerializedRename(ctx, renameGate, func() error {
-			starts.put(key, time.Now())
-			return cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
-				Mount:      cfg.Mount,
-				FromParent: dirs.scratch,
-				FromName:   stageName,
-				ToParent:   dirs.runs,
-				ToName:     finalName,
-			})
+		starts.put(key, time.Now())
+		return cli.Rename(ctx, fsmeta.RenameRequest{
+			Mount:      cfg.Mount,
+			FromParent: dirs.scratch,
+			FromName:   stageName,
+			ToParent:   dirs.runs,
+			ToName:     finalName,
 		})
 	})
 
@@ -298,7 +295,7 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 	if artifact.Inode != 0 {
 		runWriterSessionLifecycle(ctx, cli, cfg, artifact, task, rec)
 	}
-	runCheckpointPublish(ctx, cli, cfg, dirs, task, renameGate, rec)
+	runCheckpointPublish(ctx, cli, cfg, dirs, task, rec)
 	dataset, ok := datasets[task]
 	rec.recordCall("link_dataset", func() error {
 		if !ok {
@@ -373,7 +370,7 @@ func createRunArtifacts(ctx context.Context, cli MixedClient, cfg MixedConfig, r
 	return state
 }
 
-func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, task mixedTask, renameGate chan struct{}, rec *recorder) {
+func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, task mixedTask, rec *recorder) {
 	stageName := fmt.Sprintf("group-%02d-run-%04d-checkpoint.tmp", task.group, task.run)
 	finalName := fmt.Sprintf("group-%02d-run-%04d-checkpoint", task.group, task.run)
 	var checkpoint fsmeta.DentryRecord
@@ -409,34 +406,18 @@ func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig,
 		})
 	}
 	rec.recordCall("publish_checkpoint", func() error {
-		return runSerializedRename(ctx, renameGate, func() error {
-			return cli.RenameSubtree(ctx, fsmeta.RenameSubtreeRequest{
-				Mount:      cfg.Mount,
-				FromParent: dirs.scratch,
-				FromName:   stageName,
-				ToParent:   dirs.checkpoints,
-				ToName:     finalName,
-			})
+		return cli.Rename(ctx, fsmeta.RenameRequest{
+			Mount:      cfg.Mount,
+			FromParent: dirs.scratch,
+			FromName:   stageName,
+			ToParent:   dirs.checkpoints,
+			ToName:     finalName,
 		})
 	})
 	rec.recordCall("lookup_checkpoint", func() error {
 		_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: dirs.checkpoints, Name: finalName})
 		return err
 	})
-}
-
-func runSerializedRename(ctx context.Context, gate chan struct{}, rename func() error) error {
-	// RenameSubtree carries a rooted subtree-authority handoff. Rooted truth
-	// admits one handoff per authority at a time, so the mixed benchmark keeps
-	// this control-plane phase serial while leaving the data-plane operations
-	// concurrent.
-	select {
-	case gate <- struct{}{}:
-		defer func() { <-gate }()
-		return rename()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedConfig, entry fsmeta.DentryRecord, task mixedTask, rec *recorder) {

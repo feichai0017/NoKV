@@ -105,6 +105,10 @@ func (unavailableCreateExecutor) SnapshotSubtree(context.Context, fsmeta.Snapsho
 	return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
 }
 
+func (unavailableCreateExecutor) Rename(context.Context, fsmeta.RenameRequest) error {
+	return fsmeta.ErrInvalidRequest
+}
+
 func (unavailableCreateExecutor) RenameSubtree(context.Context, fsmeta.RenameSubtreeRequest) error {
 	return fsmeta.ErrInvalidRequest
 }
