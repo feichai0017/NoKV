@@ -1891,7 +1891,7 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	v, err := lsm.Get(e.Key)
 	utils.Panic(err)
 	utils.CondPanic(!bytes.Equal(e.Value, v.Value), fmt.Errorf("lsm.Get(e.Key) value not equal !!!"))
-	// Verified bounded range-scans in TestLSMBoundedRangeIteration (lsm_range_test.go).
+	// Verified bounded range-scans in TestLSMBoundedRangeMultiLevel (lsm_range_test.go).
 }
 
 // buildLSM is the test harness helper.

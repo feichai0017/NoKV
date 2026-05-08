@@ -24,7 +24,6 @@ import (
 func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
-	lsm.StartCompacter()
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	maxLevel := lsm.option.MaxLevelNum - 1
