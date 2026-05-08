@@ -43,6 +43,7 @@ type MixedConfig struct {
 	ArtifactsPerRun int
 	PageLimit       uint32
 	SessionTTL      time.Duration
+	StaleSessionTTL time.Duration
 }
 
 type mixedDirs struct {
@@ -422,15 +423,27 @@ func runCheckpointPublish(ctx context.Context, cli MixedClient, cfg MixedConfig,
 }
 
 func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedConfig, entry fsmeta.DentryRecord, task mixedTask, rec *recorder) {
-	session := fsmeta.SessionID(fmt.Sprintf("group-%s-%02d-%04d", cfg.RunID, task.group, task.run))
-	expires := time.Now().Add(cfg.SessionTTL).UnixNano()
+	sessionPrefix := fsmeta.SessionID(fmt.Sprintf("group-%s-%02d-%04d", cfg.RunID, task.group, task.run))
+	var session fsmeta.SessionID
+	openAttempt := 0
 	if err := recordCall(rec, "open_write_session", func() error {
+		openAttempt++
+		candidate := sessionPrefix
+		if openAttempt > 1 {
+			// OpenWriteSession is a lease acquisition, not an idempotent create.
+			// If an earlier attempt left an ambiguous primary lock, a real client
+			// can abandon that lease id and request a fresh one.
+			candidate = fsmeta.SessionID(fmt.Sprintf("%s-retry-%02d", sessionPrefix, openAttempt))
+		}
 		_, err := cli.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
 			Mount:         cfg.Mount,
 			Inode:         entry.Inode,
-			Session:       session,
-			ExpiresUnixNs: expires,
+			Session:       candidate,
+			ExpiresUnixNs: time.Now().Add(cfg.SessionTTL).UnixNano(),
 		})
+		if err == nil {
+			session = candidate
+		}
 		return err
 	}); err != nil {
 		return
@@ -497,11 +510,11 @@ func runStaleSessionCleanup(ctx context.Context, cli MixedClient, cfg MixedConfi
 			Mount:         cfg.Mount,
 			Inode:         stale.Inode.Inode,
 			Session:       session,
-			ExpiresUnixNs: time.Now().Add(cfg.SessionTTL).UnixNano(),
+			ExpiresUnixNs: time.Now().Add(cfg.StaleSessionTTL).UnixNano(),
 		})
 		return err
 	})
-	wait := cfg.SessionTTL + 10*time.Millisecond
+	wait := cfg.StaleSessionTTL + 10*time.Millisecond
 	select {
 	case <-time.After(wait):
 	case <-ctx.Done():
@@ -544,6 +557,9 @@ func normalizeMixedConfig(cfg MixedConfig) MixedConfig {
 	}
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = 2 * time.Second
+	}
+	if cfg.StaleSessionTTL <= 0 {
+		cfg.StaleSessionTTL = cfg.SessionTTL
 	}
 	return cfg
 }

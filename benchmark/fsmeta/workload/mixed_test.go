@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 )
 
 type fakeMixedClient struct {
@@ -292,6 +294,27 @@ func (c *fakeMixedClient) ExpireWriteSessions(_ context.Context, req fsmeta.Expi
 	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
 }
 
+type retryOpenMixedClient struct {
+	*fakeMixedClient
+	attempts      int
+	firstSession  fsmeta.SessionID
+	secondSession fsmeta.SessionID
+	firstExpires  int64
+	secondExpires int64
+}
+
+func (c *retryOpenMixedClient) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	c.attempts++
+	if c.attempts == 1 {
+		c.firstSession = req.Session
+		c.firstExpires = req.ExpiresUnixNs
+		return fsmeta.SessionRecord{}, nokverrors.RPCStatusError(nokverrors.KindLockConflict, codes.Aborted, "live lock", nil)
+	}
+	c.secondSession = req.Session
+	c.secondExpires = req.ExpiresUnixNs
+	return c.fakeMixedClient.OpenWriteSession(ctx, req)
+}
+
 func (c *fakeMixedClient) emitDentryEventLocked(mount fsmeta.MountID, entry fsmeta.DentryRecord) {
 	if c.stream == nil {
 		return
@@ -319,7 +342,8 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 		EntriesPerGroup: 2,
 		ArtifactsPerRun: 5,
 		PageLimit:       8,
-		SessionTTL:      2 * time.Millisecond,
+		SessionTTL:      time.Hour,
+		StaleSessionTTL: 2 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	require.Equal(t, Mixed, result.Name)
@@ -377,6 +401,30 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 	for version := range versions {
 		require.Contains(t, seen, version)
 	}
+}
+
+func TestWriterSessionOpenRefreshesExpiryAcrossRetry(t *testing.T) {
+	base := newFakeMixedClient()
+	created, err := base.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 1,
+		Name:   "state.bin",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	})
+	require.NoError(t, err)
+	cli := &retryOpenMixedClient{fakeMixedClient: base}
+	rec := newRecorder()
+
+	runWriterSessionLifecycle(context.Background(), cli, MixedConfig{
+		Mount:      "vol",
+		RunID:      "retry-expiry",
+		SessionTTL: time.Second,
+	}, created.Dentry, mixedTask{group: 1, run: 2}, rec)
+
+	require.Equal(t, 2, cli.attempts)
+	require.NotEqual(t, cli.firstSession, cli.secondSession)
+	require.GreaterOrEqual(t, cli.secondExpires, cli.firstExpires)
+	require.False(t, hasRecordedErrors(rec.snapshot()))
 }
 
 func TestRunMixedRequiresNativeClient(t *testing.T) {
