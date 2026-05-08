@@ -200,7 +200,7 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
-		active := s.snapshot.ActiveGrant
+		active, _ := coordinatorRootActiveGrantFor(s.snapshot, cmd.RequestedDuties)
 		requestedGrantID := strings.TrimSpace(cmd.GrantID)
 		if requestedGrantID != "" &&
 			active.Present() &&
@@ -236,29 +236,32 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 			Duties: append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
 		}
 		s.applyEventLocked(rootevent.GrantIssued(grant))
-		cert, err := coordinatorRootGrantCertificate(s.snapshot.ActiveGrant)
+		issued, _ := s.snapshot.ActiveGrantByID(grant.GrantID)
+		cert, err := coordinatorRootGrantCertificate(issued)
 		return s.protocolStateLocked(), cert, err
 	case rootproto.GrantActSeal:
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+		active, ok := s.snapshot.ActiveGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok || active.HolderID != holderID {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
 		retirement := rootproto.GrantRetirement{
-			GrantID:  s.snapshot.ActiveGrant.GrantID,
-			HolderID: s.snapshot.ActiveGrant.HolderID,
-			Era:      s.snapshot.ActiveGrant.Era,
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
 			Mode:     rootproto.GrantRetirementSealedExact,
 			Bounds:   coordinatorDutyGrantsFromUsages(cmd.ExactUsages),
 		}
 		if len(retirement.Bounds) == 0 {
-			retirement.Bounds = append([]rootproto.DutyGrant(nil), s.snapshot.ActiveGrant.Duties...)
+			retirement.Bounds = append([]rootproto.DutyGrant(nil), active.Duties...)
 		}
 		s.applyEventLocked(rootevent.GrantSealed(retirement))
 		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+		active, ok := coordinatorRootActiveGrantForHolder(s.snapshot, holderID)
+		if !ok {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		successor := s.snapshot.ActiveGrant.GrantID
+		successor := active.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			s.applyEventLocked(rootevent.GrantInherited(rootproto.GrantInheritance{
 				PredecessorGrantID: predecessor,
@@ -287,11 +290,31 @@ func (s *coordinatorRootStorage) applyEventLocked(event rootevent.Event) {
 
 func (s *coordinatorRootStorage) protocolStateLocked() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
-		ActiveGrant:       s.snapshot.ActiveGrant,
+		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), s.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
 		RetiredEraFloor:   s.snapshot.RetiredEraFloor,
 	}
+}
+
+func coordinatorRootActiveGrantFor(snapshot rootview.Snapshot, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		for _, duty := range duties {
+			if grant.CoversDutyKey(duty.Key()) {
+				return grant, true
+			}
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func coordinatorRootActiveGrantForHolder(snapshot rootview.Snapshot, holderID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == holderID {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
 }
 
 func coordinatorRootGrantCertificate(grant rootproto.AuthorityGrant) (rootproto.GrantCertificate, error) {

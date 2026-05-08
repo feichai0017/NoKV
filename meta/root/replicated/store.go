@@ -341,13 +341,17 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 	if !validDutyGrants(cmd.RequestedDuties) || !validAuthorityUsages(cmd.ExactUsages) {
 		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrDuty
 	}
+	requestedKeys := dutyKeysFromGrants(cmd.RequestedDuties)
 	requestedGrantID := strings.TrimSpace(cmd.GrantID)
 	if requestedGrantID != "" &&
-		s.state.ActiveGrant.Present() &&
-		s.state.ActiveGrant.GrantID == requestedGrantID &&
-		s.state.ActiveGrant.HolderID == holderID &&
-		dutyBoundsCovered(s.state.ActiveGrant.Duties, cmd.RequestedDuties) {
-		cert, err := signGrantCertificate(s.state.ActiveGrant)
+		func() bool {
+			active, ok := activeGrantByID(s.state.ActiveGrants, requestedGrantID)
+			return ok &&
+				active.HolderID == holderID &&
+				dutyBoundsCovered(active.Duties, cmd.RequestedDuties)
+		}() {
+		active, _ := activeGrantByID(s.state.ActiveGrants, requestedGrantID)
+		cert, err := signGrantCertificate(active)
 		if err != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 		}
@@ -359,13 +363,20 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 		if strings.TrimSpace(retirement.InheritedByGrantID) != "" {
 			continue
 		}
+		if !dutyBoundsOverlap(retirement.Bounds, requestedKeys) {
+			continue
+		}
 		if !dutyBoundsCovered(cmd.RequestedDuties, retirement.Bounds) {
 			return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInheritance
 		}
 		predecessors = append(predecessors, retirement)
 	}
-	active := s.state.ActiveGrant
-	if active.Present() {
+	var active rootproto.AuthorityGrant
+	for _, candidate := range s.state.ActiveGrants {
+		if !grantOverlapsDutyKeys(candidate, requestedKeys) {
+			continue
+		}
+		active = candidate
 		if active.ActiveAt(cmd.NowUnixNano) && active.HolderID != holderID {
 			return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
@@ -394,7 +405,7 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 	}
 	era := nextGrantEra(s.state)
 	grantID := requestedGrantID
-	if grantID == "" || grantID == active.GrantID || retiredGrantIDExists(s.state.RetiredGrants, grantID) {
+	if grantID == "" || activeGrantIDExists(s.state.ActiveGrants, grantID) || retiredGrantIDExists(s.state.RetiredGrants, grantID) {
 		grantID = fmt.Sprintf("%s/%d", holderID, era)
 	}
 	grant := rootproto.AuthorityGrant{
@@ -410,11 +421,20 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 	if err != nil {
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 	}
-	cert, err := signGrantCertificate(commit.State.ActiveGrant)
+	committed, ok := commit.State.ActiveGrantByID(grantID)
+	if !ok {
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrFinality
+	}
+	cert, err := signGrantCertificate(committed)
 	if err != nil {
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
 	}
 	return commit.State.Eunomia(), cert, nil
+}
+
+func activeGrantIDExists(grants []rootproto.AuthorityGrant, grantID string) bool {
+	_, ok := activeGrantByID(grants, grantID)
+	return ok
 }
 
 func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {
@@ -427,14 +447,11 @@ func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID strin
 }
 
 func (s *Store) sealGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
-	active := s.state.ActiveGrant
-	if !active.Present() {
+	active, ok := activeGrantByID(s.state.ActiveGrants, strings.TrimSpace(cmd.GrantID))
+	if !ok {
 		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
 	if strings.TrimSpace(cmd.HolderID) != active.HolderID {
-		return s.state.Eunomia(), rootstate.ErrPrimacy
-	}
-	if cmd.GrantID != "" && cmd.GrantID != active.GrantID {
 		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
 	if !validAuthorityUsages(cmd.ExactUsages) {
@@ -458,12 +475,9 @@ func (s *Store) sealGrantLocked(ctx context.Context, cmd rootproto.GrantCommand)
 }
 
 func (s *Store) retireExpiredGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
-	active := s.state.ActiveGrant
-	if !active.Present() {
+	active, ok := activeGrantByID(s.state.ActiveGrants, strings.TrimSpace(cmd.GrantID))
+	if !ok {
 		return s.state.Eunomia(), nil
-	}
-	if cmd.GrantID != "" && cmd.GrantID != active.GrantID {
-		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
 	if active.ExpiresUnixNano > cmd.NowUnixNano {
 		return s.state.Eunomia(), rootstate.ErrPrimacy
@@ -482,13 +496,9 @@ func (s *Store) retireExpiredGrantLocked(ctx context.Context, cmd rootproto.Gran
 }
 
 func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, error) {
-	if !s.state.ActiveGrant.Present() {
+	if len(s.state.ActiveGrants) == 0 {
 		return s.state.Eunomia(), rootstate.ErrPrimacy
 	}
-	if strings.TrimSpace(cmd.HolderID) != s.state.ActiveGrant.HolderID {
-		return s.state.Eunomia(), rootstate.ErrPrimacy
-	}
-	successor := s.state.ActiveGrant.GrantID
 	events := make([]rootevent.Event, 0, len(cmd.PredecessorGrantIDs))
 	seen := make(map[string]struct{}, len(cmd.PredecessorGrantIDs))
 	for _, predecessor := range cmd.PredecessorGrantIDs {
@@ -504,18 +514,22 @@ func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantComma
 		if !ok {
 			return s.state.Eunomia(), rootstate.ErrInheritance
 		}
+		successor, ok := successorGrantForRetirement(s.state.ActiveGrants, strings.TrimSpace(cmd.HolderID), retirement)
+		if !ok {
+			return s.state.Eunomia(), rootstate.ErrPrimacy
+		}
 		if retirement.InheritedByGrantID != "" {
-			if retirement.InheritedByGrantID == successor {
+			if retirement.InheritedByGrantID == successor.GrantID {
 				continue
 			}
 			return s.state.Eunomia(), rootstate.ErrFinality
 		}
-		if !predecessorRetirementCovered(s.state.ActiveGrant, retirement) {
+		if !predecessorRetirementCovered(successor, retirement) {
 			return s.state.Eunomia(), rootstate.ErrInheritance
 		}
 		events = append(events, rootevent.GrantInherited(rootproto.GrantInheritance{
 			PredecessorGrantID: predecessor,
-			SuccessorGrantID:   successor,
+			SuccessorGrantID:   successor.GrantID,
 		}))
 	}
 	if len(events) == 0 {
@@ -529,7 +543,12 @@ func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantComma
 }
 
 func nextGrantEra(state rootstate.State) uint64 {
-	era := state.ActiveGrant.Era
+	var era uint64
+	for _, grant := range state.ActiveGrants {
+		if grant.Era > era {
+			era = grant.Era
+		}
+	}
 	for _, retirement := range state.RetiredGrants {
 		if retirement.Era > era {
 			era = retirement.Era
@@ -566,6 +585,50 @@ func findDutyGrant(grants []rootproto.DutyGrant, duty rootproto.DutyID, scope ro
 		}
 	}
 	return rootproto.DutyGrant{}, false
+}
+
+func dutyKeysFromGrants(grants []rootproto.DutyGrant) []rootproto.DutyKey {
+	out := make([]rootproto.DutyKey, 0, len(grants))
+	for _, grant := range grants {
+		out = append(out, grant.Key())
+	}
+	return out
+}
+
+func dutyBoundsOverlap(grants []rootproto.DutyGrant, keys []rootproto.DutyKey) bool {
+	for _, grant := range grants {
+		for _, key := range keys {
+			if rootproto.DutyKeyEqual(grant.Key(), key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func grantOverlapsDutyKeys(grant rootproto.AuthorityGrant, keys []rootproto.DutyKey) bool {
+	return dutyBoundsOverlap(grant.Duties, keys)
+}
+
+func activeGrantByID(grants []rootproto.AuthorityGrant, grantID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range grants {
+		if grant.GrantID == grantID {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func successorGrantForRetirement(grants []rootproto.AuthorityGrant, holderID string, retirement rootproto.GrantRetirement) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range grants {
+		if strings.TrimSpace(grant.HolderID) != holderID {
+			continue
+		}
+		if dutyBoundsCovered(grant.Duties, retirement.Bounds) {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
 }
 
 func validDutyGrants(grants []rootproto.DutyGrant) bool {

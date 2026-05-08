@@ -421,7 +421,7 @@ func TestServiceApplyGrant(t *testing.T) {
 		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
 	}
 	grantState := rootstate.EunomiaState{
-		ActiveGrant: grant,
+		ActiveGrants: []rootproto.AuthorityGrant{grant},
 	}
 	cert := rootproto.GrantCertificate{Grant: grant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("sig")}
 	cmd := rootproto.GrantCommand{

@@ -55,7 +55,7 @@ type State struct {
     LastCommitted      Cursor         // highest committed (term, index)
     IDFence            uint64         // globally fenced ID allocator floor
     TSOFence           uint64         // globally fenced TSO allocator floor
-    ActiveGrant        AuthorityGrant
+    ActiveGrants       []AuthorityGrant // mutually exclusive by {DutyID, Scope}
     RetiredGrants      []GrantRetirement
     GrantInheritances  []GrantInheritance
 }
@@ -137,7 +137,7 @@ These are **validated, typed writes** that internally:
 2. Emit the appropriate `KindGrantIssued` / `KindGrantSealed` /
    `KindGrantRetired` / `KindGrantInherited` event
 3. Append through the normal log path
-4. Return the new `EunomiaState = { ActiveGrant, RetiredGrants,
+4. Return the new `EunomiaState = { ActiveGrants, RetiredGrants,
    GrantInheritances, RetiredEraFloor }` and, for issue, a root-signed
    deterministic `GrantCertificate`
 

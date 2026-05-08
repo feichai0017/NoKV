@@ -3,7 +3,7 @@ package state
 import rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 
 type EunomiaState struct {
-	ActiveGrant       rootproto.AuthorityGrant
+	ActiveGrants      []rootproto.AuthorityGrant
 	RetiredGrants     []rootproto.GrantRetirement
 	GrantInheritances []rootproto.GrantInheritance
 	RetiredEraFloor   uint64
@@ -11,7 +11,7 @@ type EunomiaState struct {
 
 func (s State) Eunomia() EunomiaState {
 	return EunomiaState{
-		ActiveGrant:       s.ActiveGrant,
+		ActiveGrants:      cloneAuthorityGrants(s.ActiveGrants),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
 		RetiredEraFloor:   s.RetiredEraFloor,

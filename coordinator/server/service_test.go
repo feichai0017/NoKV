@@ -98,7 +98,7 @@ func TestTranslateGrantContextErrors(t *testing.T) {
 
 func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
-		ActiveGrant:       f.snapshot.ActiveGrant,
+		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), f.snapshot.GrantInheritances...),
 		RetiredEraFloor:   f.snapshot.RetiredEraFloor,
@@ -132,6 +132,46 @@ func testDutyGrantsCover(grants, usages []rootproto.DutyGrant) bool {
 	return true
 }
 
+func testActiveGrantForDuties(snapshot rootview.Snapshot, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		for _, duty := range duties {
+			if grant.CoversDutyKey(duty.Key()) {
+				return grant, true
+			}
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func testActiveGrantForHolder(snapshot rootview.Snapshot, holderID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == holderID {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func upsertTestGrant(grants []rootproto.AuthorityGrant, grant rootproto.AuthorityGrant) []rootproto.AuthorityGrant {
+	for i := range grants {
+		if grants[i].GrantID == grant.GrantID {
+			grants[i] = grant
+			return grants
+		}
+	}
+	return append(grants, grant)
+}
+
+func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootproto.AuthorityGrant {
+	for i := 0; i < len(grants); i++ {
+		if grants[i].GrantID == grantID {
+			grants = append(grants[:i], grants[i+1:]...)
+			i--
+		}
+	}
+	return grants
+}
+
 func (f *fakeStorage) Load() (rootview.Snapshot, error) {
 	f.loadCalls++
 	if f.loadErr != nil {
@@ -154,7 +194,7 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			ClusterEpoch:  f.snapshot.ClusterEpoch,
 			IDFence:       f.snapshot.Allocator.IDCurrent,
 			TSOFence:      f.snapshot.Allocator.TSCurrent,
-			ActiveGrant:   f.snapshot.ActiveGrant,
+			ActiveGrants:  append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),
 			RetiredGrants: append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
@@ -179,30 +219,31 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 		if f.campaignErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, f.campaignErr
 		}
-		if f.snapshot.ActiveGrant.Present() &&
-			f.snapshot.ActiveGrant.GrantID == strings.TrimSpace(cmd.GrantID) &&
-			f.snapshot.ActiveGrant.HolderID == holderID &&
-			testDutyGrantsCover(f.snapshot.ActiveGrant.Duties, cmd.RequestedDuties) {
-			return f.protocolState(), testGrantCertificate(f.snapshot.ActiveGrant), nil
+		active, _ := testActiveGrantForDuties(f.snapshot, cmd.RequestedDuties)
+		if active.Present() &&
+			active.GrantID == strings.TrimSpace(cmd.GrantID) &&
+			active.HolderID == holderID &&
+			testDutyGrantsCover(active.Duties, cmd.RequestedDuties) {
+			return f.protocolState(), testGrantCertificate(active), nil
 		}
 		f.campaignCalls++
-		if f.snapshot.ActiveGrant.Present() &&
-			f.snapshot.ActiveGrant.HolderID != holderID &&
-			f.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
+		if active.Present() &&
+			active.HolderID != holderID &&
+			active.ActiveAt(cmd.NowUnixNano) {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
 		predecessors := []rootproto.GrantRetirement(nil)
-		if f.snapshot.ActiveGrant.Present() {
+		if active.Present() {
 			mode := rootproto.GrantRetirementSealedExact
-			if !f.snapshot.ActiveGrant.ActiveAt(cmd.NowUnixNano) {
+			if !active.ActiveAt(cmd.NowUnixNano) {
 				mode = rootproto.GrantRetirementExpiredBound
 			}
 			predecessors = append(predecessors, rootproto.GrantRetirement{
-				GrantID:  f.snapshot.ActiveGrant.GrantID,
-				HolderID: f.snapshot.ActiveGrant.HolderID,
-				Era:      f.snapshot.ActiveGrant.Era,
+				GrantID:  active.GrantID,
+				HolderID: active.HolderID,
+				Era:      active.Era,
 				Mode:     mode,
-				Bounds:   append([]rootproto.DutyGrant(nil), f.snapshot.ActiveGrant.Duties...),
+				Bounds:   append([]rootproto.DutyGrant(nil), active.Duties...),
 			})
 		}
 		for _, retired := range f.snapshot.RetiredGrants {
@@ -210,7 +251,7 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 				predecessors = append(predecessors, retired)
 			}
 		}
-		era := f.snapshot.ActiveGrant.Era + 1
+		era := active.Era + 1
 		for _, retired := range f.snapshot.RetiredGrants {
 			if retired.Era >= era {
 				era = retired.Era + 1
@@ -220,7 +261,7 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 		if strings.TrimSpace(grantID) == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, era)
 		}
-		f.snapshot.ActiveGrant = rootproto.AuthorityGrant{
+		grant := rootproto.AuthorityGrant{
 			GrantID:                grantID,
 			HolderID:               holderID,
 			Era:                    era,
@@ -229,6 +270,10 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 			Duties:                 append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
 			PredecessorRetirements: append([]rootproto.GrantRetirement(nil), predecessors...),
 		}
+		for _, predecessor := range predecessors {
+			f.snapshot.ActiveGrants = removeTestGrant(f.snapshot.ActiveGrants, predecessor.GrantID)
+		}
+		f.snapshot.ActiveGrants = upsertTestGrant(f.snapshot.ActiveGrants, grant)
 		f.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), predecessors...)
 		for _, duty := range cmd.RequestedDuties {
 			if duty.Bound.Kind != rootproto.DutyBoundMonotone {
@@ -246,56 +291,59 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 			}
 		}
 		f.advanceRootToken()
-		return f.protocolState(), testGrantCertificate(f.snapshot.ActiveGrant), nil
+		return f.protocolState(), testGrantCertificate(grant), nil
 	case rootproto.GrantActSeal:
 		f.sealCalls++
 		if f.sealErr != nil {
 			return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, f.sealErr
 		}
-		if !f.snapshot.ActiveGrant.Present() {
+		active, ok := f.snapshot.ActiveGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 		}
-		if holder := strings.TrimSpace(cmd.HolderID); holder != "" && holder != f.snapshot.ActiveGrant.HolderID {
+		if holder := strings.TrimSpace(cmd.HolderID); holder != "" && holder != active.HolderID {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
 		retirement := rootproto.GrantRetirement{
-			GrantID:  f.snapshot.ActiveGrant.GrantID,
-			HolderID: f.snapshot.ActiveGrant.HolderID,
-			Era:      f.snapshot.ActiveGrant.Era,
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
 			Mode:     rootproto.GrantRetirementSealedExact,
 			Bounds:   dutyGrantsFromAuthorityUsagesForTest(cmd.ExactUsages),
 		}
 		if len(retirement.Bounds) == 0 {
-			retirement.Bounds = append([]rootproto.DutyGrant(nil), f.snapshot.ActiveGrant.Duties...)
+			retirement.Bounds = append([]rootproto.DutyGrant(nil), active.Duties...)
 		}
 		f.snapshot.RetiredGrants = append(f.snapshot.RetiredGrants, retirement)
-		f.snapshot.ActiveGrant = rootproto.AuthorityGrant{}
+		f.snapshot.ActiveGrants = removeTestGrant(f.snapshot.ActiveGrants, active.GrantID)
 		f.advanceRootToken()
 		return f.protocolState(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActRetireExpired:
-		if !f.snapshot.ActiveGrant.Present() {
+		active, ok := f.snapshot.ActiveGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 		}
-		if cmd.NowUnixNano < f.snapshot.ActiveGrant.ExpiresUnixNano {
+		if cmd.NowUnixNano < active.ExpiresUnixNano {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 		}
 		retirement := rootproto.GrantRetirement{
-			GrantID:  f.snapshot.ActiveGrant.GrantID,
-			HolderID: f.snapshot.ActiveGrant.HolderID,
-			Era:      f.snapshot.ActiveGrant.Era,
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
 			Mode:     rootproto.GrantRetirementExpiredBound,
-			Bounds:   append([]rootproto.DutyGrant(nil), f.snapshot.ActiveGrant.Duties...),
+			Bounds:   append([]rootproto.DutyGrant(nil), active.Duties...),
 		}
 		f.snapshot.RetiredGrants = append(f.snapshot.RetiredGrants, retirement)
-		f.snapshot.ActiveGrant = rootproto.AuthorityGrant{}
+		f.snapshot.ActiveGrants = removeTestGrant(f.snapshot.ActiveGrants, active.GrantID)
 		f.advanceRootToken()
 		return f.protocolState(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
 		f.reattachCalls++
-		if !f.snapshot.ActiveGrant.Present() || f.snapshot.ActiveGrant.HolderID != holderID {
+		active, ok := testActiveGrantForHolder(f.snapshot, holderID)
+		if !ok {
 			return f.protocolState(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		successor := f.snapshot.ActiveGrant.GrantID
+		successor := active.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			for i := range f.snapshot.RetiredGrants {
 				if f.snapshot.RetiredGrants[i].GrantID == predecessor {
@@ -631,7 +679,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				IDCurrent: 55,
 				TSCurrent: 88,
 			},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/3",
 				HolderID:        "c1",
 				ExpiresUnixNano: now.Add(5 * time.Second).UnixNano(),
@@ -643,7 +691,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 88),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{Term: 2, Index: 9, Revision: 4}, 5, 0),
 				},
-			},
+			}},
 			RetiredGrants: []rootproto.GrantRetirement{
 				{
 					GrantID:   "c0/2",
@@ -796,7 +844,7 @@ func TestServiceGetRegionByKeyRenewsSelfHeldExpiringGrant(t *testing.T) {
 		snapshot: rootview.Snapshot{
 			RootToken:   token,
 			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/1",
 				HolderID:        "c1",
 				ExpiresUnixNano: 100,
@@ -806,7 +854,7 @@ func TestServiceGetRegionByKeyRenewsSelfHeldExpiringGrant(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 10),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 5, 0),
 				},
-			},
+			}},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -819,10 +867,12 @@ func TestServiceGetRegionByKeyRenewsSelfHeldExpiringGrant(t *testing.T) {
 	require.False(t, resp.GetNotFound())
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
 	require.Equal(t, 1, storage.campaignCalls)
-	require.Equal(t, "c1", storage.snapshot.ActiveGrant.HolderID)
-	require.Equal(t, uint64(2), storage.snapshot.ActiveGrant.Era)
+	renewedGrant, ok := storage.snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "c1", renewedGrant.HolderID)
+	require.Equal(t, uint64(2), renewedGrant.Era)
 	require.Equal(t, uint64(2), resp.GetEra())
-	require.True(t, storage.snapshot.ActiveGrant.ActiveAt(200))
+	require.True(t, renewedGrant.ActiveAt(200))
 	require.NotNil(t, resp.GetAuthorityEvidence())
 }
 
@@ -839,13 +889,13 @@ func TestServiceGetRegionByKeyRejectsOtherActiveGrant(t *testing.T) {
 		snapshot: rootview.Snapshot{
 			RootToken:   token,
 			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/4",
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Second.Nanoseconds(),
 				Era:             4,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 5, 0)},
-			},
+			}},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -857,7 +907,9 @@ func TestServiceGetRegionByKeyRejectsOtherActiveGrant(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.Equal(t, 0, storage.campaignCalls)
-	require.Equal(t, "c2", storage.snapshot.ActiveGrant.HolderID)
+	otherGrant, ok := storage.snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "c2", otherGrant.HolderID)
 }
 
 func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
@@ -872,7 +924,7 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 		snapshot: rootview.Snapshot{
 			RootToken:   rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 5},
 			Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/4",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Second.Nanoseconds(),
@@ -882,7 +934,7 @@ func TestServiceGetRegionByKeyRequiredRootToken(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 10),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{Term: 1, Index: 3, Revision: 5}, 5, 0),
 				},
-			},
+			}},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
@@ -2112,13 +2164,13 @@ func TestServiceAuthorityEvidenceUsesRootedAllocatorFence(t *testing.T) {
 func TestServiceAuthorityEvidenceRejectsUnrootedAllocatorFrontier(t *testing.T) {
 	store := &fakeStorage{
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "grant-1",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 				Era:             1,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 5)},
-			},
+			}},
 			Allocator: rootview.AllocatorState{IDCurrent: 5},
 		},
 	}
@@ -2126,9 +2178,11 @@ func TestServiceAuthorityEvidenceRejectsUnrootedAllocatorFrontier(t *testing.T) 
 	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	require.NoError(t, svc.RefreshFromStorage())
 
+	grant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
 	admission := dutyAdmission{
-		grant:          store.snapshot.ActiveGrant,
-		certificate:    rootproto.GrantCertificate{Grant: store.snapshot.ActiveGrant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test-signature")},
+		grant:          grant,
+		certificate:    rootproto.GrantCertificate{Grant: grant, SignerKeyID: rootproto.GrantSignerKeyID, Signature: []byte("test-signature")},
 		duty:           rootproto.DutyAllocID,
 		servedUnixNano: time.Now().UnixNano(),
 	}
@@ -2281,8 +2335,10 @@ func TestServiceGrantReusedAcrossAllocatorRequests(t *testing.T) {
 	require.Equal(t, uint64(1), idResp.GetEra())
 	require.Equal(t, uint64(10), idResp.GetConsumedFrontier())
 	require.Equal(t, 1, store.campaignCalls)
-	require.Equal(t, "c1", store.snapshot.ActiveGrant.HolderID)
-	require.Equal(t, uint64(1), store.snapshot.ActiveGrant.Era)
+	allocGrant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "c1", allocGrant.HolderID)
+	require.Equal(t, uint64(1), allocGrant.Era)
 	require.NotNil(t, idResp.GetAuthorityEvidence())
 
 	tsResp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
@@ -2290,8 +2346,57 @@ func TestServiceGrantReusedAcrossAllocatorRequests(t *testing.T) {
 	require.Equal(t, uint64(100), tsResp.GetTimestamp())
 	require.Equal(t, uint64(1), tsResp.GetEra())
 	require.Equal(t, uint64(100), tsResp.GetConsumedFrontier())
-	require.Equal(t, 1, store.campaignCalls)
+	require.Equal(t, 2, store.campaignCalls)
 	require.NotNil(t, tsResp.GetAuthorityEvidence())
+}
+
+func TestServicePreferredDutyHolderSpreadsDefaultDuties(t *testing.T) {
+	candidates := []string{"coord-1", "coord-2", "coord-3"}
+	assignments := map[rootproto.DutyID]string{
+		rootproto.DutyAllocID:      preferredDutyHolder(rootproto.DutyAllocID, candidates),
+		rootproto.DutyTSO:          preferredDutyHolder(rootproto.DutyTSO, candidates),
+		rootproto.DutyRegionLookup: preferredDutyHolder(rootproto.DutyRegionLookup, candidates),
+	}
+	holders := make(map[string]struct{}, len(assignments))
+	for _, holder := range assignments {
+		holders[holder] = struct{}{}
+	}
+	require.Len(t, holders, 3)
+}
+
+func TestServicePerDutyAdmissionIsIsolated(t *testing.T) {
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants: []rootproto.AuthorityGrant{
+				{
+					GrantID:         "c1/alloc_id/1",
+					HolderID:        "c1",
+					Era:             1,
+					ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+					Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
+				},
+				{
+					GrantID:         "c2/tso/2",
+					HolderID:        "c2",
+					Era:             2,
+					ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+					Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200)},
+				},
+			},
+			Allocator: rootview.AllocatorState{IDCurrent: 20, TSCurrent: 200},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrantDuties("c1", nil, []rootproto.DutyID{rootproto.DutyAllocID, rootproto.DutyTSO}, 10*time.Second, 3*time.Second)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.Error(t, err)
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
+	require.Equal(t, 0, store.campaignCalls)
 }
 
 func TestServiceGrantRenewsInsideRenewWindow(t *testing.T) {
@@ -2305,15 +2410,18 @@ func TestServiceGrantRenewsInsideRenewWindow(t *testing.T) {
 	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, 1, store.campaignCalls)
-	firstGrant := store.snapshot.ActiveGrant.GrantID
+	firstGrant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
 
 	now = now.Add(85 * time.Millisecond)
-	_, err = svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	_, err = svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, 2, store.campaignCalls)
-	require.Equal(t, uint64(2), store.snapshot.ActiveGrant.Era)
-	require.NotEqual(t, firstGrant, store.snapshot.ActiveGrant.GrantID)
-	require.NotEmpty(t, store.snapshot.ActiveGrant.PredecessorRetirements)
+	renewedGrant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, uint64(2), renewedGrant.Era)
+	require.NotEqual(t, firstGrant.GrantID, renewedGrant.GrantID)
+	require.NotEmpty(t, renewedGrant.PredecessorRetirements)
 }
 
 func TestServiceGrantLoopSkipsFollower(t *testing.T) {
@@ -2332,13 +2440,13 @@ func TestServiceGrantLoopDoesNotCampaignOverActiveOtherHolder(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/1",
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 				Era:             1,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2393,13 +2501,13 @@ func TestServiceRejectsDrainingAdmissionBeforeGrantRenewal(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/1",
 				HolderID:        "c1",
 				Era:             1,
 				ExpiresUnixNano: now.Add(10 * time.Millisecond).UnixNano(),
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2407,7 +2515,7 @@ func TestServiceRejectsDrainingAdmissionBeforeGrantRenewal(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	require.NoError(t, svc.ReloadFromStorage())
 	svc.authorityMu.Lock()
-	svc.authorityState = authorityDraining
+	svc.setAuthorityDutyLocked(rootproto.DutyAllocID, authorityDutyServing{state: authorityDraining})
 	svc.authorityMu.Unlock()
 
 	_, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyAllocID)
@@ -2425,13 +2533,13 @@ func TestServiceRejectsDrainingMetadataBeforeGrantRenewal(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/1",
 				HolderID:        "c1",
 				Era:             1,
 				ExpiresUnixNano: now.Add(10 * time.Millisecond).UnixNano(),
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 1, 0)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2439,7 +2547,7 @@ func TestServiceRejectsDrainingMetadataBeforeGrantRenewal(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	require.NoError(t, svc.ReloadFromStorage())
 	svc.authorityMu.Lock()
-	svc.authorityState = authorityDraining
+	svc.setAuthorityDutyLocked(rootproto.DutyRegionLookup, authorityDutyServing{state: authorityDraining})
 	svc.authorityMu.Unlock()
 
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
@@ -2466,13 +2574,13 @@ func TestServiceInheritRetiredGrants(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/2",
 				HolderID:        "c2",
 				Era:             2,
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
-			},
+			}},
 			RetiredGrants: []rootproto.GrantRetirement{retired},
 		},
 	}
@@ -2490,7 +2598,7 @@ func TestServiceInheritRetiredGrants(t *testing.T) {
 func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {
 	stale := rootview.Snapshot{
 		RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 10}, Revision: 10},
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "c2/1",
 			HolderID:        "c2",
 			Era:             1,
@@ -2499,14 +2607,14 @@ func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {
 				rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
 				rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100),
 			},
-		},
+		}},
 	}
 	store := &staleGrantReloadStorage{
 		fakeStorage: &fakeStorage{
 			leader: true,
 			snapshot: rootview.Snapshot{
 				RootToken: rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 11}, Revision: 11},
-				ActiveGrant: rootproto.AuthorityGrant{
+				ActiveGrants: []rootproto.AuthorityGrant{{
 					GrantID:         "expired/1",
 					HolderID:        "expired",
 					Era:             1,
@@ -2515,7 +2623,7 @@ func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {
 						rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10),
 						rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100),
 					},
-				},
+				}},
 				Allocator: rootview.AllocatorState{IDCurrent: 10, TSCurrent: 100},
 			},
 		},
@@ -2528,8 +2636,9 @@ func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {
 	resp, err := svc.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), resp.GetTimestamp())
-	require.Equal(t, "c1", svc.currentGrant().HolderID)
-	require.Equal(t, uint64(2), svc.currentGrant().Era)
+	current := svc.currentGrant(rootproto.DutyTSO)
+	require.Equal(t, "c1", current.HolderID)
+	require.Equal(t, uint64(2), current.Era)
 	require.Equal(t, 1, store.campaignCalls)
 }
 
@@ -2560,7 +2669,8 @@ func TestServiceReleaseGrantSealsGrant(t *testing.T) {
 
 	require.NoError(t, svc.ReleaseGrant())
 	require.Equal(t, 1, store.sealCalls)
-	require.Empty(t, store.snapshot.ActiveGrant.GrantID)
+	_, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.False(t, ok)
 	require.Len(t, store.snapshot.RetiredGrants, 1)
 	require.Equal(t, rootproto.GrantRetirementSealedExact, store.snapshot.RetiredGrants[0].Mode)
 }
@@ -2582,36 +2692,39 @@ func TestServiceSealGrant(t *testing.T) {
 	campaignCallsBeforeSeal := store.campaignCalls
 
 	require.NoError(t, svc.SealGrant())
-	require.Equal(t, 1, store.sealCalls)
-	require.Empty(t, store.snapshot.ActiveGrant.GrantID)
-	require.Len(t, store.snapshot.RetiredGrants, 1)
-	retired := store.snapshot.RetiredGrants[0]
-	require.Equal(t, "c1/1", retired.GrantID)
+	require.Equal(t, 2, store.sealCalls)
+	require.Empty(t, store.snapshot.ActiveGrants)
+	require.Len(t, store.snapshot.RetiredGrants, 2)
+	retired := grantRetirementForDuty(t, store.snapshot.RetiredGrants, rootproto.DutyAllocID)
+	require.Equal(t, "c1/alloc_id/1", retired.GrantID)
 	require.Equal(t, "c1", retired.HolderID)
 	require.Equal(t, uint64(1), retired.Era)
 	require.Equal(t, rootproto.GrantRetirementSealedExact, retired.Mode)
 	require.Equal(t, uint64(11), grantMonotoneBoundForTest(retired.Bounds, rootproto.DutyAllocID))
-	require.Equal(t, uint64(102), grantMonotoneBoundForTest(retired.Bounds, rootproto.DutyTSO))
+	tsoRetired := grantRetirementForDuty(t, store.snapshot.RetiredGrants, rootproto.DutyTSO)
+	require.Equal(t, uint64(102), grantMonotoneBoundForTest(tsoRetired.Bounds, rootproto.DutyTSO))
 
 	nextID, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), nextID.GetEra())
 	require.Equal(t, campaignCallsBeforeSeal+1, store.campaignCalls)
-	require.NotEmpty(t, store.snapshot.ActiveGrant.PredecessorRetirements)
-	require.Equal(t, "c1/1", store.snapshot.ActiveGrant.PredecessorRetirements[0].GrantID)
+	nextGrant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.NotEmpty(t, nextGrant.PredecessorRetirements)
+	require.Equal(t, "c1/alloc_id/1", nextGrant.PredecessorRetirements[0].GrantID)
 }
 
-func TestServiceSealGrantRejectsOtherHolder(t *testing.T) {
+func TestServiceSealGrantIgnoresOtherHolder(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/2",
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
 				Era:             2,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2620,27 +2733,24 @@ func TestServiceSealGrantRejectsOtherHolder(t *testing.T) {
 	require.NoError(t, svc.ReloadFromStorage())
 
 	err := svc.SealGrant()
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(err))
-	_, metadata, ok := nokverrors.RPCErrorInfo(err)
-	require.True(t, ok)
-	require.Equal(t, reasonGrantNotHeld, metadata[coordinatorReasonMetadata])
+	require.NoError(t, err)
 	require.Equal(t, 0, store.sealCalls)
-	require.Equal(t, "c2/2", store.snapshot.ActiveGrant.GrantID)
+	otherGrant, ok := store.snapshot.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "c2/2", otherGrant.GrantID)
 }
 
 func TestServiceDutyAdmissionRejectsOtherActiveGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c2/1",
 				HolderID:        "c2",
 				ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 				Era:             1,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2657,11 +2767,11 @@ func TestServiceDutyAdmissionRejectsOtherActiveGrant(t *testing.T) {
 	require.Equal(t, 0, store.campaignCalls)
 }
 
-func TestServiceAllocIDFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
+func TestServiceAllocIDIssuesMissingDutyGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/2",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
@@ -2670,27 +2780,27 @@ func TestServiceAllocIDFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 0, 0),
 				},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	_, hasAllocID := svc.currentGrant().Duty(rootproto.DutyAllocID)
+	_, hasAllocID := svc.currentGrant(rootproto.DutyAllocID).Duty(rootproto.DutyAllocID)
 	require.False(t, hasAllocID)
 
-	_, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), "required_duty=alloc_id")
+	resp, err := svc.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), resp.GetFirstId())
+	require.Equal(t, 1, store.campaignCalls)
 }
 
-func TestServiceGetRegionByKeyFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
+func TestServiceGetRegionByKeyIssuesMissingDutyGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/2",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
@@ -2699,7 +2809,7 @@ func TestServiceGetRegionByKeyFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200),
 				},
-			},
+			}},
 			Descriptors: map[uint64]topology.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
@@ -2709,23 +2819,23 @@ func TestServiceGetRegionByKeyFailsWhenGrantDoesNotCoverDuty(t *testing.T) {
 	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
-	_, hasRegionLookup := svc.currentGrant().Duty(rootproto.DutyRegionLookup)
+	_, hasRegionLookup := svc.currentGrant(rootproto.DutyRegionLookup).Duty(rootproto.DutyRegionLookup)
 	require.False(t, hasRegionLookup)
 
-	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:       []byte("m"),
 		Freshness: coordpb.Freshness_FRESHNESS_BEST_EFFORT,
 	})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), "required_duty=region_lookup")
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, 1, store.campaignCalls)
 }
 
 func TestServiceGetRegionByKeyRenewsWhenDescriptorOutsideGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/2",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(10, 0).UnixNano(),
@@ -2735,7 +2845,7 @@ func TestServiceGetRegionByKeyRenewsWhenDescriptorOutsideGrant(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 6, 0),
 				},
-			},
+			}},
 			Descriptors: map[uint64]topology.Descriptor{
 				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
 			},
@@ -2765,13 +2875,13 @@ func TestServiceStoreHeartbeatSuppressesOperationsWithoutGrant(t *testing.T) {
 				1: {StoreID: 1, State: rootstate.StoreMembershipActive},
 				2: {StoreID: 2, State: rootstate.StoreMembershipActive},
 			},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "other/1",
 				HolderID:        "other",
 				ExpiresUnixNano: 10_000,
 				Era:             1,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 0, 0)},
-			},
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), nil, nil, store)
@@ -2806,6 +2916,19 @@ func grantMonotoneBoundForTest(duties []rootproto.DutyGrant, duty rootproto.Duty
 		}
 	}
 	return 0
+}
+
+func grantRetirementForDuty(t *testing.T, retirements []rootproto.GrantRetirement, duty rootproto.DutyID) rootproto.GrantRetirement {
+	t.Helper()
+	for _, retirement := range retirements {
+		for _, bound := range retirement.Bounds {
+			if bound.DutyID == duty {
+				return retirement
+			}
+		}
+	}
+	t.Fatalf("missing retirement for duty %s", rootproto.DutyName(duty))
+	return rootproto.GrantRetirement{}
 }
 
 func TestServiceRejectsWritesOnFollower(t *testing.T) {

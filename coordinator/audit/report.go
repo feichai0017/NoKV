@@ -52,14 +52,15 @@ type Report struct {
 // report. It treats a crash-before-seal takeover as complete only when the
 // expired_bound retirement has been inherited by a successor grant.
 func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64) Report {
+	active := auditPrimaryGrant(snapshot)
 	report := Report{
 		HolderID:               holderID,
 		NowUnixNano:            nowUnixNano,
 		RootDescriptorRevision: rootstate.MaxDescriptorRevision(snapshot.Descriptors),
 		CatchUpState:           snapshot.CatchUpState.String(),
-		CurrentHolderID:        snapshot.ActiveGrant.HolderID,
-		CurrentEra:             snapshot.ActiveGrant.Era,
-		ActiveGrant:            snapshot.ActiveGrant,
+		CurrentHolderID:        active.HolderID,
+		CurrentEra:             active.Era,
+		ActiveGrant:            active,
 		RetiredGrants:          append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:      append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
 		RetiredEraFloor:        snapshot.RetiredEraFloor,
@@ -86,6 +87,16 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 	}
 	report.AuthorityCompletion = evaluateAuthorityCompletion(report.RetiredGrants)
 	return report
+}
+
+func auditPrimaryGrant(snapshot rootview.Snapshot) rootproto.AuthorityGrant {
+	if grant, ok := snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}); ok {
+		return grant
+	}
+	if len(snapshot.ActiveGrants) > 0 {
+		return snapshot.ActiveGrants[0]
+	}
+	return rootproto.AuthorityGrant{}
 }
 
 func evaluateAuthorityCompletion(retirements []rootproto.GrantRetirement) AuthorityCompletionState {
