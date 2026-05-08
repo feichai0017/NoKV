@@ -309,6 +309,16 @@ func TestTypedClientErrorTranslation(t *testing.T) {
 	err = cli.Rename(context.Background(), fsmeta.RenameRequest{Mount: "vol", FromParent: 1, FromName: "a", ToParent: 2, ToName: "b"})
 	require.ErrorIs(t, err, fsmeta.ErrCrossAuthorityRename)
 
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrInvalidRequest})
+	defer cleanup()
+	err = cli.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{Mount: "vol", FromParent: 1, FromName: "a", ToParent: 1, ToName: "a"})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrInvalidName})
+	defer cleanup()
+	_, err = cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: ""})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidName)
+
 	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrQuotaExceeded})
 	defer cleanup()
 	_, err = cli.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol"})

@@ -10,6 +10,7 @@ import (
 var (
 	errCoordinatorAddrRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: coordinator addr is required")
 	errSessionCleanupLimitExceeded = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: session cleanup limit exceeds maximum")
+	errLockTTLInvalid              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: lock ttl must be non-negative")
 	errMountCacheNotConfigured     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: mount cache is not configured")
 	errRootPublisherNotConfigured  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: root publisher is not configured")
 	errStoreListerRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: store lister is required")

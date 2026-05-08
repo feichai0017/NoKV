@@ -21,6 +21,16 @@ const (
 	reasonNamespaceExists      = "entry_exists"
 	reasonNamespaceNotFound    = "entry_not_found"
 	reasonInvalidFSMetaInput   = "invalid_fsmeta_input"
+	reasonInvalidMountID       = "invalid_mount_id"
+	reasonInvalidInodeID       = "invalid_inode_id"
+	reasonInvalidName          = "invalid_name"
+	reasonInvalidSession       = "invalid_session"
+	reasonInvalidRequest       = "invalid_request"
+	reasonInvalidKey           = "invalid_key"
+	reasonInvalidKeyKind       = "invalid_key_kind"
+	reasonInvalidValue         = "invalid_value"
+	reasonInvalidValueKind     = "invalid_value_kind"
+	reasonInvalidPageSize      = "invalid_page_size"
 	reasonServiceUnavailable   = "service_unavailable"
 	reasonContextCanceled      = "context_canceled"
 	reasonContextDeadline      = "context_deadline"
@@ -79,12 +89,26 @@ func fsmetaErrorMetadata(err error) map[string]string {
 		reason = reasonNamespaceExists
 	case errors.Is(err, fsmeta.ErrNotFound):
 		reason = reasonNamespaceNotFound
-	case errors.Is(err, fsmeta.ErrInvalidMountID), errors.Is(err, fsmeta.ErrInvalidInodeID),
-		errors.Is(err, fsmeta.ErrInvalidName), errors.Is(err, fsmeta.ErrInvalidSession),
-		errors.Is(err, fsmeta.ErrInvalidRequest), errors.Is(err, fsmeta.ErrInvalidKey),
-		errors.Is(err, fsmeta.ErrInvalidKeyKind), errors.Is(err, fsmeta.ErrInvalidValue),
-		errors.Is(err, fsmeta.ErrInvalidValueKind), errors.Is(err, fsmeta.ErrInvalidPageSize):
-		reason = reasonInvalidFSMetaInput
+	case errors.Is(err, fsmeta.ErrInvalidMountID):
+		reason = reasonInvalidMountID
+	case errors.Is(err, fsmeta.ErrInvalidInodeID):
+		reason = reasonInvalidInodeID
+	case errors.Is(err, fsmeta.ErrInvalidName):
+		reason = reasonInvalidName
+	case errors.Is(err, fsmeta.ErrInvalidSession):
+		reason = reasonInvalidSession
+	case errors.Is(err, fsmeta.ErrInvalidRequest):
+		reason = reasonInvalidRequest
+	case errors.Is(err, fsmeta.ErrInvalidKey):
+		reason = reasonInvalidKey
+	case errors.Is(err, fsmeta.ErrInvalidKeyKind):
+		reason = reasonInvalidKeyKind
+	case errors.Is(err, fsmeta.ErrInvalidValue):
+		reason = reasonInvalidValue
+	case errors.Is(err, fsmeta.ErrInvalidValueKind):
+		reason = reasonInvalidValueKind
+	case errors.Is(err, fsmeta.ErrInvalidPageSize):
+		reason = reasonInvalidPageSize
 	}
 	if reason == "" {
 		return nil

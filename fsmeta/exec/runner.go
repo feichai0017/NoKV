@@ -16,10 +16,17 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-const defaultLockTTL uint64 = 3000
-const maxTxnContentionRetries = 3
-const maxReadContentionRetries = 3
-const txnContentionRetryBackoff = time.Millisecond
+const (
+	// Percolator TTLs are encoded in milliseconds. fsmeta mutations cross the
+	// coordinator TSO path plus raft apply queues, so the default must cover
+	// short commit stalls instead of letting read-side lock resolution roll
+	// back a live metadata transaction.
+	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
+
+	maxTxnContentionRetries   = 3
+	maxReadContentionRetries  = 3
+	txnContentionRetryBackoff = time.Millisecond
+)
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
 type KV struct {

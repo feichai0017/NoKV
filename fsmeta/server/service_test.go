@@ -395,7 +395,7 @@ func TestGRPCServiceErrorMapping(t *testing.T) {
 	}{
 		{name: "exists", err: fsmeta.ErrExists, code: codes.AlreadyExists, reason: reasonNamespaceExists},
 		{name: "not found", err: fsmeta.ErrNotFound, code: codes.NotFound, reason: reasonNamespaceNotFound},
-		{name: "invalid", err: fsmeta.ErrInvalidName, code: codes.InvalidArgument, reason: reasonInvalidFSMetaInput},
+		{name: "invalid", err: fsmeta.ErrInvalidName, code: codes.InvalidArgument, reason: reasonInvalidName},
 		{name: "quota exceeded", err: fsmeta.ErrQuotaExceeded, code: codes.ResourceExhausted, reason: reasonQuotaExceeded},
 		{name: "watch overflow", err: fsmeta.ErrWatchOverflow, code: codes.ResourceExhausted, reason: reasonWatchOverflow},
 		{name: "watch cursor expired", err: fsmeta.ErrWatchCursorExpired, code: codes.OutOfRange, reason: reasonWatchCursorExpired},

@@ -42,6 +42,12 @@ type Options struct {
 	// uses fsmeta.DefaultSessionExpireLimit.
 	SessionCleanupLimit uint32
 
+	// LockTTL bounds Percolator primary-lock liveness for fsmeta mutations.
+	// Zero uses fsmeta/exec's default. Set this above the p99 raft apply and
+	// coordinator TSO window; otherwise read-side lock resolution can roll back
+	// a live transaction that is only delayed in the commit path.
+	LockTTL time.Duration
+
 	// NegativeCacheDir enables the slab-backed negative dentry cache. Empty
 	// disables it. This is a Derived cache: authoritative reads still fall
 	// back to raftstore plus txn/percolator on miss or invalidation.
@@ -94,6 +100,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if opts.SessionCleanupLimit > fsmeta.MaxSessionExpireLimit {
 		return nil, errSessionCleanupLimitExceeded
+	}
+	if opts.LockTTL < 0 {
+		return nil, errLockTTLInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -154,6 +163,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithSubtreeAuthorityResolver(mounts),
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
+	}
+	if opts.LockTTL > 0 {
+		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
 	}
 	var negPersist *negativecache.Persistence
 	if opts.NegativeCacheDir != "" {

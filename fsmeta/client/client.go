@@ -23,6 +23,17 @@ const (
 	reasonMountNotRegistered   = "mount_not_registered"
 	reasonMountRetired         = "mount_retired"
 	reasonCrossAuthorityRename = "cross_authority_rename"
+	reasonInvalidFSMetaInput   = "invalid_fsmeta_input"
+	reasonInvalidMountID       = "invalid_mount_id"
+	reasonInvalidInodeID       = "invalid_inode_id"
+	reasonInvalidName          = "invalid_name"
+	reasonInvalidSession       = "invalid_session"
+	reasonInvalidRequest       = "invalid_request"
+	reasonInvalidKey           = "invalid_key"
+	reasonInvalidKeyKind       = "invalid_key_kind"
+	reasonInvalidValue         = "invalid_value"
+	reasonInvalidValueKind     = "invalid_value_kind"
+	reasonInvalidPageSize      = "invalid_page_size"
 )
 
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
@@ -387,6 +398,11 @@ func translateRPCError(err error) error {
 		return nil
 	}
 	switch status.Code(err) {
+	case codes.InvalidArgument:
+		if sentinel := invalidReasonSentinel(fsmetaReason(err)); sentinel != nil {
+			return fmt.Errorf("%w: %v", sentinel, err)
+		}
+		return err
 	case codes.AlreadyExists:
 		return fmt.Errorf("%w: %v", fsmeta.ErrExists, err)
 	case codes.NotFound:
@@ -414,6 +430,33 @@ func translateRPCError(err error) error {
 		return err
 	default:
 		return err
+	}
+}
+
+func invalidReasonSentinel(reason string) error {
+	switch reason {
+	case reasonInvalidMountID:
+		return fsmeta.ErrInvalidMountID
+	case reasonInvalidInodeID:
+		return fsmeta.ErrInvalidInodeID
+	case reasonInvalidName:
+		return fsmeta.ErrInvalidName
+	case reasonInvalidSession:
+		return fsmeta.ErrInvalidSession
+	case reasonInvalidRequest, reasonInvalidFSMetaInput:
+		return fsmeta.ErrInvalidRequest
+	case reasonInvalidKey:
+		return fsmeta.ErrInvalidKey
+	case reasonInvalidKeyKind:
+		return fsmeta.ErrInvalidKeyKind
+	case reasonInvalidValue:
+		return fsmeta.ErrInvalidValue
+	case reasonInvalidValueKind:
+		return fsmeta.ErrInvalidValueKind
+	case reasonInvalidPageSize:
+		return fsmeta.ErrInvalidPageSize
+	default:
+		return nil
 	}
 }
 
