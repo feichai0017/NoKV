@@ -1,5 +1,7 @@
 package fsmeta
 
+import "time"
+
 // fsmeta operation plans define semantic key boundaries only. The executor
 // owns value interpretation, conflict handling, and operation-specific checks;
 // the transaction runner owns timestamps, retries, and MVCC mutation encoding.
@@ -127,17 +129,22 @@ type UnlinkRequest struct {
 }
 
 type OpenWriteSessionRequest struct {
-	Mount         MountID
-	Inode         InodeID
-	Session       SessionID
-	ExpiresUnixNs int64
+	Mount   MountID
+	Inode   InodeID
+	Session SessionID
+	// TTL is a requested lease duration. The executor derives the persisted
+	// absolute expiry from its own clock inside the successful transaction
+	// attempt, so caller clock skew and queueing delay cannot shorten a lease.
+	TTL time.Duration
 }
 
 type HeartbeatWriteSessionRequest struct {
-	Mount         MountID
-	Inode         InodeID
-	Session       SessionID
-	ExpiresUnixNs int64
+	Mount   MountID
+	Inode   InodeID
+	Session SessionID
+	// TTL is a requested extension duration; SessionRecord.ExpiresUnixNs is the
+	// server-issued absolute expiry returned after commit.
+	TTL time.Duration
 }
 
 type CloseWriteSessionRequest struct {

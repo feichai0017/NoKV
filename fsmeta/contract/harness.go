@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 )
@@ -164,18 +165,18 @@ func execute(ctx context.Context, exec Executor, model *Model, op Operation) Res
 		return Result{Err: err}
 	case OpOpenWriteSession:
 		session, err := exec.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
-			Mount:         op.Mount,
-			Inode:         op.Inode,
-			Session:       op.Session,
-			ExpiresUnixNs: op.ExpiresNs,
+			Mount:   op.Mount,
+			Inode:   op.Inode,
+			Session: op.Session,
+			TTL:     time.Duration(op.ExpiresNs - model.NowUnixNs),
 		})
 		return Result{Err: err, Session: session}
 	case OpHeartbeatSession:
 		session, err := exec.HeartbeatWriteSession(ctx, fsmeta.HeartbeatWriteSessionRequest{
-			Mount:         op.Mount,
-			Inode:         op.Inode,
-			Session:       op.Session,
-			ExpiresUnixNs: op.ExpiresNs,
+			Mount:   op.Mount,
+			Inode:   op.Inode,
+			Session: op.Session,
+			TTL:     time.Duration(op.ExpiresNs - model.NowUnixNs),
 		})
 		return Result{Err: err, Session: session}
 	case OpCloseSession:

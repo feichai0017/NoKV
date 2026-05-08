@@ -128,20 +128,19 @@ func runSessionProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fs
 	inode := result.Inode.Inode
 
 	session := fsmeta.SessionID(fmt.Sprintf("soak-writer-%06d-%d", seed, unique))
-	expires := time.Now().Add(2 * time.Minute).UnixNano()
 	if _, err := cli.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
-		Mount:         mount,
-		Inode:         inode,
-		Session:       session,
-		ExpiresUnixNs: expires,
+		Mount:   mount,
+		Inode:   inode,
+		Session: session,
+		TTL:     2 * time.Minute,
 	}); err != nil {
 		return err
 	}
 	if _, err := cli.HeartbeatWriteSession(ctx, fsmeta.HeartbeatWriteSessionRequest{
-		Mount:         mount,
-		Inode:         inode,
-		Session:       session,
-		ExpiresUnixNs: time.Now().Add(3 * time.Minute).UnixNano(),
+		Mount:   mount,
+		Inode:   inode,
+		Session: session,
+		TTL:     3 * time.Minute,
 	}); err != nil {
 		return err
 	}
