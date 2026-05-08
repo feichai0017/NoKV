@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -14,12 +15,33 @@ import (
 // Service exposes StoreKV gRPC handlers backed by a raftstore Store.
 type Service struct {
 	kvrpcpb.UnimplementedStoreKVServer
-	store *store.Store
+	store        *store.Store
+	writeBatcher *writeCommandBatcher
 }
 
 // NewService constructs a StoreKV service bound to the provided store.
-func NewService(st *store.Store) *Service {
-	return &Service{store: st}
+func NewService(st *store.Store, opts ...ServiceOption) *Service {
+	options := defaultServiceOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	s := &Service{store: st}
+	if options.writeCommandBatchMaxSize > 1 && options.writeCommandBatchMaxWait > 0 {
+		s.writeBatcher = newWriteCommandBatcher(s.propose, options.writeCommandBatchMaxSize, options.writeCommandBatchMaxWait)
+	}
+	return s
+}
+
+// Stats exposes low-cardinality StoreKV service counters for expvar and
+// benchmark artifacts.
+func (s *Service) Stats() map[string]any {
+	if s == nil || s.writeBatcher == nil {
+		var empty *writeCommandBatcher
+		return empty.Stats()
+	}
+	return s.writeBatcher.Stats()
 }
 
 func servicePhysicalTimeMillis() uint64 {
@@ -184,23 +206,16 @@ func (s *Service) Prewrite(ctx context.Context, req *kvrpcpb.KvPrewriteRequest) 
 	if req.GetRequest() == nil {
 		return nil, rpcInvalidArgument("prewrite request missing payload")
 	}
-	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
-		Header: header,
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
-			Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: req.GetRequest()},
-		}},
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+		Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: req.GetRequest()},
 	})
 	if err != nil {
-		return nil, rpcStatus(err)
+		return nil, err
 	}
-	out := &kvrpcpb.KvPrewriteResponse{RegionError: resp.GetRegionError()}
+	out := &kvrpcpb.KvPrewriteResponse{RegionError: regionErr}
 	if out.GetRegionError() != nil {
 		return out, nil
-	}
-	first, err := singleRaftResponse("prewrite", resp)
-	if err != nil {
-		return nil, err
 	}
 	if first.GetPrewrite() == nil {
 		return nil, raftPayloadError("prewrite", "missing prewrite payload")
@@ -217,23 +232,16 @@ func (s *Service) Commit(ctx context.Context, req *kvrpcpb.KvCommitRequest) (*kv
 	if req.GetRequest() == nil {
 		return nil, rpcInvalidArgument("commit request missing payload")
 	}
-	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
-		Header: header,
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_COMMIT,
-			Cmd:     &raftcmdpb.Request_Commit{Commit: req.GetRequest()},
-		}},
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_COMMIT,
+		Cmd:     &raftcmdpb.Request_Commit{Commit: req.GetRequest()},
 	})
 	if err != nil {
-		return nil, rpcStatus(err)
+		return nil, err
 	}
-	out := &kvrpcpb.KvCommitResponse{RegionError: resp.GetRegionError()}
+	out := &kvrpcpb.KvCommitResponse{RegionError: regionErr}
 	if out.GetRegionError() != nil {
 		return out, nil
-	}
-	first, err := singleRaftResponse("commit", resp)
-	if err != nil {
-		return nil, err
 	}
 	if first.GetCommit() == nil {
 		return nil, raftPayloadError("commit", "missing commit payload")
@@ -250,23 +258,16 @@ func (s *Service) BatchRollback(ctx context.Context, req *kvrpcpb.KvBatchRollbac
 	if req.GetRequest() == nil {
 		return nil, rpcInvalidArgument("rollback request missing payload")
 	}
-	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
-		Header: header,
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
-			Cmd:     &raftcmdpb.Request_BatchRollback{BatchRollback: req.GetRequest()},
-		}},
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
+		Cmd:     &raftcmdpb.Request_BatchRollback{BatchRollback: req.GetRequest()},
 	})
 	if err != nil {
-		return nil, rpcStatus(err)
+		return nil, err
 	}
-	out := &kvrpcpb.KvBatchRollbackResponse{RegionError: resp.GetRegionError()}
+	out := &kvrpcpb.KvBatchRollbackResponse{RegionError: regionErr}
 	if out.GetRegionError() != nil {
 		return out, nil
-	}
-	first, err := singleRaftResponse("batch rollback", resp)
-	if err != nil {
-		return nil, err
 	}
 	if first.GetBatchRollback() == nil {
 		return nil, raftPayloadError("batch rollback", "missing batch rollback payload")
@@ -283,23 +284,16 @@ func (s *Service) ResolveLock(ctx context.Context, req *kvrpcpb.KvResolveLockReq
 	if req.GetRequest() == nil {
 		return nil, rpcInvalidArgument("resolve lock request missing payload")
 	}
-	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
-		Header: header,
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
-			Cmd:     &raftcmdpb.Request_ResolveLock{ResolveLock: req.GetRequest()},
-		}},
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
+		Cmd:     &raftcmdpb.Request_ResolveLock{ResolveLock: req.GetRequest()},
 	})
 	if err != nil {
-		return nil, rpcStatus(err)
+		return nil, err
 	}
-	out := &kvrpcpb.KvResolveLockResponse{RegionError: resp.GetRegionError()}
+	out := &kvrpcpb.KvResolveLockResponse{RegionError: regionErr}
 	if out.GetRegionError() != nil {
 		return out, nil
-	}
-	first, err := singleRaftResponse("resolve lock", resp)
-	if err != nil {
-		return nil, err
 	}
 	if first.GetResolveLock() == nil {
 		return nil, raftPayloadError("resolve lock", "missing resolve lock payload")
@@ -384,29 +378,43 @@ func (s *Service) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicM
 	if req.GetRequest() == nil {
 		return nil, rpcInvalidArgument("atomic mutate request missing payload")
 	}
-	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
-		Header: header,
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
-			Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: req.GetRequest()},
-		}},
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+		Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: req.GetRequest()},
 	})
 	if err != nil {
-		return nil, rpcStatus(err)
+		return nil, err
 	}
-	out := &kvrpcpb.KvTryAtomicMutateResponse{RegionError: resp.GetRegionError()}
+	out := &kvrpcpb.KvTryAtomicMutateResponse{RegionError: regionErr}
 	if out.GetRegionError() != nil {
 		return out, nil
-	}
-	first, err := singleRaftResponse("atomic mutate", resp)
-	if err != nil {
-		return nil, err
 	}
 	if first.GetTryAtomicMutate() == nil {
 		return nil, raftPayloadError("atomic mutate", "missing atomic mutate payload")
 	}
 	out.Response = first.GetTryAtomicMutate()
 	return out, nil
+}
+
+func (s *Service) submitWriteCommand(ctx context.Context, header *raftcmdpb.CmdHeader, request *raftcmdpb.Request) (*raftcmdpb.Response, *errorpb.RegionError, error) {
+	if s.writeBatcher != nil {
+		return s.writeBatcher.submit(ctx, header, request)
+	}
+	resp, err := s.propose(ctx, &raftcmdpb.RaftCmdRequest{
+		Header:   header,
+		Requests: []*raftcmdpb.Request{request},
+	})
+	if err != nil {
+		return nil, nil, rpcStatus(err)
+	}
+	if regionErr := resp.GetRegionError(); regionErr != nil {
+		return nil, regionErr, nil
+	}
+	first, err := singleRaftResponse(writeCommandName(request.GetCmdType()), resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	return first, nil, nil
 }
 
 func (s *Service) read(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {

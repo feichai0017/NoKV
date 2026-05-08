@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+const defaultMaxRootRPCMessageBytes = 64 << 20
+
 // Backend is the metadata-root authority surface exported over gRPC.
 type Backend interface {
 	Snapshot() (rootstate.Snapshot, error)
@@ -52,6 +54,16 @@ type Service struct {
 // NewService constructs one metadata-root RPC service around backend.
 func NewService(backend Backend) *Service {
 	return &Service{backend: backend}
+}
+
+// GRPCServerOptions returns the production transport budget for metadata-root
+// RPCs. Coordinator bootstrap can transfer a compact checkpoint that is larger
+// than gRPC's 4 MiB default after long-running root workloads.
+func GRPCServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(defaultMaxRootRPCMessageBytes),
+		grpc.MaxSendMsgSize(defaultMaxRootRPCMessageBytes),
+	}
 }
 
 // Register registers one metadata-root RPC service.

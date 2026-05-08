@@ -308,6 +308,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = server.Close()
 	}()
 	installStorePercolatorExpvar()
+	installStoreKVExpvar(server.KVStats)
 	metricsLn, err := startExpvarServer(*metricsAddr)
 	if err != nil {
 		return fmt.Errorf("start serve metrics endpoint: %w", err)

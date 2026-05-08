@@ -38,6 +38,7 @@ func enableRaftDebugLogging() {
 type Node struct {
 	store           *store.Store
 	transport       *transport.GRPCTransport
+	kvService       *kv.Service
 	mvccMaintenance *storemvcc.MaintenanceWorker
 	mvccGCPlan      *storemvcc.GCPlanner
 	mvccGCPlanTask  *utils.PeriodicTask
@@ -124,6 +125,7 @@ func NewNode(cfg Config) (*Node, error) {
 	node := &Node{
 		store:     st,
 		transport: tr,
+		kvService: kvService,
 	}
 	if sink, ok := cfg.Storage.MVCC.(transportMetricsSink); ok {
 		sink.SetTransportMetricsSource(transport.GRPCMetricsSnapshot)
@@ -168,6 +170,14 @@ func (n *Node) Store() *store.Store {
 		return nil
 	}
 	return n.store
+}
+
+// KVStats returns low-cardinality StoreKV service counters for diagnostics.
+func (n *Node) KVStats() map[string]any {
+	if n == nil || n.kvService == nil {
+		return map[string]any{}
+	}
+	return n.kvService.Stats()
 }
 
 // Transport returns the shared raft/StoreKV gRPC transport.

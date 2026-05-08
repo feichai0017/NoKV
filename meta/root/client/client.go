@@ -27,7 +27,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const defaultCallTimeout = 3 * time.Second
+const (
+	defaultCallTimeout            = 3 * time.Second
+	defaultMaxRootRPCMessageBytes = 64 << 20
+)
 
 const errMetadataRootNotLeader = "metadata root not leader"
 
@@ -394,10 +397,23 @@ func dialEndpoint(ctx context.Context, target string, opts ...grpc.DialOption) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	dialOpts := make([]grpc.DialOption, 0, len(opts)+2)
 	if len(opts) == 0 {
-		opts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		dialOpts = append(dialOpts, opts...)
 	}
-	conn, err := grpc.NewClient(target, opts...)
+	// Metadata-root checkpoints are compact state, but long-running fsmeta
+	// tests can legitimately grow them past gRPC's 4 MiB default. The root RPC
+	// boundary owns that transport budget so coordinator bootstrap does not
+	// depend on an implicit library limit.
+	dialOpts = append(dialOpts,
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(defaultMaxRootRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(defaultMaxRootRPCMessageBytes),
+		),
+	)
+	conn, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {
 		return nil, err
 	}
