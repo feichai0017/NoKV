@@ -168,6 +168,14 @@ message WatchAckOrSubscribe {
   }
 }
 
+message GetReadVersionRequest {
+  string mount = 1;
+}
+
+message GetReadVersionResponse {
+  uint64 read_version = 1;
+}
+
 message SnapshotSubtreeRequest {
   string mount = 1;
   uint64 root_inode = 2;
@@ -282,6 +290,7 @@ service FSMetadata {
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);
+  rpc GetReadVersion(GetReadVersionRequest) returns (GetReadVersionResponse);
   rpc SnapshotSubtree(SnapshotSubtreeRequest) returns (SnapshotSubtreeResponse);
   rpc RetireSnapshotSubtree(RetireSnapshotSubtreeRequest) returns (RetireSnapshotSubtreeResponse);
   rpc GetQuotaUsage(QuotaUsageRequest) returns (QuotaUsageResponse);

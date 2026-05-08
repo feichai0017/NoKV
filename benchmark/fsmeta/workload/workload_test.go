@@ -154,6 +154,29 @@ func TestRunNegativeLookup(t *testing.T) {
 	require.Equal(t, "lookup_missing", rows[0].Operation)
 }
 
+func TestRunDurableSnapshot(t *testing.T) {
+	result, err := RunDurableSnapshot(context.Background(), newFakeSnapshotClient(), DurableSnapshotConfig{
+		Mount:     "vol",
+		RunID:     "test",
+		Files:     3,
+		Snapshots: 2,
+		PageLimit: 8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, DurableSnapshot, result.Name)
+	require.Zero(t, result.Errors)
+	rows := SummaryRows(result)
+	ops := make(map[string]int, len(rows))
+	for _, row := range rows {
+		ops[row.Operation] = row.Count
+	}
+	require.Equal(t, 1, ops["mkdir"])
+	require.Equal(t, 3, ops["seed_create"])
+	require.Equal(t, 2, ops["snapshot_subtree"])
+	require.Equal(t, 2, ops["snapshot_readdirplus"])
+	require.Equal(t, 2, ops["retire_snapshot_subtree"])
+}
+
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteSummaryCSV(&buf, []SummaryRow{{
@@ -211,6 +234,36 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) 
 func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
 	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
 	return c.stream, nil
+}
+
+type fakeSnapshotClient struct {
+	*fakeClient
+	nextVersion uint64
+	snapshots   map[uint64]fsmeta.SnapshotSubtreeToken
+}
+
+func newFakeSnapshotClient() *fakeSnapshotClient {
+	return &fakeSnapshotClient{
+		fakeClient:  newFakeClient(),
+		nextVersion: 1,
+		snapshots:   make(map[uint64]fsmeta.SnapshotSubtreeToken),
+	}
+}
+
+func (c *fakeSnapshotClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nextVersion++
+	token := fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: c.nextVersion}
+	c.snapshots[token.ReadVersion] = token
+	return token, nil
+}
+
+func (c *fakeSnapshotClient) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.snapshots, token.ReadVersion)
+	return nil
 }
 
 type fakeWatchStream struct {

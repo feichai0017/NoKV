@@ -40,9 +40,16 @@ type DentryAttrPair struct {
 	Inode  InodeRecord
 }
 
-// SnapshotSubtreeToken identifies one MVCC read epoch for a direct subtree
-// page. V0 uses the token as a stable read version; recursive subtree
-// materialization and GC retention enforcement are later layers.
+// ReadVersionRequest asks for an ephemeral MVCC read version. It provides a
+// consistent read timestamp only; it does not publish a snapshot epoch or pin
+// GC state.
+type ReadVersionRequest struct {
+	Mount MountID
+}
+
+// SnapshotSubtreeToken identifies a durable subtree snapshot epoch. The token
+// is published into rooted truth by the fsmeta service boundary and must be
+// retired by callers when its GC-retention contract is no longer needed.
 type SnapshotSubtreeToken struct {
 	Mount       MountID
 	RootInode   InodeID

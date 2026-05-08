@@ -79,6 +79,13 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 	}}, nil
 }
 
+func (e *fakeExecutor) GetReadVersion(context.Context, fsmeta.ReadVersionRequest) (uint64, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	return 5678, nil
+}
+
 func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
@@ -399,6 +406,15 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
 	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
 	require.Equal(t, token, publisher.retired)
+}
+
+func TestTypedClientGetReadVersion(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	version, err := cli.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5678), version)
 }
 
 func TestTypedClientGetQuotaUsage(t *testing.T) {

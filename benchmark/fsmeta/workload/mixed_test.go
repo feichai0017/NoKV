@@ -146,6 +146,13 @@ func (c *fakeMixedClient) RetireSnapshotSubtree(_ context.Context, token fsmeta.
 	return nil
 }
 
+func (c *fakeMixedClient) GetReadVersion(context.Context, fsmeta.ReadVersionRequest) (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.version++
+	return c.version, nil
+}
+
 func (c *fakeMixedClient) GetQuotaUsage(context.Context, fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -338,9 +345,8 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 		"unlink_temp",
 		"readdir",
 		"readdirplus",
-		"snapshot_subtree",
+		"get_read_version",
 		"snapshot_readdirplus",
-		"retire_snapshot_subtree",
 		"get_quota_usage",
 		"open_stale_write_session",
 		"expire_write_sessions",

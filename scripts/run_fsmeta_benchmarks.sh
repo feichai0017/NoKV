@@ -219,7 +219,7 @@ print_bench_summary() {
 }
 
 run_compose_benchmarks() {
-	local workloads="${NOKV_FSMETA_WORKLOADS:-mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
+	local workloads="${NOKV_FSMETA_WORKLOADS:-mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
 	if [[ "${NOKV_FSMETA_COMPOSE:-1}" == "1" ]]; then
 		if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" ]]; then

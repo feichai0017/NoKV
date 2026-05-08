@@ -27,6 +27,7 @@ const (
 	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
 	FSMetadata_ReadDirPlus_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
 	FSMetadata_WatchSubtree_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/WatchSubtree"
+	FSMetadata_GetReadVersion_FullMethodName        = "/nokv.fsmeta.v1.FSMetadata/GetReadVersion"
 	FSMetadata_SnapshotSubtree_FullMethodName       = "/nokv.fsmeta.v1.FSMetadata/SnapshotSubtree"
 	FSMetadata_RetireSnapshotSubtree_FullMethodName = "/nokv.fsmeta.v1.FSMetadata/RetireSnapshotSubtree"
 	FSMetadata_GetQuotaUsage_FullMethodName         = "/nokv.fsmeta.v1.FSMetadata/GetQuotaUsage"
@@ -50,6 +51,7 @@ type FSMetadataClient interface {
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
 	ReadDirPlus(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
 	WatchSubtree(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse], error)
+	GetReadVersion(ctx context.Context, in *GetReadVersionRequest, opts ...grpc.CallOption) (*GetReadVersionResponse, error)
 	SnapshotSubtree(ctx context.Context, in *SnapshotSubtreeRequest, opts ...grpc.CallOption) (*SnapshotSubtreeResponse, error)
 	RetireSnapshotSubtree(ctx context.Context, in *RetireSnapshotSubtreeRequest, opts ...grpc.CallOption) (*RetireSnapshotSubtreeResponse, error)
 	GetQuotaUsage(ctx context.Context, in *QuotaUsageRequest, opts ...grpc.CallOption) (*QuotaUsageResponse, error)
@@ -133,6 +135,16 @@ func (c *fSMetadataClient) WatchSubtree(ctx context.Context, opts ...grpc.CallOp
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FSMetadata_WatchSubtreeClient = grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse]
+
+func (c *fSMetadataClient) GetReadVersion(ctx context.Context, in *GetReadVersionRequest, opts ...grpc.CallOption) (*GetReadVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetReadVersionResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_GetReadVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *fSMetadataClient) SnapshotSubtree(ctx context.Context, in *SnapshotSubtreeRequest, opts ...grpc.CallOption) (*SnapshotSubtreeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -254,6 +266,7 @@ type FSMetadataServer interface {
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
 	ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error)
 	WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error
+	GetReadVersion(context.Context, *GetReadVersionRequest) (*GetReadVersionResponse, error)
 	SnapshotSubtree(context.Context, *SnapshotSubtreeRequest) (*SnapshotSubtreeResponse, error)
 	RetireSnapshotSubtree(context.Context, *RetireSnapshotSubtreeRequest) (*RetireSnapshotSubtreeResponse, error)
 	GetQuotaUsage(context.Context, *QuotaUsageRequest) (*QuotaUsageResponse, error)
@@ -291,6 +304,9 @@ func (UnimplementedFSMetadataServer) ReadDirPlus(context.Context, *ReadDirReques
 }
 func (UnimplementedFSMetadataServer) WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchSubtree not implemented")
+}
+func (UnimplementedFSMetadataServer) GetReadVersion(context.Context, *GetReadVersionRequest) (*GetReadVersionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetReadVersion not implemented")
 }
 func (UnimplementedFSMetadataServer) SnapshotSubtree(context.Context, *SnapshotSubtreeRequest) (*SnapshotSubtreeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SnapshotSubtree not implemented")
@@ -441,6 +457,24 @@ func _FSMetadata_WatchSubtree_Handler(srv interface{}, stream grpc.ServerStream)
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FSMetadata_WatchSubtreeServer = grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]
+
+func _FSMetadata_GetReadVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetReadVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).GetReadVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_GetReadVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).GetReadVersion(ctx, req.(*GetReadVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _FSMetadata_SnapshotSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SnapshotSubtreeRequest)
@@ -666,6 +700,10 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadDirPlus",
 			Handler:    _FSMetadata_ReadDirPlus_Handler,
+		},
+		{
+			MethodName: "GetReadVersion",
+			Handler:    _FSMetadata_GetReadVersion_Handler,
 		},
 		{
 			MethodName: "SnapshotSubtree",

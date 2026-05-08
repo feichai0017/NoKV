@@ -23,6 +23,7 @@ type fakeExecutor struct {
 	createInode      fsmeta.InodeRecord
 	updateReq        fsmeta.UpdateInodeRequest
 	readDirReq       fsmeta.ReadDirRequest
+	readVersionReq   fsmeta.ReadVersionRequest
 	snapshotReq      fsmeta.SnapshotSubtreeRequest
 	quotaReq         fsmeta.QuotaUsageRequest
 	renameReq        fsmeta.RenameRequest
@@ -110,6 +111,14 @@ func (e *fakeExecutor) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest)
 			LinkCount: 1,
 		},
 	}}, nil
+}
+
+func (e *fakeExecutor) GetReadVersion(_ context.Context, req fsmeta.ReadVersionRequest) (uint64, error) {
+	e.readVersionReq = req
+	if e.err != nil {
+		return 0, e.err
+	}
+	return 1234, nil
 }
 
 func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
@@ -472,6 +481,20 @@ func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 42}, executor.snapshotReq)
 	require.Equal(t, uint64(1234), resp.GetReadVersion())
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.token)
+}
+
+func TestGRPCServiceGetReadVersionDoesNotPublishSnapshot(t *testing.T) {
+	executor := &fakeExecutor{}
+	publisher := &fakeSnapshotPublisher{}
+	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
+	defer cleanup()
+
+	resp, err := client.GetReadVersion(context.Background(), &fsmetapb.GetReadVersionRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ReadVersionRequest{Mount: "vol"}, executor.readVersionReq)
+	require.Equal(t, uint64(1234), resp.GetReadVersion())
+	require.Zero(t, publisher.token)
+	require.Zero(t, publisher.retired)
 }
 
 func TestGRPCServiceSnapshotSubtreeRetiresTokenAfterPublishFailure(t *testing.T) {

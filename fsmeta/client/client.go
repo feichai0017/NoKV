@@ -33,6 +33,7 @@ type Client interface {
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
+	GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
@@ -166,6 +167,17 @@ func (c *GRPCClient) WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) 
 		return nil, err
 	}
 	return &WatchStream{stream: stream, ready: ready}, nil
+}
+
+func (c *GRPCClient) GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error) {
+	if err := c.requireRPC(); err != nil {
+		return 0, err
+	}
+	resp, err := c.rpc.GetReadVersion(ctx, getReadVersionRequestToProto(req))
+	if err != nil {
+		return 0, translateRPCError(err)
+	}
+	return resp.GetReadVersion(), nil
 }
 
 func (c *GRPCClient) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {

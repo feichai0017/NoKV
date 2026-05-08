@@ -27,7 +27,7 @@ const benchEnvKey = "NOKV_FSMETA_BENCH"
 var (
 	fsmetaAddr            = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
 	fsmetaCoordAddr       = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for mount bootstrap")
-	fsmetaWorkloads       = flag.String("fsmeta_workloads", "mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
+	fsmetaWorkloads       = flag.String("fsmeta_workloads", "mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
 	fsmetaMount           = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
 	fsmetaClients         = flag.Int("fsmeta_clients", 8, "concurrent clients")
 	fsmetaDirs            = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
@@ -199,6 +199,14 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName
 			Clients:            *fsmetaClients,
 			Files:              *fsmetaFiles,
 			BackPressureWindow: uint32(*fsmetaWatchWindow),
+		})
+	case workload.DurableSnapshot:
+		result, err = workload.RunDurableSnapshot(ctx, cli, workload.DurableSnapshotConfig{
+			Mount:     fsmeta.MountID(*fsmetaMount),
+			RunID:     runID,
+			Files:     *fsmetaFilesPerDir,
+			Snapshots: *fsmetaEntriesPerGroup,
+			PageLimit: uint32(*fsmetaPageLimit),
 		})
 	case workload.NegativeLookup:
 		result, err = workload.RunNegativeLookup(ctx, cli, workload.NegativeLookupConfig{

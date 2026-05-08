@@ -19,6 +19,7 @@ type Executor interface {
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
+	GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
@@ -216,6 +217,20 @@ func (s *Service) WatchSubtree(stream fsmetapb.FSMetadata_WatchSubtreeServer) er
 			}
 		}
 	}
+}
+
+func (s *Service) GetReadVersion(ctx context.Context, req *fsmetapb.GetReadVersionRequest) (*fsmetapb.GetReadVersionResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta get read version request is required")
+	}
+	version, err := s.executor.GetReadVersion(ctx, getReadVersionRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.GetReadVersionResponse{ReadVersion: version}, nil
 }
 
 func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSubtreeRequest) (*fsmetapb.SnapshotSubtreeResponse, error) {

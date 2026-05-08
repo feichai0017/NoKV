@@ -18,6 +18,7 @@ const Mixed = "mixed"
 type MixedClient interface {
 	WatchClient
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
+	GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
 	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
@@ -451,24 +452,21 @@ func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedCo
 }
 
 func runSnapshotLifecycle(ctx context.Context, cli MixedClient, cfg MixedConfig, root fsmeta.InodeID, rec *recorder) {
-	var token fsmeta.SnapshotSubtreeToken
-	rec.recordCall("snapshot_subtree", func() error {
+	var readVersion uint64
+	rec.recordCall("get_read_version", func() error {
 		var err error
-		token, err = cli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
+		readVersion, err = cli.GetReadVersion(ctx, fsmeta.ReadVersionRequest{Mount: cfg.Mount})
 		return err
 	})
-	if token.ReadVersion != 0 {
+	if readVersion != 0 {
 		rec.recordCall("snapshot_readdirplus", func() error {
 			_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
 				Mount:           cfg.Mount,
 				Parent:          root,
 				Limit:           cfg.PageLimit,
-				SnapshotVersion: token.ReadVersion,
+				SnapshotVersion: readVersion,
 			})
 			return err
-		})
-		rec.recordCall("retire_snapshot_subtree", func() error {
-			return cli.RetireSnapshotSubtree(ctx, token)
 		})
 	}
 }
