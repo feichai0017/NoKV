@@ -146,6 +146,7 @@ func runSessionProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fs
 	}
 	if err := cli.CloseWriteSession(ctx, fsmeta.CloseWriteSessionRequest{
 		Mount:   mount,
+		Inode:   inode,
 		Session: session,
 	}); err != nil {
 		return err

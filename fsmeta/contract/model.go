@@ -88,6 +88,11 @@ type sessionIndexEntry struct {
 	session bool
 }
 
+type sessionKey struct {
+	inode   fsmeta.InodeID
+	session fsmeta.SessionID
+}
+
 // Model is a sequential oracle for fsmeta namespace semantics. It does not
 // model raftstore, routing, or Percolator internals; it models the user-visible
 // metadata contract those layers must preserve.
@@ -97,7 +102,7 @@ type Model struct {
 	NowUnixNs   int64
 	dentries    map[dentryKey]fsmeta.DentryRecord
 	inodes      map[fsmeta.InodeID]fsmeta.InodeRecord
-	sessions    map[fsmeta.SessionID]fsmeta.SessionRecord
+	sessions    map[sessionKey]fsmeta.SessionRecord
 	owners      map[fsmeta.InodeID]fsmeta.SessionRecord
 	snapshots   map[uint64]snapshotState
 	snapshotRef map[int]uint64
@@ -111,7 +116,7 @@ func NewModel(mount fsmeta.MountID) *Model {
 		NowUnixNs:   1_000_000_000,
 		dentries:    make(map[dentryKey]fsmeta.DentryRecord),
 		inodes:      make(map[fsmeta.InodeID]fsmeta.InodeRecord),
-		sessions:    make(map[fsmeta.SessionID]fsmeta.SessionRecord),
+		sessions:    make(map[sessionKey]fsmeta.SessionRecord),
 		owners:      make(map[fsmeta.InodeID]fsmeta.SessionRecord),
 		snapshots:   make(map[uint64]snapshotState),
 		snapshotRef: make(map[int]uint64),
@@ -398,19 +403,21 @@ func (m *Model) openWriteSession(op Operation) Result {
 	if inode.Type != fsmeta.InodeTypeFile {
 		return Result{Err: fsmeta.ErrInvalidRequest}
 	}
-	if existing, ok := m.sessions[op.Session]; ok && sessionLive(existing, m.NowUnixNs) {
+	key := sessionKey{inode: op.Inode, session: op.Session}
+	if existing, ok := m.sessions[key]; ok && sessionLive(existing, m.NowUnixNs) {
 		return Result{Err: fsmeta.ErrExists}
 	}
 	if owner, ok := m.owners[op.Inode]; ok {
 		if sessionLive(owner, m.NowUnixNs) {
 			return Result{Err: fsmeta.ErrExists}
 		}
-		if current, ok := m.sessions[owner.Session]; ok && current == owner {
-			delete(m.sessions, owner.Session)
+		ownerKey := sessionKey{inode: owner.Inode, session: owner.Session}
+		if current, ok := m.sessions[ownerKey]; ok && current == owner {
+			delete(m.sessions, ownerKey)
 		}
 	}
 	record := fsmeta.SessionRecord{Session: op.Session, Inode: op.Inode, ExpiresUnixNs: op.ExpiresNs}
-	m.sessions[op.Session] = record
+	m.sessions[key] = record
 	m.owners[op.Inode] = record
 	return Result{Session: record}
 }
@@ -419,7 +426,8 @@ func (m *Model) heartbeatSession(op Operation) Result {
 	if op.ExpiresNs <= m.NowUnixNs {
 		return Result{Err: fsmeta.ErrInvalidRequest}
 	}
-	session, ok := m.sessions[op.Session]
+	key := sessionKey{inode: op.Inode, session: op.Session}
+	session, ok := m.sessions[key]
 	if !ok || !sessionLive(session, m.NowUnixNs) || session.Inode != op.Inode {
 		return Result{Err: fsmeta.ErrNotFound}
 	}
@@ -428,17 +436,21 @@ func (m *Model) heartbeatSession(op Operation) Result {
 		return Result{Err: fsmeta.ErrNotFound}
 	}
 	record := fsmeta.SessionRecord{Session: op.Session, Inode: op.Inode, ExpiresUnixNs: op.ExpiresNs}
-	m.sessions[op.Session] = record
+	m.sessions[key] = record
 	m.owners[op.Inode] = record
 	return Result{Session: record}
 }
 
 func (m *Model) closeSession(op Operation) Result {
-	session, ok := m.sessions[op.Session]
+	key := sessionKey{inode: op.Inode, session: op.Session}
+	session, ok := m.sessions[key]
 	if !ok {
 		return Result{Err: fsmeta.ErrNotFound}
 	}
-	delete(m.sessions, op.Session)
+	if session.Inode != op.Inode {
+		return Result{Err: fsmeta.ErrNotFound}
+	}
+	delete(m.sessions, key)
 	if owner, ok := m.owners[session.Inode]; ok && owner.Session == op.Session && owner.Inode == session.Inode {
 		delete(m.owners, session.Inode)
 	}
@@ -452,7 +464,7 @@ func (m *Model) expireSessions(op Operation) Result {
 	}
 	entries := make([]sessionIndexEntry, 0, len(m.sessions)+len(m.owners))
 	for _, record := range m.sessions {
-		key, err := fsmeta.EncodeSessionKey(m.Mount, record.Session)
+		key, err := fsmeta.EncodeSessionKey(m.Mount, record.Inode, record.Session)
 		if err != nil {
 			return Result{Err: err}
 		}
@@ -466,9 +478,9 @@ func (m *Model) expireSessions(op Operation) Result {
 		entries = append(entries, sessionIndexEntry{key: string(key), record: record})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
-	deleteSessions := make(map[fsmeta.SessionID]struct{})
+	deleteSessions := make(map[sessionKey]struct{})
 	deleteOwners := make(map[fsmeta.InodeID]struct{})
-	expiredSessions := make(map[fsmeta.SessionID]struct{})
+	expiredSessions := make(map[sessionKey]struct{})
 	visited := uint32(0)
 	for _, entry := range entries {
 		if visited >= limit {
@@ -478,21 +490,22 @@ func (m *Model) expireSessions(op Operation) Result {
 		if sessionLive(entry.record, m.NowUnixNs) {
 			continue
 		}
+		key := sessionKey{inode: entry.record.Inode, session: entry.record.Session}
 		if entry.session {
-			deleteSessions[entry.record.Session] = struct{}{}
+			deleteSessions[key] = struct{}{}
 		} else {
 			deleteOwners[entry.record.Inode] = struct{}{}
 		}
-		if current, ok := m.sessions[entry.record.Session]; ok && current == entry.record {
-			deleteSessions[entry.record.Session] = struct{}{}
-			expiredSessions[entry.record.Session] = struct{}{}
+		if current, ok := m.sessions[key]; ok && current == entry.record {
+			deleteSessions[key] = struct{}{}
+			expiredSessions[key] = struct{}{}
 		}
 		if owner, ok := m.owners[entry.record.Inode]; ok && owner == entry.record {
 			deleteOwners[entry.record.Inode] = struct{}{}
 		}
 	}
-	for session := range deleteSessions {
-		delete(m.sessions, session)
+	for key := range deleteSessions {
+		delete(m.sessions, key)
 	}
 	for inode := range deleteOwners {
 		delete(m.owners, inode)
@@ -547,9 +560,9 @@ func (m *Model) CheckInvariants() error {
 			return fmt.Errorf("inode %d link_count=%d refs=%d", inodeID, inode.LinkCount, refs[inodeID])
 		}
 	}
-	for sessionID, session := range m.sessions {
-		if session.Session != sessionID {
-			return fmt.Errorf("session key/value mismatch key=%s record=%+v", sessionID, session)
+	for key, session := range m.sessions {
+		if session.Session != key.session || session.Inode != key.inode {
+			return fmt.Errorf("session key/value mismatch key=%+v record=%+v", key, session)
 		}
 		if !sessionLive(session, m.NowUnixNs) {
 			continue
@@ -566,7 +579,7 @@ func (m *Model) CheckInvariants() error {
 		if !sessionLive(owner, m.NowUnixNs) {
 			continue
 		}
-		session, ok := m.sessions[owner.Session]
+		session, ok := m.sessions[sessionKey{inode: owner.Inode, session: owner.Session}]
 		if !ok || session.Inode != inodeID {
 			return fmt.Errorf("owner for inode %d missing session %s", inodeID, owner.Session)
 		}

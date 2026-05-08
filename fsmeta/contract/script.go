@@ -87,7 +87,7 @@ func chooseOperation(rng *rand.Rand, model *Model, names []string, sessions []fs
 			return lookupOperation(rng, model, names)
 		}
 		session := liveSessions[rng.Intn(len(liveSessions))]
-		return Operation{Kind: OpCloseSession, Mount: model.Mount, Session: session.Session}
+		return Operation{Kind: OpCloseSession, Mount: model.Mount, Inode: session.Inode, Session: session.Session}
 	case 66, 67:
 		return Operation{
 			Kind:      OpAdvanceTime,

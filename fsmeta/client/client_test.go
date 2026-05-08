@@ -267,7 +267,7 @@ func TestTypedClientMutationRPCs(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2000), session.ExpiresUnixNs)
-	require.NoError(t, cli.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"}))
+	require.NoError(t, cli.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1"}))
 	expired, err := cli.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol", Limit: 64})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 2}, expired)

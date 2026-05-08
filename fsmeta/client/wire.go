@@ -164,6 +164,7 @@ func closeWriteSessionRequestToProto(req fsmeta.CloseWriteSessionRequest) *fsmet
 	return &fsmetapb.CloseWriteSessionRequest{
 		Mount:   string(req.Mount),
 		Session: string(req.Session),
+		Inode:   uint64(req.Inode),
 	}
 }
 

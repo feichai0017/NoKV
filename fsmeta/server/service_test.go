@@ -376,9 +376,9 @@ func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
 	require.Equal(t, fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1", TTL: 2 * time.Microsecond}, executor.heartbeatReq)
 	require.Equal(t, int64(2000), heartbeatResp.GetSession().GetExpiresUnixNs())
 
-	_, err = client.CloseWriteSession(context.Background(), &fsmetapb.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"})
+	_, err = client.CloseWriteSession(context.Background(), &fsmetapb.CloseWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1"})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.CloseWriteSessionRequest{Mount: "vol", Session: "writer-1"}, executor.closeReq)
+	require.Equal(t, fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 42, Session: "writer-1"}, executor.closeReq)
 
 	expireResp, err := client.ExpireWriteSessions(context.Background(), &fsmetapb.ExpireWriteSessionsRequest{Mount: "vol", Limit: 64})
 	require.NoError(t, err)
