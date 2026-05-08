@@ -429,23 +429,25 @@ func RunDurableSnapshot(ctx context.Context, cli Client, cfg DurableSnapshotConf
 	}
 	for i := 0; i < cfg.Snapshots; i++ {
 		var token fsmeta.SnapshotSubtreeToken
+		var snapshotErr error
 		rec.recordCall("snapshot_subtree", func() error {
-			var err error
-			token, err = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
-			return err
+			token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
+			return snapshotErr
 		})
-		if token.ReadVersion == 0 {
+		if snapshotErr != nil {
 			continue
 		}
-		rec.recordCall("snapshot_readdirplus", func() error {
-			_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-				Mount:           cfg.Mount,
-				Parent:          root,
-				Limit:           cfg.PageLimit,
-				SnapshotVersion: token.ReadVersion,
+		if token.ReadVersion != 0 {
+			rec.recordCall("snapshot_readdirplus", func() error {
+				_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+					Mount:           cfg.Mount,
+					Parent:          root,
+					Limit:           cfg.PageLimit,
+					SnapshotVersion: token.ReadVersion,
+				})
+				return err
 			})
-			return err
-		})
+		}
 		rec.recordCall("retire_snapshot_subtree", func() error {
 			return snapshotCli.RetireSnapshotSubtree(ctx, token)
 		})

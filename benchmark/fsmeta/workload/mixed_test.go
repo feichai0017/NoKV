@@ -19,6 +19,8 @@ type fakeMixedClient struct {
 	inodes    map[fsmeta.InodeID]fsmeta.InodeRecord
 	sessions  map[fsmeta.SessionID]fsmeta.SessionRecord
 	snapshots map[uint64]fsmeta.SnapshotSubtreeToken
+	versions  map[uint64]struct{}
+	reads     []fsmeta.ReadDirRequest
 	next      fsmeta.InodeID
 	version   uint64
 	stream    *fakeWatchStream
@@ -30,6 +32,7 @@ func newFakeMixedClient() *fakeMixedClient {
 		inodes:    make(map[fsmeta.InodeID]fsmeta.InodeRecord),
 		sessions:  make(map[fsmeta.SessionID]fsmeta.SessionRecord),
 		snapshots: make(map[uint64]fsmeta.SnapshotSubtreeToken),
+		versions:  make(map[uint64]struct{}),
 		next:      100,
 		version:   1,
 		stream:    &fakeWatchStream{events: make(chan fsmeta.WatchEvent, 1024)},
@@ -97,6 +100,7 @@ func (c *fakeMixedClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (f
 func (c *fakeMixedClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.reads = append(c.reads, req)
 	out := make([]fsmeta.DentryRecord, 0)
 	for _, entry := range c.dentries {
 		if entry.Parent == req.Parent {
@@ -109,6 +113,7 @@ func (c *fakeMixedClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) 
 func (c *fakeMixedClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.reads = append(c.reads, req)
 	out := make([]fsmeta.DentryAttrPair, 0)
 	for _, entry := range c.dentries {
 		if entry.Parent != req.Parent {
@@ -150,6 +155,7 @@ func (c *fakeMixedClient) GetReadVersion(context.Context, fsmeta.ReadVersionRequ
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.version++
+	c.versions[c.version] = struct{}{}
 	return c.version, nil
 }
 
@@ -304,7 +310,8 @@ func (c *fakeMixedClient) emitDentryEventLocked(mount fsmeta.MountID, entry fsme
 }
 
 func TestRunMixedCoversFullSurface(t *testing.T) {
-	result, err := RunMixed(context.Background(), newFakeMixedClient(), MixedConfig{
+	cli := newFakeMixedClient()
+	result, err := RunMixed(context.Background(), cli, MixedConfig{
 		Mount:           "vol",
 		RunID:           "test",
 		Clients:         2,
@@ -352,6 +359,23 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 		"expire_write_sessions",
 	} {
 		require.True(t, ops[op], fmt.Sprintf("missing operation %s", op))
+	}
+	cli.mu.Lock()
+	versions := make(map[uint64]struct{}, len(cli.versions))
+	for version := range cli.versions {
+		versions[version] = struct{}{}
+	}
+	reads := append([]fsmeta.ReadDirRequest(nil), cli.reads...)
+	cli.mu.Unlock()
+	seen := make(map[uint64]struct{})
+	for _, req := range reads {
+		if req.SnapshotVersion != 0 {
+			seen[req.SnapshotVersion] = struct{}{}
+		}
+	}
+	require.NotEmpty(t, versions)
+	for version := range versions {
+		require.Contains(t, seen, version)
 	}
 }
 

@@ -155,7 +155,8 @@ func TestRunNegativeLookup(t *testing.T) {
 }
 
 func TestRunDurableSnapshot(t *testing.T) {
-	result, err := RunDurableSnapshot(context.Background(), newFakeSnapshotClient(), DurableSnapshotConfig{
+	cli := newFakeSnapshotClient()
+	result, err := RunDurableSnapshot(context.Background(), cli, DurableSnapshotConfig{
 		Mount:     "vol",
 		RunID:     "test",
 		Files:     3,
@@ -175,6 +176,21 @@ func TestRunDurableSnapshot(t *testing.T) {
 	require.Equal(t, 2, ops["snapshot_subtree"])
 	require.Equal(t, 2, ops["snapshot_readdirplus"])
 	require.Equal(t, 2, ops["retire_snapshot_subtree"])
+	cli.mu.RLock()
+	snapshots := len(cli.snapshots)
+	retired := make(map[uint64]fsmeta.SnapshotSubtreeToken, len(cli.retired))
+	for version, token := range cli.retired {
+		retired[version] = token
+	}
+	readVersions := append([]uint64(nil), cli.readVersions...)
+	cli.mu.RUnlock()
+	require.Zero(t, snapshots)
+	require.Len(t, retired, 2)
+	require.Len(t, readVersions, 2)
+	for _, version := range readVersions {
+		require.NotZero(t, version)
+		require.Contains(t, retired, version)
+	}
 }
 
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
@@ -238,8 +254,10 @@ func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchReques
 
 type fakeSnapshotClient struct {
 	*fakeClient
-	nextVersion uint64
-	snapshots   map[uint64]fsmeta.SnapshotSubtreeToken
+	nextVersion  uint64
+	snapshots    map[uint64]fsmeta.SnapshotSubtreeToken
+	retired      map[uint64]fsmeta.SnapshotSubtreeToken
+	readVersions []uint64
 }
 
 func newFakeSnapshotClient() *fakeSnapshotClient {
@@ -247,7 +265,15 @@ func newFakeSnapshotClient() *fakeSnapshotClient {
 		fakeClient:  newFakeClient(),
 		nextVersion: 1,
 		snapshots:   make(map[uint64]fsmeta.SnapshotSubtreeToken),
+		retired:     make(map[uint64]fsmeta.SnapshotSubtreeToken),
 	}
+}
+
+func (c *fakeSnapshotClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	c.mu.Lock()
+	c.readVersions = append(c.readVersions, req.SnapshotVersion)
+	c.mu.Unlock()
+	return c.fakeClient.ReadDirPlus(ctx, req)
 }
 
 func (c *fakeSnapshotClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
@@ -263,6 +289,7 @@ func (c *fakeSnapshotClient) RetireSnapshotSubtree(_ context.Context, token fsme
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.snapshots, token.ReadVersion)
+	c.retired[token.ReadVersion] = token
 	return nil
 }
 

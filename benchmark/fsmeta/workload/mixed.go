@@ -453,22 +453,25 @@ func runWriterSessionLifecycle(ctx context.Context, cli MixedClient, cfg MixedCo
 
 func runSnapshotLifecycle(ctx context.Context, cli MixedClient, cfg MixedConfig, root fsmeta.InodeID, rec *recorder) {
 	var readVersion uint64
-	rec.recordCall("get_read_version", func() error {
+	if err := recordCall(rec, "get_read_version", func() error {
 		var err error
 		readVersion, err = cli.GetReadVersion(ctx, fsmeta.ReadVersionRequest{Mount: cfg.Mount})
 		return err
-	})
-	if readVersion != 0 {
-		rec.recordCall("snapshot_readdirplus", func() error {
-			_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-				Mount:           cfg.Mount,
-				Parent:          root,
-				Limit:           cfg.PageLimit,
-				SnapshotVersion: readVersion,
-			})
-			return err
-		})
+	}); err != nil {
+		return
 	}
+	rec.recordCall("snapshot_readdirplus", func() error {
+		if readVersion == 0 {
+			return fmt.Errorf("zero read version from GetReadVersion")
+		}
+		_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+			Mount:           cfg.Mount,
+			Parent:          root,
+			Limit:           cfg.PageLimit,
+			SnapshotVersion: readVersion,
+		})
+		return err
+	})
 }
 
 func runStaleSessionCleanup(ctx context.Context, cli MixedClient, cfg MixedConfig, parent fsmeta.InodeID, rec *recorder) {
