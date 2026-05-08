@@ -154,6 +154,45 @@ func TestRunNegativeLookup(t *testing.T) {
 	require.Equal(t, "lookup_missing", rows[0].Operation)
 }
 
+func TestRunDurableSnapshot(t *testing.T) {
+	cli := newFakeSnapshotClient()
+	result, err := RunDurableSnapshot(context.Background(), cli, DurableSnapshotConfig{
+		Mount:     "vol",
+		RunID:     "test",
+		Files:     3,
+		Snapshots: 2,
+		PageLimit: 8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, DurableSnapshot, result.Name)
+	require.Zero(t, result.Errors)
+	rows := SummaryRows(result)
+	ops := make(map[string]int, len(rows))
+	for _, row := range rows {
+		ops[row.Operation] = row.Count
+	}
+	require.Equal(t, 1, ops["mkdir"])
+	require.Equal(t, 3, ops["seed_create"])
+	require.Equal(t, 2, ops["snapshot_subtree"])
+	require.Equal(t, 2, ops["snapshot_readdirplus"])
+	require.Equal(t, 2, ops["retire_snapshot_subtree"])
+	cli.mu.RLock()
+	snapshots := len(cli.snapshots)
+	retired := make(map[uint64]fsmeta.SnapshotSubtreeToken, len(cli.retired))
+	for version, token := range cli.retired {
+		retired[version] = token
+	}
+	readVersions := append([]uint64(nil), cli.readVersions...)
+	cli.mu.RUnlock()
+	require.Zero(t, snapshots)
+	require.Len(t, retired, 2)
+	require.Len(t, readVersions, 2)
+	for _, version := range readVersions {
+		require.NotZero(t, version)
+		require.Contains(t, retired, version)
+	}
+}
+
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteSummaryCSV(&buf, []SummaryRow{{
@@ -211,6 +250,47 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) 
 func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
 	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
 	return c.stream, nil
+}
+
+type fakeSnapshotClient struct {
+	*fakeClient
+	nextVersion  uint64
+	snapshots    map[uint64]fsmeta.SnapshotSubtreeToken
+	retired      map[uint64]fsmeta.SnapshotSubtreeToken
+	readVersions []uint64
+}
+
+func newFakeSnapshotClient() *fakeSnapshotClient {
+	return &fakeSnapshotClient{
+		fakeClient:  newFakeClient(),
+		nextVersion: 1,
+		snapshots:   make(map[uint64]fsmeta.SnapshotSubtreeToken),
+		retired:     make(map[uint64]fsmeta.SnapshotSubtreeToken),
+	}
+}
+
+func (c *fakeSnapshotClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	c.mu.Lock()
+	c.readVersions = append(c.readVersions, req.SnapshotVersion)
+	c.mu.Unlock()
+	return c.fakeClient.ReadDirPlus(ctx, req)
+}
+
+func (c *fakeSnapshotClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nextVersion++
+	token := fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: c.nextVersion}
+	c.snapshots[token.ReadVersion] = token
+	return token, nil
+}
+
+func (c *fakeSnapshotClient) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.snapshots, token.ReadVersion)
+	c.retired[token.ReadVersion] = token
+	return nil
 }
 
 type fakeWatchStream struct {

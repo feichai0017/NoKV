@@ -279,6 +279,17 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
+func TestExecutorGetReadVersionReservesEphemeralTimestamp(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	version, err := executor.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), version)
+	require.Equal(t, uint64(2), runner.nextTS)
+}
+
 func TestExecutorGetQuotaUsage(t *testing.T) {
 	runner := newFakeRunner()
 	key, err := fsmeta.EncodeUsageKey("vol", 7)

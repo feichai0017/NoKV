@@ -60,6 +60,10 @@ func readDirRequestToProto(req fsmeta.ReadDirRequest) *fsmetapb.ReadDirRequest {
 	}
 }
 
+func getReadVersionRequestToProto(req fsmeta.ReadVersionRequest) *fsmetapb.GetReadVersionRequest {
+	return &fsmetapb.GetReadVersionRequest{Mount: string(req.Mount)}
+}
+
 func snapshotSubtreeRequestToProto(req fsmeta.SnapshotSubtreeRequest) *fsmetapb.SnapshotSubtreeRequest {
 	return &fsmetapb.SnapshotSubtreeRequest{
 		Mount:     string(req.Mount),

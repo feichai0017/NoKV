@@ -19,6 +19,7 @@ import (
 
 const (
 	CheckpointStorm = "checkpoint-storm"
+	DurableSnapshot = "durable-snapshot"
 	HotspotFanIn    = "hotspot-fanin"
 	WatchSubtree    = "watch-subtree"
 	NegativeLookup  = "negative-lookup"
@@ -63,6 +64,14 @@ type WatchSubtreeConfig struct {
 	BackPressureWindow uint32
 }
 
+type DurableSnapshotConfig struct {
+	Mount     fsmeta.MountID
+	RunID     string
+	Files     int
+	Snapshots int
+	PageLimit uint32
+}
+
 type NegativeLookupConfig struct {
 	Mount          fsmeta.MountID
 	RunID          string
@@ -86,6 +95,12 @@ type Result struct {
 type WatchClient interface {
 	Client
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error)
+}
+
+type DurableSnapshotClient interface {
+	Client
+	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
+	RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error
 }
 
 type Sample struct {
@@ -375,6 +390,70 @@ func RunNegativeLookup(ctx context.Context, cli Client, cfg NegativeLookupConfig
 	wg.Wait()
 
 	return finishResult(NegativeLookup, cfg.RunID, started, rec.snapshot())
+}
+
+func RunDurableSnapshot(ctx context.Context, cli Client, cfg DurableSnapshotConfig) (Result, error) {
+	snapshotCli, ok := cli.(DurableSnapshotClient)
+	if !ok {
+		return Result{}, fmt.Errorf("durable-snapshot requires native fsmeta snapshot client")
+	}
+	cfg = normalizeDurableSnapshotConfig(cfg)
+	started := time.Now()
+	rec := newRecorder()
+
+	dirName := fmt.Sprintf("durable-snapshot-%s", cfg.RunID)
+	var root fsmeta.InodeID
+	rec.recordCall("mkdir", func() error {
+		result, err := cli.Create(ctx, fsmeta.CreateRequest{
+			Mount:  cfg.Mount,
+			Parent: fsmeta.RootInode,
+			Name:   dirName,
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeDirectory, Mode: 0o755},
+		})
+		if err == nil {
+			root = result.Inode.Inode
+		}
+		return err
+	})
+	for i := 0; i < cfg.Files; i++ {
+		name := fmt.Sprintf("snapshot-%s-file-%08d", cfg.RunID, i)
+		rec.recordCall("seed_create", func() error {
+			_, err := cli.Create(ctx, fsmeta.CreateRequest{
+				Mount:  cfg.Mount,
+				Parent: root,
+				Name:   name,
+				Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+			})
+			return err
+		})
+	}
+	for i := 0; i < cfg.Snapshots; i++ {
+		var token fsmeta.SnapshotSubtreeToken
+		var snapshotErr error
+		rec.recordCall("snapshot_subtree", func() error {
+			token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
+			return snapshotErr
+		})
+		if snapshotErr != nil {
+			continue
+		}
+		if token.ReadVersion != 0 {
+			rec.recordCall("snapshot_readdirplus", func() error {
+				_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+					Mount:           cfg.Mount,
+					Parent:          root,
+					Limit:           cfg.PageLimit,
+					SnapshotVersion: token.ReadVersion,
+				})
+				return err
+			})
+		}
+		rec.recordCall("retire_snapshot_subtree", func() error {
+			return snapshotCli.RetireSnapshotSubtree(ctx, token)
+		})
+	}
+
+	return finishResult(DurableSnapshot, cfg.RunID, started, rec.snapshot())
 }
 
 func SummaryRows(result Result) []SummaryRow {
@@ -697,6 +776,28 @@ func normalizeNegativeLookupConfig(cfg NegativeLookupConfig) NegativeLookupConfi
 	}
 	if cfg.Parent == 0 {
 		cfg.Parent = fsmeta.RootInode
+	}
+	return cfg
+}
+
+func normalizeDurableSnapshotConfig(cfg DurableSnapshotConfig) DurableSnapshotConfig {
+	if cfg.Mount == "" {
+		cfg.Mount = "fsmeta-workload"
+	}
+	if cfg.RunID == "" {
+		cfg.RunID = NewRunID()
+	}
+	if cfg.Files <= 0 {
+		cfg.Files = 128
+	}
+	if cfg.Snapshots <= 0 {
+		cfg.Snapshots = 16
+	}
+	if cfg.PageLimit == 0 {
+		cfg.PageLimit = uint32(cfg.Files)
+	}
+	if cfg.PageLimit > fsmeta.MaxReadDirLimit {
+		cfg.PageLimit = fsmeta.MaxReadDirLimit
 	}
 	return cfg
 }

@@ -66,6 +66,13 @@ func readDirRequestFromProto(req *fsmetapb.ReadDirRequest) fsmeta.ReadDirRequest
 	}
 }
 
+func getReadVersionRequestFromProto(req *fsmetapb.GetReadVersionRequest) fsmeta.ReadVersionRequest {
+	if req == nil {
+		return fsmeta.ReadVersionRequest{}
+	}
+	return fsmeta.ReadVersionRequest{Mount: fsmeta.MountID(req.GetMount())}
+}
+
 func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmeta.SnapshotSubtreeRequest {
 	if req == nil {
 		return fsmeta.SnapshotSubtreeRequest{}

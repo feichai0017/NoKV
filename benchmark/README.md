@@ -136,7 +136,7 @@ cd benchmark
 NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args \
   -fsmeta_addr 127.0.0.1:8090 \
   -fsmeta_coordinator_addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
-  -fsmeta_workloads mixed,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup \
+  -fsmeta_workloads mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup \
   -fsmeta_readdirplus=true
 ```
 

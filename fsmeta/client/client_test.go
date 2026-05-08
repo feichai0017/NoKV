@@ -79,6 +79,13 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 	}}, nil
 }
 
+func (e *fakeExecutor) GetReadVersion(context.Context, fsmeta.ReadVersionRequest) (uint64, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	return 5678, nil
+}
+
 func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
@@ -302,6 +309,16 @@ func TestTypedClientErrorTranslation(t *testing.T) {
 	err = cli.Rename(context.Background(), fsmeta.RenameRequest{Mount: "vol", FromParent: 1, FromName: "a", ToParent: 2, ToName: "b"})
 	require.ErrorIs(t, err, fsmeta.ErrCrossAuthorityRename)
 
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrInvalidRequest})
+	defer cleanup()
+	err = cli.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{Mount: "vol", FromParent: 1, FromName: "a", ToParent: 1, ToName: "a"})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+
+	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrInvalidName})
+	defer cleanup()
+	_, err = cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: ""})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidName)
+
 	cli, cleanup = openBufconnClient(t, &fakeExecutor{err: fsmeta.ErrQuotaExceeded})
 	defer cleanup()
 	_, err = cli.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol"})
@@ -399,6 +416,15 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
 	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
 	require.Equal(t, token, publisher.retired)
+}
+
+func TestTypedClientGetReadVersion(t *testing.T) {
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
+	defer cleanup()
+
+	version, err := cli.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5678), version)
 }
 
 func TestTypedClientGetQuotaUsage(t *testing.T) {

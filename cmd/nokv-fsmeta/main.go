@@ -38,10 +38,15 @@ func main() {
 		negCacheDir            = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
 		dirPageDir             = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
 		inodeAffinityShards    = flag.Int("inode-affinity-shards", 4, "local LSM shard count used to choose Create inode IDs that match dentry shard placement")
+		lockTTL                = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
 		sessionCleanupInterval = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit    = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
 	)
 	flag.Parse()
+	if *lockTTL < 0 {
+		fatalf("lock-ttl must be non-negative")
+		return
+	}
 	if *sessionCleanupLimit > uint(fsmeta.MaxSessionExpireLimit) {
 		fatalf("session-cleanup-limit exceeds maximum %d", fsmeta.MaxSessionExpireLimit)
 		return
@@ -55,6 +60,7 @@ func main() {
 		NegativeCacheDir:       *negCacheDir,
 		DirPageCacheDir:        *dirPageDir,
 		InodeAffinityShards:    *inodeAffinityShards,
+		LockTTL:                *lockTTL,
 		SessionCleanupInterval: *sessionCleanupInterval,
 		SessionCleanupLimit:    uint32(*sessionCleanupLimit),
 	})

@@ -3,6 +3,7 @@ package raftstore
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/stretchr/testify/require"
@@ -14,4 +15,12 @@ func TestOpenRejectsInvalidSessionCleanupLimit(t *testing.T) {
 		SessionCleanupLimit: fsmeta.MaxSessionExpireLimit + 1,
 	})
 	require.ErrorContains(t, err, "session cleanup limit exceeds maximum")
+}
+
+func TestOpenRejectsNegativeLockTTL(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr: "127.0.0.1:1",
+		LockTTL:         -time.Millisecond,
+	})
+	require.ErrorIs(t, err, errLockTTLInvalid)
 }

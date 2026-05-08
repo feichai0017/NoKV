@@ -16,10 +16,17 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-const defaultLockTTL uint64 = 3000
-const maxTxnContentionRetries = 3
-const maxReadContentionRetries = 3
-const txnContentionRetryBackoff = time.Millisecond
+const (
+	// Percolator TTLs are encoded in milliseconds. fsmeta mutations cross the
+	// coordinator TSO path plus raft apply queues, so the default must cover
+	// short commit stalls instead of letting read-side lock resolution roll
+	// back a live metadata transaction.
+	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
+
+	maxTxnContentionRetries   = 3
+	maxReadContentionRetries  = 3
+	txnContentionRetryBackoff = time.Millisecond
+)
 
 // KV is the minimal key/value tuple the fsmeta executor consumes from scans.
 type KV struct {
@@ -710,17 +717,27 @@ func decodeDirPageEntries(key dirpage.PageKey, entries []dirpage.Entry) ([]fsmet
 	return out, nil
 }
 
-// SnapshotSubtree publishes a stable MVCC read version for one direct subtree
-// root. The returned token is consumed by ReadDir / ReadDirPlus through
-// ReadDirRequest.SnapshotVersion.
+// GetReadVersion returns an ephemeral MVCC read version. It is intentionally
+// cheaper than SnapshotSubtree: no root event is published and no GC-retention
+// promise is made.
+func (e *Executor) GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error) {
+	if req.Mount == "" {
+		return 0, fsmeta.ErrInvalidMountID
+	}
+	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+		return 0, err
+	}
+	return e.reserveReadVersion(ctx)
+}
+
+// SnapshotSubtree reserves a durable MVCC read version for one direct subtree
+// root. The service boundary publishes the returned token into rooted truth so
+// GC can treat it as a retained snapshot until RetireSnapshotSubtree.
 func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
 	if _, err := fsmeta.PlanSnapshotSubtree(req); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
-		return fsmeta.SnapshotSubtreeToken{}, err
-	}
-	version, err := e.reserveReadVersion(ctx)
+	version, err := e.GetReadVersion(ctx, fsmeta.ReadVersionRequest{Mount: req.Mount})
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
