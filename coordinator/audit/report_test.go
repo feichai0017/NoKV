@@ -13,7 +13,7 @@ import (
 func TestBuildReportSurfacesSealedExactCompleted(t *testing.T) {
 	snapshot := rootview.Snapshot{
 		CatchUpState: rootview.CatchUpStateFresh,
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:  "g2",
 			HolderID: "c2",
 			Era:      2,
@@ -21,7 +21,7 @@ func TestBuildReportSurfacesSealedExactCompleted(t *testing.T) {
 				rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20),
 				rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 30),
 			},
-		},
+		}},
 		RetiredGrants: []rootproto.GrantRetirement{
 			{
 				GrantID:            "g1",
@@ -48,7 +48,7 @@ func TestBuildReportSurfacesSealedExactCompleted(t *testing.T) {
 
 func TestBuildReportSurfacesExpiredBoundInherited(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		ActiveGrant: rootproto.AuthorityGrant{GrantID: "g2", HolderID: "c2", Era: 2},
+		ActiveGrants: []rootproto.AuthorityGrant{{GrantID: "g2", HolderID: "c2", Era: 2}},
 		RetiredGrants: []rootproto.GrantRetirement{
 			{
 				GrantID:            "g1",
@@ -80,12 +80,12 @@ func TestBuildReportSurfacesRetiredNotInherited(t *testing.T) {
 
 func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:  "g2",
 			HolderID: "c2",
 			Era:      2,
 			Duties:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 5)},
-		},
+		}},
 		RetiredGrants: []rootproto.GrantRetirement{
 			{
 				GrantID:  "g1",
@@ -104,11 +104,11 @@ func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
 func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
 		RetiredEraFloor: 3,
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID: "g4",
 			Era:     4,
 			Duties:  []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 40)},
-		},
+		}},
 	}, "c4", 1_000)
 
 	require.Equal(t, uint64(3), report.RetiredEraFloor)

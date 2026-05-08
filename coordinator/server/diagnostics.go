@@ -45,7 +45,7 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 	snapshotRetention := rootSnapshot.SnapshotRetentionIndex()
 
 	nowUnixNano, _, holderID, renewIn, clockSkew := s.grantCampaignBounds()
-	grant := rootSnapshot.ActiveGrant
+	grant := diagnosticsPrimaryGrant(rootSnapshot)
 	latestRetirement := diagnosticsLatestRetirement(rootSnapshot.RetiredGrants)
 
 	s.allocMu.Lock()
@@ -181,6 +181,16 @@ func (s *Service) DiagnosticsSnapshot() map[string]any {
 		},
 		"eunomia_metrics": s.eunomiaMetrics.snapshot(),
 	}
+}
+
+func diagnosticsPrimaryGrant(snapshot rootview.Snapshot) rootproto.AuthorityGrant {
+	if grant, ok := snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}); ok {
+		return grant
+	}
+	if len(snapshot.ActiveGrants) > 0 {
+		return snapshot.ActiveGrants[0]
+	}
+	return rootproto.AuthorityGrant{}
 }
 
 func diagnosticsTailToken(token rootstorage.TailToken) map[string]any {

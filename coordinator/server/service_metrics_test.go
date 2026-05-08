@@ -70,7 +70,7 @@ func TestServiceDiagnosticsMarksInheritedGrantFinality(t *testing.T) {
 				IDCurrent: 12,
 				TSCurrent: 34,
 			},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "c1/3",
 				HolderID:        "c1",
 				ExpiresUnixNano: time.Unix(0, 20_000).UnixNano(),
@@ -80,7 +80,7 @@ func TestServiceDiagnosticsMarksInheritedGrantFinality(t *testing.T) {
 					rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40),
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 7, 0),
 				},
-			},
+			}},
 			RetiredGrants: []rootproto.GrantRetirement{
 				{
 					GrantID:            "c0/2",

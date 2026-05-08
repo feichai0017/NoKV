@@ -39,10 +39,28 @@ type State struct {
 	LastCommitted     Cursor
 	IDFence           uint64
 	TSOFence          uint64
-	ActiveGrant       rootproto.AuthorityGrant
+	ActiveGrants      []rootproto.AuthorityGrant
 	RetiredGrants     []rootproto.GrantRetirement
 	GrantInheritances []rootproto.GrantInheritance
 	RetiredEraFloor   uint64
+}
+
+func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range s.ActiveGrants {
+		if grant.CoversDutyKey(rootproto.DutyKey{DutyID: duty, Scope: scope}) {
+			return cloneAuthorityGrant(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func (s State) ActiveGrantByID(grantID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range s.ActiveGrants {
+		if grant.GrantID == grantID {
+			return cloneAuthorityGrant(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
 }
 
 type StoreMembershipState uint8
@@ -199,8 +217,7 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	state := snapshot.State
-	state.ActiveGrant.Duties = append([]rootproto.DutyGrant(nil), state.ActiveGrant.Duties...)
-	state.ActiveGrant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), state.ActiveGrant.PredecessorRetirements...)
+	state.ActiveGrants = cloneAuthorityGrants(state.ActiveGrants)
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	out := Snapshot{
@@ -457,16 +474,24 @@ func applyGrantIssuedToState(state *State, cursor Cursor, event rootevent.Event)
 	if state == nil || event.Grant == nil {
 		return
 	}
-	grant := *event.Grant
-	grant.Duties = append([]rootproto.DutyGrant(nil), event.Grant.Duties...)
-	grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), event.Grant.PredecessorRetirements...)
+	grant := cloneAuthorityGrant(*event.Grant)
 	if grant.IssuedAt.Term == 0 && grant.IssuedAt.Index == 0 {
 		grant.IssuedAt = cursor
 	}
 	if grant.IssuedRootToken.Term == 0 && grant.IssuedRootToken.Index == 0 && grant.IssuedRootToken.Revision == 0 {
 		grant.IssuedRootToken = rootproto.AuthorityRootToken{Term: cursor.Term, Index: cursor.Index}
 	}
-	state.ActiveGrant = grant
+	replaced := false
+	for i := range state.ActiveGrants {
+		if state.ActiveGrants[i].GrantID == grant.GrantID {
+			state.ActiveGrants[i] = grant
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		state.ActiveGrants = append(state.ActiveGrants, grant)
+	}
 	for _, duty := range grant.Duties {
 		if duty.Bound.Kind != rootproto.DutyBoundMonotone {
 			continue
@@ -510,8 +535,11 @@ func applyGrantRetirementToState(state *State, cursor Cursor, event rootevent.Ev
 	if !replaced {
 		state.RetiredGrants = append(state.RetiredGrants, retirement)
 	}
-	if state.ActiveGrant.GrantID == retirement.GrantID {
-		state.ActiveGrant = rootproto.AuthorityGrant{}
+	for i := 0; i < len(state.ActiveGrants); i++ {
+		if state.ActiveGrants[i].GrantID == retirement.GrantID {
+			state.ActiveGrants = append(state.ActiveGrants[:i], state.ActiveGrants[i+1:]...)
+			i--
+		}
 	}
 }
 
@@ -539,10 +567,12 @@ func CompactEunomiaState(state State) State {
 		return state
 	}
 	originalRetirements := append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
-	activePredecessors := make(map[string]struct{}, len(state.ActiveGrant.PredecessorRetirements))
-	for _, retirement := range state.ActiveGrant.PredecessorRetirements {
-		if retirement.GrantID != "" {
-			activePredecessors[retirement.GrantID] = struct{}{}
+	activePredecessors := make(map[string]struct{})
+	for _, grant := range state.ActiveGrants {
+		for _, retirement := range grant.PredecessorRetirements {
+			if retirement.GrantID != "" {
+				activePredecessors[retirement.GrantID] = struct{}{}
+			}
 		}
 	}
 	retirements := make([]rootproto.GrantRetirement, 0, len(originalRetirements))
@@ -574,6 +604,23 @@ func CompactEunomiaState(state State) State {
 	state.RetiredGrants = retirements
 	state.GrantInheritances = inheritances
 	return state
+}
+
+func cloneAuthorityGrant(grant rootproto.AuthorityGrant) rootproto.AuthorityGrant {
+	grant.Duties = append([]rootproto.DutyGrant(nil), grant.Duties...)
+	grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), grant.PredecessorRetirements...)
+	return grant
+}
+
+func cloneAuthorityGrants(grants []rootproto.AuthorityGrant) []rootproto.AuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]rootproto.AuthorityGrant, len(grants))
+	for i, grant := range grants {
+		out[i] = cloneAuthorityGrant(grant)
+	}
+	return out
 }
 
 // NextCursor returns the next ordered root cursor.

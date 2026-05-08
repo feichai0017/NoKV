@@ -75,7 +75,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		LastCommitted:     rootproto.Cursor{Term: 2, Index: 9},
 		IDFence:           100,
 		TSOFence:          200,
-		ActiveGrant:       grant,
+		ActiveGrants:      []rootproto.AuthorityGrant{grant},
 		RetiredGrants:     []rootproto.GrantRetirement{retirement},
 		GrantInheritances: []rootproto.GrantInheritance{inheritance},
 	}
@@ -93,7 +93,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
 
 	protocolState := rootstate.EunomiaState{
-		ActiveGrant:       state.ActiveGrant,
+		ActiveGrants:      state.ActiveGrants,
 		RetiredGrants:     state.RetiredGrants,
 		GrantInheritances: state.GrantInheritances,
 	}

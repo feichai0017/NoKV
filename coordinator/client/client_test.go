@@ -300,11 +300,16 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
-		active := s.snapshot.ActiveGrant
+		active, _ := clientActiveGrantFor(s.snapshot, cmd.RequestedDuties)
 		if active.Present() && active.HolderID != holderID && active.ActiveAt(cmd.NowUnixNano) {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		era := active.Era + 1
+		var era uint64 = 1
+		for _, current := range s.snapshot.ActiveGrants {
+			if current.Era >= era {
+				era = current.Era + 1
+			}
+		}
 		for _, retirement := range s.snapshot.RetiredGrants {
 			if retirement.Era >= era {
 				era = retirement.Era + 1
@@ -326,29 +331,35 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 			},
 			Duties: append([]rootproto.DutyGrant(nil), cmd.RequestedDuties...),
 		}
+		if active.Present() {
+			s.snapshot.ActiveGrants = clientRemoveGrantForTest(s.snapshot.ActiveGrants, active.GrantID)
+		}
 		s.applyEventLocked(rootevent.GrantIssued(grant))
-		return s.protocolStateLocked(), clientGrantCertificateForTest(s.snapshot.ActiveGrant), nil
+		issued, _ := s.snapshot.ActiveGrantByID(grant.GrantID)
+		return s.protocolStateLocked(), clientGrantCertificateForTest(issued), nil
 	case rootproto.GrantActSeal:
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+		active, ok := s.snapshot.ActiveGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok || active.HolderID != holderID {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
 		retirement := rootproto.GrantRetirement{
-			GrantID:  s.snapshot.ActiveGrant.GrantID,
-			HolderID: s.snapshot.ActiveGrant.HolderID,
-			Era:      s.snapshot.ActiveGrant.Era,
+			GrantID:  active.GrantID,
+			HolderID: active.HolderID,
+			Era:      active.Era,
 			Mode:     rootproto.GrantRetirementSealedExact,
 			Bounds:   clientDutyGrantsFromUsages(cmd.ExactUsages),
 		}
 		if len(retirement.Bounds) == 0 {
-			retirement.Bounds = append([]rootproto.DutyGrant(nil), s.snapshot.ActiveGrant.Duties...)
+			retirement.Bounds = append([]rootproto.DutyGrant(nil), active.Duties...)
 		}
 		s.applyEventLocked(rootevent.GrantSealed(retirement))
 		return s.protocolStateLocked(), rootproto.GrantCertificate{}, nil
 	case rootproto.GrantActInherit:
-		if !s.snapshot.ActiveGrant.Present() || s.snapshot.ActiveGrant.HolderID != holderID {
+		active, ok := clientActiveGrantForHolder(s.snapshot, holderID)
+		if !ok {
 			return s.protocolStateLocked(), rootproto.GrantCertificate{}, rootstate.ErrPrimacy
 		}
-		successor := s.snapshot.ActiveGrant.GrantID
+		successor := active.GrantID
 		for _, predecessor := range cmd.PredecessorGrantIDs {
 			s.applyEventLocked(rootevent.GrantInherited(rootproto.GrantInheritance{
 				PredecessorGrantID: predecessor,
@@ -377,10 +388,40 @@ func (s *clientRootStorage) applyEventLocked(event rootevent.Event) {
 
 func (s *clientRootStorage) protocolStateLocked() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
-		ActiveGrant:       s.snapshot.ActiveGrant,
+		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), s.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
 	}
+}
+
+func clientActiveGrantFor(snapshot rootview.Snapshot, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		for _, duty := range duties {
+			if grant.CoversDutyKey(duty.Key()) {
+				return grant, true
+			}
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func clientActiveGrantForHolder(snapshot rootview.Snapshot, holderID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == holderID {
+			return grant, true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func clientRemoveGrantForTest(grants []rootproto.AuthorityGrant, grantID string) []rootproto.AuthorityGrant {
+	out := grants[:0]
+	for _, grant := range grants {
+		if grant.GrantID != grantID {
+			out = append(out, grant)
+		}
+	}
+	return out
 }
 
 func clientGrantCertificateForTest(grant rootproto.AuthorityGrant) rootproto.GrantCertificate {
@@ -460,7 +501,7 @@ func TestGRPCClientRetriesTSOAcrossGrantNotHeldEndpoint(t *testing.T) {
 	require.Equal(t, uint64(2), resp.GetCount())
 	require.Equal(t, 1, servers["standby"].tsoCalls)
 	require.Equal(t, 1, servers["holder"].tsoCalls)
-	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyTSO)[0].addr)
 }
 
 func TestGRPCClientRetriesAllocIDAcrossGrantNotHeldEndpoint(t *testing.T) {
@@ -486,7 +527,7 @@ func TestGRPCClientRetriesAllocIDAcrossGrantNotHeldEndpoint(t *testing.T) {
 	require.Equal(t, uint64(3), resp.GetCount())
 	require.Equal(t, 1, servers["standby"].allocCalls)
 	require.Equal(t, 1, servers["holder"].allocCalls)
-	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyAllocID)[0].addr)
 }
 
 func TestGRPCClientRetriesGetRegionByKeyAcrossGrantNotHeldEndpoint(t *testing.T) {
@@ -526,7 +567,7 @@ func TestGRPCClientRetriesGetRegionByKeyAcrossGrantNotHeldEndpoint(t *testing.T)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
 	require.Equal(t, 1, servers["standby"].getCalls)
 	require.Equal(t, 1, servers["holder"].getCalls)
-	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyRegionLookup)[0].addr)
 }
 
 func TestGRPCClientRetriesTSOAfterFullGrantMissRound(t *testing.T) {
@@ -552,7 +593,7 @@ func TestGRPCClientRetriesTSOAfterFullGrantMissRound(t *testing.T) {
 	require.Equal(t, uint64(300), resp.GetTimestamp())
 	require.Equal(t, 2, servers["standby"].tsoCalls)
 	require.Equal(t, 2, servers["holder"].tsoCalls)
-	require.Equal(t, "passthrough:///holder", cli.orderedEndpoints()[0].addr)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyTSO)[0].addr)
 }
 
 func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
@@ -648,7 +689,7 @@ func TestGRPCClientRetriesStaleWitnessEraAcrossEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), resp.GetFirstId())
 
-	cli.markPreferred("passthrough:///stale")
+	cli.markPreferredForDuty(rootproto.DutyAllocID, "passthrough:///stale")
 
 	resp, err = cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.NoError(t, err)
@@ -805,7 +846,7 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
 
-	cli.markPreferred("passthrough:///stale")
+	cli.markPreferredForDuty(rootproto.DutyRegionLookup, "passthrough:///stale")
 
 	resp, err = cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
 		Key:                        []byte("m"),

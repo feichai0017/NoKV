@@ -56,10 +56,28 @@ type Snapshot struct {
 	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
 	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
 	Allocator           AllocatorState
-	ActiveGrant         rootproto.AuthorityGrant
+	ActiveGrants        []rootproto.AuthorityGrant
 	RetiredGrants       []rootproto.GrantRetirement
 	GrantInheritances   []rootproto.GrantInheritance
 	RetiredEraFloor     uint64
+}
+
+func (s Snapshot) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range s.ActiveGrants {
+		if grant.CoversDutyKey(rootproto.DutyKey{DutyID: duty, Scope: scope}) {
+			return cloneAuthorityGrant(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
+}
+
+func (s Snapshot) ActiveGrantByID(grantID string) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range s.ActiveGrants {
+		if grant.GrantID == grantID {
+			return cloneAuthorityGrant(grant), true
+		}
+	}
+	return rootproto.AuthorityGrant{}, false
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
@@ -76,7 +94,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 		Allocator:           snapshot.Allocator,
-		ActiveGrant:         snapshot.ActiveGrant,
+		ActiveGrants:        cloneAuthorityGrants(snapshot.ActiveGrants),
 		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
 		RetiredEraFloor:     snapshot.RetiredEraFloor,
@@ -89,37 +107,26 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 // Eunomia authority mirror is protected against stale replacement.
 func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	out := CloneSnapshot(observed)
-	if !authorityStateNewer(current, observed) {
-		return out
+	for _, currentGrant := range current.ActiveGrants {
+		if !currentGrant.Present() || observedRetiresGrant(observed, currentGrant) {
+			continue
+		}
+		observedGrant, ok := activeGrantOverlapping(out.ActiveGrants, currentGrant)
+		if ok && !authorityGrantNewer(currentGrant, observedGrant) {
+			continue
+		}
+		out.ActiveGrants = removeOverlappingActiveGrant(out.ActiveGrants, currentGrant)
+		out.ActiveGrants = append(out.ActiveGrants, cloneAuthorityGrant(currentGrant))
 	}
-	out.ActiveGrant = current.ActiveGrant
-	out.RetiredGrants = append([]rootproto.GrantRetirement(nil), current.RetiredGrants...)
-	out.GrantInheritances = append([]rootproto.GrantInheritance(nil), current.GrantInheritances...)
-	out.RetiredEraFloor = current.RetiredEraFloor
+	out.RetiredGrants = mergeGrantRetirements(out.RetiredGrants, current.RetiredGrants)
+	out.GrantInheritances = mergeGrantInheritances(out.GrantInheritances, current.GrantInheritances)
+	if current.RetiredEraFloor > out.RetiredEraFloor {
+		out.RetiredEraFloor = current.RetiredEraFloor
+	}
 	return out
 }
 
-func authorityStateNewer(current, observed Snapshot) bool {
-	currentGeneration := authorityGeneration(current)
-	observedGeneration := authorityGeneration(observed)
-	if currentGeneration > observedGeneration {
-		return true
-	}
-	if currentGeneration < observedGeneration {
-		return false
-	}
-	if observedRetiresGrant(observed, current.ActiveGrant) {
-		return false
-	}
-	currentCursor := authorityCursor(current)
-	observedCursor := authorityCursor(observed)
-	return rootstate.CursorAfter(currentCursor, observedCursor)
-}
-
 func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) bool {
-	if !grant.Present() {
-		return false
-	}
 	for _, retirement := range observed.RetiredGrants {
 		if retirement.GrantID == grant.GrantID && retirement.Era == grant.Era {
 			return true
@@ -128,29 +135,73 @@ func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) boo
 	return false
 }
 
-func authorityGeneration(snapshot Snapshot) uint64 {
-	generation := max(snapshot.RetiredEraFloor, snapshot.ActiveGrant.Era)
-	for _, retirement := range snapshot.RetiredGrants {
-		if retirement.Era > generation {
-			generation = retirement.Era
+func activeGrantOverlapping(grants []rootproto.AuthorityGrant, needle rootproto.AuthorityGrant) (rootproto.AuthorityGrant, bool) {
+	for _, grant := range grants {
+		if authorityGrantsOverlap(grant, needle) {
+			return grant, true
 		}
 	}
-	return generation
+	return rootproto.AuthorityGrant{}, false
 }
 
-func authorityCursor(snapshot Snapshot) rootstate.Cursor {
-	cursor := snapshot.ActiveGrant.IssuedAt
-	for _, retirement := range snapshot.RetiredGrants {
-		if rootstate.CursorAfter(retirement.RetiredAt, cursor) {
-			cursor = retirement.RetiredAt
+func authorityGrantNewer(current, observed rootproto.AuthorityGrant) bool {
+	if current.Era != observed.Era {
+		return current.Era > observed.Era
+	}
+	return rootstate.CursorAfter(current.IssuedAt, observed.IssuedAt)
+}
+
+func removeOverlappingActiveGrant(grants []rootproto.AuthorityGrant, needle rootproto.AuthorityGrant) []rootproto.AuthorityGrant {
+	out := grants[:0]
+	for _, grant := range grants {
+		if !authorityGrantsOverlap(grant, needle) {
+			out = append(out, grant)
 		}
 	}
-	for _, inheritance := range snapshot.GrantInheritances {
-		if rootstate.CursorAfter(inheritance.InheritedAt, cursor) {
-			cursor = inheritance.InheritedAt
+	return out
+}
+
+func authorityGrantsOverlap(left, right rootproto.AuthorityGrant) bool {
+	for _, a := range left.Duties {
+		for _, b := range right.Duties {
+			if rootproto.DutyKeyEqual(a.Key(), b.Key()) {
+				return true
+			}
 		}
 	}
-	return cursor
+	return false
+}
+
+func mergeGrantRetirements(observed, current []rootproto.GrantRetirement) []rootproto.GrantRetirement {
+	out := append([]rootproto.GrantRetirement(nil), observed...)
+	seen := make(map[string]struct{}, len(out))
+	for _, retirement := range out {
+		seen[retirement.GrantID] = struct{}{}
+	}
+	for _, retirement := range current {
+		if _, ok := seen[retirement.GrantID]; ok {
+			continue
+		}
+		seen[retirement.GrantID] = struct{}{}
+		out = append(out, retirement)
+	}
+	return out
+}
+
+func mergeGrantInheritances(observed, current []rootproto.GrantInheritance) []rootproto.GrantInheritance {
+	out := append([]rootproto.GrantInheritance(nil), observed...)
+	seen := make(map[string]struct{}, len(out))
+	for _, inheritance := range out {
+		seen[inheritance.PredecessorGrantID] = struct{}{}
+	}
+	for _, inheritance := range current {
+		if _, ok := seen[inheritance.PredecessorGrantID]; ok {
+			continue
+		}
+		seen[inheritance.PredecessorGrantID] = struct{}{}
+		out = append(out, inheritance)
+	}
+	return out
 }
 
 func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
@@ -173,7 +224,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		ActiveGrant:       snapshot.State.ActiveGrant,
+		ActiveGrants:      cloneAuthorityGrants(snapshot.State.ActiveGrants),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
 		RetiredEraFloor:   snapshot.State.RetiredEraFloor,
@@ -187,7 +238,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 			LastCommitted:     s.RootToken.Cursor,
 			IDFence:           s.Allocator.IDCurrent,
 			TSOFence:          s.Allocator.TSCurrent,
-			ActiveGrant:       s.ActiveGrant,
+			ActiveGrants:      cloneAuthorityGrants(s.ActiveGrants),
 			RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
 			GrantInheritances: append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
 			RetiredEraFloor:   s.RetiredEraFloor,
@@ -201,6 +252,25 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.PendingPeerChanges),
 		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.PendingRangeChanges),
 	}
+}
+
+func cloneAuthorityGrants(grants []rootproto.AuthorityGrant) []rootproto.AuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]rootproto.AuthorityGrant, len(grants))
+	for i, grant := range grants {
+		grant.Duties = append([]rootproto.DutyGrant(nil), grant.Duties...)
+		grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), grant.PredecessorRetirements...)
+		out[i] = grant
+	}
+	return out
+}
+
+func cloneAuthorityGrant(grant rootproto.AuthorityGrant) rootproto.AuthorityGrant {
+	grant.Duties = append([]rootproto.DutyGrant(nil), grant.Duties...)
+	grant.PredecessorRetirements = append([]rootproto.GrantRetirement(nil), grant.PredecessorRetirements...)
+	return grant
 }
 
 // SnapshotRetentionFloor returns the oldest active fsmeta snapshot read version

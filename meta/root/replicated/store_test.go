@@ -27,7 +27,7 @@ func issueGrant(store *Store, holderID string, expiresUnixNano, nowUnixNano int6
 			rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, descriptorRevision, 0),
 		},
 	})
-	return state.ActiveGrant, cert, err
+	return firstActiveGrant(state), cert, err
 }
 
 func issueGrantWithDuties(store *Store, holderID string, expiresUnixNano, nowUnixNano int64, duties []rootproto.DutyGrant) (rootproto.AuthorityGrant, error) {
@@ -38,7 +38,14 @@ func issueGrantWithDuties(store *Store, holderID string, expiresUnixNano, nowUni
 		NowUnixNano:     nowUnixNano,
 		RequestedDuties: duties,
 	})
-	return state.ActiveGrant, err
+	return firstActiveGrant(state), err
+}
+
+func firstActiveGrant(state rootstate.EunomiaState) rootproto.AuthorityGrant {
+	if len(state.ActiveGrants) == 0 {
+		return rootproto.AuthorityGrant{}
+	}
+	return state.ActiveGrants[0]
 }
 
 func sealGrant(store *Store, holderID, grantID string, usages []rootproto.AuthorityUsage) (rootproto.GrantRetirement, error) {
@@ -319,11 +326,40 @@ func TestReplicatedStoreIssueGrant(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return current.ActiveGrant.HolderID == "c1" &&
-			current.ActiveGrant.Era == 1 &&
+		grant, ok := current.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+		return ok &&
+			grant.HolderID == "c1" &&
+			grant.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestReplicatedStoreAllowsDisjointDutyGrants(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	store := stores[leaderID]
+
+	allocGrant, err := issueGrantWithDuties(store, "c1", 1_000, 100, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 123),
+	})
+	require.NoError(t, err)
+	_, err = issueGrantWithDuties(store, "c2", 1_000, 100, []rootproto.DutyGrant{
+		rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 456),
+	})
+	require.NoError(t, err)
+
+	current, err := store.Current()
+	require.NoError(t, err)
+	require.Len(t, current.ActiveGrants, 2)
+	activeAlloc, ok := current.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, allocGrant.GrantID, activeAlloc.GrantID)
+	activeTSO, ok := current.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "c2", activeTSO.HolderID)
+	require.Empty(t, current.RetiredGrants)
+	require.Equal(t, uint64(123), current.IDFence)
+	require.Equal(t, uint64(456), current.TSOFence)
 }
 
 func TestReplicatedStoreIssueGrantIdempotentByGrantID(t *testing.T) {
@@ -345,10 +381,10 @@ func TestReplicatedStoreIssueGrantIdempotentByGrantID(t *testing.T) {
 	secondState, secondCert, err := stores[leaderID].ApplyGrant(context.Background(), cmd)
 	require.NoError(t, err)
 
-	require.Equal(t, firstState.ActiveGrant, secondState.ActiveGrant)
+	require.Equal(t, firstActiveGrant(firstState), firstActiveGrant(secondState))
 	require.Equal(t, firstCert.Grant, secondCert.Grant)
-	require.Equal(t, uint64(1), secondState.ActiveGrant.Era)
-	require.Equal(t, "c1/request-1", secondState.ActiveGrant.GrantID)
+	require.Equal(t, uint64(1), firstActiveGrant(secondState).Era)
+	require.Equal(t, "c1/request-1", firstActiveGrant(secondState).GrantID)
 	require.Empty(t, secondState.RetiredGrants)
 
 	wider := cmd
@@ -358,8 +394,8 @@ func TestReplicatedStoreIssueGrantIdempotentByGrantID(t *testing.T) {
 	}
 	widerState, _, err := stores[leaderID].ApplyGrant(context.Background(), wider)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), widerState.ActiveGrant.Era)
-	require.NotEqual(t, "c1/request-1", widerState.ActiveGrant.GrantID)
+	require.Equal(t, uint64(2), firstActiveGrant(widerState).Era)
+	require.NotEqual(t, "c1/request-1", firstActiveGrant(widerState).GrantID)
 	require.Len(t, widerState.RetiredGrants, 1)
 	require.Equal(t, "c1/request-1", widerState.RetiredGrants[0].GrantID)
 }
@@ -505,9 +541,11 @@ func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {
 			return false
 		}
 		current, err := stores[followerID].Current()
+		grant, ok := current.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
 		return err == nil &&
-			current.ActiveGrant.HolderID == "c1" &&
-			current.ActiveGrant.Era == 1 &&
+			ok &&
+			grant.HolderID == "c1" &&
+			grant.Era == 1 &&
 			current.IDFence == 123 &&
 			current.TSOFence == 456
 	}, 5*time.Second, 50*time.Millisecond)
@@ -531,9 +569,11 @@ func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {
 				return false
 			}
 			current, err := stores[id].Current()
+			grant, ok := current.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
 			return err == nil &&
-				current.ActiveGrant.HolderID == "c1" &&
-				current.ActiveGrant.Era == 2 &&
+				ok &&
+				grant.HolderID == "c1" &&
+				grant.Era == 2 &&
 				current.IDFence == 200 &&
 				current.TSOFence == 600
 		}, 5*time.Second, 50*time.Millisecond)
@@ -557,7 +597,7 @@ func TestReplicatedStoreRetireExpiredGrant(t *testing.T) {
 
 	current, err := stores[leaderID].Current()
 	require.NoError(t, err)
-	require.False(t, current.ActiveGrant.Present())
+	require.Empty(t, current.ActiveGrants)
 }
 
 func testDescriptor(id uint64, start, end []byte) topology.Descriptor {

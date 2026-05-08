@@ -151,7 +151,7 @@ func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand
 	if f.applyGrantErr != nil {
 		return f.applyGrantResult, rootproto.GrantCertificate{}, f.applyGrantErr
 	}
-	f.snapshot.State.ActiveGrant = f.applyGrantResult.ActiveGrant
+	f.snapshot.State.ActiveGrants = append([]rootproto.AuthorityGrant(nil), f.applyGrantResult.ActiveGrants...)
 	f.snapshot.State.RetiredGrants = append([]rootproto.GrantRetirement(nil), f.applyGrantResult.RetiredGrants...)
 	f.snapshot.State.GrantInheritances = append([]rootproto.GrantInheritance(nil), f.applyGrantResult.GrantInheritances...)
 	if f.useObserved {
@@ -213,12 +213,12 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			desc1.RegionID: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: desc1.RegionID, Left: desc1, Right: desc2},
 		},
 		Allocator: AllocatorState{IDCurrent: 20, TSCurrent: 30},
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "grant-7",
 			HolderID:        "coord",
 			Era:             7,
 			ExpiresUnixNano: 999,
-		},
+		}},
 	}
 
 	cloned := CloneSnapshot(snapshot)
@@ -233,7 +233,7 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			LastCommitted: rootstate.Cursor{Term: 3, Index: 10},
 			IDFence:       40,
 			TSOFence:      50,
-			ActiveGrant:   snapshot.ActiveGrant,
+			ActiveGrants:  snapshot.ActiveGrants,
 		},
 		Stores: map[uint64]rootstate.StoreMembership{
 			7: {StoreID: 7, State: rootstate.StoreMembershipActive, JoinedAt: rootstate.Cursor{Term: 2, Index: 3}},
@@ -389,13 +389,13 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 			rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Revision: 2},
 		),
 		applyGrantResult: rootstate.EunomiaState{
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "grant-2",
 				HolderID:        "coord-2",
 				Era:             2,
 				ExpiresUnixNano: 999,
 				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 50)},
-			},
+			}},
 		},
 	}
 
@@ -433,11 +433,11 @@ func TestRootStoreWithOptionalBackend(t *testing.T) {
 
 	leaseState, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActIssue})
 	require.NoError(t, err)
-	require.Equal(t, "coord-2", leaseState.ActiveGrant.HolderID)
+	require.Equal(t, "coord-2", leaseState.ActiveGrants[0].HolderID)
 
 	sealState, _, err := store.ApplyGrant(context.Background(), rootproto.GrantCommand{Kind: rootproto.GrantActSeal, GrantID: "grant-2"})
 	require.NoError(t, err)
-	require.Equal(t, "coord-2", sealState.ActiveGrant.HolderID)
+	require.Equal(t, "coord-2", sealState.ActiveGrants[0].HolderID)
 
 	require.NoError(t, store.Close())
 	require.True(t, fake.closeCalled)
@@ -447,22 +447,22 @@ func TestRootStoreMergesGrantStateFromHeldRejection(t *testing.T) {
 	initial := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "stale-grant",
 				HolderID:        "stale",
 				Era:             1,
 				ExpiresUnixNano: 100,
-			},
+			}},
 		},
 	}
 	authoritative := rootstate.EunomiaState{
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "grant-2",
 			HolderID:        "coord-1",
 			Era:             2,
 			ExpiresUnixNano: 1_000,
 			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
-		},
+		}},
 	}
 	fake := &fakeRootBackend{
 		snapshot:         initial,
@@ -480,31 +480,31 @@ func TestRootStoreMergesGrantStateFromHeldRejection(t *testing.T) {
 	require.Equal(t, authoritative, state)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "coord-1", loaded.ActiveGrant.HolderID)
-	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
+	require.Equal(t, "coord-1", loaded.ActiveGrants[0].HolderID)
+	require.Equal(t, uint64(2), loaded.ActiveGrants[0].Era)
 }
 
 func TestRootStorePreservesAppliedGrantAcrossStaleObservedReload(t *testing.T) {
 	stale := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "stale-grant",
 				HolderID:        "coord-2",
 				Era:             1,
 				ExpiresUnixNano: 1_000,
-			},
+			}},
 		},
 	}
 	authoritative := rootstate.EunomiaState{
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "grant-2",
 			HolderID:        "coord-1",
 			Era:             2,
 			ExpiresUnixNano: 2_000,
 			IssuedAt:        rootstate.Cursor{Term: 1, Index: 11},
 			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 20)},
-		},
+		}},
 	}
 	fake := &fakeRootBackend{
 		snapshot:         stale,
@@ -521,42 +521,45 @@ func TestRootStorePreservesAppliedGrantAcrossStaleObservedReload(t *testing.T) {
 	require.Equal(t, authoritative, state)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "coord-1", loaded.ActiveGrant.HolderID)
-	require.Equal(t, uint64(2), loaded.ActiveGrant.Era)
+	require.Equal(t, "coord-1", loaded.ActiveGrants[0].HolderID)
+	require.Equal(t, uint64(2), loaded.ActiveGrants[0].Era)
 }
 
 func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *testing.T) {
 	initial := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "grant-1",
 				HolderID:        "coord-1",
 				Era:             1,
 				ExpiresUnixNano: 1_000,
-			},
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+			}},
 		},
 	}
 	fresher := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 12},
-			ActiveGrant: rootproto.AuthorityGrant{
+			ActiveGrants: []rootproto.AuthorityGrant{{
 				GrantID:         "grant-3",
 				HolderID:        "coord-3",
 				Era:             3,
 				ExpiresUnixNano: 3_000,
 				IssuedAt:        rootstate.Cursor{Term: 1, Index: 12},
-			},
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 30)},
+			}},
 		},
 	}
 	olderApply := rootstate.EunomiaState{
-		ActiveGrant: rootproto.AuthorityGrant{
+		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "grant-2",
 			HolderID:        "coord-2",
 			Era:             2,
 			ExpiresUnixNano: 2_000,
 			IssuedAt:        rootstate.Cursor{Term: 1, Index: 11},
-		},
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
+		}},
 	}
 	fake := &fakeRootBackend{
 		snapshot:         initial,
@@ -572,8 +575,39 @@ func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *test
 	require.NoError(t, err)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "coord-3", loaded.ActiveGrant.HolderID)
-	require.Equal(t, uint64(3), loaded.ActiveGrant.Era)
+	require.Equal(t, "coord-3", loaded.ActiveGrants[0].HolderID)
+	require.Equal(t, uint64(3), loaded.ActiveGrants[0].Era)
+}
+
+func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
+	observed := Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "alloc/3",
+			HolderID:        "coord-1",
+			Era:             3,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 30},
+			ExpiresUnixNano: 3_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 30)},
+		}},
+	}
+	current := Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "tso/4",
+			HolderID:        "coord-2",
+			Era:             4,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 40},
+			ExpiresUnixNano: 4_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40)},
+		}},
+	}
+
+	merged := PreserveNewerAuthorityState(observed, current)
+	alloc, ok := merged.ActiveGrantFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "coord-1", alloc.HolderID)
+	tso, ok := merged.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, "coord-2", tso.HolderID)
 }
 
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
