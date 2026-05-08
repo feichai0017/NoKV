@@ -435,7 +435,7 @@ func TestReplicatedStoreRejectsUnregisteredDuty(t *testing.T) {
 		ExpiresUnixNano: 1_000,
 		NowUnixNano:     100,
 		RequestedDuties: []rootproto.DutyGrant{
-			rootproto.NewGlobalMonotoneDuty(rootproto.DutyLeaseStart, 10),
+			rootproto.NewGlobalMonotoneDuty(rootproto.DutyID("lease_start"), 10),
 		},
 	})
 	require.ErrorIs(t, err, rootstate.ErrDuty)
