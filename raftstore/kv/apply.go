@@ -30,7 +30,8 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		latches = latch.NewManager(defaultLatchSlots)
 	}
 	resp := &raftcmdpb.RaftCmdResponse{Header: req.Header}
-	for _, r := range req.Requests {
+	for i := 0; i < len(req.Requests); i++ {
+		r := req.Requests[i]
 		if r == nil {
 			continue
 		}
@@ -45,17 +46,49 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Get{Get: result}})
 		case raftcmdpb.CmdType_CMD_PREWRITE:
-			result := &kvrpcpb.PrewriteResponse{Errors: percolator.Prewrite(db, latches, r.GetPrewrite())}
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: result}})
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_PREWRITE)
+			batch := []*kvrpcpb.PrewriteRequest{r.GetPrewrite()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetPrewrite())
+			}
+			for _, errs := range percolator.PrewriteBatch(db, latches, batch) {
+				result := &kvrpcpb.PrewriteResponse{Errors: errs}
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: result}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_COMMIT:
-			err := percolator.Commit(db, latches, r.GetCommit())
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: err}}})
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_COMMIT)
+			batch := []*kvrpcpb.CommitRequest{r.GetCommit()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetCommit())
+			}
+			for _, err := range percolator.CommitBatch(db, latches, batch) {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: err}}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
-			err := percolator.BatchRollback(db, latches, r.GetBatchRollback())
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_BatchRollback{BatchRollback: &kvrpcpb.BatchRollbackResponse{Error: err}}})
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_BATCH_ROLLBACK)
+			batch := []*kvrpcpb.BatchRollbackRequest{r.GetBatchRollback()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetBatchRollback())
+			}
+			for _, err := range percolator.BatchRollbackBatch(db, latches, batch) {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_BatchRollback{BatchRollback: &kvrpcpb.BatchRollbackResponse{Error: err}}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
-			count, err := percolator.ResolveLock(db, latches, r.GetResolveLock())
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{ResolvedLocks: count, Error: err}}})
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_RESOLVE_LOCK)
+			batch := []*kvrpcpb.ResolveLockRequest{r.GetResolveLock()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetResolveLock())
+			}
+			for _, result := range percolator.ResolveLockBatch(db, latches, batch) {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{
+					ResolvedLocks: result.ResolvedLocks,
+					Error:         result.Error,
+				}}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			result := percolator.CheckTxnStatus(db, latches, r.GetCheckTxnStatus())
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_CheckTxnStatus{CheckTxnStatus: result}})
@@ -63,12 +96,19 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 			result := percolator.TxnHeartBeat(db, latches, r.GetTxnHeartBeat())
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TxnHeartBeat{TxnHeartBeat: result}})
 		case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
-			result := percolator.ApplyAtomicMutate(db, latches, r.GetTryAtomicMutate())
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{
-				Error:                    result.Error,
-				AppliedKeys:              result.AppliedKeys,
-				FallbackToTwoPhaseCommit: result.Fallback,
-			}}})
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE)
+			batch := []*kvrpcpb.TryAtomicMutateRequest{r.GetTryAtomicMutate()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetTryAtomicMutate())
+			}
+			for _, result := range percolator.ApplyAtomicMutateBatch(db, latches, batch) {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{
+					Error:                    result.Error,
+					AppliedKeys:              result.AppliedKeys,
+					FallbackToTwoPhaseCommit: result.Fallback,
+				}}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 			result, err := applyMVCCMaintenance(db, r.GetMvccMaintenance())
 			if err != nil {
@@ -86,6 +126,18 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 		}
 	}
 	return resp, nil
+}
+
+func collectCommandRun(reqs []*raftcmdpb.Request, start int, cmdType raftcmdpb.CmdType) int {
+	end := start + 1
+	for end < len(reqs) {
+		next := reqs[end]
+		if next == nil || next.GetCmdType() != cmdType {
+			break
+		}
+		end++
+	}
+	return end
 }
 
 func applyMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest) (*kvrpcpb.MVCCMaintenanceResponse, error) {

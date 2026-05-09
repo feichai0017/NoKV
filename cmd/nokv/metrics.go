@@ -130,7 +130,7 @@ func metaRootSnapshot(ctx metaRootExpvarContext) map[string]any {
 func installStorePercolatorExpvar() {
 	storePercolatorOnce.Do(func() {
 		expvar.Publish("nokv_store_percolator", expvar.Func(func() any {
-			return percolator.AtomicMutateStats()
+			return percolator.Stats()
 		}))
 	})
 }

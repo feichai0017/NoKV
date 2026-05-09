@@ -57,6 +57,19 @@ func atomicPutIfAbsentRequest(startVersion, commitVersion uint64, firstKey, firs
 	}
 }
 
+func atomicPutRequest(startVersion, commitVersion uint64, key, value []byte) *kvrpcpb.TryAtomicMutateRequest {
+	return &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  startVersion,
+		CommitVersion: commitVersion,
+		Predicates: []*kvrpcpb.AtomicPredicate{
+			{Key: kv.SafeCopy(nil, key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+		},
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: kv.SafeCopy(nil, key), Value: kv.SafeCopy(nil, value), AssertionNotExist: true},
+		},
+	}
+}
+
 func atomicMutateStat(t *testing.T, stats map[string]any, key string) uint64 {
 	t.Helper()
 	raw, ok := stats[key]
@@ -159,6 +172,18 @@ func (s *countingStore) NewInternalIterator(opt *index.Options) index.Iterator {
 func (s *countingStore) failNextApply(err error) {
 	s.failApplyErr = err
 	s.failApplyRemaining = 1
+}
+
+type countingAtomicStore struct {
+	*countingStore
+}
+
+func newCountingAtomicStore(base *local.DB) *countingAtomicStore {
+	return &countingAtomicStore{countingStore: newCountingStore(base)}
+}
+
+func (s *countingAtomicStore) CanApplyInternalEntriesAtomically(entries []*kv.Entry) bool {
+	return s.base.CanApplyInternalEntriesAtomically(entries)
 }
 
 type testIterator struct {
@@ -274,16 +299,135 @@ func TestApplyAtomicMutateStatsRecordLocalFallback(t *testing.T) {
 	db := openTestDB(t)
 	store := newCountingStore(db)
 	latches := latch.NewManager(16)
-	before := AtomicMutateStats()
+	before := Stats()
 
 	result := ApplyAtomicMutate(store, latches, atomicPutIfAbsentRequest(20, 21, []byte("dentry"), []byte("ino=42"), []byte("inode"), []byte("attrs")))
 	require.Nil(t, result.Error)
 	require.True(t, result.Fallback)
 	require.Zero(t, store.applyCalls)
 
-	after := AtomicMutateStats()
+	after := Stats()
 	require.Equal(t, atomicMutateStat(t, before, "atomic_apply_called_total")+1, atomicMutateStat(t, after, "atomic_apply_called_total"))
 	require.Equal(t, atomicMutateStat(t, before, "atomic_local_fallback_total")+1, atomicMutateStat(t, after, "atomic_local_fallback_total"))
+}
+
+func TestApplyAtomicMutateBatchFusesIndependentRequests(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newCountingAtomicStore(db)
+	latches := latch.NewManager(16)
+	before := Stats()
+	results := ApplyAtomicMutateBatch(store, latches, []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(40, 41, []byte("atomic-batch-a"), []byte("va")),
+		atomicPutRequest(42, 43, []byte("atomic-batch-b"), []byte("vb")),
+	})
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.Nil(t, result.Error)
+		require.False(t, result.Fallback)
+		require.Equal(t, uint64(1), result.AppliedKeys)
+	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+
+	reader := NewReader(db)
+	value, _, err := reader.GetValue([]byte("atomic-batch-a"), 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("va"), value)
+	value, _, err = reader.GetValue([]byte("atomic-batch-b"), 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("vb"), value)
+
+	after := Stats()
+	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_batches_total")+1, atomicMutateStat(t, after, "atomic_fused_apply_batches_total"))
+	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_requests_total")+2, atomicMutateStat(t, after, "atomic_fused_apply_requests_total"))
+	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_entries_total")+6, atomicMutateStat(t, after, "atomic_fused_apply_entries_total"))
+}
+
+func TestApplyAtomicMutateBatchSplitsDifferentLocalApplyGroups(t *testing.T) {
+	const shardCount = 4
+
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = shardCount
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	first, second := keysWithAscendingCommitShards(t, shardCount)
+	firstShard := lsm.ShardForInternalKey(kv.InternalKey(kv.CFDefault, first, 50), shardCount)
+	secondShard := lsm.ShardForInternalKey(kv.InternalKey(kv.CFDefault, second, 52), shardCount)
+	require.NotEqual(t, firstShard, secondShard)
+
+	store := newCountingAtomicStore(db)
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(16), []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(50, 51, first, []byte("first")),
+		atomicPutRequest(52, 53, second, []byte("second")),
+	})
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.Nil(t, result.Error)
+		require.False(t, result.Fallback)
+		require.Equal(t, uint64(1), result.AppliedKeys)
+	}
+	require.Equal(t, 2, store.applyCalls)
+	require.Equal(t, []int{3, 3}, store.appliedEntryCounts)
+}
+
+func TestApplyAtomicMutateBatchPreservesOverlappingRequestOrder(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newCountingAtomicStore(db)
+	key := []byte("atomic-overlap")
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(16), []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(60, 61, key, []byte("first")),
+		atomicPutRequest(62, 63, key, []byte("second")),
+	})
+	require.Len(t, results, 2)
+	require.Nil(t, results[0].Error)
+	require.Equal(t, uint64(1), results[0].AppliedKeys)
+	require.NotNil(t, results[1].Error)
+	require.NotNil(t, results[1].Error.GetAlreadyExists())
+	require.Equal(t, 1, store.applyCalls)
+
+	value, _, err := NewReader(db).GetValue(key, 70)
+	require.NoError(t, err)
+	require.Equal(t, []byte("first"), value)
+}
+
+func TestApplyAtomicMutateBatchApplyFailureMarksWholeFusedGroup(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	injected := errors.New("fused atomic apply failed")
+	store := newCountingAtomicStore(db)
+	store.failNextApply(injected)
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(16), []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(70, 71, []byte("atomic-fail-a"), []byte("va")),
+		atomicPutRequest(72, 73, []byte("atomic-fail-b"), []byte("vb")),
+	})
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.NotNil(t, result.Error)
+		require.Contains(t, result.Error.GetRetryable(), injected.Error())
+	}
+	require.Equal(t, 1, store.applyCalls)
+
+	reader := NewReader(db)
+	_, _, err = reader.GetValue([]byte("atomic-fail-a"), 80)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	_, _, err = reader.GetValue([]byte("atomic-fail-b"), 80)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
@@ -643,6 +787,186 @@ func TestPrewriteBatchAppliesAllMutationsOnce(t *testing.T) {
 		require.NotNil(t, lock, "key=%s", key)
 		require.Equal(t, uint64(8), lock.Ts)
 	}
+}
+
+func TestPrewriteRequestBatchFusesIndependentRequests(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(32)
+	before := Stats()
+
+	results := PrewriteBatch(store, latches, []*kvrpcpb.PrewriteRequest{
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: []byte("prewrite-fused-a"), Value: []byte("va")}},
+			PrimaryLock:  []byte("prewrite-fused-a"),
+			StartVersion: 20,
+			LockTtl:      1000,
+		},
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: []byte("prewrite-fused-b"), Value: []byte("vb")}},
+			PrimaryLock:  []byte("prewrite-fused-b"),
+			StartVersion: 22,
+			LockTtl:      1000,
+		},
+	})
+	require.Len(t, results, 2)
+	require.Empty(t, results[0])
+	require.Empty(t, results[1])
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+
+	after := Stats()
+	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_batches_total")+1, atomicMutateStat(t, after, "two_pc_fused_apply_batches_total"))
+	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_requests_total")+2, atomicMutateStat(t, after, "two_pc_fused_apply_requests_total"))
+	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_entries_total")+6, atomicMutateStat(t, after, "two_pc_fused_apply_entries_total"))
+}
+
+func TestPrewriteRequestBatchPreservesOverlappingOrder(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	latches := latch.NewManager(32)
+	key := []byte("prewrite-overlap")
+
+	results := PrewriteBatch(store, latches, []*kvrpcpb.PrewriteRequest{
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: key, Value: []byte("first")}},
+			PrimaryLock:  key,
+			StartVersion: 30,
+			LockTtl:      1000,
+		},
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: key, Value: []byte("second")}},
+			PrimaryLock:  key,
+			StartVersion: 32,
+			LockTtl:      1000,
+		},
+	})
+	require.Len(t, results, 2)
+	require.Empty(t, results[0])
+	require.Len(t, results[1], 1)
+	require.NotNil(t, results[1][0].GetLocked())
+	require.Equal(t, 1, store.applyCalls)
+
+	lock, err := NewReader(db).GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, uint64(30), lock.Ts)
+}
+
+func TestPrewriteRequestBatchApplyFailureMarksFusedRequests(t *testing.T) {
+	db := openTestDB(t)
+	store := newCountingStore(db)
+	injected := errors.New("fused prewrite apply failed")
+	store.failNextApply(injected)
+	latches := latch.NewManager(32)
+
+	results := PrewriteBatch(store, latches, []*kvrpcpb.PrewriteRequest{
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: []byte("prewrite-fail-a"), Value: []byte("va")}},
+			PrimaryLock:  []byte("prewrite-fail-a"),
+			StartVersion: 40,
+			LockTtl:      1000,
+		},
+		{
+			Mutations:    []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Put, Key: []byte("prewrite-fail-b"), Value: []byte("vb")}},
+			PrimaryLock:  []byte("prewrite-fail-b"),
+			StartVersion: 42,
+			LockTtl:      1000,
+		},
+	})
+	require.Len(t, results, 2)
+	for _, errs := range results {
+		require.Len(t, errs, 1)
+		require.Contains(t, errs[0].GetRetryable(), injected.Error())
+	}
+	require.Equal(t, 1, store.applyCalls)
+
+	reader := NewReader(db)
+	for _, key := range [][]byte{[]byte("prewrite-fail-a"), []byte("prewrite-fail-b")} {
+		lock, err := reader.GetLock(key)
+		require.NoError(t, err)
+		require.Nil(t, lock)
+	}
+}
+
+func TestCommitRequestBatchFusesIndependentRequests(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	keys := [][]byte{[]byte("commit-fused-a"), []byte("commit-fused-b")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 50,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	results := CommitBatch(store, latches, []*kvrpcpb.CommitRequest{
+		{Keys: [][]byte{keys[0]}, StartVersion: 50, CommitVersion: 60},
+		{Keys: [][]byte{keys[1]}, StartVersion: 50, CommitVersion: 60},
+	})
+	require.Len(t, results, 2)
+	require.Nil(t, results[0])
+	require.Nil(t, results[1])
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{4}, store.appliedEntryCounts)
+}
+
+func TestBatchRollbackRequestBatchFusesIndependentRequests(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	keys := [][]byte{[]byte("rollback-fused-a"), []byte("rollback-fused-b")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 70,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	results := BatchRollbackBatch(store, latches, []*kvrpcpb.BatchRollbackRequest{
+		{Keys: [][]byte{keys[0]}, StartVersion: 70},
+		{Keys: [][]byte{keys[1]}, StartVersion: 70},
+	})
+	require.Len(t, results, 2)
+	require.Nil(t, results[0])
+	require.Nil(t, results[1])
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+}
+
+func TestResolveLockRequestBatchFusesIndependentRequests(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(32)
+	keys := [][]byte{[]byte("resolve-fused-a"), []byte("resolve-fused-b")}
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: keys[0], Value: []byte("va")},
+			{Op: kvrpcpb.Mutation_Put, Key: keys[1], Value: []byte("vb")},
+		},
+		PrimaryLock:  keys[0],
+		StartVersion: 80,
+		LockTtl:      1000,
+	}))
+
+	store := newCountingStore(db)
+	results := ResolveLockBatch(store, latches, []*kvrpcpb.ResolveLockRequest{
+		{Keys: [][]byte{keys[0]}, StartVersion: 80, CommitVersion: 90},
+		{Keys: [][]byte{keys[1]}, StartVersion: 80, CommitVersion: 90},
+	})
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.Nil(t, result.Error)
+		require.Equal(t, uint64(1), result.ResolvedLocks)
+	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{4}, store.appliedEntryCounts)
 }
 
 func TestCommitMissingLock(t *testing.T) {
