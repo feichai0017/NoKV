@@ -1648,7 +1648,7 @@ func (e *Executor) reserveQuota(ctx context.Context, changes []QuotaChange, star
 }
 
 func (e *Executor) reserveReadVersion(ctx context.Context) (uint64, error) {
-	return e.runner.ReserveTimestamp(ctx, 1)
+	return e.reserveTimestampWithRetry(ctx, 1, maxReadContentionRetries, &e.readRetriesTotal, &e.readRetryExhaustedTotal)
 }
 
 func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uint64, error) {
@@ -1676,11 +1676,41 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 // speculative commit_ts is detected at commit time, never silently accepted.
 // CommitTsExpired is retried transparently by withTxnRetry below.
 func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
-	startVersion, err := e.runner.ReserveTimestamp(ctx, 2)
+	startVersion, err := e.reserveTimestampWithRetry(ctx, 2, maxTxnContentionRetries, &e.txnRetriesTotal, &e.txnRetryExhaustedTotal)
 	if err != nil {
 		return 0, 0, err
 	}
 	return startVersion, startVersion + 1, nil
+}
+
+func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, maxRetries int, retryTotal, exhaustedTotal *atomic.Uint64) (uint64, error) {
+	var last error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		version, err := e.runner.ReserveTimestamp(ctx, count)
+		if err == nil {
+			return version, nil
+		}
+		if !nokverrors.Retryable(err) {
+			return 0, err
+		}
+		last = err
+		if attempt == maxRetries {
+			if exhaustedTotal != nil {
+				exhaustedTotal.Add(1)
+			}
+			break
+		}
+		if retryTotal != nil {
+			retryTotal.Add(1)
+		}
+		// Coordinator duty handoff can reject a timestamp request with stale
+		// evidence before any fsmeta mutation has started. Retrying here keeps
+		// transient authority churn below the namespace API boundary.
+		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
+			return 0, err
+		}
+	}
+	return 0, last
 }
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {

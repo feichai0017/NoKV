@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"testing"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -25,4 +26,33 @@ func TestRPCCodeForKind(t *testing.T) {
 func TestRPCErrorPassesThroughStatusErrors(t *testing.T) {
 	err := status.Error(codes.NotFound, "already mapped")
 	require.Same(t, err, rpcError(err))
+}
+
+func TestRPCErrorPreservesOuterStableKindOverWrappedStatus(t *testing.T) {
+	err := testKindWrap{
+		kind: nokverrors.KindRouteUnavailable,
+		err:  status.Error(codes.FailedPrecondition, "required descriptor revision not satisfied"),
+	}
+
+	got := rpcError(err)
+
+	require.Equal(t, codes.Unavailable, status.Code(got))
+	require.Equal(t, nokverrors.KindRouteUnavailable, nokverrors.KindOf(got))
+}
+
+type testKindWrap struct {
+	kind nokverrors.Kind
+	err  error
+}
+
+func (e testKindWrap) Error() string {
+	return fmt.Sprintf("wrapped: %v", e.err)
+}
+
+func (e testKindWrap) Unwrap() error {
+	return e.err
+}
+
+func (e testKindWrap) ErrorKind() nokverrors.Kind {
+	return e.kind
 }

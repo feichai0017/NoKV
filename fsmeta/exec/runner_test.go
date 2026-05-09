@@ -26,6 +26,7 @@ type fakeRunner struct {
 	batchVersions       []uint64
 	scanErrs            []error
 	batchErrs           []error
+	timestampErrs       []error
 	mutateErr           error
 	mutateErrs          []error
 	actualCommitVersion uint64
@@ -203,6 +204,13 @@ func newFakeRunner() *fakeRunner {
 func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, error) {
 	if count == 0 {
 		return 0, errors.New("zero timestamp reservation")
+	}
+	if len(r.timestampErrs) > 0 {
+		err := r.timestampErrs[0]
+		r.timestampErrs = r.timestampErrs[1:]
+		if err != nil {
+			return 0, err
+		}
 	}
 	first := r.nextTS
 	r.nextTS += count
@@ -464,6 +472,39 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.Len(t, runner.mutations[0], 2)
 	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
+	runner := newFakeRunner()
+	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, runner.timestampErrs)
+	require.Len(t, runner.mutations, 1)
+	requireStatUint(t, executor.Stats(), "txn_retries_total", 1)
+}
+
+func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
+	runner := newFakeRunner()
+	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	version, err := executor.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
+
+	require.NoError(t, err)
+	require.NotZero(t, version)
+	require.Empty(t, runner.timestampErrs)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
 }
 
 func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
