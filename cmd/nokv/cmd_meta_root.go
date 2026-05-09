@@ -114,7 +114,7 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	}
 	defer func() { _ = lis.Close() }()
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(rootserver.GRPCServerOptions()...)
 	rootserver.Register(grpcServer, backend)
 
 	installMetaRootExpvar(metaRootExpvarContext{

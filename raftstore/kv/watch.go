@@ -10,6 +10,8 @@ import (
 )
 
 const defaultApplyWatchBuffer = 256
+const defaultApplyWatchMaxKeysPerMessage = 512
+const defaultApplyWatchMaxKeyBytesPerMessage = 512 * 1024
 
 type applyWatchObserver struct {
 	prefix  []byte
@@ -36,22 +38,60 @@ func (o *applyWatchObserver) OnApply(evt storepkg.ApplyEvent) {
 	if len(keys) == 0 {
 		return
 	}
-	out := &kvrpcpb.ApplyWatchEvent{
-		RegionId:      evt.RegionID,
-		Term:          evt.Term,
-		Index:         evt.Index,
-		Source:        applyWatchSourceToProto(evt.Source),
-		CommitVersion: evt.CommitVersion,
-		Keys:          keys,
-	}
-	if out.GetSource() == kvrpcpb.ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED {
+	source := applyWatchSourceToProto(evt.Source)
+	if source == kvrpcpb.ApplyWatchEventSource_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED {
 		return
 	}
+	// Atomic/proposal batching can make one raft apply event contain thousands
+	// of keys. WatchApply is a streaming boundary, so split the event into
+	// bounded messages with the same raft cursor instead of depending on a large
+	// transport-wide gRPC message limit.
+	for _, chunk := range chunkApplyWatchKeys(keys) {
+		o.enqueue(&kvrpcpb.ApplyWatchEvent{
+			RegionId:      evt.RegionID,
+			Term:          evt.Term,
+			Index:         evt.Index,
+			Source:        source,
+			CommitVersion: evt.CommitVersion,
+			Keys:          chunk,
+		})
+	}
+}
+
+func (o *applyWatchObserver) enqueue(out *kvrpcpb.ApplyWatchEvent) {
 	select {
 	case o.ch <- out:
 	default:
 		o.dropped.Add(1)
 	}
+}
+
+func chunkApplyWatchKeys(keys [][]byte) [][][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+	chunks := make([][][]byte, 0, (len(keys)+defaultApplyWatchMaxKeysPerMessage-1)/defaultApplyWatchMaxKeysPerMessage)
+	current := make([][]byte, 0, min(len(keys), defaultApplyWatchMaxKeysPerMessage))
+	currentBytes := 0
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		chunks = append(chunks, current)
+		current = make([][]byte, 0, defaultApplyWatchMaxKeysPerMessage)
+		currentBytes = 0
+	}
+	for _, key := range keys {
+		keyBytes := len(key)
+		if len(current) > 0 &&
+			(len(current) >= defaultApplyWatchMaxKeysPerMessage || currentBytes+keyBytes > defaultApplyWatchMaxKeyBytesPerMessage) {
+			flush()
+		}
+		current = append(current, key)
+		currentBytes += keyBytes
+	}
+	flush()
+	return chunks
 }
 
 func (s *Service) WatchApply(req *kvrpcpb.ApplyWatchRequest, stream kvrpcpb.StoreKV_WatchApplyServer) error {

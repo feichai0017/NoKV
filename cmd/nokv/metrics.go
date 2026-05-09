@@ -61,6 +61,8 @@ var (
 	metaRootExpvarOnce     sync.Once
 	metaRootExpvarProvider atomic.Value
 	storePercolatorOnce    sync.Once
+	storeKVExpvarOnce      sync.Once
+	storeKVExpvarProvider  atomic.Value
 )
 
 type metaRootExpvarContext struct {
@@ -126,6 +128,24 @@ func installStorePercolatorExpvar() {
 	storePercolatorOnce.Do(func() {
 		expvar.Publish("nokv_store_percolator", expvar.Func(func() any {
 			return percolator.AtomicMutateStats()
+		}))
+	})
+}
+
+func installStoreKVExpvar(source func() map[string]any) {
+	if source == nil {
+		return
+	}
+	storeKVExpvarProvider.Store(debugSnapshotFunc(func() any {
+		return source()
+	}))
+	storeKVExpvarOnce.Do(func() {
+		expvar.Publish("nokv_store_kv", expvar.Func(func() any {
+			provider, _ := storeKVExpvarProvider.Load().(debugSnapshotFunc)
+			if provider == nil {
+				return map[string]any{}
+			}
+			return provider()
 		}))
 	})
 }

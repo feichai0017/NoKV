@@ -524,7 +524,47 @@ func (s *Service) currentRegionLookupRevision() uint64 {
 	if err == nil && snapshot.RootToken.Revision > revision {
 		revision = snapshot.RootToken.Revision
 	}
+	if floor := s.currentRegionLookupGrantFloor(); floor > revision {
+		revision = floor
+	}
 	return revision
+}
+
+func (s *Service) currentRegionLookupGrantFloor() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.grantMu.RLock()
+	view := s.grantView
+	s.grantMu.RUnlock()
+	var floor uint64
+	// Version-bounded duties must be successor-monotone. A restarted
+	// coordinator can rebuild a smaller in-memory descriptor revision than the
+	// ceiling carried by an expired or sealed predecessor, but root will reject
+	// a successor grant that does not cover that predecessor. Keep the requested
+	// region_lookup bound at least as high as every non-inherited predecessor
+	// and currently rooted grant.
+	for _, grant := range view.Grants() {
+		floor = maxUint64(floor, regionLookupRevisionBound(grant.Duties))
+	}
+	for _, retirement := range view.Retirements() {
+		if retirement.InheritedByGrantID != "" {
+			continue
+		}
+		floor = maxUint64(floor, regionLookupRevisionBound(retirement.Bounds))
+	}
+	return floor
+}
+
+func regionLookupRevisionBound(duties []rootproto.DutyGrant) uint64 {
+	var out uint64
+	for _, duty := range duties {
+		if duty.DutyID != rootproto.DutyRegionLookup || duty.Scope.Kind != rootproto.DutyScopeGlobal || duty.Bound.Kind != rootproto.DutyBoundVersion {
+			continue
+		}
+		out = maxUint64(out, duty.Bound.DescriptorRevisionCeiling)
+	}
+	return out
 }
 
 func (s *Service) localGrantDuties() []rootproto.DutyID {

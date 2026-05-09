@@ -2867,6 +2867,53 @@ func TestServiceGetRegionByKeyRenewsWhenDescriptorOutsideGrant(t *testing.T) {
 	require.Equal(t, 1, store.campaignCalls)
 }
 
+func TestServiceGetRegionByKeyRenewCoversRetiredRegionLookupBound(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants: []rootproto.AuthorityGrant{{
+				GrantID:         "c1/region_lookup/10",
+				HolderID:        "c1",
+				ExpiresUnixNano: now.Add(-time.Second).UnixNano(),
+				Era:             10,
+				Duties: []rootproto.DutyGrant{
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 100, 0),
+				},
+			}},
+			RetiredGrants: []rootproto.GrantRetirement{{
+				GrantID:  "c1/region_lookup/9",
+				HolderID: "c1",
+				Era:      9,
+				Mode:     rootproto.GrantRetirementSealedExact,
+				Bounds: []rootproto.DutyGrant{
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 96, 0),
+				},
+			}},
+			Descriptors: map[uint64]topology.Descriptor{
+				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
+			},
+			RootToken: rootstorage.TailToken{Revision: 8},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("m"),
+		Freshness: coordpb.Freshness_FRESHNESS_BEST_EFFORT,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, 1, store.campaignCalls)
+	renewed, ok := store.snapshot.ActiveGrantFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, uint64(100), regionLookupRevisionBound(renewed.Duties))
+	require.NotEmpty(t, renewed.PredecessorRetirements)
+}
+
 func TestServiceStoreHeartbeatSuppressesOperationsWithoutGrant(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,

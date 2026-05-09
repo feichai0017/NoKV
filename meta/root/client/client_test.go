@@ -3,16 +3,24 @@ package client
 import (
 	"context"
 	stderrors "errors"
+	"fmt"
+	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootserver "github.com/feichai0017/NoKV/meta/root/server"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestRetryableRemoteErrorConnectionClosing(t *testing.T) {
@@ -30,6 +38,69 @@ func TestRetryableRemoteErrorWrappedConnectionClosing(t *testing.T) {
 func clientConnClosingErrForTest() error {
 	//nolint:staticcheck
 	return grpc.ErrClientConnClosing
+}
+
+func TestDialClusterAcceptsLargeRootSnapshot(t *testing.T) {
+	listener := bufconn.Listen(defaultMaxRootRPCMessageBytes)
+	server := grpc.NewServer(rootserver.GRPCServerOptions()...)
+	rootserver.Register(server, largeSnapshotBackend())
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	ctx := context.Background()
+	client, err := DialCluster(ctx, map[uint64]string{1: "passthrough:///bufnet"},
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	snapshot, err := client.Snapshot()
+	require.NoError(t, err)
+	require.Greater(t, len(snapshot.Subtrees), 4_000)
+}
+
+type largeRootBackend struct {
+	snapshot rootstate.Snapshot
+}
+
+func largeSnapshotBackend() *largeRootBackend {
+	subtrees := make(map[string]rootstate.SubtreeAuthority, 5_200)
+	payload := strings.Repeat("x", 1024)
+	for i := range 5_200 {
+		rootInode := uint64(i + 1)
+		id := fmt.Sprintf("bench/%d", rootInode)
+		subtrees[id] = rootstate.SubtreeAuthority{
+			SubtreeID:   id,
+			Mount:       "bench",
+			RootInode:   rootInode,
+			AuthorityID: payload,
+			Era:         1,
+			State:       rootstate.SubtreeAuthorityActive,
+		}
+	}
+	return &largeRootBackend{
+		snapshot: rootstate.Snapshot{
+			Subtrees: subtrees,
+		},
+	}
+}
+
+func (b *largeRootBackend) Snapshot() (rootstate.Snapshot, error) {
+	return rootstate.CloneSnapshot(b.snapshot), nil
+}
+
+func (b *largeRootBackend) Append(context.Context, ...rootevent.Event) (rootstate.CommitInfo, error) {
+	return rootstate.CommitInfo{}, nil
+}
+
+func (b *largeRootBackend) FenceAllocator(context.Context, rootstate.AllocatorKind, uint64) (uint64, error) {
+	return 0, nil
 }
 
 func TestRetryableRemoteErrorMetadataRootNotLeaderIsWriteOnly(t *testing.T) {
