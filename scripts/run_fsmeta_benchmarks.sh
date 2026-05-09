@@ -232,6 +232,10 @@ run_compose_benchmarks() {
 	local workloads="${NOKV_FSMETA_WORKLOADS:-multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
 	if [[ "${NOKV_FSMETA_COMPOSE:-1}" == "1" ]]; then
+		# The benchmark mount must exist before the fsmeta gateway starts.
+		# Otherwise the run depends on asynchronous root watch catch-up during
+		# the benchmark bootstrap window, which makes long/profiled CI runs flaky.
+		export NOKV_MOUNT_IDS="${NOKV_MOUNT_IDS:-default,$mount}"
 		if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" ]]; then
 			echo "starting Docker Compose NoKV cluster with local build"
 			docker compose up -d --build
