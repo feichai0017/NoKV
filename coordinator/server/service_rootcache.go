@@ -149,6 +149,18 @@ func (s *Service) currentAuthoritySnapshot() rootview.Snapshot {
 	}
 }
 
+func (s *Service) cachedRootSnapshot() (rootview.Snapshot, bool) {
+	if s == nil {
+		return rootview.Snapshot{}, false
+	}
+	s.rootViewMu.RLock()
+	defer s.rootViewMu.RUnlock()
+	if !s.rootView.loaded {
+		return rootview.Snapshot{}, false
+	}
+	return rootview.CloneSnapshot(s.rootView.snapshot), true
+}
+
 func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 	if s == nil || !serviceEunomiaStatePresent(state) {
 		return

@@ -118,6 +118,9 @@ func metaRootSnapshot(ctx metaRootExpvarContext) map[string]any {
 		out["is_leader"] = leader.IsLeader()
 		out["leader_id"] = leader.LeaderID()
 	}
+	if stats, ok := ctx.backend.(interface{ Stats() map[string]any }); ok {
+		out["root_metrics"] = stats.Stats()
+	}
 	return out
 }
 

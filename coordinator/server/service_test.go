@@ -2589,10 +2589,123 @@ func TestServiceInheritRetiredGrants(t *testing.T) {
 	svc.now = func() time.Time { return time.Unix(0, 200) }
 	require.NoError(t, svc.ReloadFromStorage())
 
+	loadsBefore := store.loadCalls
 	require.NoError(t, svc.InheritRetiredGrants(context.Background()))
 	require.Equal(t, 1, store.reattachCalls)
+	require.Equal(t, loadsBefore, store.loadCalls)
 	require.Equal(t, "c2/2", store.snapshot.RetiredGrants[0].InheritedByGrantID)
 	require.Len(t, store.snapshot.GrantInheritances, 1)
+}
+
+func TestServiceInheritRetiredGrantsSubmitsOnlyCoveredPredecessors(t *testing.T) {
+	allocRetired := rootproto.GrantRetirement{
+		GrantID:  "c1/alloc/1",
+		HolderID: "c1",
+		Era:      1,
+		Mode:     rootproto.GrantRetirementExpiredBound,
+		Bounds:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+	}
+	tsoRetired := rootproto.GrantRetirement{
+		GrantID:  "c1/tso/2",
+		HolderID: "c1",
+		Era:      2,
+		Mode:     rootproto.GrantRetirementExpiredBound,
+		Bounds:   []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 10)},
+	}
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants: []rootproto.AuthorityGrant{{
+				GrantID:         "c2/alloc/3",
+				HolderID:        "c2",
+				Era:             3,
+				ExpiresUnixNano: time.Unix(0, 10_000).UnixNano(),
+				Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 20)},
+			}},
+			RetiredGrants: []rootproto.GrantRetirement{allocRetired, tsoRetired},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c2", 10*time.Second, 3*time.Second)
+	svc.now = func() time.Time { return time.Unix(0, 200) }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	require.NoError(t, svc.InheritRetiredGrants(context.Background()))
+	require.Equal(t, 1, store.reattachCalls)
+	require.Equal(t, "c2/alloc/3", store.snapshot.RetiredGrants[0].InheritedByGrantID)
+	require.Empty(t, store.snapshot.RetiredGrants[1].InheritedByGrantID)
+	require.Len(t, store.snapshot.GrantInheritances, 1)
+	require.Equal(t, allocRetired.GrantID, store.snapshot.GrantInheritances[0].PredecessorGrantID)
+}
+
+func TestServiceDutyAdmissionSkipsInheritanceWhenNoPendingRetirement(t *testing.T) {
+	now := time.Unix(0, 200)
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "c1/1",
+		HolderID:        "c1",
+		Era:             1,
+		ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 100)},
+	}
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants: []rootproto.AuthorityGrant{grant},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+	svc.cacheGrantCertificate(testGrantCertificate(grant))
+
+	admission, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyAllocID)
+	require.NoError(t, err)
+	admission.Done()
+	require.Zero(t, store.reattachCalls)
+	require.Equal(t, uint64(1), svc.eunomiaMetrics.grantInheritanceSkippedTotal.Load())
+	require.Equal(t, uint64(0), svc.eunomiaMetrics.grantInheritanceSubmittedTotal.Load())
+}
+
+func TestServiceAuthorityEvidenceUsesRetiredFloorInsteadOfInheritedHistory(t *testing.T) {
+	now := time.Unix(0, 200)
+	retired := rootproto.GrantRetirement{
+		GrantID:            "c0/1",
+		HolderID:           "c0",
+		Era:                1,
+		Mode:               rootproto.GrantRetirementExpiredBound,
+		Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+		InheritedByGrantID: "c1/2",
+	}
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "c1/2",
+		HolderID:        "c1",
+		Era:             2,
+		ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 100)},
+	}
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants:    []rootproto.AuthorityGrant{grant},
+			RetiredGrants:   []rootproto.GrantRetirement{retired},
+			RetiredEraFloor: 1,
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+	svc.cacheGrantCertificate(testGrantCertificate(grant))
+
+	admission, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyAllocID)
+	require.NoError(t, err)
+	defer admission.Done()
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 20})
+	require.NoError(t, err)
+	evidence := metawire.RootAuthorityEvidenceFromProto(proof.Evidence)
+	require.Equal(t, uint64(1), evidence.ObservedRetiredEraFloor)
+	require.Empty(t, evidence.ObservedRetirements)
 }
 
 func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {

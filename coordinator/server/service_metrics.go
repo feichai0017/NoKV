@@ -21,6 +21,9 @@ type eunomiaMetrics struct {
 
 	gateDutyAdmissionRejectedTotal atomic.Uint64
 
+	grantInheritanceSkippedTotal   atomic.Uint64
+	grantInheritanceSubmittedTotal atomic.Uint64
+
 	guaranteePrimacyTotal     atomic.Uint64
 	guaranteeInheritanceTotal atomic.Uint64
 	guaranteeSilenceTotal     atomic.Uint64
@@ -33,6 +36,10 @@ func (m *eunomiaMetrics) snapshot() map[string]any {
 		"gate_rejections_total": map[string]any{
 			"duty_admission": m.gateDutyAdmissionRejectedTotal.Load(),
 		},
+		"grant_inheritance_total": map[string]any{
+			"skipped":   m.grantInheritanceSkippedTotal.Load(),
+			"submitted": m.grantInheritanceSubmittedTotal.Load(),
+		},
 		"guarantee_violations_total": map[string]any{
 			"primacy":     m.guaranteePrimacyTotal.Load(),
 			"inheritance": m.guaranteeInheritanceTotal.Load(),
@@ -40,6 +47,14 @@ func (m *eunomiaMetrics) snapshot() map[string]any {
 			"finality":    m.guaranteeFinalityTotal.Load(),
 		},
 	}
+}
+
+func (m *eunomiaMetrics) recordGrantInheritanceSkipped() {
+	m.grantInheritanceSkippedTotal.Add(1)
+}
+
+func (m *eunomiaMetrics) recordGrantInheritanceSubmitted() {
+	m.grantInheritanceSubmittedTotal.Add(1)
 }
 
 func (m *eunomiaMetrics) recordGrantEraTransition(before, after uint64) {
