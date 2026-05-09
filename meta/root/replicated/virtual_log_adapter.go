@@ -11,10 +11,13 @@ import (
 // replicated protocol driver. Callers must hold the enclosing driver mutex
 // before invoking the mutating helpers.
 type virtualLogAdapter struct {
-	mu       sync.Mutex
-	log      rootstorage.VirtualLog
-	notifyCh chan struct{}
-	latest   rootstorage.TailToken
+	mu         sync.Mutex
+	log        rootstorage.VirtualLog
+	notifyCh   chan struct{}
+	latest     rootstorage.TailToken
+	metrics    metrics
+	cacheValid bool
+	cache      rootstorage.ObservedCommitted
 }
 
 func newVirtualLogAdapter(log rootstorage.VirtualLog) (*virtualLogAdapter, error) {
@@ -32,7 +35,7 @@ func (a *virtualLogAdapter) bootstrap() error {
 	if a == nil || a.log == nil {
 		return nil
 	}
-	observed, err := rootstorage.ObserveCommitted(a.log, 0)
+	observed, err := a.loadObservedLocked(0)
 	if err != nil {
 		return err
 	}
@@ -53,7 +56,7 @@ func (a *virtualLogAdapter) watchChannel() <-chan struct{} {
 func (a *virtualLogAdapter) observe(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	observed, err := rootstorage.ObserveCommitted(a.log, 0)
+	observed, err := a.observeCommittedLocked()
 	if err != nil {
 		return rootstorage.TailAdvance{}, err
 	}
@@ -79,6 +82,8 @@ func (a *virtualLogAdapter) installBootstrap(observed rootstorage.ObservedCommit
 	if err := a.log.InstallBootstrap(observed); err != nil {
 		return err
 	}
+	a.cache = rootstorage.CloneObservedCommitted(observed)
+	a.cacheValid = true
 	a.bump(observed.LastCursor())
 	a.signal()
 	return nil
@@ -93,9 +98,59 @@ func (a *virtualLogAdapter) appendCommitted(ctx context.Context, records []roots
 	if _, err := a.log.AppendCommitted(ctx, records...); err != nil {
 		return err
 	}
+	a.invalidateCacheLocked()
 	a.bump(records[len(records)-1].Cursor)
 	a.signal()
 	return nil
+}
+
+func (a *virtualLogAdapter) observeCommitted() (rootstorage.ObservedCommitted, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.observeCommittedLocked()
+}
+
+func (a *virtualLogAdapter) observeCommittedLocked() (rootstorage.ObservedCommitted, error) {
+	if a.cacheValid {
+		a.metrics.observeCacheHitTotal.Add(1)
+		return rootstorage.CloneObservedCommitted(a.cache), nil
+	}
+	a.metrics.observeCacheMissTotal.Add(1)
+	observed, err := a.loadObservedLocked(0)
+	if err != nil {
+		return rootstorage.ObservedCommitted{}, err
+	}
+	a.cache = rootstorage.CloneObservedCommitted(observed)
+	a.cacheValid = true
+	return rootstorage.CloneObservedCommitted(observed), nil
+}
+
+// loadObservedLocked is the only checkpoint+tail read behind the observe
+// cache. All local commit, checkpoint, compaction, and bootstrap publishers
+// invalidate or replace the cache before exposing a newer tail token.
+func (a *virtualLogAdapter) loadObservedLocked(offset int64) (rootstorage.ObservedCommitted, error) {
+	a.metrics.checkpointLoadTotal.Add(1)
+	checkpoint, err := a.log.LoadCheckpoint()
+	if err != nil {
+		return rootstorage.ObservedCommitted{}, err
+	}
+	a.metrics.committedTailReadTotal.Add(1)
+	tail, err := a.log.ReadCommitted(offset)
+	if err != nil {
+		return rootstorage.ObservedCommitted{}, err
+	}
+	return rootstorage.ObservedCommitted{Checkpoint: checkpoint, Tail: tail}, nil
+}
+
+func (a *virtualLogAdapter) invalidateCacheLocked() {
+	if a == nil {
+		return
+	}
+	if a.cacheValid {
+		a.metrics.observeCacheInvalidations.Add(1)
+	}
+	a.cacheValid = false
+	a.cache = rootstorage.ObservedCommitted{}
 }
 
 func (a *virtualLogAdapter) loadCheckpoint() (rootstorage.Checkpoint, error) {
@@ -110,11 +165,8 @@ func (a *virtualLogAdapter) saveCheckpoint(checkpoint rootstorage.Checkpoint) er
 	if err := a.log.SaveCheckpoint(checkpoint); err != nil {
 		return err
 	}
-	observed, err := rootstorage.ObserveCommitted(a.log, 0)
-	if err != nil {
-		return err
-	}
-	a.bump(observed.LastCursor())
+	a.invalidateCacheLocked()
+	a.bump(checkpoint.Snapshot.State.LastCommitted)
 	a.signal()
 	return nil
 }
@@ -131,6 +183,7 @@ func (a *virtualLogAdapter) compactCommitted(stream rootstorage.CommittedTail) e
 	if err := a.log.CompactCommitted(stream); err != nil {
 		return err
 	}
+	a.invalidateCacheLocked()
 	a.bump(stream.TailCursor(a.latest.Cursor))
 	a.signal()
 	return nil
@@ -140,6 +193,13 @@ func (a *virtualLogAdapter) size() (int64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.log.Size()
+}
+
+func (a *virtualLogAdapter) stats() map[string]any {
+	if a == nil {
+		return map[string]any{}
+	}
+	return a.metrics.snapshot()
 }
 
 func (a *virtualLogAdapter) bump(cursor rootstate.Cursor) {
