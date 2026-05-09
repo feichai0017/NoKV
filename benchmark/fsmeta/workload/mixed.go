@@ -46,6 +46,11 @@ type MixedConfig struct {
 	StaleSessionTTL time.Duration
 }
 
+type MultiWorkspaceAutoscaleConfig struct {
+	MixedConfig
+	Workspaces int
+}
+
 type mixedDirs struct {
 	project     fsmeta.InodeID
 	groups      fsmeta.InodeID
@@ -152,6 +157,44 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	runStaleSessionCleanup(ctx, native, cfg, dirs.scratch, rec)
 
 	return finishResult(Mixed, cfg.RunID, started, rec.snapshot())
+}
+
+// RunMultiWorkspaceAutoscale runs the mixed workload across several independent
+// workspace roots. It keeps total CI work bounded by dividing groups across
+// workspaces; the goal is to exercise dynamic region placement and leader
+// spread, not to multiply the benchmark size by workspace count.
+func RunMultiWorkspaceAutoscale(ctx context.Context, cli Client, cfg MultiWorkspaceAutoscaleConfig) (Result, error) {
+	cfg = normalizeMultiWorkspaceAutoscaleConfig(cfg)
+	started := time.Now()
+	type workspaceResult struct {
+		samples []Sample
+		err     error
+	}
+	results := make(chan workspaceResult, cfg.Workspaces)
+	var wg sync.WaitGroup
+	for workspace := 0; workspace < cfg.Workspaces; workspace++ {
+		workspace := workspace
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub := cfg.MixedConfig
+			sub.RunID = fmt.Sprintf("%s-ws%02d", cfg.RunID, workspace)
+			result, err := RunMixed(ctx, cli, sub)
+			item := workspaceResult{samples: result.Samples, err: err}
+			if err != nil && len(result.Samples) == 0 {
+				item.samples = []Sample{{Operation: "workspace_setup", Error: err.Error()}}
+			}
+			results <- item
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var samples []Sample
+	for result := range results {
+		samples = append(samples, result.samples...)
+	}
+	return finishResult(MultiWorkspaceAutoscale, cfg.RunID, started, samples)
 }
 
 func createMixedDirs(ctx context.Context, cli MixedClient, cfg MixedConfig, rec *recorder) (mixedDirs, error) {
@@ -566,6 +609,23 @@ func normalizeMixedConfig(cfg MixedConfig) MixedConfig {
 		cfg.StaleSessionTTL = cfg.SessionTTL
 	}
 	return cfg
+}
+
+func normalizeMultiWorkspaceAutoscaleConfig(cfg MultiWorkspaceAutoscaleConfig) MultiWorkspaceAutoscaleConfig {
+	cfg.MixedConfig = normalizeMixedConfig(cfg.MixedConfig)
+	if cfg.Workspaces <= 0 {
+		cfg.Workspaces = 4
+	}
+	cfg.Clients = max(1, ceilDiv(cfg.Clients, cfg.Workspaces))
+	cfg.Groups = max(1, ceilDiv(cfg.Groups, cfg.Workspaces))
+	return cfg
+}
+
+func ceilDiv(n, d int) int {
+	if d <= 0 {
+		return n
+	}
+	return (n + d - 1) / d
 }
 
 func recordCall(rec *recorder, operation string, fn func() error) error {

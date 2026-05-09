@@ -252,8 +252,22 @@ func TestNewDefaultOptionsExposeConcreteCompactionDefaults(t *testing.T) {
 	require.LessOrEqual(t, opt.CompactionResumeTrigger, opt.CompactionSlowdownTrigger)
 	require.Greater(t, opt.LandingCompactBatchSize, 0)
 	require.Greater(t, opt.LandingBacklogMergeScore, 0.0)
-	require.NotNil(t, opt.PrefixExtractor)
+	require.Nil(t, opt.UserKeyShapeExtractor)
 	require.Greater(t, opt.CompactionTombstoneWeight, 0.0)
+}
+
+func TestLSMPrefixExtractorUsesUserKeyShape(t *testing.T) {
+	opt := NewDefaultOptions()
+	opt.UserKeyShapeExtractor = func(userKey []byte) UserKeyShape {
+		require.Equal(t, []byte("user-key"), userKey)
+		return UserKeyShape{BloomPrefix: []byte("bloom-prefix")}
+	}
+	cfg := &lsm.Options{}
+
+	opt.applyLSMSharedOptions(cfg)
+
+	require.NotNil(t, cfg.PrefixExtractor)
+	require.Equal(t, []byte("bloom-prefix"), cfg.PrefixExtractor([]byte("user-key")))
 }
 
 func TestNewDefaultOptionsExposeConcreteBatchDefaults(t *testing.T) {

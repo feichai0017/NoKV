@@ -1,7 +1,6 @@
 package local
 
 import (
-	"encoding/binary"
 	"time"
 
 	lsmpkg "github.com/feichai0017/NoKV/engine/lsm"
@@ -92,13 +91,11 @@ type Options struct {
 	// default; non-power-of-two values are rounded DOWN to the nearest
 	// power of two during Open (e.g. 6 → 4, 12 → 8).
 	LSMShardCount int
-	// UserKeyShardRouter optionally overrides the local data-plane shard for a
-	// user key. Nil keeps the generic full-key hash router. Runtime-specific
-	// routers must be deterministic and must not depend on mutable process
-	// state, because WAL recovery and AtomicMutate admission use the same
-	// placement boundary.
-	UserKeyShardRouter func(userKey []byte, shardCount int) int
-	ManifestSync       bool
+	// UserKeyShapeExtractor optionally exposes runtime-derived key structure to
+	// local storage. Nil keeps generic full-key hashing and disables semantic
+	// prefix bloom filters.
+	UserKeyShapeExtractor UserKeyShapeExtractor
+	ManifestSync          bool
 	// ManifestRewriteThreshold triggers a manifest rewrite when the active
 	// MANIFEST file grows beyond this size (bytes). Values <= 0 disable rewrites.
 	ManifestRewriteThreshold int64
@@ -125,10 +122,6 @@ type Options struct {
 	BlockCacheBytes int64
 	// IndexCacheBytes bounds the in-memory budget for decoded SSTable indexes.
 	IndexCacheBytes int64
-	// PrefixExtractor enables SST prefix bloom filters. Nil disables prefix
-	// bloom creation. The default extractor recognizes NoKV native metadata
-	// keys and returns nil for unrelated user keys.
-	PrefixExtractor lsmpkg.PrefixExtractor
 	// BlockCompression controls SST data-block compression.
 	BlockCompression lsmpkg.BlockCompression
 
@@ -293,7 +286,6 @@ func NewDefaultOptions() *Options {
 		MaxBatchSize:                  defaultWriteBatchMaxSize,
 		BlockCacheBytes:               lsmpkg.DefaultBlockCacheBytes,
 		IndexCacheBytes:               lsmpkg.DefaultIndexCacheBytes,
-		PrefixExtractor:               nativeMetadataPrefix,
 		BlockCompression:              lsmpkg.DefaultBlockCompression,
 		SyncWrites:                    false,
 		ManifestSync:                  false,
@@ -413,7 +405,7 @@ func (opt *Options) applyLSMSharedOptions(dst *lsmpkg.Options) {
 	dst.CompactionValueAlertThreshold = opt.CompactionValueAlertThreshold
 	dst.BlockCacheBytes = opt.BlockCacheBytes
 	dst.IndexCacheBytes = opt.IndexCacheBytes
-	dst.PrefixExtractor = opt.PrefixExtractor
+	dst.PrefixExtractor = opt.lsmPrefixExtractor()
 	dst.BlockCompression = opt.BlockCompression
 	dst.NegativeCachePersistent = opt.NegativeCachePersistent
 	dst.NegativeCacheSlabMaxSize = opt.NegativeCacheSlabMaxSize
@@ -444,44 +436,17 @@ func (opt *Options) copyNormalizedLSMOptions(src *lsmpkg.Options) {
 	opt.CompactionValueAlertThreshold = src.CompactionValueAlertThreshold
 	opt.BlockCacheBytes = src.BlockCacheBytes
 	opt.IndexCacheBytes = src.IndexCacheBytes
-	opt.PrefixExtractor = src.PrefixExtractor
 	opt.BlockCompression = src.BlockCompression
 	opt.NegativeCachePersistent = src.NegativeCachePersistent
 	opt.NegativeCacheSlabMaxSize = src.NegativeCacheSlabMaxSize
 }
 
-func nativeMetadataPrefix(key []byte) []byte {
-	const (
-		magicLen = 4
-		version  = byte(1)
-	)
-	if len(key) < magicLen+3 {
+func (opt *Options) lsmPrefixExtractor() lsmpkg.PrefixExtractor {
+	if opt == nil || opt.UserKeyShapeExtractor == nil {
 		return nil
 	}
-	if key[0] != 'f' || key[1] != 's' || key[2] != 'm' || key[3] != 0 || key[4] != version {
-		return nil
-	}
-	pos := magicLen + 1
-	mountLen, n := binary.Uvarint(key[pos:])
-	if n <= 0 {
-		return nil
-	}
-	pos += n
-	if mountLen == 0 || uint64(len(key)-pos) < mountLen+1 {
-		return nil
-	}
-	pos += int(mountLen)
-	kindPos := pos
-	pos++
-	switch key[kindPos] {
-	case 'd', 'c':
-		if len(key) < pos+8 {
-			return nil
-		}
-		return key[:pos+8]
-	case 'i', 'm', 's', 'u':
-		return key[:pos]
-	default:
-		return nil
+	return func(userKey []byte) []byte {
+		shape := opt.UserKeyShapeExtractor(userKey)
+		return shape.BloomPrefix
 	}
 }

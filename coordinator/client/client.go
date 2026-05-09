@@ -66,9 +66,13 @@ type grpcEndpoint struct {
 	coord coordpb.CoordinatorClient
 }
 
-const maxAuthorityMissRetryRounds = 3
-const defaultAuthorityClockSkewAllowance = time.Second
-const defaultAuthorityMaxReplyAge = 30 * time.Second
+const (
+	maxAuthorityMissRetryRounds        = 8
+	authorityMissRetryBackoff          = 20 * time.Millisecond
+	authorityMissRetryMaxBackoff       = 120 * time.Millisecond
+	defaultAuthorityClockSkewAllowance = time.Second
+	defaultAuthorityMaxReplyAge        = 30 * time.Second
+)
 
 type GRPCClientOptions struct {
 	VerifierStore               AuthorityVerifierStore
@@ -215,35 +219,35 @@ func (c *GRPCClient) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeart
 
 // RegionLiveness forwards region liveness heartbeat RPC.
 func (c *GRPCClient) RegionLiveness(ctx context.Context, req *coordpb.RegionLivenessRequest) (*coordpb.RegionLivenessResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.RegionLivenessResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.RegionLivenessResponse, error) {
 		return coord.RegionLiveness(ctx, req)
 	}, nil)
 }
 
 // PublishRootEvent forwards explicit rooted event RPC.
 func (c *GRPCClient) PublishRootEvent(ctx context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
-	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.PublishRootEventResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.PublishRootEventResponse, error) {
 		return coord.PublishRootEvent(ctx, req)
 	}, nil)
 }
 
 // ListTransitions returns the rooted pending transition view.
 func (c *GRPCClient) ListTransitions(ctx context.Context, req *coordpb.ListTransitionsRequest) (*coordpb.ListTransitionsResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListTransitionsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListTransitionsResponse, error) {
 		return coord.ListTransitions(ctx, req)
 	}, nil)
 }
 
 // AssessRootEvent evaluates one rooted transition event without mutating truth.
 func (c *GRPCClient) AssessRootEvent(ctx context.Context, req *coordpb.AssessRootEventRequest) (*coordpb.AssessRootEventResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.AssessRootEventResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.AssessRootEventResponse, error) {
 		return coord.AssessRootEvent(ctx, req)
 	}, nil)
 }
 
 // RemoveRegion forwards region removal RPC.
 func (c *GRPCClient) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegionRequest) (*coordpb.RemoveRegionResponse, error) {
-	return invokeRPCValidated(c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.RemoveRegionResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.RemoveRegionResponse, error) {
 		return coord.RemoveRegion(ctx, req)
 	}, nil)
 }
@@ -253,7 +257,7 @@ func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionB
 	// Region lookup is a metadata authority read: standby coordinators can
 	// reject it with grant-not-held, so it must fail over like TSO/AllocID even
 	// though the RPC does not mutate user metadata.
-	return invokeDutyRPCValidated(c, rootproto.DutyRegionLookup, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
+	return invokeDutyRPCValidated(ctx, c, rootproto.DutyRegionLookup, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
 		return coord.GetRegionByKey(ctx, req)
 	}, func(resp *coordpb.GetRegionByKeyResponse) error {
 		return c.validateGetRegionByKeyResponse(req, resp)
@@ -262,44 +266,44 @@ func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionB
 
 // GetStore returns the current runtime endpoint for one store.
 func (c *GRPCClient) GetStore(ctx context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetStoreResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetStoreResponse, error) {
 		return coord.GetStore(ctx, req)
 	}, validateGetStoreResponse)
 }
 
 // ListStores returns the current runtime store registry snapshot.
 func (c *GRPCClient) ListStores(ctx context.Context, req *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListStoresResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListStoresResponse, error) {
 		return coord.ListStores(ctx, req)
 	}, validateListStoresResponse)
 }
 
 func (c *GRPCClient) GetMount(ctx context.Context, req *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetMountResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetMountResponse, error) {
 		return coord.GetMount(ctx, req)
 	}, validateGetMountResponse)
 }
 
 func (c *GRPCClient) ListMounts(ctx context.Context, req *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListMountsResponse, error) {
 		return coord.ListMounts(ctx, req)
 	}, validateListMountsResponse)
 }
 
 func (c *GRPCClient) ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
 		return coord.ListSubtreeAuthorities(ctx, req)
 	}, validateListSubtreeAuthoritiesResponse)
 }
 
 func (c *GRPCClient) GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetQuotaFenceResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.GetQuotaFenceResponse, error) {
 		return coord.GetQuotaFence(ctx, req)
 	}, validateGetQuotaFenceResponse)
 }
 
 func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error) {
-	return invokeRPCValidated(c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
 		return coord.ListQuotaFences(ctx, req)
 	}, validateListQuotaFencesResponse)
 }
@@ -332,7 +336,7 @@ func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRoot
 
 // AllocID forwards ID allocation RPC.
 func (c *GRPCClient) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
-	return invokeDutyRPCValidated(c, rootproto.DutyAllocID, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.AllocIDResponse, error) {
+	return invokeDutyRPCValidated(ctx, c, rootproto.DutyAllocID, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.AllocIDResponse, error) {
 		return coord.AllocID(ctx, req)
 	}, func(resp *coordpb.AllocIDResponse) error {
 		return c.validateAllocIDResponse(req, resp)
@@ -341,7 +345,7 @@ func (c *GRPCClient) AllocID(ctx context.Context, req *coordpb.AllocIDRequest) (
 
 // Tso forwards TSO allocation RPC.
 func (c *GRPCClient) Tso(ctx context.Context, req *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
-	return invokeDutyRPCValidated(c, rootproto.DutyTSO, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.TsoResponse, error) {
+	return invokeDutyRPCValidated(ctx, c, rootproto.DutyTSO, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.TsoResponse, error) {
 		return coord.Tso(ctx, req)
 	}, func(resp *coordpb.TsoResponse) error {
 		return c.validateTSOResponse(req, resp)
@@ -454,11 +458,11 @@ func (c *GRPCClient) markPreferredForDuty(duty rootproto.DutyID, addr string) {
 	}
 }
 
-func invokeRPCValidated[T any](c *GRPCClient, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
-	return invokeDutyRPCValidated(c, "", retryable, call, validate)
+func invokeRPCValidated[T any](ctx context.Context, c *GRPCClient, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
+	return invokeDutyRPCValidated(ctx, c, "", retryable, call, validate)
 }
 
-func invokeDutyRPCValidated[T any](c *GRPCClient, duty rootproto.DutyID, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
+func invokeDutyRPCValidated[T any](ctx context.Context, c *GRPCClient, duty rootproto.DutyID, retryable func(error) bool, call func(coord coordpb.CoordinatorClient) (T, error), validate func(T) error) (T, error) {
 	var zero T
 	if c == nil {
 		return zero, errNoReachableAddress
@@ -470,9 +474,14 @@ func invokeDutyRPCValidated[T any](c *GRPCClient, duty rootproto.DutyID, retryab
 			return zero, errNoReachableAddress
 		}
 		// Not-leader / grant-not-held replies mean the client reached a coordinator,
-		// but not the current authority. If every endpoint misses authority, retry
-		// the whole set briefly so root write access and grant ownership can converge.
+		// but not the current authority. A holder can also be briefly unavailable
+		// during root grant renewal or allocator persistence. In both cases retry
+		// the whole endpoint set as a unit so a standby rejection from the last
+		// endpoint does not mask a converging holder.
 		allAuthorityMiss := true
+		allRetryable := true
+		roundConverging := true
+		var lastNonAuthorityErr error
 		for i, endpoint := range endpoints {
 			resp, err := call(endpoint.coord)
 			if err == nil && validate != nil {
@@ -485,15 +494,32 @@ func invokeDutyRPCValidated[T any](c *GRPCClient, duty rootproto.DutyID, retryab
 			lastErr = err
 			if !isAuthorityMiss(err) {
 				allAuthorityMiss = false
+				lastNonAuthorityErr = err
 			}
-			if i == len(endpoints)-1 || !retryable(err) {
-				if allAuthorityMiss && retryable(err) && round+1 < maxAuthorityMissRetryRounds {
-					break
-				}
+			if !isDutyConvergenceError(err) {
+				roundConverging = false
+			}
+			if !retryable(err) {
 				return zero, err
 			}
+			if i == len(endpoints)-1 && roundConverging && round+1 < maxAuthorityMissRetryRounds {
+				if waitErr := waitAuthorityMissRetry(ctx, round); waitErr != nil {
+					return zero, waitErr
+				}
+				break
+			}
+			allRetryable = allRetryable && retryable(err)
 		}
-		if !allAuthorityMiss {
+		if !allRetryable {
+			if lastNonAuthorityErr != nil {
+				return zero, lastNonAuthorityErr
+			}
+			return zero, lastErr
+		}
+		if !allAuthorityMiss && (!roundConverging || round+1 >= maxAuthorityMissRetryRounds) {
+			if lastNonAuthorityErr != nil {
+				return zero, lastNonAuthorityErr
+			}
 			return zero, lastErr
 		}
 	}
@@ -501,6 +527,44 @@ func invokeDutyRPCValidated[T any](c *GRPCClient, duty rootproto.DutyID, retryab
 		lastErr = errNoReachableAddress
 	}
 	return zero, lastErr
+}
+
+func isDutyConvergenceError(err error) bool {
+	if isAuthorityMiss(err) {
+		return true
+	}
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable, nokverrors.KindRetryable, nokverrors.KindStaleEpoch:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitAuthorityMissRetry(ctx context.Context, round int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// All endpoints missing the same duty usually means root grant issue,
+	// renewal, or route-view publication is still converging. Back off within
+	// the caller's deadline instead of leaking that short authority gap to the
+	// metadata operation.
+	backoff := authorityMissRetryBackoff
+	for range round {
+		if backoff >= authorityMissRetryMaxBackoff/2 {
+			backoff = authorityMissRetryMaxBackoff
+			break
+		}
+		backoff *= 2
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func retryableRead(err error) bool {
@@ -533,9 +597,8 @@ type witnessEraFloor struct {
 }
 
 type metadataAttachedFloor struct {
-	hasCurrentToken    bool
-	currentToken       *coordpb.RootToken
-	descriptorRevision uint64
+	hasCurrentToken bool
+	currentToken    *coordpb.RootToken
 }
 
 type metadataWitnessExpectation struct {
@@ -905,16 +968,6 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 			errInvalidWitness,
 		)
 	}
-	if c.metadataAttached.descriptorRevision != 0 &&
-		resp.GetDescriptorRevision() != 0 &&
-		resp.GetDescriptorRevision() < c.metadataAttached.descriptorRevision {
-		return fmt.Errorf(
-			"%w: get_region_by_key era=0 descriptor_revision=%d attached_floor=%d",
-			errInvalidWitness,
-			resp.GetDescriptorRevision(),
-			c.metadataAttached.descriptorRevision,
-		)
-	}
 	storeState, err := c.loadVerifierStateLocked(rootproto.DutyRegionLookup)
 	if err != nil {
 		return err
@@ -926,27 +979,10 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 			errInvalidWitness,
 		)
 	}
-	if storeState.MaxDescriptorRevision != 0 &&
-		resp.GetDescriptorRevision() != 0 &&
-		resp.GetDescriptorRevision() < storeState.MaxDescriptorRevision {
-		return fmt.Errorf(
-			"%w: get_region_by_key era=0 descriptor_revision=%d durable_floor=%d",
-			errInvalidWitness,
-			resp.GetDescriptorRevision(),
-			storeState.MaxDescriptorRevision,
-		)
-	}
-
 	if currentToken != nil {
 		c.metadataAttached.currentToken = proto.Clone(currentToken).(*coordpb.RootToken)
 		c.metadataAttached.hasCurrentToken = true
 		storeState.MaxRootToken = authorityRootTokenFromCoordProto(currentToken)
-	}
-	if resp.GetDescriptorRevision() > c.metadataAttached.descriptorRevision {
-		c.metadataAttached.descriptorRevision = resp.GetDescriptorRevision()
-	}
-	if resp.GetDescriptorRevision() > storeState.MaxDescriptorRevision {
-		storeState.MaxDescriptorRevision = resp.GetDescriptorRevision()
 	}
 	if err := c.saveVerifierStateLocked(storeState); err != nil {
 		return err
@@ -966,17 +1002,14 @@ func (c *GRPCClient) advanceMetadataVerifierRootFloor(resp *coordpb.GetRegionByK
 		!metadataRootTokenSatisfied(currentToken, authorityRootTokenToCoordProto(storeState.MaxRootToken)) {
 		return fmt.Errorf("%w: get_region_by_key current_root_token regressed behind durable verifier floor", errInvalidWitness)
 	}
-	if storeState.MaxDescriptorRevision != 0 &&
-		resp.GetDescriptorRevision() != 0 &&
-		resp.GetDescriptorRevision() < storeState.MaxDescriptorRevision {
-		return fmt.Errorf("%w: get_region_by_key descriptor_revision=%d durable_floor=%d", errInvalidWitness, resp.GetDescriptorRevision(), storeState.MaxDescriptorRevision)
-	}
 	if currentToken != nil {
 		storeState.MaxRootToken = authorityRootTokenFromCoordProto(currentToken)
 	}
-	if resp.GetDescriptorRevision() > storeState.MaxDescriptorRevision {
-		storeState.MaxDescriptorRevision = resp.GetDescriptorRevision()
-	}
+	// DescriptorRevision is the returned region descriptor's own root epoch.
+	// Different bucket regions can validly carry lower root epochs than a
+	// previously observed hot region, so only the root token is a global durable
+	// floor. Per-request descriptor_revision checks stay in
+	// validateGetRegionByKeyResponse.
 	return c.saveVerifierStateLocked(storeState)
 }
 

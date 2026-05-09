@@ -106,6 +106,7 @@ func TestApplyEventsFromCommandExtractsVisibleCommitSources(t *testing.T) {
 		Source:        ApplyEventSourceCommit,
 		CommitVersion: 22,
 		Keys:          [][]byte{[]byte("dentry"), []byte("inode")},
+		AtomicMutate:  true,
 	}, events[2])
 
 	commitKeys[0][0] = 'z'

@@ -54,6 +54,35 @@ func TestPlanReadDirDefaultsLimit(t *testing.T) {
 	require.Equal(t, DefaultReadDirLimit, plan.Limit)
 }
 
+func TestPlanExpireWriteSessionsScansSessionBuckets(t *testing.T) {
+	plan, err := PlanExpireWriteSessions(ExpireWriteSessionsRequest{
+		Mount: "vol",
+		Limit: 32,
+	})
+	require.NoError(t, err)
+
+	first, err := EncodeSessionBucketPrefix("vol", 0)
+	require.NoError(t, err)
+	last, err := EncodeSessionBucketPrefix("vol", AffinityBucket(DefaultAffinityBucketCount-1))
+	require.NoError(t, err)
+	mountPrefix, err := EncodeMountPrefix("vol")
+	require.NoError(t, err)
+
+	require.Equal(t, OperationExpireSessions, plan.Kind)
+	require.Equal(t, first, plan.PrimaryKey)
+	require.Equal(t, first, plan.StartKey)
+	require.Equal(t, uint32(32), plan.Limit)
+	require.Len(t, plan.ReadPrefixes, DefaultAffinityBucketCount)
+	require.Equal(t, first, plan.ReadPrefixes[0])
+	require.Equal(t, last, plan.ReadPrefixes[len(plan.ReadPrefixes)-1])
+	for _, prefix := range plan.ReadPrefixes {
+		require.True(t, bytes.HasPrefix(prefix, mountPrefix))
+		kind, err := KeyKindOf(prefix)
+		require.NoError(t, err)
+		require.Equal(t, KeyKindSession, kind)
+	}
+}
+
 func TestPlanReadDirStartAfterBecomesInclusiveSeekKey(t *testing.T) {
 	plan, err := PlanReadDir(ReadDirRequest{
 		Mount:      "vol",

@@ -150,6 +150,17 @@ func (s *Store) applyOperation(op storecontrol.Operation) bool {
 			}
 		})
 		return true
+	case storecontrol.OperationSplitRegion:
+		if op.Region == 0 || len(op.SplitKey) == 0 || op.SplitChild.RegionID == 0 {
+			return false
+		}
+		child := localmeta.FromDescriptor(op.SplitChild)
+		return s.ProposeSplit(op.Region, child, op.SplitKey) == nil
+	case storecontrol.OperationMergeRegion:
+		if op.Region == 0 || op.SourceRegion == 0 {
+			return false
+		}
+		return s.ProposeMerge(op.Region, op.SourceRegion) == nil
 	}
 	return false
 }
@@ -507,6 +518,21 @@ func localmetaSchedulerOperation(item scheduledOp) (localmeta.PendingSchedulerOp
 			TargetPeerID: item.op.Target,
 			Attempts:     item.attempts,
 		}, true
+	case storecontrol.OperationSplitRegion:
+		return localmeta.PendingSchedulerOperation{
+			Kind:       localmeta.PendingSchedulerOperationSplitRegion,
+			RegionID:   item.op.Region,
+			SplitKey:   append([]byte(nil), item.op.SplitKey...),
+			SplitChild: localmeta.FromDescriptor(item.op.SplitChild),
+			Attempts:   item.attempts,
+		}, true
+	case storecontrol.OperationMergeRegion:
+		return localmeta.PendingSchedulerOperation{
+			Kind:           localmeta.PendingSchedulerOperationMergeRegion,
+			RegionID:       item.op.Region,
+			SourceRegionID: item.op.SourceRegion,
+			Attempts:       item.attempts,
+		}, true
 	default:
 		return localmeta.PendingSchedulerOperation{}, false
 	}
@@ -520,6 +546,19 @@ func storeOperationFromLocalMeta(op localmeta.PendingSchedulerOperation) (storec
 			Region: op.RegionID,
 			Source: op.SourcePeerID,
 			Target: op.TargetPeerID,
+		}, true
+	case localmeta.PendingSchedulerOperationSplitRegion:
+		return storecontrol.Operation{
+			Type:       storecontrol.OperationSplitRegion,
+			Region:     op.RegionID,
+			SplitKey:   append([]byte(nil), op.SplitKey...),
+			SplitChild: localmeta.Descriptor(op.SplitChild, 0),
+		}, true
+	case localmeta.PendingSchedulerOperationMergeRegion:
+		return storecontrol.Operation{
+			Type:         storecontrol.OperationMergeRegion,
+			Region:       op.RegionID,
+			SourceRegion: op.SourceRegionID,
 		}, true
 	default:
 		return storecontrol.Operation{}, false
@@ -857,15 +896,20 @@ func (s *Store) storeStatsSnapshot() storecontrol.StoreStats {
 		return storecontrol.StoreStats{}
 	}
 	leaderRegions := s.leaderRegionIDs()
+	leaderSet := make(map[uint64]struct{}, len(leaderRegions))
+	for _, id := range leaderRegions {
+		leaderSet[id] = struct{}{}
+	}
 	s.addressMu.RLock()
 	clientAddr := s.clientAddr
 	raftAddr := s.raftAddr
 	s.addressMu.RUnlock()
+	metas := s.RegionMetas()
 	stats := storecontrol.StoreStats{
 		StoreID:         s.storeID,
 		ClientAddr:      clientAddr,
 		RaftAddr:        raftAddr,
-		RegionNum:       uint64(len(s.RegionMetas())),
+		RegionNum:       uint64(len(metas)),
 		LeaderNum:       uint64(len(leaderRegions)),
 		LeaderRegionIDs: leaderRegions,
 	}
@@ -878,7 +922,30 @@ func (s *Store) storeStatsSnapshot() storecontrol.StoreStats {
 		stats.Capacity = capacity
 		stats.Available = available
 	}
+	if s.regionStats != nil {
+		stats.RegionStats = s.regionStats.snapshot(metas, s.storeID, leaderSet, s.pendingAdminRegions())
+	}
 	return stats
+}
+
+func (s *Store) pendingAdminRegions() map[uint64]bool {
+	out := make(map[uint64]bool)
+	if s == nil {
+		return out
+	}
+	rm := s.regionMgr()
+	if rm == nil || rm.localMeta == nil {
+		return out
+	}
+	for _, op := range rm.localMeta.PendingSchedulerOperations() {
+		if op.RegionID != 0 {
+			out[op.RegionID] = true
+		}
+		if op.SourceRegionID != 0 {
+			out[op.SourceRegionID] = true
+		}
+	}
+	return out
 }
 
 func flattenScheduledOps(pending []scheduledOp) []storecontrol.Operation {

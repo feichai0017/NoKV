@@ -272,14 +272,17 @@ All deployment shapes share one configuration file: [`raft_config.example.json`]
     { "store_id": 2, "listen_addr": "127.0.0.1:20171", ... },
     { "store_id": 3, "listen_addr": "127.0.0.1:20172", ... }
   ],
-  "regions": [
-    { "id": 1, "range": [-inf, "m"), "leader": 1, ... },
-    { "id": 2, "range": ["m", +inf), "leader": 2, ... }
-  ]
+  "fsmeta_region_bootstrap": {
+    "mounts": ["default", "fsmeta-bench"],
+    "bucket_count": 16,
+    "region_id_base": 1000,
+    "peer_id_base": 100000,
+    "leader_store_ids": [1, 2, 3]
+  }
 }
 ```
 
-Local scripts, Docker Compose, and all CLI tools consume the same file. Programmatic access: `import "github.com/feichai0017/NoKV/config"` and call `config.LoadFile` / `Validate`.
+Local scripts, Docker Compose, and all CLI tools consume the same file. `nokv-config regions` expands fsmeta bucket bootstrap into ordinary byte-range region descriptors before store seeding; after bootstrap, runtime topology comes from meta-root. Programmatic access: `import "github.com/feichai0017/NoKV/config"` and call `config.LoadFile` / `Validate`.
 
 <br/>
 

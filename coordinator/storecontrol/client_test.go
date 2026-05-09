@@ -176,6 +176,16 @@ func TestClientForwardsAndPlans(t *testing.T) {
 		Available:         800,
 		DroppedOperations: 7,
 		LeaderRegionIDs:   []uint64{10, 12},
+		RegionStats: []RegionStats{{
+			RegionID:            10,
+			ReadQPS:             11,
+			WriteQPS:            12,
+			WriteBytesPerSecond: 13,
+			ApproxRegionBytes:   14,
+			AtomicMutateQPS:     15,
+			LeaderStoreID:       1,
+			PendingAdmin:        true,
+		}},
 	})
 
 	require.Len(t, coord.livenessReqs, 1)
@@ -184,6 +194,10 @@ func TestClientForwardsAndPlans(t *testing.T) {
 	require.Equal(t, uint64(1), coord.storeReqs[0].GetStoreId())
 	require.Equal(t, uint64(7), coord.storeReqs[0].GetDroppedOperations())
 	require.Equal(t, []uint64{10, 12}, coord.storeReqs[0].GetLeaderRegionIds())
+	require.Len(t, coord.storeReqs[0].GetRegionStats(), 1)
+	require.Equal(t, uint64(10), coord.storeReqs[0].GetRegionStats()[0].GetRegionId())
+	require.Equal(t, uint64(12), coord.storeReqs[0].GetRegionStats()[0].GetWriteQps())
+	require.True(t, coord.storeReqs[0].GetRegionStats()[0].GetPendingAdmin())
 
 	require.Len(t, ops, 1)
 	require.Equal(t, OperationLeaderTransfer, ops[0].Type)
@@ -288,6 +302,27 @@ func TestFromPBOperationValidation(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Equal(t, OperationLeaderTransfer, op.Type)
+
+	child := testDescriptor(2, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
+		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
+		RegionId:   1,
+		SplitKey:   []byte("m"),
+		SplitChild: metawire.DescriptorToProto(child),
+	})
+	require.True(t, ok)
+	require.Equal(t, OperationSplitRegion, op.Type)
+	require.Equal(t, []byte("m"), op.SplitKey)
+	require.Equal(t, uint64(2), op.SplitChild.RegionID)
+
+	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
+		Type:           coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION,
+		RegionId:       1,
+		SourceRegionId: 2,
+	})
+	require.True(t, ok)
+	require.Equal(t, OperationMergeRegion, op.Type)
+	require.Equal(t, uint64(2), op.SourceRegion)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) topology.Descriptor {

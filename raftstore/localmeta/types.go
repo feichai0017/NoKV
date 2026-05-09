@@ -134,6 +134,8 @@ type PendingSchedulerOperationKind uint8
 const (
 	PendingSchedulerOperationUnknown PendingSchedulerOperationKind = iota
 	PendingSchedulerOperationLeaderTransfer
+	PendingSchedulerOperationSplitRegion
+	PendingSchedulerOperationMergeRegion
 )
 
 // PendingSchedulerOperation captures one store-local scheduler decision that
@@ -143,14 +145,21 @@ const (
 // decisions that have been accepted by the store runtime but not yet consumed
 // by the local execution loop.
 type PendingSchedulerOperation struct {
-	Kind         PendingSchedulerOperationKind `json:"kind"`
-	RegionID     uint64                        `json:"region_id"`
-	SourcePeerID uint64                        `json:"source_peer_id,omitempty"`
-	TargetPeerID uint64                        `json:"target_peer_id,omitempty"`
-	Attempts     uint32                        `json:"attempts,omitempty"`
+	Kind           PendingSchedulerOperationKind `json:"kind"`
+	RegionID       uint64                        `json:"region_id"`
+	SourcePeerID   uint64                        `json:"source_peer_id,omitempty"`
+	TargetPeerID   uint64                        `json:"target_peer_id,omitempty"`
+	Attempts       uint32                        `json:"attempts,omitempty"`
+	SplitKey       []byte                        `json:"split_key,omitempty"`
+	SplitChild     RegionMeta                    `json:"split_child"`
+	SourceRegionID uint64                        `json:"source_region_id,omitempty"`
 }
 
 func ClonePendingSchedulerOperation(op PendingSchedulerOperation) PendingSchedulerOperation {
+	if op.SplitKey != nil {
+		op.SplitKey = append([]byte(nil), op.SplitKey...)
+	}
+	op.SplitChild = CloneRegionMeta(op.SplitChild)
 	return op
 }
 
@@ -177,6 +186,10 @@ func (k PendingSchedulerOperationKind) String() string {
 	switch k {
 	case PendingSchedulerOperationLeaderTransfer:
 		return "leader-transfer"
+	case PendingSchedulerOperationSplitRegion:
+		return "split-region"
+	case PendingSchedulerOperationMergeRegion:
+		return "merge-region"
 	default:
 		return "unknown"
 	}

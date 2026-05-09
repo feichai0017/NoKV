@@ -1631,6 +1631,54 @@ func TestClientEpochMismatchRaisesRouteLookupDescriptorFloor(t *testing.T) {
 	resolver.mu.Unlock()
 }
 
+func TestClientRouteDescriptorFloorIsRangeScoped(t *testing.T) {
+	resolver := &mockRegionResolver{regions: []*metapb.RegionDescriptor{
+		{
+			RegionId:  2,
+			StartKey:  []byte("a"),
+			EndKey:    []byte("m"),
+			Epoch:     &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+			RootEpoch: 8,
+			Peers:     []*metapb.RegionPeer{{StoreId: 1, PeerId: 201}},
+		},
+		{
+			RegionId:  3,
+			StartKey:  []byte("m"),
+			EndKey:    []byte("z"),
+			Epoch:     &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			RootEpoch: 2,
+			Peers:     []*metapb.RegionPeer{{StoreId: 1, PeerId: 301}},
+		},
+	}}
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: "unused"}},
+		RegionResolver: resolver,
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+	cli.upsertRegionLocked(metawire.DescriptorFromProto(&metapb.RegionDescriptor{
+		RegionId:  1,
+		StartKey:  []byte("a"),
+		EndKey:    []byte("m"),
+		Epoch:     &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		RootEpoch: 7,
+		Peers:     []*metapb.RegionPeer{{StoreId: 1, PeerId: 101}},
+	}), 1)
+
+	require.NoError(t, cli.handleRegionError(1, &errorpb.RegionError{EpochNotMatch: &errorpb.EpochNotMatch{}}))
+	_, err = cli.regionForKeyFromResolver(context.Background(), []byte("b"))
+	require.NoError(t, err)
+	resolver.mu.Lock()
+	require.Equal(t, uint64(8), resolver.lastRequiredDescriptorRevision)
+	resolver.mu.Unlock()
+
+	_, err = cli.regionForKeyFromResolver(context.Background(), []byte("q"))
+	require.NoError(t, err)
+	resolver.mu.Lock()
+	require.Zero(t, resolver.lastRequiredDescriptorRevision)
+	resolver.mu.Unlock()
+}
+
 func TestClientHandleRegionErrorDropsIndexedCacheWhenLeaderUnknown(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),

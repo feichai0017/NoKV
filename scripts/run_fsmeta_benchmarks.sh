@@ -32,6 +32,7 @@ case "$profile" in
 		default_groups=8
 		default_entries_per_group=64
 		default_artifacts_per_entry=8
+		default_workspaces=4
 		default_session_ttl=5m
 		default_stale_session_ttl=2s
 		default_timeout=25m
@@ -46,6 +47,7 @@ case "$profile" in
 		default_groups=16
 		default_entries_per_group=128
 		default_artifacts_per_entry=10
+		default_workspaces=8
 		default_session_ttl=5m
 		default_stale_session_ttl=2s
 		default_timeout=120m
@@ -65,6 +67,7 @@ reads="${NOKV_FSMETA_READS_PER_CLIENT:-$default_reads}"
 groups="${NOKV_FSMETA_GROUPS:-$default_groups}"
 entries_per_group="${NOKV_FSMETA_ENTRIES_PER_GROUP:-$default_entries_per_group}"
 artifacts_per_entry="${NOKV_FSMETA_ARTIFACTS_PER_ENTRY:-$default_artifacts_per_entry}"
+workspaces="${NOKV_FSMETA_WORKSPACES:-$default_workspaces}"
 session_ttl="${NOKV_FSMETA_SESSION_TTL:-$default_session_ttl}"
 stale_session_ttl="${NOKV_FSMETA_STALE_SESSION_TTL:-$default_stale_session_ttl}"
 timeout="${NOKV_FSMETA_TIMEOUT:-$default_timeout}"
@@ -115,6 +118,7 @@ run_bench() {
 			-fsmeta_groups "$groups" \
 			-fsmeta_entries_per_group "$entries_per_group" \
 			-fsmeta_artifacts_per_entry "$artifacts_per_entry" \
+			-fsmeta_workspaces "$workspaces" \
 			-fsmeta_session_ttl "$session_ttl" \
 			-fsmeta_stale_session_ttl "$stale_session_ttl" \
 			-fsmeta_timeout "$timeout" \
@@ -143,6 +147,7 @@ reads_per_client=$reads
 groups=$groups
 entries_per_group=$entries_per_group
 artifacts_per_entry=$artifacts_per_entry
+workspaces=$workspaces
 session_ttl=$session_ttl
 stale_session_ttl=$stale_session_ttl
 profile_seconds=$profile_seconds
@@ -224,7 +229,7 @@ print_bench_summary() {
 }
 
 run_compose_benchmarks() {
-	local workloads="${NOKV_FSMETA_WORKLOADS:-mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
+	local workloads="${NOKV_FSMETA_WORKLOADS:-multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
 	if [[ "${NOKV_FSMETA_COMPOSE:-1}" == "1" ]]; then
 		if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" ]]; then

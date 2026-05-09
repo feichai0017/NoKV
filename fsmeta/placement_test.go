@@ -1,0 +1,65 @@
+package fsmeta
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestPlanBucketPlacementReturnsContinuousRanges(t *testing.T) {
+	ranges, err := PlanBucketPlacement([]MountID{"default", "fsmeta-bench"}, DefaultAffinityBucketCount)
+	require.NoError(t, err)
+	require.Len(t, ranges, DefaultAffinityBucketCount*2+3)
+
+	for i := 0; i+1 < len(ranges); i++ {
+		require.Equal(t, ranges[i].EndKey, ranges[i+1].StartKey)
+		if len(ranges[i].EndKey) != 0 {
+			require.Less(t, bytes.Compare(ranges[i].StartKey, ranges[i].EndKey), 0)
+		}
+	}
+	require.Empty(t, ranges[0].StartKey)
+	require.Empty(t, ranges[len(ranges)-1].EndKey)
+}
+
+func TestPlanBucketPlacementKeepsBucketKeysInsideBucketRange(t *testing.T) {
+	ranges, err := PlanBucketPlacement([]MountID{"vol"}, DefaultAffinityBucketCount)
+	require.NoError(t, err)
+
+	var bucketRange PlacementRange
+	for _, r := range ranges {
+		if r.Bucketed && r.Bucket == 7 {
+			bucketRange = r
+			break
+		}
+	}
+	require.True(t, bucketRange.Bucketed)
+
+	inode := findInodeOnBucket(t, "vol", 7)
+	key, err := EncodeInodeKey("vol", inode)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, bytes.Compare(key, bucketRange.StartKey), 0)
+	require.Less(t, bytes.Compare(key, bucketRange.EndKey), 0)
+}
+
+func TestPlanBucketPlacementRejectsInvalidInput(t *testing.T) {
+	_, err := PlanBucketPlacement([]MountID{"vol"}, 0)
+	require.ErrorIs(t, err, ErrInvalidRequest)
+
+	_, err = PlanBucketPlacement([]MountID{"vol", "vol"}, DefaultAffinityBucketCount)
+	require.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestBucketSplitBoundariesUseBucketEdges(t *testing.T) {
+	boundaries, err := BucketSplitBoundaries([]MountID{"vol"}, 4)
+	require.NoError(t, err)
+	require.Len(t, boundaries, 5)
+
+	bucket0, _, err := EncodeBucketRange("vol", 0)
+	require.NoError(t, err)
+	require.Equal(t, bucket0, boundaries[0])
+
+	_, bucket3End, err := EncodeBucketRange("vol", 3)
+	require.NoError(t, err)
+	require.Equal(t, bucket3End, boundaries[4])
+}

@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
-	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/feichai0017/NoKV/config"
+	"github.com/feichai0017/NoKV/fsmeta"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 )
 
@@ -144,11 +145,16 @@ func runRegions(args []string) error {
 		return err
 	}
 
+	regions, err := effectiveRegions(cfg)
+	if err != nil {
+		return err
+	}
+
 	switch strings.ToLower(*format) {
 	case "json":
-		return json.NewEncoder(os.Stdout).Encode(cfg.Regions)
+		return json.NewEncoder(os.Stdout).Encode(regions)
 	case "simple":
-		for _, region := range cfg.Regions {
+		for _, region := range regions {
 			encodedPeers := make([]string, 0, len(region.Peers))
 			for _, peer := range region.Peers {
 				encodedPeers = append(encodedPeers, fmt.Sprintf("%d:%d", peer.StoreID, peer.PeerID))
@@ -167,6 +173,58 @@ func runRegions(args []string) error {
 	default:
 		return fmt.Errorf("unknown format %q", *format)
 	}
+}
+
+func effectiveRegions(cfg *config.File) ([]config.Region, error) {
+	if cfg == nil || cfg.FSMetaRegionBootstrap == nil {
+		return cfg.Regions, nil
+	}
+	return expandFSMetaBootstrapRegions(cfg)
+}
+
+func expandFSMetaBootstrapRegions(cfg *config.File) ([]config.Region, error) {
+	layout := cfg.FSMetaRegionBootstrap
+	mounts := make([]fsmeta.MountID, 0, len(layout.Mounts))
+	for _, mount := range layout.Mounts {
+		mounts = append(mounts, fsmeta.MountID(mount))
+	}
+	ranges, err := fsmeta.PlanBucketPlacement(mounts, layout.BucketCount)
+	if err != nil {
+		return nil, err
+	}
+	leaders := layout.LeaderStoreIDs
+	if len(leaders) == 0 {
+		leaders = make([]uint64, 0, len(cfg.Stores))
+		for _, store := range cfg.Stores {
+			leaders = append(leaders, store.StoreID)
+		}
+	}
+	if len(leaders) == 0 {
+		return nil, fmt.Errorf("config: fsmeta_region_bootstrap requires stores")
+	}
+	regions := make([]config.Region, 0, len(ranges))
+	for i, r := range ranges {
+		regionID := layout.RegionIDBase + uint64(i)
+		peers := make([]config.Peer, 0, len(cfg.Stores))
+		for j, store := range cfg.Stores {
+			peers = append(peers, config.Peer{
+				StoreID: store.StoreID,
+				PeerID:  layout.PeerIDBase + uint64(i*len(cfg.Stores)+j),
+			})
+		}
+		regions = append(regions, config.Region{
+			ID:       regionID,
+			StartKey: string(r.StartKey),
+			EndKey:   string(r.EndKey),
+			Epoch: config.RegionEpoch{
+				Version:     1,
+				ConfVersion: uint64(len(peers)),
+			},
+			Peers:         peers,
+			LeaderStoreID: leaders[i%len(leaders)],
+		})
+	}
+	return regions, nil
 }
 
 func runCoordinator(args []string) error {

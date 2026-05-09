@@ -8,15 +8,27 @@ import (
 
 // StoreStats captures store-level heartbeat data tracked by Coordinator views.
 type StoreStats struct {
-	StoreID           uint64    `json:"store_id"`
-	ClientAddr        string    `json:"client_addr,omitempty"`
-	RaftAddr          string    `json:"raft_addr,omitempty"`
-	RegionNum         uint64    `json:"region_num"`
-	LeaderNum         uint64    `json:"leader_num"`
-	Capacity          uint64    `json:"capacity"`
-	Available         uint64    `json:"available"`
-	DroppedOperations uint64    `json:"dropped_operations"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	StoreID           uint64        `json:"store_id"`
+	ClientAddr        string        `json:"client_addr,omitempty"`
+	RaftAddr          string        `json:"raft_addr,omitempty"`
+	RegionNum         uint64        `json:"region_num"`
+	LeaderNum         uint64        `json:"leader_num"`
+	Capacity          uint64        `json:"capacity"`
+	Available         uint64        `json:"available"`
+	DroppedOperations uint64        `json:"dropped_operations"`
+	UpdatedAt         time.Time     `json:"updated_at"`
+	RegionStats       []RegionStats `json:"region_stats,omitempty"`
+}
+
+type RegionStats struct {
+	RegionID            uint64 `json:"region_id"`
+	ReadQPS             uint64 `json:"read_qps"`
+	WriteQPS            uint64 `json:"write_qps"`
+	WriteBytesPerSecond uint64 `json:"write_bytes_per_sec"`
+	ApproxRegionBytes   uint64 `json:"approx_region_bytes"`
+	AtomicMutateQPS     uint64 `json:"atomic_mutate_qps"`
+	LeaderStoreID       uint64 `json:"leader_store_id,omitempty"`
+	PendingAdmin        bool   `json:"pending_admin,omitempty"`
 }
 
 // StoreHealthView is the disposable control-plane view of store heartbeats.
@@ -41,6 +53,7 @@ func (v *StoreHealthView) UpsertAt(stats StoreStats, now time.Time) error {
 		return ErrInvalidStoreID
 	}
 	stats.UpdatedAt = now
+	stats.RegionStats = cloneRegionStats(stats.RegionStats)
 	v.mu.Lock()
 	v.stores[stats.StoreID] = stats
 	v.mu.Unlock()
@@ -64,6 +77,7 @@ func (v *StoreHealthView) Get(storeID uint64) (StoreStats, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	stats, ok := v.stores[storeID]
+	stats.RegionStats = cloneRegionStats(stats.RegionStats)
 	return stats, ok
 }
 
@@ -74,9 +88,19 @@ func (v *StoreHealthView) Snapshot() []StoreStats {
 	v.mu.RLock()
 	out := make([]StoreStats, 0, len(v.stores))
 	for _, st := range v.stores {
+		st.RegionStats = cloneRegionStats(st.RegionStats)
 		out = append(out, st)
 	}
 	v.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].StoreID < out[j].StoreID })
+	return out
+}
+
+func cloneRegionStats(in []RegionStats) []RegionStats {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]RegionStats, len(in))
+	copy(out, in)
 	return out
 }

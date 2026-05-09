@@ -20,6 +20,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	"github.com/feichai0017/NoKV/fsmeta"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -61,15 +62,17 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var cfg *config.File
 	if strings.TrimSpace(*configPath) != "" {
 		scopeNorm := strings.ToLower(strings.TrimSpace(*scope))
 		if scopeNorm != "host" && scopeNorm != "docker" {
 			return fmt.Errorf("invalid coordinator scope %q (expected host|docker)", *scope)
 		}
-		cfg, err := config.LoadFile(strings.TrimSpace(*configPath))
+		loaded, err := config.LoadFile(strings.TrimSpace(*configPath))
 		if err != nil {
 			return fmt.Errorf("coordinator load config %q: %w", strings.TrimSpace(*configPath), err)
 		}
+		cfg = loaded
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("coordinator validate config %q: %w", strings.TrimSpace(*configPath), err)
 		}
@@ -127,6 +130,13 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
+	if cfg != nil && cfg.FSMetaRegionBootstrap != nil {
+		boundaries, err := fsmetaBootstrapSplitBoundaries(cfg.FSMetaRegionBootstrap)
+		if err != nil {
+			return err
+		}
+		svc.ConfigureSchedulerSplitBoundaries(boundaries)
+	}
 	parsedDuties, err := parseCoordinatorGrantDuties(*grantDuties)
 	if err != nil {
 		return err
@@ -272,6 +282,21 @@ func dutyNames(duties []rootproto.DutyID) []string {
 		out = append(out, rootproto.DutyName(duty))
 	}
 	return out
+}
+
+func fsmetaBootstrapSplitBoundaries(layout *config.FSMetaRegionBootstrap) ([][]byte, error) {
+	if layout == nil {
+		return nil, nil
+	}
+	mounts := make([]fsmeta.MountID, 0, len(layout.Mounts))
+	for _, mount := range layout.Mounts {
+		mounts = append(mounts, fsmeta.MountID(mount))
+	}
+	boundaries, err := fsmeta.BucketSplitBoundaries(mounts, layout.BucketCount)
+	if err != nil {
+		return nil, fmt.Errorf("coordinator build fsmeta split boundaries: %w", err)
+	}
+	return boundaries, nil
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {

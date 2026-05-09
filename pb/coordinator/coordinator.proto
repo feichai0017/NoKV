@@ -29,6 +29,18 @@ message StoreHeartbeatRequest {
   // transport-aware scheduling. The first implementation usually matches
   // client_addr because NoKV currently shares one gRPC transport.
   string raft_addr = 9;
+  repeated RegionRuntimeStats region_stats = 10;
+}
+
+message RegionRuntimeStats {
+  uint64 region_id = 1;
+  uint64 read_qps = 2;
+  uint64 write_qps = 3;
+  uint64 write_bytes_per_sec = 4;
+  uint64 approx_region_bytes = 5;
+  uint64 atomic_mutate_qps = 6;
+  uint64 leader_store_id = 7;
+  bool pending_admin = 8;
 }
 
 enum StoreState {
@@ -171,6 +183,8 @@ message WatchRootEventsResponse {
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
+  SCHEDULER_OPERATION_TYPE_SPLIT_REGION = 2;
+  SCHEDULER_OPERATION_TYPE_MERGE_REGION = 3;
 }
 
 message SchedulerOperation {
@@ -178,6 +192,9 @@ message SchedulerOperation {
   uint64 region_id = 2;
   uint64 source_peer_id = 3;
   uint64 target_peer_id = 4;
+  bytes split_key = 5;
+  nokv.meta.v1.RegionDescriptor split_child = 6;
+  uint64 source_region_id = 7;
 }
 
 message StoreHeartbeatResponse {

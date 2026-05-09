@@ -26,13 +26,14 @@ const (
 //     ignored. Runtime topology (splits, merges, peer changes) lives in
 //     meta-root, not here; use `nokv-config regions` to inspect current state.
 type File struct {
-	MaxRetries                 int          `json:"max_retries"`
-	MetaRoot                   *MetaRoot    `json:"meta_root,omitempty"`
-	Coordinator                *Coordinator `json:"coordinator,omitempty"`
-	StoreWorkDirTemplate       string       `json:"store_work_dir_template,omitempty"`
-	StoreDockerWorkDirTemplate string       `json:"store_docker_work_dir_template,omitempty"`
-	Stores                     []Store      `json:"stores"`
-	Regions                    []Region     `json:"regions"`
+	MaxRetries                 int                    `json:"max_retries"`
+	MetaRoot                   *MetaRoot              `json:"meta_root,omitempty"`
+	Coordinator                *Coordinator           `json:"coordinator,omitempty"`
+	StoreWorkDirTemplate       string                 `json:"store_work_dir_template,omitempty"`
+	StoreDockerWorkDirTemplate string                 `json:"store_docker_work_dir_template,omitempty"`
+	Stores                     []Store                `json:"stores"`
+	Regions                    []Region               `json:"regions"`
+	FSMetaRegionBootstrap      *FSMetaRegionBootstrap `json:"fsmeta_region_bootstrap,omitempty"`
 }
 
 // MetaRoot describes the 3-peer replicated meta-root cluster. NoKV only
@@ -109,6 +110,17 @@ type Peer struct {
 	PeerID  uint64 `json:"peer_id"`
 }
 
+// FSMetaRegionBootstrap is a concise bootstrap-only layout that expands to
+// ordinary byte-range regions in nokv-config. Runtime routing still uses rooted
+// region descriptors; this block is not consulted after fresh store seeding.
+type FSMetaRegionBootstrap struct {
+	Mounts         []string `json:"mounts"`
+	BucketCount    int      `json:"bucket_count"`
+	RegionIDBase   uint64   `json:"region_id_base"`
+	PeerIDBase     uint64   `json:"peer_id_base"`
+	LeaderStoreIDs []uint64 `json:"leader_store_ids,omitempty"`
+}
+
 // LoadFile parses a config file from disk.
 func LoadFile(path string) (*File, error) {
 	data, err := os.ReadFile(path)
@@ -162,6 +174,48 @@ func (f *File) Validate() error {
 			if _, ok := storeIDs[peer.StoreID]; !ok {
 				return fmt.Errorf("config: region %d references unknown store %d", region.ID, peer.StoreID)
 			}
+		}
+	}
+	if err := f.validateFSMetaRegionBootstrap(storeIDs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *File) validateFSMetaRegionBootstrap(storeIDs map[uint64]struct{}) error {
+	if f == nil || f.FSMetaRegionBootstrap == nil {
+		return nil
+	}
+	layout := f.FSMetaRegionBootstrap
+	if len(f.Regions) != 0 {
+		return fmt.Errorf("config: fsmeta_region_bootstrap cannot be combined with explicit regions")
+	}
+	if len(layout.Mounts) == 0 {
+		return fmt.Errorf("config: fsmeta_region_bootstrap.mounts is required")
+	}
+	if layout.BucketCount <= 0 || layout.BucketCount > 1<<16 {
+		return fmt.Errorf("config: fsmeta_region_bootstrap.bucket_count out of range")
+	}
+	if layout.RegionIDBase == 0 || layout.PeerIDBase == 0 {
+		return fmt.Errorf("config: fsmeta_region_bootstrap region_id_base and peer_id_base must be > 0")
+	}
+	if len(storeIDs) == 0 {
+		return fmt.Errorf("config: fsmeta_region_bootstrap requires stores")
+	}
+	mounts := make(map[string]struct{}, len(layout.Mounts))
+	for _, mount := range layout.Mounts {
+		mount = strings.TrimSpace(mount)
+		if mount == "" {
+			return fmt.Errorf("config: fsmeta_region_bootstrap mount cannot be empty")
+		}
+		if _, dup := mounts[mount]; dup {
+			return fmt.Errorf("config: fsmeta_region_bootstrap duplicate mount %q", mount)
+		}
+		mounts[mount] = struct{}{}
+	}
+	for _, storeID := range layout.LeaderStoreIDs {
+		if _, ok := storeIDs[storeID]; !ok {
+			return fmt.Errorf("config: fsmeta_region_bootstrap leader store %d missing from stores", storeID)
 		}
 	}
 	return nil

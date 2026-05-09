@@ -312,6 +312,7 @@ services:
       - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--negative-cache-dir=/var/lib/nokv/negative-cache"
       - "--dirpage-cache-dir=/var/lib/nokv/dirpage-cache"
+      - "--affinity-buckets=16"
       - "--metrics-addr=0.0.0.0:9400"
     volumes:
       - fsmeta-negative-cache:/var/lib/nokv/negative-cache

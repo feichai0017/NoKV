@@ -1328,47 +1328,63 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	now := e.clock().UnixNano()
 	var expired uint64
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, startVersion)
-		if err != nil {
-			return err
-		}
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   fsmeta.InodeID
 			session fsmeta.SessionID
 		}
 		expiredSessions := make(map[expiredSessionKey]struct{})
-		for _, kv := range kvs {
-			if !bytes.HasPrefix(kv.Key, plan.PrimaryKey) {
+		remaining := plan.Limit
+		for _, scanPrefix := range plan.ReadPrefixes {
+			if remaining == 0 {
 				break
 			}
-			record, err := fsmeta.DecodeSessionValue(kv.Value)
+			kvs, err := e.runner.Scan(ctx, scanPrefix, remaining, startVersion)
 			if err != nil {
 				return err
 			}
-			if sessionLive(record, now) {
-				continue
+			var matched uint32
+			for _, kv := range kvs {
+				if !bytes.HasPrefix(kv.Key, scanPrefix) {
+					break
+				}
+				matched++
+				kind, err := fsmeta.KeyKindOf(kv.Key)
+				if err != nil {
+					return err
+				}
+				if kind != fsmeta.KeyKindSession {
+					continue
+				}
+				record, err := fsmeta.DecodeSessionValue(kv.Value)
+				if err != nil {
+					return err
+				}
+				if sessionLive(record, now) {
+					continue
+				}
+				deletes[string(kv.Key)] = cloneBytes(kv.Key)
+				sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Inode, record.Session)
+				if err != nil {
+					return err
+				}
+				ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, record.Inode)
+				if err != nil {
+					return err
+				}
+				if value, ok, err := e.runner.Get(ctx, sessionKey, startVersion); err != nil {
+					return err
+				} else if ok && bytes.Equal(value, kv.Value) {
+					deletes[string(sessionKey)] = sessionKey
+					expiredSessions[expiredSessionKey{inode: record.Inode, session: record.Session}] = struct{}{}
+				}
+				if value, ok, err := e.runner.Get(ctx, ownerKey, startVersion); err != nil {
+					return err
+				} else if ok && bytes.Equal(value, kv.Value) {
+					deletes[string(ownerKey)] = ownerKey
+				}
 			}
-			deletes[string(kv.Key)] = cloneBytes(kv.Key)
-			sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Inode, record.Session)
-			if err != nil {
-				return err
-			}
-			ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, record.Inode)
-			if err != nil {
-				return err
-			}
-			if value, ok, err := e.runner.Get(ctx, sessionKey, startVersion); err != nil {
-				return err
-			} else if ok && bytes.Equal(value, kv.Value) {
-				deletes[string(sessionKey)] = sessionKey
-				expiredSessions[expiredSessionKey{inode: record.Inode, session: record.Session}] = struct{}{}
-			}
-			if value, ok, err := e.runner.Get(ctx, ownerKey, startVersion); err != nil {
-				return err
-			} else if ok && bytes.Equal(value, kv.Value) {
-				deletes[string(ownerKey)] = ownerKey
-			}
+			remaining -= matched
 		}
 		if len(deletes) == 0 {
 			expired = 0
@@ -1679,19 +1695,17 @@ func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, comm
 		if err == nil {
 			return nil
 		}
-		if !isRetryableTxnContention(err) {
+		if !isRetryableTxnAttempt(err) {
 			return translateMutateError(err)
 		}
 		last = err
-		if !canRetryTxnContention(attempt, started, err, e.lockTTL) {
+		if !canRetryTxnAttempt(attempt, started, err, e.lockTTL) {
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
-		// A live Percolator lock may survive ordinary RPC and raft scheduling
-		// jitter, especially when a close and session-cleanup delete touch the
-		// same lease key. fsmeta write APIs should absorb that transient
-		// contention up to the advertised lock TTL instead of returning MVCC
-		// lock details.
+		// A live Percolator lock or a coordinator/region route refresh can race
+		// with the same semantic fsmeta operation. Retrying at this boundary
+		// keeps transient MVCC and route churn below the API contract.
 		e.txnRetriesTotal.Add(1)
 		delay := txnContentionRetryDelay(attempt)
 		if budget := txnRetryBudget(err, e.lockTTL); budget > 0 {
@@ -1720,7 +1734,7 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 		if err == nil {
 			return nil
 		}
-		if !isRetryableTxnContention(err) {
+		if !isRetryableReadAttempt(err) {
 			return err
 		}
 		last = err
@@ -1728,9 +1742,9 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 			e.readRetryExhaustedTotal.Add(1)
 			break
 		}
-		// ReadDir and ReadDirPlus may race with live Percolator locks from
-		// concurrent namespace mutation. Retrying keeps the external API at the
-		// fsmeta level instead of leaking a transient MVCC lock to callers.
+		// ReadDir and ReadDirPlus may race with live Percolator locks or region
+		// route refresh. Retrying keeps the external API at the fsmeta level
+		// instead of leaking transient storage details to callers.
 		e.readRetriesTotal.Add(1)
 		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
 			return err
@@ -1739,7 +1753,7 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 	return last
 }
 
-func canRetryTxnContention(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
+func canRetryTxnAttempt(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
 	if budget := txnRetryBudget(err, fallbackLockTTL); budget > 0 {
 		return time.Since(started) < budget
 	}
@@ -1926,4 +1940,23 @@ func translateMutateError(err error) error {
 
 func isRetryableTxnContention(err error) bool {
 	return nokverrors.IsTxnContention(err)
+}
+
+func isRetryableTxnAttempt(err error) bool {
+	return isRetryableTxnContention(err) || isRetryableRouteRefresh(err)
+}
+
+func isRetryableReadAttempt(err error) bool {
+	return isRetryableTxnContention(err) || isRetryableRouteRefresh(err)
+}
+
+func isRetryableRouteRefresh(err error) bool {
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindRouteUnavailable,
+		nokverrors.KindRegionRouting,
+		nokverrors.KindStaleEpoch:
+		return true
+	default:
+		return false
+	}
 }

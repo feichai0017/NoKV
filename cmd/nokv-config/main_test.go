@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/config"
+	"github.com/feichai0017/NoKV/fsmeta"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/stretchr/testify/require"
 )
@@ -61,6 +62,46 @@ func TestRunRegionsJSONFormat(t *testing.T) {
 	var regions []config.Region
 	require.NoError(t, json.Unmarshal([]byte(output), &regions))
 	require.Len(t, regions, 2)
+}
+
+func TestRunRegionsExpandsFSMetaBootstrapLayout(t *testing.T) {
+	cfg := config.File{
+		Stores: []config.Store{
+			{StoreID: 1, Addr: "store-1"},
+			{StoreID: 2, Addr: "store-2"},
+			{StoreID: 3, Addr: "store-3"},
+		},
+		FSMetaRegionBootstrap: &config.FSMetaRegionBootstrap{
+			Mounts:         []string{"fsmeta-bench"},
+			BucketCount:    fsmeta.DefaultAffinityBucketCount,
+			RegionIDBase:   1000,
+			PeerIDBase:     10_000,
+			LeaderStoreIDs: []uint64{1, 2, 3},
+		},
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+
+	output, err := captureStdout(t, func() error {
+		return runRegions([]string{"--config", cfgPath, "--format", "json"})
+	})
+	require.NoError(t, err)
+	var regions []config.Region
+	require.NoError(t, json.Unmarshal([]byte(output), &regions))
+	require.Len(t, regions, fsmeta.DefaultAffinityBucketCount+2)
+	require.Equal(t, uint64(1000), regions[0].ID)
+	require.Equal(t, uint64(1), regions[0].LeaderStoreID)
+	require.Equal(t, uint64(2), regions[1].LeaderStoreID)
+	require.Len(t, regions[1].Peers, 3)
+	require.Equal(t, uint64(10_003), regions[1].Peers[0].PeerID)
+
+	start, end, err := fsmeta.EncodeBucketRange("fsmeta-bench", 0)
+	require.NoError(t, err)
+	require.Equal(t, start, []byte(regions[1].StartKey))
+	require.Equal(t, end, []byte(regions[1].EndKey))
 }
 
 func TestRunMetaRootSimpleFormat(t *testing.T) {

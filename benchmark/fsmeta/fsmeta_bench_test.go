@@ -27,7 +27,7 @@ const benchEnvKey = "NOKV_FSMETA_BENCH"
 var (
 	fsmetaAddr            = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
 	fsmetaCoordAddr       = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for mount bootstrap")
-	fsmetaWorkloads       = flag.String("fsmeta_workloads", "mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
+	fsmetaWorkloads       = flag.String("fsmeta_workloads", "multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
 	fsmetaMount           = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
 	fsmetaClients         = flag.Int("fsmeta_clients", 8, "concurrent clients")
 	fsmetaDirs            = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
@@ -41,6 +41,7 @@ var (
 	fsmetaGroups          = flag.Int("fsmeta_groups", 4, "mixed workload group directory count")
 	fsmetaEntriesPerGroup = flag.Int("fsmeta_entries_per_group", 8, "mixed workload published entry count per group")
 	fsmetaArtifactsPerRun = flag.Int("fsmeta_artifacts_per_entry", 4, "mixed workload artifact file count per entry; minimum 4")
+	fsmetaWorkspaces      = flag.Int("fsmeta_workspaces", 4, "multi-workspace-autoscale workspace count")
 	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 5*time.Minute, "mixed writer session TTL")
 	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 2*time.Second, "mixed stale-session cleanup TTL")
 	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
@@ -229,6 +230,21 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName
 			PageLimit:       uint32(*fsmetaPageLimit),
 			SessionTTL:      *fsmetaSessionTTL,
 			StaleSessionTTL: *fsmetaStaleSessionTTL,
+		})
+	case workload.MultiWorkspaceAutoscale:
+		result, err = workload.RunMultiWorkspaceAutoscale(ctx, cli, workload.MultiWorkspaceAutoscaleConfig{
+			MixedConfig: workload.MixedConfig{
+				Mount:           fsmeta.MountID(*fsmetaMount),
+				RunID:           runID,
+				Clients:         *fsmetaClients,
+				Groups:          *fsmetaGroups,
+				EntriesPerGroup: *fsmetaEntriesPerGroup,
+				ArtifactsPerRun: *fsmetaArtifactsPerRun,
+				PageLimit:       uint32(*fsmetaPageLimit),
+				SessionTTL:      *fsmetaSessionTTL,
+				StaleSessionTTL: *fsmetaStaleSessionTTL,
+			},
+			Workspaces: *fsmetaWorkspaces,
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)
