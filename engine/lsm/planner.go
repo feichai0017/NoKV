@@ -107,6 +107,8 @@ func (cd *compactDef) unlockLevels() {
 	cd.thisLevel.RUnlock()
 }
 
+// fillTables selects SSTables for this compaction and registers the plan in
+// compactState. Returns true if a valid plan was produced.
 func (lm *levelManager) fillTables(cd *compactDef) bool {
 	cd.lockLevels()
 	defer cd.unlockLevels()
