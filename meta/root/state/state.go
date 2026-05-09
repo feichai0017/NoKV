@@ -92,6 +92,7 @@ const (
 // and cache state are intentionally excluded.
 type MountRecord struct {
 	MountID       string
+	MountKeyID    uint64
 	RootInode     uint64
 	SchemaVersion uint32
 	State         MountState
@@ -270,6 +271,7 @@ func CloneQuotaFences(in map[string]QuotaFence) map[string]QuotaFence {
 type SnapshotEpoch struct {
 	SnapshotID  string
 	Mount       string
+	MountKeyID  uint64
 	RootInode   uint64
 	ReadVersion uint64
 	PublishedAt Cursor
@@ -277,10 +279,10 @@ type SnapshotEpoch struct {
 
 // SnapshotRetentionIndex summarizes active snapshot read-version floors.
 // GlobalFloor is the oldest active snapshot across all mounts. MountFloors
-// narrows the same retention pressure to one fsmeta mount when Mount is known.
+// narrows the same retention pressure to one numeric fsmeta storage mount.
 type SnapshotRetentionIndex struct {
 	GlobalFloor uint64
-	MountFloors map[string]uint64
+	MountFloors map[uint64]uint64
 }
 
 // Active reports whether at least one snapshot epoch contributes a retention
@@ -289,13 +291,14 @@ func (i SnapshotRetentionIndex) Active() bool {
 	return i.GlobalFloor != 0
 }
 
-// FloorForMount returns the oldest active snapshot read version for one mount.
-func (i SnapshotRetentionIndex) FloorForMount(mount string) (uint64, bool) {
-	if mount == "" || len(i.MountFloors) == 0 {
+// FloorForMount returns the oldest active snapshot read version for one
+// numeric storage mount.
+func (i SnapshotRetentionIndex) FloorForMount(mountKeyID uint64) (uint64, bool) {
+	if mountKeyID == 0 || len(i.MountFloors) == 0 {
 		return 0, false
 	}
-	floor := i.MountFloors[mount]
-	return floor, floor != 0
+	floor, ok := i.MountFloors[mountKeyID]
+	return floor, ok
 }
 
 // SnapshotRetentionFloor returns the oldest active snapshot read version.
@@ -309,7 +312,7 @@ func SnapshotRetentionFloor(epochs map[string]SnapshotEpoch) (uint64, bool) {
 // SnapshotRetentionIndexFor returns both global and mount-scoped retention
 // floors for active snapshot epochs.
 func SnapshotRetentionIndexFor(epochs map[string]SnapshotEpoch) SnapshotRetentionIndex {
-	index := SnapshotRetentionIndex{MountFloors: make(map[string]uint64)}
+	index := SnapshotRetentionIndex{MountFloors: make(map[uint64]uint64)}
 	for _, epoch := range epochs {
 		if epoch.ReadVersion == 0 {
 			continue
@@ -317,11 +320,11 @@ func SnapshotRetentionIndexFor(epochs map[string]SnapshotEpoch) SnapshotRetentio
 		if index.GlobalFloor == 0 || epoch.ReadVersion < index.GlobalFloor {
 			index.GlobalFloor = epoch.ReadVersion
 		}
-		if epoch.Mount == "" {
+		if epoch.MountKeyID == 0 {
 			continue
 		}
-		if current := index.MountFloors[epoch.Mount]; current == 0 || epoch.ReadVersion < current {
-			index.MountFloors[epoch.Mount] = epoch.ReadVersion
+		if current := index.MountFloors[epoch.MountKeyID]; current == 0 || epoch.ReadVersion < current {
+			index.MountFloors[epoch.MountKeyID] = epoch.ReadVersion
 		}
 	}
 	return index
@@ -436,7 +439,6 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		}
 	case rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
-		rootevent.KindMountRegistered,
 		rootevent.KindMountRetired,
 		rootevent.KindSubtreeAuthorityDeclared,
 		rootevent.KindSubtreeHandoffStarted,
@@ -444,6 +446,12 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		rootevent.KindQuotaFenceUpdated:
 		// Filesystem namespace authority events advance the root cursor but do
 		// not mutate cluster topology or store membership epochs.
+	case rootevent.KindMountRegistered:
+		// mount_key_id is allocated from the same global ID space as region and
+		// peer IDs. Static bootstrap events therefore act as allocator fences.
+		if event.Mount != nil && event.Mount.MountKeyID > state.IDFence {
+			state.IDFence = event.Mount.MountKeyID
+		}
 	case rootevent.KindGrantIssued:
 		applyGrantIssuedToState(state, cursor, event)
 	case rootevent.KindGrantSealed, rootevent.KindGrantRetired:

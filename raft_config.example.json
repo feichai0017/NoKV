@@ -61,7 +61,10 @@
     }
   ],
   "fsmeta_region_bootstrap": {
-    "mounts": ["default", "fsmeta-bench"],
+    "mounts": [
+      {"mount_id": "default", "mount_key_id": 1},
+      {"mount_id": "fsmeta-bench", "mount_key_id": 2}
+    ],
     "bucket_count": 16,
     "region_id_base": 1000,
     "peer_id_base": 100000,

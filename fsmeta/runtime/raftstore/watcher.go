@@ -29,6 +29,11 @@ func (w watcher) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 		if record.Retired {
 			return nil, fsmeta.ErrMountRetired
 		}
+		prefix, err := fsmeta.WatchPrefixForMount(req, record.Identity())
+		if err != nil {
+			return nil, err
+		}
+		req.KeyPrefix = prefix
 	}
 	if w.Router == nil {
 		return nil, fsmeta.ErrInvalidRequest

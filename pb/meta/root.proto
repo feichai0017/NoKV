@@ -95,6 +95,7 @@ message RootSnapshotEpoch {
   uint64 root_inode = 3;
   uint64 read_version = 4;
   RootCursor published_at = 5;
+  uint64 mount_key_id = 6;
 }
 
 enum RootMountState {
@@ -110,6 +111,7 @@ message RootMount {
   RootMountState state = 4;
   RootCursor registered_at = 5;
   RootCursor retired_at = 6;
+  uint64 mount_key_id = 7;
 }
 
 enum RootSubtreeAuthorityState {

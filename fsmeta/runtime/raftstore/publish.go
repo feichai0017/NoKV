@@ -17,11 +17,11 @@ type rootPublisher struct {
 }
 
 func (p rootPublisher) PublishSnapshotSubtree(ctx context.Context, t fsmeta.SnapshotSubtreeToken) error {
-	return p.send(ctx, rootevent.SnapshotEpochPublished(string(t.Mount), uint64(t.RootInode), t.ReadVersion))
+	return p.send(ctx, rootevent.SnapshotEpochPublished(string(t.Mount), uint64(t.MountKeyID), uint64(t.RootInode), t.ReadVersion))
 }
 
 func (p rootPublisher) RetireSnapshotSubtree(ctx context.Context, t fsmeta.SnapshotSubtreeToken) error {
-	return p.send(ctx, rootevent.SnapshotEpochRetired(string(t.Mount), uint64(t.RootInode), t.ReadVersion))
+	return p.send(ctx, rootevent.SnapshotEpochRetired(string(t.Mount), uint64(t.MountKeyID), uint64(t.RootInode), t.ReadVersion))
 }
 
 func (p rootPublisher) StartSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {

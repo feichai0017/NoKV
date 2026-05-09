@@ -293,9 +293,20 @@ services:
     command:
       - |
         for mount in $(printf '%s' "${NOKV_MOUNT_IDS:-default}" | tr ',' ' '); do
+          mount_key_id=
+          for pair in $(printf '%s' "${NOKV_MOUNT_KEY_IDS:-default=1,fsmeta-bench=2}" | tr ',' ' '); do
+            case "$$pair" in
+              "$$mount="*) mount_key_id="$${pair#*=}" ;;
+            esac
+          done
+          if [ -z "$$mount_key_id" ]; then
+            echo "missing mount_key_id mapping for $$mount in NOKV_MOUNT_KEY_IDS" >&2
+            exit 1
+          fi
+          mount_key_arg="--mount-key-id $$mount_key_id"
           until /usr/local/bin/nokv mount register \
             --coordinator-addr nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379 \
-            --mount "$$mount" --root-inode 1 --schema-version 1; do
+            --mount "$$mount" $$mount_key_arg --root-inode 1 --schema-version 1; do
             sleep 1
           done
         done

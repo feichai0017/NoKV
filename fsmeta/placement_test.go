@@ -8,7 +8,10 @@ import (
 )
 
 func TestPlanBucketPlacementReturnsContinuousRanges(t *testing.T) {
-	ranges, err := PlanBucketPlacement([]MountID{"default", "fsmeta-bench"}, DefaultAffinityBucketCount)
+	ranges, err := PlanBucketPlacement([]MountIdentity{
+		{MountID: "default", MountKeyID: 1},
+		{MountID: "fsmeta-bench", MountKeyID: 2},
+	}, DefaultAffinityBucketCount)
 	require.NoError(t, err)
 	require.Len(t, ranges, DefaultAffinityBucketCount*2+3)
 
@@ -23,7 +26,7 @@ func TestPlanBucketPlacementReturnsContinuousRanges(t *testing.T) {
 }
 
 func TestPlanBucketPlacementKeepsBucketKeysInsideBucketRange(t *testing.T) {
-	ranges, err := PlanBucketPlacement([]MountID{"vol"}, DefaultAffinityBucketCount)
+	ranges, err := PlanBucketPlacement([]MountIdentity{testMount}, DefaultAffinityBucketCount)
 	require.NoError(t, err)
 
 	var bucketRange PlacementRange
@@ -35,31 +38,31 @@ func TestPlanBucketPlacementKeepsBucketKeysInsideBucketRange(t *testing.T) {
 	}
 	require.True(t, bucketRange.Bucketed)
 
-	inode := findInodeOnBucket(t, "vol", 7)
-	key, err := EncodeInodeKey("vol", inode)
+	inode := findInodeOnBucket(t, testMount, 7)
+	key, err := EncodeInodeKey(testMount, inode)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, bytes.Compare(key, bucketRange.StartKey), 0)
 	require.Less(t, bytes.Compare(key, bucketRange.EndKey), 0)
 }
 
 func TestPlanBucketPlacementRejectsInvalidInput(t *testing.T) {
-	_, err := PlanBucketPlacement([]MountID{"vol"}, 0)
+	_, err := PlanBucketPlacement([]MountIdentity{testMount}, 0)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 
-	_, err = PlanBucketPlacement([]MountID{"vol", "vol"}, DefaultAffinityBucketCount)
+	_, err = PlanBucketPlacement([]MountIdentity{testMount, testMount}, DefaultAffinityBucketCount)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
 func TestBucketSplitBoundariesUseBucketEdges(t *testing.T) {
-	boundaries, err := BucketSplitBoundaries([]MountID{"vol"}, 4)
+	boundaries, err := BucketSplitBoundaries([]MountIdentity{testMount}, 4)
 	require.NoError(t, err)
 	require.Len(t, boundaries, 5)
 
-	bucket0, _, err := EncodeBucketRange("vol", 0)
+	bucket0, _, err := EncodeBucketRange(testMount, 0)
 	require.NoError(t, err)
 	require.Equal(t, bucket0, boundaries[0])
 
-	_, bucket3End, err := EncodeBucketRange("vol", 3)
+	_, bucket3End, err := EncodeBucketRange(testMount, 3)
 	require.NoError(t, err)
 	require.Equal(t, bucket3End, boundaries[4])
 }

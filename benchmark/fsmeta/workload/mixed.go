@@ -97,12 +97,9 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 		return Result{}, err
 	}
 
-	prefix, err := fsmeta.EncodeDentryPrefix(cfg.Mount, dirs.runs)
-	if err != nil {
-		return Result{}, err
-	}
 	stream, err := native.WatchSubtree(ctx, fsmeta.WatchRequest{
-		KeyPrefix:          prefix,
+		Mount:              cfg.Mount,
+		RootInode:          dirs.runs,
 		BackPressureWindow: uint32(cfg.Groups*cfg.EntriesPerGroup + 1),
 	})
 	if err != nil {
@@ -110,10 +107,6 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	}
 	defer func() { _ = stream.Close() }()
 
-	warmupKey, err := fsmeta.EncodeDentryKey(cfg.Mount, dirs.runs, "watch-warmup")
-	if err != nil {
-		return Result{}, err
-	}
 	if _, err := native.Create(ctx, fsmeta.CreateRequest{
 		Mount:  cfg.Mount,
 		Parent: dirs.runs,
@@ -122,7 +115,7 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	}); err != nil {
 		return Result{}, err
 	}
-	if err := waitForWatchKey(ctx, stream, warmupKey); err != nil {
+	if err := waitForWatchName(ctx, stream, "watch-warmup"); err != nil {
 		return Result{}, err
 	}
 
@@ -316,13 +309,8 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 		return
 	}
 
-	key, err := fsmeta.EncodeDentryKey(cfg.Mount, dirs.runs, finalName)
-	if err != nil {
-		rec.record("rename_run_publish", 0, err)
-		return
-	}
 	if err := recordCall(rec, "rename_run_publish", func() error {
-		starts.put(key, time.Now())
+		starts.put(finalName, time.Now())
 		return cli.Rename(ctx, fsmeta.RenameRequest{
 			Mount:      cfg.Mount,
 			FromParent: dirs.scratch,

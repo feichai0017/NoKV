@@ -16,6 +16,22 @@ import (
 	"google.golang.org/grpc"
 )
 
+type staticMountWatcher struct {
+	router   *fswatch.Router
+	identity fsmeta.MountIdentity
+}
+
+func (w staticMountWatcher) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	if req.Mount != "" {
+		prefix, err := fsmeta.WatchPrefixForMount(req, w.identity)
+		if err != nil {
+			return nil, err
+		}
+		req.KeyPrefix = prefix
+	}
+	return w.router.Subscribe(ctx, req)
+}
+
 func TestFSMetadataClientServerOnRealCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -177,10 +193,10 @@ func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 	require.NoError(t, err)
 	defer reg.Close()
 
-	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(staticMountWatcher{router: router, identity: runtime.mountIdentity}))
 	defer cleanup()
 
-	prefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	prefix, err := fsmeta.EncodeDentryPrefix(runtime.mountIdentity, fsmeta.RootInode)
 	require.NoError(t, err)
 	stream, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
 		KeyPrefix:          prefix,
@@ -197,7 +213,7 @@ func TestFSMetadataWatchSubtreeOnRealCluster(t *testing.T) {
 	}
 	_, err = cli.Create(ctx, req)
 	require.NoError(t, err)
-	wantKey, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	wantKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, req.Parent, req.Name)
 	require.NoError(t, err)
 
 	var got fsmeta.WatchEvent
@@ -225,10 +241,10 @@ func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
 	require.NoError(t, err)
 	defer reg.Close()
 
-	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(staticMountWatcher{router: router, identity: runtime.mountIdentity}))
 	defer cleanup()
 
-	prefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	prefix, err := fsmeta.EncodeDentryPrefix(runtime.mountIdentity, fsmeta.RootInode)
 	require.NoError(t, err)
 	stream, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
 		KeyPrefix:          prefix,
@@ -239,7 +255,7 @@ func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
 	first := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "catchup-0001", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
 	_, err = cli.Create(ctx, first)
 	require.NoError(t, err)
-	firstKey, err := fsmeta.EncodeDentryKey(first.Mount, first.Parent, first.Name)
+	firstKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, first.Parent, first.Name)
 	require.NoError(t, err)
 	firstEvent := recvWatchKey(t, stream, firstKey)
 	require.NoError(t, stream.Ack(firstEvent.Cursor))
@@ -251,9 +267,9 @@ func TestFSMetadataWatchSubtreeReplaysAfterResumeCursor(t *testing.T) {
 	require.NoError(t, err)
 	_, err = cli.Create(ctx, third)
 	require.NoError(t, err)
-	secondKey, err := fsmeta.EncodeDentryKey(second.Mount, second.Parent, second.Name)
+	secondKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, second.Parent, second.Name)
 	require.NoError(t, err)
-	thirdKey, err := fsmeta.EncodeDentryKey(third.Mount, third.Parent, third.Name)
+	thirdKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, third.Parent, third.Name)
 	require.NoError(t, err)
 
 	resumed, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
@@ -287,7 +303,7 @@ func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
 	require.NoError(t, err)
 	defer reg.Close()
 
-	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(router))
+	cli, cleanup := openFSMetadataClient(t, ctx, runtime.executor, fsmetaserver.WithWatcher(staticMountWatcher{router: router, identity: runtime.mountIdentity}))
 	defer cleanup()
 
 	warmup, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
@@ -300,7 +316,7 @@ func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
 	baseline := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "baseline-artifact", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
 	_, err = cli.Create(ctx, baseline)
 	require.NoError(t, err)
-	baselineKey, err := fsmeta.EncodeDentryKey(baseline.Mount, baseline.Parent, baseline.Name)
+	baselineKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, baseline.Parent, baseline.Name)
 	require.NoError(t, err)
 	baselineEvent := recvWatchKey(t, warmup, baselineKey)
 	require.NotZero(t, baselineEvent.Cursor.RegionID)
@@ -328,7 +344,7 @@ func TestFSMetadataWatchSubtreeReconcilesAfterExpiredCursor(t *testing.T) {
 	live := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "live-after-reconcile", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
 	_, err = cli.Create(ctx, live)
 	require.NoError(t, err)
-	liveKey, err := fsmeta.EncodeDentryKey(live.Mount, live.Parent, live.Name)
+	liveKey, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, live.Parent, live.Name)
 	require.NoError(t, err)
 	got := recvWatchKey(t, result.Subscription, liveKey)
 	require.NoError(t, result.Subscription.Ack(got.Cursor))
@@ -360,7 +376,10 @@ func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	require.Equal(t, mount, token.Mount)
 	require.Equal(t, fsmeta.RootInode, token.RootInode)
 	require.NotZero(t, token.ReadVersion)
-	require.Equal(t, token, publisher.token)
+	require.Equal(t, token.Mount, publisher.token.Mount)
+	require.Equal(t, fsmeta.MountKeyID(1), publisher.token.MountKeyID)
+	require.Equal(t, token.RootInode, publisher.token.RootInode)
+	require.Equal(t, token.ReadVersion, publisher.token.ReadVersion)
 
 	_, err = cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  mount,
@@ -388,7 +407,10 @@ func TestFSMetadataSnapshotSubtreeOnRealCluster(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, dentryNames(latestPage))
 
 	require.NoError(t, cli.RetireSnapshotSubtree(ctx, token))
-	require.Equal(t, token, publisher.retired)
+	require.Equal(t, token.Mount, publisher.retired.Mount)
+	require.Equal(t, fsmeta.MountKeyID(1), publisher.retired.MountKeyID)
+	require.Equal(t, token.RootInode, publisher.retired.RootInode)
+	require.Equal(t, token.ReadVersion, publisher.retired.ReadVersion)
 }
 
 func TestFSMetadataStageCommitArtifactPublishOnRealCluster(t *testing.T) {

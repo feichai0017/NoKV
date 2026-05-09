@@ -241,6 +241,7 @@ func rootEventsAfter(records []rootstorage.CommittedEvent, after rootstate.Curso
 func mountInfoToProto(mount rootstate.MountRecord) *coordpb.MountInfo {
 	return &coordpb.MountInfo{
 		MountId:       mount.MountID,
+		MountKeyId:    mount.MountKeyID,
 		RootInode:     mount.RootInode,
 		SchemaVersion: mount.SchemaVersion,
 		State:         mountStateToProto(mount.State),

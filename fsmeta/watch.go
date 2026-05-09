@@ -83,13 +83,27 @@ func (f SnapshotPublisherFunc) RetireSnapshotSubtree(context.Context, SnapshotSu
 	return nil
 }
 
-// WatchPrefix returns the byte prefix a WatchRequest should match.
+// WatchPrefix returns an explicit byte prefix a WatchRequest should match.
+// Public callers cannot derive storage prefixes from a string mount name; the
+// runtime boundary must first resolve rooted mount admission and then call
+// WatchPrefixForMount.
 func WatchPrefix(req WatchRequest) ([]byte, error) {
 	if len(req.KeyPrefix) > 0 {
 		if req.Mount != "" || req.RootInode != 0 {
 			return nil, ErrInvalidRequest
 		}
 		return append([]byte(nil), req.KeyPrefix...), nil
+	}
+	return nil, ErrInvalidRequest
+}
+
+// WatchPrefixForMount returns the dentry prefix for a resolved mount identity.
+func WatchPrefixForMount(req WatchRequest, mount MountIdentity) ([]byte, error) {
+	if len(req.KeyPrefix) > 0 {
+		return WatchPrefix(req)
+	}
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return nil, err
 	}
 	if err := validateMountID(req.Mount); err != nil {
 		return nil, err
@@ -102,5 +116,5 @@ func WatchPrefix(req WatchRequest) ([]byte, error) {
 		// subtree watch needs a directory-tree index and is deferred.
 		return nil, ErrInvalidRequest
 	}
-	return EncodeDentryPrefix(req.Mount, req.RootInode)
+	return EncodeDentryPrefix(mount, req.RootInode)
 }

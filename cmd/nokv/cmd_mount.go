@@ -18,6 +18,7 @@ type mountCoordinatorClient interface {
 	PublishRootEvent(context.Context, *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error)
 	GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
 	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
+	AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error)
 	Close() error
 }
 
@@ -83,6 +84,7 @@ func runMountRegisterCmd(w io.Writer, args []string) error {
 	var cfg mountCmdConfig
 	fs := flag.NewFlagSet("mount register", flag.ContinueOnError)
 	mount := fs.String("mount", "", "mount id")
+	mountKeyIDFlag := fs.Uint64("mount-key-id", 0, "rooted numeric mount storage key id; omitted means allocate from coordinator")
 	rootInode := fs.Uint64("root-inode", 1, "root inode id")
 	schemaVersion := fs.Uint("schema-version", 1, "fsmeta schema version")
 	mountCommonFlags(fs, &cfg)
@@ -119,16 +121,30 @@ func runMountRegisterCmd(w io.Writer, args []string) error {
 		if info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
 			return fmt.Errorf("mount %q is retired", mountID)
 		}
-		if info.GetRootInode() != *rootInode || info.GetSchemaVersion() != uint32(*schemaVersion) {
+		if info.GetMountKeyId() == 0 || (*mountKeyIDFlag != 0 && info.GetMountKeyId() != *mountKeyIDFlag) || info.GetRootInode() != *rootInode || info.GetSchemaVersion() != uint32(*schemaVersion) {
 			return fmt.Errorf("mount %q conflicts with rooted truth", mountID)
 		}
-		_, _ = fmt.Fprintf(w, "mount %q already registered root_inode=%d schema_version=%d\n", mountID, *rootInode, *schemaVersion)
+		_, _ = fmt.Fprintf(w, "mount %q already registered mount_key_id=%d root_inode=%d schema_version=%d\n", mountID, info.GetMountKeyId(), *rootInode, *schemaVersion)
 		return nil
 	}
-	if err := publishMountEvent(ctx, cli, rootevent.MountRegistered(mountID, *rootInode, uint32(*schemaVersion))); err != nil {
+	mountKeyID := *mountKeyIDFlag
+	if mountKeyID == 0 {
+		alloc, err := cli.AllocID(ctx, &coordpb.AllocIDRequest{Count: 1})
+		if err != nil {
+			return err
+		}
+		if alloc == nil {
+			return fmt.Errorf("coordinator returned empty mount_key_id allocation")
+		}
+		mountKeyID = alloc.GetFirstId()
+		if mountKeyID == 0 || alloc.GetCount() != 1 {
+			return fmt.Errorf("coordinator returned invalid mount_key_id allocation")
+		}
+	}
+	if err := publishMountEvent(ctx, cli, rootevent.MountRegistered(mountID, mountKeyID, *rootInode, uint32(*schemaVersion))); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(w, "mount %q registered root_inode=%d schema_version=%d\n", mountID, *rootInode, *schemaVersion)
+	_, _ = fmt.Fprintf(w, "mount %q registered mount_key_id=%d root_inode=%d schema_version=%d\n", mountID, mountKeyID, *rootInode, *schemaVersion)
 	return nil
 }
 
@@ -184,8 +200,8 @@ func runMountListCmd(w io.Writer, args []string) error {
 	}
 	_, _ = fmt.Fprintln(w, "Mounts:")
 	for _, mount := range resp.GetMounts() {
-		_, _ = fmt.Fprintf(w, "  - id=%s root_inode=%d schema_version=%d state=%s\n",
-			mount.GetMountId(), mount.GetRootInode(), mount.GetSchemaVersion(), mount.GetState().String())
+		_, _ = fmt.Fprintf(w, "  - id=%s mount_key_id=%d root_inode=%d schema_version=%d state=%s\n",
+			mount.GetMountId(), mount.GetMountKeyId(), mount.GetRootInode(), mount.GetSchemaVersion(), mount.GetState().String())
 	}
 	return nil
 }

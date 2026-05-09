@@ -195,7 +195,7 @@ func applySubtreeHandoffCompletedToSnapshot(snapshot *Snapshot, cursor Cursor, e
 }
 
 func applyMountRegisteredToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Event) {
-	if snapshot == nil || event.Mount == nil || event.Mount.MountID == "" || event.Mount.RootInode == 0 {
+	if snapshot == nil || event.Mount == nil || event.Mount.MountID == "" || event.Mount.MountKeyID == 0 || event.Mount.RootInode == 0 {
 		return
 	}
 	current := snapshot.Mounts[event.Mount.MountID]
@@ -204,10 +204,17 @@ func applyMountRegisteredToSnapshot(snapshot *Snapshot, cursor Cursor, event roo
 	}
 	snapshot.Mounts[event.Mount.MountID] = MountRecord{
 		MountID:       event.Mount.MountID,
+		MountKeyID:    event.Mount.MountKeyID,
 		RootInode:     event.Mount.RootInode,
 		SchemaVersion: event.Mount.SchemaVersion,
 		State:         MountStateActive,
 		RegisteredAt:  cursor,
+	}
+	// Static mount bootstrap consumes the same global ID space as runtime
+	// AllocID. Raising the fence here prevents a later dynamic mount or region
+	// allocation from reusing a mount_key_id that was installed from config.
+	if event.Mount.MountKeyID > snapshot.State.IDFence {
+		snapshot.State.IDFence = event.Mount.MountKeyID
 	}
 	key := SubtreeAuthorityKey(event.Mount.MountID, event.Mount.RootInode)
 	if key != "" && snapshot.Subtrees[key].State == SubtreeAuthorityUnknown {
@@ -244,6 +251,7 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 	epoch := SnapshotEpoch{
 		SnapshotID:  event.SnapshotEpoch.SnapshotID,
 		Mount:       event.SnapshotEpoch.Mount,
+		MountKeyID:  event.SnapshotEpoch.MountKeyID,
 		RootInode:   event.SnapshotEpoch.RootInode,
 		ReadVersion: event.SnapshotEpoch.ReadVersion,
 		PublishedAt: cursor,
@@ -251,7 +259,7 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 	if epoch.SnapshotID == "" {
 		epoch.SnapshotID = rootevent.SnapshotEpochID(epoch.Mount, epoch.RootInode, epoch.ReadVersion)
 	}
-	if epoch.Mount == "" || epoch.RootInode == 0 || epoch.ReadVersion == 0 {
+	if epoch.Mount == "" || epoch.MountKeyID == 0 || epoch.RootInode == 0 || epoch.ReadVersion == 0 {
 		return
 	}
 	snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch

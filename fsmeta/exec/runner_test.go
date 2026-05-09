@@ -47,6 +47,31 @@ type fakeAtomicRunner struct {
 	atomicCalls []atomicMutateCall
 }
 
+var testMountIdentity = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
+func testMountIdentityFor(mount fsmeta.MountID) fsmeta.MountIdentity {
+	if mount == testMountIdentity.MountID {
+		return testMountIdentity
+	}
+	return fsmeta.MountIdentity{MountID: mount, MountKeyID: 2}
+}
+
+func testMountAdmission() MountAdmission {
+	return MountAdmission{
+		MountID:       testMountIdentity.MountID,
+		MountKeyID:    testMountIdentity.MountKeyID,
+		RootInode:     fsmeta.RootInode,
+		SchemaVersion: 1,
+	}
+}
+
+func newTestExecutor(runner TxnRunner, opts ...Option) (*Executor, error) {
+	defaults := []Option{WithMountResolver(&fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		testMountIdentity.MountID: testMountAdmission(),
+	}})}
+	return New(runner, append(defaults, opts...)...)
+}
+
 func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
 	raw, ok := stats[key]
@@ -70,7 +95,7 @@ func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.Opera
 }
 
 func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
-	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
+	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
 		panic(err)
 	}
@@ -117,7 +142,7 @@ type fakeInodeAllocator struct {
 	calls int
 }
 
-func (a *fakeInodeAllocator) AllocateCreateInode(context.Context, fsmeta.MountID, fsmeta.InodeID, string) (fsmeta.InodeID, error) {
+func (a *fakeInodeAllocator) AllocateCreateInode(context.Context, fsmeta.MountIdentity, fsmeta.InodeID, string) (fsmeta.InodeID, error) {
 	a.calls++
 	if a.err != nil {
 		return 0, a.err
@@ -279,7 +304,7 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 21, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	token, err := executor.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
@@ -287,7 +312,7 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 		RootInode: 7,
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 7, ReadVersion: 1}, token)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 7, ReadVersion: 1}, token)
 
 	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
 		Mount:           "vol",
@@ -300,9 +325,26 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
+func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
+	runner := newFakeRunner()
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", MountKeyID: 9, RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
+	}}
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver))
+	require.NoError(t, err)
+
+	token, err := executor.ResolveSnapshotSubtreeToken(context.Background(), fsmeta.SnapshotSubtreeToken{
+		Mount:       "vol",
+		RootInode:   7,
+		ReadVersion: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 9, RootInode: 7, ReadVersion: 42}, token)
+}
+
 func TestExecutorGetReadVersionReservesEphemeralTimestamp(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	version, err := executor.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
@@ -313,12 +355,12 @@ func TestExecutorGetReadVersionReservesEphemeralTimestamp(t *testing.T) {
 
 func TestExecutorGetQuotaUsage(t *testing.T) {
 	runner := newFakeRunner()
-	key, err := fsmeta.EncodeUsageKey("vol", 7)
+	key, err := fsmeta.EncodeUsageKey(testMountIdentity, 7)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeUsageValue(fsmeta.UsageRecord{Bytes: 4096, Inodes: 2})
 	require.NoError(t, err)
 	runner.data[string(key)] = value
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	usage, err := executor.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol", Scope: 7})
@@ -328,7 +370,7 @@ func TestExecutorGetQuotaUsage(t *testing.T) {
 
 func TestExecutorGetQuotaUsageReturnsZeroForMissingCounter(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	usage, err := executor.GetQuotaUsage(context.Background(), fsmeta.QuotaUsageRequest{Mount: "vol"})
@@ -443,7 +485,7 @@ func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, pr
 
 func TestExecutorCreateAndLookup(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -477,7 +519,7 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
 	runner := newFakeRunner()
 	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -496,7 +538,7 @@ func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
 func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
 	runner := newFakeRunner()
 	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	version, err := executor.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
@@ -508,7 +550,7 @@ func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
 }
 
 func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
-	executor, err := New(newFakeRunner())
+	executor, err := newTestExecutor(newFakeRunner())
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -523,14 +565,14 @@ func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
 func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
 	_, err = executor.Create(context.Background(), req)
 	require.NoError(t, err)
 
-	plan, err := fsmeta.PlanCreate(req, 22)
+	plan, err := fsmeta.PlanCreate(req, testMountIdentity, 22)
 	require.NoError(t, err)
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
@@ -566,7 +608,7 @@ func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
 func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -591,7 +633,7 @@ func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 
 func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -615,10 +657,10 @@ func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
 func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
-	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
+	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 0)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -650,7 +692,7 @@ func TestExecutorUpdateInodeUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T)
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Mode: 0o644, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
@@ -667,7 +709,7 @@ func TestExecutorUpdateInodeUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "success_total", 1)
 
-	stored, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint32(0o600), stored.Mode)
@@ -678,10 +720,10 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 1024, LinkCount: 1})
-	quotaKey, err := fsmeta.EncodeUsageKey("vol", 7)
+	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 7)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
@@ -700,7 +742,7 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}))
 	require.NoError(t, err)
 
 	req := fsmeta.CreateRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}}
@@ -717,9 +759,9 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	t.Run("active mount", func(t *testing.T) {
 		runner := newFakeRunner()
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+			"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 		}}
-		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
+		executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
 		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -736,7 +778,7 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	t.Run("missing mount", func(t *testing.T) {
 		runner := newFakeRunner()
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{}}
-		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
+		executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
 		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -753,9 +795,9 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 	t.Run("retired mount", func(t *testing.T) {
 		runner := newFakeRunner()
 		resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-			"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
+			"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1, Retired: true},
 		}}
-		executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
+		executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithMountResolver(resolver))
 		require.NoError(t, err)
 
 		_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -772,10 +814,10 @@ func TestExecutorCreateRequiresActiveMountWhenResolverConfigured(t *testing.T) {
 
 func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 	runner := newFakeRunner()
-	quotaKey, err := fsmeta.EncodeUsageKey("vol", 0)
+	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 0)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -785,7 +827,7 @@ func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
 	})
 	require.NoError(t, err)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, quotaKey, runner.mutations[0][2].GetKey())
 }
@@ -793,7 +835,7 @@ func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 	runner := newFakeRunner()
 	quota := &fakeQuotaResolver{err: fsmeta.ErrQuotaExceeded}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}), WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -804,7 +846,7 @@ func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 	})
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 	require.Empty(t, runner.mutations)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
 func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
@@ -819,10 +861,10 @@ func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
 		CreatedUnixNs: 10,
 		UpdatedUnixNs: 20,
 	})
-	quotaKey, err := fsmeta.EncodeUsageKey("vol", 7)
+	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 7)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
@@ -845,11 +887,11 @@ func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
 	require.Equal(t, int64(30), updated.UpdatedUnixNs)
 	require.Equal(t, []byte("body=cas://1"), updated.OpaqueAttrs)
 	require.Equal(t, int64(10), updated.CreatedUnixNs)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: 4096}}}, quota.changes)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, quotaKey, runner.mutations[0][1].GetKey())
 
-	stored, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, updated, stored)
@@ -859,7 +901,7 @@ func TestExecutorUpdateInodeRejectsHardLinkedInode(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
@@ -878,7 +920,7 @@ func TestExecutorUpdateInodeRejectsDentryTypeMismatch(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentryType(t, runner, "vol", 7, "file", 22, fsmeta.InodeTypeDirectory)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	_, err = executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
@@ -897,7 +939,7 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
 	now := time.Unix(0, 100)
-	executor, err := New(runner, WithClock(func() time.Time { return now }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return now }))
 	require.NoError(t, err)
 
 	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -909,9 +951,9 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, opened)
 
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-1")
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-1")
 	require.NoError(t, err)
-	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, 22)
 	require.NoError(t, err)
 	require.Contains(t, runner.data, string(sessionKey))
 	require.Contains(t, runner.data, string(ownerKey))
@@ -948,7 +990,7 @@ func TestExecutorWriteSessionLifecycleUsesAtomicMutate(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
 	now := time.Unix(0, 100)
-	executor, err := New(runner, WithClock(func() time.Time { return now }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return now }))
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -983,13 +1025,13 @@ func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *test
 	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
 	require.NoError(t, err)
-	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-old")
+	oldSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-old")
 	require.NoError(t, err)
-	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, 22)
 	require.NoError(t, err)
 	runner.data[string(oldSessionKey)] = oldValue
 	runner.data[string(ownerKey)] = oldValue
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -1009,7 +1051,7 @@ func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *test
 func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -1033,7 +1075,7 @@ func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
 func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-1")
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-1")
 	require.NoError(t, err)
 	runner.mutateErrs = []error{
 		nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
@@ -1046,7 +1088,7 @@ func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) 
 		nil,
 	}
 	clockCalls := 0
-	executor, err := New(runner, WithClock(func() time.Time {
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time {
 		clockCalls++
 		if clockCalls == 1 {
 			return time.Unix(0, 100)
@@ -1075,14 +1117,14 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	oldRecord := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	oldValue, err := fsmeta.EncodeSessionValue(oldRecord)
 	require.NoError(t, err)
-	oldSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-old")
+	oldSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-old")
 	require.NoError(t, err)
-	ownerKey, err := fsmeta.EncodeInodeSessionKey("vol", 22)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, 22)
 	require.NoError(t, err)
 	runner.data[string(oldSessionKey)] = oldValue
 	runner.data[string(ownerKey)] = oldValue
 
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
 		Mount:   "vol",
@@ -1092,7 +1134,7 @@ func TestExecutorOpenWriteSessionReclaimsExpiredOwner(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(oldSessionKey))
-	newSessionKey, err := fsmeta.EncodeSessionKey("vol", 22, "writer-new")
+	newSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-new")
 	require.NoError(t, err)
 	require.Contains(t, runner.data, string(newSessionKey))
 	require.Contains(t, runner.data, string(ownerKey))
@@ -1107,14 +1149,14 @@ func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
 	expired := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}
 	expiredValue, err := fsmeta.EncodeSessionValue(expired)
 	require.NoError(t, err)
-	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, expired.Inode)
 	require.NoError(t, err)
 	runner.data[string(expiredOwnerKey)] = expiredValue
-	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
+	liveSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, live.Inode, live.Session)
 	require.NoError(t, err)
-	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, live.Inode)
 	require.NoError(t, err)
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -1136,7 +1178,7 @@ func TestExecutorOpenWriteSessionDoesNotDeleteReusedLiveSession(t *testing.T) {
 func TestExecutorOpenWriteSessionRejectsDirectory(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	_, err = executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
@@ -1155,20 +1197,20 @@ func TestExecutorExpireWriteSessionsDeletesBothIndexes(t *testing.T) {
 	live := fsmeta.SessionRecord{Session: "writer-live", Inode: 23, ExpiresUnixNs: 500}
 	seedSession(t, runner, "vol", expired)
 	seedSession(t, runner, "vol", live)
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
 
-	expiredSessionKey, err := fsmeta.EncodeSessionKey("vol", expired.Inode, expired.Session)
+	expiredSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, expired.Inode, expired.Session)
 	require.NoError(t, err)
-	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, expired.Inode)
 	require.NoError(t, err)
-	liveSessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
+	liveSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, live.Inode, live.Session)
 	require.NoError(t, err)
-	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, live.Inode)
 	require.NoError(t, err)
 	require.NotContains(t, runner.data, string(expiredSessionKey))
 	require.NotContains(t, runner.data, string(expiredOwnerKey))
@@ -1182,7 +1224,7 @@ func TestExecutorExpireWriteSessionsCountsSessionPerInode(t *testing.T) {
 	second := fsmeta.SessionRecord{Session: "writer-reused", Inode: 23, ExpiresUnixNs: 50}
 	seedSession(t, runner, "vol", first)
 	seedSession(t, runner, "vol", second)
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
@@ -1198,16 +1240,16 @@ func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T)
 	require.NoError(t, err)
 	liveValue, err := fsmeta.EncodeSessionValue(live)
 	require.NoError(t, err)
-	sessionKey, err := fsmeta.EncodeSessionKey("vol", live.Inode, live.Session)
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, live.Inode, live.Session)
 	require.NoError(t, err)
-	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", expired.Inode)
+	expiredOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, expired.Inode)
 	require.NoError(t, err)
-	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey("vol", live.Inode)
+	liveOwnerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, live.Inode)
 	require.NoError(t, err)
 	runner.data[string(expiredOwnerKey)] = expiredValue
 	runner.data[string(sessionKey)] = liveValue
 	runner.data[string(liveOwnerKey)] = liveValue
-	executor, err := New(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 
 	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
@@ -1223,12 +1265,12 @@ func TestExecutorUnlinkReservesNegativeQuotaWhenInodeExists(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
 	quota := &fakeQuotaResolver{}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
 	require.NoError(t, err)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 7, Bytes: -4096, Inodes: -1}}}, quota.changes)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: -4096, Inodes: -1}}}, quota.changes)
 }
 
 func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
@@ -1236,7 +1278,7 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
 	quota := &fakeQuotaResolver{}
-	executor, err := New(runner, WithQuotaResolver(quota))
+	executor, err := newTestExecutor(runner, WithQuotaResolver(quota))
 	require.NoError(t, err)
 
 	err = executor.Link(context.Background(), fsmeta.LinkRequest{
@@ -1251,11 +1293,11 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "alias"})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.InodeID(22), record.Inode)
-	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint32(2), inode.LinkCount)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
 func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
@@ -1263,7 +1305,7 @@ func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Link(context.Background(), fsmeta.LinkRequest{
@@ -1278,7 +1320,7 @@ func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	require.Len(t, runner.atomicCalls, 1)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationLink, "success_total", 1)
-	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint32(2), inode.LinkCount)
@@ -1288,7 +1330,7 @@ func TestExecutorLinkRejectsDirectory(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentryType(t, runner, "vol", 7, "dir", 22, fsmeta.InodeTypeDirectory)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Link(context.Background(), fsmeta.LinkRequest{
@@ -1307,7 +1349,7 @@ func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	runner.mutateErr = fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
 		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("dentry")},
 	}}}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1333,7 +1375,7 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 		nil,
 	}
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1359,7 +1401,7 @@ func TestExecutorRetriesLostTxnLock(t *testing.T) {
 		nil,
 	}
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1382,7 +1424,7 @@ func TestExecutorRetriesRouteUnavailable(t *testing.T) {
 		nil,
 	}
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1413,7 +1455,7 @@ func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 		nil,
 	}
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1444,7 +1486,7 @@ func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 	}
 	runner.mutateErrs = append(runner.mutateErrs, nil)
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1519,7 +1561,7 @@ func TestExecutorRetriesWriteConflict(t *testing.T) {
 		nil,
 	}
 	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
-	executor, err := New(runner, WithInodeAllocator(allocator))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -1536,7 +1578,7 @@ func TestExecutorRetriesWriteConflict(t *testing.T) {
 }
 
 func TestExecutorLookupReturnsNotFound(t *testing.T) {
-	executor, err := New(newFakeRunner())
+	executor, err := newTestExecutor(newFakeRunner())
 	require.NoError(t, err)
 
 	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
@@ -1554,7 +1596,7 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "c", 23)
 	seedDentry(t, runner, "vol", 8, "outside", 99)
 
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
@@ -1576,7 +1618,7 @@ func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
 	runner := newFakeRunner()
 	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
 	seedDentry(t, runner, "vol", 7, "a", 21)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
@@ -1597,7 +1639,7 @@ func TestExecutorReadDirExhaustsRetriesOnLiveLock(t *testing.T) {
 		runner.scanErrs = append(runner.scanErrs, txnLockedError("vol", 7, "a"))
 	}
 	seedDentry(t, runner, "vol", 7, "a", 21)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	_, err = executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
@@ -1629,7 +1671,7 @@ func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
 		LinkCount: 2,
 	})
 
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
@@ -1670,7 +1712,7 @@ func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {
 		Type:      fsmeta.InodeTypeFile,
 		LinkCount: 1,
 	})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
@@ -1689,7 +1731,7 @@ func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {
 func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
@@ -1704,7 +1746,7 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{
@@ -1724,7 +1766,7 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	require.Len(t, runner.mutations[0], 2)
 	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
 	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][1].GetOp())
-	_, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	_, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -1734,7 +1776,7 @@ func TestExecutorUnlinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
@@ -1743,7 +1785,7 @@ func TestExecutorUnlinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	require.Len(t, runner.atomicCalls, 1)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUnlink, "success_total", 1)
-	_, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	_, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
@@ -1752,13 +1794,13 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 2})
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
 	require.NoError(t, err)
 
-	inode, ok, err := executor.readInode(context.Background(), "vol", 22, 99)
+	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint32(1), inode.LinkCount)
@@ -1766,7 +1808,7 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 
 func TestExecutorUnlinkMissingDentry(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{
@@ -1783,9 +1825,9 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	publisher := &fakeSubtreePublisher{}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -1822,9 +1864,9 @@ func TestExecutorRenameMovesDentryWithoutSubtreeHandoff(t *testing.T) {
 	publisher := &fakeSubtreePublisher{}
 	authority := &fakeAuthorityResolver{same: true}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(
+	executor, err := newTestExecutor(
 		runner,
 		WithMountResolver(resolver),
 		WithSubtreeAuthorityResolver(authority),
@@ -1860,9 +1902,9 @@ func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
 	publisher := &fakeSubtreePublisher{}
 	authority := &fakeAuthorityResolver{same: true}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(
+	executor, err := newTestExecutor(
 		runner,
 		WithMountResolver(resolver),
 		WithSubtreeAuthorityResolver(authority),
@@ -1894,9 +1936,9 @@ func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
 	authority := &fakeAuthorityResolver{same: true}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
 	require.NoError(t, err)
 
 	total := atomicFastPathBackoffAfter + 3
@@ -1926,9 +1968,9 @@ func TestExecutorAtomicFastPathBackoffIsAffinityScoped(t *testing.T) {
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
 	authority := &fakeAuthorityResolver{same: true}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
 	require.NoError(t, err)
 
 	for i := range atomicFastPathBackoffAfter {
@@ -1965,9 +2007,9 @@ func TestExecutorRenameRejectsCrossAuthority(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	authority := &fakeAuthorityResolver{same: false}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
 	require.NoError(t, err)
 
 	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
@@ -1988,9 +2030,9 @@ func TestExecutorRenameSubtreePinsCommitVersionToHandoffFrontier(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	publisher := &fakeSubtreePublisher{}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -2011,9 +2053,9 @@ func TestExecutorRenameSubtreeBlocksMutationWhenStartHandoffFails(t *testing.T) 
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	publisher := &fakeSubtreePublisher{startErr: errors.New("publish failed")}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -2036,9 +2078,9 @@ func TestExecutorRenameSubtreeReportsCompleteHandoffFailureAfterMutation(t *test
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	publisher := &fakeSubtreePublisher{completeErr: errors.New("complete failed")}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -2061,7 +2103,7 @@ func TestExecutorRenameSubtreeReportsCompleteHandoffFailureAfterMutation(t *test
 
 func TestExecutorRenameSubtreeRejectsMissingSource(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -2081,9 +2123,9 @@ func TestExecutorRenameSubtreeRejectsExistingDestination(t *testing.T) {
 	seedDentry(t, runner, "vol", 8, "existing", 23)
 	publisher := &fakeSubtreePublisher{}
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
-		"vol": {MountID: "vol", RootInode: fsmeta.RootInode, SchemaVersion: 1},
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
 	}}
-	executor, err := New(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
 	require.NoError(t, err)
 
 	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
@@ -2106,7 +2148,7 @@ func seedDentry(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent f
 
 func seedDentryType(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID, name string, inode fsmeta.InodeID, typ fsmeta.InodeType) {
 	t.Helper()
-	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
+	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
 		Parent: parent,
@@ -2120,7 +2162,7 @@ func seedDentryType(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, pare
 
 func seedInode(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fsmeta.InodeRecord) {
 	t.Helper()
-	key, err := fsmeta.EncodeInodeKey(mount, record.Inode)
+	key, err := fsmeta.EncodeInodeKey(testMountIdentityFor(mount), record.Inode)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeInodeValue(record)
 	require.NoError(t, err)
@@ -2146,9 +2188,9 @@ func findDifferentRenameAffinity(t *testing.T, baseFrom, baseTo fsmeta.InodeID) 
 
 func renameAffinity(t *testing.T, from, to fsmeta.InodeID) string {
 	t.Helper()
-	source, err := fsmeta.EncodeDentryKey("vol", from, "old")
+	source, err := fsmeta.EncodeDentryKey(testMountIdentity, from, "old")
 	require.NoError(t, err)
-	destination, err := fsmeta.EncodeDentryKey("vol", to, "new")
+	destination, err := fsmeta.EncodeDentryKey(testMountIdentity, to, "new")
 	require.NoError(t, err)
 	return atomicFastPathAffinity(source, []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Delete, Key: source},
@@ -2160,9 +2202,9 @@ func seedSession(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record 
 	t.Helper()
 	value, err := fsmeta.EncodeSessionValue(record)
 	require.NoError(t, err)
-	sessionKey, err := fsmeta.EncodeSessionKey(mount, record.Inode, record.Session)
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentityFor(mount), record.Inode, record.Session)
 	require.NoError(t, err)
-	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, record.Inode)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentityFor(mount), record.Inode)
 	require.NoError(t, err)
 	runner.data[string(sessionKey)] = value
 	runner.data[string(ownerKey)] = value
@@ -2205,7 +2247,7 @@ func TestExecutorNegativeCacheLookupShortCircuit(t *testing.T) {
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
 	})
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
 	require.NoError(t, err)
 
 	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "missing"}
@@ -2227,7 +2269,7 @@ func TestExecutorNegativeCacheInvalidatedByCreate(t *testing.T) {
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
 	})
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
 	require.NoError(t, err)
 
 	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "novel"}
@@ -2251,7 +2293,7 @@ func TestExecutorDirPageReadDirPlusCacheHit(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
@@ -2284,7 +2326,7 @@ func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
@@ -2315,7 +2357,7 @@ func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
 func TestExecutorDirPageDecodeFailureFallsBackToRunner(t *testing.T) {
 	runner := newFakeRunner()
 	cache := &corruptDirPageCache{}
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10}}), WithDirPageCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")
@@ -2351,7 +2393,7 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{99}}), WithDirPageCache(cache))
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{99}}), WithDirPageCache(cache))
 	require.NoError(t, err)
 
 	mount := fsmeta.MountID("vol")

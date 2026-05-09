@@ -68,7 +68,7 @@ type AtomicMutateFastPath interface {
 // transaction retry so a retry cannot publish a different inode for the same
 // logical Create after a conflict or ambiguous transport error.
 type InodeAllocator interface {
-	AllocateCreateInode(ctx context.Context, mount fsmeta.MountID, parent fsmeta.InodeID, name string) (fsmeta.InodeID, error)
+	AllocateCreateInode(ctx context.Context, mount fsmeta.MountIdentity, parent fsmeta.InodeID, name string) (fsmeta.InodeID, error)
 }
 
 // statsProvider is implemented by lower fsmeta runtime layers that can expose
@@ -80,9 +80,14 @@ type statsProvider interface {
 // MountAdmission is the executor's mount-admission view.
 type MountAdmission struct {
 	MountID       fsmeta.MountID
+	MountKeyID    fsmeta.MountKeyID
 	RootInode     fsmeta.InodeID
 	SchemaVersion uint32
 	Retired       bool
+}
+
+func (m MountAdmission) Identity() fsmeta.MountIdentity {
+	return fsmeta.MountIdentity{MountID: m.MountID, MountKeyID: m.MountKeyID}
 }
 
 // MountResolver checks rooted mount lifecycle before mutating fsmeta data.
@@ -360,23 +365,22 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if e.inodes == nil {
 		return fsmeta.CreateResult{}, errInodeAllocatorRequired
 	}
-	if _, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name); err != nil {
-		return fsmeta.CreateResult{}, err
-	}
 	if _, err := fsmeta.EncodeInodeValue(req.Attrs.InodeRecord(fsmeta.RootInode)); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
-		return fsmeta.CreateResult{}, err
-	}
-	// Allocate after cheap semantic validation and mount admission. Transaction
-	// retries below reuse this single ID; failed creates may leave coordinator
-	// ID gaps, but they cannot publish a different inode on retry.
-	inodeID, err := e.inodes.AllocateCreateInode(ctx, req.Mount, req.Parent, req.Name)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	plan, err := fsmeta.PlanCreate(req, inodeID)
+	mount := mountRecord.Identity()
+	// Allocate after cheap semantic validation and mount admission. Transaction
+	// retries below reuse this single ID; failed creates may leave coordinator
+	// ID gaps, but they cannot publish a different inode on retry.
+	inodeID, err := e.inodes.AllocateCreateInode(ctx, mount, req.Parent, req.Name)
+	if err != nil {
+		return fsmeta.CreateResult{}, err
+	}
+	plan, err := fsmeta.PlanCreate(req, mount, inodeID)
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
@@ -413,10 +417,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	e.createTotal.Add(1)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
-			Mount:  req.Mount,
-			Scope:  req.Parent,
-			Bytes:  inodeSizeDelta(inode.Size),
-			Inodes: 1,
+			Mount:      req.Mount,
+			MountKeyID: mount.MountKeyID,
+			Scope:      req.Parent,
+			Bytes:      inodeSizeDelta(inode.Size),
+			Inodes:     1,
 		}}, startVersion)
 		if err != nil {
 			return err
@@ -566,15 +571,17 @@ func atomicNotExists(key []byte) *kvrpcpb.AtomicPredicate {
 // in the same transaction. The parent field is required because quota and
 // DirPage invalidation are directory-scoped by parent inode and page token.
 func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
-	plan, err := fsmeta.PlanUpdateInode(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanUpdateInode(req, mount)
 	if err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return fsmeta.InodeRecord{}, fsmeta.ErrInvalidRequest
-	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
-		return fsmeta.InodeRecord{}, err
 	}
 	var updated fsmeta.InodeRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -585,7 +592,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		if dentry.Inode != req.Inode {
 			return fsmeta.ErrInvalidRequest
 		}
-		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
+		inode, ok, err := e.readInode(ctx, mount, req.Inode, startVersion)
 		if err != nil {
 			return err
 		}
@@ -626,9 +633,10 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		}}
 		if sizeDelta != 0 {
 			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
-				Mount: req.Mount,
-				Scope: req.Parent,
-				Bytes: sizeDelta,
+				Mount:      req.Mount,
+				MountKeyID: mount.MountKeyID,
+				Scope:      req.Parent,
+				Bytes:      sizeDelta,
 			}}, startVersion)
 			if err != nil {
 				return err
@@ -660,7 +668,11 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 // fast path; subsequent Create/Link/Rename for the same key Invalidate the
 // entry so the negative memo cannot mask a now-existing dentry.
 func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
-	plan, err := fsmeta.PlanLookup(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	plan, err := fsmeta.PlanLookup(req, mountRecord.Identity())
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
 	}
@@ -743,7 +755,11 @@ func (e *Executor) invalidateDirPages(mount fsmeta.MountID, parents ...fsmeta.In
 
 // ReadDir returns one directory page from a dentry prefix scan.
 func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
-	plan, err := fsmeta.PlanReadDir(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := fsmeta.PlanReadDir(req, mountRecord.Identity())
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +788,12 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 // with the live cache, so we keep that path on the authoritative LSM
 // route.
 func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
-	plan, err := fsmeta.PlanReadDir(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return nil, err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanReadDir(req, mount)
 	if err != nil {
 		return nil, err
 	}
@@ -802,7 +823,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		}
 		inodeKeys := make([][]byte, 0, len(dentries))
 		for _, dentry := range dentries {
-			key, err := fsmeta.EncodeInodeKey(req.Mount, dentry.Inode)
+			key, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
 			if err != nil {
 				return err
 			}
@@ -907,18 +928,35 @@ func (e *Executor) GetReadVersion(ctx context.Context, req fsmeta.ReadVersionReq
 // root. The service boundary publishes the returned token into rooted truth so
 // GC can treat it as a retained snapshot until RetireSnapshotSubtree.
 func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
-	if _, err := fsmeta.PlanSnapshotSubtree(req); err != nil {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	version, err := e.GetReadVersion(ctx, fsmeta.ReadVersionRequest{Mount: req.Mount})
+	if _, err := fsmeta.PlanSnapshotSubtree(req, mountRecord.Identity()); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	return fsmeta.SnapshotSubtreeToken{
 		Mount:       req.Mount,
+		MountKeyID:  mountRecord.MountKeyID,
 		RootInode:   req.RootInode,
 		ReadVersion: version,
 	}, nil
+}
+
+func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error) {
+	record, err := e.resolveKnownMount(ctx, token.Mount)
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	if token.RootInode == 0 || token.ReadVersion == 0 {
+		return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
+	}
+	token.MountKeyID = record.MountKeyID
+	return token, nil
 }
 
 // GetQuotaUsage returns the current persisted usage counter for one quota
@@ -927,7 +965,11 @@ func (e *Executor) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageReque
 	if req.Mount == "" {
 		return fsmeta.UsageRecord{}, fsmeta.ErrInvalidMountID
 	}
-	key, err := fsmeta.EncodeUsageKey(req.Mount, req.Scope)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.UsageRecord{}, err
+	}
+	key, err := fsmeta.EncodeUsageKey(mountRecord.Identity(), req.Scope)
 	if err != nil {
 		return fsmeta.UsageRecord{}, err
 	}
@@ -968,11 +1010,13 @@ func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, 
 // Link creates a second dentry for an existing non-directory inode and bumps
 // the inode link count in the same transaction.
 func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
-	plan, err := fsmeta.PlanLink(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanLink(req, mount)
+	if err != nil {
 		return err
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -988,7 +1032,7 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		} else if !errors.Is(err, fsmeta.ErrNotFound) {
 			return err
 		}
-		inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion)
+		inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion)
 		if err != nil {
 			return err
 		}
@@ -1015,7 +1059,7 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		if err != nil {
 			return err
 		}
-		inodeKey, err := fsmeta.EncodeInodeKey(req.Mount, inode.Inode)
+		inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
 		if err != nil {
 			return err
 		}
@@ -1037,10 +1081,11 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 			},
 		}
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
-			Mount:  req.Mount,
-			Scope:  req.ToParent,
-			Bytes:  inodeSizeDelta(inode.Size),
-			Inodes: 1,
+			Mount:      req.Mount,
+			MountKeyID: mount.MountKeyID,
+			Scope:      req.ToParent,
+			Bytes:      inodeSizeDelta(inode.Size),
+			Inodes:     1,
 		}}, startVersion)
 		if err != nil {
 			return err
@@ -1065,11 +1110,13 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 // Unlink removes one dentry, decrements its inode link count, and deletes the
 // inode record when the last dentry goes away.
 func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
-	plan, err := fsmeta.PlanUnlink(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanUnlink(req, mount)
+	if err != nil {
 		return err
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1082,10 +1129,10 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			Key: cloneBytes(plan.MutateKeys[0]),
 		}}
 		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.PrimaryKey)}
-		if inode, ok, err := e.readInode(ctx, req.Mount, record.Inode, startVersion); err != nil {
+		if inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
-			inodeKey, err := fsmeta.EncodeInodeKey(req.Mount, inode.Inode)
+			inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
 			if err != nil {
 				return err
 			}
@@ -1101,10 +1148,11 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: inodeKey, Value: inodeValue})
 			}
 			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
-				Mount:  req.Mount,
-				Scope:  req.Parent,
-				Bytes:  -inodeSizeDelta(inode.Size),
-				Inodes: -1,
+				Mount:      req.Mount,
+				MountKeyID: mount.MountKeyID,
+				Scope:      req.Parent,
+				Bytes:      -inodeSizeDelta(inode.Size),
+				Inodes:     -1,
 			}}, startVersion)
 			if err != nil {
 				return err
@@ -1132,11 +1180,13 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 // both a session-id key and an inode-owner key so concurrent opens for the same
 // inode conflict on one Percolator key.
 func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
-	plan, err := fsmeta.PlanOpenWriteSession(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanOpenWriteSession(req, mount)
+	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	if req.TTL <= 0 {
@@ -1144,7 +1194,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	}
 	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		inode, ok, err := e.readInode(ctx, req.Mount, req.Inode, startVersion)
+		inode, ok, err := e.readInode(ctx, mount, req.Inode, startVersion)
 		if err != nil {
 			return err
 		}
@@ -1179,7 +1229,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 				return fsmeta.ErrExists
 			}
 			predicates = append(predicates, atomicExists(plan.ReadKeys[2]))
-			staleSessionKey, err := fsmeta.EncodeSessionKey(req.Mount, owner.Inode, owner.Session)
+			staleSessionKey, err := fsmeta.EncodeSessionKey(mount, owner.Inode, owner.Session)
 			if err != nil {
 				return err
 			}
@@ -1225,11 +1275,13 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 // HeartbeatWriteSession extends a live writer lease. Both session records must
 // agree, otherwise the session is considered lost and the caller must reopen.
 func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
-	plan, err := fsmeta.PlanHeartbeatWriteSession(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanHeartbeatWriteSession(req, mount)
+	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	if req.TTL <= 0 {
@@ -1281,7 +1333,12 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 // CloseWriteSession releases one writer lease. It deletes the owner key only
 // when it still points at the closing session.
 func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error {
-	plan, err := fsmeta.PlanCloseWriteSession(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanCloseWriteSession(req, mount)
 	if err != nil {
 		return err
 	}
@@ -1297,7 +1354,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 			return fsmeta.ErrNotFound
 		}
 		mutations := []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Delete, Key: cloneBytes(plan.MutateKeys[0])}}
-		ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, session.Inode)
+		ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, session.Inode)
 		if err != nil {
 			return err
 		}
@@ -1321,7 +1378,12 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 // mount. It is a bounded maintenance primitive; callers should repeat until
 // Expired is zero when draining a large backlog.
 func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
-	plan, err := fsmeta.PlanExpireWriteSessions(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanExpireWriteSessions(req, mount)
 	if err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
@@ -1364,11 +1426,11 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 					continue
 				}
 				deletes[string(kv.Key)] = cloneBytes(kv.Key)
-				sessionKey, err := fsmeta.EncodeSessionKey(req.Mount, record.Inode, record.Session)
+				sessionKey, err := fsmeta.EncodeSessionKey(mount, record.Inode, record.Session)
 				if err != nil {
 					return err
 				}
-				ownerKey, err := fsmeta.EncodeInodeSessionKey(req.Mount, record.Inode)
+				ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, record.Inode)
 				if err != nil {
 					return err
 				}
@@ -1413,15 +1475,17 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 
 type renameMove struct {
 	mount      fsmeta.MountID
+	identity   fsmeta.MountIdentity
 	fromParent fsmeta.InodeID
 	fromName   string
 	toParent   fsmeta.InodeID
 	toName     string
 }
 
-func renameMoveFromRename(req fsmeta.RenameRequest) renameMove {
+func renameMoveFromRename(req fsmeta.RenameRequest, identity fsmeta.MountIdentity) renameMove {
 	return renameMove{
 		mount:      req.Mount,
+		identity:   identity,
 		fromParent: req.FromParent,
 		fromName:   req.FromName,
 		toParent:   req.ToParent,
@@ -1429,9 +1493,10 @@ func renameMoveFromRename(req fsmeta.RenameRequest) renameMove {
 	}
 }
 
-func renameMoveFromRenameSubtree(req fsmeta.RenameSubtreeRequest) renameMove {
+func renameMoveFromRenameSubtree(req fsmeta.RenameSubtreeRequest, identity fsmeta.MountIdentity) renameMove {
 	return renameMove{
 		mount:      req.Mount,
+		identity:   identity,
 		fromParent: req.FromParent,
 		fromName:   req.FromName,
 		toParent:   req.ToParent,
@@ -1443,17 +1508,19 @@ func renameMoveFromRenameSubtree(req fsmeta.RenameSubtreeRequest) renameMove {
 // a data-plane transaction: no rooted handoff is published, so common staged
 // publish paths do not serialize through the control plane.
 func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
-	plan, err := fsmeta.PlanRename(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return err
 	}
-	if err := e.requireActiveMount(ctx, req.Mount); err != nil {
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanRename(req, mount)
+	if err != nil {
 		return err
 	}
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
-	move := renameMoveFromRename(req)
+	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1478,11 +1545,12 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 // RenameSubtree moves the subtree root dentry from source to destination.
 // Descendants follow through inode parent links rather than key rewrites.
 func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
-	plan, err := fsmeta.PlanRenameSubtree(req)
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
 		return err
 	}
-	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanRenameSubtree(req, mount)
 	if err != nil {
 		return err
 	}
@@ -1494,7 +1562,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	var movedInode bool
 	var committedAt uint64
 	var handoffStarted bool
-	move := renameMoveFromRenameSubtree(req)
+	move := renameMoveFromRenameSubtree(req, mount)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		mutations, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
@@ -1559,7 +1627,7 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan fsmeta.Opera
 	}
 	*movedSize = 0
 	*movedInode = false
-	if inode, ok, err := e.readInode(ctx, move.mount, record.Inode, startVersion); err != nil {
+	if inode, ok, err := e.readInode(ctx, move.identity, record.Inode, startVersion); err != nil {
 		return nil, err
 	} else if ok {
 		*movedSize = inode.Size
@@ -1579,8 +1647,8 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan fsmeta.Opera
 	}
 	if *movedInode {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{
-			{Mount: move.mount, Scope: move.fromParent, Bytes: -inodeSizeDelta(*movedSize), Inodes: -1},
-			{Mount: move.mount, Scope: move.toParent, Bytes: inodeSizeDelta(*movedSize), Inodes: 1},
+			{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.fromParent, Bytes: -inodeSizeDelta(*movedSize), Inodes: -1},
+			{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.toParent, Bytes: inodeSizeDelta(*movedSize), Inodes: 1},
 		}, startVersion)
 		if err != nil {
 			return nil, err
@@ -1624,8 +1692,19 @@ func (e *Executor) requireSameAuthority(ctx context.Context, mount fsmeta.MountI
 }
 
 func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID) (MountAdmission, error) {
+	record, err := e.resolveKnownMount(ctx, mount)
+	if err != nil {
+		return MountAdmission{}, err
+	}
+	if record.Retired {
+		return MountAdmission{}, fsmeta.ErrMountRetired
+	}
+	return record, nil
+}
+
+func (e *Executor) resolveKnownMount(ctx context.Context, mount fsmeta.MountID) (MountAdmission, error) {
 	if e == nil || e.mounts == nil {
-		return MountAdmission{}, nil
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	record, err := e.mounts.ResolveMount(ctx, mount)
 	if err != nil {
@@ -1634,8 +1713,8 @@ func (e *Executor) resolveActiveMount(ctx context.Context, mount fsmeta.MountID)
 	if record.MountID == "" {
 		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
-	if record.Retired {
-		return MountAdmission{}, fsmeta.ErrMountRetired
+	if record.MountKeyID == 0 {
+		return MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
 	return record, nil
 }
@@ -1903,7 +1982,7 @@ func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (
 	return fsmeta.DecodeDentryValue(value)
 }
 
-func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountID, inodeID fsmeta.InodeID, version uint64) (fsmeta.InodeRecord, bool, error) {
+func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountIdentity, inodeID fsmeta.InodeID, version uint64) (fsmeta.InodeRecord, bool, error) {
 	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err

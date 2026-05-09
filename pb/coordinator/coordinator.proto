@@ -91,6 +91,7 @@ message MountInfo {
   MountState state = 4;
   nokv.meta.v1.RootCursor registered_at = 5;
   nokv.meta.v1.RootCursor retired_at = 6;
+  uint64 mount_key_id = 7;
 }
 
 message GetMountRequest {

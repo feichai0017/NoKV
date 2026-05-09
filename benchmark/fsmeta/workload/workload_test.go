@@ -260,6 +260,10 @@ func newFakeWatchClient() *fakeWatchClient {
 	}
 }
 
+func testMountIdentity(mount fsmeta.MountID) fsmeta.MountIdentity {
+	return fsmeta.MountIdentity{MountID: mount, MountKeyID: 1}
+}
+
 func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	result, err := c.fakeClient.Create(ctx, req)
 	if err != nil {
@@ -268,7 +272,7 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) 
 	if c.stream == nil {
 		return result, nil
 	}
-	key, err := fsmeta.EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	key, err := fsmeta.EncodeDentryKey(testMountIdentity(req.Mount), req.Parent, req.Name)
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}

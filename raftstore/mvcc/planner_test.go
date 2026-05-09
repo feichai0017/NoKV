@@ -195,18 +195,18 @@ func TestMVCCGCPlannerHonorsSnapshotRetentionAndTxnFloor(t *testing.T) {
 		SafePoint: func() uint64 { return 100 },
 		Retention: func() rootstate.SnapshotRetentionIndex {
 			return rootstate.SnapshotRetentionIndex{
-				MountFloors: map[string]uint64{
-					"vol": 50,
+				MountFloors: map[uint64]uint64{
+					1: 50,
 				},
 			}
 		},
-		Mount: fsmeta.StringMountResolver,
+		Mount: fsmeta.MountKeyResolver,
 	})
 	defer planner.Close()
 
-	volKey, err := fsmeta.EncodeInodeKey("vol", 10)
+	volKey, err := fsmeta.EncodeInodeKey(fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}, 10)
 	require.NoError(t, err)
-	otherKey, err := fsmeta.EncodeInodeKey("other", 10)
+	otherKey, err := fsmeta.EncodeInodeKey(fsmeta.MountIdentity{MountID: "other", MountKeyID: 2}, 10)
 	require.NoError(t, err)
 	for _, key := range [][]byte{volKey, otherKey} {
 		applyMVCCGCPlannerWrite(t, db, key, 150, 140)

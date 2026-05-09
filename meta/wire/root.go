@@ -270,6 +270,7 @@ func rootEventSnapshotEpochToProto(epoch *rootevent.SnapshotEpoch) *metapb.RootS
 	return &metapb.RootSnapshotEpoch{
 		SnapshotId:  epoch.SnapshotID,
 		Mount:       epoch.Mount,
+		MountKeyId:  epoch.MountKeyID,
 		RootInode:   epoch.RootInode,
 		ReadVersion: epoch.ReadVersion,
 		PublishedAt: RootCursorToProto(epoch.PublishedAt),
@@ -283,6 +284,7 @@ func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent
 	return &rootevent.SnapshotEpoch{
 		SnapshotID:  epoch.GetSnapshotId(),
 		Mount:       epoch.GetMount(),
+		MountKeyID:  epoch.GetMountKeyId(),
 		RootInode:   epoch.GetRootInode(),
 		ReadVersion: epoch.GetReadVersion(),
 		PublishedAt: RootCursorFromProto(epoch.GetPublishedAt()),
@@ -295,6 +297,7 @@ func rootEventMountToProto(mount *rootevent.Mount) *metapb.RootMount {
 	}
 	return &metapb.RootMount{
 		MountId:       mount.MountID,
+		MountKeyId:    mount.MountKeyID,
 		RootInode:     mount.RootInode,
 		SchemaVersion: mount.SchemaVersion,
 		RegisteredAt:  RootCursorToProto(mount.RegisteredAt),
@@ -308,6 +311,7 @@ func rootEventMountFromProto(mount *metapb.RootMount) *rootevent.Mount {
 	}
 	return &rootevent.Mount{
 		MountID:       mount.GetMountId(),
+		MountKeyID:    mount.GetMountKeyId(),
 		RootInode:     mount.GetRootInode(),
 		SchemaVersion: mount.GetSchemaVersion(),
 		RegisteredAt:  RootCursorFromProto(mount.GetRegisteredAt()),
@@ -843,6 +847,7 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 func RootMountToProto(mount rootstate.MountRecord) *metapb.RootMount {
 	return &metapb.RootMount{
 		MountId:       mount.MountID,
+		MountKeyId:    mount.MountKeyID,
 		RootInode:     mount.RootInode,
 		SchemaVersion: mount.SchemaVersion,
 		State:         rootMountStateToProto(mount.State),
@@ -939,6 +944,7 @@ func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
 	}
 	return rootstate.MountRecord{
 		MountID:       pbMount.GetMountId(),
+		MountKeyID:    pbMount.GetMountKeyId(),
 		RootInode:     pbMount.GetRootInode(),
 		SchemaVersion: pbMount.GetSchemaVersion(),
 		State:         rootMountStateFromProto(pbMount.GetState()),
@@ -951,6 +957,7 @@ func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapsho
 	return &metapb.RootSnapshotEpoch{
 		SnapshotId:  epoch.SnapshotID,
 		Mount:       epoch.Mount,
+		MountKeyId:  epoch.MountKeyID,
 		RootInode:   epoch.RootInode,
 		ReadVersion: epoch.ReadVersion,
 		PublishedAt: RootCursorToProto(epoch.PublishedAt),
@@ -964,6 +971,7 @@ func RootSnapshotEpochFromProto(pbEpoch *metapb.RootSnapshotEpoch) rootstate.Sna
 	return rootstate.SnapshotEpoch{
 		SnapshotID:  pbEpoch.GetSnapshotId(),
 		Mount:       pbEpoch.GetMount(),
+		MountKeyID:  pbEpoch.GetMountKeyId(),
 		RootInode:   pbEpoch.GetRootInode(),
 		ReadVersion: pbEpoch.GetReadVersion(),
 		PublishedAt: RootCursorFromProto(pbEpoch.GetPublishedAt()),

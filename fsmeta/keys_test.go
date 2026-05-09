@@ -8,11 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	testMount      = MountIdentity{MountID: "vol", MountKeyID: 1}
+	testOtherMount = MountIdentity{MountID: "volume", MountKeyID: 2}
+)
+
 func TestKeyLayoutStable(t *testing.T) {
-	key, err := EncodeInodeKey("vol", 42)
+	key, err := EncodeInodeKey(testMount, 42)
 	require.NoError(t, err)
 
-	require.Equal(t, "66736d000103766f6c000769000000000000002a", hex.EncodeToString(key))
+	require.Equal(t, "66736d00010000000000000001000769000000000000002a", hex.EncodeToString(key))
 
 	kind, err := KeyKindOf(key)
 	require.NoError(t, err)
@@ -20,7 +25,7 @@ func TestKeyLayoutStable(t *testing.T) {
 }
 
 func TestUsageKeyAllowsMountWideScope(t *testing.T) {
-	key, err := EncodeUsageKey("vol", 0)
+	key, err := EncodeUsageKey(testMount, 0)
 	require.NoError(t, err)
 
 	kind, err := KeyKindOf(key)
@@ -29,7 +34,7 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 }
 
 func TestAuxiliaryKeyEncoders(t *testing.T) {
-	mount, err := EncodeMountKey("vol")
+	mount, err := EncodeMountKey(testMount)
 	require.NoError(t, err)
 	kind, err := KeyKindOf(mount)
 	require.NoError(t, err)
@@ -37,7 +42,7 @@ func TestAuxiliaryKeyEncoders(t *testing.T) {
 	require.Equal(t, "mount", kind.String())
 	require.Equal(t, "unknown(120)", KeyKind('x').String())
 
-	chunk, err := EncodeChunkKey("vol", 22, 3)
+	chunk, err := EncodeChunkKey(testMount, 22, 3)
 	require.NoError(t, err)
 	kind, err = KeyKindOf(chunk)
 	require.NoError(t, err)
@@ -46,7 +51,7 @@ func TestAuxiliaryKeyEncoders(t *testing.T) {
 }
 
 func TestBucketPrefixAndRangeCoverOneAffinityBucket(t *testing.T) {
-	start, end, err := EncodeBucketRange("vol", 3)
+	start, end, err := EncodeBucketRange(testMount, 3)
 	require.NoError(t, err)
 	require.NotEmpty(t, end)
 
@@ -58,7 +63,7 @@ func TestBucketPrefixAndRangeCoverOneAffinityBucket(t *testing.T) {
 		}
 	}
 	require.NotZero(t, inBucket)
-	key, err := EncodeInodeKey("vol", inBucket)
+	key, err := EncodeInodeKey(testMount, inBucket)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, bytes.Compare(key, start), 0)
 	require.Less(t, bytes.Compare(key, end), 0)
@@ -68,15 +73,15 @@ func TestBucketPrefixAndRangeCoverOneAffinityBucket(t *testing.T) {
 }
 
 func TestMountPrefixAndRangeCoverOnlyOneMount(t *testing.T) {
-	start, end, err := EncodeMountKeyRange("vol")
+	start, end, err := EncodeMountKeyRange(testMount)
 	require.NoError(t, err)
 	require.NotEmpty(t, end)
 
-	inode, err := EncodeInodeKey("vol", 42)
+	inode, err := EncodeInodeKey(testMount, 42)
 	require.NoError(t, err)
-	dentry, err := EncodeDentryKey("vol", 7, "name")
+	dentry, err := EncodeDentryKey(testMount, 7, "name")
 	require.NoError(t, err)
-	other, err := EncodeInodeKey("volume", 42)
+	other, err := EncodeInodeKey(testOtherMount, 42)
 	require.NoError(t, err)
 
 	require.True(t, bytes.HasPrefix(inode, start))
@@ -88,55 +93,58 @@ func TestMountPrefixAndRangeCoverOnlyOneMount(t *testing.T) {
 	require.False(t, bytes.HasPrefix(other, start))
 	require.GreaterOrEqual(t, bytes.Compare(other, end), 0)
 
-	mount, ok := MountIDOfKey(dentry)
+	mountKey, ok := MountKeyIDOfKey(dentry)
 	require.True(t, ok)
-	require.Equal(t, MountID("vol"), mount)
+	require.Equal(t, MountKeyID(1), mountKey)
+	name, ok := DentryNameOfKey(dentry)
+	require.True(t, ok)
+	require.Equal(t, "name", name)
 
-	_, ok = MountIDOfKey(start)
+	_, ok = MountKeyIDOfKey(start)
 	require.False(t, ok)
 }
 
 func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
-	prefix, err := EncodeDentryPrefix("vol", 9)
+	prefix, err := EncodeDentryPrefix(testMount, 9)
 	require.NoError(t, err)
-	a, err := EncodeDentryKey("vol", 9, "a")
+	a, err := EncodeDentryKey(testMount, 9, "a")
 	require.NoError(t, err)
-	b, err := EncodeDentryKey("vol", 9, "b")
+	b, err := EncodeDentryKey(testMount, 9, "b")
 	require.NoError(t, err)
-	otherParent, err := EncodeDentryKey("vol", 10, "a")
+	otherParent, err := EncodeDentryKey(testMount, 10, "a")
 	require.NoError(t, err)
-	otherMount, err := EncodeDentryKey("other", 9, "a")
+	otherMountKey, err := EncodeDentryKey(testOtherMount, 9, "a")
 	require.NoError(t, err)
 
 	require.True(t, bytes.HasPrefix(a, prefix))
 	require.True(t, bytes.HasPrefix(b, prefix))
 	require.False(t, bytes.HasPrefix(otherParent, prefix))
-	require.False(t, bytes.HasPrefix(otherMount, prefix))
+	require.False(t, bytes.HasPrefix(otherMountKey, prefix))
 }
 
 func TestShardForUserKeyKeepsWorkspaceMutationsLocal(t *testing.T) {
 	const shards = 4
-	createDentry, err := EncodeDentryKey("vol", RootInode, "workspace-a")
+	createDentry, err := EncodeDentryKey(testMount, RootInode, "workspace-a")
 	require.NoError(t, err)
 	rootBucket, ok := BucketOfKey(createDentry)
 	require.True(t, ok)
 	require.Equal(t, RootAffinityBucket, rootBucket)
 
-	targetBucket := ChooseWorkspaceBucket("vol", "workspace-a")
-	inode := findInodeOnBucket(t, "vol", targetBucket)
-	createInode, err := EncodeInodeKey("vol", inode)
+	targetBucket := ChooseWorkspaceBucket(testMount, "workspace-a")
+	inode := findInodeOnBucket(t, testMount, targetBucket)
+	createInode, err := EncodeInodeKey(testMount, inode)
 	require.NoError(t, err)
 
-	childA, err := EncodeDentryKey("vol", inode, "scratch")
+	childA, err := EncodeDentryKey(testMount, inode, "scratch")
 	require.NoError(t, err)
-	childB, err := EncodeDentryKey("vol", inode, "checkpoint")
+	childB, err := EncodeDentryKey(testMount, inode, "checkpoint")
 	require.NoError(t, err)
 	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(childA, shards))
 	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(childB, shards))
 }
 
 func TestUserKeyShapeExtractsAffinityAndBloomPrefixes(t *testing.T) {
-	const mount MountID = "vol"
+	mount := testMount
 	const inode InodeID = 42
 
 	bucketPrefix, err := EncodeBucketPrefix(mount, BucketForInodeID(inode))
@@ -170,7 +178,7 @@ func TestUserKeyShapeExtractsAffinityAndBloomPrefixes(t *testing.T) {
 
 func TestShardForUserKeyUsesShapeLocalityAcrossFamilies(t *testing.T) {
 	const shards = 4
-	const mount MountID = "vol"
+	mount := testMount
 	inode := findInodeOnBucket(t, mount, 7)
 	keys := make([][]byte, 0, 5)
 
@@ -198,11 +206,11 @@ func TestShardForUserKeyUsesShapeLocalityAcrossFamilies(t *testing.T) {
 
 func TestShardForUserKeyKeepsSessionIndexesWithInode(t *testing.T) {
 	const shards = 8
-	session, err := EncodeSessionKey("vol", 42, "writer-1")
+	session, err := EncodeSessionKey(testMount, 42, "writer-1")
 	require.NoError(t, err)
-	owner, err := EncodeInodeSessionKey("vol", 42)
+	owner, err := EncodeInodeSessionKey(testMount, 42)
 	require.NoError(t, err)
-	inode, err := EncodeInodeKey("vol", 42)
+	inode, err := EncodeInodeKey(testMount, 42)
 	require.NoError(t, err)
 
 	targetShard := ShardForUserKey(inode, shards)
@@ -212,7 +220,7 @@ func TestShardForUserKeyKeepsSessionIndexesWithInode(t *testing.T) {
 
 func TestNameValidationRejectsUnsafePathComponents(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "a/b", "a\x00b"} {
-		_, err := EncodeDentryKey("vol", RootInode, name)
+		_, err := EncodeDentryKey(testMount, RootInode, name)
 		require.ErrorIs(t, err, ErrInvalidName)
 	}
 }
@@ -221,13 +229,13 @@ func TestKeyKindOfRejectsInvalidKeys(t *testing.T) {
 	_, err := KeyKindOf([]byte("not-fsmeta"))
 	require.ErrorIs(t, err, ErrInvalidKey)
 
-	key, err := encodeKey("vol", RootAffinityBucket, KeyKind('x'), []byte("body"))
+	key, err := encodeKey(testMount, RootAffinityBucket, KeyKind('x'), []byte("body"))
 	require.NoError(t, err)
 	_, err = KeyKindOf(key)
 	require.ErrorIs(t, err, ErrInvalidKeyKind)
 }
 
-func findInodeOnBucket(t *testing.T, mount MountID, bucket AffinityBucket) InodeID {
+func findInodeOnBucket(t *testing.T, mount MountIdentity, bucket AffinityBucket) InodeID {
 	t.Helper()
 	for inode := InodeID(2); inode < 10_000; inode++ {
 		key, err := EncodeInodeKey(mount, inode)

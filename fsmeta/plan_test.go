@@ -12,12 +12,12 @@ func TestPlanCreateTouchesDentryAndInode(t *testing.T) {
 		Mount:  "vol",
 		Parent: RootInode,
 		Name:   "file",
-	}, 22)
+	}, testMount, 22)
 	require.NoError(t, err)
 
-	dentry, err := EncodeDentryKey("vol", RootInode, "file")
+	dentry, err := EncodeDentryKey(testMount, RootInode, "file")
 	require.NoError(t, err)
-	inode, err := EncodeInodeKey("vol", 22)
+	inode, err := EncodeInodeKey(testMount, 22)
 	require.NoError(t, err)
 
 	require.Equal(t, OperationCreate, plan.Kind)
@@ -31,10 +31,10 @@ func TestPlanReadDirScansOnlyDirectoryPrefix(t *testing.T) {
 		Mount:  "vol",
 		Parent: 7,
 		Limit:  128,
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	prefix, err := EncodeDentryPrefix("vol", 7)
+	prefix, err := EncodeDentryPrefix(testMount, 7)
 	require.NoError(t, err)
 	require.Equal(t, OperationReadDir, plan.Kind)
 	require.Equal(t, prefix, plan.PrimaryKey)
@@ -49,7 +49,7 @@ func TestPlanReadDirDefaultsLimit(t *testing.T) {
 	plan, err := PlanReadDir(ReadDirRequest{
 		Mount:  "vol",
 		Parent: 7,
-	})
+	}, testMount)
 	require.NoError(t, err)
 	require.Equal(t, DefaultReadDirLimit, plan.Limit)
 }
@@ -58,14 +58,14 @@ func TestPlanExpireWriteSessionsScansSessionBuckets(t *testing.T) {
 	plan, err := PlanExpireWriteSessions(ExpireWriteSessionsRequest{
 		Mount: "vol",
 		Limit: 32,
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	first, err := EncodeSessionBucketPrefix("vol", 0)
+	first, err := EncodeSessionBucketPrefix(testMount, 0)
 	require.NoError(t, err)
-	last, err := EncodeSessionBucketPrefix("vol", AffinityBucket(DefaultAffinityBucketCount-1))
+	last, err := EncodeSessionBucketPrefix(testMount, AffinityBucket(DefaultAffinityBucketCount-1))
 	require.NoError(t, err)
-	mountPrefix, err := EncodeMountPrefix("vol")
+	mountPrefix, err := EncodeMountPrefix(testMount)
 	require.NoError(t, err)
 
 	require.Equal(t, OperationExpireSessions, plan.Kind)
@@ -89,12 +89,12 @@ func TestPlanReadDirStartAfterBecomesInclusiveSeekKey(t *testing.T) {
 		Parent:     7,
 		StartAfter: "a",
 		Limit:      64,
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	cursor, err := EncodeDentryKey("vol", 7, "a")
+	cursor, err := EncodeDentryKey(testMount, 7, "a")
 	require.NoError(t, err)
-	nextName, err := EncodeDentryKey("vol", 7, "aa")
+	nextName, err := EncodeDentryKey(testMount, 7, "aa")
 	require.NoError(t, err)
 
 	require.Equal(t, append(cursor, 0), plan.StartKey)
@@ -108,7 +108,7 @@ func TestPlanReadDirRejectsOversizedPage(t *testing.T) {
 		Mount:  "vol",
 		Parent: 7,
 		Limit:  MaxReadDirLimit + 1,
-	})
+	}, testMount)
 	require.ErrorIs(t, err, ErrInvalidPageSize)
 }
 
@@ -119,12 +119,12 @@ func TestPlanRenameTouchesSourceAndDestinationDentries(t *testing.T) {
 		FromName:   "old",
 		ToParent:   3,
 		ToName:     "new",
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	from, err := EncodeDentryKey("vol", 2, "old")
+	from, err := EncodeDentryKey(testMount, 2, "old")
 	require.NoError(t, err)
-	to, err := EncodeDentryKey("vol", 3, "new")
+	to, err := EncodeDentryKey(testMount, 3, "new")
 	require.NoError(t, err)
 
 	require.Equal(t, OperationRename, plan.Kind)
@@ -140,7 +140,7 @@ func TestPlanRenameRejectsNoop(t *testing.T) {
 		FromName:   "same",
 		ToParent:   2,
 		ToName:     "same",
-	})
+	}, testMount)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
@@ -151,12 +151,12 @@ func TestPlanRenameSubtreeTouchesSourceAndDestinationDentries(t *testing.T) {
 		FromName:   "old",
 		ToParent:   3,
 		ToName:     "new",
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	from, err := EncodeDentryKey("vol", 2, "old")
+	from, err := EncodeDentryKey(testMount, 2, "old")
 	require.NoError(t, err)
-	to, err := EncodeDentryKey("vol", 3, "new")
+	to, err := EncodeDentryKey(testMount, 3, "new")
 	require.NoError(t, err)
 
 	require.Equal(t, OperationRenameSubtree, plan.Kind)
@@ -172,7 +172,7 @@ func TestPlanRenameSubtreeRejectsNoop(t *testing.T) {
 		FromName:   "same",
 		ToParent:   2,
 		ToName:     "same",
-	})
+	}, testMount)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
@@ -180,10 +180,10 @@ func TestPlanSnapshotSubtreeScansRootPrefix(t *testing.T) {
 	plan, err := PlanSnapshotSubtree(SnapshotSubtreeRequest{
 		Mount:     "vol",
 		RootInode: 7,
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	prefix, err := EncodeDentryPrefix("vol", 7)
+	prefix, err := EncodeDentryPrefix(testMount, 7)
 	require.NoError(t, err)
 	require.Equal(t, OperationSnapshotSubtree, plan.Kind)
 	require.Equal(t, "vol", string(plan.Mount))
@@ -200,12 +200,12 @@ func TestPlanLinkTouchesSourceDestinationAndRejectsNoop(t *testing.T) {
 		FromName:   "old",
 		ToParent:   3,
 		ToName:     "new",
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	from, err := EncodeDentryKey("vol", 2, "old")
+	from, err := EncodeDentryKey(testMount, 2, "old")
 	require.NoError(t, err)
-	to, err := EncodeDentryKey("vol", 3, "new")
+	to, err := EncodeDentryKey(testMount, 3, "new")
 	require.NoError(t, err)
 
 	require.Equal(t, OperationLink, plan.Kind)
@@ -219,7 +219,7 @@ func TestPlanLinkTouchesSourceDestinationAndRejectsNoop(t *testing.T) {
 		FromName:   "same",
 		ToParent:   2,
 		ToName:     "same",
-	})
+	}, testMount)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
@@ -228,10 +228,10 @@ func TestPlanUnlinkTouchesDentry(t *testing.T) {
 		Mount:  "vol",
 		Parent: 7,
 		Name:   "file",
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	dentry, err := EncodeDentryKey("vol", 7, "file")
+	dentry, err := EncodeDentryKey(testMount, 7, "file")
 	require.NoError(t, err)
 	require.Equal(t, OperationUnlink, plan.Kind)
 	require.Equal(t, dentry, plan.PrimaryKey)
@@ -240,7 +240,7 @@ func TestPlanUnlinkTouchesDentry(t *testing.T) {
 }
 
 func TestPlansCloneKeys(t *testing.T) {
-	plan, err := PlanLookup(LookupRequest{Mount: "vol", Parent: RootInode, Name: "file"})
+	plan, err := PlanLookup(LookupRequest{Mount: "vol", Parent: RootInode, Name: "file"}, testMount)
 	require.NoError(t, err)
 	original := append([]byte(nil), plan.PrimaryKey...)
 
@@ -253,14 +253,14 @@ func TestPlanOpenWriteSessionTouchesInodeAndSession(t *testing.T) {
 		Mount:   "vol",
 		Inode:   44,
 		Session: "client-1",
-	})
+	}, testMount)
 	require.NoError(t, err)
 
-	inode, err := EncodeInodeKey("vol", 44)
+	inode, err := EncodeInodeKey(testMount, 44)
 	require.NoError(t, err)
-	session, err := EncodeSessionKey("vol", 44, "client-1")
+	session, err := EncodeSessionKey(testMount, 44, "client-1")
 	require.NoError(t, err)
-	owner, err := EncodeInodeSessionKey("vol", 44)
+	owner, err := EncodeInodeSessionKey(testMount, 44)
 	require.NoError(t, err)
 
 	require.Equal(t, OperationOpenWriteSession, plan.Kind)

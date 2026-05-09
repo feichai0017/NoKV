@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var allocatorTestMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
 type fakeAllocIDClient struct {
 	mu      sync.Mutex
 	next    uint64
@@ -53,7 +55,7 @@ func TestShardAffineInodeAllocatorSkipsRootInode(t *testing.T) {
 	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, 1, 4)
 	require.NoError(t, err)
 
-	inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "file")
+	inode, err := alloc.AllocateCreateInode(context.Background(), allocatorTestMount, fsmeta.RootInode, "file")
 	require.NoError(t, err)
 	require.Greater(t, inode, fsmeta.RootInode)
 	require.Equal(t, []uint64{4}, client.counts)
@@ -65,11 +67,11 @@ func TestShardAffineInodeAllocatorChoosesWorkspaceBucket(t *testing.T) {
 	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, fsmeta.DefaultAffinityBucketCount, 64)
 	require.NoError(t, err)
 
-	inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "aligned")
+	inode, err := alloc.AllocateCreateInode(context.Background(), allocatorTestMount, fsmeta.RootInode, "aligned")
 	require.NoError(t, err)
-	want, err := createDentryBucket("vol", fsmeta.RootInode, "aligned")
+	want, err := createDentryBucket(allocatorTestMount, fsmeta.RootInode, "aligned")
 	require.NoError(t, err)
-	got, err := createInodeBucket("vol", inode)
+	got, err := createInodeBucket(allocatorTestMount, inode)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Equal(t, uint64(1), alloc.Stats()["inode_alloc_affinity_hit_total"])
@@ -87,7 +89,7 @@ func TestShardAffineInodeAllocatorReturnsUniqueConcurrentIDs(t *testing.T) {
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
-			inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "hot")
+			inode, err := alloc.AllocateCreateInode(context.Background(), allocatorTestMount, fsmeta.RootInode, "hot")
 			errs <- err
 			ids <- inode
 		})
@@ -112,16 +114,16 @@ func TestShardAffineInodeAllocatorPropagatesAllocIDError(t *testing.T) {
 	alloc, err := NewShardAffineInodeAllocatorWithBatch(&fakeAllocIDClient{err: want}, fsmeta.DefaultAffinityBucketCount, 8)
 	require.NoError(t, err)
 
-	_, err = alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "file")
+	_, err = alloc.AllocateCreateInode(context.Background(), allocatorTestMount, fsmeta.RootInode, "file")
 	require.ErrorIs(t, err, want)
 }
 
 func TestShardAffineInodeAllocatorMissStillReturnsUsableID(t *testing.T) {
-	target, err := createDentryBucket("vol", fsmeta.RootInode, "file")
+	target, err := createDentryBucket(allocatorTestMount, fsmeta.RootInode, "file")
 	require.NoError(t, err)
 	var candidate fsmeta.InodeID
 	for id := fsmeta.InodeID(2); id < 10_000; id++ {
-		bucket, err := createInodeBucket("vol", id)
+		bucket, err := createInodeBucket(allocatorTestMount, id)
 		require.NoError(t, err)
 		if bucket != target {
 			candidate = id
@@ -133,7 +135,7 @@ func TestShardAffineInodeAllocatorMissStillReturnsUsableID(t *testing.T) {
 	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, fsmeta.DefaultAffinityBucketCount, 1)
 	require.NoError(t, err)
 
-	inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "file")
+	inode, err := alloc.AllocateCreateInode(context.Background(), allocatorTestMount, fsmeta.RootInode, "file")
 	require.NoError(t, err)
 	require.Equal(t, candidate, inode)
 	require.Equal(t, uint64(0), alloc.Stats()["inode_alloc_affinity_hit_total"])

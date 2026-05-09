@@ -126,7 +126,15 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
 	}
-	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 1234}, nil
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, MountKeyID: 1, RootInode: req.RootInode, ReadVersion: 1234}, nil
+}
+
+func (e *fakeExecutor) ResolveSnapshotSubtreeToken(_ context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error) {
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	token.MountKeyID = 1
+	return token, nil
 }
 
 func (e *fakeExecutor) GetQuotaUsage(_ context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
@@ -480,7 +488,7 @@ func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 42}, executor.snapshotReq)
 	require.Equal(t, uint64(1234), resp.GetReadVersion())
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.token)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 42, ReadVersion: 1234}, publisher.token)
 }
 
 func TestGRPCServiceGetReadVersionDoesNotPublishSnapshot(t *testing.T) {
@@ -508,7 +516,7 @@ func TestGRPCServiceSnapshotSubtreeRetiresTokenAfterPublishFailure(t *testing.T)
 		RootInode: 42,
 	})
 	require.Error(t, err)
-	want := fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}
+	want := fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 42, ReadVersion: 1234}
 	require.Equal(t, want, publisher.token)
 	require.Equal(t, want, publisher.retired)
 }
@@ -524,7 +532,7 @@ func TestGRPCServiceRetireSnapshotSubtree(t *testing.T) {
 		ReadVersion: 1234,
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 1234}, publisher.retired)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 42, ReadVersion: 1234}, publisher.retired)
 }
 
 func TestGRPCServiceGetQuotaUsage(t *testing.T) {

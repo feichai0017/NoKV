@@ -13,8 +13,7 @@ import (
 //	common prefix:
 //	  magic[4] = "fsm\0"
 //	  version  = 0x01
-//	  mount_len uvarint
-//	  mount bytes
+//	  mount_key_id be64
 //	  affinity_bucket be16
 //	  kind byte
 //
@@ -34,6 +33,7 @@ const keySchemaVersion byte = 1
 const (
 	DefaultAffinityBucketCount = 16
 	RootAffinityBucket         = AffinityBucket(0)
+	encodedMountKeyBytes       = 8
 	encodedBucketBytes         = 2
 )
 
@@ -71,19 +71,19 @@ func (k KeyKind) String() string {
 }
 
 // EncodeMountKey returns the mount-level metadata record key.
-func EncodeMountKey(mount MountID) ([]byte, error) {
+func EncodeMountKey(mount MountIdentity) ([]byte, error) {
 	return encodeKey(mount, RootAffinityBucket, KeyKindMount, nil)
 }
 
 // EncodeMountPrefix returns the common key prefix for one mount. All fsmeta
 // records under the mount share this prefix regardless of key kind.
-func EncodeMountPrefix(mount MountID) ([]byte, error) {
-	return encodeMountPrefix(mount)
+func EncodeMountPrefix(mount MountIdentity) ([]byte, error) {
+	return encodeMountPrefix(mount, 0)
 }
 
 // EncodeMountKeyRange returns the half-open key range covering all fsmeta
 // records under one mount.
-func EncodeMountKeyRange(mount MountID) (start, end []byte, err error) {
+func EncodeMountKeyRange(mount MountIdentity) (start, end []byte, err error) {
 	start, err = EncodeMountPrefix(mount)
 	if err != nil {
 		return nil, nil, err
@@ -94,15 +94,15 @@ func EncodeMountKeyRange(mount MountID) (start, end []byte, err error) {
 // EncodeBucketPrefix returns the key prefix for one mount-local affinity
 // bucket. Coordinator placement can split these byte ranges without learning
 // fsmeta's record families.
-func EncodeBucketPrefix(mount MountID, bucket AffinityBucket) ([]byte, error) {
-	prefix, err := encodeMountPrefix(mount)
+func EncodeBucketPrefix(mount MountIdentity, bucket AffinityBucket) ([]byte, error) {
+	prefix, err := encodeMountPrefix(mount, encodedBucketBytes)
 	if err != nil {
 		return nil, err
 	}
 	return appendBucket(prefix, bucket), nil
 }
 
-func EncodeBucketRange(mount MountID, bucket AffinityBucket) (start, end []byte, err error) {
+func EncodeBucketRange(mount MountIdentity, bucket AffinityBucket) (start, end []byte, err error) {
 	start, err = EncodeBucketPrefix(mount, bucket)
 	if err != nil {
 		return nil, nil, err
@@ -111,7 +111,7 @@ func EncodeBucketRange(mount MountID, bucket AffinityBucket) (start, end []byte,
 }
 
 // EncodeInodeKey returns the inode attribute record key.
-func EncodeInodeKey(mount MountID, inode InodeID) ([]byte, error) {
+func EncodeInodeKey(mount MountIdentity, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func EncodeInodeKey(mount MountID, inode InodeID) ([]byte, error) {
 }
 
 // EncodeDentryPrefix returns the scan prefix for entries directly under parent.
-func EncodeDentryPrefix(mount MountID, parent InodeID) ([]byte, error) {
+func EncodeDentryPrefix(mount MountIdentity, parent InodeID) ([]byte, error) {
 	if err := validateInodeID(parent); err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func EncodeDentryPrefix(mount MountID, parent InodeID) ([]byte, error) {
 }
 
 // EncodeDentryKey returns the dentry record key for parent/name.
-func EncodeDentryKey(mount MountID, parent InodeID, name string) ([]byte, error) {
+func EncodeDentryKey(mount MountIdentity, parent InodeID, name string) ([]byte, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func EncodeDentryKey(mount MountID, parent InodeID, name string) ([]byte, error)
 }
 
 // EncodeChunkKey returns the chunk mapping record key for inode/chunk.
-func EncodeChunkKey(mount MountID, inode InodeID, chunk ChunkIndex) ([]byte, error) {
+func EncodeChunkKey(mount MountIdentity, inode InodeID, chunk ChunkIndex) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func EncodeChunkKey(mount MountID, inode InodeID, chunk ChunkIndex) ([]byte, err
 }
 
 // EncodeSessionKey returns the client/session state key.
-func EncodeSessionKey(mount MountID, inode InodeID, session SessionID) ([]byte, error) {
+func EncodeSessionKey(mount MountIdentity, inode InodeID, session SessionID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
@@ -172,12 +172,12 @@ func EncodeSessionKey(mount MountID, inode InodeID, session SessionID) ([]byte, 
 // mount-local affinity bucket. Maintenance scanners use this bucket-local
 // prefix instead of the mount prefix so routed scans stay inside real fsmeta
 // data ranges.
-func EncodeSessionBucketPrefix(mount MountID, bucket AffinityBucket) ([]byte, error) {
+func EncodeSessionBucketPrefix(mount MountIdentity, bucket AffinityBucket) ([]byte, error) {
 	return encodeKey(mount, bucket, KeyKindSession, nil)
 }
 
 // EncodeInodeSessionKey returns the exclusive writer-owner key for one inode.
-func EncodeInodeSessionKey(mount MountID, inode InodeID) ([]byte, error) {
+func EncodeInodeSessionKey(mount MountIdentity, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func EncodeInodeSessionKey(mount MountID, inode InodeID) ([]byte, error) {
 
 // EncodeUsageKey returns a quota usage/counter key. Scope 0 is mount-wide;
 // non-zero scopes are direct quota accounting roots.
-func EncodeUsageKey(mount MountID, scope InodeID) ([]byte, error) {
+func EncodeUsageKey(mount MountIdentity, scope InodeID) ([]byte, error) {
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(scope))
 	return encodeKey(mount, BucketForInodeID(scope), KeyKindUsage, body[:])
@@ -213,11 +213,27 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 }
 
-// MountIDOfKey returns the mount encoded in a full fsmeta key.
-func MountIDOfKey(key []byte) (MountID, bool) {
+// DentryNameOfKey extracts the final name component from a concrete dentry
+// storage key. It is intended for watch diagnostics that receive committed
+// storage keys but must not know the mount_key_id that produced them.
+func DentryNameOfKey(key []byte) (string, bool) {
+	_, kindPos, err := decodeHeaderParts(key)
+	if err != nil || kindPos >= len(key) || KeyKind(key[kindPos]) != KeyKindDentry {
+		return "", false
+	}
+	body := key[kindPos+1:]
+	if len(body) <= 8 {
+		return "", false
+	}
+	return string(body[8:]), true
+}
+
+// MountKeyIDOfKey returns the rooted storage mount identity encoded in a full
+// fsmeta key.
+func MountKeyIDOfKey(key []byte) (MountKeyID, bool) {
 	mount, _, err := decodeHeaderParts(key)
 	if err != nil {
-		return "", false
+		return 0, false
 	}
 	return mount, true
 }
@@ -230,11 +246,11 @@ func BucketOfKey(key []byte) (AffinityBucket, bool) {
 	return AffinityBucket(binary.BigEndian.Uint16(key[pos : pos+encodedBucketBytes])), true
 }
 
-// StringMountResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped
+// MountKeyResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped
 // retention policy.
-func StringMountResolver(key []byte) (string, bool) {
-	mount, ok := MountIDOfKey(key)
-	return string(mount), ok
+func MountKeyResolver(key []byte) (uint64, bool) {
+	mount, ok := MountKeyIDOfKey(key)
+	return uint64(mount), ok
 }
 
 // UserKeyShape exposes fsmeta key shape to the local engine without making the
@@ -295,16 +311,18 @@ func BucketForInodeID(inode InodeID) AffinityBucket {
 	return AffinityBucket(utils.ShardForUserKey(body[:], DefaultAffinityBucketCount))
 }
 
-func ChooseWorkspaceBucket(mount MountID, name string) AffinityBucket {
-	key := make([]byte, 0, len(mount)+1+len(name))
-	key = append(key, string(mount)...)
+func ChooseWorkspaceBucket(mount MountIdentity, name string) AffinityBucket {
+	var mountBuf [8]byte
+	binary.BigEndian.PutUint64(mountBuf[:], uint64(mount.MountKeyID))
+	key := make([]byte, 0, len(mountBuf)+1+len(name))
+	key = append(key, mountBuf[:]...)
 	key = append(key, 0)
 	key = append(key, name...)
 	return AffinityBucket(utils.ShardForUserKey(key, DefaultAffinityBucketCount))
 }
 
-func encodeKey(mount MountID, bucket AffinityBucket, kind KeyKind, body []byte) ([]byte, error) {
-	out, err := encodeMountPrefix(mount)
+func encodeKey(mount MountIdentity, bucket AffinityBucket, kind KeyKind, body []byte) ([]byte, error) {
+	out, err := encodeMountPrefix(mount, encodedBucketBytes+1+len(body))
 	if err != nil {
 		return nil, err
 	}
@@ -314,15 +332,16 @@ func encodeKey(mount MountID, bucket AffinityBucket, kind KeyKind, body []byte) 
 	return out, nil
 }
 
-func encodeMountPrefix(mount MountID) ([]byte, error) {
-	if err := validateMountID(mount); err != nil {
+func encodeMountPrefix(mount MountIdentity, suffixLen int) ([]byte, error) {
+	if err := validateMountIdentity(mount); err != nil {
 		return nil, err
 	}
-	out := make([]byte, 0, len(keyMagic)+2+len(mount))
+	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+suffixLen)
 	out = append(out, keyMagic...)
 	out = append(out, keySchemaVersion)
-	out = binary.AppendUvarint(out, uint64(len(mount)))
-	out = append(out, string(mount)...)
+	var buf [encodedMountKeyBytes]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(mount.MountKeyID))
+	out = append(out, buf[:]...)
 	return out, nil
 }
 
@@ -343,40 +362,38 @@ func prefixUpperBound(prefix []byte) []byte {
 	return nil
 }
 
-func decodeHeaderParts(key []byte) (MountID, int, error) {
+func decodeHeaderParts(key []byte) (MountKeyID, int, error) {
 	mount, pos, err := decodeMountPrefix(key)
 	if err != nil {
-		return "", 0, err
+		return 0, 0, err
 	}
 	if len(key)-pos < encodedBucketBytes+1 {
-		return "", 0, ErrInvalidKey
+		return 0, 0, ErrInvalidKey
 	}
 	return mount, pos + encodedBucketBytes, nil
 }
 
-func decodeMountPrefix(key []byte) (MountID, int, error) {
-	if len(key) < len(keyMagic)+2 {
-		return "", 0, ErrInvalidKey
+func decodeMountPrefix(key []byte) (MountKeyID, int, error) {
+	if len(key) < len(keyMagic)+1+encodedMountKeyBytes {
+		return 0, 0, ErrInvalidKey
 	}
 	for i := range keyMagic {
 		if key[i] != keyMagic[i] {
-			return "", 0, ErrInvalidKey
+			return 0, 0, ErrInvalidKey
 		}
 	}
 	pos := len(keyMagic)
 	if key[pos] != keySchemaVersion {
-		return "", 0, ErrInvalidKey
+		return 0, 0, ErrInvalidKey
 	}
 	pos++
-	mountLen, n := binary.Uvarint(key[pos:])
-	if n <= 0 {
-		return "", 0, ErrInvalidKey
+	if len(key)-pos < encodedMountKeyBytes {
+		return 0, 0, ErrInvalidKey
 	}
-	pos += n
-	if mountLen == 0 || uint64(len(key)-pos) < mountLen+1 {
-		return "", 0, ErrInvalidKey
+	mount := MountKeyID(binary.BigEndian.Uint64(key[pos : pos+encodedMountKeyBytes]))
+	if mount == 0 {
+		return 0, 0, ErrInvalidKey
 	}
-	mount := MountID(string(key[pos : pos+int(mountLen)]))
-	pos += int(mountLen)
+	pos += encodedMountKeyBytes
 	return mount, pos, nil
 }

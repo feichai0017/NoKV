@@ -38,9 +38,18 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 	if r == nil {
 		return nil, fsmeta.ErrInvalidRequest
 	}
-	prefix, err := fsmeta.WatchPrefix(req)
-	if err != nil {
-		return nil, err
+	var prefix []byte
+	var err error
+	if len(req.KeyPrefix) > 0 {
+		// Runtime watchers resolve public mount/root requests into concrete
+		// prefixes but keep req.Mount attached so RetireMount can close stale
+		// subscribers when root retires a mount.
+		prefix = append([]byte(nil), req.KeyPrefix...)
+	} else {
+		prefix, err = fsmeta.WatchPrefix(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	window := req.BackPressureWindow
 	if window == 0 {

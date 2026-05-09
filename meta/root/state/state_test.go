@@ -51,7 +51,7 @@ func TestCloneSnapshotDetachesAuthorityMapsAndPendingChanges(t *testing.T) {
 	snapshot := rootstate.Snapshot{
 		State: rootstate.State{ClusterEpoch: 3},
 		Mounts: map[string]rootstate.MountRecord{
-			"vol": {MountID: "vol", RootInode: 1, State: rootstate.MountStateActive},
+			"vol": {MountID: "vol", MountKeyID: 1, RootInode: 1, State: rootstate.MountStateActive},
 		},
 		Subtrees: map[string]rootstate.SubtreeAuthority{
 			"vol/1": {SubtreeID: "vol/1", Mount: "vol", RootInode: 1, State: rootstate.SubtreeAuthorityActive},
@@ -138,7 +138,7 @@ func TestApplyStoreMembershipEventsToSnapshot(t *testing.T) {
 func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
 	var snapshot rootstate.Snapshot
 	cursor := rootstate.Cursor{Term: 2, Index: 7}
-	event := rootevent.SnapshotEpochPublished("vol", 42, 100)
+	event := rootevent.SnapshotEpochPublished("vol", 1, 42, 100)
 
 	rootstate.ApplyEventToSnapshot(&snapshot, cursor, event)
 
@@ -147,13 +147,14 @@ func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
 	require.Equal(t, rootstate.SnapshotEpoch{
 		SnapshotID:  id,
 		Mount:       "vol",
+		MountKeyID:  1,
 		RootInode:   42,
 		ReadVersion: 100,
 		PublishedAt: cursor,
 	}, snapshot.SnapshotEpochs[id])
 
 	retireCursor := rootstate.Cursor{Term: 2, Index: 8}
-	rootstate.ApplyEventToSnapshot(&snapshot, retireCursor, rootevent.SnapshotEpochRetired("vol", 42, 100))
+	rootstate.ApplyEventToSnapshot(&snapshot, retireCursor, rootevent.SnapshotEpochRetired("vol", 1, 42, 100))
 	require.Equal(t, retireCursor, snapshot.State.LastCommitted)
 	require.NotContains(t, snapshot.SnapshotEpochs, id)
 }
@@ -197,8 +198,9 @@ func TestSnapshotRetentionFloor(t *testing.T) {
 	snapshot := rootstate.Snapshot{
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
 			"newer": {Mount: "vol", ReadVersion: 90},
-			"old":   {Mount: "data", ReadVersion: 30},
+			"old":   {Mount: "data", MountKeyID: 2, ReadVersion: 30},
 			"zero":  {Mount: "vol", ReadVersion: 0},
+			"vol":   {Mount: "vol", MountKeyID: 1, ReadVersion: 90},
 		},
 	}
 	floor, ok = snapshot.SnapshotRetentionFloor()
@@ -208,33 +210,33 @@ func TestSnapshotRetentionFloor(t *testing.T) {
 	index := snapshot.SnapshotRetentionIndex()
 	require.True(t, index.Active())
 	require.Equal(t, uint64(30), index.GlobalFloor)
-	require.Equal(t, map[string]uint64{
-		"vol":  90,
-		"data": 30,
+	require.Equal(t, map[uint64]uint64{
+		1: 90,
+		2: 30,
 	}, index.MountFloors)
 }
 
 func TestSnapshotRetentionIndexTracksMountFloors(t *testing.T) {
 	snapshot := rootstate.Snapshot{
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
-			"vol/root/90":  {Mount: "vol", RootInode: 1, ReadVersion: 90},
-			"vol/child/30": {Mount: "vol", RootInode: 7, ReadVersion: 30},
-			"data/root/70": {Mount: "data", RootInode: 1, ReadVersion: 70},
-			"data/zero":    {Mount: "data", RootInode: 9, ReadVersion: 0},
+			"vol/root/90":  {Mount: "vol", MountKeyID: 1, RootInode: 1, ReadVersion: 90},
+			"vol/child/30": {Mount: "vol", MountKeyID: 1, RootInode: 7, ReadVersion: 30},
+			"data/root/70": {Mount: "data", MountKeyID: 2, RootInode: 1, ReadVersion: 70},
+			"data/zero":    {Mount: "data", MountKeyID: 2, RootInode: 9, ReadVersion: 0},
 		},
 	}
 
 	index := snapshot.SnapshotRetentionIndex()
 	require.True(t, index.Active())
 	require.Equal(t, uint64(30), index.GlobalFloor)
-	require.Equal(t, map[string]uint64{
-		"vol":  30,
-		"data": 70,
+	require.Equal(t, map[uint64]uint64{
+		1: 30,
+		2: 70,
 	}, index.MountFloors)
-	floor, ok := index.FloorForMount("vol")
+	floor, ok := index.FloorForMount(1)
 	require.True(t, ok)
 	require.Equal(t, uint64(30), floor)
-	floor, ok = index.FloorForMount("missing")
+	floor, ok = index.FloorForMount(999)
 	require.False(t, ok)
 	require.Zero(t, floor)
 }

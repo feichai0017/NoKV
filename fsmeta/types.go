@@ -25,6 +25,19 @@ package fsmeta
 // MountID identifies one filesystem namespace hosted inside fsmeta.
 type MountID string
 
+// MountKeyID is the compact rooted storage identity for one mount. Public
+// APIs keep using MountID; fsmeta storage keys use MountKeyID so every key does
+// not repeat the human-readable mount name.
+type MountKeyID uint64
+
+// MountIdentity is the boundary object returned by rooted mount admission.
+// Code that encodes storage keys must use this identity instead of trusting a
+// caller-supplied string mount name.
+type MountIdentity struct {
+	MountID    MountID
+	MountKeyID MountKeyID
+}
+
 // InodeID identifies one inode. ID 0 is reserved as invalid.
 type InodeID uint64
 
@@ -52,6 +65,7 @@ type ReadVersionRequest struct {
 // retired by callers when its GC-retention contract is no longer needed.
 type SnapshotSubtreeToken struct {
 	Mount       MountID
+	MountKeyID  MountKeyID
 	RootInode   InodeID
 	ReadVersion uint64
 }
@@ -89,6 +103,30 @@ const (
 
 func validateMountID(id MountID) error {
 	if id == "" {
+		return ErrInvalidMountID
+	}
+	return nil
+}
+
+func validateMountKeyID(id MountKeyID) error {
+	if id == 0 {
+		return ErrInvalidMountID
+	}
+	return nil
+}
+
+func validateMountIdentity(identity MountIdentity) error {
+	if err := validateMountID(identity.MountID); err != nil {
+		return err
+	}
+	return validateMountKeyID(identity.MountKeyID)
+}
+
+func validateMountIdentityForRequest(identity MountIdentity, mount MountID) error {
+	if err := validateMountIdentity(identity); err != nil {
+		return err
+	}
+	if mount != "" && mount != identity.MountID {
 		return ErrInvalidMountID
 	}
 	return nil

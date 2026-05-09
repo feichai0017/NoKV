@@ -90,7 +90,15 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
 	}
-	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: 5678}, nil
+	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, MountKeyID: 1, RootInode: req.RootInode, ReadVersion: 5678}, nil
+}
+
+func (e *fakeExecutor) ResolveSnapshotSubtreeToken(_ context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error) {
+	if e.err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, e.err
+	}
+	token.MountKeyID = 1
+	return token, nil
 }
 
 func (e *fakeExecutor) GetQuotaUsage(context.Context, fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error) {
@@ -415,7 +423,10 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
 	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
-	require.Equal(t, token, publisher.retired)
+	require.Equal(t, token.Mount, publisher.retired.Mount)
+	require.Equal(t, fsmeta.MountKeyID(1), publisher.retired.MountKeyID)
+	require.Equal(t, token.RootInode, publisher.retired.RootInode)
+	require.Equal(t, token.ReadVersion, publisher.retired.ReadVersion)
 }
 
 func TestTypedClientGetReadVersion(t *testing.T) {

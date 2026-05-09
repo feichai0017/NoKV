@@ -52,11 +52,11 @@ func PublishStagedNamespaceEntry(ctx context.Context, cli StagedPublishClient, r
 		return errStagedPublishClientRequired
 	}
 	create := req.createRequest()
-	if _, err := fsmeta.PlanCreate(create, fsmeta.RootInode); err != nil {
+	if err := fsmeta.ValidateCreateRequest(create); err != nil {
 		return err
 	}
 	rename := req.renameRequest()
-	if _, err := fsmeta.PlanRename(rename); err != nil {
+	if err := fsmeta.ValidateRenameRequest(rename); err != nil {
 		return err
 	}
 

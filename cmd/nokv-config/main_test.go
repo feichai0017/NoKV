@@ -72,7 +72,7 @@ func TestRunRegionsExpandsFSMetaBootstrapLayout(t *testing.T) {
 			{StoreID: 3, Addr: "store-3"},
 		},
 		FSMetaRegionBootstrap: &config.FSMetaRegionBootstrap{
-			Mounts:         []string{"fsmeta-bench"},
+			Mounts:         []config.FSMetaRegionBootstrapMount{{MountID: "fsmeta-bench", MountKeyID: 2}},
 			BucketCount:    fsmeta.DefaultAffinityBucketCount,
 			RegionIDBase:   1000,
 			PeerIDBase:     10_000,
@@ -98,7 +98,7 @@ func TestRunRegionsExpandsFSMetaBootstrapLayout(t *testing.T) {
 	require.Len(t, regions[1].Peers, 3)
 	require.Equal(t, uint64(10_003), regions[1].Peers[0].PeerID)
 
-	start, end, err := fsmeta.EncodeBucketRange("fsmeta-bench", 0)
+	start, end, err := fsmeta.EncodeBucketRange(fsmeta.MountIdentity{MountID: "fsmeta-bench", MountKeyID: 2}, 0)
 	require.NoError(t, err)
 	require.Equal(t, start, []byte(regions[1].StartKey))
 	require.Equal(t, end, []byte(regions[1].EndKey))

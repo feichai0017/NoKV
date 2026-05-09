@@ -38,8 +38,9 @@ type quotaCache struct {
 }
 
 type quotaSubject struct {
-	mount fsmeta.MountID
-	scope fsmeta.InodeID
+	mount      fsmeta.MountID
+	mountKeyID fsmeta.MountKeyID
+	scope      fsmeta.InodeID
 }
 
 type quotaEntry struct {
@@ -86,12 +87,12 @@ func (c *quotaCache) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRunn
 func (c *quotaCache) aggregate(changes []fsmetaexec.QuotaChange) (map[quotaSubject]quotaDelta, error) {
 	out := make(map[quotaSubject]quotaDelta)
 	for _, change := range changes {
-		if change.Mount == "" {
+		if change.Mount == "" || change.MountKeyID == 0 {
 			return nil, fsmeta.ErrInvalidMountID
 		}
-		addDelta(out, quotaSubject{mount: change.Mount}, change.Bytes, change.Inodes)
+		addDelta(out, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID}, change.Bytes, change.Inodes)
 		if change.Scope != 0 {
-			addDelta(out, quotaSubject{mount: change.Mount, scope: change.Scope}, change.Bytes, change.Inodes)
+			addDelta(out, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID, scope: change.Scope}, change.Bytes, change.Inodes)
 		}
 	}
 	for subject, delta := range out {
@@ -118,7 +119,7 @@ func (c *quotaCache) reserveSubject(ctx context.Context, runner fsmetaexec.TxnRu
 	if !ok {
 		return nil, nil
 	}
-	key, err := fsmeta.EncodeUsageKey(subject.mount, subject.scope)
+	key, err := fsmeta.EncodeUsageKey(fsmeta.MountIdentity{MountID: subject.mount, MountKeyID: subject.mountKeyID}, subject.scope)
 	if err != nil {
 		return nil, err
 	}
@@ -210,12 +211,9 @@ func (c *quotaCache) markFenceUpdated(info *coordpb.QuotaFenceInfo) {
 	if c == nil || info == nil || info.GetSubject() == nil || info.GetSubject().GetMountId() == "" {
 		return
 	}
-	subject := quotaSubject{
-		mount: fsmeta.MountID(info.GetSubject().GetMountId()),
-		scope: fsmeta.InodeID(info.GetSubject().GetSubtreeRoot()),
-	}
-	c.putFence(subject, c.clock(), quotaFenceFromProto(info))
-	c.fenceUpdatesTotal.Add(1)
+	// QuotaFenceInfo currently carries the public mount id but not mount_key_id.
+	// ReserveQuota keys the cache by both identities, so caching this update here
+	// would create an entry that no reserve path can safely hit.
 }
 
 func (c *quotaCache) purgeMount(mount fsmeta.MountID) {

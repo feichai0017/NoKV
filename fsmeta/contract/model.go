@@ -30,6 +30,8 @@ const (
 	OpAdvanceTime      OperationKind = "advance_time"
 )
 
+const contractMountKeyID fsmeta.MountKeyID = 1
+
 // Operation is one generated fsmeta request. Unused fields are ignored by the
 // selected Kind. For OpCreate, Inode is the model-assigned server-side inode
 // used to keep later generated operations meaningful; it is not a public
@@ -462,16 +464,17 @@ func (m *Model) expireSessions(op Operation) Result {
 	if limit == 0 {
 		limit = fsmeta.DefaultSessionExpireLimit
 	}
+	identity := fsmeta.MountIdentity{MountID: m.Mount, MountKeyID: contractMountKeyID}
 	entries := make([]sessionIndexEntry, 0, len(m.sessions)+len(m.owners))
 	for _, record := range m.sessions {
-		key, err := fsmeta.EncodeSessionKey(m.Mount, record.Inode, record.Session)
+		key, err := fsmeta.EncodeSessionKey(identity, record.Inode, record.Session)
 		if err != nil {
 			return Result{Err: err}
 		}
 		entries = append(entries, sessionIndexEntry{key: string(key), record: record, session: true})
 	}
 	for _, record := range m.owners {
-		key, err := fsmeta.EncodeInodeSessionKey(m.Mount, record.Inode)
+		key, err := fsmeta.EncodeInodeSessionKey(identity, record.Inode)
 		if err != nil {
 			return Result{Err: err}
 		}

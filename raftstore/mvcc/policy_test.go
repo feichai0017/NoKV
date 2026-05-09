@@ -10,16 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testMountResolver(userKey []byte) (string, bool) {
+func testMountResolver(userKey []byte) (uint64, bool) {
 	switch string(userKey) {
 	case "vol/key":
-		return "vol", true
+		return 1, true
 	case "data/key":
-		return "data", true
+		return 2, true
 	case "other/key":
-		return "other", true
+		return 3, true
 	default:
-		return "", false
+		return 0, false
 	}
 }
 
@@ -32,9 +32,9 @@ func TestMVCCGCSafePointPolicyUsesMountScopedSnapshotFloor(t *testing.T) {
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
-			MountFloors: map[string]uint64{
-				"vol":  50,
-				"data": 200,
+			MountFloors: map[uint64]uint64{
+				1: 50,
+				2: 200,
 			},
 		},
 		TxnFloor: 80,
@@ -51,8 +51,8 @@ func TestMVCCGCSafePointPolicyKeepsGlobalFloorAsUnknownLayoutFallback(t *testing
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 40,
-			MountFloors: map[string]uint64{
-				"vol": 80,
+			MountFloors: map[uint64]uint64{
+				1: 80,
 			},
 		},
 		Mount: testMountResolver,
@@ -67,8 +67,8 @@ func TestMVCCGCSafePointPolicyFallsBackToGlobalFloorForUnknownKeys(t *testing.T)
 		RequestedSafePoint: 1_000,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
-			MountFloors: map[string]uint64{
-				"vol": 50,
+			MountFloors: map[uint64]uint64{
+				1: 50,
 			},
 		},
 		TxnFloor: 80,
@@ -82,8 +82,8 @@ func TestMVCCGCSafePointPolicyHonorsDisabledRequestedSafePoint(t *testing.T) {
 		RequestedSafePoint: 0,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
-			MountFloors: map[string]uint64{
-				"vol": 50,
+			MountFloors: map[uint64]uint64{
+				1: 50,
 			},
 		},
 		TxnFloor: 80,
@@ -109,8 +109,8 @@ func TestMVCCGCSafePointPolicyPlansWritesWithKeyScopedFloor(t *testing.T) {
 	policy := storemvcc.SafePointPolicy{
 		RequestedSafePoint: 100,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
-			MountFloors: map[string]uint64{
-				"vol": 50,
+			MountFloors: map[uint64]uint64{
+				1: 50,
 			},
 		},
 		Mount: testMountResolver,
