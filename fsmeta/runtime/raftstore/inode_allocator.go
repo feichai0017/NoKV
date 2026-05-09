@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultInodeAllocBatchSize = 256
-	defaultInodeAffinityShards = 4
+	defaultInodeAllocBatchSize  = 256
+	defaultInodeAffinityBuckets = fsmeta.DefaultAffinityBucketCount
 )
 
 // IDAllocatorClient is the rooted coordinator ID surface used by fsmeta. The
@@ -23,12 +23,12 @@ type IDAllocatorClient interface {
 }
 
 // ShardAffineInodeAllocator prefetches coordinator IDs and returns an inode ID
-// whose fsmeta placement shard matches the target dentry when possible. A miss
-// is still correct: Create keeps the existing 1PC safety gate and falls back to
-// Percolator 2PC when local atomicity cannot be proven.
+// whose fsmeta affinity bucket matches the target workspace when possible. A
+// miss is still correct: Create keeps the existing 1PC safety gate and falls
+// back to Percolator 2PC when local atomicity cannot be proven.
 type ShardAffineInodeAllocator struct {
 	client    IDAllocatorClient
-	shards    int
+	buckets   int
 	batchSize uint64
 
 	mu    sync.Mutex
@@ -52,10 +52,10 @@ func NewShardAffineInodeAllocatorWithBatch(client IDAllocatorClient, shardCount 
 	if batchSize == 0 {
 		return nil, errInodeAllocBatchRequired
 	}
-	shards := utils.NormalizeShardCount(shardCount)
+	buckets := max(utils.NormalizeShardCount(shardCount), fsmeta.DefaultAffinityBucketCount)
 	return &ShardAffineInodeAllocator{
 		client:    client,
-		shards:    shards,
+		buckets:   buckets,
 		batchSize: batchSize,
 		pools:     make(map[fsmeta.MountID][][]fsmeta.InodeID),
 	}, nil
@@ -65,13 +65,13 @@ func (a *ShardAffineInodeAllocator) AllocateCreateInode(ctx context.Context, mou
 	if a == nil {
 		return 0, errIDAllocatorClientRequired
 	}
-	target, err := createDentryShard(mount, parent, name, a.shards)
+	target, err := createDentryBucket(mount, parent, name)
 	if err != nil {
 		return 0, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if inode, ok := a.popShardLocked(mount, target); ok {
+	if inode, ok := a.popBucketLocked(mount, target); ok {
 		a.total.Add(1)
 		a.affinityHit.Add(1)
 		return inode, nil
@@ -79,7 +79,7 @@ func (a *ShardAffineInodeAllocator) AllocateCreateInode(ctx context.Context, mou
 	if err := a.refillLocked(ctx, mount); err != nil {
 		return 0, err
 	}
-	if inode, ok := a.popShardLocked(mount, target); ok {
+	if inode, ok := a.popBucketLocked(mount, target); ok {
 		a.total.Add(1)
 		a.affinityHit.Add(1)
 		return inode, nil
@@ -130,58 +130,70 @@ func (a *ShardAffineInodeAllocator) refillLocked(ctx context.Context, mount fsme
 		if id < first || fsmeta.InodeID(id) <= fsmeta.RootInode {
 			continue
 		}
-		shard, err := createInodeShard(mount, fsmeta.InodeID(id), a.shards)
+		bucket, err := createInodeBucket(mount, fsmeta.InodeID(id))
 		if err != nil {
 			return err
 		}
-		pool[shard] = append(pool[shard], fsmeta.InodeID(id))
+		pool[bucket] = append(pool[bucket], fsmeta.InodeID(id))
 		a.reservedTotal.Add(1)
 	}
 	return nil
 }
 
 func (a *ShardAffineInodeAllocator) ensurePoolsLocked(mount fsmeta.MountID) [][]fsmeta.InodeID {
-	if pool := a.pools[mount]; len(pool) == a.shards {
+	if pool := a.pools[mount]; len(pool) == a.buckets {
 		return pool
 	}
-	pool := make([][]fsmeta.InodeID, a.shards)
+	pool := make([][]fsmeta.InodeID, a.buckets)
 	a.pools[mount] = pool
 	return pool
 }
 
-func (a *ShardAffineInodeAllocator) popShardLocked(mount fsmeta.MountID, shard int) (fsmeta.InodeID, bool) {
+func (a *ShardAffineInodeAllocator) popBucketLocked(mount fsmeta.MountID, bucket fsmeta.AffinityBucket) (fsmeta.InodeID, bool) {
 	pool := a.ensurePoolsLocked(mount)
-	if shard < 0 || shard >= len(pool) || len(pool[shard]) == 0 {
+	idx := int(bucket)
+	if idx < 0 || idx >= len(pool) || len(pool[idx]) == 0 {
 		return 0, false
 	}
-	last := len(pool[shard]) - 1
-	inode := pool[shard][last]
-	pool[shard] = pool[shard][:last]
+	last := len(pool[idx]) - 1
+	inode := pool[idx][last]
+	pool[idx] = pool[idx][:last]
 	return inode, true
 }
 
 func (a *ShardAffineInodeAllocator) popAnyLocked(mount fsmeta.MountID) (fsmeta.InodeID, bool) {
 	pool := a.ensurePoolsLocked(mount)
-	for shard := range pool {
-		if inode, ok := a.popShardLocked(mount, shard); ok {
+	for bucket := range pool {
+		if inode, ok := a.popBucketLocked(mount, fsmeta.AffinityBucket(bucket)); ok {
 			return inode, true
 		}
 	}
 	return 0, false
 }
 
-func createDentryShard(mount fsmeta.MountID, parent fsmeta.InodeID, name string, shards int) (int, error) {
+func createDentryBucket(mount fsmeta.MountID, parent fsmeta.InodeID, name string) (fsmeta.AffinityBucket, error) {
+	if parent == fsmeta.RootInode {
+		return fsmeta.ChooseWorkspaceBucket(mount, name), nil
+	}
 	key, err := fsmeta.EncodeDentryKey(mount, parent, name)
 	if err != nil {
 		return 0, err
 	}
-	return fsmeta.ShardForUserKey(key, shards), nil
+	bucket, ok := fsmeta.BucketOfKey(key)
+	if !ok {
+		return 0, fsmeta.ErrInvalidKey
+	}
+	return bucket, nil
 }
 
-func createInodeShard(mount fsmeta.MountID, inode fsmeta.InodeID, shards int) (int, error) {
+func createInodeBucket(mount fsmeta.MountID, inode fsmeta.InodeID) (fsmeta.AffinityBucket, error) {
 	key, err := fsmeta.EncodeInodeKey(mount, inode)
 	if err != nil {
 		return 0, err
 	}
-	return fsmeta.ShardForUserKey(key, shards), nil
+	bucket, ok := fsmeta.BucketOfKey(key)
+	if !ok {
+		return 0, fsmeta.ErrInvalidKey
+	}
+	return bucket, nil
 }

@@ -60,30 +60,11 @@
       "docker_addr": "nokv-store-3:20160"
     }
   ],
-  "regions": [
-    {
-      "id": 1,
-      "start_key": "",
-      "end_key": "m",
-      "epoch": { "version": 1, "conf_version": 1 },
-      "peers": [
-        { "store_id": 1, "peer_id": 101 },
-        { "store_id": 2, "peer_id": 201 },
-        { "store_id": 3, "peer_id": 301 }
-      ],
-      "leader_store_id": 1
-    },
-    {
-      "id": 2,
-      "start_key": "m",
-      "end_key": "",
-      "epoch": { "version": 1, "conf_version": 1 },
-      "peers": [
-        { "store_id": 1, "peer_id": 102 },
-        { "store_id": 2, "peer_id": 202 },
-        { "store_id": 3, "peer_id": 302 }
-      ],
-      "leader_store_id": 2
-    }
-  ]
+  "fsmeta_region_bootstrap": {
+    "mounts": ["default", "fsmeta-bench"],
+    "bucket_count": 16,
+    "region_id_base": 1000,
+    "peer_id_base": 100000,
+    "leader_store_ids": [1, 2, 3]
+  }
 }

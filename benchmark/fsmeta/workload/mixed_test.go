@@ -25,7 +25,7 @@ type fakeMixedClient struct {
 	reads     []fsmeta.ReadDirRequest
 	next      fsmeta.InodeID
 	version   uint64
-	stream    *fakeWatchStream
+	streams   []*fakeWatchStream
 }
 
 type fakeSessionKey struct {
@@ -42,7 +42,6 @@ func newFakeMixedClient() *fakeMixedClient {
 		versions:  make(map[uint64]struct{}),
 		next:      100,
 		version:   1,
-		stream:    &fakeWatchStream{events: make(chan fsmeta.WatchEvent, 1024)},
 	}
 }
 
@@ -138,8 +137,10 @@ func (c *fakeMixedClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirReque
 func (c *fakeMixedClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
-	return c.stream, nil
+	stream := newFakeWatchStream(1024)
+	stream.prefix = append([]byte(nil), req.KeyPrefix...)
+	c.streams = append(c.streams, stream)
+	return stream, nil
 }
 
 func (c *fakeMixedClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
@@ -326,19 +327,26 @@ func (c *retryOpenMixedClient) OpenWriteSession(ctx context.Context, req fsmeta.
 }
 
 func (c *fakeMixedClient) emitDentryEventLocked(mount fsmeta.MountID, entry fsmeta.DentryRecord) {
-	if c.stream == nil {
+	if len(c.streams) == 0 {
 		return
 	}
 	key, err := fsmeta.EncodeDentryKey(mount, entry.Parent, entry.Name)
-	if err != nil || len(c.stream.prefix) > 0 && !bytes.HasPrefix(key, c.stream.prefix) {
+	if err != nil {
 		return
 	}
 	c.version++
-	c.stream.events <- fsmeta.WatchEvent{
+	evt := fsmeta.WatchEvent{
 		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: c.version},
 		CommitVersion: c.version,
 		Source:        fsmeta.WatchEventSourceCommit,
 		Key:           key,
+	}
+	for _, stream := range c.streams {
+		stream.mu.Lock()
+		if !stream.closed && (len(stream.prefix) == 0 || bytes.HasPrefix(key, stream.prefix)) {
+			stream.events <- evt
+		}
+		stream.mu.Unlock()
 	}
 }
 
@@ -411,6 +419,34 @@ func TestRunMixedCoversFullSurface(t *testing.T) {
 	for version := range versions {
 		require.Contains(t, seen, version)
 	}
+}
+
+func TestRunMultiWorkspaceAutoscaleUsesIndependentWorkspaceRoots(t *testing.T) {
+	cli := newFakeMixedClient()
+	result, err := RunMultiWorkspaceAutoscale(context.Background(), cli, MultiWorkspaceAutoscaleConfig{
+		MixedConfig: MixedConfig{
+			Mount:           "vol",
+			RunID:           "autoscale",
+			Clients:         4,
+			Groups:          4,
+			EntriesPerGroup: 1,
+			ArtifactsPerRun: 4,
+			PageLimit:       8,
+			SessionTTL:      time.Hour,
+			StaleSessionTTL: 2 * time.Millisecond,
+		},
+		Workspaces: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, MultiWorkspaceAutoscale, result.Name)
+	require.Zero(t, result.Errors)
+
+	cli.mu.Lock()
+	_, left := cli.dentries[dentryID(fsmeta.RootInode, "mixed-workload-autoscale-ws00")]
+	_, right := cli.dentries[dentryID(fsmeta.RootInode, "mixed-workload-autoscale-ws01")]
+	cli.mu.Unlock()
+	require.True(t, left)
+	require.True(t, right)
 }
 
 func TestWriterSessionOpenUsesFreshLeaseIDAcrossRetry(t *testing.T) {

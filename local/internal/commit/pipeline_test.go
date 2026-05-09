@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -8,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShardForBatchUsesConfiguredUserKeyRouter(t *testing.T) {
+func TestShardForBatchUsesConfiguredShardKey(t *testing.T) {
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("semantic-key"), 7), []byte("value"))
 	defer entry.DecrRef()
 
@@ -16,17 +17,17 @@ func TestShardForBatchUsesConfiguredUserKeyRouter(t *testing.T) {
 	batch := &CommitBatch{Reqs: []*CommitRequest{{Req: req}}}
 	rr := 0
 
-	shard := shardForBatch(batch, 4, &rr, func(userKey []byte, shardCount int) int {
+	shardKey := keyForShard(t, 4, 3)
+	shard := shardForBatch(batch, 4, &rr, func(userKey []byte) []byte {
 		require.Equal(t, []byte("semantic-key"), userKey)
-		require.Equal(t, 4, shardCount)
-		return 3
+		return shardKey
 	})
 
 	require.Equal(t, 3, shard)
 	require.Equal(t, 0, rr)
 }
 
-func TestShardForBatchFallsBackWhenRouterReturnsInvalidShard(t *testing.T) {
+func TestShardForBatchFallsBackWhenShardKeyIsEmpty(t *testing.T) {
 	userKey := []byte("semantic-key")
 	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, userKey, 7), []byte("value"))
 	defer entry.DecrRef()
@@ -35,7 +36,19 @@ func TestShardForBatchFallsBackWhenRouterReturnsInvalidShard(t *testing.T) {
 	batch := &CommitBatch{Reqs: []*CommitRequest{{Req: req}}}
 	rr := 0
 
-	shard := shardForBatch(batch, 4, &rr, func([]byte, int) int { return 99 })
+	shard := shardForBatch(batch, 4, &rr, func([]byte) []byte { return nil })
 
 	require.Equal(t, utils.ShardForUserKey(userKey, 4), shard)
+}
+
+func keyForShard(t *testing.T, shards int, target int) []byte {
+	t.Helper()
+	for i := range 10_000 {
+		key := fmt.Appendf(nil, "shard-key-%d", i)
+		if utils.ShardForUserKey(key, shards) == target {
+			return key
+		}
+	}
+	t.Fatalf("no key found for shard %d", target)
+	return nil
 }

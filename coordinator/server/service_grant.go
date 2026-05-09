@@ -37,7 +37,7 @@ func (s *Service) requireRootWriteAccess() error {
 
 func (s *Service) grantScopedStoreOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || !s.coordinatorGrantEnabled() {
-		return s.storeControlOperations(storeID)
+		return s.storeControlOperations(ctx, storeID)
 	}
 	if s.storage != nil && !s.storage.CanSubmitRootWrites() {
 		return nil
@@ -45,14 +45,50 @@ func (s *Service) grantScopedStoreOperations(ctx context.Context, storeID uint64
 	if err := s.ensureGrant(ctx, rootproto.DutyRegionLookup); err != nil {
 		return nil
 	}
-	return s.storeControlOperations(storeID)
+	return s.storeControlOperations(ctx, storeID)
 }
 
-func (s *Service) storeControlOperations(storeID uint64) []*coordpb.SchedulerOperation {
+func (s *Service) storeControlOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || s.cluster == nil || storeID == 0 {
 		return nil
 	}
-	return scheduling.PlanStoreOperations(storeID, s.cluster.Snapshot())
+	opts := scheduling.PlanOptions{
+		NextID: s.schedulerNextID(ctx),
+	}
+	if s.scheduler != nil {
+		return s.scheduler.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), opts)
+	}
+	return scheduling.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), opts)
+}
+
+func (s *Service) ConfigureSchedulerSplitBoundaries(boundaries [][]byte) {
+	if s == nil {
+		return
+	}
+	if s.scheduler == nil {
+		s.scheduler = scheduling.NewPlanner(scheduling.PlanOptions{})
+	}
+	s.scheduler.ConfigureOptions(scheduling.PlanOptions{
+		SplitKey: scheduling.SplitKeyFromBoundaries(boundaries),
+	})
+}
+
+func (s *Service) schedulerNextID(ctx context.Context) func() (uint64, bool) {
+	return func() (uint64, bool) {
+		if s == nil {
+			return 0, false
+		}
+		if s.coordinatorGrantEnabled() {
+			if err := s.ensureGrant(ctx, rootproto.DutyAllocID); err != nil {
+				return 0, false
+			}
+		}
+		id, err := s.reserveIDs(ctx, 1)
+		if err != nil {
+			return 0, false
+		}
+		return id, true
+	}
 }
 
 // RunGrantLoop keeps the local coordinator grant renewed while ctx
@@ -584,11 +620,11 @@ func (s *Service) grantDutyRequest(duty rootproto.DutyID) (rootproto.DutyGrant, 
 }
 
 func (s *Service) currentRegionLookupRevision() uint64 {
+	// RegionLookup grants fence route descriptors, not every root-log event.
+	// Using the root token revision here makes a grant self-invalidating:
+	// issuing the grant appends a root event, advances the root token, and then
+	// immediately forces another renewal even though no descriptor changed.
 	revision := s.currentDescriptorRevision()
-	snapshot, err := s.currentRootSnapshot()
-	if err == nil && snapshot.RootToken.Revision > revision {
-		revision = snapshot.RootToken.Revision
-	}
 	if floor := s.currentRegionLookupGrantFloor(); floor > revision {
 		revision = floor
 	}

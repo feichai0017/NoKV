@@ -40,9 +40,6 @@ func rpcError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if _, ok := status.FromError(err); ok {
-		return err
-	}
 	switch {
 	case errors.Is(err, context.Canceled):
 		return nokverrors.RPCStatusError(nokverrors.KindAborted, codes.Canceled, err.Error(), map[string]string{
@@ -52,10 +49,19 @@ func rpcError(err error) error {
 		return nokverrors.RPCStatusError(nokverrors.KindUnavailable, codes.DeadlineExceeded, err.Error(), map[string]string{
 			fsmetaReasonMetadata: reasonContextDeadline,
 		})
-	default:
-		kind := nokverrors.KindOf(err)
-		return nokverrors.RPCStatusError(kind, rpcCodeForKind(kind), err.Error(), fsmetaErrorMetadata(err))
 	}
+	var carrier nokverrors.KindCarrier
+	if errors.As(err, &carrier) {
+		kind := nokverrors.KindOf(err)
+		if kind != nokverrors.KindUnknown {
+			return nokverrors.RPCStatusError(kind, rpcCodeForKind(kind), err.Error(), fsmetaErrorMetadata(err))
+		}
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	kind := nokverrors.KindOf(err)
+	return nokverrors.RPCStatusError(kind, rpcCodeForKind(kind), err.Error(), fsmetaErrorMetadata(err))
 }
 
 func rpcInvalidArgument(message string) error {

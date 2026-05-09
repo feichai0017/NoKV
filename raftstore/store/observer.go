@@ -32,6 +32,7 @@ type ApplyEvent struct {
 	Source        ApplyEventSource
 	CommitVersion uint64
 	Keys          [][]byte
+	AtomicMutate  bool
 }
 
 // ApplyObserver consumes post-apply events. Store dispatch to observers is
@@ -174,10 +175,16 @@ func (s *Store) DroppedApplyObserverEvents() uint64 {
 }
 
 func (s *Store) emitApplyEvents(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *raftcmdpb.RaftCmdResponse) {
-	if s == nil || s.observers == nil {
+	if s == nil {
 		return
 	}
 	for _, evt := range applyEventsFromCommand(entry, req, resp) {
+		if s.regionStats != nil {
+			s.regionStats.recordApply(evt)
+		}
+		if s.observers == nil {
+			continue
+		}
 		s.observers.emit(evt)
 	}
 }
@@ -245,6 +252,7 @@ func applyEventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, r
 				Source:        ApplyEventSourceCommit,
 				CommitVersion: atomicMutate.GetCommitVersion(),
 				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
+				AtomicMutate:  true,
 			})
 		}
 	}

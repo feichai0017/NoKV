@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	CheckpointStorm = "checkpoint-storm"
-	DurableSnapshot = "durable-snapshot"
-	HotspotFanIn    = "hotspot-fanin"
-	WatchSubtree    = "watch-subtree"
-	NegativeLookup  = "negative-lookup"
+	CheckpointStorm         = "checkpoint-storm"
+	DurableSnapshot         = "durable-snapshot"
+	HotspotFanIn            = "hotspot-fanin"
+	WatchSubtree            = "watch-subtree"
+	NegativeLookup          = "negative-lookup"
+	MultiWorkspaceAutoscale = "multi-workspace-autoscale"
 
 	DriverNativeFSMetadata = "native-fsmeta"
 )

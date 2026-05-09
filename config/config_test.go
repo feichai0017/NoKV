@@ -161,6 +161,26 @@ func TestValidatePeerUnknownStore(t *testing.T) {
 	}
 }
 
+func TestValidateFSMetaRegionBootstrap(t *testing.T) {
+	cfg := &File{
+		Stores: []Store{{StoreID: 1, Addr: "x"}},
+		FSMetaRegionBootstrap: &FSMetaRegionBootstrap{
+			Mounts:       []string{"default"},
+			BucketCount:  16,
+			RegionIDBase: 1000,
+			PeerIDBase:   10_000,
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate fsmeta bootstrap: %v", err)
+	}
+
+	cfg.Regions = []Region{{ID: 1}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected explicit region conflict")
+	}
+}
+
 func TestValidateStoreWorkDirTemplateRequiresID(t *testing.T) {
 	cfg := &File{
 		StoreWorkDirTemplate: "/var/lib/nokv-store",

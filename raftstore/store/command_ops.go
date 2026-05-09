@@ -300,6 +300,9 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 	if out != nil {
 		trimScanResponse(meta, req, out)
 	}
+	if s.regionStats != nil {
+		s.regionStats.recordRead(req.Header.GetRegionId(), uint64(len(req.GetRequests())))
+	}
 	return out, nil
 }
 

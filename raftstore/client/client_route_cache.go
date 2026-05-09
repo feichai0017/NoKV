@@ -30,6 +30,16 @@ type regionRange struct {
 	endKey   []byte
 }
 
+// routeDescriptorFloor is range-scoped on purpose. RootEpoch is a descriptor
+// revision for one region range, not a cluster-wide clock; a high revision in a
+// hot bucket must not force unrelated bucket lookups to reject valid older
+// descriptors.
+type routeDescriptorFloor struct {
+	startKey    []byte
+	endKey      []byte
+	minRevision uint64
+}
+
 func (c *Client) regionSnapshot(regionID uint64) (regionSnapshot, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -100,7 +110,7 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 	ctx, cancel := contextWithTimeout(ctx, c.routeLookupTimeout)
 	defer cancel()
 	req := &coordpb.GetRegionByKeyRequest{Key: append([]byte(nil), key...)}
-	requiredDescriptorRevision := c.requiredRouteDescriptorRevision()
+	requiredDescriptorRevision := c.requiredRouteDescriptorRevisionForKey(key)
 	if requiredDescriptorRevision != 0 {
 		req.RequiredDescriptorRevision = requiredDescriptorRevision
 	}
@@ -139,7 +149,6 @@ func (c *Client) regionForKeyFromResolver(ctx context.Context, key []byte) (regi
 		leader = old.leader
 	}
 	c.mu.Lock()
-	c.advanceRouteDescriptorRevisionLocked(desc.RootEpoch)
 	c.upsertRegionLocked(desc, leader)
 	c.mu.Unlock()
 	if !containsKey(desc, key) {
@@ -188,6 +197,9 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 	}
 	if err.GetKeyNotInRegion() != nil || err.GetRegionNotFound() != nil {
 		c.mu.Lock()
+		if region, ok := c.regions[regionID]; ok && region != nil && region.desc.RootEpoch != 0 {
+			c.requireRouteDescriptorRevisionLocked(region.desc, nextDescriptorRevision(region.desc.RootEpoch))
+		}
 		c.removeRegionLocked(regionID)
 		c.mu.Unlock()
 		return nil
@@ -213,10 +225,16 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 	}
 }
 
-func (c *Client) requiredRouteDescriptorRevision() uint64 {
+func (c *Client) requiredRouteDescriptorRevisionForKey(key []byte) uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.requiredDescriptorRevision
+	var required uint64
+	for _, floor := range c.routeDescriptorFloors {
+		if routeDescriptorFloorContainsKey(floor, key) && floor.minRevision > required {
+			required = floor.minRevision
+		}
+	}
+	return required
 }
 
 func (c *Client) observeEpochMismatchLocked(regionID uint64, mismatch *errorpb.EpochNotMatch) {
@@ -224,22 +242,30 @@ func (c *Client) observeEpochMismatchLocked(regionID uint64, mismatch *errorpb.E
 		return
 	}
 	if region, ok := c.regions[regionID]; ok && region != nil && region.desc.RootEpoch != 0 {
-		c.advanceRouteDescriptorRevisionLocked(nextDescriptorRevision(region.desc.RootEpoch))
-	}
-	for _, meta := range mismatch.GetRegions() {
-		if meta == nil {
-			continue
-		}
-		desc := metawire.DescriptorFromProto(meta)
-		c.advanceRouteDescriptorRevisionLocked(desc.RootEpoch)
+		c.requireRouteDescriptorRevisionLocked(region.desc, nextDescriptorRevision(region.desc.RootEpoch))
 	}
 }
 
-func (c *Client) advanceRouteDescriptorRevisionLocked(revision uint64) {
-	if c == nil || revision == 0 || revision <= c.requiredDescriptorRevision {
+func (c *Client) requireRouteDescriptorRevisionLocked(desc topology.Descriptor, revision uint64) {
+	if c == nil || revision == 0 || desc.RegionID == 0 {
 		return
 	}
-	c.requiredDescriptorRevision = revision
+	floor := routeDescriptorFloor{
+		startKey:    append([]byte(nil), desc.StartKey...),
+		endKey:      append([]byte(nil), desc.EndKey...),
+		minRevision: revision,
+	}
+	for i := range c.routeDescriptorFloors {
+		existing := &c.routeDescriptorFloors[i]
+		if bytesCompare(existing.startKey, floor.startKey) == 0 &&
+			bytesCompare(existing.endKey, floor.endKey) == 0 {
+			if floor.minRevision > existing.minRevision {
+				existing.minRevision = floor.minRevision
+			}
+			return
+		}
+	}
+	c.routeDescriptorFloors = append(c.routeDescriptorFloors, floor)
 }
 
 func nextDescriptorRevision(revision uint64) uint64 {
@@ -391,6 +417,16 @@ func containsKey(desc topology.Descriptor, key []byte) bool {
 		return false
 	}
 	if len(end) > 0 && bytesCompare(key, end) >= 0 {
+		return false
+	}
+	return true
+}
+
+func routeDescriptorFloorContainsKey(floor routeDescriptorFloor, key []byte) bool {
+	if len(floor.startKey) > 0 && bytesCompare(key, floor.startKey) < 0 {
+		return false
+	}
+	if len(floor.endKey) > 0 && bytesCompare(key, floor.endKey) >= 0 {
 		return false
 	}
 	return true

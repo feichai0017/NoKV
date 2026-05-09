@@ -37,7 +37,7 @@ type Config struct {
 	WriteBatchMaxCount int
 	WriteBatchMaxSize  int64
 	WriteBatchWait     time.Duration
-	UserKeyShardRouter func(userKey []byte, shardCount int) int
+	UserKeyShardKey    func(userKey []byte) []byte
 }
 
 // LSM is the narrow LSM surface the pipeline writes through. Implemented
@@ -301,19 +301,19 @@ func (p *Pipeline) dispatcher() {
 			closeAll()
 			return
 		}
-		shardID := shardForBatch(batch, n, &rrFallback, p.cfg.UserKeyShardRouter)
+		shardID := shardForBatch(batch, n, &rrFallback, p.cfg.UserKeyShardKey)
 		batch.ShardID = shardID
 		p.dispatch[shardID] <- batch
 	}
 }
 
 // shardForBatch picks the destination shard for a commit batch using the
-// configured user-key router. The default router hashes the whole user key;
-// fsmeta runtimes can inject a semantic-affinity router so keys that must be
-// atomically mutated together reach one local apply group.
+// configured semantic shard key. The default router hashes the whole user key;
+// runtimes can expose a stable locality key so related records reach one local
+// apply group without the commit package knowing their higher-level schema.
 //
 // Empty batches (no key to hash) round-robin via *rr to keep load even.
-func shardForBatch(batch *CommitBatch, n int, rr *int, router func([]byte, int) int) int {
+func shardForBatch(batch *CommitBatch, n int, rr *int, shardKey func([]byte) []byte) int {
 	if n <= 1 {
 		return 0
 	}
@@ -330,7 +330,7 @@ func shardForBatch(batch *CommitBatch, n int, rr *int, router func([]byte, int) 
 				if !ok || len(userKey) == 0 {
 					continue
 				}
-				return routeUserKeyToShard(userKey, n, router)
+				return routeUserKeyToShard(userKey, n, shardKey)
 			}
 		}
 	}
@@ -342,11 +342,10 @@ func shardForBatch(batch *CommitBatch, n int, rr *int, router func([]byte, int) 
 	return id
 }
 
-func routeUserKeyToShard(userKey []byte, shardCount int, router func([]byte, int) int) int {
-	if router != nil {
-		shard := router(userKey, shardCount)
-		if shard >= 0 && shard < utils.NormalizeShardCount(shardCount) {
-			return shard
+func routeUserKeyToShard(userKey []byte, shardCount int, shardKey func([]byte) []byte) int {
+	if shardKey != nil {
+		if key := shardKey(userKey); len(key) > 0 {
+			return utils.ShardForUserKey(key, shardCount)
 		}
 	}
 	return utils.ShardForUserKey(userKey, shardCount)

@@ -260,10 +260,10 @@ The RPC request/response shape is intentionally close to TinyKV/TiKV so the MVCC
 - **Timestamps**: clients must supply `startVersion`/`commitVersion`. For distributed demos, use Coordinator (`nokv coordinator`) to obtain globally increasing values before calling `TwoPhaseCommit`.
 - **Bootstrap helpers**: `scripts/dev/cluster.sh --config raft_config.example.json` builds the binaries, seeds local peer catalogs via `nokv-config catalog`, launches the 3 meta-root peers + coordinator, and starts the stores declared in the config.
 
-**Example (two regions)**
-1. Regions `[a,m)` and `[m,+∞)`, each led by a different store.
-2. `Mutate(ctx, primary="alfa", mutations, startTs, commitTs, ttl)` prewrites and commits across the relevant regions.
-3. `Get/Scan` retries automatically if the leader changes.
+**Example (fsmeta bucket regions)**
+1. `raft_config.example.json` declares `fsmeta_region_bootstrap` for the default mounts.
+2. `nokv-config regions` expands that declaration into ordinary byte ranges, with one range per fsmeta affinity bucket plus gap ranges.
+3. `Mutate(ctx, primary, mutations, startTs, commitTs, ttl)` still sees only region descriptors and retries on stale epochs or leader changes.
 4. See `raftstore/server/node_test.go` for a full end-to-end example using real `server.Node` instances.
 
 ---

@@ -26,6 +26,7 @@ type fakeRunner struct {
 	batchVersions       []uint64
 	scanErrs            []error
 	batchErrs           []error
+	timestampErrs       []error
 	mutateErr           error
 	mutateErrs          []error
 	actualCommitVersion uint64
@@ -203,6 +204,13 @@ func newFakeRunner() *fakeRunner {
 func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, error) {
 	if count == 0 {
 		return 0, errors.New("zero timestamp reservation")
+	}
+	if len(r.timestampErrs) > 0 {
+		err := r.timestampErrs[0]
+		r.timestampErrs = r.timestampErrs[1:]
+		if err != nil {
+			return 0, err
+		}
 	}
 	first := r.nextTS
 	r.nextTS += count
@@ -464,6 +472,39 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.Len(t, runner.mutations[0], 2)
 	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
+	runner := newFakeRunner()
+	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
+	executor, err := New(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, runner.timestampErrs)
+	require.Len(t, runner.mutations, 1)
+	requireStatUint(t, executor.Stats(), "txn_retries_total", 1)
+}
+
+func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
+	runner := newFakeRunner()
+	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
+	executor, err := New(runner)
+	require.NoError(t, err)
+
+	version, err := executor.GetReadVersion(context.Background(), fsmeta.ReadVersionRequest{Mount: "vol"})
+
+	require.NoError(t, err)
+	require.NotZero(t, version)
+	require.Empty(t, runner.timestampErrs)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
 }
 
 func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
@@ -1334,6 +1375,30 @@ func TestExecutorRetriesLostTxnLock(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
 }
 
+func TestExecutorRetriesRouteUnavailable(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErrs = []error{
+		nokverrors.New(nokverrors.KindRouteUnavailable, "route lookup refreshing"),
+		nil,
+	}
+	allocator := &fakeInodeAllocator{ids: []fsmeta.InodeID{22}}
+	executor, err := New(runner, WithInodeAllocator(allocator))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
+	require.Equal(t, uint64(5), runner.nextTS)
+	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+}
+
 func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
@@ -1408,8 +1473,8 @@ func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
 	budget := txnRetryBudget(lockErr, defaultLockTTL)
 
 	require.Equal(t, 5*time.Second+txnContentionRetryMaxBackoff, budget)
-	require.True(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
-	require.False(t, canRetryTxnContention(maxTxnContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
+	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
+	require.False(t, canRetryTxnAttempt(maxTxnContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
 }
 
 func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
@@ -1422,8 +1487,8 @@ func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T
 	}}}
 
 	require.Zero(t, txnRetryBudget(writeConflictErr, defaultLockTTL))
-	require.True(t, canRetryTxnContention(maxTxnContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
-	require.False(t, canRetryTxnContention(maxTxnContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
+	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
+	require.False(t, canRetryTxnAttempt(maxTxnContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
 }
 
 func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
@@ -1438,7 +1503,7 @@ func TestTxnRetryBudgetCoversPercolatorRetryableStartTSLoss(t *testing.T) {
 	}}}
 
 	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))
-	require.True(t, canRetryTxnContention(maxTxnContentionRetries+1, time.Now(), err, 50))
+	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+1, time.Now(), err, 50))
 }
 
 func TestExecutorRetriesWriteConflict(t *testing.T) {

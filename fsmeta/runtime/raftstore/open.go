@@ -58,10 +58,10 @@ type Options struct {
 	// invalidated by fsmeta mutations.
 	DirPageCacheDir string
 
-	// InodeAffinityShards must match the store-side LSM shard count for Create
-	// to choose IDs that can hit the region-local 1PC apply group. Mismatch is
-	// safe because the percolator fallback gate remains authoritative.
-	InodeAffinityShards int
+	// AffinityBuckets is the fsmeta key-placement bucket count used when
+	// choosing Create inode IDs. The local engine receives only generic key
+	// shape hints; this value belongs to fsmeta placement policy.
+	AffinityBuckets int
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -135,11 +135,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = coord.Close()
 		return nil, fmt.Errorf("init runner: %w", err)
 	}
-	shards := opts.InodeAffinityShards
-	if shards == 0 {
-		shards = defaultInodeAffinityShards
+	buckets := opts.AffinityBuckets
+	if buckets == 0 {
+		buckets = defaultInodeAffinityBuckets
 	}
-	inodes, err := NewShardAffineInodeAllocator(coord, shards)
+	inodes, err := NewShardAffineInodeAllocator(coord, buckets)
 	if err != nil {
 		_ = kv.Close()
 		_ = coord.Close()

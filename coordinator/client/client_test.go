@@ -596,6 +596,79 @@ func TestGRPCClientRetriesTSOAfterFullGrantMissRound(t *testing.T) {
 	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyTSO)[0].addr)
 }
 
+func TestGRPCClientRetriesDutyRoundWhenHolderTemporarilyUnavailable(t *testing.T) {
+	grantErr := grantNotHeldErrorForTest()
+	servers := map[string]*scriptedCoordinatorServer{
+		"holder": {
+			tsoErrors: []error{status.Error(codes.Unavailable, "holder is renewing grant")},
+			tsoResponses: []*coordpb.TsoResponse{{
+				Timestamp:        400,
+				Count:            1,
+				Era:              4,
+				ConsumedFrontier: 400,
+			}},
+		},
+		"standby": {
+			tsoErrors: []error{grantErr},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"holder", "standby"}, servers)
+
+	resp, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(400), resp.GetTimestamp())
+	require.Equal(t, 2, servers["holder"].tsoCalls)
+	require.Equal(t, 1, servers["standby"].tsoCalls)
+	require.Equal(t, "passthrough:///holder", cli.orderedEndpointsForDuty(rootproto.DutyTSO)[0].addr)
+}
+
+func TestGRPCClientRetriesStaleWitnessAcrossDutyRounds(t *testing.T) {
+	servers := map[string]*scriptedCoordinatorServer{
+		"holder": {
+			tsoResponses: []*coordpb.TsoResponse{
+				{
+					Timestamp:               500,
+					Count:                   1,
+					Era:                     5,
+					ConsumedFrontier:        500,
+					ObservedRetiredEraFloor: 5,
+				},
+				{
+					Timestamp:        501,
+					Count:            1,
+					Era:              6,
+					ConsumedFrontier: 501,
+				},
+			},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"holder"}, servers)
+
+	resp, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(501), resp.GetTimestamp())
+	require.Equal(t, 2, servers["holder"].tsoCalls)
+}
+
+func TestGRPCClientAuthorityMissRetryHonorsContext(t *testing.T) {
+	grantErr := grantNotHeldErrorForTest()
+	servers := map[string]*scriptedCoordinatorServer{
+		"standby": {
+			tsoErrors: []error{
+				grantErr, grantErr, grantErr, grantErr,
+				grantErr, grantErr, grantErr, grantErr,
+			},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"standby"}, servers)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	_, err := cli.Tso(ctx, &coordpb.TsoRequest{Count: 1})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, servers["standby"].tsoCalls)
+}
+
 func TestGRPCClientRejectsInvalidAllocWitness(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"alloc-invalid"}, map[string]*scriptedCoordinatorServer{
 		"alloc-invalid": {
@@ -782,6 +855,64 @@ func TestGRPCClientAcceptsValidMetadataWitness(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+}
+
+func TestGRPCClientAcceptsLowerDescriptorRevisionFromDifferentRegion(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"metadata-valid"}, map[string]*scriptedCoordinatorServer{
+		"metadata-valid": {
+			getResponses: []*coordpb.GetRegionByKeyResponse{
+				{
+					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 21, RootEpoch: 100},
+					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 100, Revision: 100},
+					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 101, Revision: 101},
+					ServedFreshness:            coordpb.Freshness_FRESHNESS_BOUNDED,
+					RootLag:                    1,
+					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
+					DescriptorRevision:         100,
+					RequiredDescriptorRevision: 1,
+					Era:                        7,
+					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
+					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
+				},
+				{
+					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 22, RootEpoch: 12},
+					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 101, Revision: 101},
+					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 102, Revision: 102},
+					ServedFreshness:            coordpb.Freshness_FRESHNESS_BOUNDED,
+					RootLag:                    1,
+					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
+					DescriptorRevision:         12,
+					RequiredDescriptorRevision: 1,
+					Era:                        7,
+					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
+					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
+				},
+			},
+		},
+	})
+
+	resp, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:                        []byte("hot-bucket"),
+		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
+		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 100, Revision: 100},
+		RequiredDescriptorRevision: 1,
+		MaxRootLag:                 proto.Uint64(2),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(21), resp.GetRegionDescriptor().GetRegionId())
+
+	// Region descriptor revisions are per-region root epochs. A later lookup
+	// for a colder bucket can return a lower descriptor revision while still
+	// carrying a monotone current root token and valid region-lookup evidence.
+	resp, err = cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:                        []byte("cold-bucket"),
+		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
+		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 101, Revision: 101},
+		RequiredDescriptorRevision: 1,
+		MaxRootLag:                 proto.Uint64(2),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(22), resp.GetRegionDescriptor().GetRegionId())
 }
 
 func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
@@ -1192,21 +1323,15 @@ func TestValidateAuthorityEvidenceRejectsMissingServedTime(t *testing.T) {
 }
 
 func TestGRPCClientRejectsReplyAtObservedSealFloor(t *testing.T) {
-	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
-		"mixed": {
-			allocResponses: []*coordpb.AllocIDResponse{
-				{
-					FirstId:                 100,
-					Count:                   1,
-					Era:                     2,
-					ConsumedFrontier:        100,
-					ObservedRetiredEraFloor: 2,
-				},
-			},
-		},
+	cli := &GRPCClient{verifierStore: NewMemoryAuthorityVerifierStore(), verifierClusterID: "test"}
+	err := cli.validateAllocIDResponse(&coordpb.AllocIDRequest{Count: 1}, &coordpb.AllocIDResponse{
+		FirstId:                 100,
+		Count:                   1,
+		Era:                     2,
+		ConsumedFrontier:        100,
+		ObservedRetiredEraFloor: 2,
+		AuthorityEvidence:       defaultAuthorityEvidence(rootproto.DutyAllocID, rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 100}, 2, 2),
 	})
-
-	_, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
 	require.Error(t, err)
 	require.True(t, IsStaleWitnessEra(err))
 	require.Contains(t, err.Error(), "retired_floor=2")

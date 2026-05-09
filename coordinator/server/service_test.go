@@ -96,6 +96,23 @@ func TestTranslateGrantContextErrors(t *testing.T) {
 	}
 }
 
+func TestRegionLookupGrantRevisionIgnoresRootOnlyEvents(t *testing.T) {
+	cluster := catalog.NewCluster()
+	desc := testDescriptor(11, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	desc.RootEpoch = 7
+	require.NoError(t, cluster.PublishRootEvent(rootevent.RegionBootstrapped(desc)))
+	storage := &fakeStorage{snapshot: rootview.Snapshot{
+		RootToken: rootstorage.TailToken{
+			Cursor:   rootstate.Cursor{Term: 1, Index: 100},
+			Revision: 100,
+		},
+		Descriptors: map[uint64]topology.Descriptor{desc.RegionID: desc},
+	}}
+	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+
+	require.Equal(t, uint64(7), svc.currentRegionLookupRevision())
+}
+
 func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 	return rootstate.EunomiaState{
 		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),

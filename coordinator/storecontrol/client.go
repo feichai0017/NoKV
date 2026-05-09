@@ -116,6 +116,7 @@ func (s *CoordinatorClient) StoreHeartbeat(ctx context.Context, stats StoreStats
 		Available:         stats.Available,
 		DroppedOperations: stats.DroppedOperations,
 		LeaderRegionIds:   stats.LeaderRegionIDs,
+		RegionStats:       regionStatsToPB(stats.RegionStats),
 	})
 	if err != nil {
 		s.recordError("StoreHeartbeat", err)
@@ -166,9 +167,52 @@ func fromPBOperation(op *coordpb.SchedulerOperation) (Operation, bool) {
 			Source: op.GetSourcePeerId(),
 			Target: op.GetTargetPeerId(),
 		}, true
+	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION:
+		child := metawire.DescriptorFromProto(op.GetSplitChild())
+		if op.GetRegionId() == 0 || len(op.GetSplitKey()) == 0 || child.RegionID == 0 {
+			return Operation{}, false
+		}
+		return Operation{
+			Type:       OperationSplitRegion,
+			Region:     op.GetRegionId(),
+			SplitKey:   append([]byte(nil), op.GetSplitKey()...),
+			SplitChild: child,
+		}, true
+	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION:
+		if op.GetRegionId() == 0 || op.GetSourceRegionId() == 0 {
+			return Operation{}, false
+		}
+		return Operation{
+			Type:         OperationMergeRegion,
+			Region:       op.GetRegionId(),
+			SourceRegion: op.GetSourceRegionId(),
+		}, true
 	default:
 		return Operation{}, false
 	}
+}
+
+func regionStatsToPB(in []RegionStats) []*coordpb.RegionRuntimeStats {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*coordpb.RegionRuntimeStats, 0, len(in))
+	for _, stat := range in {
+		if stat.RegionID == 0 {
+			continue
+		}
+		out = append(out, &coordpb.RegionRuntimeStats{
+			RegionId:          stat.RegionID,
+			ReadQps:           stat.ReadQPS,
+			WriteQps:          stat.WriteQPS,
+			WriteBytesPerSec:  stat.WriteBytesPerSecond,
+			ApproxRegionBytes: stat.ApproxRegionBytes,
+			AtomicMutateQps:   stat.AtomicMutateQPS,
+			LeaderStoreId:     stat.LeaderStoreID,
+			PendingAdmin:      stat.PendingAdmin,
+		})
+	}
+	return out
 }
 
 // Close closes the coordinator client if present.

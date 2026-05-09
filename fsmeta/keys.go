@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	localdb "github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -14,6 +15,7 @@ import (
 //	  version  = 0x01
 //	  mount_len uvarint
 //	  mount bytes
+//	  affinity_bucket be16
 //	  kind byte
 //
 //	kind bodies:
@@ -28,6 +30,14 @@ import (
 var keyMagic = []byte{'f', 's', 'm', 0}
 
 const keySchemaVersion byte = 1
+
+const (
+	DefaultAffinityBucketCount = 16
+	RootAffinityBucket         = AffinityBucket(0)
+	encodedBucketBytes         = 2
+)
+
+type AffinityBucket uint16
 
 // KeyKind classifies one fsmeta key family.
 type KeyKind byte
@@ -62,7 +72,7 @@ func (k KeyKind) String() string {
 
 // EncodeMountKey returns the mount-level metadata record key.
 func EncodeMountKey(mount MountID) ([]byte, error) {
-	return encodeKey(mount, KeyKindMount, nil)
+	return encodeKey(mount, RootAffinityBucket, KeyKindMount, nil)
 }
 
 // EncodeMountPrefix returns the common key prefix for one mount. All fsmeta
@@ -81,6 +91,25 @@ func EncodeMountKeyRange(mount MountID) (start, end []byte, err error) {
 	return start, prefixUpperBound(start), nil
 }
 
+// EncodeBucketPrefix returns the key prefix for one mount-local affinity
+// bucket. Coordinator placement can split these byte ranges without learning
+// fsmeta's record families.
+func EncodeBucketPrefix(mount MountID, bucket AffinityBucket) ([]byte, error) {
+	prefix, err := encodeMountPrefix(mount)
+	if err != nil {
+		return nil, err
+	}
+	return appendBucket(prefix, bucket), nil
+}
+
+func EncodeBucketRange(mount MountID, bucket AffinityBucket) (start, end []byte, err error) {
+	start, err = EncodeBucketPrefix(mount, bucket)
+	if err != nil {
+		return nil, nil, err
+	}
+	return start, prefixUpperBound(start), nil
+}
+
 // EncodeInodeKey returns the inode attribute record key.
 func EncodeInodeKey(mount MountID, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
@@ -88,7 +117,7 @@ func EncodeInodeKey(mount MountID, inode InodeID) ([]byte, error) {
 	}
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(inode))
-	return encodeKey(mount, KeyKindInode, body[:])
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindInode, body[:])
 }
 
 // EncodeDentryPrefix returns the scan prefix for entries directly under parent.
@@ -98,7 +127,7 @@ func EncodeDentryPrefix(mount MountID, parent InodeID) ([]byte, error) {
 	}
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(parent))
-	return encodeKey(mount, KeyKindDentry, body[:])
+	return encodeKey(mount, BucketForInodeID(parent), KeyKindDentry, body[:])
 }
 
 // EncodeDentryKey returns the dentry record key for parent/name.
@@ -121,7 +150,7 @@ func EncodeChunkKey(mount MountID, inode InodeID, chunk ChunkIndex) ([]byte, err
 	var body [16]byte
 	binary.BigEndian.PutUint64(body[:8], uint64(inode))
 	binary.BigEndian.PutUint64(body[8:], uint64(chunk))
-	return encodeKey(mount, KeyKindChunk, body[:])
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindChunk, body[:])
 }
 
 // EncodeSessionKey returns the client/session state key.
@@ -136,7 +165,15 @@ func EncodeSessionKey(mount MountID, inode InodeID, session SessionID) ([]byte, 
 	binary.BigEndian.PutUint64(body[:8], uint64(inode))
 	body[8] = 0x01
 	body = append(body, string(session)...)
-	return encodeKey(mount, KeyKindSession, body)
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindSession, body)
+}
+
+// EncodeSessionBucketPrefix returns the prefix for all session records in one
+// mount-local affinity bucket. Maintenance scanners use this bucket-local
+// prefix instead of the mount prefix so routed scans stay inside real fsmeta
+// data ranges.
+func EncodeSessionBucketPrefix(mount MountID, bucket AffinityBucket) ([]byte, error) {
+	return encodeKey(mount, bucket, KeyKindSession, nil)
 }
 
 // EncodeInodeSessionKey returns the exclusive writer-owner key for one inode.
@@ -147,13 +184,7 @@ func EncodeInodeSessionKey(mount MountID, inode InodeID) ([]byte, error) {
 	var body [9]byte
 	binary.BigEndian.PutUint64(body[:8], uint64(inode))
 	body[8] = 0x00
-	return encodeKey(mount, KeyKindSession, body[:])
-}
-
-// EncodeSessionPrefix returns the scan prefix covering both session IDs and
-// inode owner records for one mount.
-func EncodeSessionPrefix(mount MountID) ([]byte, error) {
-	return encodeKey(mount, KeyKindSession, nil)
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindSession, body[:])
 }
 
 // EncodeUsageKey returns a quota usage/counter key. Scope 0 is mount-wide;
@@ -161,7 +192,7 @@ func EncodeSessionPrefix(mount MountID) ([]byte, error) {
 func EncodeUsageKey(mount MountID, scope InodeID) ([]byte, error) {
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(scope))
-	return encodeKey(mount, KeyKindUsage, body[:])
+	return encodeKey(mount, BucketForInodeID(scope), KeyKindUsage, body[:])
 }
 
 // KeyKindOf returns the kind byte encoded in a fsmeta key.
@@ -191,11 +222,50 @@ func MountIDOfKey(key []byte) (MountID, bool) {
 	return mount, true
 }
 
+func BucketOfKey(key []byte) (AffinityBucket, bool) {
+	_, pos, err := decodeMountPrefix(key)
+	if err != nil || len(key)-pos < encodedBucketBytes+1 {
+		return 0, false
+	}
+	return AffinityBucket(binary.BigEndian.Uint16(key[pos : pos+encodedBucketBytes])), true
+}
+
 // StringMountResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped
 // retention policy.
 func StringMountResolver(key []byte) (string, bool) {
 	mount, ok := MountIDOfKey(key)
 	return string(mount), ok
+}
+
+// UserKeyShape exposes fsmeta key shape to the local engine without making the
+// engine import fsmeta. The shape keeps all keys in one mount-local affinity
+// bucket on the same local shard and gives prefix bloom filters record-family
+// prefixes that match the current key layout.
+func UserKeyShape(key []byte) localdb.UserKeyShape {
+	_, bucketPos, err := decodeMountPrefix(key)
+	if err != nil || len(key)-bucketPos < encodedBucketBytes+1 {
+		return localdb.UserKeyShape{}
+	}
+	kindPos := bucketPos + encodedBucketBytes
+	kind := KeyKind(key[kindPos])
+	bodyPos := kindPos + 1
+	shape := localdb.UserKeyShape{
+		LocalityPrefix: key[:kindPos],
+		ShardKey:       key[:kindPos],
+		Family:         byte(kind),
+	}
+	switch kind {
+	case KeyKindMount:
+		shape.BloomPrefix = key[:bodyPos]
+	case KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage:
+		if len(key) < bodyPos+8 {
+			return localdb.UserKeyShape{}
+		}
+		shape.BloomPrefix = key[:bodyPos+8]
+	default:
+		return localdb.UserKeyShape{}
+	}
+	return shape
 }
 
 // ShardForUserKey is the fsmeta physical placement policy used by local DB
@@ -206,64 +276,39 @@ func ShardForUserKey(key []byte, shardCount int) int {
 	if shardCount <= 1 {
 		return 0
 	}
-	_, pos, err := decodeHeaderParts(key)
-	if err != nil || pos >= len(key) {
-		return utils.ShardForUserKey(key, shardCount)
+	shape := UserKeyShape(key)
+	if len(shape.ShardKey) > 0 {
+		return utils.ShardForUserKey(shape.ShardKey, shardCount)
 	}
-	kind := KeyKind(key[pos])
-	body := key[pos+1:]
-	switch kind {
-	case KeyKindMount:
-		mount, _, err := decodeHeaderParts(key)
-		if err != nil {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		return utils.ShardForUserKey([]byte(mount), shardCount)
-	case KeyKindInode:
-		if len(body) < 8 {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
-	case KeyKindDentry:
-		if len(body) < 8 {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		parent := InodeID(binary.BigEndian.Uint64(body[:8]))
-		if parent == RootInode && len(body) > 8 {
-			return utils.ShardForUserKey(body[8:], shardCount)
-		}
-		return shardForInodeAffinity(parent, shardCount)
-	case KeyKindChunk:
-		if len(body) < 8 {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
-	case KeyKindSession:
-		if len(body) < 9 {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
-	case KeyKindUsage:
-		if len(body) < 8 {
-			return utils.ShardForUserKey(key, shardCount)
-		}
-		return shardForInodeAffinity(InodeID(binary.BigEndian.Uint64(body[:8])), shardCount)
-	default:
-		return utils.ShardForUserKey(key, shardCount)
+	if len(shape.LocalityPrefix) > 0 {
+		return utils.ShardForUserKey(shape.LocalityPrefix, shardCount)
 	}
+	return utils.ShardForUserKey(key, shardCount)
 }
 
-func shardForInodeAffinity(inode InodeID, shardCount int) int {
+func BucketForInodeID(inode InodeID) AffinityBucket {
+	if inode == RootInode {
+		return RootAffinityBucket
+	}
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(inode))
-	return utils.ShardForUserKey(body[:], shardCount)
+	return AffinityBucket(utils.ShardForUserKey(body[:], DefaultAffinityBucketCount))
 }
 
-func encodeKey(mount MountID, kind KeyKind, body []byte) ([]byte, error) {
+func ChooseWorkspaceBucket(mount MountID, name string) AffinityBucket {
+	key := make([]byte, 0, len(mount)+1+len(name))
+	key = append(key, string(mount)...)
+	key = append(key, 0)
+	key = append(key, name...)
+	return AffinityBucket(utils.ShardForUserKey(key, DefaultAffinityBucketCount))
+}
+
+func encodeKey(mount MountID, bucket AffinityBucket, kind KeyKind, body []byte) ([]byte, error) {
 	out, err := encodeMountPrefix(mount)
 	if err != nil {
 		return nil, err
 	}
+	out = appendBucket(out, bucket)
 	out = append(out, byte(kind))
 	out = append(out, body...)
 	return out, nil
@@ -281,6 +326,12 @@ func encodeMountPrefix(mount MountID) ([]byte, error) {
 	return out, nil
 }
 
+func appendBucket(out []byte, bucket AffinityBucket) []byte {
+	var buf [encodedBucketBytes]byte
+	binary.BigEndian.PutUint16(buf[:], uint16(bucket))
+	return append(out, buf[:]...)
+}
+
 func prefixUpperBound(prefix []byte) []byte {
 	out := append([]byte(nil), prefix...)
 	for i := len(out) - 1; i >= 0; i-- {
@@ -293,6 +344,17 @@ func prefixUpperBound(prefix []byte) []byte {
 }
 
 func decodeHeaderParts(key []byte) (MountID, int, error) {
+	mount, pos, err := decodeMountPrefix(key)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(key)-pos < encodedBucketBytes+1 {
+		return "", 0, ErrInvalidKey
+	}
+	return mount, pos + encodedBucketBytes, nil
+}
+
+func decodeMountPrefix(key []byte) (MountID, int, error) {
 	if len(key) < len(keyMagic)+2 {
 		return "", 0, ErrInvalidKey
 	}

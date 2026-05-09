@@ -65,6 +65,9 @@ message PendingSchedulerOperation {
   uint64 source_peer_id = 3;
   uint64 target_peer_id = 4;
   uint32 attempts = 5;
+  bytes split_key = 6;
+  RegionDescriptor split_child = 7;
+  uint64 source_region_id = 8;
 }
 
 message PendingSchedulerOperationCatalog {

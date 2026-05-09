@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 
@@ -255,7 +256,7 @@ type fakeWatchClient struct {
 func newFakeWatchClient() *fakeWatchClient {
 	return &fakeWatchClient{
 		fakeClient: newFakeClient(),
-		stream:     &fakeWatchStream{events: make(chan fsmeta.WatchEvent, 16)},
+		stream:     newFakeWatchStream(16),
 	}
 }
 
@@ -271,7 +272,12 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) 
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
+	c.stream.mu.Lock()
+	defer c.stream.mu.Unlock()
 	if len(c.stream.prefix) > 0 && !bytes.HasPrefix(key, c.stream.prefix) {
+		return result, nil
+	}
+	if c.stream.closed {
 		return result, nil
 	}
 	c.stream.events <- fsmeta.WatchEvent{
@@ -284,6 +290,8 @@ func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) 
 }
 
 func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
+	c.stream.mu.Lock()
+	defer c.stream.mu.Unlock()
 	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
 	return c.stream, nil
 }
@@ -330,12 +338,22 @@ func (c *fakeSnapshotClient) RetireSnapshotSubtree(_ context.Context, token fsme
 }
 
 type fakeWatchStream struct {
+	mu     sync.Mutex
 	prefix []byte
 	events chan fsmeta.WatchEvent
+	closed bool
+}
+
+func newFakeWatchStream(size int) *fakeWatchStream {
+	return &fakeWatchStream{events: make(chan fsmeta.WatchEvent, size)}
 }
 
 func (s *fakeWatchStream) Recv() (fsmeta.WatchEvent, error) {
-	return <-s.events, nil
+	evt, ok := <-s.events
+	if !ok {
+		return fsmeta.WatchEvent{}, io.EOF
+	}
+	return evt, nil
 }
 
 func (s *fakeWatchStream) ReadyCursor() fsmeta.WatchCursor {
@@ -347,5 +365,11 @@ func (s *fakeWatchStream) Ack(fsmeta.WatchCursor) error {
 }
 
 func (s *fakeWatchStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		close(s.events)
+		s.closed = true
+	}
 	return nil
 }

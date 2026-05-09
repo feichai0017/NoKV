@@ -117,9 +117,9 @@ them is a common deployment mistake, so be explicit:
 | Layer | Keys | Lifecycle | Source of truth |
 |---|---|---|---|
 | **Address directory** | `meta_root.peers`, `coordinator`, `stores`, `store_work_dir_template`, `max_retries` | Read on **every** CLI invocation. Keep in sync with deployed containers/hosts. | **This file is the source of truth.** Nothing else knows where to dial. |
-| **Bootstrap seed** | `regions` | Read **only** on first startup by `scripts/ops/bootstrap.sh`. Once a store has `CURRENT`, bootstrap skips it. | After first bootstrap, **meta-root** owns the runtime region topology. Inspect with `nokv-config regions`. |
+| **Bootstrap seed** | `regions` or `fsmeta_region_bootstrap` | Read **only** on first startup by `scripts/ops/bootstrap.sh`. Once a store has `CURRENT`, bootstrap skips it. | After first bootstrap, **meta-root** owns the runtime region topology. Inspect with `nokv-config regions`. |
 
-Consequence: editing `regions` after bootstrap is a no-op for running
+Consequence: editing bootstrap ranges after bootstrap is a no-op for running
 clusters. Editing addresses is effective on the next CLI invocation
 (restart / docker compose up).
 
@@ -164,12 +164,13 @@ a source of defaults:
       "docker_listen_addr": "0.0.0.0:20160",
       "docker_addr": "nokv-store-1:20160" }
   ],
-  "regions": [
-    { "id": 1, "start_key": "", "end_key": "m",
-      "epoch": { "version": 1, "conf_version": 1 },
-      "peers": [{ "store_id": 1, "peer_id": 101 }],
-      "leader_store_id": 1 }
-  ]
+  "fsmeta_region_bootstrap": {
+    "mounts": ["default", "fsmeta-bench"],
+    "bucket_count": 16,
+    "region_id_base": 1000,
+    "peer_id_base": 100000,
+    "leader_store_ids": [1, 2, 3]
+  }
 }
 ```
 
@@ -193,6 +194,10 @@ a source of defaults:
   Empty or `"-"` means unbounded.
 - **`leader_store_id`** is bootstrap metadata only. Runtime routing comes
   from coordinator (`GetRegionByKey`), never from this field.
+- **`fsmeta_region_bootstrap`** is mutually exclusive with explicit `regions`.
+  It expands to continuous byte-range regions: gap ranges plus one range per
+  fsmeta mount/bucket. This keeps the store/coordinator layer generic while
+  giving fsmeta workloads stable locality and round-robin bootstrap leaders.
 
 ### CLI integration
 

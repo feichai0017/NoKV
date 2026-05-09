@@ -370,6 +370,49 @@ func TestLocalStorePersistsPendingSchedulerOperations(t *testing.T) {
 	require.FileExists(t, filepath.Join(dir, PendingSchedulerOperationsFileName))
 }
 
+func TestLocalStorePersistsPendingSplitAndMergeSchedulerOperations(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+
+	child := RegionMeta{
+		ID:       18,
+		StartKey: []byte("m"),
+		EndKey:   []byte("z"),
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}},
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+	}
+	require.NoError(t, store.SavePendingSchedulerOperation(PendingSchedulerOperation{
+		Kind:       PendingSchedulerOperationSplitRegion,
+		RegionID:   17,
+		SplitKey:   []byte("m"),
+		SplitChild: child,
+		Attempts:   2,
+	}))
+	require.NoError(t, store.SavePendingSchedulerOperation(PendingSchedulerOperation{
+		Kind:           PendingSchedulerOperationMergeRegion,
+		RegionID:       17,
+		SourceRegionID: 18,
+		Attempts:       4,
+	}))
+	require.NoError(t, store.Close())
+
+	reopened, err := OpenLocalStore(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	ops := reopened.PendingSchedulerOperations()
+	require.Len(t, ops, 2)
+	require.Equal(t, PendingSchedulerOperationMergeRegion, ops[0].Kind)
+	require.Equal(t, uint64(18), ops[0].SourceRegionID)
+	require.Equal(t, uint32(4), ops[0].Attempts)
+	require.Equal(t, PendingSchedulerOperationSplitRegion, ops[1].Kind)
+	require.Equal(t, []byte("m"), ops[1].SplitKey)
+	require.Equal(t, uint64(18), ops[1].SplitChild.ID)
+	require.Equal(t, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}}, ops[1].SplitChild.Peers)
+	require.Equal(t, uint32(2), ops[1].Attempts)
+}
+
 func TestLocalStoreMovesPendingRootEventToBlocked(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenLocalStore(dir, nil)

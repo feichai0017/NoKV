@@ -38,6 +38,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		Capacity:          req.GetCapacity(),
 		Available:         req.GetAvailable(),
 		DroppedOperations: req.GetDroppedOperations(),
+		RegionStats:       regionStatsFromPB(req.GetRegionStats()),
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
@@ -58,6 +59,29 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		Accepted:   true,
 		Operations: operations,
 	}, nil
+}
+
+func regionStatsFromPB(in []*coordpb.RegionRuntimeStats) []catalog.RegionStats {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]catalog.RegionStats, 0, len(in))
+	for _, stat := range in {
+		if stat == nil || stat.GetRegionId() == 0 {
+			continue
+		}
+		out = append(out, catalog.RegionStats{
+			RegionID:            stat.GetRegionId(),
+			ReadQPS:             stat.GetReadQps(),
+			WriteQPS:            stat.GetWriteQps(),
+			WriteBytesPerSecond: stat.GetWriteBytesPerSec(),
+			ApproxRegionBytes:   stat.GetApproxRegionBytes(),
+			AtomicMutateQPS:     stat.GetAtomicMutateQps(),
+			LeaderStoreID:       stat.GetLeaderStoreId(),
+			PendingAdmin:        stat.GetPendingAdmin(),
+		})
+	}
+	return out
 }
 
 // GetStore returns the current runtime endpoint for one store.

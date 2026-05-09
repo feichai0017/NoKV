@@ -60,16 +60,16 @@ func TestShardAffineInodeAllocatorSkipsRootInode(t *testing.T) {
 	require.Equal(t, uint64(3), alloc.Stats()["inode_alloc_reserved_total"])
 }
 
-func TestShardAffineInodeAllocatorChoosesDentryShard(t *testing.T) {
+func TestShardAffineInodeAllocatorChoosesWorkspaceBucket(t *testing.T) {
 	client := &fakeAllocIDClient{next: 2}
-	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, 4, 64)
+	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, fsmeta.DefaultAffinityBucketCount, 64)
 	require.NoError(t, err)
 
 	inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "aligned")
 	require.NoError(t, err)
-	want, err := createDentryShard("vol", fsmeta.RootInode, "aligned", 4)
+	want, err := createDentryBucket("vol", fsmeta.RootInode, "aligned")
 	require.NoError(t, err)
-	got, err := createInodeShard("vol", inode, 4)
+	got, err := createInodeBucket("vol", inode)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Equal(t, uint64(1), alloc.Stats()["inode_alloc_affinity_hit_total"])
@@ -78,7 +78,7 @@ func TestShardAffineInodeAllocatorChoosesDentryShard(t *testing.T) {
 
 func TestShardAffineInodeAllocatorReturnsUniqueConcurrentIDs(t *testing.T) {
 	client := &fakeAllocIDClient{next: 2}
-	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, 4, 16)
+	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, fsmeta.DefaultAffinityBucketCount, 16)
 	require.NoError(t, err)
 
 	const workers = 64
@@ -109,7 +109,7 @@ func TestShardAffineInodeAllocatorReturnsUniqueConcurrentIDs(t *testing.T) {
 
 func TestShardAffineInodeAllocatorPropagatesAllocIDError(t *testing.T) {
 	want := errors.New("root unavailable")
-	alloc, err := NewShardAffineInodeAllocatorWithBatch(&fakeAllocIDClient{err: want}, 4, 8)
+	alloc, err := NewShardAffineInodeAllocatorWithBatch(&fakeAllocIDClient{err: want}, fsmeta.DefaultAffinityBucketCount, 8)
 	require.NoError(t, err)
 
 	_, err = alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "file")
@@ -117,20 +117,20 @@ func TestShardAffineInodeAllocatorPropagatesAllocIDError(t *testing.T) {
 }
 
 func TestShardAffineInodeAllocatorMissStillReturnsUsableID(t *testing.T) {
-	target, err := createDentryShard("vol", fsmeta.RootInode, "file", 4)
+	target, err := createDentryBucket("vol", fsmeta.RootInode, "file")
 	require.NoError(t, err)
 	var candidate fsmeta.InodeID
 	for id := fsmeta.InodeID(2); id < 10_000; id++ {
-		shard, err := createInodeShard("vol", id, 4)
+		bucket, err := createInodeBucket("vol", id)
 		require.NoError(t, err)
-		if shard != target {
+		if bucket != target {
 			candidate = id
 			break
 		}
 	}
 	require.NotZero(t, candidate)
 	client := &fakeAllocIDClient{fixed: []*coordpb.AllocIDResponse{{FirstId: uint64(candidate), Count: 1}}}
-	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, 4, 1)
+	alloc, err := NewShardAffineInodeAllocatorWithBatch(client, fsmeta.DefaultAffinityBucketCount, 1)
 	require.NoError(t, err)
 
 	inode, err := alloc.AllocateCreateInode(context.Background(), "vol", fsmeta.RootInode, "file")

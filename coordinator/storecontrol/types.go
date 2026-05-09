@@ -7,6 +7,7 @@ import (
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // StoreStats captures minimal store-level heartbeat information.
@@ -19,19 +20,37 @@ type StoreStats struct {
 	// LeaderRegionIDs enumerates the regions for which this store is the
 	// local raft leader at snapshot time. The coordinator uses this to
 	// populate its region directory view with per-region leadership.
-	LeaderRegionIDs   []uint64  `json:"leader_region_ids,omitempty"`
-	Capacity          uint64    `json:"capacity"`
-	Available         uint64    `json:"available"`
-	DroppedOperations uint64    `json:"dropped_operations"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	LeaderRegionIDs   []uint64      `json:"leader_region_ids,omitempty"`
+	Capacity          uint64        `json:"capacity"`
+	Available         uint64        `json:"available"`
+	DroppedOperations uint64        `json:"dropped_operations"`
+	UpdatedAt         time.Time     `json:"updated_at"`
+	RegionStats       []RegionStats `json:"region_stats,omitempty"`
+}
+
+// RegionStats carries low-cardinality per-region load over the store-control
+// heartbeat. It is scheduling input only; region descriptors remain rooted
+// truth and must not be inferred from this telemetry.
+type RegionStats struct {
+	RegionID            uint64 `json:"region_id"`
+	ReadQPS             uint64 `json:"read_qps"`
+	WriteQPS            uint64 `json:"write_qps"`
+	WriteBytesPerSecond uint64 `json:"write_bytes_per_sec"`
+	ApproxRegionBytes   uint64 `json:"approx_region_bytes"`
+	AtomicMutateQPS     uint64 `json:"atomic_mutate_qps"`
+	LeaderStoreID       uint64 `json:"leader_store_id,omitempty"`
+	PendingAdmin        bool   `json:"pending_admin,omitempty"`
 }
 
 // Operation represents a control-plane decision to be executed by store runtime.
 type Operation struct {
-	Type   OperationType
-	Region uint64
-	Source uint64
-	Target uint64
+	Type         OperationType
+	Region       uint64
+	Source       uint64
+	Target       uint64
+	SplitKey     []byte
+	SplitChild   topology.Descriptor
+	SourceRegion uint64
 }
 
 // OperationType identifies one store-control operation kind.
@@ -40,12 +59,18 @@ type OperationType uint8
 const (
 	OperationNone OperationType = iota
 	OperationLeaderTransfer
+	OperationSplitRegion
+	OperationMergeRegion
 )
 
 func (t OperationType) String() string {
 	switch t {
 	case OperationLeaderTransfer:
 		return "leader-transfer"
+	case OperationSplitRegion:
+		return "split-region"
+	case OperationMergeRegion:
+		return "merge-region"
 	default:
 		return "none"
 	}

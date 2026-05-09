@@ -26,6 +26,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	"github.com/feichai0017/NoKV/coordinator/rootview"
+	"github.com/feichai0017/NoKV/coordinator/scheduling"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -74,6 +75,7 @@ type Service struct {
 	lastRootReload    int64
 	lastRootError     string
 	eunomiaMetrics    eunomiaMetrics
+	scheduler         *scheduling.Planner
 }
 
 type authorityServingState uint8
@@ -227,6 +229,7 @@ func NewService(cluster *catalog.Cluster, ids *idalloc.IDAllocator, tsAlloc *tso
 		idWindowSize:  defaultAllocatorWindowSize,
 		tsoWindowSize: defaultAllocatorWindowSize,
 		now:           time.Now,
+		scheduler:     scheduling.NewPlanner(scheduling.PlanOptions{}),
 	}
 	svc.storeHeartbeatTTL.Store(int64(defaultStoreHeartbeatTTL))
 	return svc

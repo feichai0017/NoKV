@@ -508,14 +508,17 @@ func (x *PendingRootEventCatalog) GetEntries() []*PendingRootEvent {
 }
 
 type PendingSchedulerOperation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperationType uint32                 `protobuf:"varint,1,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
-	RegionId      uint64                 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-	SourcePeerId  uint64                 `protobuf:"varint,3,opt,name=source_peer_id,json=sourcePeerId,proto3" json:"source_peer_id,omitempty"`
-	TargetPeerId  uint64                 `protobuf:"varint,4,opt,name=target_peer_id,json=targetPeerId,proto3" json:"target_peer_id,omitempty"`
-	Attempts      uint32                 `protobuf:"varint,5,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OperationType  uint32                 `protobuf:"varint,1,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	RegionId       uint64                 `protobuf:"varint,2,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	SourcePeerId   uint64                 `protobuf:"varint,3,opt,name=source_peer_id,json=sourcePeerId,proto3" json:"source_peer_id,omitempty"`
+	TargetPeerId   uint64                 `protobuf:"varint,4,opt,name=target_peer_id,json=targetPeerId,proto3" json:"target_peer_id,omitempty"`
+	Attempts       uint32                 `protobuf:"varint,5,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	SplitKey       []byte                 `protobuf:"bytes,6,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
+	SplitChild     *RegionDescriptor      `protobuf:"bytes,7,opt,name=split_child,json=splitChild,proto3" json:"split_child,omitempty"`
+	SourceRegionId uint64                 `protobuf:"varint,8,opt,name=source_region_id,json=sourceRegionId,proto3" json:"source_region_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PendingSchedulerOperation) Reset() {
@@ -579,6 +582,27 @@ func (x *PendingSchedulerOperation) GetTargetPeerId() uint64 {
 func (x *PendingSchedulerOperation) GetAttempts() uint32 {
 	if x != nil {
 		return x.Attempts
+	}
+	return 0
+}
+
+func (x *PendingSchedulerOperation) GetSplitKey() []byte {
+	if x != nil {
+		return x.SplitKey
+	}
+	return nil
+}
+
+func (x *PendingSchedulerOperation) GetSplitChild() *RegionDescriptor {
+	if x != nil {
+		return x.SplitChild
+	}
+	return nil
+}
+
+func (x *PendingSchedulerOperation) GetSourceRegionId() uint64 {
+	if x != nil {
+		return x.SourceRegionId
 	}
 	return 0
 }
@@ -782,13 +806,17 @@ const file_meta_recovery_proto_rawDesc = "" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12-\n" +
 	"\x05event\x18\x02 \x01(\v2\x17.nokv.meta.v1.RootEventR\x05event\"S\n" +
 	"\x17PendingRootEventCatalog\x128\n" +
-	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentries\"\xc7\x01\n" +
+	"\aentries\x18\x01 \x03(\v2\x1e.nokv.meta.v1.PendingRootEventR\aentries\"\xcf\x02\n" +
 	"\x19PendingSchedulerOperation\x12%\n" +
 	"\x0eoperation_type\x18\x01 \x01(\rR\roperationType\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
 	"\x0esource_peer_id\x18\x03 \x01(\x04R\fsourcePeerId\x12$\n" +
 	"\x0etarget_peer_id\x18\x04 \x01(\x04R\ftargetPeerId\x12\x1a\n" +
-	"\battempts\x18\x05 \x01(\rR\battempts\"e\n" +
+	"\battempts\x18\x05 \x01(\rR\battempts\x12\x1b\n" +
+	"\tsplit_key\x18\x06 \x01(\fR\bsplitKey\x12?\n" +
+	"\vsplit_child\x18\a \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
+	"splitChild\x12(\n" +
+	"\x10source_region_id\x18\b \x01(\x04R\x0esourceRegionId\"e\n" +
 	" PendingSchedulerOperationCatalog\x12A\n" +
 	"\aentries\x18\x01 \x03(\v2'.nokv.meta.v1.PendingSchedulerOperationR\aentries\"\xa1\x01\n" +
 	"\x10BlockedRootEvent\x12\x1a\n" +
@@ -841,14 +869,15 @@ var file_meta_recovery_proto_depIdxs = []int32{
 	3,  // 6: nokv.meta.v1.RaftProgressCatalog.entries:type_name -> nokv.meta.v1.RaftProgress
 	15, // 7: nokv.meta.v1.PendingRootEvent.event:type_name -> nokv.meta.v1.RootEvent
 	5,  // 8: nokv.meta.v1.PendingRootEventCatalog.entries:type_name -> nokv.meta.v1.PendingRootEvent
-	7,  // 9: nokv.meta.v1.PendingSchedulerOperationCatalog.entries:type_name -> nokv.meta.v1.PendingSchedulerOperation
-	15, // 10: nokv.meta.v1.BlockedRootEvent.event:type_name -> nokv.meta.v1.RootEvent
-	9,  // 11: nokv.meta.v1.BlockedRootEventCatalog.entries:type_name -> nokv.meta.v1.BlockedRootEvent
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 9: nokv.meta.v1.PendingSchedulerOperation.split_child:type_name -> nokv.meta.v1.RegionDescriptor
+	7,  // 10: nokv.meta.v1.PendingSchedulerOperationCatalog.entries:type_name -> nokv.meta.v1.PendingSchedulerOperation
+	15, // 11: nokv.meta.v1.BlockedRootEvent.event:type_name -> nokv.meta.v1.RootEvent
+	9,  // 12: nokv.meta.v1.BlockedRootEventCatalog.entries:type_name -> nokv.meta.v1.BlockedRootEvent
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_meta_recovery_proto_init() }

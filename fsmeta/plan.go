@@ -419,17 +419,21 @@ func PlanExpireWriteSessions(req ExpireWriteSessionsRequest) (OperationPlan, err
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	prefix, err := EncodeSessionPrefix(req.Mount)
-	if err != nil {
-		return OperationPlan{}, err
+	prefixes := make([][]byte, 0, DefaultAffinityBucketCount)
+	for bucket := range DefaultAffinityBucketCount {
+		prefix, err := EncodeSessionBucketPrefix(req.Mount, AffinityBucket(bucket))
+		if err != nil {
+			return OperationPlan{}, err
+		}
+		prefixes = append(prefixes, prefix)
 	}
 	return OperationPlan{
 		Kind:         OperationExpireSessions,
 		Mount:        req.Mount,
-		PrimaryKey:   cloneBytes(prefix),
-		StartKey:     cloneBytes(prefix),
+		PrimaryKey:   cloneBytes(prefixes[0]),
+		StartKey:     cloneBytes(prefixes[0]),
 		Limit:        limit,
-		ReadPrefixes: cloneKeySet(prefix),
+		ReadPrefixes: cloneKeySet(prefixes...),
 	}, nil
 }
 

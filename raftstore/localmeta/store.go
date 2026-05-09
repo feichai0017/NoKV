@@ -568,11 +568,20 @@ func loadPendingSchedulerOperationCatalog(fs vfs.FS, workdir string) (map[string
 			continue
 		}
 		op := PendingSchedulerOperation{
-			Kind:         pendingSchedulerOperationKindFromPB(item.GetOperationType()),
-			RegionID:     item.GetRegionId(),
-			SourcePeerID: item.GetSourcePeerId(),
-			TargetPeerID: item.GetTargetPeerId(),
-			Attempts:     item.GetAttempts(),
+			Kind:           pendingSchedulerOperationKindFromPB(item.GetOperationType()),
+			RegionID:       item.GetRegionId(),
+			SourcePeerID:   item.GetSourcePeerId(),
+			TargetPeerID:   item.GetTargetPeerId(),
+			Attempts:       item.GetAttempts(),
+			SplitKey:       append([]byte(nil), item.GetSplitKey()...),
+			SourceRegionID: item.GetSourceRegionId(),
+		}
+		if item.GetSplitChild() != nil {
+			child, err := FromDescriptorProto(item.GetSplitChild())
+			if err != nil {
+				return nil, err
+			}
+			op.SplitChild = child
 		}
 		if op.Kind == PendingSchedulerOperationUnknown {
 			continue
@@ -676,11 +685,14 @@ func persistPendingSchedulerOperationCatalog(fs vfs.FS, workdir string, ops map[
 	for _, key := range keys {
 		op := ops[key]
 		pbCatalog.Entries = append(pbCatalog.Entries, &metapb.PendingSchedulerOperation{
-			OperationType: pendingSchedulerOperationKindToPB(op.Kind),
-			RegionId:      op.RegionID,
-			SourcePeerId:  op.SourcePeerID,
-			TargetPeerId:  op.TargetPeerID,
-			Attempts:      op.Attempts,
+			OperationType:  pendingSchedulerOperationKindToPB(op.Kind),
+			RegionId:       op.RegionID,
+			SourcePeerId:   op.SourcePeerID,
+			TargetPeerId:   op.TargetPeerID,
+			Attempts:       op.Attempts,
+			SplitKey:       append([]byte(nil), op.SplitKey...),
+			SplitChild:     pendingSplitChildToPB(op.SplitChild),
+			SourceRegionId: op.SourceRegionID,
 		})
 	}
 	payload, err := proto.Marshal(pbCatalog)
@@ -688,6 +700,13 @@ func persistPendingSchedulerOperationCatalog(fs vfs.FS, workdir string, ops map[
 		return err
 	}
 	return persistProtoFile(fs, workdir, PendingSchedulerOperationsFileName, payload)
+}
+
+func pendingSplitChildToPB(meta RegionMeta) *metapb.RegionDescriptor {
+	if meta.ID == 0 {
+		return nil
+	}
+	return DescriptorToProto(meta)
 }
 
 func persistBlockedRootEventCatalog(fs vfs.FS, workdir string, blocked map[uint64]BlockedRootEvent) error {
@@ -865,8 +884,8 @@ func pendingSchedulerOperationKindToPB(kind PendingSchedulerOperationKind) uint3
 
 func pendingSchedulerOperationKindFromPB(kind uint32) PendingSchedulerOperationKind {
 	switch PendingSchedulerOperationKind(kind) {
-	case PendingSchedulerOperationLeaderTransfer:
-		return PendingSchedulerOperationLeaderTransfer
+	case PendingSchedulerOperationLeaderTransfer, PendingSchedulerOperationSplitRegion, PendingSchedulerOperationMergeRegion:
+		return PendingSchedulerOperationKind(kind)
 	default:
 		return PendingSchedulerOperationUnknown
 	}

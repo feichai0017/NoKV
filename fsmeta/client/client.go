@@ -411,7 +411,10 @@ func translateRPCError(err error) error {
 		}
 		return fmt.Errorf("%w: %v", fsmeta.ErrNotFound, err)
 	case codes.OutOfRange:
-		return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
+		if fsmetaReason(err) == reasonWatchCursorExpired {
+			return fmt.Errorf("%w: %v", fsmeta.ErrWatchCursorExpired, err)
+		}
+		return err
 	case codes.FailedPrecondition:
 		switch fsmetaReason(err) {
 		case reasonMountRetired:

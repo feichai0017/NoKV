@@ -223,7 +223,7 @@ func (db *DB) startWriteRuntime() {
 		WriteBatchMaxCount: db.opt.WriteBatchMaxCount,
 		WriteBatchMaxSize:  db.opt.WriteBatchMaxSize,
 		WriteBatchWait:     db.opt.WriteBatchWait,
-		UserKeyShardRouter: db.opt.UserKeyShardRouter,
+		UserKeyShardKey:    db.userKeyShardKey,
 	}, db)
 	db.pipeline.Start()
 }
@@ -1079,18 +1079,25 @@ func (db *DB) groupInternalEntriesByShard(entries []*kv.Entry) [][]*kv.Entry {
 }
 
 func (db *DB) shardForInternalKey(internalKey []byte, shardCount int) int {
-	if db == nil || db.opt == nil || db.opt.UserKeyShardRouter == nil {
-		return lsm.ShardForInternalKey(internalKey, shardCount)
-	}
 	_, userKey, _, ok := kv.SplitInternalKey(internalKey)
-	if !ok {
+	if !ok || len(userKey) == 0 {
 		return 0
 	}
-	shard := db.opt.UserKeyShardRouter(userKey, shardCount)
-	if shard < 0 || shard >= utils.NormalizeShardCount(shardCount) {
-		return utils.ShardForUserKey(userKey, shardCount)
+	return utils.ShardForUserKey(db.userKeyShardKeyOrUserKey(userKey), shardCount)
+}
+
+func (db *DB) userKeyShardKey(userKey []byte) []byte {
+	if db == nil || db.opt == nil || db.opt.UserKeyShapeExtractor == nil {
+		return nil
 	}
-	return shard
+	return db.opt.UserKeyShapeExtractor(userKey).shardKey()
+}
+
+func (db *DB) userKeyShardKeyOrUserKey(userKey []byte) []byte {
+	if key := db.userKeyShardKey(userKey); len(key) > 0 {
+		return key
+	}
+	return userKey
 }
 
 func releaseEntryGroups(groups [][]*kv.Entry) {
