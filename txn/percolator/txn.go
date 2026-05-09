@@ -28,43 +28,64 @@ import (
 
 // Prewrite applies mutation prewrites for a single region transaction.
 func Prewrite(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
-	if req == nil {
+	results := PrewriteBatch(db, latches, []*kvrpcpb.PrewriteRequest{req})
+	if len(results) == 0 {
 		return nil
 	}
-	keys := make([][]byte, 0, len(req.Mutations))
-	for _, mut := range req.Mutations {
-		if mut != nil && len(mut.Key) > 0 {
-			keys = append(keys, mut.Key)
-		}
+	return results[0]
+}
+
+// PrewriteBatch applies a raft-entry batch of prewrite requests. It keeps
+// request-level errors independent while fusing local storage apply for
+// non-overlapping requests.
+func PrewriteBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.PrewriteRequest) [][]*kvrpcpb.KeyError {
+	results := make([][]*kvrpcpb.KeyError, len(reqs))
+	keys := make([][]byte, 0)
+	for _, req := range reqs {
+		keys = append(keys, prewriteRequestKeys(req)...)
 	}
 	guard := latches.Acquire(keys)
 	defer guard.Release()
 
 	reader := NewReader(db)
-	var errs []*kvrpcpb.KeyError
-	ops := make([]versionedOp, 0, len(req.Mutations)*3)
-	for _, mut := range req.Mutations {
-		if mut == nil {
+	group := twoPCApplyGroup{}
+	for i, req := range reqs {
+		if req == nil {
 			continue
 		}
-		planned, err := planPrewriteMutation(reader, req, mut)
+		requestKeys := prewriteRequestKeys(req)
+		if group.conflicts(requestKeys) {
+			group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+				if err != nil {
+					results[item.index] = []*kvrpcpb.KeyError{err}
+				}
+			})
+		}
+		var errs []*kvrpcpb.KeyError
+		ops := make([]versionedOp, 0, len(req.Mutations)*3)
+		for _, mut := range req.Mutations {
+			if mut == nil {
+				continue
+			}
+			planned, err := planPrewriteMutation(reader, req, mut)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			ops = append(ops, planned...)
+		}
+		if len(errs) > 0 {
+			results[i] = errs
+			continue
+		}
+		group.add(i, requestKeys, ops, 0)
+	}
+	group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
 		if err != nil {
-			errs = append(errs, err)
-			continue
+			results[item.index] = []*kvrpcpb.KeyError{err}
 		}
-		ops = append(ops, planned...)
-	}
-	if len(errs) > 0 {
-		return errs
-	}
-	// Prewrite is the lock admission boundary for a region request. Validation
-	// happens for every mutation before storage is touched, so semantic key
-	// errors never hide partial locks. Storage failures are retryable: replaying
-	// the same start_ts observes its own locks and finishes the missing keys.
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return []*kvrpcpb.KeyError{keyErrorRetryable(err)}
-	}
-	return nil
+	})
+	return results
 }
 
 func planPrewriteMutation(reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvrpcpb.Mutation) ([]versionedOp, *kvrpcpb.KeyError) {
@@ -120,6 +141,19 @@ func planPrewriteMutation(reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvr
 	return ops, nil
 }
 
+func prewriteRequestKeys(req *kvrpcpb.PrewriteRequest) [][]byte {
+	if req == nil {
+		return nil
+	}
+	keys := make([][]byte, 0, len(req.Mutations))
+	for _, mut := range req.Mutations {
+		if mut != nil && len(mut.Key) > 0 {
+			keys = append(keys, mut.Key)
+		}
+	}
+	return keys
+}
+
 // validateCommitVersion rejects commits that would violate MVCC ordering.
 func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.KeyError {
 	if CommitVersion <= StartVersion {
@@ -131,31 +165,60 @@ func validateCommitVersion(StartVersion uint64, CommitVersion uint64) *kvrpcpb.K
 // Commit finalises earlier prewrites by removing locks and writing commit
 // records. A non-nil KeyError is returned when commit should abort.
 func Commit(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.CommitRequest) *kvrpcpb.KeyError {
-	if req == nil {
+	results := CommitBatch(db, latches, []*kvrpcpb.CommitRequest{req})
+	if len(results) == 0 {
 		return nil
 	}
-	if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
-		return err
+	return results[0]
+}
+
+// CommitBatch applies a raft-entry batch of commit requests. Percolator still
+// decides each transaction at its primary key; this only reduces local apply
+// fragmentation after raft has already ordered the commit requests.
+func CommitBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.CommitRequest) []*kvrpcpb.KeyError {
+	results := make([]*kvrpcpb.KeyError, len(reqs))
+	keys := make([][]byte, 0)
+	for _, req := range reqs {
+		if req != nil {
+			keys = append(keys, req.Keys...)
+		}
 	}
-	guard := latches.Acquire(req.Keys)
+	guard := latches.Acquire(keys)
 	defer guard.Release()
 
 	reader := NewReader(db)
-	ops := make([]versionedOp, 0, len(req.Keys)*2)
-	for _, key := range req.Keys {
-		planned, err := planCommitKey(reader, key, req.StartVersion, req.CommitVersion)
-		if err != nil {
-			return err
+	group := twoPCApplyGroup{}
+	for i, req := range reqs {
+		if req == nil {
+			continue
 		}
-		ops = append(ops, planned...)
+		if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
+			results[i] = err
+			continue
+		}
+		if group.conflicts(req.Keys) {
+			group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+				results[item.index] = err
+			})
+		}
+		ops := make([]versionedOp, 0, len(req.Keys)*2)
+		for _, key := range req.Keys {
+			planned, err := planCommitKey(reader, key, req.StartVersion, req.CommitVersion)
+			if err != nil {
+				results[i] = err
+				break
+			}
+			ops = append(ops, planned...)
+		}
+		if results[i] != nil {
+			continue
+		}
+		group.add(i, req.Keys, ops, 0)
 	}
-	// Commit remains Percolator-idempotent: already committed keys produce no
-	// write op, while residual locks are cleaned with the commit records for the
-	// same key. The DB may fan multi-key requests out by LSM shard affinity.
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return keyErrorRetryable(err)
-	}
-	return nil
+	group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+		results[item.index] = err
+	})
+	return results
 }
 
 // AtomicMutateResult is the local outcome for a region-local 1PC attempt.
@@ -165,20 +228,32 @@ type AtomicMutateResult struct {
 	Fallback    bool
 }
 
-type atomicMutateStatsRegistry struct {
-	applyCalledTotal   atomic.Uint64
-	localFallbackTotal atomic.Uint64
+type statsRegistry struct {
+	applyCalledTotal        atomic.Uint64
+	localFallbackTotal      atomic.Uint64
+	fusedApplyBatchesTotal  atomic.Uint64
+	fusedApplyRequestsTotal atomic.Uint64
+	fusedApplyEntriesTotal  atomic.Uint64
+	twoPCFusedBatchesTotal  atomic.Uint64
+	twoPCFusedRequestsTotal atomic.Uint64
+	twoPCFusedEntriesTotal  atomic.Uint64
 }
 
-var atomicMutateStats atomicMutateStatsRegistry
+var percolatorStats statsRegistry
 
-// AtomicMutateStats returns package-wide server-side 1PC counters. These are
-// deliberately protocol-level counters, so callers can tell whether a request
+// Stats returns package-wide server-side Percolator counters. These are
+// deliberately protocol-level counters, so callers can tell whether requests
 // reached Percolator after client-side region admission.
-func AtomicMutateStats() map[string]any {
+func Stats() map[string]any {
 	return map[string]any{
-		"atomic_apply_called_total":   atomicMutateStats.applyCalledTotal.Load(),
-		"atomic_local_fallback_total": atomicMutateStats.localFallbackTotal.Load(),
+		"atomic_apply_called_total":         percolatorStats.applyCalledTotal.Load(),
+		"atomic_local_fallback_total":       percolatorStats.localFallbackTotal.Load(),
+		"atomic_fused_apply_batches_total":  percolatorStats.fusedApplyBatchesTotal.Load(),
+		"atomic_fused_apply_requests_total": percolatorStats.fusedApplyRequestsTotal.Load(),
+		"atomic_fused_apply_entries_total":  percolatorStats.fusedApplyEntriesTotal.Load(),
+		"two_pc_fused_apply_batches_total":  percolatorStats.twoPCFusedBatchesTotal.Load(),
+		"two_pc_fused_apply_requests_total": percolatorStats.twoPCFusedRequestsTotal.Load(),
+		"two_pc_fused_apply_entries_total":  percolatorStats.twoPCFusedEntriesTotal.Load(),
 	}
 }
 
@@ -190,14 +265,98 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 	if req == nil {
 		return AtomicMutateResult{}
 	}
+	results := ApplyAtomicMutateBatch(db, latches, []*kvrpcpb.TryAtomicMutateRequest{req})
+	if len(results) == 0 {
+		return AtomicMutateResult{}
+	}
+	return results[0]
+}
+
+// ApplyAtomicMutateBatch applies a raft-entry batch of independent 1PC
+// attempts. It preserves per-request responses and only fuses requests when
+// their combined MVCC entries remain one local atomic apply group.
+func ApplyAtomicMutateBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.TryAtomicMutateRequest) []AtomicMutateResult {
+	results := make([]AtomicMutateResult, len(reqs))
+	if len(reqs) == 0 {
+		return results
+	}
+	prepared := make([]atomicMutatePrepared, len(reqs))
+	var allKeys [][]byte
+	var called uint64
+	for i, req := range reqs {
+		item := prepareAtomicMutate(req)
+		prepared[i] = item
+		results[i] = item.result
+		if !item.eligible {
+			continue
+		}
+		called++
+		allKeys = append(allKeys, item.keys...)
+	}
+	if called == 0 {
+		return results
+	}
+	percolatorStats.applyCalledTotal.Add(called)
+
+	guard := latches.Acquire(allKeys)
+	defer guard.Release()
+
+	planner, hasPlanner := db.(txnstore.AtomicInternalApplyPlanner)
+	group := atomicMutateApplyGroup{}
+	for i, item := range prepared {
+		if !item.eligible {
+			continue
+		}
+		// Overlapping requests must observe raft-log order. Flush before
+		// planning the later request so its predicates see earlier writes.
+		if group.conflicts(item.keys) {
+			group.flush(db, results)
+		}
+		plan, result, ok := planAtomicMutateUnlocked(db, item.req, item.keys)
+		if !ok {
+			results[i] = result
+			continue
+		}
+		if len(plan.entries) == 0 {
+			results[i] = AtomicMutateResult{AppliedKeys: plan.appliedKeys}
+			continue
+		}
+		if !hasPlanner || !planner.CanApplyInternalEntriesAtomically(plan.entries) {
+			percolatorStats.localFallbackTotal.Add(1)
+			releaseEntries(plan.entries)
+			results[i] = AtomicMutateResult{Fallback: true}
+			continue
+		}
+		// A request can be locally atomic by itself while belonging to a
+		// different LSM shard than the current group. Split the group instead
+		// of turning a valid 1PC request into a 2PC fallback.
+		if !group.empty() && !planner.CanApplyInternalEntriesAtomically(group.entriesWith(plan.entries)) {
+			group.flush(db, results)
+		}
+		group.add(i, plan)
+	}
+	group.flush(db, results)
+	return results
+}
+
+type atomicMutatePrepared struct {
+	req      *kvrpcpb.TryAtomicMutateRequest
+	keys     [][]byte
+	eligible bool
+	result   AtomicMutateResult
+}
+
+func prepareAtomicMutate(req *kvrpcpb.TryAtomicMutateRequest) atomicMutatePrepared {
+	if req == nil {
+		return atomicMutatePrepared{}
+	}
 	if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
-		return AtomicMutateResult{Error: err}
+		return atomicMutatePrepared{result: AtomicMutateResult{Error: err}}
 	}
 	mutations := req.GetMutations()
 	if len(mutations) == 0 {
-		return AtomicMutateResult{}
+		return atomicMutatePrepared{}
 	}
-	atomicMutateStats.applyCalledTotal.Add(1)
 	keys := make([][]byte, 0, len(mutations)+len(req.GetPredicates()))
 	for _, mut := range mutations {
 		if mut != nil && len(mut.Key) > 0 {
@@ -209,21 +368,29 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 			keys = append(keys, pred.Key)
 		}
 	}
-	guard := latches.Acquire(keys)
-	defer guard.Release()
+	return atomicMutatePrepared{req: req, keys: keys, eligible: true}
+}
 
+type atomicMutatePlan struct {
+	entries     []*kv.Entry
+	appliedKeys uint64
+	keys        [][]byte
+}
+
+func planAtomicMutateUnlocked(db txnstore.Store, req *kvrpcpb.TryAtomicMutateRequest, keys [][]byte) (atomicMutatePlan, AtomicMutateResult, bool) {
+	mutations := req.GetMutations()
 	reader := NewReader(db)
 	if applied, err := atomicMutateAlreadyApplied(db, reader, req); err != nil {
-		return AtomicMutateResult{Error: keyErrorRetryable(err)}
+		return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorRetryable(err)}, false
 	} else if applied {
-		return AtomicMutateResult{AppliedKeys: uint64(len(mutations))}
+		return atomicMutatePlan{}, AtomicMutateResult{AppliedKeys: uint64(len(mutations))}, false
 	}
 
 	primary := mutations[0].GetKey()
 	ops := make([]versionedOp, 0, len(mutations)*3)
 	for _, pred := range req.GetPredicates() {
 		if err := validateAtomicPredicate(reader, pred, req.StartVersion); err != nil {
-			return AtomicMutateResult{Error: err}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: err}, false
 		}
 	}
 	for _, mut := range mutations {
@@ -231,43 +398,102 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 			continue
 		}
 		if err := validateAtomicMutation(mut); err != nil {
-			return AtomicMutateResult{Error: err}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: err}, false
 		}
 		key := mut.GetKey()
 		lock, err := reader.GetLock(key)
 		if err != nil {
-			return AtomicMutateResult{Error: keyErrorRetryable(err)}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorRetryable(err)}, false
 		}
 		if lock != nil {
-			return AtomicMutateResult{Error: keyErrorLocked(key, lock)}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorLocked(key, lock)}, false
 		}
 		if write, commitTs, err := reader.MostRecentWrite(key); err != nil {
-			return AtomicMutateResult{Error: keyErrorRetryable(err)}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorRetryable(err)}, false
 		} else if write != nil && commitTs >= req.StartVersion {
-			return AtomicMutateResult{Error: keyErrorWriteConflict(key, primary, commitTs, write.StartTs, req.StartVersion)}
+			return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorWriteConflict(key, primary, commitTs, write.StartTs, req.StartVersion)}, false
 		}
 		if mut.GetAssertionNotExist() {
 			exists, err := keyExistsAt(reader, key, req.StartVersion)
 			if err != nil {
-				return AtomicMutateResult{Error: keyErrorRetryable(err)}
+				return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorRetryable(err)}, false
 			}
 			if exists {
-				return AtomicMutateResult{Error: keyErrorAlreadyExists(key)}
+				return atomicMutatePlan{}, AtomicMutateResult{Error: keyErrorAlreadyExists(key)}, false
 			}
 		}
 		ops = append(ops, committedMutationOps(mut, req.StartVersion, req.CommitVersion)...)
 	}
 	entries := versionedOpsToEntries(ops...)
-	defer releaseEntries(entries)
-	planner, ok := db.(txnstore.AtomicInternalApplyPlanner)
-	if !ok || !planner.CanApplyInternalEntriesAtomically(entries) {
-		atomicMutateStats.localFallbackTotal.Add(1)
-		return AtomicMutateResult{Fallback: true}
+	return atomicMutatePlan{entries: entries, appliedKeys: uint64(len(mutations)), keys: keys}, AtomicMutateResult{}, true
+}
+
+type atomicMutateApplyGroup struct {
+	requests []atomicMutateGroupRequest
+	entries  []*kv.Entry
+	keys     map[string]struct{}
+}
+
+type atomicMutateGroupRequest struct {
+	index       int
+	appliedKeys uint64
+}
+
+func (g *atomicMutateApplyGroup) empty() bool {
+	return g == nil || len(g.requests) == 0
+}
+
+func (g *atomicMutateApplyGroup) conflicts(keys [][]byte) bool {
+	if g == nil || len(g.keys) == 0 {
+		return false
 	}
-	if err := applyVersionedEntries(db, entries); err != nil {
-		return AtomicMutateResult{Error: keyErrorRetryable(err)}
+	for _, key := range keys {
+		if _, ok := g.keys[string(key)]; ok {
+			return true
+		}
 	}
-	return AtomicMutateResult{AppliedKeys: uint64(len(mutations))}
+	return false
+}
+
+func (g *atomicMutateApplyGroup) entriesWith(entries []*kv.Entry) []*kv.Entry {
+	out := make([]*kv.Entry, 0, len(g.entries)+len(entries))
+	out = append(out, g.entries...)
+	out = append(out, entries...)
+	return out
+}
+
+func (g *atomicMutateApplyGroup) add(index int, plan atomicMutatePlan) {
+	g.requests = append(g.requests, atomicMutateGroupRequest{index: index, appliedKeys: plan.appliedKeys})
+	g.entries = append(g.entries, plan.entries...)
+	if g.keys == nil {
+		g.keys = make(map[string]struct{}, len(plan.keys))
+	}
+	for _, key := range plan.keys {
+		g.keys[string(key)] = struct{}{}
+	}
+}
+
+func (g *atomicMutateApplyGroup) flush(db txnstore.Store, results []AtomicMutateResult) {
+	if g == nil || len(g.requests) == 0 {
+		return
+	}
+	defer releaseEntries(g.entries)
+	if len(g.requests) > 1 {
+		percolatorStats.fusedApplyBatchesTotal.Add(1)
+		percolatorStats.fusedApplyRequestsTotal.Add(uint64(len(g.requests)))
+		percolatorStats.fusedApplyEntriesTotal.Add(uint64(len(g.entries)))
+	}
+	err := applyVersionedEntries(db, g.entries)
+	for _, req := range g.requests {
+		if err != nil {
+			results[req.index] = AtomicMutateResult{Error: keyErrorRetryable(err)}
+			continue
+		}
+		results[req.index] = AtomicMutateResult{AppliedKeys: req.appliedKeys}
+	}
+	g.requests = nil
+	g.entries = nil
+	g.keys = nil
 }
 
 func validateAtomicPredicate(reader *Reader, pred *kvrpcpb.AtomicPredicate, startVersion uint64) *kvrpcpb.KeyError {
@@ -386,82 +612,162 @@ func committedMutationOps(mut *kvrpcpb.Mutation, startVersion, commitVersion uin
 
 // BatchRollback rolls back the provided keys for the given start version.
 func BatchRollback(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.BatchRollbackRequest) *kvrpcpb.KeyError {
-	if req == nil {
+	results := BatchRollbackBatch(db, latches, []*kvrpcpb.BatchRollbackRequest{req})
+	if len(results) == 0 {
 		return nil
 	}
-	guard := latches.Acquire(req.Keys)
-	defer guard.Release()
-	reader := NewReader(db)
-	ops := make([]versionedOp, 0, len(req.Keys)*3)
-	for _, key := range req.Keys {
-		planned, err := planRollbackKey(reader, key, req.StartVersion)
-		if err != nil {
-			return err
+	return results[0]
+}
+
+// BatchRollbackBatch applies a raft-entry batch of rollback requests. Rollback
+// remains idempotent per start_ts; this only shares local storage apply for
+// independent rollback records already ordered by raft.
+func BatchRollbackBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.BatchRollbackRequest) []*kvrpcpb.KeyError {
+	results := make([]*kvrpcpb.KeyError, len(reqs))
+	keys := make([][]byte, 0)
+	for _, req := range reqs {
+		if req != nil {
+			keys = append(keys, req.Keys...)
 		}
-		ops = append(ops, planned...)
 	}
-	// Rollback markers and lock tombstones for one key must be planned together;
-	// the DB preserves per-key shard affinity when it persists the internal
-	// entries, and retries keep rollback idempotent.
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return keyErrorRetryable(err)
+	guard := latches.Acquire(keys)
+	defer guard.Release()
+
+	reader := NewReader(db)
+	group := twoPCApplyGroup{}
+	for i, req := range reqs {
+		if req == nil {
+			continue
+		}
+		if group.conflicts(req.Keys) {
+			group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+				results[item.index] = err
+			})
+		}
+		ops := make([]versionedOp, 0, len(req.Keys)*3)
+		for _, key := range req.Keys {
+			planned, err := planRollbackKey(reader, key, req.StartVersion)
+			if err != nil {
+				results[i] = err
+				break
+			}
+			ops = append(ops, planned...)
+		}
+		if results[i] != nil {
+			continue
+		}
+		group.add(i, req.Keys, ops, 0)
 	}
-	return nil
+	group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+		results[item.index] = err
+	})
+	return results
+}
+
+type ResolveLockResult struct {
+	ResolvedLocks uint64
+	Error         *kvrpcpb.KeyError
 }
 
 // ResolveLock resolves locks for the given transaction. commitVersion == 0
 // performs a rollback; otherwise the keys are committed.
 func ResolveLock(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.ResolveLockRequest) (uint64, *kvrpcpb.KeyError) {
-	if req == nil {
+	results := ResolveLockBatch(db, latches, []*kvrpcpb.ResolveLockRequest{req})
+	if len(results) == 0 {
 		return 0, nil
 	}
-	if req.CommitVersion != 0 {
-		if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
-			return 0, err
+	return results[0].ResolvedLocks, results[0].Error
+}
+
+// ResolveLockBatch applies a raft-entry batch of lock resolution requests. It
+// preserves resolved-count semantics for every logical request while sharing the
+// local apply when the resolved key sets do not overlap.
+func ResolveLockBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.ResolveLockRequest) []ResolveLockResult {
+	results := make([]ResolveLockResult, len(reqs))
+	keys := make([][]byte, 0)
+	for _, req := range reqs {
+		if req != nil {
+			keys = append(keys, req.Keys...)
 		}
 	}
-	guard := latches.Acquire(req.Keys)
+	guard := latches.Acquire(keys)
 	defer guard.Release()
 
 	reader := NewReader(db)
-	var resolved uint64
-	ops := make([]versionedOp, 0, len(req.Keys)*3)
-	seen := make(map[string]struct{}, len(req.Keys))
-	for _, key := range req.Keys {
-		if len(key) == 0 {
+	group := twoPCApplyGroup{}
+	for i, req := range reqs {
+		if req == nil {
 			continue
 		}
-		keyID := string(key)
-		if _, ok := seen[keyID]; ok {
+		if req.CommitVersion != 0 {
+			if err := validateCommitVersion(req.StartVersion, req.CommitVersion); err != nil {
+				results[i].Error = err
+				continue
+			}
+		}
+		if group.conflicts(req.Keys) {
+			group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
+				if err != nil {
+					results[item.index].Error = err
+					return
+				}
+				results[item.index].ResolvedLocks = item.resolvedLocks
+			})
+		}
+		var resolved uint64
+		ops := make([]versionedOp, 0, len(req.Keys)*3)
+		seen := make(map[string]struct{}, len(req.Keys))
+		for _, key := range req.Keys {
+			if len(key) == 0 {
+				continue
+			}
+			keyID := string(key)
+			if _, ok := seen[keyID]; ok {
+				continue
+			}
+			seen[keyID] = struct{}{}
+			lock, err := reader.GetLock(key)
+			if err != nil {
+				results[i].Error = keyErrorRetryable(err)
+				break
+			}
+			if lock == nil || lock.Ts != req.StartVersion {
+				continue
+			}
+			if req.CommitVersion == 0 {
+				planned, err := planRollbackKey(reader, key, req.StartVersion)
+				if err != nil {
+					results[i].Error = err
+					break
+				}
+				ops = append(ops, planned...)
+			} else {
+				planned, err := planCommitKeyWithLock(reader, key, lock, req.CommitVersion)
+				if err != nil {
+					results[i].Error = err
+					break
+				}
+				ops = append(ops, planned...)
+			}
+			resolved++
+		}
+		if results[i].Error != nil {
 			continue
 		}
-		seen[keyID] = struct{}{}
-		lock, err := reader.GetLock(key)
+		if len(ops) == 0 {
+			results[i].ResolvedLocks = resolved
+			continue
+		}
+		group.add(i, req.Keys, ops, resolved)
+	}
+	group.flush(db, func(item twoPCApplyRequest, err *kvrpcpb.KeyError) {
 		if err != nil {
-			return resolved, keyErrorRetryable(err)
+			results[item.index].Error = err
+			return
 		}
-		if lock == nil || lock.Ts != req.StartVersion {
-			continue
-		}
-		if req.CommitVersion == 0 {
-			planned, err := planRollbackKey(reader, key, req.StartVersion)
-			if err != nil {
-				return resolved, err
-			}
-			ops = append(ops, planned...)
-		} else {
-			planned, err := planCommitKeyWithLock(reader, key, lock, req.CommitVersion)
-			if err != nil {
-				return resolved, err
-			}
-			ops = append(ops, planned...)
-		}
-		resolved++
-	}
-	if err := applyVersionedOps(db, ops...); err != nil {
-		return 0, keyErrorRetryable(err)
-	}
-	return resolved, nil
+		results[item.index].ResolvedLocks = item.resolvedLocks
+	})
+	return results
 }
 
 // CheckTxnStatus inspects the primary lock state and optionally rolls back
@@ -752,6 +1058,65 @@ type versionedOp struct {
 	value   []byte
 	meta    byte
 	expires uint64
+}
+
+type twoPCApplyGroup struct {
+	requests []twoPCApplyRequest
+	entries  []*kv.Entry
+	keys     map[string]struct{}
+}
+
+type twoPCApplyRequest struct {
+	index         int
+	resolvedLocks uint64
+}
+
+func (g *twoPCApplyGroup) conflicts(keys [][]byte) bool {
+	if g == nil || len(g.keys) == 0 {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := g.keys[string(key)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *twoPCApplyGroup) add(index int, keys [][]byte, ops []versionedOp, resolvedLocks uint64) {
+	if len(ops) == 0 {
+		return
+	}
+	g.requests = append(g.requests, twoPCApplyRequest{index: index, resolvedLocks: resolvedLocks})
+	g.entries = append(g.entries, versionedOpsToEntries(ops...)...)
+	if g.keys == nil {
+		g.keys = make(map[string]struct{}, len(keys))
+	}
+	for _, key := range keys {
+		g.keys[string(key)] = struct{}{}
+	}
+}
+
+func (g *twoPCApplyGroup) flush(db txnstore.Store, setResult func(twoPCApplyRequest, *kvrpcpb.KeyError)) {
+	if g == nil || len(g.requests) == 0 {
+		return
+	}
+	defer releaseEntries(g.entries)
+	if len(g.requests) > 1 {
+		percolatorStats.twoPCFusedBatchesTotal.Add(1)
+		percolatorStats.twoPCFusedRequestsTotal.Add(uint64(len(g.requests)))
+		percolatorStats.twoPCFusedEntriesTotal.Add(uint64(len(g.entries)))
+	}
+	var keyErr *kvrpcpb.KeyError
+	if err := applyVersionedEntries(db, g.entries); err != nil {
+		keyErr = keyErrorRetryable(err)
+	}
+	for _, req := range g.requests {
+		setResult(req, keyErr)
+	}
+	g.requests = nil
+	g.entries = nil
+	g.keys = nil
 }
 
 func applyVersionedOps(db txnstore.Store, ops ...versionedOp) error {

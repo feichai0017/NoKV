@@ -180,6 +180,71 @@ func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {
 	require.Equal(t, []byte("attrs"), inode)
 }
 
+func TestApplyTryAtomicMutateBatchFusesLocalApply(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := &countingAtomicApplyStore{base: db}
+	resp, err := Apply(store, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{
+			{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(40, 41, []byte("batched-a"), []byte("va"))},
+			},
+			{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(42, 43, []byte("batched-b"), []byte("vb"))},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 2)
+	for _, raftResp := range resp.GetResponses() {
+		atomicResp := raftResp.GetTryAtomicMutate()
+		require.NotNil(t, atomicResp)
+		require.Nil(t, atomicResp.GetError())
+		require.False(t, atomicResp.GetFallbackToTwoPhaseCommit())
+		require.Equal(t, uint64(1), atomicResp.GetAppliedKeys())
+	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+}
+
+func TestApplyPrewriteBatchFusesLocalApply(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := &countingAtomicApplyStore{base: db}
+	resp, err := Apply(store, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{
+			{
+				CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+				Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: prewriteForApplyTest(50, []byte("prewrite-batched-a"), []byte("va"))},
+			},
+			{
+				CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
+				Cmd:     &raftcmdpb.Request_Prewrite{Prewrite: prewriteForApplyTest(52, []byte("prewrite-batched-b"), []byte("vb"))},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 2)
+	for _, raftResp := range resp.GetResponses() {
+		prewriteResp := raftResp.GetPrewrite()
+		require.NotNil(t, prewriteResp)
+		require.Empty(t, prewriteResp.GetErrors())
+	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{6}, store.appliedEntryCounts)
+}
+
 func TestApplyTryAtomicMutateCommandFallsBackForCrossShardBatch(t *testing.T) {
 	const shardCount = 4
 
@@ -223,6 +288,54 @@ func TestApplyTryAtomicMutateCommandFallsBackForCrossShardBatch(t *testing.T) {
 		_, _, err := reader.GetValue(key, commitVersion)
 		require.ErrorIs(t, err, utils.ErrKeyNotFound)
 	}
+}
+
+func atomicPutForApplyTest(startVersion, commitVersion uint64, key, value []byte) *kvrpcpb.TryAtomicMutateRequest {
+	return &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  startVersion,
+		CommitVersion: commitVersion,
+		Predicates: []*kvrpcpb.AtomicPredicate{
+			{Key: entrykv.SafeCopy(nil, key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS},
+		},
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: entrykv.SafeCopy(nil, key), Value: entrykv.SafeCopy(nil, value), AssertionNotExist: true},
+		},
+	}
+}
+
+func prewriteForApplyTest(startVersion uint64, key, value []byte) *kvrpcpb.PrewriteRequest {
+	return &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{
+			{Op: kvrpcpb.Mutation_Put, Key: entrykv.SafeCopy(nil, key), Value: entrykv.SafeCopy(nil, value)},
+		},
+		PrimaryLock:  entrykv.SafeCopy(nil, key),
+		StartVersion: startVersion,
+		LockTtl:      1000,
+	}
+}
+
+type countingAtomicApplyStore struct {
+	base               *local.DB
+	applyCalls         int
+	appliedEntryCounts []int
+}
+
+func (s *countingAtomicApplyStore) ApplyInternalEntries(entries []*entrykv.Entry) error {
+	s.applyCalls++
+	s.appliedEntryCounts = append(s.appliedEntryCounts, len(entries))
+	return s.base.ApplyInternalEntries(entries)
+}
+
+func (s *countingAtomicApplyStore) CanApplyInternalEntriesAtomically(entries []*entrykv.Entry) bool {
+	return s.base.CanApplyInternalEntriesAtomically(entries)
+}
+
+func (s *countingAtomicApplyStore) GetInternalEntry(cf entrykv.ColumnFamily, key []byte, version uint64) (*entrykv.Entry, error) {
+	return s.base.GetInternalEntry(cf, key, version)
+}
+
+func (s *countingAtomicApplyStore) NewInternalIterator(opt *index.Options) index.Iterator {
+	return s.base.NewInternalIterator(opt)
 }
 
 func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, version uint64) ([]byte, []byte) {
