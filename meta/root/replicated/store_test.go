@@ -164,6 +164,42 @@ func TestOpenAcceptsDriverConfig(t *testing.T) {
 	require.NotNil(t, store)
 }
 
+func TestReplicatedStoreObserveCommittedUsesDetachedCache(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
+	commit, err := stores[leaderID].Append(context.Background(),
+		rootevent.RegionDescriptorPublished(testDescriptor(10, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+
+	first, err := stores[leaderID].ObserveCommitted()
+	require.NoError(t, err)
+	first.Checkpoint.Snapshot.State.ClusterEpoch = 999
+
+	second, err := stores[leaderID].ObserveCommitted()
+	require.NoError(t, err)
+	require.Equal(t, commit.State.ClusterEpoch, second.Checkpoint.Snapshot.State.ClusterEpoch)
+
+	stats := drivers[leaderID].Stats()
+	require.GreaterOrEqual(t, metricUint64(stats, "observe_cache_hit_total"), uint64(1))
+	require.GreaterOrEqual(t, metricUint64(stats, "observe_cache_miss_total"), uint64(1))
+}
+
+func TestReplicatedStoreObserveCacheInvalidatesAfterAppend(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 4)
+	_, err := stores[leaderID].ObserveCommitted()
+	require.NoError(t, err)
+	before := metricUint64(drivers[leaderID].Stats(), "observe_cache_invalidations_total")
+
+	commit, err := stores[leaderID].Append(context.Background(),
+		rootevent.RegionDescriptorPublished(testDescriptor(11, []byte("a"), []byte("z"))),
+	)
+	require.NoError(t, err)
+	observed, err := stores[leaderID].ObserveCommitted()
+	require.NoError(t, err)
+	require.Equal(t, commit.Cursor, observed.LastCursor())
+	require.Greater(t, metricUint64(drivers[leaderID].Stats(), "observe_cache_invalidations_total"), before)
+}
+
 func TestReplicatedStoreWaitForTailTracksFollowerAdvance(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	followerID := uint64(1)
@@ -612,4 +648,9 @@ func testDescriptor(id uint64, start, end []byte) topology.Descriptor {
 	}
 	desc.EnsureHash()
 	return desc
+}
+
+func metricUint64(stats map[string]any, key string) uint64 {
+	value, _ := stats[key].(uint64)
+	return value
 }

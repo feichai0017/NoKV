@@ -356,23 +356,22 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 	if !s.storage.CanSubmitRootWrites() {
 		return nil
 	}
-	snapshot, err := s.storage.Load()
-	if err != nil {
-		return err
-	}
-	s.refreshCurrentRootSnapshot(snapshot)
 	s.grantMu.RLock()
 	holderID := strings.TrimSpace(s.coordinatorID)
 	s.grantMu.RUnlock()
-	if holderID == "" || !snapshotHasLocalGrant(snapshot, holderID) {
+	if holderID == "" {
 		return nil
 	}
-	pending := make([]string, 0, len(snapshot.RetiredGrants))
-	for _, retirement := range snapshot.RetiredGrants {
-		if retirement.InheritedByGrantID == "" && retirement.GrantID != "" {
-			pending = append(pending, retirement.GrantID)
+	snapshot, ok := s.cachedRootSnapshot()
+	if !ok {
+		var err error
+		snapshot, err = s.storage.Load()
+		if err != nil {
+			return err
 		}
+		s.refreshCurrentRootSnapshot(snapshot)
 	}
+	pending := pendingGrantInheritanceIDs(snapshot, holderID)
 	if len(pending) == 0 {
 		return nil
 	}
@@ -388,14 +387,80 @@ func (s *Service) InheritRetiredGrants(ctx context.Context) error {
 		return err
 	}
 	s.publishEunomiaState(protocolState)
-	return s.reloadAndFenceAllocators(true)
+	// Inheritance only advances the grant lifecycle. Allocator fences and
+	// descriptor state are unchanged, so a full rooted reload would put every
+	// hot TSO/AllocID request back on the checkpoint-read path.
+	return nil
 }
 
 func (s *Service) grantInheritanceCandidate() bool {
 	if s == nil || !s.coordinatorGrantEnabled() || s.storage == nil {
 		return false
 	}
-	return len(s.localActiveAuthorityDuties()) > 0
+	snapshot, ok := s.cachedRootSnapshot()
+	if !ok {
+		return false
+	}
+	s.grantMu.RLock()
+	holderID := strings.TrimSpace(s.coordinatorID)
+	s.grantMu.RUnlock()
+	return len(pendingGrantInheritanceIDs(snapshot, holderID)) > 0
+}
+
+func pendingGrantInheritanceIDs(snapshot rootview.Snapshot, holderID string) []string {
+	holderID = strings.TrimSpace(holderID)
+	if holderID == "" || !snapshotHasLocalGrant(snapshot, holderID) {
+		return nil
+	}
+	grants := localActiveGrants(snapshot, holderID)
+	pending := make([]string, 0, len(snapshot.RetiredGrants))
+	for _, retirement := range snapshot.RetiredGrants {
+		if retirement.InheritedByGrantID == "" && retirement.GrantID != "" && localGrantCoversRetirement(grants, retirement) {
+			pending = append(pending, retirement.GrantID)
+		}
+	}
+	return pending
+}
+
+func localActiveGrants(snapshot rootview.Snapshot, holderID string) []rootproto.AuthorityGrant {
+	holderID = strings.TrimSpace(holderID)
+	if holderID == "" {
+		return nil
+	}
+	out := make([]rootproto.AuthorityGrant, 0, len(snapshot.ActiveGrants))
+	for _, grant := range snapshot.ActiveGrants {
+		if strings.TrimSpace(grant.HolderID) == holderID {
+			out = append(out, grant)
+		}
+	}
+	return out
+}
+
+func localGrantCoversRetirement(grants []rootproto.AuthorityGrant, retirement rootproto.GrantRetirement) bool {
+	for _, grant := range grants {
+		if dutyGrantSetCovers(grant.Duties, retirement.Bounds) {
+			return true
+		}
+	}
+	return false
+}
+
+func dutyGrantSetCovers(grants, required []rootproto.DutyGrant) bool {
+	for _, req := range required {
+		found := false
+		for _, grant := range grants {
+			if grant.DutyID == req.DutyID &&
+				rootproto.ScopeEqual(grant.Scope, req.Scope) &&
+				rootproto.DutyBoundCovers(grant.Bound, req.Bound) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func grantInheritanceIgnorable(err error) bool {

@@ -46,9 +46,12 @@ func (s *Service) beginDutyAdmission(ctx context.Context, duty rootproto.DutyID)
 		return dutyAdmission{}, translateGrantError(err)
 	}
 	if s.grantInheritanceCandidate() {
+		s.eunomiaMetrics.recordGrantInheritanceSubmitted()
 		if err := s.InheritRetiredGrants(ctx); err != nil {
 			return dutyAdmission{}, err
 		}
+	} else {
+		s.eunomiaMetrics.recordGrantInheritanceSkipped()
 	}
 	admission, err := s.admitDutyFromCachedGrant(duty)
 	if err != nil {
@@ -230,11 +233,28 @@ func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission
 	return dutyAdmission{
 		grant:           grant,
 		certificate:     cert,
-		retirements:     append([]rootproto.GrantRetirement(nil), view.retirements...),
+		retirements:     authorityEvidenceRetirements(view.retirements, view.retiredEraFloor),
 		retiredEraFloor: view.retiredEraFloor,
 		duty:            duty,
 		servedUnixNano:  nowUnixNano,
 	}, nil
+}
+
+func authorityEvidenceRetirements(retirements []rootproto.GrantRetirement, retiredEraFloor uint64) []rootproto.GrantRetirement {
+	if len(retirements) == 0 {
+		return nil
+	}
+	out := make([]rootproto.GrantRetirement, 0, len(retirements))
+	for _, retirement := range retirements {
+		// The retired-era floor is the stable verifier contract for inherited
+		// history. Keeping those records in every hot TSO/AllocID reply only
+		// grows the evidence payload without adding a stronger fence.
+		if retirement.InheritedByGrantID != "" && retirement.Era <= retiredEraFloor {
+			continue
+		}
+		out = append(out, retirement)
+	}
+	return out
 }
 
 func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {

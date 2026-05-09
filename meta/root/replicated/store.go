@@ -3,8 +3,10 @@ package replicated
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -47,6 +49,9 @@ type Store struct {
 	records            []rootstorage.CommittedEvent
 	retainFrom         rootstate.Cursor
 	maxRetainedRecords int
+
+	eunomiaCompactDroppedRetirements  atomic.Uint64
+	eunomiaCompactDroppedInheritances atomic.Uint64
 }
 
 func Open(cfg Config) (*Store, error) {
@@ -56,7 +61,7 @@ func Open(cfg Config) (*Store, error) {
 	if cfg.MaxRetainedRecords <= 0 {
 		cfg.MaxRetainedRecords = defaultRetainedRecords
 	}
-	observed, err := rootstorage.ObserveCommitted(cfg.Driver, 0)
+	observed, err := observeDriverCommitted(cfg.Driver)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +149,29 @@ func (s *Store) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	if s == nil {
 		return rootstorage.ObservedCommitted{}, nil
 	}
-	return rootstorage.ObserveCommitted(s.driver, 0)
+	return observeDriverCommitted(s.driver)
+}
+
+func observeDriverCommitted(driver Driver) (rootstorage.ObservedCommitted, error) {
+	if observer, ok := driver.(interface {
+		ObserveCommitted() (rootstorage.ObservedCommitted, error)
+	}); ok {
+		return observer.ObserveCommitted()
+	}
+	return rootstorage.ObserveCommitted(driver, 0)
+}
+
+func (s *Store) Stats() map[string]any {
+	if s == nil {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	if stats, ok := s.driver.(interface{ Stats() map[string]any }); ok {
+		maps.Copy(out, stats.Stats())
+	}
+	out["eunomia_compact_dropped_retirements_total"] = s.eunomiaCompactDroppedRetirements.Load()
+	out["eunomia_compact_dropped_inheritances_total"] = s.eunomiaCompactDroppedInheritances.Load()
+	return out
 }
 
 // WaitForTail waits until the durable committed tail view changes past after.
@@ -261,6 +288,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
+	snapshot.State = s.compactEunomiaState(snapshot.State)
 	logEnd, err := s.driver.AppendCommitted(ctx, records...)
 	if err != nil {
 		return rootstate.CommitInfo{}, err
@@ -762,10 +790,7 @@ func (s *Store) maybeCompactLocked() {
 		return
 	}
 	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, s.maxRetainedRecords)
-	snapshotState := s.state
-	if plan.Compacted {
-		snapshotState = rootstate.CompactEunomiaState(snapshotState)
-	}
+	snapshotState := s.compactEunomiaState(s.state)
 	snapshot := rootstate.Snapshot{
 		State:               snapshotState,
 		Stores:              rootstate.CloneStoreMemberships(s.stores),
@@ -788,6 +813,19 @@ func (s *Store) maybeCompactLocked() {
 	s.state = snapshotState
 	s.records = plan.Tail.Records
 	s.retainFrom = plan.RetainFrom
+}
+
+func (s *Store) compactEunomiaState(state rootstate.State) rootstate.State {
+	compacted := rootstate.CompactEunomiaState(state)
+	if s != nil {
+		if dropped := len(state.RetiredGrants) - len(compacted.RetiredGrants); dropped > 0 {
+			s.eunomiaCompactDroppedRetirements.Add(uint64(dropped))
+		}
+		if dropped := len(state.GrantInheritances) - len(compacted.GrantInheritances); dropped > 0 {
+			s.eunomiaCompactDroppedInheritances.Add(uint64(dropped))
+		}
+	}
+	return compacted
 }
 
 func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {

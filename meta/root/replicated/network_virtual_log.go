@@ -13,6 +13,10 @@ func (d *NetworkDriver) ObserveTail(after rootstorage.TailToken) (rootstorage.Ta
 	return d.adapter.observe(after)
 }
 
+func (d *NetworkDriver) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
+	return d.adapter.observeCommitted()
+}
+
 func (d *NetworkDriver) TailNotify() <-chan struct{} {
 	return d.adapter.watchChannel()
 }
@@ -169,4 +173,11 @@ func (d *NetworkDriver) CompactCommitted(stream rootstorage.CommittedTail) error
 
 func (d *NetworkDriver) Size() (int64, error) {
 	return d.adapter.size()
+}
+
+func (d *NetworkDriver) Stats() map[string]any {
+	if d == nil || d.adapter == nil {
+		return map[string]any{}
+	}
+	return d.adapter.stats()
 }
