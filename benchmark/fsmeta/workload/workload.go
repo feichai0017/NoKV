@@ -293,12 +293,9 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 		}
 		return err
 	})
-	prefix, err := fsmeta.EncodeDentryPrefix(cfg.Mount, dirInode)
-	if err != nil {
-		return Result{}, err
-	}
 	stream, err := watchCli.WatchSubtree(ctx, fsmeta.WatchRequest{
-		KeyPrefix:          prefix,
+		Mount:              cfg.Mount,
+		RootInode:          dirInode,
 		BackPressureWindow: cfg.BackPressureWindow,
 	})
 	if err != nil {
@@ -306,10 +303,6 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	}
 	defer func() { _ = stream.Close() }()
 
-	warmupKey, err := fsmeta.EncodeDentryKey(cfg.Mount, dirInode, "watch-warmup")
-	if err != nil {
-		return Result{}, err
-	}
 	if _, err := cli.Create(ctx, fsmeta.CreateRequest{
 		Mount:  cfg.Mount,
 		Parent: dirInode,
@@ -318,7 +311,7 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	}); err != nil {
 		return Result{}, err
 	}
-	if err := waitForWatchKey(ctx, stream, warmupKey); err != nil {
+	if err := waitForWatchName(ctx, stream, "watch-warmup"); err != nil {
 		return Result{}, err
 	}
 
@@ -338,12 +331,7 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 					return
 				}
 				name := fmt.Sprintf("watch-%s-file-%08d", cfg.RunID, idx)
-				key, err := fsmeta.EncodeDentryKey(cfg.Mount, dirInode, name)
-				if err != nil {
-					rec.record("watch_create", 0, err)
-					continue
-				}
-				starts.put(key, time.Now())
+				starts.put(name, time.Now())
 				rec.recordCall("watch_create", func() error {
 					_, err := cli.Create(ctx, fsmeta.CreateRequest{
 						Mount:  cfg.Mount,
@@ -680,18 +668,18 @@ func newWatchStarts() *watchStarts {
 	return &watchStarts{values: make(map[string]time.Time)}
 }
 
-func (s *watchStarts) put(key []byte, started time.Time) {
+func (s *watchStarts) put(name string, started time.Time) {
 	s.mu.Lock()
-	s.values[string(key)] = started
+	s.values[name] = started
 	s.mu.Unlock()
 }
 
-func (s *watchStarts) pop(key []byte) (time.Time, bool) {
+func (s *watchStarts) pop(name string) (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	started, ok := s.values[string(key)]
+	started, ok := s.values[name]
 	if ok {
-		delete(s.values, string(key))
+		delete(s.values, name)
 	}
 	return started, ok
 }
@@ -709,7 +697,11 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 			return
 		}
 		_ = stream.Ack(evt.Cursor)
-		if started, ok := starts.pop(evt.Key); ok {
+		name, ok := fsmeta.DentryNameOfKey(evt.Key)
+		if !ok {
+			continue
+		}
+		if started, ok := starts.pop(name); ok {
 			rec.record("watch_notify", time.Since(started), nil)
 			received++
 		}
@@ -723,14 +715,14 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 	done <- nil
 }
 
-func waitForWatchKey(ctx context.Context, stream fsmetaclient.WatchSubscription, key []byte) error {
+func waitForWatchName(ctx context.Context, stream fsmetaclient.WatchSubscription, want string) error {
 	for {
 		evt, err := stream.Recv()
 		if err != nil {
 			return err
 		}
 		_ = stream.Ack(evt.Cursor)
-		if string(evt.Key) == string(key) {
+		if name, ok := fsmeta.DentryNameOfKey(evt.Key); ok && name == want {
 			return nil
 		}
 		select {

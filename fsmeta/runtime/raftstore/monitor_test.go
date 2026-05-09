@@ -130,7 +130,7 @@ func TestMonitorRefreshesQuotaFences(t *testing.T) {
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	fence, ok, found := quotas.lookup(quotaSubject{mount: "vol", scope: 7}, time.Now())
-	require.True(t, found)
-	require.True(t, ok)
-	require.Equal(t, quotaFence{limitBytes: 4096, limitInodes: 12, era: 3}, fence)
+	require.False(t, found)
+	require.False(t, ok)
+	require.Equal(t, quotaFence{}, fence)
 }

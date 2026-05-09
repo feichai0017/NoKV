@@ -266,7 +266,7 @@ func runServeCmd(w io.Writer, args []string) error {
 				}
 				return retentionSource.Retention()
 			},
-			Mount: fsmeta.StringMountResolver,
+			Mount: fsmeta.MountKeyResolver,
 			Apply: storemvcc.ApplyOptions{
 				BatchEntries: *mvccGCBatchEntries,
 				MaxKeys:      *mvccGCMaxKeys,
@@ -295,7 +295,7 @@ func runServeCmd(w io.Writer, args []string) error {
 				}
 				return retentionSource.Retention()
 			},
-			Mount: fsmeta.StringMountResolver,
+			Mount: fsmeta.MountKeyResolver,
 		},
 		TransportAddr: *listenAddr,
 	})

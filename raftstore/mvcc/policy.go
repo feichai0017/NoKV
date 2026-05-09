@@ -7,10 +7,10 @@ import (
 
 const defaultMaxBufferedVersionsPerKey = 65536
 
-// MountResolver extracts a namespace mount identifier from a user key. GC
+// MountResolver extracts a numeric namespace mount key from a user key. GC
 // policy treats nil or unresolved keys as unknown layouts and falls back to the
 // global snapshot floor.
-type MountResolver func(userKey []byte) (mount string, ok bool)
+type MountResolver func(userKey []byte) (mountKeyID uint64, ok bool)
 
 // SafePointPolicy resolves the safe point used for one user key. It keeps
 // namespace snapshot scoping out of transaction apply code and keeps deletion

@@ -55,6 +55,7 @@ type StoreMembership struct {
 type SnapshotEpoch struct {
 	SnapshotID  string
 	Mount       string
+	MountKeyID  uint64
 	RootInode   uint64
 	ReadVersion uint64
 	PublishedAt RootCursor
@@ -63,6 +64,7 @@ type SnapshotEpoch struct {
 // Mount records one filesystem metadata mount lifecycle event.
 type Mount struct {
 	MountID       string
+	MountKeyID    uint64
 	RootInode     uint64
 	SchemaVersion uint32
 	RegisteredAt  RootCursor
@@ -188,11 +190,12 @@ func GrantInherited(inheritance rootproto.GrantInheritance) Event {
 	return Event{Kind: KindGrantInherited, GrantInheritance: &inheritance}
 }
 
-func MountRegistered(mountID string, rootInode uint64, schemaVersion uint32) Event {
+func MountRegistered(mountID string, mountKeyID, rootInode uint64, schemaVersion uint32) Event {
 	return Event{
 		Kind: KindMountRegistered,
 		Mount: &Mount{
 			MountID:       mountID,
+			MountKeyID:    mountKeyID,
 			RootInode:     rootInode,
 			SchemaVersion: schemaVersion,
 		},
@@ -278,24 +281,26 @@ func SnapshotEpochID(mount string, rootInode, readVersion uint64) string {
 	return fmt.Sprintf("%s/%d/%d", mount, rootInode, readVersion)
 }
 
-func SnapshotEpochPublished(mount string, rootInode, readVersion uint64) Event {
+func SnapshotEpochPublished(mount string, mountKeyID, rootInode, readVersion uint64) Event {
 	return Event{
 		Kind: KindSnapshotEpochPublished,
 		SnapshotEpoch: &SnapshotEpoch{
 			SnapshotID:  SnapshotEpochID(mount, rootInode, readVersion),
 			Mount:       mount,
+			MountKeyID:  mountKeyID,
 			RootInode:   rootInode,
 			ReadVersion: readVersion,
 		},
 	}
 }
 
-func SnapshotEpochRetired(mount string, rootInode, readVersion uint64) Event {
+func SnapshotEpochRetired(mount string, mountKeyID, rootInode, readVersion uint64) Event {
 	return Event{
 		Kind: KindSnapshotEpochRetired,
 		SnapshotEpoch: &SnapshotEpoch{
 			SnapshotID:  SnapshotEpochID(mount, rootInode, readVersion),
 			Mount:       mount,
+			MountKeyID:  mountKeyID,
 			RootInode:   rootInode,
 			ReadVersion: readVersion,
 		},

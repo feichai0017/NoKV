@@ -18,6 +18,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var contractMountIdentity = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
+type contractMountResolver struct{}
+
+func (contractMountResolver) ResolveMount(context.Context, fsmeta.MountID) (fsmetaexec.MountAdmission, error) {
+	return fsmetaexec.MountAdmission{
+		MountID:       contractMountIdentity.MountID,
+		MountKeyID:    contractMountIdentity.MountKeyID,
+		RootInode:     fsmeta.RootInode,
+		SchemaVersion: 1,
+	}, nil
+}
+
 func TestFSMetaExecutorModelContract(t *testing.T) {
 	seeds := envInt("NOKV_CONTRACT_SEEDS", 16)
 	steps := envInt("NOKV_CONTRACT_STEPS", 80)
@@ -27,6 +40,7 @@ func TestFSMetaExecutorModelContract(t *testing.T) {
 			runner := newVersionedRunner()
 			ops := GenerateScript(seed, steps)
 			executor, err := fsmetaexec.New(runner,
+				fsmetaexec.WithMountResolver(contractMountResolver{}),
 				fsmetaexec.WithInodeAllocator(newScriptInodeAllocator(ops)),
 				fsmetaexec.WithClock(func() time.Time {
 					return time.Unix(0, model.NowUnixNs)
@@ -215,11 +229,11 @@ func TestVersionedRunnerDelaysPreallocatedCommitPastConcurrentRead(t *testing.T)
 	ctx := context.Background()
 	runner := newVersionedRunner()
 
-	epsilonKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "epsilon")
+	epsilonKey, err := fsmeta.EncodeDentryKey(contractMountIdentity, fsmeta.RootInode, "epsilon")
 	require.NoError(t, err)
-	etaKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "eta")
+	etaKey, err := fsmeta.EncodeDentryKey(contractMountIdentity, fsmeta.RootInode, "eta")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey("vol", 10)
+	inodeKey, err := fsmeta.EncodeInodeKey(contractMountIdentity, 10)
 	require.NoError(t, err)
 	epsilonValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
 		Parent: fsmeta.RootInode,

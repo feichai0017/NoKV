@@ -1059,6 +1059,7 @@ type RootSnapshotEpoch struct {
 	RootInode     uint64                 `protobuf:"varint,3,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
 	ReadVersion   uint64                 `protobuf:"varint,4,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
 	PublishedAt   *RootCursor            `protobuf:"bytes,5,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	MountKeyId    uint64                 `protobuf:"varint,6,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1128,6 +1129,13 @@ func (x *RootSnapshotEpoch) GetPublishedAt() *RootCursor {
 	return nil
 }
 
+func (x *RootSnapshotEpoch) GetMountKeyId() uint64 {
+	if x != nil {
+		return x.MountKeyId
+	}
+	return 0
+}
+
 type RootMount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MountId       string                 `protobuf:"bytes,1,opt,name=mount_id,json=mountId,proto3" json:"mount_id,omitempty"`
@@ -1136,6 +1144,7 @@ type RootMount struct {
 	State         RootMountState         `protobuf:"varint,4,opt,name=state,proto3,enum=nokv.meta.v1.RootMountState" json:"state,omitempty"`
 	RegisteredAt  *RootCursor            `protobuf:"bytes,5,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
 	RetiredAt     *RootCursor            `protobuf:"bytes,6,opt,name=retired_at,json=retiredAt,proto3" json:"retired_at,omitempty"`
+	MountKeyId    uint64                 `protobuf:"varint,7,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1210,6 +1219,13 @@ func (x *RootMount) GetRetiredAt() *RootCursor {
 		return x.RetiredAt
 	}
 	return nil
+}
+
+func (x *RootMount) GetMountKeyId() uint64 {
+	if x != nil {
+		return x.MountKeyId
+	}
+	return 0
 }
 
 type RootSubtreeAuthority struct {
@@ -4576,7 +4592,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05state\x18\x02 \x01(\x0e2\x1c.nokv.meta.v1.RootStoreStateR\x05state\x125\n" +
 	"\tjoined_at\x18\x03 \x01(\v2\x18.nokv.meta.v1.RootCursorR\bjoinedAt\x127\n" +
 	"\n" +
-	"retired_at\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xc9\x01\n" +
+	"retired_at\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xeb\x01\n" +
 	"\x11RootSnapshotEpoch\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
 	"snapshotId\x12\x14\n" +
@@ -4584,7 +4600,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"root_inode\x18\x03 \x01(\x04R\trootInode\x12!\n" +
 	"\fread_version\x18\x04 \x01(\x04R\vreadVersion\x12;\n" +
-	"\fpublished_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vpublishedAt\"\x98\x02\n" +
+	"\fpublished_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vpublishedAt\x12 \n" +
+	"\fmount_key_id\x18\x06 \x01(\x04R\n" +
+	"mountKeyId\"\xba\x02\n" +
 	"\tRootMount\x12\x19\n" +
 	"\bmount_id\x18\x01 \x01(\tR\amountId\x12\x1d\n" +
 	"\n" +
@@ -4593,7 +4611,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1c.nokv.meta.v1.RootMountStateR\x05state\x12=\n" +
 	"\rregistered_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\fregisteredAt\x127\n" +
 	"\n" +
-	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xe9\x05\n" +
+	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\x12 \n" +
+	"\fmount_key_id\x18\a \x01(\x04R\n" +
+	"mountKeyId\"\xe9\x05\n" +
 	"\x14RootSubtreeAuthority\x12\x1d\n" +
 	"\n" +
 	"subtree_id\x18\x01 \x01(\tR\tsubtreeId\x12\x14\n" +

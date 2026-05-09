@@ -32,14 +32,14 @@ func TestWatchPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, byte('f'), prefixAgain[0])
 
-	dentryPrefix, err := WatchPrefix(WatchRequest{Mount: "vol", RootInode: 7})
+	dentryPrefix, err := WatchPrefixForMount(WatchRequest{Mount: "vol", RootInode: 7}, testMount)
 	require.NoError(t, err)
-	want, err := EncodeDentryPrefix("vol", 7)
+	want, err := EncodeDentryPrefix(testMount, 7)
 	require.NoError(t, err)
 	require.Equal(t, want, dentryPrefix)
 
 	_, err = WatchPrefix(WatchRequest{Mount: "vol", KeyPrefix: []byte("fsm/custom")})
 	require.ErrorIs(t, err, ErrInvalidRequest)
-	_, err = WatchPrefix(WatchRequest{Mount: "vol", RootInode: 7, DescendRecursively: true})
+	_, err = WatchPrefixForMount(WatchRequest{Mount: "vol", RootInode: 7, DescendRecursively: true}, testMount)
 	require.ErrorIs(t, err, ErrInvalidRequest)
 }

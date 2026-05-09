@@ -32,8 +32,9 @@ func openRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Exec
 }
 
 type realClusterRuntime struct {
-	executor *fsmetaexec.Executor
-	node     *testcluster.Node
+	executor      *fsmetaexec.Executor
+	node          *testcluster.Node
+	mountIdentity fsmeta.MountIdentity
 }
 
 func openRealClusterRuntime(t *testing.T, ctx context.Context) *realClusterRuntime {
@@ -98,7 +99,11 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	executorOpts = append(executorOpts, opts...)
 	executor, err := fsmetaexec.New(runner, executorOpts...)
 	require.NoError(t, err)
-	return &realClusterRuntime{executor: executor, node: node}
+	return &realClusterRuntime{
+		executor:      executor,
+		node:          node,
+		mountIdentity: fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
+	}
 }
 
 func openSplitRealClusterExecutor(t *testing.T, ctx context.Context) *fsmetaexec.Executor {
@@ -143,7 +148,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	testcluster.WaitForLeaderPeer(t, ctx, node.Addr(), parentRegionID, parentPeerID)
 	testcluster.WaitForSchedulerMode(t, node, storecontrol.ModeHealthy, false)
 
-	splitKey, err := fsmeta.EncodeDentryKey("vol", fsmeta.RootInode, "m")
+	splitKey, err := fsmeta.EncodeDentryKey(fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}, fsmeta.RootInode, "m")
 	require.NoError(t, err)
 	childMeta := localmeta.RegionMeta{
 		ID:       childRegionID,
@@ -214,6 +219,7 @@ func (r testMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountI
 	info := resp.GetMount()
 	return fsmetaexec.MountAdmission{
 		MountID:       fsmeta.MountID(info.GetMountId()),
+		MountKeyID:    fsmeta.MountKeyID(info.GetMountKeyId()),
 		RootInode:     fsmeta.InodeID(info.GetRootInode()),
 		SchemaVersion: info.GetSchemaVersion(),
 		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,
@@ -223,7 +229,7 @@ func (r testMountResolver) ResolveMount(ctx context.Context, mount fsmeta.MountI
 func registerMount(t *testing.T, ctx context.Context, coord *coordclient.GRPCClient, mount fsmeta.MountID) {
 	t.Helper()
 	resp, err := coord.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.MountRegistered(string(mount), uint64(fsmeta.RootInode), 1)),
+		Event: metawire.RootEventToProto(rootevent.MountRegistered(string(mount), 1, uint64(fsmeta.RootInode), 1)),
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetAccepted())

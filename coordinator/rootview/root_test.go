@@ -191,12 +191,14 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 			"vol/9/25": {
 				SnapshotID:  "vol/9/25",
 				Mount:       "vol",
+				MountKeyID:  1,
 				RootInode:   9,
 				ReadVersion: 25,
 			},
 			"data/1/40": {
 				SnapshotID:  "data/1/40",
 				Mount:       "data",
+				MountKeyID:  2,
 				RootInode:   1,
 				ReadVersion: 40,
 			},
@@ -253,9 +255,9 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 	require.Equal(t, uint64(25), floor)
 	retentionIndex := fromRoot.SnapshotRetentionIndex()
 	require.Equal(t, uint64(25), retentionIndex.GlobalFloor)
-	require.Equal(t, map[string]uint64{
-		"vol":  25,
-		"data": 40,
+	require.Equal(t, map[uint64]uint64{
+		1: 25,
+		2: 40,
 	}, retentionIndex.MountFloors)
 	require.Equal(t, rootSnapshot.SnapshotEpochs, fromRoot.RootSnapshot().SnapshotEpochs)
 

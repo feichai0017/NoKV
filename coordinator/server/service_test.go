@@ -723,6 +723,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 				"vol/9/33": {
 					SnapshotID:  "vol/9/33",
 					Mount:       "vol",
+					MountKeyID:  1,
 					RootInode:   9,
 					ReadVersion: 33,
 				},
@@ -765,7 +766,7 @@ func TestServiceDiagnosticsSnapshot(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"active":             true,
 		"min_read_version":   uint64(33),
-		"mount_floors":       map[string]uint64{"vol": 33},
+		"mount_floors":       map[uint64]uint64{1: 33},
 		"enforcement_target": "mvcc_gc",
 	}, root["snapshot_retention"])
 	require.Equal(t, true, grant["enabled"])
@@ -1892,10 +1893,10 @@ func TestServiceAssessRootEventUsesStorageSnapshot(t *testing.T) {
 
 func TestServicePublishRootEventValidatesAgainstStorageSnapshot(t *testing.T) {
 	cluster := catalog.NewCluster()
-	require.NoError(t, cluster.PublishRootEvent(rootevent.MountRegistered("default", 1, 1)))
+	require.NoError(t, cluster.PublishRootEvent(rootevent.MountRegistered("default", 1, 1, 1)))
 
 	var rooted rootstate.Snapshot
-	rootstate.ApplyEventToSnapshot(&rooted, rootstate.Cursor{Term: 1, Index: 1}, rootevent.MountRegistered("default", 1, 1))
+	rootstate.ApplyEventToSnapshot(&rooted, rootstate.Cursor{Term: 1, Index: 1}, rootevent.MountRegistered("default", 1, 1, 1))
 	rootstate.ApplyEventToSnapshot(&rooted, rootstate.Cursor{Term: 1, Index: 2}, rootevent.SubtreeHandoffStarted("default", 1, 21))
 	store := &fakeStorage{
 		leader:   true,

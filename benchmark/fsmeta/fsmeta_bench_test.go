@@ -111,8 +111,16 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 		}
 		return
 	}
+	alloc, err := coordRPC.AllocID(ctx, &coordpb.AllocIDRequest{Count: 1})
+	if err != nil {
+		t.Fatalf("allocate benchmark mount key id: %v", err)
+	}
+	if alloc == nil || alloc.GetFirstId() == 0 || alloc.GetCount() != 1 {
+		t.Fatalf("coordinator returned invalid benchmark mount key id allocation")
+	}
+	mountKeyID := alloc.GetFirstId()
 	publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.MountRegistered(strings.TrimSpace(*fsmetaMount), uint64(fsmeta.RootInode), 1)),
+		Event: metawire.RootEventToProto(rootevent.MountRegistered(strings.TrimSpace(*fsmetaMount), mountKeyID, uint64(fsmeta.RootInode), 1)),
 	})
 	if err != nil {
 		t.Fatalf("register benchmark mount: %v", err)

@@ -63,6 +63,7 @@ type rootScheduleModel struct {
 	activeRegions   []uint64
 	nextMountID     uint64
 	activeMounts    []string
+	mountKeyIDs     map[string]uint64
 	snapshotVersion map[string]uint64
 	quotaEra        map[string]uint64
 }
@@ -73,6 +74,7 @@ func newRootScheduleModel(seed int64) *rootScheduleModel {
 		nextStoreID:     10,
 		nextRegionID:    1000,
 		nextMountID:     1,
+		mountKeyIDs:     make(map[string]uint64),
 		snapshotVersion: make(map[string]uint64),
 		quotaEra:        make(map[string]uint64),
 	}
@@ -126,9 +128,11 @@ func (m *rootScheduleModel) storeRetired() rootevent.Event {
 
 func (m *rootScheduleModel) mountRegistered() rootevent.Event {
 	mount := fmt.Sprintf("vol-%03d", m.nextMountID)
+	mountKeyID := m.nextMountID
 	m.nextMountID++
 	m.activeMounts = append(m.activeMounts, mount)
-	return rootevent.MountRegistered(mount, 1, 1)
+	m.mountKeyIDs[mount] = mountKeyID
+	return rootevent.MountRegistered(mount, mountKeyID, 1, 1)
 }
 
 func (m *rootScheduleModel) mountRetired() rootevent.Event {
@@ -138,13 +142,14 @@ func (m *rootScheduleModel) mountRetired() rootevent.Event {
 	idx := m.rng.Intn(len(m.activeMounts))
 	mount := m.activeMounts[idx]
 	m.activeMounts = append(m.activeMounts[:idx], m.activeMounts[idx+1:]...)
+	delete(m.mountKeyIDs, mount)
 	return rootevent.MountRetired(mount)
 }
 
 func (m *rootScheduleModel) snapshotPublished() rootevent.Event {
 	mount := m.randomMount()
 	m.snapshotVersion[mount]++
-	return rootevent.SnapshotEpochPublished(mount, 1, m.snapshotVersion[mount])
+	return rootevent.SnapshotEpochPublished(mount, m.mountKeyIDs[mount], 1, m.snapshotVersion[mount])
 }
 
 func (m *rootScheduleModel) snapshotRetired() rootevent.Event {
@@ -152,7 +157,7 @@ func (m *rootScheduleModel) snapshotRetired() rootevent.Event {
 	if m.snapshotVersion[mount] == 0 {
 		return m.snapshotPublished()
 	}
-	return rootevent.SnapshotEpochRetired(mount, 1, m.snapshotVersion[mount])
+	return rootevent.SnapshotEpochRetired(mount, m.mountKeyIDs[mount], 1, m.snapshotVersion[mount])
 }
 
 func (m *rootScheduleModel) quotaUpdated() rootevent.Event {

@@ -175,14 +175,11 @@ func runSnapshotProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount f
 }
 
 func runWatchProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fsmeta.MountID, seed int64) error {
-	prefix, err := fsmeta.EncodeDentryPrefix(mount, fsmeta.RootInode)
-	if err != nil {
-		return err
-	}
 	watchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	stream, err := cli.WatchSubtree(watchCtx, fsmeta.WatchRequest{
-		KeyPrefix:          prefix,
+		Mount:              mount,
+		RootInode:          fsmeta.RootInode,
 		BackPressureWindow: 8,
 	})
 	if err != nil {
@@ -204,16 +201,12 @@ func runWatchProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fsme
 	}); err != nil && !errors.Is(err, fsmeta.ErrExists) {
 		return err
 	}
-	wantKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, name)
-	if err != nil {
-		return err
-	}
 	for {
 		evt, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		if string(evt.Key) != string(wantKey) {
+		if got, ok := fsmeta.DentryNameOfKey(evt.Key); !ok || got != name {
 			_ = stream.Ack(evt.Cursor)
 			continue
 		}

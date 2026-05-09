@@ -85,7 +85,12 @@ func (e *Executor) AuditMount(ctx context.Context, mount fsmeta.MountID, readVer
 	if batchSize == 0 {
 		batchSize = defaultAuditBatchSize
 	}
-	start, end, err := fsmeta.EncodeMountKeyRange(mount)
+	record, err := e.resolveActiveMount(ctx, mount)
+	if err != nil {
+		return AuditReport{}, err
+	}
+	identity := record.Identity()
+	start, end, err := fsmeta.EncodeMountKeyRange(identity)
 	if err != nil {
 		return AuditReport{}, err
 	}
@@ -140,7 +145,7 @@ func (e *Executor) AuditMount(ctx context.Context, mount fsmeta.MountID, readVer
 				}
 				report.Inodes++
 				inodes[record.Inode] = record
-				expected, err := fsmeta.EncodeInodeKey(mount, record.Inode)
+				expected, err := fsmeta.EncodeInodeKey(identity, record.Inode)
 				if err != nil || !bytes.Equal(expected, row.Key) {
 					if !addIssue(AuditIssue{Kind: AuditInodeKeyMismatch, Key: row.Key, Inode: record.Inode}) {
 						return report, nil
@@ -157,7 +162,7 @@ func (e *Executor) AuditMount(ctx context.Context, mount fsmeta.MountID, readVer
 				report.Dentries++
 				dentries = append(dentries, record)
 				refs[record.Inode]++
-				expected, err := fsmeta.EncodeDentryKey(mount, record.Parent, record.Name)
+				expected, err := fsmeta.EncodeDentryKey(identity, record.Parent, record.Name)
 				if err != nil || !bytes.Equal(expected, row.Key) {
 					if !addIssue(AuditIssue{Kind: AuditDentryKeyMismatch, Key: row.Key, Parent: record.Parent, Name: record.Name, Inode: record.Inode}) {
 						return report, nil

@@ -21,6 +21,7 @@ type Executor interface {
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error)
 	SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error)
+	ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error)
 	GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageRequest) (fsmeta.UsageRecord, error)
 	Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error
@@ -256,13 +257,20 @@ func (s *Service) SnapshotSubtree(ctx context.Context, req *fsmetapb.SnapshotSub
 }
 
 func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.RetireSnapshotSubtreeRequest) (*fsmetapb.RetireSnapshotSubtreeResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.snapshot == nil {
 		return nil, rpcServiceUnavailable("fsmeta snapshot publisher is not configured")
 	}
 	if req == nil {
 		return nil, rpcInvalidArgument("fsmeta retire snapshot subtree request is required")
 	}
-	if err := s.snapshot.RetireSnapshotSubtree(ctx, retireSnapshotSubtreeRequestFromProto(req)); err != nil {
+	token, err := s.executor.ResolveSnapshotSubtreeToken(ctx, retireSnapshotSubtreeRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	if err := s.snapshot.RetireSnapshotSubtree(ctx, token); err != nil {
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil

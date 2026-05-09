@@ -91,7 +91,7 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.True(t, joinResp.GetAccepted())
 
 	mountResp, err := cli.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.MountRegistered("vol", 1, 1)),
+		Event: metawire.RootEventToProto(rootevent.MountRegistered("vol", 1, 1, 1)),
 	})
 	require.NoError(t, err)
 	require.True(t, mountResp.GetAccepted())

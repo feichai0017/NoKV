@@ -330,7 +330,7 @@ func (c *fakeMixedClient) emitDentryEventLocked(mount fsmeta.MountID, entry fsme
 	if len(c.streams) == 0 {
 		return
 	}
-	key, err := fsmeta.EncodeDentryKey(mount, entry.Parent, entry.Name)
+	key, err := fsmeta.EncodeDentryKey(testMountIdentity(mount), entry.Parent, entry.Name)
 	if err != nil {
 		return
 	}

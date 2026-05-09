@@ -216,18 +216,17 @@ func TestRouterRejectsExpiredResumeCursor(t *testing.T) {
 
 func TestRouterRetiresMountSubscriptions(t *testing.T) {
 	router := NewRouter()
-	volPrefix, err := fsmeta.EncodeDentryPrefix("vol", fsmeta.RootInode)
+	volPrefix, err := fsmeta.EncodeDentryPrefix(fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}, fsmeta.RootInode)
 	require.NoError(t, err)
-	otherPrefix, err := fsmeta.EncodeDentryPrefix("other", fsmeta.RootInode)
+	otherPrefix, err := fsmeta.EncodeDentryPrefix(fsmeta.MountIdentity{MountID: "other", MountKeyID: 2}, fsmeta.RootInode)
 	require.NoError(t, err)
 	volSub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
 		Mount:     "vol",
-		RootInode: fsmeta.RootInode,
+		KeyPrefix: volPrefix,
 	})
 	require.NoError(t, err)
 	otherSub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
-		Mount:     "other",
-		RootInode: fsmeta.RootInode,
+		KeyPrefix: otherPrefix,
 	})
 	require.NoError(t, err)
 	defer otherSub.Close()

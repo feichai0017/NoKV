@@ -13,7 +13,7 @@ func TestAuditMountReportsHealthyNamespace(t *testing.T) {
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: fsmeta.RootInode, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 22)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{BatchSize: 1})
@@ -29,7 +29,7 @@ func TestAuditMountReportsDentryMissingInode(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: fsmeta.RootInode, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "missing", 99)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
@@ -43,7 +43,7 @@ func TestAuditMountReportsDentryMissingInode(t *testing.T) {
 
 func TestAuditMountReportsMissingRootInode(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
@@ -59,7 +59,7 @@ func TestAuditMountReportsLinkCountMismatch(t *testing.T) {
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: fsmeta.RootInode, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 2})
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 22)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
@@ -75,7 +75,7 @@ func TestAuditMountReportsDentryTypeMismatch(t *testing.T) {
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: fsmeta.RootInode, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 22)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
@@ -90,7 +90,7 @@ func TestAuditMountLimitsIssues(t *testing.T) {
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: fsmeta.RootInode, Type: fsmeta.InodeTypeDirectory, LinkCount: 1})
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "a", 10)
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "b", 11)
-	executor, err := New(runner)
+	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
 	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{MaxIssues: 1})

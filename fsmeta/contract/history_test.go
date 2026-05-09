@@ -31,7 +31,7 @@ func newScriptInodeAllocator(ops []Operation) *scriptInodeAllocator {
 	return alloc
 }
 
-func (a *scriptInodeAllocator) AllocateCreateInode(ctx context.Context, _ fsmeta.MountID, _ fsmeta.InodeID, _ string) (fsmeta.InodeID, error) {
+func (a *scriptInodeAllocator) AllocateCreateInode(ctx context.Context, _ fsmeta.MountIdentity, _ fsmeta.InodeID, _ string) (fsmeta.InodeID, error) {
 	if inode, ok := plannedCreateInode(ctx); ok {
 		return inode, nil
 	}
@@ -52,6 +52,7 @@ func TestFSMetaExecutorConcurrentHistoryContract(t *testing.T) {
 			runner := newVersionedRunner()
 			ops := GenerateScript(seed, steps)
 			executor, err := fsmetaexec.New(runner,
+				fsmetaexec.WithMountResolver(contractMountResolver{}),
 				fsmetaexec.WithInodeAllocator(newScriptInodeAllocator(ops)),
 				fsmetaexec.WithClock(func() time.Time {
 					return time.Unix(0, model.NowUnixNs)

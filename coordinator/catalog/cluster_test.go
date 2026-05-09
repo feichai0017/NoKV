@@ -55,18 +55,24 @@ func TestClusterStoreHeartbeatRequiresActiveMembership(t *testing.T) {
 func TestClusterMountLifecycleRootEvents(t *testing.T) {
 	c := NewCluster()
 
-	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1, 1)))
 	mount, ok := c.MountByID("vol")
 	require.True(t, ok)
 	require.Equal(t, rootstate.MountRecord{
 		MountID:       "vol",
+		MountKeyID:    1,
 		RootInode:     1,
 		SchemaVersion: 1,
 		State:         rootstate.MountStateActive,
 	}, mount)
 
-	require.NoError(t, c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1)))
-	err := c.ValidateRootEvent(rootevent.MountRegistered("vol", 2, 1))
+	require.NoError(t, c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1, 1)))
+	err := c.ValidateRootEvent(rootevent.MountRegistered("vol2", 0, 1, 1))
+	require.ErrorIs(t, err, ErrInvalidMountConfig)
+	err = c.ValidateRootEvent(rootevent.MountRegistered("vol2", 1, 2, 1))
+	require.ErrorIs(t, err, ErrMountConflict)
+
+	err = c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 2, 1))
 	require.ErrorIs(t, err, ErrMountConflict)
 
 	require.NoError(t, c.PublishRootEvent(rootevent.MountRetired("vol")))
@@ -74,7 +80,7 @@ func TestClusterMountLifecycleRootEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, rootstate.MountStateRetired, mount.State)
 
-	err = c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1))
+	err = c.ValidateRootEvent(rootevent.MountRegistered("vol", 1, 1, 1))
 	require.ErrorIs(t, err, ErrMountRetired)
 	err = c.ValidateRootEvent(rootevent.MountRetired("missing"))
 	require.ErrorIs(t, err, ErrMountNotFound)
@@ -82,7 +88,7 @@ func TestClusterMountLifecycleRootEvents(t *testing.T) {
 
 func TestClusterSubtreeAuthorityLifecycleRootEvents(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1, 1)))
 
 	key := rootstate.SubtreeAuthorityKey("vol", 1)
 	subtree, ok := c.SubtreeAuthorityByID(key)
@@ -111,7 +117,7 @@ func TestClusterSubtreeAuthorityLifecycleRootEvents(t *testing.T) {
 
 func TestClusterQuotaFenceRootEvents(t *testing.T) {
 	c := NewCluster()
-	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1)))
+	require.NoError(t, c.PublishRootEvent(rootevent.MountRegistered("vol", 1, 1, 1)))
 
 	require.NoError(t, c.PublishRootEvent(rootevent.QuotaFenceUpdated("vol", 0, 1024, 10, 1, 0)))
 	fence, ok := c.QuotaFenceBySubject("vol", 0)

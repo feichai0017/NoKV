@@ -585,6 +585,7 @@ func (c *Cluster) applyRootEventToMounts(event rootevent.Event) {
 	case rootevent.KindMountRegistered:
 		c.mounts[event.Mount.MountID] = rootstate.MountRecord{
 			MountID:       event.Mount.MountID,
+			MountKeyID:    event.Mount.MountKeyID,
 			RootInode:     event.Mount.RootInode,
 			SchemaVersion: event.Mount.SchemaVersion,
 			State:         rootstate.MountStateActive,
@@ -651,13 +652,22 @@ func validateMountEvent(snapshot rootstate.Snapshot, event rootevent.Event) erro
 	current := snapshot.Mounts[mountID]
 	switch event.Kind {
 	case rootevent.KindMountRegistered:
-		if event.Mount.RootInode == 0 {
-			return ErrInvalidMountID
+		if event.Mount.MountKeyID == 0 || event.Mount.RootInode == 0 {
+			return ErrInvalidMountConfig
+		}
+		// mount_key_id comes from the global ID space and is fenced in root
+		// state. Keep this uniqueness check across the whole mount catalog so a
+		// later mount cannot reuse storage key ranges that already belong to
+		// another mount.
+		for id, mount := range snapshot.Mounts {
+			if id != mountID && mount.MountKeyID == event.Mount.MountKeyID {
+				return ErrMountConflict
+			}
 		}
 		if current.State == rootstate.MountStateRetired {
 			return ErrMountRetired
 		}
-		if current.MountID != "" && (current.RootInode != event.Mount.RootInode || current.SchemaVersion != event.Mount.SchemaVersion) {
+		if current.MountID != "" && (current.MountKeyID != event.Mount.MountKeyID || current.RootInode != event.Mount.RootInode || current.SchemaVersion != event.Mount.SchemaVersion) {
 			return ErrMountConflict
 		}
 	case rootevent.KindMountRetired:

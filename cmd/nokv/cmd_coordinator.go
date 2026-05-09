@@ -288,9 +288,12 @@ func fsmetaBootstrapSplitBoundaries(layout *config.FSMetaRegionBootstrap) ([][]b
 	if layout == nil {
 		return nil, nil
 	}
-	mounts := make([]fsmeta.MountID, 0, len(layout.Mounts))
+	mounts := make([]fsmeta.MountIdentity, 0, len(layout.Mounts))
 	for _, mount := range layout.Mounts {
-		mounts = append(mounts, fsmeta.MountID(mount))
+		mounts = append(mounts, fsmeta.MountIdentity{
+			MountID:    fsmeta.MountID(mount.MountID),
+			MountKeyID: fsmeta.MountKeyID(mount.MountKeyID),
+		})
 	}
 	boundaries, err := fsmeta.BucketSplitBoundaries(mounts, layout.BucketCount)
 	if err != nil {

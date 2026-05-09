@@ -1303,6 +1303,7 @@ type MountInfo struct {
 	State         MountState             `protobuf:"varint,4,opt,name=state,proto3,enum=nokv.coordinator.v1.MountState" json:"state,omitempty"`
 	RegisteredAt  *meta.RootCursor       `protobuf:"bytes,5,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
 	RetiredAt     *meta.RootCursor       `protobuf:"bytes,6,opt,name=retired_at,json=retiredAt,proto3" json:"retired_at,omitempty"`
+	MountKeyId    uint64                 `protobuf:"varint,7,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1377,6 +1378,13 @@ func (x *MountInfo) GetRetiredAt() *meta.RootCursor {
 		return x.RetiredAt
 	}
 	return nil
+}
+
+func (x *MountInfo) GetMountKeyId() uint64 {
+	if x != nil {
+		return x.MountKeyId
+	}
+	return 0
 }
 
 type GetMountRequest struct {
@@ -3658,7 +3666,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\"\x13\n" +
 	"\x11ListStoresRequest\"L\n" +
 	"\x12ListStoresResponse\x126\n" +
-	"\x06stores\x18\x01 \x03(\v2\x1e.nokv.coordinator.v1.StoreInfoR\x06stores\"\x9b\x02\n" +
+	"\x06stores\x18\x01 \x03(\v2\x1e.nokv.coordinator.v1.StoreInfoR\x06stores\"\xbd\x02\n" +
 	"\tMountInfo\x12\x19\n" +
 	"\bmount_id\x18\x01 \x01(\tR\amountId\x12\x1d\n" +
 	"\n" +
@@ -3667,7 +3675,9 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1f.nokv.coordinator.v1.MountStateR\x05state\x12=\n" +
 	"\rregistered_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\fregisteredAt\x127\n" +
 	"\n" +
-	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\",\n" +
+	"retired_at\x18\x06 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\x12 \n" +
+	"\fmount_key_id\x18\a \x01(\x04R\n" +
+	"mountKeyId\",\n" +
 	"\x0fGetMountRequest\x12\x19\n" +
 	"\bmount_id\x18\x01 \x01(\tR\amountId\"e\n" +
 	"\x10GetMountResponse\x124\n" +

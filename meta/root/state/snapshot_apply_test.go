@@ -91,7 +91,7 @@ func TestApplySubtreeAuthorityHandoffToSnapshot(t *testing.T) {
 func TestApplyMountRegisteredDeclaresRootAuthority(t *testing.T) {
 	snapshot := rootstate.Snapshot{}
 	cursor := rootstate.Cursor{Term: 1, Index: 1}
-	rootstate.ApplyEventToSnapshot(&snapshot, cursor, rootevent.MountRegistered("vol", 1, 1))
+	rootstate.ApplyEventToSnapshot(&snapshot, cursor, rootevent.MountRegistered("vol", 42, 1, 1))
 
 	key := rootstate.SubtreeAuthorityKey("vol", 1)
 	require.Equal(t, rootstate.SubtreeAuthority{
@@ -104,17 +104,19 @@ func TestApplyMountRegisteredDeclaresRootAuthority(t *testing.T) {
 		State:       rootstate.SubtreeAuthorityActive,
 		DeclaredAt:  cursor,
 	}, snapshot.Subtrees[key])
+	require.Equal(t, uint64(42), snapshot.State.IDFence)
 }
 
 func TestApplyMountRetiredToSnapshot(t *testing.T) {
 	snapshot := rootstate.Snapshot{}
 	registeredAt := rootstate.Cursor{Term: 1, Index: 1}
 	retiredAt := rootstate.Cursor{Term: 1, Index: 2}
-	rootstate.ApplyEventToSnapshot(&snapshot, registeredAt, rootevent.MountRegistered("vol", 1, 1))
+	rootstate.ApplyEventToSnapshot(&snapshot, registeredAt, rootevent.MountRegistered("vol", 1, 1, 1))
 	rootstate.ApplyEventToSnapshot(&snapshot, retiredAt, rootevent.MountRetired("vol"))
 
 	require.Equal(t, rootstate.MountRecord{
 		MountID:       "vol",
+		MountKeyID:    1,
 		RootInode:     1,
 		SchemaVersion: 1,
 		State:         rootstate.MountStateRetired,

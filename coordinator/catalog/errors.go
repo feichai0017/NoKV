@@ -21,6 +21,8 @@ var (
 	ErrStoreRetired = errors.New("coordinator/catalog: store is retired in rooted membership")
 	// ErrInvalidMountID indicates a rooted mount event uses an invalid mount id.
 	ErrInvalidMountID = errors.New("coordinator/catalog: invalid mount id")
+	// ErrInvalidMountConfig indicates a rooted mount event has invalid mount metadata.
+	ErrInvalidMountConfig = errors.New("coordinator/catalog: invalid mount config")
 	// ErrMountNotFound indicates a mount-scoped operation referenced an unknown rooted mount.
 	ErrMountNotFound = errors.New("coordinator/catalog: mount is not registered")
 	// ErrMountRetired indicates a mount-scoped operation referenced a retired rooted mount.

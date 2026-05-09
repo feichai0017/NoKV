@@ -738,6 +738,9 @@ func validateGetMountResponse(resp *coordpb.GetMountResponse) error {
 	if mount.GetMountId() == "" {
 		return fmt.Errorf("%w: get_mount mount_id is empty", errInvalidWitness)
 	}
+	if mount.GetMountKeyId() == 0 {
+		return fmt.Errorf("%w: get_mount mount_key_id is empty", errInvalidWitness)
+	}
 	return nil
 }
 
@@ -746,6 +749,7 @@ func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
 		return fmt.Errorf("%w: list_mounts response is nil", errInvalidWitness)
 	}
 	seen := make(map[string]struct{}, len(resp.GetMounts()))
+	seenKeyID := make(map[uint64]struct{}, len(resp.GetMounts()))
 	for _, mount := range resp.GetMounts() {
 		if mount == nil {
 			return fmt.Errorf("%w: list_mounts contains nil mount", errInvalidWitness)
@@ -753,10 +757,17 @@ func validateListMountsResponse(resp *coordpb.ListMountsResponse) error {
 		if mount.GetMountId() == "" {
 			return fmt.Errorf("%w: list_mounts contains empty mount_id", errInvalidWitness)
 		}
+		if mount.GetMountKeyId() == 0 {
+			return fmt.Errorf("%w: list_mounts contains empty mount_key_id", errInvalidWitness)
+		}
 		if _, ok := seen[mount.GetMountId()]; ok {
 			return fmt.Errorf("%w: list_mounts duplicate mount_id=%s", errInvalidWitness, mount.GetMountId())
 		}
 		seen[mount.GetMountId()] = struct{}{}
+		if _, ok := seenKeyID[mount.GetMountKeyId()]; ok {
+			return fmt.Errorf("%w: list_mounts duplicate mount_key_id=%d", errInvalidWitness, mount.GetMountKeyId())
+		}
+		seenKeyID[mount.GetMountKeyId()] = struct{}{}
 	}
 	return nil
 }

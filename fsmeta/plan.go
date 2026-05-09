@@ -162,8 +162,44 @@ type ExpireWriteSessionsResult struct {
 	Expired uint64
 }
 
-func PlanCreate(req CreateRequest, inodeID InodeID) (OperationPlan, error) {
+func ValidateCreateRequest(req CreateRequest) error {
 	if err := validateMountID(req.Mount); err != nil {
+		return err
+	}
+	if err := validateInodeID(req.Parent); err != nil {
+		return err
+	}
+	if err := validateName(req.Name); err != nil {
+		return err
+	}
+	_, err := EncodeInodeValue(req.Attrs.InodeRecord(RootInode))
+	return err
+}
+
+func ValidateRenameRequest(req RenameRequest) error {
+	if err := validateMountID(req.Mount); err != nil {
+		return err
+	}
+	if err := validateInodeID(req.FromParent); err != nil {
+		return err
+	}
+	if err := validateInodeID(req.ToParent); err != nil {
+		return err
+	}
+	if err := validateName(req.FromName); err != nil {
+		return err
+	}
+	if err := validateName(req.ToName); err != nil {
+		return err
+	}
+	if req.FromParent == req.ToParent && req.FromName == req.ToName {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func PlanCreate(req CreateRequest, mount MountIdentity, inodeID InodeID) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
 		return OperationPlan{}, err
 	}
 	if err := validateInodeID(req.Parent); err != nil {
@@ -172,11 +208,11 @@ func PlanCreate(req CreateRequest, inodeID InodeID) (OperationPlan, error) {
 	if err := validateInodeID(inodeID); err != nil {
 		return OperationPlan{}, err
 	}
-	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	dentry, err := EncodeDentryKey(mount, req.Parent, req.Name)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	inode, err := EncodeInodeKey(req.Mount, inodeID)
+	inode, err := EncodeInodeKey(mount, inodeID)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -189,18 +225,18 @@ func PlanCreate(req CreateRequest, inodeID InodeID) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanUpdateInode(req UpdateInodeRequest) (OperationPlan, error) {
-	if err := validateMountID(req.Mount); err != nil {
+func PlanUpdateInode(req UpdateInodeRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
 		return OperationPlan{}, err
 	}
 	if err := validateInodeID(req.Parent); err != nil {
 		return OperationPlan{}, err
 	}
-	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
+	dentry, err := EncodeDentryKey(mount, req.Parent, req.Name)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	inode, err := EncodeInodeKey(req.Mount, req.Inode)
+	inode, err := EncodeInodeKey(mount, req.Inode)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -213,8 +249,11 @@ func PlanUpdateInode(req UpdateInodeRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanLookup(req LookupRequest) (OperationPlan, error) {
-	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
+func PlanLookup(req LookupRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	dentry, err := EncodeDentryKey(mount, req.Parent, req.Name)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -226,14 +265,17 @@ func PlanLookup(req LookupRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanReadDir(req ReadDirRequest) (OperationPlan, error) {
+func PlanReadDir(req ReadDirRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
 	limit, err := normalizeReadDirLimit(req.Limit)
 	if err != nil {
 		return OperationPlan{}, err
 	}
 	var startKey []byte
 	if req.StartAfter == "" {
-		prefix, err := EncodeDentryPrefix(req.Mount, req.Parent)
+		prefix, err := EncodeDentryPrefix(mount, req.Parent)
 		if err != nil {
 			return OperationPlan{}, err
 		}
@@ -242,7 +284,7 @@ func PlanReadDir(req ReadDirRequest) (OperationPlan, error) {
 		if err := validateName(req.StartAfter); err != nil {
 			return OperationPlan{}, err
 		}
-		cursor, err := EncodeDentryKey(req.Mount, req.Parent, req.StartAfter)
+		cursor, err := EncodeDentryKey(mount, req.Parent, req.StartAfter)
 		if err != nil {
 			return OperationPlan{}, err
 		}
@@ -250,7 +292,7 @@ func PlanReadDir(req ReadDirRequest) (OperationPlan, error) {
 		// seek key after the cursor while still staying inside the dentry range.
 		startKey = append(cursor, 0)
 	}
-	prefix, err := EncodeDentryPrefix(req.Mount, req.Parent)
+	prefix, err := EncodeDentryPrefix(mount, req.Parent)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -264,14 +306,14 @@ func PlanReadDir(req ReadDirRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanSnapshotSubtree(req SnapshotSubtreeRequest) (OperationPlan, error) {
-	if err := validateMountID(req.Mount); err != nil {
+func PlanSnapshotSubtree(req SnapshotSubtreeRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
 		return OperationPlan{}, err
 	}
 	if err := validateInodeID(req.RootInode); err != nil {
 		return OperationPlan{}, err
 	}
-	prefix, err := EncodeDentryPrefix(req.Mount, req.RootInode)
+	prefix, err := EncodeDentryPrefix(mount, req.RootInode)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -283,15 +325,18 @@ func PlanSnapshotSubtree(req SnapshotSubtreeRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanRename(req RenameRequest) (OperationPlan, error) {
+func PlanRename(req RenameRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
 	if req.FromParent == req.ToParent && req.FromName == req.ToName {
 		return OperationPlan{}, ErrInvalidRequest
 	}
-	source, err := EncodeDentryKey(req.Mount, req.FromParent, req.FromName)
+	source, err := EncodeDentryKey(mount, req.FromParent, req.FromName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	dest, err := EncodeDentryKey(req.Mount, req.ToParent, req.ToName)
+	dest, err := EncodeDentryKey(mount, req.ToParent, req.ToName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -304,15 +349,18 @@ func PlanRename(req RenameRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanRenameSubtree(req RenameSubtreeRequest) (OperationPlan, error) {
+func PlanRenameSubtree(req RenameSubtreeRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
 	if req.FromParent == req.ToParent && req.FromName == req.ToName {
 		return OperationPlan{}, ErrInvalidRequest
 	}
-	from, err := EncodeDentryKey(req.Mount, req.FromParent, req.FromName)
+	from, err := EncodeDentryKey(mount, req.FromParent, req.FromName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	to, err := EncodeDentryKey(req.Mount, req.ToParent, req.ToName)
+	to, err := EncodeDentryKey(mount, req.ToParent, req.ToName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -325,15 +373,18 @@ func PlanRenameSubtree(req RenameSubtreeRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanLink(req LinkRequest) (OperationPlan, error) {
+func PlanLink(req LinkRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
 	if req.FromParent == req.ToParent && req.FromName == req.ToName {
 		return OperationPlan{}, ErrInvalidRequest
 	}
-	from, err := EncodeDentryKey(req.Mount, req.FromParent, req.FromName)
+	from, err := EncodeDentryKey(mount, req.FromParent, req.FromName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	to, err := EncodeDentryKey(req.Mount, req.ToParent, req.ToName)
+	to, err := EncodeDentryKey(mount, req.ToParent, req.ToName)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -346,8 +397,11 @@ func PlanLink(req LinkRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanUnlink(req UnlinkRequest) (OperationPlan, error) {
-	dentry, err := EncodeDentryKey(req.Mount, req.Parent, req.Name)
+func PlanUnlink(req UnlinkRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	dentry, err := EncodeDentryKey(mount, req.Parent, req.Name)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -360,16 +414,19 @@ func PlanUnlink(req UnlinkRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanOpenWriteSession(req OpenWriteSessionRequest) (OperationPlan, error) {
-	inode, err := EncodeInodeKey(req.Mount, req.Inode)
+func PlanOpenWriteSession(req OpenWriteSessionRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	inode, err := EncodeInodeKey(mount, req.Inode)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
+	session, err := EncodeSessionKey(mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	owner, err := EncodeInodeSessionKey(req.Mount, req.Inode)
+	owner, err := EncodeInodeSessionKey(mount, req.Inode)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -382,12 +439,15 @@ func PlanOpenWriteSession(req OpenWriteSessionRequest) (OperationPlan, error) {
 	}, nil
 }
 
-func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest) (OperationPlan, error) {
-	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
+func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	session, err := EncodeSessionKey(mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}
-	owner, err := EncodeInodeSessionKey(req.Mount, req.Inode)
+	owner, err := EncodeInodeSessionKey(mount, req.Inode)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -400,8 +460,11 @@ func PlanHeartbeatWriteSession(req HeartbeatWriteSessionRequest) (OperationPlan,
 	}, nil
 }
 
-func PlanCloseWriteSession(req CloseWriteSessionRequest) (OperationPlan, error) {
-	session, err := EncodeSessionKey(req.Mount, req.Inode, req.Session)
+func PlanCloseWriteSession(req CloseWriteSessionRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	session, err := EncodeSessionKey(mount, req.Inode, req.Session)
 	if err != nil {
 		return OperationPlan{}, err
 	}
@@ -414,14 +477,17 @@ func PlanCloseWriteSession(req CloseWriteSessionRequest) (OperationPlan, error) 
 	}, nil
 }
 
-func PlanExpireWriteSessions(req ExpireWriteSessionsRequest) (OperationPlan, error) {
+func PlanExpireWriteSessions(req ExpireWriteSessionsRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
 	limit, err := normalizeSessionExpireLimit(req.Limit)
 	if err != nil {
 		return OperationPlan{}, err
 	}
 	prefixes := make([][]byte, 0, DefaultAffinityBucketCount)
 	for bucket := range DefaultAffinityBucketCount {
-		prefix, err := EncodeSessionBucketPrefix(req.Mount, AffinityBucket(bucket))
+		prefix, err := EncodeSessionBucketPrefix(mount, AffinityBucket(bucket))
 		if err != nil {
 			return OperationPlan{}, err
 		}

@@ -57,8 +57,8 @@ func TestPlanMVCCGCReportsMountScopedPlan(t *testing.T) {
 		RequestedSafePoint: 100,
 		SnapshotRetention: rootstate.SnapshotRetentionIndex{
 			GlobalFloor: 50,
-			MountFloors: map[string]uint64{
-				"vol": 50,
+			MountFloors: map[uint64]uint64{
+				1: 50,
 			},
 		},
 		Mount: testMountResolver,
@@ -284,8 +284,8 @@ func TestApplyMVCCGCHonorsMountScopedRetention(t *testing.T) {
 			RequestedSafePoint: 100,
 			SnapshotRetention: rootstate.SnapshotRetentionIndex{
 				GlobalFloor: 50,
-				MountFloors: map[string]uint64{
-					"vol": 50,
+				MountFloors: map[uint64]uint64{
+					1: 50,
 				},
 			},
 			Mount: testMountResolver,

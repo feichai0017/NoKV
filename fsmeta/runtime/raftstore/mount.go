@@ -147,8 +147,12 @@ func mountFromProto(resp *coordpb.GetMountResponse) (fsmetaexec.MountAdmission, 
 	if info == nil {
 		return fsmetaexec.MountAdmission{}, fsmeta.ErrMountNotRegistered
 	}
+	if info.GetMountKeyId() == 0 {
+		return fsmetaexec.MountAdmission{}, fsmeta.ErrMountNotRegistered
+	}
 	return fsmetaexec.MountAdmission{
 		MountID:       fsmeta.MountID(info.GetMountId()),
+		MountKeyID:    fsmeta.MountKeyID(info.GetMountKeyId()),
 		RootInode:     fsmeta.InodeID(info.GetRootInode()),
 		SchemaVersion: info.GetSchemaVersion(),
 		Retired:       info.GetState() == coordpb.MountState_MOUNT_STATE_RETIRED,

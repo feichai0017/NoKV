@@ -12,10 +12,11 @@ import (
 // affects the mount-wide subject; non-zero scopes also affect that direct
 // accounting scope.
 type QuotaChange struct {
-	Mount  fsmeta.MountID
-	Scope  fsmeta.InodeID
-	Bytes  int64
-	Inodes int64
+	Mount      fsmeta.MountID
+	MountKeyID fsmeta.MountKeyID
+	Scope      fsmeta.InodeID
+	Bytes      int64
+	Inodes     int64
 }
 
 // QuotaResolver resolves rooted quota fences and plans usage-counter mutations

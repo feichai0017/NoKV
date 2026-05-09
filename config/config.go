@@ -114,11 +114,16 @@ type Peer struct {
 // ordinary byte-range regions in nokv-config. Runtime routing still uses rooted
 // region descriptors; this block is not consulted after fresh store seeding.
 type FSMetaRegionBootstrap struct {
-	Mounts         []string `json:"mounts"`
-	BucketCount    int      `json:"bucket_count"`
-	RegionIDBase   uint64   `json:"region_id_base"`
-	PeerIDBase     uint64   `json:"peer_id_base"`
-	LeaderStoreIDs []uint64 `json:"leader_store_ids,omitempty"`
+	Mounts         []FSMetaRegionBootstrapMount `json:"mounts"`
+	BucketCount    int                          `json:"bucket_count"`
+	RegionIDBase   uint64                       `json:"region_id_base"`
+	PeerIDBase     uint64                       `json:"peer_id_base"`
+	LeaderStoreIDs []uint64                     `json:"leader_store_ids,omitempty"`
+}
+
+type FSMetaRegionBootstrapMount struct {
+	MountID    string `json:"mount_id"`
+	MountKeyID uint64 `json:"mount_key_id"`
 }
 
 // LoadFile parses a config file from disk.
@@ -203,15 +208,26 @@ func (f *File) validateFSMetaRegionBootstrap(storeIDs map[uint64]struct{}) error
 		return fmt.Errorf("config: fsmeta_region_bootstrap requires stores")
 	}
 	mounts := make(map[string]struct{}, len(layout.Mounts))
+	mountKeyIDs := make(map[uint64]struct{}, len(layout.Mounts))
 	for _, mount := range layout.Mounts {
-		mount = strings.TrimSpace(mount)
-		if mount == "" {
-			return fmt.Errorf("config: fsmeta_region_bootstrap mount cannot be empty")
+		mountID := strings.TrimSpace(mount.MountID)
+		if mountID == "" {
+			return fmt.Errorf("config: fsmeta_region_bootstrap mount_id cannot be empty")
 		}
-		if _, dup := mounts[mount]; dup {
-			return fmt.Errorf("config: fsmeta_region_bootstrap duplicate mount %q", mount)
+		if mountID != mount.MountID {
+			return fmt.Errorf("config: fsmeta_region_bootstrap mount_id %q must not contain leading/trailing whitespace", mount.MountID)
 		}
-		mounts[mount] = struct{}{}
+		if mount.MountKeyID == 0 {
+			return fmt.Errorf("config: fsmeta_region_bootstrap mount_key_id must be > 0")
+		}
+		if _, dup := mounts[mountID]; dup {
+			return fmt.Errorf("config: fsmeta_region_bootstrap duplicate mount_id %q", mountID)
+		}
+		if _, dup := mountKeyIDs[mount.MountKeyID]; dup {
+			return fmt.Errorf("config: fsmeta_region_bootstrap duplicate mount_key_id %d", mount.MountKeyID)
+		}
+		mounts[mountID] = struct{}{}
+		mountKeyIDs[mount.MountKeyID] = struct{}{}
 	}
 	for _, storeID := range layout.LeaderStoreIDs {
 		if _, ok := storeIDs[storeID]; !ok {

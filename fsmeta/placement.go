@@ -13,23 +13,32 @@ type PlacementRange struct {
 	StartKey []byte
 	EndKey   []byte
 	Mount    MountID
+	MountKey MountKeyID
 	Bucket   AffinityBucket
 	Bucketed bool
 }
 
 // PlanBucketPlacement returns continuous byte ranges that isolate each
 // mount-local affinity bucket while preserving full keyspace coverage.
-func PlanBucketPlacement(mounts []MountID, bucketCount int) ([]PlacementRange, error) {
+func PlanBucketPlacement(mounts []MountIdentity, bucketCount int) ([]PlacementRange, error) {
 	if bucketCount <= 0 || bucketCount > 1<<16 {
 		return nil, fmt.Errorf("%w: affinity bucket count out of range", ErrInvalidRequest)
 	}
 	buckets := make([]PlacementRange, 0, len(mounts)*bucketCount)
-	seen := make(map[MountID]struct{}, len(mounts))
+	seenMount := make(map[MountID]struct{}, len(mounts))
+	seenKey := make(map[MountKeyID]struct{}, len(mounts))
 	for _, mount := range mounts {
-		if _, ok := seen[mount]; ok {
-			return nil, fmt.Errorf("%w: duplicate mount %q", ErrInvalidRequest, mount)
+		if err := validateMountIdentity(mount); err != nil {
+			return nil, err
 		}
-		seen[mount] = struct{}{}
+		if _, ok := seenMount[mount.MountID]; ok {
+			return nil, fmt.Errorf("%w: duplicate mount %q", ErrInvalidRequest, mount.MountID)
+		}
+		if _, ok := seenKey[mount.MountKeyID]; ok {
+			return nil, fmt.Errorf("%w: duplicate mount_key_id %d", ErrInvalidRequest, mount.MountKeyID)
+		}
+		seenMount[mount.MountID] = struct{}{}
+		seenKey[mount.MountKeyID] = struct{}{}
 		for bucket := range bucketCount {
 			start, end, err := EncodeBucketRange(mount, AffinityBucket(bucket))
 			if err != nil {
@@ -38,7 +47,8 @@ func PlanBucketPlacement(mounts []MountID, bucketCount int) ([]PlacementRange, e
 			buckets = append(buckets, PlacementRange{
 				StartKey: start,
 				EndKey:   end,
-				Mount:    mount,
+				Mount:    mount.MountID,
+				MountKey: mount.MountKeyID,
 				Bucket:   AffinityBucket(bucket),
 				Bucketed: true,
 			})
@@ -82,7 +92,7 @@ func PlanBucketPlacement(mounts []MountID, bucketCount int) ([]PlacementRange, e
 
 // BucketSplitBoundaries returns byte boundaries that can split fsmeta bootstrap
 // ranges without cutting through one affinity bucket.
-func BucketSplitBoundaries(mounts []MountID, bucketCount int) ([][]byte, error) {
+func BucketSplitBoundaries(mounts []MountIdentity, bucketCount int) ([][]byte, error) {
 	ranges, err := PlanBucketPlacement(mounts, bucketCount)
 	if err != nil {
 		return nil, err

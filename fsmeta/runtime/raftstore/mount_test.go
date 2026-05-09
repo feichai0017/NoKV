@@ -26,6 +26,7 @@ func TestMountCacheReturnsActiveMount(t *testing.T) {
 	lookup := &fakeMountLookup{
 		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
 			MountId:       "vol",
+			MountKeyId:    1,
 			RootInode:     1,
 			SchemaVersion: 1,
 			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
@@ -53,6 +54,7 @@ func TestMountCacheRefreshesAfterTTL(t *testing.T) {
 	lookup := &fakeMountLookup{
 		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
 			MountId:       "vol",
+			MountKeyId:    1,
 			RootInode:     1,
 			SchemaVersion: 1,
 			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
@@ -72,6 +74,7 @@ func TestMountCacheRefreshesAfterTTL(t *testing.T) {
 	now = now.Add(2 * time.Second)
 	lookup.resp = &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
 		MountId:       "vol",
+		MountKeyId:    1,
 		RootInode:     9,
 		SchemaVersion: 2,
 		State:         coordpb.MountState_MOUNT_STATE_RETIRED,
@@ -109,6 +112,7 @@ func TestWatcherRejectsRetiredMount(t *testing.T) {
 	lookup := &fakeMountLookup{
 		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
 			MountId:       "vol",
+			MountKeyId:    1,
 			RootInode:     1,
 			SchemaVersion: 1,
 			State:         coordpb.MountState_MOUNT_STATE_RETIRED,

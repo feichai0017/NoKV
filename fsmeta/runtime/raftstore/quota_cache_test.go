@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var quotaTestMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
 type fakeTxnRunner struct {
 	data map[string][]byte
 }
@@ -71,7 +73,7 @@ func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	mutations, err := cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", Scope: 7, Bytes: 1024, Inodes: 1}}, 1)
+	mutations, err := cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 1024, Inodes: 1}}, 1)
 	require.NoError(t, err)
 	require.Len(t, mutations, 2)
 
@@ -85,7 +87,7 @@ func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
 
 func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 	runner := newFakeTxnRunner()
-	key, err := fsmeta.EncodeUsageKey("vol", 0)
+	key, err := fsmeta.EncodeUsageKey(quotaTestMount, 0)
 	require.NoError(t, err)
 	value, err := fsmeta.EncodeUsageValue(fsmeta.UsageRecord{Bytes: 900, Inodes: 1})
 	require.NoError(t, err)
@@ -95,7 +97,7 @@ func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	_, err = cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", Scope: 7, Bytes: 200, Inodes: 1}}, 1)
+	_, err = cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 200, Inodes: 1}}, 1)
 	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
 }
 
@@ -109,8 +111,8 @@ func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
 	mutations, err := cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{
-		{Mount: "vol", Scope: 7, Bytes: -100, Inodes: -1},
-		{Mount: "vol", Scope: 8, Bytes: 100, Inodes: 1},
+		{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: -100, Inodes: -1},
+		{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 100, Inodes: 1},
 	}, 1)
 	require.NoError(t, err)
 	require.Len(t, mutations, 2, "mount-wide zero delta should be elided")
