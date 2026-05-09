@@ -121,11 +121,10 @@ func buildNoKVBenchmarkOptions(dir string, opts ycsbEngineOptions, memtable loca
 	cfg.ManifestSync = false
 
 	// Maximum-throughput profile: skip the production defaults that trade
-	// CPU for IO/bloom benefits — the benchmark stresses the write path
-	// on a fast local disk where snappy compression and the prefix bloom
-	// filter cost more than they save. Production keeps both on.
+	// CPU for IO benefits. YCSB uses generic keys, so it deliberately does
+	// not provide a semantic key shape for local shard or prefix-bloom hints.
 	cfg.BlockCompression = nokvlsm.BlockCompressionNone
-	cfg.PrefixExtractor = nil
+	cfg.UserKeyShapeExtractor = nil
 
 	return cfg
 }

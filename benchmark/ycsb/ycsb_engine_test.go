@@ -93,6 +93,7 @@ func TestBuildNoKVBenchmarkOptions(t *testing.T) {
 	require.Zero(t, opts.WriteBatchWait)
 	require.Zero(t, opts.WriteHotKeyLimit)
 	require.False(t, opts.EnableWALWatchdog)
+	require.Nil(t, opts.UserKeyShapeExtractor)
 	require.Equal(t, ycsbNoKVWriteBatchMaxCount, opts.WriteBatchMaxCount)
 	require.Equal(t, int64(ycsbNoKVWriteBatchMaxCount), opts.MaxBatchCount)
 	require.Equal(t, int64(384)<<20, opts.BlockCacheBytes)
