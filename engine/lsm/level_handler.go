@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/engine/lsm/landing"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
@@ -645,7 +646,7 @@ func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
 	if len(mainTables) == 1 {
 		itrs = append(itrs, mainTables[0].NewIterator(topt))
 	} else if len(mainTables) > 1 {
-		itrs = append(itrs, NewConcatIterator(mainTables, topt))
+		itrs = append(itrs, iterator.NewConcatIterator(mainTables, topt))
 	}
 	if bounded && lh.lm != nil {
 		total := len(lh.tables) + lh.landing.TableCount()

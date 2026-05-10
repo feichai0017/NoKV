@@ -62,7 +62,7 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		}
 	}
 	if lsm.flushQueue != nil {
-		diag.Flush = lsm.flushQueue.stats()
+		diag.Flush = lsm.flushQueue.Stats()
 	}
 	if lsm.option != nil {
 		diag.Compaction.ValueWeight = lsm.option.CompactionValueWeight

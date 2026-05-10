@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	lsmiter "github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -107,7 +108,7 @@ func New(deps Deps, opt *index.Options) index.Iterator {
 		isAsc:      opt.IsAsc,
 	}
 	itr.item.e = &itr.entry
-	itr.iitr = lsm.NewMergeIterator(ctx.Iterators(), !opt.IsAsc)
+	itr.iitr = lsmiter.NewMergeIterator(ctx.Iterators(), !opt.IsAsc)
 	if deps.Storage != nil {
 		itr.rtCheck = deps.Storage.HasAnyRangeTombstone()
 	}
@@ -124,7 +125,7 @@ func NewInternal(storage Storage, opt *index.Options) index.Iterator {
 		opt = &index.Options{}
 	}
 	iters := storage.NewIterators(opt)
-	return lsm.NewMergeIterator(iters, !opt.IsAsc)
+	return lsmiter.NewMergeIterator(iters, !opt.IsAsc)
 }
 
 // Next advances to the next visible key/value pair.

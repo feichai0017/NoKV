@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/stretchr/testify/require"
@@ -190,7 +191,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 		LowerBound: []byte("c"),
 		UpperBound: []byte("f"),
 	})
-	merge := NewMergeIterator(iters, false)
+	merge := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, merge.Close()) }()
 
 	var keys [][]byte
@@ -232,7 +233,7 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 		LowerBound: []byte("c"),
 		UpperBound: []byte("e"),
 	})
-	merge := NewMergeIterator(iters, false)
+	merge := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, merge.Close()) }()
 
 	var keys []string

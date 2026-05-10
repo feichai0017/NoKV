@@ -1,6 +1,10 @@
-package lsm
+// Package flush owns the LSM flush queue: the per-shard FIFO that
+// preserves WAL segment ordering while letting different shards flush
+// in parallel.
+package flush
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,15 +13,25 @@ import (
 	"github.com/feichai0017/NoKV/metrics"
 )
 
-type flushTask struct {
-	memTable   *memTable
-	shardID    int
+// Sentinel errors returned by Enqueue.
+var (
+	ErrNil         = errors.New("flush: runtime is nil")
+	ErrNilPayload  = errors.New("flush: nil payload")
+	ErrClosed      = errors.New("flush: runtime closed")
+)
+
+// Task is a single flush request. Payload is the opaque value passed by
+// the caller at Enqueue time (typically a *memTable). ShardID is used by
+// the runtime to enforce per-shard serialization.
+type Task struct {
+	Payload    any
+	ShardID    int
 	queuedAt   time.Time
 	buildStart time.Time
 	installAt  time.Time
 }
 
-// flushRuntime is the concrete flush queue owned by LSM.
+// Runtime is the flush queue.
 //
 // Sharded ordering invariant
 // ──────────────────────────
@@ -30,7 +44,7 @@ type flushTask struct {
 //
 // We achieve that with one queue per shard plus an inFlight flag per
 // shard. A worker only picks up a task whose shard has no in-flight
-// task; the inFlight bit is cleared by markDone, which then broadcasts
+// task; the inFlight bit is cleared by MarkDone, which then broadcasts
 // to wake any worker waiting on cond. The result is "N workers across
 // N shards run in parallel; tasks within one shard run strictly FIFO
 // in segment-id order."
@@ -42,11 +56,11 @@ type flushTask struct {
 // mark; a crash between the two installs would lose seg=10's WAL
 // entries on restart (manifest says they're flushed but no SST holds
 // them).
-type flushRuntime struct {
+type Runtime struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
 	closed bool
-	shards []*shardFlushState
+	shards []*shardState
 
 	pending       atomic.Int64
 	queueLen      atomic.Int64
@@ -66,29 +80,30 @@ type flushRuntime struct {
 	completed     atomic.Int64
 }
 
-// shardFlushState is the per-shard FIFO queue plus the "owned by a
-// worker right now" flag that next() consults to enforce per-shard
-// serialization.
-type shardFlushState struct {
-	queue    []*flushTask
+// shardState is the per-shard FIFO queue plus the "owned by a worker
+// right now" flag that Next consults to enforce per-shard serialization.
+type shardState struct {
+	queue    []*Task
 	inFlight bool
 }
 
-func newFlushRuntime(shardCount int) *flushRuntime {
+// New constructs a Runtime sized for shardCount shards.
+func New(shardCount int) *Runtime {
 	if shardCount <= 0 {
 		shardCount = 1
 	}
-	rt := &flushRuntime{
-		shards: make([]*shardFlushState, shardCount),
+	rt := &Runtime{
+		shards: make([]*shardState, shardCount),
 	}
 	for i := range rt.shards {
-		rt.shards[i] = &shardFlushState{}
+		rt.shards[i] = &shardState{}
 	}
 	rt.cond = sync.NewCond(&rt.mu)
 	return rt
 }
 
-func (rt *flushRuntime) close() error {
+// Close marks the runtime closed and wakes any blocked workers.
+func (rt *Runtime) Close() error {
 	if rt == nil {
 		return nil
 	}
@@ -99,25 +114,26 @@ func (rt *flushRuntime) close() error {
 	return nil
 }
 
-func (rt *flushRuntime) enqueue(mt *memTable) error {
+// Enqueue appends a task for shardID. Returns ErrClosed if the runtime
+// has been closed.
+func (rt *Runtime) Enqueue(shardID int, payload any) error {
 	if rt == nil {
-		return ErrFlushRuntimeNil
+		return ErrNil
 	}
-	if mt == nil || mt.shard == nil {
-		return ErrFlushRuntimeNilMemtable
+	if payload == nil {
+		return ErrNilPayload
 	}
-	sid := mt.shard.id
-	if sid < 0 || sid >= len(rt.shards) {
-		return fmt.Errorf("flush runtime: invalid shard id %d (shard count %d)", sid, len(rt.shards))
+	if shardID < 0 || shardID >= len(rt.shards) {
+		return fmt.Errorf("flush: invalid shard id %d (shard count %d)", shardID, len(rt.shards))
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if rt.closed {
-		return ErrFlushRuntimeClosed
+		return ErrClosed
 	}
-	rt.shards[sid].queue = append(rt.shards[sid].queue, &flushTask{
-		memTable: mt,
-		shardID:  sid,
+	rt.shards[shardID].queue = append(rt.shards[shardID].queue, &Task{
+		Payload:  payload,
+		ShardID:  shardID,
 		queuedAt: time.Now(),
 	})
 	rt.pending.Add(1)
@@ -126,7 +142,7 @@ func (rt *flushRuntime) enqueue(mt *memTable) error {
 	return nil
 }
 
-// next returns the next eligible task: any shard whose queue is non-
+// Next returns the next eligible task: any shard whose queue is non-
 // empty and whose previous task has marked done. Tasks within one
 // shard are pulled in FIFO order; across shards, the iteration order
 // is round-robin starting from shard 0 — fairness is not formally
@@ -134,8 +150,8 @@ func (rt *flushRuntime) enqueue(mt *memTable) error {
 // run today (typically 4).
 //
 // Blocks until a task becomes eligible, the runtime is closed and
-// drained, or another worker calls markDone and wakes us via cond.
-func (rt *flushRuntime) next() (*flushTask, bool) {
+// drained, or another worker calls MarkDone and wakes us via cond.
+func (rt *Runtime) Next() (*Task, bool) {
 	if rt == nil {
 		return nil, false
 	}
@@ -161,7 +177,7 @@ func (rt *flushRuntime) next() (*flushTask, bool) {
 	}
 }
 
-func (rt *flushRuntime) pickEligibleLocked() *flushTask {
+func (rt *Runtime) pickEligibleLocked() *Task {
 	for _, s := range rt.shards {
 		if s.inFlight || len(s.queue) == 0 {
 			continue
@@ -175,7 +191,7 @@ func (rt *flushRuntime) pickEligibleLocked() *flushTask {
 	return nil
 }
 
-func (rt *flushRuntime) anyPendingLocked() bool {
+func (rt *Runtime) anyPendingLocked() bool {
 	for _, s := range rt.shards {
 		if s.inFlight || len(s.queue) > 0 {
 			return true
@@ -184,7 +200,8 @@ func (rt *flushRuntime) anyPendingLocked() bool {
 	return false
 }
 
-func (rt *flushRuntime) markInstalled(task *flushTask) {
+// MarkInstalled records that the SST for task is durable on disk.
+func (rt *Runtime) MarkInstalled(task *Task) {
 	if rt == nil || task == nil {
 		return
 	}
@@ -198,11 +215,11 @@ func (rt *flushRuntime) markInstalled(task *flushTask) {
 	task.installAt = time.Now()
 }
 
-// markDone clears the inFlight flag for the task's shard so other
+// MarkDone clears the inFlight flag for the task's shard so other
 // workers can pick up subsequent tasks from the same shard, and
 // broadcasts in case a worker was blocked waiting for this shard to
 // free up.
-func (rt *flushRuntime) markDone(task *flushTask) {
+func (rt *Runtime) MarkDone(task *Task) {
 	if rt == nil || task == nil {
 		return
 	}
@@ -214,8 +231,8 @@ func (rt *flushRuntime) markDone(task *flushTask) {
 		updateMaxInt64(&rt.releaseMaxNs, releaseNs)
 	}
 	rt.mu.Lock()
-	if task.shardID >= 0 && task.shardID < len(rt.shards) {
-		rt.shards[task.shardID].inFlight = false
+	if task.ShardID >= 0 && task.ShardID < len(rt.shards) {
+		rt.shards[task.ShardID].inFlight = false
 	}
 	rt.mu.Unlock()
 	rt.activeCt.Add(-1)
@@ -224,7 +241,8 @@ func (rt *flushRuntime) markDone(task *flushTask) {
 	rt.cond.Broadcast()
 }
 
-func (rt *flushRuntime) stats() metrics.FlushMetrics {
+// Stats returns the current metrics snapshot.
+func (rt *Runtime) Stats() metrics.FlushMetrics {
 	if rt == nil {
 		return metrics.FlushMetrics{}
 	}

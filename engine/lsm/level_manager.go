@@ -17,6 +17,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/table"
@@ -276,12 +277,10 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	if shard := immutable.shard; shard != nil {
 		// Monotonic per-shard high-water. Per-shard flush serialization
-		// is enforced by flushRuntime (see flush_runtime.go: per-shard
-		// queue + inFlight flag) so this Store cannot race against a
-		// later same-shard flush. The `> cur` guard is kept as a belt-
-		// and-braces against future runtime regressions; without
-		// flushRuntime serialization the WAL retention mark below
-		// would advance out of order and recovery could lose segments.
+		// is enforced by flush.Runtime (per-shard queue + inFlight flag)
+		// so this Store cannot race against a later same-shard flush.
+		// The `> cur` guard is kept as belt-and-braces against future
+		// runtime regressions.
 		if cur := shard.highestFlushedSeg.Load(); immutable.segmentID > cur {
 			shard.highestFlushedSeg.Store(immutable.segmentID)
 		}
@@ -1366,7 +1365,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table.Tab
 			return iters
 		}
 		if botCanConcat {
-			return append(iters, NewConcatIterator(botTables, iterOpt))
+			return append(iters, iterator.NewConcatIterator(botTables, iterOpt))
 		}
 		// Fallback for overlapping/out-of-order next-level windows.
 		// ConcatIterator assumes strict non-overlap; merge keeps global key ordering.
@@ -1379,7 +1378,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table.Tab
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 	for _, kr := range cd.splits {
 		if err := inflightBuilders.Go(func() error {
-			it := NewMergeIterator(newIterator(), false)
+			it := iterator.NewMergeIterator(newIterator(), false)
 			defer func() { _ = it.Close() }()
 			lm.subcompact(it, kr, cd, inflightBuilders, res)
 			return nil

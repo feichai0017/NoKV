@@ -15,6 +15,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -159,7 +160,7 @@ func TestRotateReturnsSubmitError(t *testing.T) {
 	defer func() { _ = wlog.Close() }()
 	defer func() { _ = lsm.Close() }()
 
-	if err := lsm.flushQueue.close(); err != nil {
+	if err := lsm.flushQueue.Close(); err != nil {
 		t.Fatalf("close flush queue: %v", err)
 	}
 	if err := lsm.Rotate(); err == nil {
@@ -1887,7 +1888,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	upper := []byte("key95")
 
 	iters := lsm.NewIterators(&index.Options{LowerBound: lower, UpperBound: upper, IsAsc: true})
-	mit := NewMergeIterator(iters, false)
+	mit := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, mit.Close()) }()
 
 	var resultsAsc []string
@@ -1925,7 +1926,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// Bounded descending scan [key10, key95).
 	itersDesc := lsm.NewIterators(&index.Options{LowerBound: lower, UpperBound: upper, IsAsc: false})
-	mitDesc := NewMergeIterator(itersDesc, true)
+	mitDesc := iterator.NewMergeIterator(itersDesc, true)
 	defer func() { require.NoError(t, mitDesc.Close()) }()
 
 	var resultsDesc []string
@@ -1976,7 +1977,7 @@ func TestLSMBoundedRangeSeek(t *testing.T) {
 	}
 
 	iters := lsm.NewIterators(&index.Options{LowerBound: []byte("key12"), UpperBound: []byte("key18"), IsAsc: true})
-	mit := NewMergeIterator(iters, false)
+	mit := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, mit.Close()) }()
 
 	// Seek below data range — lands on first key (>= semantic).
@@ -2026,7 +2027,7 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 
 	for _, r := range emptyRanges {
 		iters := lsm.NewIterators(&index.Options{LowerBound: r.lower, UpperBound: r.upper, IsAsc: true})
-		mit := NewMergeIterator(iters, false)
+		mit := iterator.NewMergeIterator(iters, false)
 
 		count := 0
 		for mit.Rewind(); mit.Valid(); mit.Next() {

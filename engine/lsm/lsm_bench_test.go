@@ -10,6 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -463,7 +464,7 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						iters := lh.iterators(opt)
-						merge := NewMergeIterator(iters, false)
+						merge := iterator.NewMergeIterator(iters, false)
 						merge.Rewind()
 						count := 0
 						for ; merge.Valid(); merge.Next() {
@@ -791,7 +792,7 @@ func BenchmarkLSMMultiLevelIteratorBoundsPruning(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						iters := lsm.NewIterators(opt)
-						merge := NewMergeIterator(iters, false)
+						merge := iterator.NewMergeIterator(iters, false)
 						merge.Rewind()
 						count := 0
 						for ; merge.Valid(); merge.Next() {

@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/flush"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -44,7 +45,7 @@ type LSM struct {
 	levels           *levelManager
 	option           *Options
 	closer           *utils.Closer
-	flushQueue       *flushRuntime
+	flushQueue       *flush.Runtime
 	flushWG          sync.WaitGroup
 	logger           *slog.Logger
 
@@ -115,7 +116,7 @@ func (lsm *LSM) Close() error {
 		lsm.closer.Close()
 	}
 	if lsm.flushQueue != nil {
-		closeErr = errors.Join(closeErr, lsm.flushQueue.close())
+		closeErr = errors.Join(closeErr, lsm.flushQueue.Close())
 	}
 	lsm.flushWG.Wait()
 
@@ -236,7 +237,7 @@ func (lsm *LSM) FlushPending() int64 {
 	if lsm == nil || lsm.flushQueue == nil {
 		return 0
 	}
-	return lsm.flushQueue.stats().Pending
+	return lsm.flushQueue.Stats().Pending
 }
 
 // MaxVersion returns the largest commit timestamp known to the LSM tree.
@@ -331,7 +332,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		lsm.logger = slog.Default()
 	}
 	lsm.throttleFn = frozen.ThrottleCallback
-	lsm.flushQueue = newFlushRuntime(len(lsm.shards))
+	lsm.flushQueue = flush.New(len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -906,8 +907,11 @@ func (lsm *LSM) submitFlush(mt *memTable) error {
 	if mt == nil {
 		return nil
 	}
+	if mt.shard == nil {
+		return ErrFlushNilMemtable
+	}
 	mt.IncrRef()
-	if err := lsm.flushQueue.enqueue(mt); err != nil {
+	if err := lsm.flushQueue.Enqueue(mt.shard.id, mt); err != nil {
 		mt.DecrRef()
 		return err
 	}
@@ -921,23 +925,23 @@ func (lsm *LSM) startFlushWorkers(n int) {
 	for i := 0; i < n; i++ {
 		lsm.flushWG.Go(func() {
 			for {
-				task, ok := lsm.flushQueue.next()
+				task, ok := lsm.flushQueue.Next()
 				if !ok {
 					return
 				}
-				mt := task.memTable
+				mt, _ := task.Payload.(*memTable)
 				if mt == nil {
-					lsm.flushQueue.markDone(task)
+					lsm.flushQueue.MarkDone(task)
 					continue
 				}
 
 				func() {
 					defer mt.DecrRef()
 					if err := lsm.levels.flush(mt); err != nil {
-						lsm.flushQueue.markDone(task)
+						lsm.flushQueue.MarkDone(task)
 						return
 					}
-					lsm.flushQueue.markInstalled(task)
+					lsm.flushQueue.MarkInstalled(task)
 					if s := mt.shard; s != nil {
 						s.lock.Lock()
 						for idx, imm := range s.immutables {
@@ -949,7 +953,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 						s.lock.Unlock()
 					}
 					_ = mt.close()
-					lsm.flushQueue.markDone(task)
+					lsm.flushQueue.MarkDone(task)
 				}()
 			}
 		})
