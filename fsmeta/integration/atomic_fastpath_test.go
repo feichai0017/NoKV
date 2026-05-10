@@ -65,3 +65,27 @@ func TestAtomicFastPathAdmittedForWorkspaceCreates(t *testing.T) {
 			"is testcluster.NodeConfig.UserKeyShapeExtractor wired?",
 		ops-1, successes, fallbacks)
 }
+
+// TestDerivedCachesWiredForFsmetaIntegration locks in that the fsmeta
+// integration runtime configures both NegativeCache and DirPageCache,
+// matching what cmd/nokv-fsmeta does in production. Without these the
+// integration suite was running with a strictly slower read path than
+// the deployed binary: every ReadDirPlus reassembled its page from a
+// Scan + BatchGet round-trip and every Lookup miss paid a full RPC.
+//
+// This guard fails fast with a named field so future drift in the
+// fixture wiring surfaces during local test runs instead of in
+// production performance regressions.
+func TestDerivedCachesWiredForFsmetaIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rt := openRealClusterRuntime(t, ctx)
+
+	stats := rt.executor.Stats()
+	require.True(t, stats["negative_cache_enabled"].(bool),
+		"executor.negCache is nil — wire fsmetaexec.WithNegativeCache "+
+			"in openRealClusterRuntimeWithOptions")
+	require.True(t, stats["dirpage_cache_enabled"].(bool),
+		"executor.dirPages is nil — wire fsmetaexec.WithDirPageCache "+
+			"in openRealClusterRuntimeWithOptions")
+}

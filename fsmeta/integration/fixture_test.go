@@ -8,6 +8,8 @@ import (
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
@@ -71,6 +73,7 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 		Scheduler:             testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval:     50 * time.Millisecond,
 		UserKeyShapeExtractor: fsmeta.UserKeyShape,
+		EnableLeaseRead:       true,
 	})
 	t.Cleanup(func() { node.Close(t) })
 
@@ -93,9 +96,24 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 	inodes, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, 4)
 	require.NoError(t, err)
+
+	// Wire the same derived caches that production wires via
+	// cmd/nokv-fsmeta. Without these the integration runtime makes a full
+	// round-trip for every Lookup miss and reassembles every ReadDirPlus
+	// page from scratch, which is strictly slower than what the deployed
+	// binary actually does.
+	negCache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	dirPages, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dirPages.Close() })
+
 	executorOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}),
+		fsmetaexec.WithNegativeCache(negCache),
+		fsmetaexec.WithDirPageCache(dirPages),
 	}
 	executorOpts = append(executorOpts, opts...)
 	executor, err := fsmetaexec.New(runner, executorOpts...)
@@ -144,6 +162,7 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 		Scheduler:             testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
 		HeartbeatInterval:     50 * time.Millisecond,
 		UserKeyShapeExtractor: fsmeta.UserKeyShape,
+		EnableLeaseRead:       true,
 	})
 	t.Cleanup(func() { node.Close(t) })
 
@@ -196,9 +215,22 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 	inodes, err := fsmetaraftstore.NewShardAffineInodeAllocator(coordRPC, 4)
 	require.NoError(t, err)
+
+	// Match the single-cluster fixture: wire the same derived caches that
+	// production uses so split-cluster scenarios are testing the same code
+	// path the deployed binary takes.
+	negCache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	dirPages, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dirPages.Close() })
+
 	executorOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithMountResolver(testMountResolver{coord: coordRPC}),
+		fsmetaexec.WithNegativeCache(negCache),
+		fsmetaexec.WithDirPageCache(dirPages),
 	}
 	executorOpts = append(executorOpts, opts...)
 	executor, err := fsmetaexec.New(runner, executorOpts...)
