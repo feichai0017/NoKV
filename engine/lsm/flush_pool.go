@@ -33,9 +33,9 @@ func (p *flushPool) Submit(mt *memTable) error {
 	if mt.shard == nil {
 		return ErrFlushNilMemtable
 	}
-	mt.IncrRef()
+	mt.incrRef()
 	if err := p.queue.Enqueue(mt.shard.id, mt); err != nil {
-		mt.DecrRef()
+		mt.decrRef()
 		return err
 	}
 	return nil
@@ -67,7 +67,7 @@ func (p *flushPool) Start(n int) {
 }
 
 func (p *flushPool) process(task *flush.Task[*memTable], mt *memTable) {
-	defer mt.DecrRef()
+	defer mt.decrRef()
 	if err := p.install(mt); err != nil {
 		p.queue.MarkDone(task)
 		return

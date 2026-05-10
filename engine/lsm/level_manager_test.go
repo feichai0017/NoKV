@@ -50,11 +50,11 @@ func TestLevelManagerGetChoosesHighestVisibleVersionAcrossLevels(t *testing.T) {
 	t0 := buildTableWithEntries(t, lsm, 11, l0Delete)
 	t1 := buildTableWithEntries(t, lsm, 12, l1Put)
 	lsm.levels.levels[0].tables = []*table.Table{t0}
-	lsm.levels.levels[0].Sort()
+	lsm.levels.levels[0].sort()
 	lsm.levels.levels[1].tables = []*table.Table{t1}
-	lsm.levels.levels[1].Sort()
+	lsm.levels.levels[1].sort()
 
-	got, err := lsm.levels.Get(kv.InternalKey(kv.CFDefault, key, 396))
+	got, err := lsm.levels.get(kv.InternalKey(kv.CFDefault, key, 396))
 	require.NoError(t, err)
 	require.Equal(t, uint64(396), got.Version)
 	require.Equal(t, []byte("v396"), got.Value)
@@ -83,7 +83,7 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	tblV := buildTableWithEntry(t, lsm, 108, "v", 1, "vv")
 
 	lh.tables = []*table.Table{tblV, tblG, tblA, tblP, tblD, tblS, tblJ, tblM}
-	lh.Sort()
+	lh.sort()
 
 	require.Equal(t, 8, lh.filter.SpanCount())
 
@@ -147,7 +147,7 @@ func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
 	tblA := buildTableWithEntry(t, lsm, 401, "a", 1, "va")
 	tblD := buildTableWithEntry(t, lsm, 402, "d", 1, "vd")
 	lh.tables = []*table.Table{tblA, tblD}
-	lh.Sort()
+	lh.sort()
 
 	iters := lh.iterators(&index.Options{
 		IsAsc:      true,
@@ -183,7 +183,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 
 	lh.tables = []*table.Table{tblA, tblD, tblG}
 	lh.landing.AddBatch([]*table.Table{landingB, landingE})
-	lh.Sort()
+	lh.sort()
 
 	iters := lh.iterators(&index.Options{
 		IsAsc:      true,
@@ -225,7 +225,7 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	tblD := buildTableWithEntry(t, lsm, 504, "d", 1, "vd")
 
 	lh.tables = []*table.Table{tblA, tblB, tblC, tblD}
-	lh.Sort()
+	lh.sort()
 
 	iters := lh.iterators(&index.Options{
 		IsAsc:      true,

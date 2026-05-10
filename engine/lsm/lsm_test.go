@@ -228,7 +228,7 @@ func TestHitStorage(t *testing.T) {
 	}
 	// Hit the memtable path.
 	hitMemtable := func() {
-		v, err := lsm.shards[0].memTable.Get(e.Key)
+		v, err := lsm.shards[0].memTable.get(e.Key)
 		require.NoError(t, err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
@@ -508,7 +508,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	lh.tables = []*table.Table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
-	got, err := lh.Get(key)
+	got, err := lh.get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
 	}
@@ -530,7 +530,7 @@ func TestLevelGetMainWhenLandingEmpty(t *testing.T) {
 	lh.tables = []*table.Table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
-	got, err := lh.Get(key)
+	got, err := lh.get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
 	}
@@ -646,21 +646,21 @@ func TestLevelSearchLandingAndLN(t *testing.T) {
 		t.Fatalf("expected no table for key")
 	}
 
-	landingHit, err := lh.Get(key)
+	landingHit, err := lh.get(key)
 	if err != nil || landingHit == nil {
 		t.Fatalf("level get err=%v entry=%v", err, landingHit)
 	}
 	landingHit.DecrRef()
 
 	l0 := &levelHandler{levelNum: 0, tables: []*table.Table{tbl}}
-	l0Hit, err := l0.Get(key)
+	l0Hit, err := l0.get(key)
 	if err != nil || l0Hit == nil {
 		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
 	}
 	l0Hit.DecrRef()
 
 	lsm.levels.levels[0].tables = []*table.Table{tbl}
-	lmHit, err := lsm.levels.Get(key)
+	lmHit, err := lsm.levels.get(key)
 	if err != nil || lmHit == nil {
 		t.Fatalf("levels get err=%v entry=%v", err, lmHit)
 	}
@@ -966,7 +966,7 @@ func TestWriteBatchesWALFailureDoesNotApplyMemtable(t *testing.T) {
 	require.Equal(t, 0, failedAt)
 	require.Error(t, err)
 
-	got, err := shard.memTable.Get(entry.Key)
+	got, err := shard.memTable.get(entry.Key)
 	require.NoError(t, err)
 	require.Empty(t, got.Value)
 	got.DecrRef()

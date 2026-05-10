@@ -216,7 +216,7 @@ func (lh *levelHandler) numTablesLocked() int {
 }
 
 // Get finds key inside this level, considering landing shards and level semantics.
-func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
+func (lh *levelHandler) get(key []byte) (*kv.Entry, error) {
 	lh.RLock()
 	defer lh.RUnlock()
 	if lh.levelNum == 0 {
@@ -249,7 +249,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 }
 
 // Sort orders tables for lookup/compaction; L0 by file id, Ln by key range.
-func (lh *levelHandler) Sort() {
+func (lh *levelHandler) sort() {
 	lh.Lock()
 	defer lh.Unlock()
 	lh.refreshTableIndexesLocked()

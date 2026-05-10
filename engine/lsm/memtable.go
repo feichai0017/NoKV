@@ -94,7 +94,7 @@ func (m *memTable) close() error {
 }
 
 // Get reads key from the memtable index and returns a pooled entry wrapper.
-func (m *memTable) Get(key []byte) (*kv.Entry, error) {
+func (m *memTable) get(key []byte) (*kv.Entry, error) {
 	var (
 		foundKey []byte
 		vs       kv.ValueStruct
@@ -106,7 +106,7 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 }
 
 // Size returns the memory footprint reported by the backing mem index.
-func (m *memTable) Size() int64 {
+func (m *memTable) size() int64 {
 	if m == nil || m.index == nil {
 		return 0
 	}
@@ -188,7 +188,7 @@ func (lsm *LSM) recoverShard(s *lsmShard) (*memTable, []*memTable, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if mt.Size() == 0 {
+		if mt.size() == 0 {
 			continue
 		}
 		tables = append(tables, mt)
@@ -271,15 +271,15 @@ func (mt *memTable) canReserve(need, limit int64) bool {
 }
 
 // reference counting helpers, delegate to the backing index.
-func (mt *memTable) IncrRef() {
+func (mt *memTable) incrRef() {
 	if mt == nil || mt.index == nil {
 		return
 	}
 	mt.index.IncrRef()
 }
 
-// DecrRef decrements the underlying mem index reference count.
-func (mt *memTable) DecrRef() {
+// decrRef decrements the underlying mem index reference count.
+func (mt *memTable) decrRef() {
 	if mt == nil || mt.index == nil {
 		return
 	}
@@ -373,13 +373,13 @@ func (lsm *LSM) NewIterators(opt *index.Options) []index.Iterator {
 		immutables := append([]*memTable(nil), s.immutables...)
 		s.lock.RUnlock()
 		if mem != nil {
-			iters = append(iters, mem.NewIterator(opt))
+			iters = append(iters, mem.newIterator(opt))
 		}
 		for _, imm := range immutables {
 			if imm == nil {
 				continue
 			}
-			iters = append(iters, imm.NewIterator(opt))
+			iters = append(iters, imm.newIterator(opt))
 		}
 	}
 	iters = append(iters, lsm.levels.iterators(opt)...)
@@ -393,7 +393,7 @@ type memIterator struct {
 }
 
 // NewIterator creates an iterator over entries stored in this memtable.
-func (m *memTable) NewIterator(opt *index.Options) index.Iterator {
+func (m *memTable) newIterator(opt *index.Options) index.Iterator {
 	if m == nil || m.index == nil {
 		return nil
 	}

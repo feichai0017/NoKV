@@ -965,7 +965,7 @@ func (c *compactor) runCompactDef(id, l int, cd compactDef) (err error) {
 			return err
 		}
 		if thisLevel.levelNum > 0 {
-			thisLevel.Sort()
+			thisLevel.sort()
 		}
 	} else {
 		if err := nextLevel.replaceTables(cd.bot, newTables); err != nil {

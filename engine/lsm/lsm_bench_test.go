@@ -211,7 +211,7 @@ func BenchmarkLSMMemtableIterSeek(b *testing.B) {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
-			it := lsm.shards[0].memTable.NewIterator(&index.Options{IsAsc: true})
+			it := lsm.shards[0].memTable.newIterator(&index.Options{IsAsc: true})
 			defer func() { _ = it.Close() }()
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -257,7 +257,7 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 		}
 		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -294,7 +294,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 		}
 		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -326,7 +326,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 		}
 		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -360,7 +360,7 @@ func BenchmarkLevelPointMissPruning(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(missKey)
+				entry, err := lh.get(missKey)
 				if err != utils.ErrKeyNotFound {
 					b.Fatalf("expected miss, got entry=%v err=%v", entry, err)
 				}
@@ -391,7 +391,7 @@ func BenchmarkLevelPointHitPruning(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(hitKey)
+				entry, err := lh.get(hitKey)
 				if err != nil {
 					b.Fatalf("expected hit, got err=%v", err)
 				}
@@ -423,7 +423,7 @@ func BenchmarkLevelPointInRangeMissPruning(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(missKey)
+				entry, err := lh.get(missKey)
 				if err != utils.ErrKeyNotFound {
 					b.Fatalf("expected in-range miss, got entry=%v err=%v", entry, err)
 				}
@@ -650,7 +650,7 @@ func BenchmarkLevelL0OverlapFallback(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						entry, err := l0.Get(query.key)
+						entry, err := l0.get(query.key)
 						if query.hit {
 							if err != nil {
 								b.Fatalf("expected hit, got err=%v", err)

@@ -124,7 +124,7 @@ func TestGetChoosesHighestVisibleVersionAcrossMemtablesAndLevels(t *testing.T) {
 	memDelete := kv.NewInternalEntry(kv.CFDefault, userKey, 393, nil, kv.BitDelete, 0)
 	t1 := buildTableWithEntries(t, lsm, 91, levelPut)
 	lsm.levels.levels[1].tables = []*table.Table{t1}
-	lsm.levels.levels[1].Sort()
+	lsm.levels.levels[1].sort()
 	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{{memDelete}})
 	require.NoError(t, err)
 

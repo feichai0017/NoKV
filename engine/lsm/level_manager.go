@@ -91,10 +91,10 @@ func (lm *levelManager) iterators(opt *index.Options) []index.Iterator {
 }
 
 // Get searches every level and returns the highest visible version for key.
-func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
+func (lm *levelManager) get(key []byte) (*kv.Entry, error) {
 	var best *kv.Entry
 	for level := 0; level < lm.opt.MaxLevelNum; level++ {
-		entry, err := lm.levels[level].Get(key)
+		entry, err := lm.levels[level].get(key)
 		if err != nil && err != utils.ErrKeyNotFound {
 			if best != nil {
 				best.DecrRef()
@@ -160,7 +160,7 @@ func (lm *levelManager) build() error {
 	}
 	// sort each level
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
-		lm.levels[i].Sort()
+		lm.levels[i].sort()
 	}
 	// get the maximum fid value
 	lm.maxFID.Store(maxFID)
@@ -188,7 +188,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	fid := uint64(immutable.segmentID)
 	sstName := vfs.FileNameSSTable(lm.opt.WorkDir, fid)
 
-	iter := immutable.NewIterator(&index.Options{IsAsc: true})
+	iter := immutable.newIterator(&index.Options{IsAsc: true})
 	if iter == nil {
 		return nil
 	}

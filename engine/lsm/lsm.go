@@ -603,7 +603,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		best = nil
 	}
 	// query from the levels runtime
-	entry, err := lsm.levels.Get(key)
+	entry, err := lsm.levels.get(key)
 	if err != nil && err != utils.ErrKeyNotFound {
 		if best != nil {
 			best.DecrRef()
@@ -693,7 +693,7 @@ func bestMemtableEntry(key []byte, tables []*memTable) *kv.Entry {
 		if mt == nil {
 			continue
 		}
-		entry, _ := mt.Get(key)
+		entry, _ := mt.get(key)
 		if !isMemtableHit(entry) {
 			if entry != nil {
 				entry.DecrRef()
@@ -725,7 +725,7 @@ func (lsm *LSM) memSize() int64 {
 	for _, s := range lsm.shards {
 		s.lock.RLock()
 		if s.memTable != nil {
-			total += s.memTable.Size()
+			total += s.memTable.size()
 		}
 		s.lock.RUnlock()
 	}
@@ -746,7 +746,10 @@ func (lsm *LSM) memTableIsNil() bool {
 }
 
 // Rotate seals every shard's active memtable, creates fresh ones, and
-// schedules each old memtable for flush.
+// schedules each old memtable for flush. Admin/test entry point — production
+// rotation is driven implicitly by the write path (rotateForWriteShard) when
+// a memtable can no longer fit a batch. Exposed so tests/admin tools can
+// force a flush window without write traffic.
 func (lsm *LSM) Rotate() error {
 	for _, s := range lsm.shards {
 		s.lock.Lock()
@@ -784,18 +787,18 @@ func (lsm *LSM) getMemTables() ([]*memTable, func()) {
 		s.lock.RLock()
 		if s.memTable != nil {
 			tables = append(tables, s.memTable)
-			s.memTable.IncrRef()
+			s.memTable.incrRef()
 		}
 		last := len(s.immutables) - 1
 		for i := range s.immutables {
 			tables = append(tables, s.immutables[last-i])
-			s.immutables[last-i].IncrRef()
+			s.immutables[last-i].incrRef()
 		}
 		s.lock.RUnlock()
 	}
 	return tables, func() {
 		for _, tbl := range tables {
-			tbl.DecrRef()
+			tbl.decrRef()
 		}
 	}
 }
@@ -810,16 +813,16 @@ func (lsm *LSM) getMemTablesForShard(shardID int) ([]*memTable, func()) {
 	tables := make([]*memTable, 0, 1+len(s.immutables))
 	if s.memTable != nil {
 		tables = append(tables, s.memTable)
-		s.memTable.IncrRef()
+		s.memTable.incrRef()
 	}
 	last := len(s.immutables) - 1
 	for i := range s.immutables {
 		tables = append(tables, s.immutables[last-i])
-		s.immutables[last-i].IncrRef()
+		s.immutables[last-i].incrRef()
 	}
 	return tables, func() {
 		for _, tbl := range tables {
-			tbl.DecrRef()
+			tbl.decrRef()
 		}
 	}
 }

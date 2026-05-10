@@ -98,7 +98,7 @@ func TestSelectTablesForKeyL0UsesSublevels(t *testing.T) {
 	l0.addTable(a)
 	l0.addTable(m)
 	l0.addTable(z)
-	l0.Sort()
+	l0.sort()
 
 	require.Len(t, l0.l0Sublevels, 1, "three disjoint tables collapse into one sublevel")
 
@@ -120,7 +120,7 @@ func TestL0AddRefreshesSublevelsForPointLookup(t *testing.T) {
 	l0 := lsm.levels.levels[0]
 	a := buildTableWithEntry(t, lsm, 8101, "a", 1, "va")
 	l0.addTable(a)
-	l0.Sort()
+	l0.sort()
 	require.Len(t, l0.l0Sublevels, 1)
 
 	// A later flush appends a new L0 table. The sublevel read index must be
@@ -129,7 +129,7 @@ func TestL0AddRefreshesSublevelsForPointLookup(t *testing.T) {
 	l0.addTable(z)
 
 	keyZ := []byte(kv.InternalKey(kv.CFDefault, []byte("z"), 100))
-	entry, err := l0.Get(keyZ)
+	entry, err := l0.get(keyZ)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("vz"), entry.Value)
@@ -146,7 +146,7 @@ func TestL0DeleteRefreshesSublevelsForPointLookup(t *testing.T) {
 	z := buildTableWithEntry(t, lsm, 8202, "z", 1, "vz")
 	l0.addTable(a)
 	l0.addTable(z)
-	l0.Sort()
+	l0.sort()
 
 	keyZ := []byte(kv.InternalKey(kv.CFDefault, []byte("z"), 100))
 	require.NotEmpty(t, l0.selectTablesForKey(keyZ, false))
@@ -169,11 +169,11 @@ func TestL0GetReadPathReturnsHighestVersionAcrossSublevels(t *testing.T) {
 	l0.addTable(older)
 	l0.addTable(newer)
 	l0.addTable(other)
-	l0.Sort()
+	l0.sort()
 	require.Greater(t, len(l0.l0Sublevels), 1, "overlapping older/newer must occupy distinct sublevels")
 
 	keyK := []byte(kv.InternalKey(kv.CFDefault, []byte("k"), 100))
-	entry, err := l0.Get(keyK)
+	entry, err := l0.get(keyK)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Equal(t, []byte("v5"), entry.Value, "highest version across sublevels wins")
@@ -226,7 +226,7 @@ func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
 	src := lsm.levels.levels[0]
 	src.addTable(a)
 	src.addTable(z)
-	src.Sort()
+	src.sort()
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table.Table{a}
@@ -251,7 +251,7 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 	src := lsm.levels.levels[0]
 	src.addTable(a)
 	src.addTable(b)
-	src.Sort()
+	src.sort()
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table.Table{b} // pick only one of an overlapping pair
@@ -279,7 +279,7 @@ func BenchmarkL0SelectTablesForKeyLinear(b *testing.B) {
 		tbl := buildTableWithEntry(&testing.T{}, lsm, uint64(20000+i), key, uint64(i+1), "v")
 		l0.addTable(tbl)
 	}
-	l0.Sort()
+	l0.sort()
 	l0.l0Sublevels = nil // force linear scan path
 
 	target := []byte(kv.InternalKey(kv.CFDefault, []byte("k00031"), 0))
@@ -304,7 +304,7 @@ func BenchmarkL0SelectTablesForKeyViaSublevels(b *testing.B) {
 		tbl := buildTableWithEntry(&testing.T{}, lsm, uint64(30000+i), key, uint64(i+1), "v")
 		l0.addTable(tbl)
 	}
-	l0.Sort()
+	l0.sort()
 	require.NotNil(b, l0.l0Sublevels, "sortTablesLocked should populate sublevels for L0")
 
 	target := []byte(kv.InternalKey(kv.CFDefault, []byte("k00031"), 0))
