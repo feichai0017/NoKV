@@ -38,7 +38,6 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 			_ = lm.close()
 		}
 	}()
-	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
 	// read the manifest file to build the levels runtime
 	if err := lm.loadManifest(); err != nil {
@@ -52,26 +51,20 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
-	lm.compactionPacer = pacer.New(opt.CompactionWriteBytesPerSec)
-	lm.sched = newScheduler(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
+	lm.compactor = newCompactor(lm, opt)
 	return lm, nil
 }
 
 type levelManager struct {
-	maxFID           atomic.Uint64
-	opt              *Options
-	cache            *cachepkg.Cache
-	manifestMgr      *manifest.Manager
-	levels           []*levelHandler
-	lsm              *LSM
-	compactState     *plan.State
-	sched            *scheduler
-	compactionPacer  *pacer.Pacer
-	rtCollector      *tombstone.Collector
-	compactionLastNs atomic.Int64
-	compactionMaxNs  atomic.Int64
-	compactionRuns   atomic.Uint64
-	rangeFilter      rangeFilterMetrics
+	maxFID      atomic.Uint64
+	opt         *Options
+	cache       *cachepkg.Cache
+	manifestMgr *manifest.Manager
+	levels      []*levelHandler
+	lsm         *LSM
+	rtCollector *tombstone.Collector
+	compactor   *compactor
+	rangeFilter rangeFilterMetrics
 }
 
 func (lm *levelManager) close() error {
@@ -295,8 +288,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	if err := immutable.shard.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 		return err
 	}
-	if lm.sched != nil {
-		lm.sched.Trigger()
+	if lm.compactor.sched != nil {
+		lm.compactor.sched.Trigger()
 	}
 	return nil
 }
@@ -333,22 +326,22 @@ func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
 	if lm == nil {
 		return 0, 0, 0
 	}
-	lastNs := lm.compactionLastNs.Load()
-	maxNs := lm.compactionMaxNs.Load()
-	runs := lm.compactionRuns.Load()
+	lastNs := lm.compactor.metrics.LastNs.Load()
+	maxNs := lm.compactor.metrics.MaxNs.Load()
+	runs := lm.compactor.metrics.Runs.Load()
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
 func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	lm.compactionRuns.Add(1)
+	lm.compactor.metrics.Runs.Add(1)
 	last := duration.Nanoseconds()
-	lm.compactionLastNs.Store(last)
+	lm.compactor.metrics.LastNs.Store(last)
 	for {
-		prev := lm.compactionMaxNs.Load()
+		prev := lm.compactor.metrics.MaxNs.Load()
 		if last <= prev {
 			break
 		}
-		if lm.compactionMaxNs.CompareAndSwap(prev, last) {
+		if lm.compactor.metrics.MaxNs.CompareAndSwap(prev, last) {
 			break
 		}
 	}
@@ -417,8 +410,8 @@ func (lm *levelManager) pickCompactLevels() []plan.Priority {
 			KeyCount:            lvl.keyCount(),
 			RangeTombstones:     lvl.rangeTombstoneCount(),
 		}
-		if lm.compactState != nil {
-			li.DelSize = lm.compactState.DelSize(i)
+		if lm.compactor.state != nil {
+			li.DelSize = lm.compactor.state.DelSize(i)
 		}
 		levels[i] = li
 	}
@@ -473,13 +466,13 @@ func (lm *levelManager) levelTargets() plan.Targets {
 //	build start; an in-progress compaction does not switch mid-flight, which
 //	keeps the per-block charge() hot path branch-free past the nil check.
 func (lm *levelManager) compactionPacerForBuild() *pacer.Pacer {
-	if lm == nil || lm.compactionPacer == nil {
+	if lm == nil || lm.compactor.pacer == nil {
 		return nil
 	}
 	if lm.compactionPacerBypassActive() {
 		return nil
 	}
-	return lm.compactionPacer
+	return lm.compactor.pacer
 }
 
 // compactionPacerBypassActive reports whether L0 has reached the configured
@@ -498,7 +491,7 @@ func (lm *levelManager) CompactionPacerStats() pacer.Stats {
 	if lm == nil {
 		return pacer.Stats{}
 	}
-	return lm.compactionPacer.Stats()
+	return lm.compactor.pacer.Stats()
 }
 
 // =====  Planner glue (was planner.go) =====
@@ -550,7 +543,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 			if !lm.resolvePlanLocked(cd) {
 				return false
 			}
-			return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+			return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 		}
 		return false
 	}
@@ -560,7 +553,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	if cd.thisLevel.isLastLevel() {
 		return lm.fillMaxLevelTables(tables, cd)
 	}
-	p, ok := plan.ForRegular(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
+	p, ok := plan.ForRegular(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactor.state)
 	if !ok {
 		return false
 	}
@@ -568,7 +561,7 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+	return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 }
 
 func (lm *levelManager) fillTablesLandingShard(cd *compactDef, shardIdx int) bool {
@@ -591,7 +584,7 @@ func (lm *levelManager) fillTablesLandingShard(cd *compactDef, shardIdx int) boo
 		return false
 	}
 	shMeta := tableMetaSnapshot(shTables)
-	p, ok := plan.ForLandingShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactState)
+	p, ok := plan.ForLandingShard(cd.thisLevel.levelNum, shMeta, cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), cd.targetFileSize(), batchSize, lm.compactor.state)
 	if !ok {
 		return false
 	}
@@ -599,7 +592,7 @@ func (lm *levelManager) fillTablesLandingShard(cd *compactDef, shardIdx int) boo
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+	return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 }
 
 // resolveTablesLocked maps IDs to tables; caller must hold lh lock.
@@ -716,7 +709,7 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table.Table, cd *compactDef
 	if lm != nil && lm.opt != nil {
 		ttlMinAge = lm.opt.TTLCompactionMinAge
 	}
-	p, ok := plan.ForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.spec.ThisFileSize, lm.compactState, time.Now(), ttlMinAge)
+	p, ok := plan.ForMaxLevel(cd.thisLevel.levelNum, tableMetaSnapshot(tables), cd.spec.ThisFileSize, lm.compactor.state, time.Now(), ttlMinAge)
 	if !ok {
 		return false
 	}
@@ -724,7 +717,7 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table.Table, cd *compactDef
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+	return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 }
 
 // fillTablesL0 tries L0->Lbase first, then falls back to L0->L0.
@@ -810,8 +803,8 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 	second.Unlock()
 	first.Unlock()
 
-	if lm.sched != nil {
-		lm.sched.Trigger()
+	if lm.compactor.sched != nil {
+		lm.compactor.sched.Trigger()
 	}
 	return nil
 }
@@ -832,7 +825,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if len(top) == 0 {
 		return false
 	}
-	p, ok := plan.ForL0ToLbase(tableMetaSnapshot(top), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactState)
+	p, ok := plan.ForL0ToLbase(tableMetaSnapshot(top), cd.nextLevel.levelNum, tableMetaSnapshot(cd.nextLevel.tables), lm.compactor.state)
 	if !ok {
 		return false
 	}
@@ -840,7 +833,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 	if !lm.resolvePlanLocked(cd) {
 		return false
 	}
-	return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+	return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 }
 
 // fillTablesL0ToL0 performs L0->L0 compaction.
@@ -869,7 +862,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 
 	top := cd.thisLevel.tables
 	now := time.Now()
-	p, ok := plan.ForL0ToL0(cd.thisLevel.levelNum, tableMetaSnapshot(top), cd.spec.ThisFileSize, lm.compactState, now)
+	p, ok := plan.ForL0ToL0(cd.thisLevel.levelNum, tableMetaSnapshot(top), cd.spec.ThisFileSize, lm.compactor.state, now)
 	if !ok {
 		// Skip when fewer than four tables qualify.
 		return false
@@ -882,7 +875,7 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	// L0->L0 compaction collapses into a single file, reducing L0 count and read amplification.
 	cd.spec.ThisFileSize = math.MaxUint32
 	cd.spec.NextFileSize = cd.spec.ThisFileSize
-	return lm.compactState.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
+	return lm.compactor.state.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry())
 }
 
 // getKeyRange returns the merged min/max key range for a set of live tables.
@@ -944,7 +937,7 @@ func (lm *levelManager) doCompact(id int, p plan.Priority) (retErr error) {
 	var cleanup bool
 	defer func() {
 		if cleanup {
-			if err := lm.compactState.Delete(cd.stateEntry()); err != nil {
+			if err := lm.compactor.state.Delete(cd.stateEntry()); err != nil {
 				lm.getLogger().Warn("failed to cleanup compaction state", "worker", id, "err", err)
 				retErr = errors.Join(retErr, err)
 			}
@@ -982,12 +975,12 @@ func (lm *levelManager) doCompact(id int, p plan.Priority) (retErr error) {
 			sub.spec.StatsTag = p.StatsTag
 			if err := lm.runCompactDef(id, l, sub); err != nil {
 				lm.getLogger().Error("landing compaction failed", "worker", id, "err", err, "def", sub)
-				if stateDelErr := lm.compactState.Delete(sub.stateEntry()); stateDelErr != nil {
+				if stateDelErr := lm.compactor.state.Delete(sub.stateEntry()); stateDelErr != nil {
 					return errors.Join(err, stateDelErr)
 				}
 				return err
 			}
-			if err := lm.compactState.Delete(sub.stateEntry()); err != nil {
+			if err := lm.compactor.state.Delete(sub.stateEntry()); err != nil {
 				return err
 			}
 			ran = true

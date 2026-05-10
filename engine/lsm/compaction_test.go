@@ -491,7 +491,7 @@ func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef landing-drain: %v", err)
 	}
-	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
+	require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
 		if hasLandingTable(target, tbl.FID()) {
@@ -542,7 +542,7 @@ func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef landing-keep: %v", err)
 	}
-	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
+	require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	if target.numLandingTables() == 0 {
 		t.Fatalf("expected landing tables to remain after landing-keep compaction")

@@ -240,7 +240,7 @@ func TestHitStorage(t *testing.T) {
 	// Hit a non-L0 path.
 	hitNotL0 := func() {
 		// Compaction produces non-L0 data; this should hit L6.
-		lsm.levels.sched.RunOnce(0)
+		lsm.levels.compactor.sched.RunOnce(0)
 		baseTest(t, lsm, 128)
 	}
 	// Exercise the bloom-filter miss path.
@@ -1825,7 +1825,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
 			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
 		}
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
+		require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))
 	}
 
 	// --- Even keys (key00, key02, ..., key98) @ version 10 -> maxLevel ---

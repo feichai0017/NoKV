@@ -256,11 +256,11 @@ func TestCompactionPacerBypassesWhenL0IsNearStall(t *testing.T) {
 			CompactionWriteBytesPerSec: 100,
 			CompactionPacingBypassL0:   2,
 		},
-		compactionPacer: pacer.New(100),
 		levels: []*levelHandler{
 			{tables: []*table.Table{{}, {}}},
 		},
 	}
+	lm.compactor = &compactor{lm: lm, pacer: pacer.New(100)}
 
 	require.True(t, lm.compactionPacerBypassActive())
 	require.Nil(t, lm.compactionPacerForBuild())
