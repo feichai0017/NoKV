@@ -128,6 +128,7 @@ type Manager struct {
 	active          vfs.File
 	activeID        uint32
 	activeSize      int64
+	activeCatalog   []catalogEntry
 	closed          bool
 	segmentSize     int64
 	removedSegments atomic.Uint64
@@ -137,12 +138,8 @@ type Manager struct {
 	recordTotals    RecordMetrics
 	segmentTotals   map[uint32]RecordMetrics
 	retention       map[string]RetentionFunc
-	fsyncCond       *sync.Cond
+	fsync           commitBatch
 	activeFileCond  *sync.Cond
-	fsyncClosed     bool
-	fsyncBatchSeq   uint64
-	fsyncDurableSeq uint64
-	fsyncErr        error
 	activeSyncRefs  int
 }
 
@@ -163,7 +160,7 @@ func Open(cfg Config) (*Manager, error) {
 		bufferSize:    cfg.BufferSize,
 		segmentTotals: make(map[uint32]RecordMetrics, 16),
 	}
-	m.fsyncCond = sync.NewCond(&m.mu)
+	m.fsync.cond = sync.NewCond(&m.mu)
 	m.activeFileCond = sync.NewCond(&m.mu)
 	if err := m.openLatestSegment(); err != nil {
 		return nil, err
@@ -227,6 +224,11 @@ func (m *Manager) segmentPath(id uint32) string {
 }
 
 // switchSegmentLocked replaces the active segment; caller must hold m.mu.
+//
+// When sealing the previous segment we persist the in-memory catalog
+// (built incrementally during AppendRecords) instead of rescanning the
+// whole segment. The new segment starts with an empty catalog, or with
+// one loaded from disk if we are resuming an existing segment.
 func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	if m.writer != nil {
 		if err := m.writer.Flush(); err != nil {
@@ -237,7 +239,7 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 		if err := m.active.Sync(); err != nil {
 			return err
 		}
-		if err := m.rebuildActiveCatalogLocked(); err != nil {
+		if err := m.persistActiveCatalogLocked(); err != nil {
 			return err
 		}
 		m.waitActiveSyncRefsLocked()
@@ -281,11 +283,53 @@ func (m *Manager) switchSegmentLocked(id uint32, truncate bool) error {
 	}
 	if truncate {
 		m.activeSize = 0
+		m.activeCatalog = m.activeCatalog[:0]
 	} else {
 		m.activeSize = size
+		entries, err := m.resolveCatalogForActive(id, f, size)
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		m.activeCatalog = entries
 	}
 	m.writer = bufio.NewWriterSize(f, m.bufferSize)
 	return nil
+}
+
+// persistActiveCatalogLocked writes the in-memory catalog for the
+// currently-active segment to its .idx file. Caller must hold m.mu and
+// the bufio writer must already be flushed.
+func (m *Manager) persistActiveCatalogLocked() error {
+	if m.activeID == 0 {
+		return nil
+	}
+	return m.writeSegmentCatalog(m.activeID, m.activeCatalog)
+}
+
+// resolveCatalogForActive returns the catalog entries that describe the
+// data already written to an existing segment, preferring the on-disk
+// .idx file and falling back to a one-time rescan. The rescan also
+// rewrites the .idx file as a side effect, so subsequent opens stay
+// fast.
+func (m *Manager) resolveCatalogForActive(id uint32, f vfs.File, size int64) ([]catalogEntry, error) {
+	if entries, err := m.loadSegmentCatalog(id); err == nil {
+		return entries, nil
+	}
+	if size == 0 {
+		return nil, nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	entries, err := m.scanAndWriteSegmentCatalog(id, f)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func (m *Manager) switchSegment(id uint32, truncate bool) error {
@@ -391,6 +435,10 @@ func (m *Manager) AppendRecords(durability DurabilityPolicy, records ...Record) 
 			return nil, err
 		}
 		offset := m.activeSize
+		groupID, err := recordGroupID(rec.Type, rec.Payload)
+		if err != nil {
+			return nil, err
+		}
 
 		// Single bufio.Write per record - encoding chunks are already
 		// concatenated in the local buffer.
@@ -400,12 +448,20 @@ func (m *Manager) AppendRecords(durability DurabilityPolicy, records ...Record) 
 		cursor += size
 		m.activeSize += int64(size)
 
+		length := uint32(len(rec.Payload) + 1)
 		results[i] = EntryInfo{
 			SegmentID: m.activeID,
 			Offset:    offset,
-			Length:    uint32(len(rec.Payload) + 1),
+			Length:    length,
 			Type:      rec.Type,
+			GroupID:   groupID,
 		}
+		m.activeCatalog = append(m.activeCatalog, catalogEntry{
+			Type:   rec.Type,
+			Group:  groupID,
+			Offset: offset,
+			Length: length,
+		})
 		segMetrics := m.segmentTotals[m.activeID]
 		addRecordMetric(&segMetrics, rec.Type)
 		m.segmentTotals[m.activeID] = segMetrics
@@ -422,6 +478,11 @@ func (m *Manager) applyDurabilityLocked(policy DurabilityPolicy) error {
 	case DurabilityBuffered:
 		return nil
 	case DurabilityFlushed:
+		// Group-commit batching is a net loss here: bufio.Flush is too
+		// cheap (~10μs) for the debounce window to amortize. We tried
+		// it and the LSM SetBatch single-shard benchmark regressed 4×.
+		// The fsync-batched path remains a separate beast — the slow
+		// fsync syscall actually benefits from coalescing.
 		if m.writer != nil {
 			return m.writer.Flush()
 		}
@@ -442,21 +503,14 @@ func (m *Manager) applyDurabilityLocked(policy DurabilityPolicy) error {
 }
 
 func (m *Manager) enqueueFsyncBatchLocked() error {
-	if m.fsyncClosed {
-		return fmt.Errorf("wal: manager closed")
+	seq, leader, err := m.fsync.enqueueLocked()
+	if err != nil {
+		return err
 	}
-	seq := m.fsyncBatchSeq + 1
-	m.fsyncBatchSeq = seq
-	if m.fsyncBatchSeq-m.fsyncDurableSeq == 1 {
+	if leader {
 		go m.runFsyncBatch()
 	}
-	for m.fsyncDurableSeq < seq && !m.fsyncClosed {
-		m.fsyncCond.Wait()
-	}
-	if m.fsyncDurableSeq >= seq {
-		return m.fsyncErr
-	}
-	return fmt.Errorf("wal: manager closed")
+	return m.fsync.waitLocked(seq)
 }
 
 func (m *Manager) runFsyncBatch() {
@@ -465,18 +519,18 @@ func (m *Manager) runFsyncBatch() {
 
 	for {
 		m.mu.Lock()
-		target := m.fsyncBatchSeq
-		if pending := target - m.fsyncDurableSeq; pending < defaultFsyncBatchSize && !m.fsyncClosed {
+		target := m.fsync.batchSeq
+		if pending := target - m.fsync.durableSeq; pending < defaultFsyncBatchSize && !m.fsync.closed {
 			m.mu.Unlock()
 			time.Sleep(defaultFsyncBatchWindow)
 			m.mu.Lock()
-			target = m.fsyncBatchSeq
+			target = m.fsync.batchSeq
 		}
-		if target == m.fsyncDurableSeq || m.fsyncClosed {
+		if target == m.fsync.durableSeq || m.fsync.closed {
 			m.mu.Unlock()
 			return
 		}
-		// Phase 1 (under lock): flush bufio bytes [m.fsyncDurableSeq+1 .. target]
+		// Phase 1 (under lock): flush bufio bytes [durableSeq+1 .. target]
 		// into the OS page cache and capture the active file handle. Anything
 		// new appended after this point belongs to a future seq and will be
 		// covered by a subsequent fsync cycle.
@@ -502,10 +556,8 @@ func (m *Manager) runFsyncBatch() {
 		if err == nil {
 			err = syncErr
 		}
-		m.fsyncErr = err
-		m.fsyncDurableSeq = target
-		m.fsyncCond.Broadcast()
-		more := m.fsyncBatchSeq > m.fsyncDurableSeq && !m.fsyncClosed
+		m.fsync.completeLocked(target, err)
+		more := m.fsync.pendingLocked()
 		m.mu.Unlock()
 		if !more {
 			return
@@ -670,10 +722,7 @@ func (m *Manager) Close() error {
 	if m.closed {
 		return nil
 	}
-	m.fsyncClosed = true
-	if m.fsyncCond != nil {
-		m.fsyncCond.Broadcast()
-	}
+	m.fsync.closeLocked()
 	if m.active == nil {
 		m.closed = true
 		return nil
@@ -696,7 +745,7 @@ func (m *Manager) Close() error {
 		m.closed = true
 		return errors.Join(err, closeErr)
 	}
-	if err := m.rebuildActiveCatalogLocked(); err != nil {
+	if err := m.persistActiveCatalogLocked(); err != nil {
 		m.waitActiveSyncRefsLocked()
 		closeErr := m.active.Close()
 		m.active = nil
@@ -829,20 +878,6 @@ func checkSegment(fs vfs.FS, path string) error {
 	default:
 		return err
 	}
-}
-
-func (m *Manager) rebuildActiveCatalogLocked() error {
-	if m.activeID == 0 || m.active == nil {
-		return nil
-	}
-	if _, err := m.active.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	_, err := m.scanAndWriteSegmentCatalog(m.activeID, m.active)
-	if _, seekErr := m.active.Seek(0, io.SeekEnd); err == nil {
-		err = seekErr
-	}
-	return err
 }
 
 // RemoveSegment deletes a WAL segment from disk.

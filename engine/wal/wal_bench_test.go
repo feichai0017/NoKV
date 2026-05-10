@@ -21,18 +21,52 @@ func newBenchManager(b *testing.B) *Manager {
 	return mgr
 }
 
-func BenchmarkWALAppend(b *testing.B) {
-	mgr := newBenchManager(b)
-	payload := make([]byte, 256)
-	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
-	defer entry.DecrRef()
-	b.ReportAllocs()
-	b.SetBytes(int64(len(payload)))
+var benchDurabilities = []struct {
+	name   string
+	policy DurabilityPolicy
+}{
+	{"buffered", DurabilityBuffered},
+	{"flushed", DurabilityFlushed},
+	{"fsync_batched", DurabilityFsyncBatched},
+}
 
-	for b.Loop() {
-		if _, err := mgr.AppendEntry(DurabilityBuffered, entry); err != nil {
-			b.Fatalf("append: %v", err)
-		}
+func BenchmarkWALAppend(b *testing.B) {
+	for _, d := range benchDurabilities {
+		b.Run(d.name, func(b *testing.B) {
+			mgr := newBenchManager(b)
+			payload := make([]byte, 256)
+			entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
+			defer entry.DecrRef()
+			b.ReportAllocs()
+			b.SetBytes(int64(len(payload)))
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := mgr.AppendEntry(d.policy, entry); err != nil {
+					b.Fatalf("append: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkWALAppendParallel(b *testing.B) {
+	for _, d := range benchDurabilities {
+		b.Run(d.name, func(b *testing.B) {
+			mgr := newBenchManager(b)
+			payload := make([]byte, 256)
+			b.ReportAllocs()
+			b.SetBytes(int64(len(payload)))
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bench-key"), 1), payload)
+				defer entry.DecrRef()
+				for pb.Next() {
+					if _, err := mgr.AppendEntry(d.policy, entry); err != nil {
+						b.Fatalf("append: %v", err)
+					}
+				}
+			})
+		})
 	}
 }
 
