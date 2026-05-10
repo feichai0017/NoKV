@@ -1,6 +1,7 @@
 package percolator
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -332,7 +333,7 @@ func TestApplyAtomicMutateBatchFusesIndependentRequests(t *testing.T) {
 		require.Equal(t, uint64(1), result.AppliedKeys)
 	}
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{6}, store.appliedEntryCounts)
+	require.Equal(t, []int{2}, store.appliedEntryCounts)
 
 	reader := NewReader(db)
 	value, _, err := reader.GetValue([]byte("atomic-batch-a"), 50)
@@ -345,7 +346,7 @@ func TestApplyAtomicMutateBatchFusesIndependentRequests(t *testing.T) {
 	after := Stats()
 	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_batches_total")+1, atomicMutateStat(t, after, "atomic_fused_apply_batches_total"))
 	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_requests_total")+2, atomicMutateStat(t, after, "atomic_fused_apply_requests_total"))
-	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_entries_total")+6, atomicMutateStat(t, after, "atomic_fused_apply_entries_total"))
+	require.Equal(t, atomicMutateStat(t, before, "atomic_fused_apply_entries_total")+2, atomicMutateStat(t, after, "atomic_fused_apply_entries_total"))
 }
 
 func TestApplyAtomicMutateBatchSplitsDifferentLocalApplyGroups(t *testing.T) {
@@ -374,7 +375,7 @@ func TestApplyAtomicMutateBatchSplitsDifferentLocalApplyGroups(t *testing.T) {
 		require.Equal(t, uint64(1), result.AppliedKeys)
 	}
 	require.Equal(t, 2, store.applyCalls)
-	require.Equal(t, []int{3, 3}, store.appliedEntryCounts)
+	require.Equal(t, []int{1, 1}, store.appliedEntryCounts)
 }
 
 func TestApplyAtomicMutateBatchPreservesOverlappingRequestOrder(t *testing.T) {
@@ -837,7 +838,7 @@ func TestPrewriteBatchAppliesAllMutationsOnce(t *testing.T) {
 		LockTtl:      1000,
 	}))
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{9}, store.appliedEntryCounts)
+	require.Equal(t, []int{3}, store.appliedEntryCounts)
 
 	reader := NewReader(db)
 	for _, key := range keys {
@@ -872,12 +873,12 @@ func TestPrewriteRequestBatchFusesIndependentRequests(t *testing.T) {
 	require.Empty(t, results[0])
 	require.Empty(t, results[1])
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{6}, store.appliedEntryCounts)
+	require.Equal(t, []int{2}, store.appliedEntryCounts)
 
 	after := Stats()
 	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_batches_total")+1, atomicMutateStat(t, after, "two_pc_fused_apply_batches_total"))
 	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_requests_total")+2, atomicMutateStat(t, after, "two_pc_fused_apply_requests_total"))
-	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_entries_total")+6, atomicMutateStat(t, after, "two_pc_fused_apply_entries_total"))
+	require.Equal(t, atomicMutateStat(t, before, "two_pc_fused_apply_entries_total")+2, atomicMutateStat(t, after, "two_pc_fused_apply_entries_total"))
 }
 
 func TestPrewriteRequestBatchPreservesOverlappingOrder(t *testing.T) {
@@ -997,7 +998,7 @@ func TestBatchRollbackRequestBatchFusesIndependentRequests(t *testing.T) {
 	require.Nil(t, results[0])
 	require.Nil(t, results[1])
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{6}, store.appliedEntryCounts)
+	require.Equal(t, []int{4}, store.appliedEntryCounts)
 }
 
 func TestResolveLockRequestBatchFusesIndependentRequests(t *testing.T) {
@@ -1476,7 +1477,7 @@ func TestBatchRollbackAppliesAllKeysOnce(t *testing.T) {
 		StartVersion: 18,
 	}))
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{9}, store.appliedEntryCounts)
+	require.Equal(t, []int{7}, store.appliedEntryCounts)
 }
 
 func TestBatchRollbackDoesNotDeleteOtherTransactionLock(t *testing.T) {
@@ -1956,15 +1957,14 @@ func TestCommitRecoveryDropsCorruptedCommitBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 	require.Equal(t, startTs, lock.Ts)
+	require.Equal(t, []byte("value"), lock.ShortValue)
 
 	write, _, err := reader.GetWriteByStartTs(key, startTs)
 	require.NoError(t, err)
 	require.Nil(t, write)
 
-	entry, err := db2.GetInternalEntry(kv.CFDefault, key, startTs)
-	require.NoError(t, err)
-	require.Equal(t, []byte("value"), entry.Value)
-	entry.DecrRef()
+	_, err = db2.GetInternalEntry(kv.CFDefault, key, startTs)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestCheckTxnStatusTTLExpire(t *testing.T) {
@@ -2349,6 +2349,147 @@ func TestReaderGetValueFromExpiredShortValue(t *testing.T) {
 
 	_, _, err := reader.GetValue(key, 30)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func TestPrewriteCommitShortValueSkipsDefaultCF(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("short-prewrite")
+	value := []byte("inline")
+	expiresAt := uint64(^uint64(0))
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:        kvrpcpb.Mutation_Put,
+			Key:       key,
+			Value:     value,
+			ExpiresAt: expiresAt,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 10,
+		LockTtl:      1000,
+	}))
+
+	_, err := db.GetInternalEntry(kv.CFDefault, key, 10)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	reader := NewReader(db)
+	lock, err := reader.GetLock(key)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+	require.Equal(t, value, lock.ShortValue)
+	require.Equal(t, expiresAt, lock.ExpiresAt)
+
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  10,
+		CommitVersion: 20,
+	}))
+
+	write, commitTs, err := reader.GetWriteByStartTs(key, 10)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, uint64(20), commitTs)
+	require.Equal(t, value, write.ShortValue)
+	require.Equal(t, expiresAt, write.ExpiresAt)
+
+	got, gotExpiresAt, err := reader.GetValue(key, 30)
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+	require.Equal(t, expiresAt, gotExpiresAt)
+}
+
+func TestPrewriteLargeValueKeepsDefaultCF(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("large-prewrite")
+	value := bytes.Repeat([]byte("x"), mvcc.DefaultShortValueMaxBytes+1)
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: value,
+		}},
+		PrimaryLock:  key,
+		StartVersion: 11,
+		LockTtl:      1000,
+	}))
+
+	entry, err := db.GetInternalEntry(kv.CFDefault, key, 11)
+	require.NoError(t, err)
+	require.Equal(t, value, entry.Value)
+	entry.DecrRef()
+
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  11,
+		CommitVersion: 21,
+	}))
+
+	write, _, err := NewReader(db).GetWriteByStartTs(key, 11)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Empty(t, write.ShortValue)
+}
+
+func TestAtomicMutateShortValueSkipsDefaultCF(t *testing.T) {
+	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	key := []byte("atomic-short")
+	value := []byte("inline")
+	req := atomicPutRequest(30, 31, key, value)
+	result := ApplyAtomicMutate(db, latch.NewManager(16), req)
+	require.Nil(t, result.Error)
+	require.False(t, result.Fallback)
+	require.Equal(t, uint64(1), result.AppliedKeys)
+
+	_, err = db.GetInternalEntry(kv.CFDefault, key, 30)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+
+	reader := NewReader(db)
+	write, commitTs, err := reader.GetWriteByStartTs(key, 30)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, uint64(31), commitTs)
+	require.Equal(t, value, write.ShortValue)
+
+	got, _, err := reader.GetValue(key, 40)
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+}
+
+func TestBatchRollbackShortValueLockDoesNotWriteDefaultTombstone(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("short-rollback")
+
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("inline"),
+		}},
+		PrimaryLock:  key,
+		StartVersion: 40,
+		LockTtl:      1000,
+	}))
+	require.Nil(t, BatchRollback(db, latches, &kvrpcpb.BatchRollbackRequest{
+		Keys:         [][]byte{key},
+		StartVersion: 40,
+	}))
+
+	_, err := db.GetInternalEntry(kv.CFDefault, key, 40)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+	write, commitTs, err := NewReader(db).GetWriteByStartTs(key, 40)
+	require.NoError(t, err)
+	require.NotNil(t, write)
+	require.Equal(t, kvrpcpb.Mutation_Rollback, write.Kind)
+	require.Equal(t, uint64(40), commitTs)
 }
 
 func TestKeyErrorHelpers(t *testing.T) {

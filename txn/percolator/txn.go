@@ -117,12 +117,23 @@ func planPrewriteMutation(reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvr
 		}
 	}
 	ops := make([]versionedOp, 0, 3)
+	var shortValue []byte
+	var shortValueExpiresAt uint64
 	switch mut.Op {
 	case kvrpcpb.Mutation_Put:
-		ops = append(ops,
-			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
-			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, value: mut.Value, expires: mut.GetExpiresAt()},
-		)
+		if mvcc.CanInlineShortValue(mut.GetOp(), mut.GetValue()) {
+			// Commit sees only the lock, not the original mutation request.
+			// Keep small values in the lock so commit can materialize the
+			// committed write without writing a default-CF record.
+			shortValue = kv.SafeCopy(nil, mut.GetValue())
+			shortValueExpiresAt = mut.GetExpiresAt()
+			percolatorStats.shortValuePrewriteTotal.Add(1)
+		} else {
+			ops = append(ops,
+				versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
+				versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, value: mut.Value, expires: mut.GetExpiresAt()},
+			)
+		}
 	case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Lock:
 		ops = append(ops,
 			versionedOp{cf: kv.CFDefault, key: key, version: req.StartVersion, meta: kv.BitDelete},
@@ -137,6 +148,8 @@ func planPrewriteMutation(reader *Reader, req *kvrpcpb.PrewriteRequest, mut *kvr
 		TTL:         req.LockTtl,
 		Kind:        mut.Op,
 		MinCommitTs: req.MinCommitTs,
+		ShortValue:  shortValue,
+		ExpiresAt:   shortValueExpiresAt,
 	}
 	encoded := mvcc.EncodeLock(newLock)
 	ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, value: encoded})
@@ -239,6 +252,9 @@ type statsRegistry struct {
 	twoPCFusedBatchesTotal  atomic.Uint64
 	twoPCFusedRequestsTotal atomic.Uint64
 	twoPCFusedEntriesTotal  atomic.Uint64
+	shortValuePrewriteTotal atomic.Uint64
+	shortValueCommitTotal   atomic.Uint64
+	shortValueAtomicTotal   atomic.Uint64
 }
 
 var percolatorStats statsRegistry
@@ -256,6 +272,9 @@ func Stats() map[string]any {
 		"two_pc_fused_apply_batches_total":  percolatorStats.twoPCFusedBatchesTotal.Load(),
 		"two_pc_fused_apply_requests_total": percolatorStats.twoPCFusedRequestsTotal.Load(),
 		"two_pc_fused_apply_entries_total":  percolatorStats.twoPCFusedEntriesTotal.Load(),
+		"short_value_prewrite_total":        percolatorStats.shortValuePrewriteTotal.Load(),
+		"short_value_commit_total":          percolatorStats.shortValueCommitTotal.Load(),
+		"short_value_atomic_total":          percolatorStats.shortValueAtomicTotal.Load(),
 	}
 }
 
@@ -583,13 +602,20 @@ func atomicMutateAlreadyApplied(db txnstore.Store, reader *Reader, req *kvrpcpb.
 			return false, nil
 		}
 		if mut.GetOp() == kvrpcpb.Mutation_Put {
-			matches, err := defaultRecordMatches(db, mut, req.StartVersion)
+			matches, err := committedPutMatches(db, write, mut, req.StartVersion)
 			if err != nil || !matches {
 				return false, err
 			}
 		}
 	}
 	return anyPresent && allPresent, nil
+}
+
+func committedPutMatches(db txnstore.Store, write *mvcc.Write, mut *kvrpcpb.Mutation, startVersion uint64) (bool, error) {
+	if len(write.ShortValue) > 0 {
+		return bytes.Equal(write.ShortValue, mut.GetValue()) && write.ExpiresAt == mut.GetExpiresAt(), nil
+	}
+	return defaultRecordMatches(db, mut, startVersion)
 }
 
 func defaultRecordMatches(db txnstore.Store, mut *kvrpcpb.Mutation, startVersion uint64) (bool, error) {
@@ -605,15 +631,22 @@ func defaultRecordMatches(db txnstore.Store, mut *kvrpcpb.Mutation, startVersion
 }
 
 func committedMutationOps(mut *kvrpcpb.Mutation, startVersion, commitVersion uint64) []versionedOp {
-	write := mvcc.EncodeWrite(mvcc.Write{Kind: mut.GetOp(), StartTs: startVersion})
 	switch mut.GetOp() {
 	case kvrpcpb.Mutation_Put:
+		write := committedWriteForMutation(mut, startVersion)
+		if len(write.ShortValue) > 0 {
+			percolatorStats.shortValueAtomicTotal.Add(1)
+			return []versionedOp{
+				{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: mvcc.EncodeWrite(write)},
+			}
+		}
 		return []versionedOp{
 			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, meta: kv.BitDelete},
 			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, value: mut.GetValue(), expires: mut.GetExpiresAt()},
-			{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: write},
+			{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: mvcc.EncodeWrite(write)},
 		}
 	case kvrpcpb.Mutation_Delete:
+		write := mvcc.EncodeWrite(mvcc.Write{Kind: mut.GetOp(), StartTs: startVersion})
 		return []versionedOp{
 			{cf: kv.CFDefault, key: mut.GetKey(), version: startVersion, meta: kv.BitDelete},
 			{cf: kv.CFWrite, key: mut.GetKey(), version: commitVersion, value: write},
@@ -621,6 +654,15 @@ func committedMutationOps(mut *kvrpcpb.Mutation, startVersion, commitVersion uin
 	default:
 		return nil
 	}
+}
+
+func committedWriteForMutation(mut *kvrpcpb.Mutation, startVersion uint64) mvcc.Write {
+	write := mvcc.Write{Kind: mut.GetOp(), StartTs: startVersion}
+	if mvcc.CanInlineShortValue(mut.GetOp(), mut.GetValue()) {
+		write.ShortValue = kv.SafeCopy(nil, mut.GetValue())
+		write.ExpiresAt = mut.GetExpiresAt()
+	}
+	return write
 }
 
 // BatchRollback rolls back the provided keys for the given start version.
@@ -987,12 +1029,12 @@ func planCommitKey(reader *Reader, key []byte, startVersion, commitVersion uint6
 }
 
 func planCommitKeyWithLock(reader *Reader, key []byte, lock *mvcc.Lock, commitVersion uint64) ([]versionedOp, *kvrpcpb.KeyError) {
-	write, _, err := reader.GetWriteByStartTs(key, lock.Ts)
+	committed, _, err := reader.GetWriteByStartTs(key, lock.Ts)
 	if err != nil {
 		return nil, keyErrorRetryable(err)
 	}
-	if write != nil {
-		if write.Kind == kvrpcpb.Mutation_Rollback {
+	if committed != nil {
+		if committed.Kind == kvrpcpb.Mutation_Rollback {
 			return nil, keyErrorTxnAlreadyRolledBack()
 		}
 		return []versionedOp{{
@@ -1007,7 +1049,13 @@ func planCommitKeyWithLock(reader *Reader, key []byte, lock *mvcc.Lock, commitVe
 		return nil, keyErrorCommitTsExpired(key, commitVersion, lock.MinCommitTs)
 	}
 
-	entry := mvcc.EncodeWrite(mvcc.Write{Kind: lock.Kind, StartTs: lock.Ts})
+	write := mvcc.Write{Kind: lock.Kind, StartTs: lock.Ts}
+	if len(lock.ShortValue) > 0 {
+		write.ShortValue = kv.SafeCopy(nil, lock.ShortValue)
+		write.ExpiresAt = lock.ExpiresAt
+		percolatorStats.shortValueCommitTotal.Add(1)
+	}
+	entry := mvcc.EncodeWrite(write)
 	return []versionedOp{
 		{cf: kv.CFWrite, key: key, version: commitVersion, value: entry},
 		{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete},
@@ -1054,10 +1102,13 @@ func planRollbackKey(reader *Reader, key []byte, startTs uint64) ([]versionedOp,
 	}
 
 	rollback := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Rollback, StartTs: startTs})
-	ops := []versionedOp{
-		{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete},
-		{cf: kv.CFWrite, key: key, version: startTs, value: rollback},
+	ops := make([]versionedOp, 0, 3)
+	// A short-value prewrite never created a default-CF record, so rollback
+	// only needs the rollback marker and lock tombstone for that case.
+	if lock == nil || lock.Ts != startTs || len(lock.ShortValue) == 0 {
+		ops = append(ops, versionedOp{cf: kv.CFDefault, key: key, version: startTs, meta: kv.BitDelete})
 	}
+	ops = append(ops, versionedOp{cf: kv.CFWrite, key: key, version: startTs, value: rollback})
 	if lock != nil && lock.Ts == startTs {
 		ops = append(ops, versionedOp{cf: kv.CFLock, key: key, version: lockColumnTs, meta: kv.BitDelete})
 	}
