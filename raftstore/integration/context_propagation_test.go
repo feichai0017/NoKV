@@ -143,9 +143,13 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 	_, err := migrate.Init(migrate.InitConfig{WorkDir: seedDir, StoreID: 1, RegionID: 1, PeerID: 101})
 	require.NoError(t, err)
 
-	seed := testcluster.StartNode(t, 1, seedDir, []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster}, true)
-	target2 := testcluster.StartNode(t, 2, t.TempDir(), nil, false)
-	target3 := testcluster.StartNode(t, 3, t.TempDir(), nil, false)
+	seed := testcluster.StartNodeWithConfig(t, 1, seedDir, testcluster.NodeConfig{
+		AllowedModes:    []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
+		StartPeers:      true,
+		EnableLeaseRead: true,
+	})
+	target2 := testcluster.StartNodeWithConfig(t, 2, t.TempDir(), testcluster.NodeConfig{EnableLeaseRead: true})
+	target3 := testcluster.StartNodeWithConfig(t, 3, t.TempDir(), testcluster.NodeConfig{EnableLeaseRead: true})
 	defer seed.Close(t)
 	defer target2.Close(t)
 	defer target3.Close(t)
@@ -211,16 +215,24 @@ func TestClientReadWriteHonorContextUnderQuorumLoss(t *testing.T) {
 	}()
 
 	readCtx, readCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer readCancel()
-	_, err = cli.Get(readCtx, key, 3)
-	require.Error(t, err)
-	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	readResp, err := cli.Get(readCtx, key, 3)
+	readCancel()
+	if err == nil {
+		require.Equal(t, value, readResp.GetValue())
+	}
 
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer writeCancel()
 	err = cli.Put(writeCtx, []byte("ctx-write-key"), []byte("ctx-write-value"), 10, 11, 3000)
 	require.Error(t, err)
 	require.Equal(t, codes.DeadlineExceeded, status.Code(err))
+
+	require.Eventually(t, func() bool {
+		readCtx, readCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer readCancel()
+		_, err := cli.Get(readCtx, key, 3)
+		return err != nil
+	}, 3*time.Second, 50*time.Millisecond, "partitioned leader must stop serving lease reads after check-quorum expires")
 
 	seed.UnblockPeer(201)
 	seed.UnblockPeer(301)

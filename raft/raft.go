@@ -9,6 +9,7 @@ type (
 	// Aliases to etcd/raft exposed types so callers don't import the dependency directly.
 	StateType        = etcdraft.StateType
 	Config           = etcdraft.Config
+	ReadOnlyOption   = etcdraft.ReadOnlyOption
 	RawNode          = etcdraft.RawNode
 	Ready            = etcdraft.Ready
 	SoftState        = etcdraft.SoftState
@@ -34,6 +35,11 @@ const (
 	StateCandidate    = etcdraft.StateCandidate
 	StateLeader       = etcdraft.StateLeader
 	StatePreCandidate = etcdraft.StatePreCandidate
+)
+
+const (
+	ReadOnlySafe       = etcdraft.ReadOnlySafe
+	ReadOnlyLeaseBased = etcdraft.ReadOnlyLeaseBased
 )
 
 const (

@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Host-side benchmark code validates Eunomia grant evidence returned by the
+# Compose coordinators. Keep the host test process and local Compose containers
+# on the same dev/test key material; production deployments override this env.
+export NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY="${NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY:-rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc=}"
+
 mode="${NOKV_FSMETA_BENCH_MODE:-compose}"
 profile="${NOKV_FSMETA_PROFILE:-median}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -70,6 +75,8 @@ artifacts_per_entry="${NOKV_FSMETA_ARTIFACTS_PER_ENTRY:-$default_artifacts_per_e
 workspaces="${NOKV_FSMETA_WORKSPACES:-$default_workspaces}"
 session_ttl="${NOKV_FSMETA_SESSION_TTL:-$default_session_ttl}"
 stale_session_ttl="${NOKV_FSMETA_STALE_SESSION_TTL:-$default_stale_session_ttl}"
+lookup_cache_entries="${NOKV_FSMETA_LOOKUP_CACHE_ENTRIES:-4096}"
+lookup_cache_ttl="${NOKV_FSMETA_LOOKUP_CACHE_TTL:-1s}"
 timeout="${NOKV_FSMETA_TIMEOUT:-$default_timeout}"
 stabilize_seconds="${NOKV_FSMETA_STABILIZE_SECONDS:-$default_stabilize_seconds}"
 
@@ -121,6 +128,8 @@ run_bench() {
 			-fsmeta_workspaces "$workspaces" \
 			-fsmeta_session_ttl "$session_ttl" \
 			-fsmeta_stale_session_ttl "$stale_session_ttl" \
+			-fsmeta_lookup_cache_entries "$lookup_cache_entries" \
+			-fsmeta_lookup_cache_ttl "$lookup_cache_ttl" \
 			-fsmeta_timeout "$timeout" \
 			-fsmeta_output "$output"
 	)
@@ -150,6 +159,8 @@ artifacts_per_entry=$artifacts_per_entry
 workspaces=$workspaces
 session_ttl=$session_ttl
 stale_session_ttl=$stale_session_ttl
+lookup_cache_entries=$lookup_cache_entries
+lookup_cache_ttl=$lookup_cache_ttl
 profile_seconds=$profile_seconds
 targets=$profile_targets
 EOF

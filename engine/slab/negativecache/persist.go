@@ -1,37 +1,13 @@
 package negativecache
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"os"
 	"path/filepath"
 
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/slab"
-)
-
-// Wire format for the slab snapshot. See snapshot-substrate note §6.1
-// (Negative Slab) for the rationale.
-//
-//	magic     uint32 ("NCSL", little-endian)
-//	version   uint16
-//	entries   repeated of:
-//	    len     uvarint   (length of full key in bytes)
-//	    key     [len]byte
-//	terminator: zero-length record (uvarint 0) followed by a uint32 LE
-//	            CRC32 of the framed body (header + every {len,key} pair
-//	            up to and including the zero-length terminator's len byte).
-//
-// Reload tolerates partial trailing records and CRC mismatches by
-// returning zero restored entries and forcing a clean re-warm — Derived
-// consistency means we'd rather start cold than serve a corrupt cache.
-const (
-	snapshotMagic   uint32 = 0x4e43534c // "NCSL"
-	snapshotVersion uint16 = 1
-	snapshotHeader         = 4 + 2 // magic + version
-	snapshotFile           = "negative.slab"
 )
 
 // PersistConfig opens a Persistence sidecar for a Cache. Persistence is
@@ -63,7 +39,7 @@ type Persistence struct {
 // first Has call.
 func OpenWithPersistence(cacheCfg Config, persistCfg PersistConfig) (*Cache, *Persistence, error) {
 	if persistCfg.Dir == "" {
-		return nil, nil, errors.New("negativecache persistence: dir required")
+		return nil, nil, errPersistenceDirRequired
 	}
 	if persistCfg.MaxSize <= 0 {
 		persistCfg.MaxSize = 64 << 20
@@ -88,6 +64,7 @@ func (p *Persistence) Snapshot() (int, error) {
 		return 0, nil
 	}
 	keys := p.cache.SnapshotKeys()
+	body, written := encodeSnapshotKeys(keys, p.maxSize)
 	if err := os.MkdirAll(p.dir, 0o755); err != nil {
 		return 0, fmt.Errorf("negativecache snapshot dir: %w", err)
 	}
@@ -107,50 +84,10 @@ func (p *Persistence) Snapshot() (int, error) {
 	}
 	defer func() { _ = seg.Close() }()
 
-	if err := seg.Truncate(int64(snapshotHeader)); err != nil {
-		return 0, fmt.Errorf("negativecache snapshot truncate: %w", err)
+	if err := seg.Write(0, body); err != nil {
+		return 0, fmt.Errorf("negativecache snapshot write: %w", err)
 	}
-	header := make([]byte, snapshotHeader)
-	binary.LittleEndian.PutUint32(header[0:4], snapshotMagic)
-	binary.LittleEndian.PutUint16(header[4:6], snapshotVersion)
-	if err := seg.Write(0, header); err != nil {
-		return 0, fmt.Errorf("negativecache snapshot header: %w", err)
-	}
-
-	offset := uint32(snapshotHeader)
-	hasher := crc32.NewIEEE()
-	written := 0
-	var lenBuf [binary.MaxVarintLen64]byte
-	for _, key := range keys {
-		if int64(offset)+int64(len(key))+binary.MaxVarintLen64+5 >= p.maxSize {
-			break
-		}
-		n := binary.PutUvarint(lenBuf[:], uint64(len(key)))
-		if err := seg.Write(offset, lenBuf[:n]); err != nil {
-			return written, fmt.Errorf("negativecache snapshot len: %w", err)
-		}
-		hasher.Write(lenBuf[:n])
-		offset += uint32(n)
-		if err := seg.Write(offset, key); err != nil {
-			return written, fmt.Errorf("negativecache snapshot key: %w", err)
-		}
-		hasher.Write(key)
-		offset += uint32(len(key))
-		written++
-	}
-	zero := []byte{0}
-	if err := seg.Write(offset, zero); err != nil {
-		return written, fmt.Errorf("negativecache snapshot terminator: %w", err)
-	}
-	hasher.Write(zero)
-	offset++
-	var crcBuf [4]byte
-	binary.LittleEndian.PutUint32(crcBuf[:], hasher.Sum32())
-	if err := seg.Write(offset, crcBuf[:]); err != nil {
-		return written, fmt.Errorf("negativecache snapshot crc: %w", err)
-	}
-	offset += 4
-	if err := seg.DoneWriting(offset); err != nil {
+	if err := seg.DoneWriting(uint32(len(body))); err != nil {
 		return written, fmt.Errorf("negativecache snapshot seal: %w", err)
 	}
 	return written, nil
@@ -172,45 +109,12 @@ func (p *Persistence) Reload() (int, error) {
 		}
 		return 0, err
 	}
-	if len(body) < snapshotHeader {
+	keys, ok := decodeSnapshotKeys(body)
+	if !ok {
 		return 0, nil
 	}
-	if magic := binary.LittleEndian.Uint32(body[0:4]); magic != snapshotMagic {
-		return 0, nil
-	}
-	if ver := binary.LittleEndian.Uint16(body[4:6]); ver != snapshotVersion {
-		return 0, nil
-	}
-
-	hasher := crc32.NewIEEE()
-	cursor := snapshotHeader
-	restored := 0
-	for cursor < len(body) {
-		klen, n := binary.Uvarint(body[cursor:])
-		if n <= 0 {
-			return restored, nil
-		}
-		hasher.Write(body[cursor : cursor+n])
-		cursor += n
-		if klen == 0 {
-			if cursor+4 <= len(body) {
-				want := binary.LittleEndian.Uint32(body[cursor : cursor+4])
-				if want != hasher.Sum32() {
-					return 0, nil
-				}
-			}
-			return restored, nil
-		}
-		end := cursor + int(klen)
-		if end > len(body) {
-			return restored, nil
-		}
-		key := make([]byte, klen)
-		copy(key, body[cursor:end])
-		hasher.Write(body[cursor:end])
+	for _, key := range keys {
 		p.cache.Remember(key)
-		restored++
-		cursor = end
 	}
-	return restored, nil
+	return len(keys), nil
 }

@@ -64,5 +64,5 @@ func defaultRaftConfig(base myraft.Config, peerID uint64) myraft.Config {
 	if base.MaxInflightMsgs == 0 {
 		base.MaxInflightMsgs = 256
 	}
-	return base
+	return peer.EnableLeaseRead(base)
 }

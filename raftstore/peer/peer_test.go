@@ -62,6 +62,13 @@ func newTestPeer(t *testing.T, storage raftlog.PeerStorage, apply ApplyFunc) *Pe
 	return p
 }
 
+func TestEnableLeaseReadConfig(t *testing.T) {
+	cfg := EnableLeaseRead(myraft.Config{ID: 7, ElectionTick: 5, HeartbeatTick: 1})
+	require.True(t, cfg.CheckQuorum)
+	require.Equal(t, myraft.ReadOnlyLeaseBased, cfg.ReadOnlyOption)
+	require.Equal(t, uint64(7), cfg.ID)
+}
+
 func TestSnapshotExportsPayloadAndRefreshesMetadata(t *testing.T) {
 	storage := newPayloadTestStorage()
 	require.NoError(t, storage.ApplySnapshot(myraft.Snapshot{

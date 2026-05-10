@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetacontract "github.com/feichai0017/NoKV/fsmeta/contract"
@@ -10,7 +11,6 @@ import (
 func TestSoakHistoryOpsScopesExternalNamespaceOperations(t *testing.T) {
 	const (
 		mount      = fsmeta.MountID("prod")
-		scopeName  = "soak-scope"
 		scopeInode = fsmeta.InodeID(8001)
 	)
 	ops := soakHistoryOps([]fsmetacontract.Operation{
@@ -19,20 +19,30 @@ func TestSoakHistoryOpsScopesExternalNamespaceOperations(t *testing.T) {
 		{Kind: fsmetacontract.OpReadDirPlus, Mount: "vol", Parent: fsmeta.RootInode, StartAfter: "a", Limit: 10},
 		{Kind: fsmetacontract.OpUnlink, Mount: "vol", Parent: fsmeta.RootInode, Name: "alpha"},
 		{Kind: fsmetacontract.OpExpireSessions, Mount: "vol", Limit: 1},
-	}, mount, scopeName, scopeInode)
+	}, mount, scopeInode)
 
-	if len(ops) != 4 {
-		t.Fatalf("filtered op count=%d, want 4: %#v", len(ops), ops)
+	if len(ops) != 3 {
+		t.Fatalf("filtered op count=%d, want 3: %#v", len(ops), ops)
 	}
-	if ops[0].Kind != fsmetacontract.OpCreate || ops[0].Mount != mount || ops[0].Parent != fsmeta.RootInode || ops[0].Name != scopeName || ops[0].Inode != scopeInode {
-		t.Fatalf("scope create mismatch: %#v", ops[0])
-	}
-	for _, op := range ops[1:] {
+	for _, op := range ops {
 		if op.Mount != mount || op.Parent != scopeInode {
 			t.Fatalf("op was not scoped into generated root: %#v", op)
 		}
 	}
-	if ops[2].StartAfter != "a" || ops[2].Limit != 10 {
-		t.Fatalf("ReadDirPlus pagination fields changed: %#v", ops[2])
+	if ops[1].StartAfter != "a" || ops[1].Limit != 10 {
+		t.Fatalf("ReadDirPlus pagination fields changed: %#v", ops[1])
+	}
+	if ops[2].Inode != 0 {
+		t.Fatalf("zero inode remapped to %d", ops[2].Inode)
+	}
+}
+
+func TestShouldRunSoakRoundKeepsFinalDeadlineForCleanup(t *testing.T) {
+	now := time.Unix(100, 0)
+	if !shouldRunSoakRound(now, now.Add(minSoakRoundBudget), minSoakRoundBudget) {
+		t.Fatal("expected exact minimum budget to allow one more round")
+	}
+	if shouldRunSoakRound(now, now.Add(minSoakRoundBudget-time.Nanosecond), minSoakRoundBudget) {
+		t.Fatal("expected short remaining budget to stop before probes inherit an expiring context")
 	}
 }

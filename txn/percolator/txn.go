@@ -15,6 +15,7 @@ package percolator
 
 import (
 	"bytes"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 // Prewrite applies mutation prewrites for a single region transaction.
@@ -531,6 +533,17 @@ func validateAtomicPredicate(reader *Reader, pred *kvrpcpb.AtomicPredicate, star
 	case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS:
 		if !exists {
 			return keyErrorAbort(errInvalidAtomicMutate)
+		}
+	case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS:
+		value, _, err := reader.GetValue(key, readVersion)
+		if err != nil {
+			if errors.Is(err, utils.ErrKeyNotFound) {
+				return keyErrorRetryable(errAtomicPredicateMismatch)
+			}
+			return keyErrorRetryable(err)
+		}
+		if !bytes.Equal(value, pred.GetExpectedValue()) {
+			return keyErrorRetryable(errAtomicPredicateMismatch)
 		}
 	default:
 		return keyErrorAbort(errInvalidAtomicMutate)

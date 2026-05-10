@@ -507,14 +507,14 @@ func startStorePeers(server *serverpkg.Node, storage serverpkg.Storage, localMet
 			return result.Meta.Region, nil
 		}
 		cfg := &peer.Config{
-			RaftConfig: myraft.Config{
+			RaftConfig: peer.EnableLeaseRead(myraft.Config{
 				ID:              peerID,
 				ElectionTick:    electionTick,
 				HeartbeatTick:   heartbeatTick,
 				MaxSizePerMsg:   uint64(maxMsgBytes),
 				MaxInflightMsgs: maxInflight,
 				PreVote:         true,
-			},
+			}),
 			Transport:      transport,
 			Apply:          kv.NewEntryApplier(storage.MVCC),
 			SnapshotExport: storage.Snapshot.ExportSnapshot,

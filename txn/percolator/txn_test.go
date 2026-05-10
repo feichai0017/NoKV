@@ -454,6 +454,65 @@ func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
 	require.Equal(t, []byte("dentry"), keyErr.GetAlreadyExists().GetKey())
 }
 
+func TestApplyAtomicMutateValueEqualsPredicate(t *testing.T) {
+	db := openTestDB(t)
+	latches := latch.NewManager(16)
+	key := []byte("rmw-key")
+	require.Empty(t, Prewrite(db, latches, &kvrpcpb.PrewriteRequest{
+		StartVersion: 1,
+		PrimaryLock:  key,
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   key,
+			Value: []byte("old"),
+		}},
+	}))
+	require.Nil(t, Commit(db, latches, &kvrpcpb.CommitRequest{
+		Keys:          [][]byte{key},
+		StartVersion:  1,
+		CommitVersion: 5,
+	}))
+
+	result := ApplyAtomicMutate(db, latches, &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  6,
+		CommitVersion: 7,
+		Predicates: []*kvrpcpb.AtomicPredicate{{
+			Key:           kv.SafeCopy(nil, key),
+			Kind:          kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS,
+			ExpectedValue: []byte("old"),
+		}},
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   kv.SafeCopy(nil, key),
+			Value: []byte("new"),
+		}},
+	})
+	require.Nil(t, result.Error)
+	value, _, err := NewReader(db).GetValue(key, 7)
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), value)
+
+	result = ApplyAtomicMutate(db, latches, &kvrpcpb.TryAtomicMutateRequest{
+		StartVersion:  8,
+		CommitVersion: 9,
+		Predicates: []*kvrpcpb.AtomicPredicate{{
+			Key:           kv.SafeCopy(nil, key),
+			Kind:          kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS,
+			ExpectedValue: []byte("old"),
+		}},
+		Mutations: []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   kv.SafeCopy(nil, key),
+			Value: []byte("bad"),
+		}},
+	})
+	require.NotNil(t, result.Error)
+	require.Contains(t, result.Error.GetRetryable(), errAtomicPredicateMismatch.Error())
+	value, _, err = NewReader(db).GetValue(key, 9)
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), value)
+}
+
 func TestApplyAtomicMutateRejectsLockedPredicate(t *testing.T) {
 	opt := testOptionsForDir(filepath.Join(t.TempDir(), "db"))
 	opt.LSMShardCount = 1

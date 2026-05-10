@@ -8,10 +8,13 @@ import (
 	"log"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	fsmetacontract "github.com/feichai0017/NoKV/fsmeta/contract"
 )
+
+const minSoakRoundBudget = 15 * time.Second
 
 func main() {
 	var (
@@ -32,12 +35,16 @@ func main() {
 
 	mountID := fsmeta.MountID(*mount)
 	deadline := time.Now().Add(*duration)
-	for seed := *seedStart; time.Now().Before(deadline); seed++ {
+	for seed := *seedStart; shouldRunSoakRound(time.Now(), deadline, minSoakRoundBudget); seed++ {
 		if err := runRound(ctx, *addr, mountID, seed, *steps, *batch); err != nil {
 			log.Fatalf("soak round failed seed=%d: %v", seed, err)
 		}
 		log.Printf("soak round passed seed=%d remaining=%s", seed, time.Until(deadline).Round(time.Second))
 	}
+}
+
+func shouldRunSoakRound(now, deadline time.Time, minBudget time.Duration) bool {
+	return deadline.Sub(now) >= minBudget
 }
 
 func runRound(ctx context.Context, addr string, mount fsmeta.MountID, seed int64, steps, batch int) error {
@@ -53,12 +60,40 @@ func runRound(ctx context.Context, addr string, mount fsmeta.MountID, seed int64
 	model := fsmetacontract.NewModel(mount)
 	unique := time.Now().UnixNano()
 	scopeName := fmt.Sprintf("soak-history-%06d-%d", seed, unique)
-	scopeInode := fsmeta.InodeID(8_000_000_000 + seed*1_000_000 + unique%1_000_000)
-	ops := soakHistoryOps(fsmetacontract.GenerateScript(seed, steps), mount, scopeName, scopeInode)
+	scopeResult, err := createScopeWithRetry(roundCtx, cli, fsmeta.CreateRequest{
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   scopeName,
+		Attrs: fsmeta.CreateAttrs{
+			Type: fsmeta.InodeTypeDirectory,
+			Mode: 0o755,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create history scope: %w", err)
+	}
+	scopeInode := scopeResult.Inode.Inode
+	scopeOp := fsmetacontract.Operation{
+		Kind:   fsmetacontract.OpCreate,
+		Mount:  mount,
+		Parent: fsmeta.RootInode,
+		Name:   scopeName,
+		Inode:  scopeInode,
+		Type:   fsmeta.InodeTypeDirectory,
+		Mode:   0o755,
+	}
+	if got := model.Apply(scopeOp); got.Err != nil {
+		return fmt.Errorf("seed model scope: %w", got.Err)
+	}
+	historyExec, err := fsmetacontract.NewInodeMappingExecutor(cli)
+	if err != nil {
+		return err
+	}
+	ops := soakHistoryOps(fsmetacontract.GenerateScript(seed, steps), mount, scopeInode)
 	if len(ops) == 0 {
 		return fmt.Errorf("generated no namespace operations")
 	}
-	if err := fsmetacontract.RunConcurrentBatches(roundCtx, cli, model, ops, batch, fsmetacontract.HistoryOptions{}); err != nil {
+	if err := fsmetacontract.RunConcurrentBatches(roundCtx, historyExec, model, ops, batch, fsmetacontract.HistoryOptions{AllowIndeterminateErrors: true}); err != nil {
 		return fmt.Errorf("namespace history: %w", err)
 	}
 	if err := runSessionProbe(roundCtx, cli, mount, seed); err != nil {
@@ -73,17 +108,8 @@ func runRound(ctx context.Context, addr string, mount fsmeta.MountID, seed int64
 	return nil
 }
 
-func soakHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeName string, scopeInode fsmeta.InodeID) []fsmetacontract.Operation {
-	out := make([]fsmetacontract.Operation, 0, len(in)+1)
-	out = append(out, fsmetacontract.Operation{
-		Kind:   fsmetacontract.OpCreate,
-		Mount:  mount,
-		Parent: fsmeta.RootInode,
-		Name:   scopeName,
-		Inode:  scopeInode,
-		Type:   fsmeta.InodeTypeDirectory,
-		Mode:   0o755,
-	})
+func soakHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeInode fsmeta.InodeID) []fsmetacontract.Operation {
+	out := make([]fsmetacontract.Operation, 0, len(in))
 	for _, op := range in {
 		switch op.Kind {
 		case fsmetacontract.OpOpenWriteSession,
@@ -94,19 +120,72 @@ func soakHistoryOps(in []fsmetacontract.Operation, mount fsmeta.MountID, scopeNa
 			continue
 		default:
 			op.Mount = mount
+			op.Inode = scopedGeneratedInode(scopeInode, op.Inode)
 			if op.Parent == fsmeta.RootInode {
 				op.Parent = scopeInode
+			} else {
+				op.Parent = scopedGeneratedInode(scopeInode, op.Parent)
 			}
 			if op.FromParent == fsmeta.RootInode {
 				op.FromParent = scopeInode
+			} else {
+				op.FromParent = scopedGeneratedInode(scopeInode, op.FromParent)
 			}
 			if op.ToParent == fsmeta.RootInode {
 				op.ToParent = scopeInode
+			} else {
+				op.ToParent = scopedGeneratedInode(scopeInode, op.ToParent)
 			}
 			out = append(out, op)
 		}
 	}
 	return out
+}
+
+func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	delay := 100 * time.Millisecond
+	for {
+		result, err := cli.Create(ctx, req)
+		if err == nil {
+			return result, nil
+		}
+		if errors.Is(err, fsmeta.ErrExists) {
+			dentry, lookupErr := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: req.Mount, Parent: req.Parent, Name: req.Name})
+			if lookupErr == nil {
+				return fsmeta.CreateResult{Dentry: dentry, Inode: req.Attrs.InodeRecord(dentry.Inode)}, nil
+			}
+		}
+		if !retryScopeCreateError(err) {
+			return fsmeta.CreateResult{}, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fsmeta.CreateResult{}, ctx.Err()
+		case <-timer.C:
+		}
+		if delay < time.Second {
+			delay *= 2
+		}
+	}
+}
+
+func retryScopeCreateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fsmeta.ErrMountNotRegistered) {
+		return true
+	}
+	return nokverrors.Retryable(err) || nokverrors.IsKind(err, nokverrors.KindNotFound)
+}
+
+func scopedGeneratedInode(base, inode fsmeta.InodeID) fsmeta.InodeID {
+	if inode == 0 {
+		return 0
+	}
+	return base + inode
 }
 
 func runSessionProbe(ctx context.Context, cli *fsmetaclient.GRPCClient, mount fsmeta.MountID, seed int64) error {

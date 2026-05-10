@@ -199,12 +199,14 @@ message MVCCMaintenanceResponse {
 enum AtomicPredicateKind {
   ATOMIC_PREDICATE_KIND_NOT_EXISTS = 0;
   ATOMIC_PREDICATE_KIND_EXISTS = 1;
+  ATOMIC_PREDICATE_KIND_VALUE_EQUALS = 2;
 }
 
 message AtomicPredicate {
   bytes key = 1;
   AtomicPredicateKind kind = 2;
   uint64 read_version = 3;
+  bytes expected_value = 4;
 }
 
 message TryAtomicMutateRequest {

@@ -225,8 +225,9 @@ func (TxnHeartBeatAction) EnumDescriptor() ([]byte, []int) {
 type AtomicPredicateKind int32
 
 const (
-	AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS AtomicPredicateKind = 0
-	AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS     AtomicPredicateKind = 1
+	AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS   AtomicPredicateKind = 0
+	AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS       AtomicPredicateKind = 1
+	AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS AtomicPredicateKind = 2
 )
 
 // Enum value maps for AtomicPredicateKind.
@@ -234,10 +235,12 @@ var (
 	AtomicPredicateKind_name = map[int32]string{
 		0: "ATOMIC_PREDICATE_KIND_NOT_EXISTS",
 		1: "ATOMIC_PREDICATE_KIND_EXISTS",
+		2: "ATOMIC_PREDICATE_KIND_VALUE_EQUALS",
 	}
 	AtomicPredicateKind_value = map[string]int32{
-		"ATOMIC_PREDICATE_KIND_NOT_EXISTS": 0,
-		"ATOMIC_PREDICATE_KIND_EXISTS":     1,
+		"ATOMIC_PREDICATE_KIND_NOT_EXISTS":   0,
+		"ATOMIC_PREDICATE_KIND_EXISTS":       1,
+		"ATOMIC_PREDICATE_KIND_VALUE_EQUALS": 2,
 	}
 )
 
@@ -1864,6 +1867,7 @@ type AtomicPredicate struct {
 	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Kind          AtomicPredicateKind    `protobuf:"varint,2,opt,name=kind,proto3,enum=nokv.kv.v1.AtomicPredicateKind" json:"kind,omitempty"`
 	ReadVersion   uint64                 `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
+	ExpectedValue []byte                 `protobuf:"bytes,4,opt,name=expected_value,json=expectedValue,proto3" json:"expected_value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1917,6 +1921,13 @@ func (x *AtomicPredicate) GetReadVersion() uint64 {
 		return x.ReadVersion
 	}
 	return 0
+}
+
+func (x *AtomicPredicate) GetExpectedValue() []byte {
+	if x != nil {
+		return x.ExpectedValue
+	}
+	return nil
 }
 
 type TryAtomicMutateRequest struct {
@@ -3835,11 +3846,12 @@ const file_kv_kv_proto_rawDesc = "" +
 	"tombstones\"n\n" +
 	"\x17MVCCMaintenanceResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12'\n" +
-	"\x0fapplied_entries\x18\x02 \x01(\x04R\x0eappliedEntries\"{\n" +
+	"\x0fapplied_entries\x18\x02 \x01(\x04R\x0eappliedEntries\"\xa2\x01\n" +
 	"\x0fAtomicPredicate\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x123\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1f.nokv.kv.v1.AtomicPredicateKindR\x04kind\x12!\n" +
-	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\"\xd5\x01\n" +
+	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12%\n" +
+	"\x0eexpected_value\x18\x04 \x01(\fR\rexpectedValue\"\xd5\x01\n" +
 	"\x16TryAtomicMutateRequest\x12;\n" +
 	"\n" +
 	"predicates\x18\x01 \x03(\v2\x1b.nokv.kv.v1.AtomicPredicateR\n" +
@@ -3975,10 +3987,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x14TxnHeartBeatNoAction\x10\x00\x12\x1b\n" +
 	"\x17TxnHeartBeatTTLExtended\x10\x01\x12!\n" +
 	"\x1dTxnHeartBeatTTLExpireRollback\x10\x02\x12$\n" +
-	" TxnHeartBeatLockNotExistRollback\x10\x03*]\n" +
+	" TxnHeartBeatLockNotExistRollback\x10\x03*\x85\x01\n" +
 	"\x13AtomicPredicateKind\x12$\n" +
 	" ATOMIC_PREDICATE_KIND_NOT_EXISTS\x10\x00\x12 \n" +
-	"\x1cATOMIC_PREDICATE_KIND_EXISTS\x10\x01*\x91\x01\n" +
+	"\x1cATOMIC_PREDICATE_KIND_EXISTS\x10\x01\x12&\n" +
+	"\"ATOMIC_PREDICATE_KIND_VALUE_EQUALS\x10\x02*\x91\x01\n" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +

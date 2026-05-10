@@ -747,9 +747,11 @@ func (p *Peer) finishApply(entries []myraft.Entry) {
 	p.applyMark.DoneMany(indices)
 }
 
-// LinearizableRead performs a raft ReadIndex round-trip to ensure the peer
-// still holds leadership and returns the corresponding log index. Callers
-// should subsequently wait for that index to be applied before reading state.
+// LinearizableRead asks raft for a read index and returns the committed index
+// that must be applied before serving local state. With EnableLeaseRead the
+// underlying RawNode uses etcd/raft's lease-based ReadIndex path, so the leader
+// can answer from its quorum lease without broadcasting every read; without it,
+// ReadIndex falls back to the quorum-confirmed safe path.
 func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
 	if p == nil {
 		return 0, errNilPeer

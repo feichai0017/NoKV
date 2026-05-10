@@ -44,6 +44,8 @@ var (
 	fsmetaWorkspaces      = flag.Int("fsmeta_workspaces", 4, "multi-workspace-autoscale workspace count")
 	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 5*time.Minute, "mixed writer session TTL")
 	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 2*time.Second, "mixed stale-session cleanup TTL")
+	fsmetaLookupCache     = flag.Int("fsmeta_lookup_cache_entries", 4096, "client-side positive Lookup cache entries; 0 disables")
+	fsmetaLookupCacheTTL  = flag.Duration("fsmeta_lookup_cache_ttl", time.Second, "client-side positive Lookup cache TTL")
 	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
 	fsmetaOutput          = flag.String("fsmeta_output", "", "summary CSV output path")
 )
@@ -138,6 +140,17 @@ func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.Client, fu
 	cli, err := fsmetaclient.NewGRPCClient(ctx, *fsmetaAddr)
 	if err != nil {
 		t.Fatalf("dial fsmeta: %v", err)
+	}
+	if *fsmetaLookupCache > 0 {
+		cached, err := fsmetaclient.NewCachedClient(cli, fsmetaclient.LookupCacheConfig{
+			MaxEntries: *fsmetaLookupCache,
+			TTL:        *fsmetaLookupCacheTTL,
+		})
+		if err != nil {
+			_ = cli.Close()
+			t.Fatalf("open fsmeta lookup cache: %v", err)
+		}
+		return cached, func() { _ = cached.Close() }
 	}
 	return cli, func() { _ = cli.Close() }
 }

@@ -7,6 +7,8 @@ var (
 	errDirectoryReaderRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: directory reader is required")
 	errWatchClientRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: watch client is required")
 	errStagedPublishClientRequired = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: staged publish client is required")
+	errCachedClientRequired        = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: cached client requires an inner client")
+	errLookupCacheInvalidConfig    = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: invalid lookup cache config")
 	errWatchStreamNotConfigured    = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: watch stream is not configured")
 	errWatchSessionNotConfigured   = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: watch session is not configured")
 	errRPCClientNotConfigured      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/client: rpc client is not configured")
