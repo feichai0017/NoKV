@@ -46,6 +46,7 @@ func defaultPeerBuilder(storage Storage, localMeta *localmeta.Store, storeID uin
 			Storage:        peerStorage,
 			GroupID:        meta.ID,
 			Region:         localmeta.CloneRegionMetaPtr(&meta),
+			FastLeaseRead:  true,
 		}, nil
 	}
 }

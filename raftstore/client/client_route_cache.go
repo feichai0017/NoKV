@@ -347,19 +347,26 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 }
 
 func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
+	return buildReadContext(region, region.leader, ReadOptions{})
+}
+
+func buildReadContext(region regionSnapshot, targetStoreID uint64, opts ReadOptions) (*kvrpcpb.Context, error) {
 	if region.desc.RegionID == 0 {
 		return nil, errRegionMetaMissing
 	}
-	leaderStoreID := region.leader
-	if leaderStoreID == 0 {
-		leaderStoreID = defaultLeaderStoreID(region.desc)
+	opts = normalizeReadOptions(opts)
+	if targetStoreID == 0 {
+		targetStoreID = region.leader
 	}
-	if leaderStoreID == 0 {
+	if targetStoreID == 0 {
+		targetStoreID = defaultLeaderStoreID(region.desc)
+	}
+	if targetStoreID == 0 {
 		return nil, errLeaderUnknown
 	}
 	var peerMeta *metapb.RegionPeer
 	for _, peer := range region.desc.Peers {
-		if peer.StoreID == leaderStoreID {
+		if peer.StoreID == targetStoreID {
 			peerMeta = &metapb.RegionPeer{StoreId: peer.StoreID, PeerId: peer.PeerID}
 			break
 		}
@@ -368,7 +375,7 @@ func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 		return nil, &RegionRoutingError{
 			Operation: "build request context",
 			RegionID:  region.desc.RegionID,
-			Detail:    fmt.Sprintf("leader store %d not found in region peers", leaderStoreID),
+			Detail:    fmt.Sprintf("target store %d not found in region peers", targetStoreID),
 		}
 	}
 	return &kvrpcpb.Context{
@@ -377,8 +384,25 @@ func buildContext(region regionSnapshot) (*kvrpcpb.Context, error) {
 			Version:     region.desc.Epoch.Version,
 			ConfVersion: region.desc.Epoch.ConfVersion,
 		},
-		Peer: peerMeta,
+		Peer:              peerMeta,
+		ReadConsistency:   opts.Consistency,
+		ReadPreference:    opts.Preference,
+		MaxStaleReadIndex: opts.MaxStaleReadIndex,
+		MaxStaleReadMs:    opts.MaxStaleReadMS,
 	}, nil
+}
+
+func followerStoreID(region regionSnapshot) uint64 {
+	if region.desc.RegionID == 0 {
+		return 0
+	}
+	for _, peer := range region.desc.Peers {
+		if peer.StoreID == 0 || peer.StoreID == region.leader {
+			continue
+		}
+		return peer.StoreID
+	}
+	return 0
 }
 
 // defaultLeaderStoreID derives a usable leader store from Region peers when no

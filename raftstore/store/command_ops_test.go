@@ -857,6 +857,159 @@ func TestStoreReadCommandStoreNotMatch(t *testing.T) {
 	require.Equal(t, uint64(7), resp.GetRegionError().GetStoreNotMatch().GetActualStoreId())
 }
 
+func TestStoreReadCommandLeaderOnlyRejectsFollower(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	applier := func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}
+	st := NewStore(Config{StoreID: 1, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+
+	region := &localmeta.RegionMeta{
+		ID:       405,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 11}, {StoreID: 2, PeerID: 22}},
+	}
+	p, err := st.StartPeer(&peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              11,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}, []myraft.Peer{{ID: 11}, {ID: 22}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+
+	resp, err := st.ReadCommand(context.Background(), &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{
+			RegionId:    region.ID,
+			RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd:     &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("b")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetRegionError())
+	require.NotNil(t, resp.GetRegionError().GetNotLeader())
+}
+
+func TestStoreReadCommandStrongFollowerPreferPreservesCanceledContext(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	applier := func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}
+	st := NewStore(Config{StoreID: 1, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+
+	region := &localmeta.RegionMeta{
+		ID:       407,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 11}, {StoreID: 2, PeerID: 22}},
+	}
+	p, err := st.StartPeer(&peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              11,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}, []myraft.Peer{{ID: 11}, {ID: 22}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = st.ReadCommand(ctx, &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{
+			RegionId:        region.ID,
+			RegionEpoch:     &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			ReadConsistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+			ReadPreference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+		},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd:     &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("b")}},
+		}},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStoreReadCommandBoundedStaleReadsAppliedState(t *testing.T) {
+	db, localMeta := openStoreDB(t)
+	applier := func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		return &raftcmdpb.RaftCmdResponse{
+			Header: req.GetHeader(),
+			Responses: []*raftcmdpb.Response{{
+				Cmd: &raftcmdpb.Response_Get{Get: &kvrpcpb.GetResponse{Value: []byte("ok")}},
+			}},
+		}, nil
+	}
+	st := NewStore(Config{StoreID: 1, CommandApplier: applier})
+	t.Cleanup(func() { st.Close() })
+
+	region := &localmeta.RegionMeta{
+		ID:       406,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 11}},
+	}
+	p, err := st.StartPeer(&peer.Config{
+		RaftConfig: myraft.Config{
+			ID:              11,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport: noopTransport{},
+		Storage:   mustPeerStorage(t, db, localMeta, region.ID),
+		GroupID:   region.ID,
+		Region:    region,
+	}, []myraft.Peer{{ID: 11}})
+	require.NoError(t, err)
+	t.Cleanup(func() { st.StopPeer(p.ID()) })
+	require.NoError(t, p.Campaign())
+	require.Greater(t, p.AppliedIndex(), uint64(0))
+
+	resp, err := st.ReadCommand(context.Background(), &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{
+			RegionId:          region.ID,
+			RegionEpoch:       &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			ReadConsistency:   kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE,
+			ReadPreference:    kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+			MaxStaleReadIndex: 0,
+		},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_GET,
+			Cmd:     &raftcmdpb.Request_Get{Get: &kvrpcpb.GetRequest{Key: []byte("b")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.GetRegionError())
+	require.Equal(t, []byte("ok"), resp.GetResponses()[0].GetGet().GetValue())
+}
+
 func TestReadOnlyRequestPredicate(t *testing.T) {
 	require.False(t, isReadOnlyRequest(nil))
 

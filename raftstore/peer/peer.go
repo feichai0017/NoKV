@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -62,6 +63,8 @@ type Peer struct {
 	readMu                    sync.Mutex
 	pendingReads              map[string]chan uint64
 	allowSnapshotInstallRetry bool
+	fastLeaseRead             bool
+	lastLeaderContactUnixNano atomic.Int64
 	batcher                   *proposalBatcher
 }
 
@@ -104,6 +107,9 @@ func NewPeer(cfg *Config) (*Peer, error) {
 	if raftCfg.ID == 0 {
 		return nil, errZeroRaftID
 	}
+	if cfg.FastLeaseRead && (raftCfg.ReadOnlyOption != myraft.ReadOnlyLeaseBased || !raftCfg.CheckQuorum) {
+		return nil, errFastLeaseReadRequiresLeaseRead
+	}
 	raftCfg.Storage = storage
 	node, err := myraft.NewRawNode(&raftCfg)
 	if err != nil {
@@ -129,6 +135,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		region:                    localmeta.CloneRegionMetaPtr(cfg.Region),
 		pendingReads:              make(map[string]chan uint64),
 		allowSnapshotInstallRetry: cfg.AllowSnapshotInstallRetry,
+		fastLeaseRead:             cfg.FastLeaseRead,
 	}
 	if peer.logRetainEntries == 0 {
 		peer.logRetainEntries = defaultLogRetainEntries
@@ -224,6 +231,7 @@ func (p *Peer) Step(msg myraft.Message) error {
 	if err != nil {
 		return err
 	}
+	p.observeLeaderContact(msg)
 	return p.processReady()
 }
 
@@ -315,6 +323,16 @@ func (p *Peer) Status() myraft.Status {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.node.Status()
+}
+
+// AppliedIndex returns the highest raft log index fully applied to the local
+// state machine. Follower-read admission uses this as the actual read
+// freshness boundary; commit index alone is not sufficient.
+func (p *Peer) AppliedIndex() uint64 {
+	if p == nil || p.applyMark == nil {
+		return 0
+	}
+	return p.applyMark.DoneUntil()
 }
 
 // Snapshot returns the current raft snapshot enriched with the configured
@@ -762,6 +780,8 @@ func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
 	select {
 	case <-p.stopCtx.Done():
 		return 0, errPeerStopped
+	case <-ctx.Done():
+		return 0, ctx.Err()
 	default:
 	}
 	key, ch := p.startReadIndex()
@@ -781,6 +801,54 @@ func (p *Peer) LinearizableRead(ctx context.Context) (uint64, error) {
 	case <-p.stopCtx.Done():
 		p.cancelReadIndex(key)
 		return 0, errPeerStopped
+	}
+}
+
+// BoundedStaleReadIndex admits a local read without ReadIndex only when the
+// local applied index is within the caller's explicit lag budget. On followers,
+// the optional wall-clock budget also requires recent contact from the current
+// raft leader. This is intentionally separate from LinearizableRead: bounded
+// stale reads are not linearizable and must be requested explicitly.
+func (p *Peer) BoundedStaleReadIndex(maxStaleReadIndex uint64, maxStaleReadAge time.Duration) (uint64, bool) {
+	if p == nil {
+		return 0, false
+	}
+	p.mu.Lock()
+	status := p.node.BasicStatus()
+	p.mu.Unlock()
+	if status.RaftState != myraft.StateLeader && status.RaftState != myraft.StateFollower {
+		return 0, false
+	}
+	applied := p.AppliedIndex()
+	if applied == 0 || status.Commit < applied {
+		return 0, false
+	}
+	if status.Commit-applied > maxStaleReadIndex {
+		return 0, false
+	}
+	if status.RaftState == myraft.StateFollower && maxStaleReadAge > 0 {
+		lastContact := p.lastLeaderContactUnixNano.Load()
+		if lastContact <= 0 || time.Since(time.Unix(0, lastContact)) > maxStaleReadAge {
+			return 0, false
+		}
+	}
+	return applied, true
+}
+
+func (p *Peer) observeLeaderContact(msg myraft.Message) {
+	if p == nil || msg.From == 0 {
+		return
+	}
+	switch msg.Type {
+	case myraft.MsgAppend, myraft.MsgHeartbeat, myraft.MsgSnapshot:
+	default:
+		return
+	}
+	p.mu.Lock()
+	status := p.node.BasicStatus()
+	p.mu.Unlock()
+	if status.Lead == msg.From {
+		p.lastLeaderContactUnixNano.Store(time.Now().UnixNano())
 	}
 }
 

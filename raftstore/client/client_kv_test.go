@@ -13,7 +13,9 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 )
@@ -119,6 +121,319 @@ func keyStrings(keys [][]byte) []string {
 		out = append(out, string(key))
 	}
 	return out
+}
+
+func TestClientGetDefaultUsesStrongLeaderOnly(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 102},
+			},
+		},
+		leaderStore: 1,
+		committed: map[string]clusterValue{
+			"k": {value: []byte("v"), commitVersion: 10},
+		},
+	})
+	addr1, stop1 := startMockStore(t, cluster, 1)
+	defer stop1()
+	addr2, stop2 := startMockStore(t, cluster, 2)
+	defer stop2()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addr1},
+			{StoreID: 2, Addr: addr2},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.Get(context.Background(), []byte("k"), 20)
+	require.NoError(t, err)
+	require.Equal(t, []byte("v"), resp.GetValue())
+	require.Equal(t, uint64(1), cluster.lastReadStore)
+}
+
+func TestClientGetWithOptionsFollowerPreferTargetsFollower(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 102},
+			},
+		},
+		leaderStore: 1,
+		committed: map[string]clusterValue{
+			"k": {value: []byte("v"), commitVersion: 10},
+		},
+	})
+	addr1, stop1 := startMockStore(t, cluster, 1)
+	defer stop1()
+	addr2, stop2 := startMockStore(t, cluster, 2)
+	defer stop2()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addr1},
+			{StoreID: 2, Addr: addr2},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.GetWithOptions(context.Background(), []byte("k"), 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("v"), resp.GetValue())
+	require.Equal(t, uint64(2), cluster.lastReadStore)
+}
+
+func TestClientGetWithOptionsStrongFollowerPreferFallsBackToLeader(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 102},
+			},
+		},
+		leaderStore:   1,
+		followerStale: true,
+		committed: map[string]clusterValue{
+			"k": {value: []byte("v"), commitVersion: 10},
+		},
+	})
+	addr1, stop1 := startMockStore(t, cluster, 1)
+	defer stop1()
+	addr2, stop2 := startMockStore(t, cluster, 2)
+	defer stop2()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addr1},
+			{StoreID: 2, Addr: addr2},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.GetWithOptions(context.Background(), []byte("k"), 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("v"), resp.GetValue())
+	require.Equal(t, uint64(1), cluster.lastReadStore)
+}
+
+func TestClientBatchGetWithOptionsFollowerPreferTargetsFollower(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 102},
+			},
+		},
+		leaderStore: 1,
+		committed: map[string]clusterValue{
+			"k1": {value: []byte("v1"), commitVersion: 10},
+			"k2": {value: []byte("v2"), commitVersion: 10},
+		},
+	})
+	addr1, stop1 := startMockStore(t, cluster, 1)
+	defer stop1()
+	addr2, stop2 := startMockStore(t, cluster, 2)
+	defer stop2()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addr1},
+			{StoreID: 2, Addr: addr2},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.BatchGetWithOptions(context.Background(), [][]byte{[]byte("k1"), []byte("k2")}, 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("v1"), resp["k1"].GetValue())
+	require.Equal(t, []byte("v2"), resp["k2"].GetValue())
+	require.Equal(t, uint64(2), cluster.lastReadStore)
+}
+
+func TestClientScanWithOptionsStrongFollowerPreferFallsBackToLeader(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+				{StoreId: 2, PeerId: 102},
+			},
+		},
+		leaderStore:   1,
+		followerStale: true,
+		committed: map[string]clusterValue{
+			"k1": {value: []byte("v1"), commitVersion: 10},
+			"k2": {value: []byte("v2"), commitVersion: 10},
+		},
+	})
+	addr1, stop1 := startMockStore(t, cluster, 1)
+	defer stop1()
+	addr2, stop2 := startMockStore(t, cluster, 2)
+	defer stop2()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addr1},
+			{StoreID: 2, Addr: addr2},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 2, RegionErrorBackoff: 0},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	resp, err := cli.ScanWithOptions(context.Background(), []byte("k1"), 2, 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp, 2)
+	require.Equal(t, uint64(1), cluster.lastReadStore)
+}
+
+func TestClientCallGetWithFallbackReturnsLeaderRegionError(t *testing.T) {
+	descPB := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []*metapb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+			{StoreId: 2, PeerId: 102},
+		},
+	}
+	cluster := newMockCluster(clusterRegion{meta: descPB, leaderStore: 1})
+	followerAddr, followerStop := startBlockingStore(t, &scriptedKVService{
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			return &kvrpcpb.KvGetResponse{RegionError: &errorpb.RegionError{StaleCommand: &errorpb.StaleCommand{}}}, nil
+		},
+	})
+	defer followerStop()
+	leaderAddr, leaderStop := startBlockingStore(t, &scriptedKVService{
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			return &kvrpcpb.KvGetResponse{RegionError: &errorpb.RegionError{NotLeader: &errorpb.NotLeader{RegionId: 1}}}, nil
+		},
+	})
+	defer leaderStop()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: leaderAddr},
+			{StoreID: 2, Addr: followerAddr},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, regionErr, err := cli.callGetWithFallback(context.Background(), regionSnapshot{
+		desc:   metawire.DescriptorFromProto(descPB),
+		leader: 1,
+	}, []byte("k"), 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, regionErr)
+	require.NotNil(t, regionErr.GetNotLeader())
+}
+
+func TestClientCallGetWithFallbackReturnsLeaderTransportError(t *testing.T) {
+	descPB := &metapb.RegionDescriptor{
+		RegionId: 1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers: []*metapb.RegionPeer{
+			{StoreId: 1, PeerId: 101},
+			{StoreId: 2, PeerId: 102},
+		},
+	}
+	cluster := newMockCluster(clusterRegion{meta: descPB, leaderStore: 1})
+	followerAddr, followerStop := startBlockingStore(t, &scriptedKVService{
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			return &kvrpcpb.KvGetResponse{RegionError: &errorpb.RegionError{StaleCommand: &errorpb.StaleCommand{}}}, nil
+		},
+	})
+	defer followerStop()
+	leaderAddr, leaderStop := startBlockingStore(t, &scriptedKVService{
+		getFn: func(context.Context, *kvrpcpb.KvGetRequest) (*kvrpcpb.KvGetResponse, error) {
+			return nil, status.Error(codes.Unavailable, "leader transport down")
+		},
+	})
+	defer leaderStop()
+
+	cli, err := New(Config{
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: leaderAddr},
+			{StoreID: 2, Addr: followerAddr},
+		},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	_, regionErr, err := cli.callGetWithFallback(context.Background(), regionSnapshot{
+		desc:   metawire.DescriptorFromProto(descPB),
+		leader: 1,
+	}, []byte("k"), 20, ReadOptions{
+		Consistency: kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG,
+		Preference:  kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+	})
+	require.Nil(t, regionErr)
+	require.Error(t, err)
+	require.True(t, isTransportUnavailable(err))
 }
 
 func TestClientTryAtomicMutateStatsRecordRouteFallback(t *testing.T) {

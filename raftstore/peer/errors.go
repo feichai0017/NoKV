@@ -24,6 +24,7 @@ var (
 	errSnapshotPayloadInstallRequiresEmptyPeerState = errors.New("raftstore: snapshot payload install requires empty peer state")
 	errSnapshotPayloadInstallRequiresEmptyPeerLog   = errors.New("raftstore: snapshot payload install requires empty peer log")
 	errNilPeer                                      = errors.New("raftstore: peer is nil")
+	errFastLeaseReadRequiresLeaseRead               = errors.New("raftstore: fast lease read requires CheckQuorum and ReadOnlyLeaseBased")
 )
 
 func IsPeerStopped(err error) bool { return errors.Is(err, errPeerStopped) }

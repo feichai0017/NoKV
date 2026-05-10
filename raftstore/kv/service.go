@@ -456,5 +456,9 @@ func buildHeader(ctx *kvrpcpb.Context) (*raftcmdpb.CmdHeader, error) {
 		header.PeerId = peer.GetPeerId()
 		header.StoreId = peer.GetStoreId()
 	}
+	header.ReadConsistency = ctx.GetReadConsistency()
+	header.ReadPreference = ctx.GetReadPreference()
+	header.MaxStaleReadIndex = ctx.GetMaxStaleReadIndex()
+	header.MaxStaleReadMs = ctx.GetMaxStaleReadMs()
 	return header, nil
 }

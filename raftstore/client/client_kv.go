@@ -13,8 +13,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type regionBatch struct {
+	region regionSnapshot
+	keys   [][]byte
+	ids    []string
+}
+
 // Get issues a StoreKV Get RPC for the provided key/version. It retries on region errors.
 func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.GetResponse, error) {
+	return c.GetWithOptions(ctx, key, version, DefaultReadOptions())
+}
+
+// GetWithOptions issues a StoreKV Get with explicit read consistency and
+// routing preference. Follower-prefer reads fall back to the leader when the
+// follower cannot satisfy the requested consistency budget.
+func (c *Client) GetWithOptions(ctx context.Context, key []byte, version uint64, opts ReadOptions) (*kvrpcpb.GetResponse, error) {
+	opts = normalizeReadOptions(opts)
 	var lastErr error
 	var lastKeyErr *kvrpcpb.KeyError
 	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
@@ -22,7 +36,7 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.
 		if err != nil {
 			return nil, err
 		}
-		resp, regionErr, err := c.callGet(ctx, region, key, version)
+		resp, regionErr, err := c.callGetWithFallback(ctx, region, key, version, opts)
 		if err != nil {
 			if isTransportUnavailable(err) {
 				lastErr = err
@@ -77,6 +91,12 @@ func (c *Client) Get(ctx context.Context, key []byte, version uint64) (*kvrpcpb.
 // grouped by region so that each group shares a single BatchGet round-trip
 // and read index.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string]*kvrpcpb.GetResponse, error) {
+	return c.BatchGetWithOptions(ctx, keys, version, DefaultReadOptions())
+}
+
+// BatchGetWithOptions fetches multiple keys with explicit read options.
+func (c *Client) BatchGetWithOptions(ctx context.Context, keys [][]byte, version uint64, opts ReadOptions) (map[string]*kvrpcpb.GetResponse, error) {
+	opts = normalizeReadOptions(opts)
 	results := make(map[string]*kvrpcpb.GetResponse, len(keys))
 	if len(keys) == 0 {
 		return results, nil
@@ -85,11 +105,6 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	for _, key := range keys {
 		keyCopy := append([]byte(nil), key...)
 		pending[string(keyCopy)] = keyCopy
-	}
-	type regionBatch struct {
-		region regionSnapshot
-		keys   [][]byte
-		ids    []string
 	}
 	var lastErr error
 	var lastKeyErr *kvrpcpb.KeyError
@@ -111,7 +126,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 		}
 		var completed []string
 		for regionID, group := range groups {
-			resp, regionErr, err := c.callBatchGet(ctx, group.region, group.keys, version)
+			resp, regionErr, err := c.callBatchGetWithFallback(ctx, group.region, group.keys, version, opts)
 			if err != nil {
 				if isTransportUnavailable(err) {
 					lastErr = err
@@ -126,30 +141,12 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 				}
 				continue
 			}
-			responses := resp.GetResponses()
-			for i, keyID := range group.ids {
-				var getResp *kvrpcpb.GetResponse
-				if i < len(responses) && responses[i] != nil {
-					getResp = responses[i]
-				} else {
-					getResp = &kvrpcpb.GetResponse{NotFound: true}
+			if err := c.collectBatchGetResponses(resp, group, results, &completed, &lastKeyErr, version, ctx); err != nil {
+				if errors.Is(err, errReadLockStillLive) {
+					lastErr = err
+					continue
 				}
-				if keyErr := getResp.GetError(); keyErr != nil {
-					if locked := keyErr.GetLocked(); locked != nil {
-						lastKeyErr = keyErr
-						resolved, err := c.resolveReadLock(ctx, locked, version)
-						if err != nil && !errors.Is(err, errReadLockStillLive) {
-							return nil, err
-						}
-						if !resolved {
-							lastErr = txnKeyError(keyErr)
-						}
-						continue
-					}
-					return nil, txnKeyError(keyErr)
-				}
-				results[keyID] = getResp
-				completed = append(completed, keyID)
+				return nil, err
 			}
 		}
 		for _, keyID := range completed {
@@ -184,12 +181,42 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	return results, nil
 }
 
-func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte, version uint64) (*kvrpcpb.GetResponse, *errorpb.RegionError, error) {
-	cl, err := c.storeClient(ctx, region.leader)
+func (c *Client) collectBatchGetResponses(resp *kvrpcpb.BatchGetResponse, group *regionBatch, results map[string]*kvrpcpb.GetResponse, completed *[]string, lastKeyErr **kvrpcpb.KeyError, version uint64, ctx context.Context) error {
+	responses := resp.GetResponses()
+	for i, keyID := range group.ids {
+		var getResp *kvrpcpb.GetResponse
+		if i < len(responses) && responses[i] != nil {
+			getResp = responses[i]
+		} else {
+			getResp = &kvrpcpb.GetResponse{NotFound: true}
+		}
+		if keyErr := getResp.GetError(); keyErr != nil {
+			if locked := keyErr.GetLocked(); locked != nil {
+				*lastKeyErr = keyErr
+				resolved, err := c.resolveReadLock(ctx, locked, version)
+				if err != nil && !errors.Is(err, errReadLockStillLive) {
+					return err
+				}
+				if !resolved {
+					return errReadLockStillLive
+				}
+				continue
+			}
+			return txnKeyError(keyErr)
+		}
+		results[keyID] = getResp
+		*completed = append(*completed, keyID)
+	}
+	return nil
+}
+
+func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte, version uint64, opts ReadOptions) (*kvrpcpb.GetResponse, *errorpb.RegionError, error) {
+	targetStoreID := readTargetStore(region, opts)
+	cl, err := c.storeClient(ctx, targetStoreID)
 	if err != nil {
 		return nil, nil, err
 	}
-	header, err := buildContext(region)
+	header, err := buildReadContext(region, targetStoreID, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -206,15 +233,33 @@ func (c *Client) callGet(ctx context.Context, region regionSnapshot, key []byte,
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
-func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64) (*kvrpcpb.BatchGetResponse, *errorpb.RegionError, error) {
+func (c *Client) callGetWithFallback(ctx context.Context, region regionSnapshot, key []byte, version uint64, opts ReadOptions) (*kvrpcpb.GetResponse, *errorpb.RegionError, error) {
+	resp, regionErr, err := c.callGet(ctx, region, key, version, opts)
+	if err == nil && regionErr == nil {
+		return resp, nil, nil
+	}
+	if !followerPrefer(opts) {
+		return resp, regionErr, err
+	}
+	if err != nil && !isTransportUnavailable(err) {
+		return nil, nil, err
+	}
+	if regionErr != nil && regionErr.GetStaleCommand() == nil {
+		return resp, regionErr, nil
+	}
+	return c.callGet(ctx, region, key, version, leaderReadOptions(opts))
+}
+
+func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64, opts ReadOptions) (*kvrpcpb.BatchGetResponse, *errorpb.RegionError, error) {
 	if len(keys) == 0 {
 		return &kvrpcpb.BatchGetResponse{}, nil, nil
 	}
-	cl, err := c.storeClient(ctx, region.leader)
+	targetStoreID := readTargetStore(region, opts)
+	cl, err := c.storeClient(ctx, targetStoreID)
 	if err != nil {
 		return nil, nil, err
 	}
-	header, err := buildContext(region)
+	header, err := buildReadContext(region, targetStoreID, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,8 +281,31 @@ func (c *Client) callBatchGet(ctx context.Context, region regionSnapshot, keys [
 	return out, resp.GetRegionError(), nil
 }
 
+func (c *Client) callBatchGetWithFallback(ctx context.Context, region regionSnapshot, keys [][]byte, version uint64, opts ReadOptions) (*kvrpcpb.BatchGetResponse, *errorpb.RegionError, error) {
+	resp, regionErr, err := c.callBatchGet(ctx, region, keys, version, opts)
+	if err == nil && regionErr == nil {
+		return resp, nil, nil
+	}
+	if !followerPrefer(opts) {
+		return resp, regionErr, err
+	}
+	if err != nil && !isTransportUnavailable(err) {
+		return nil, nil, err
+	}
+	if regionErr != nil && regionErr.GetStaleCommand() == nil {
+		return resp, regionErr, nil
+	}
+	return c.callBatchGet(ctx, region, keys, version, leaderReadOptions(opts))
+}
+
 // Scan issues a forward StoreKV Scan RPC starting at startKey, reading up to limit keys.
 func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]*kvrpcpb.KV, error) {
+	return c.ScanWithOptions(ctx, startKey, limit, version, DefaultReadOptions())
+}
+
+// ScanWithOptions issues a scan with explicit read consistency and routing preference.
+func (c *Client) ScanWithOptions(ctx context.Context, startKey []byte, limit uint32, version uint64, opts ReadOptions) ([]*kvrpcpb.KV, error) {
+	opts = normalizeReadOptions(opts)
 	if limit == 0 {
 		return nil, errInvalidScanLimit
 	}
@@ -252,7 +320,7 @@ func (c *Client) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		if err != nil {
 			return nil, err
 		}
-		resp, regionErr, err := c.callScan(ctx, region, currentKey, remaining, version)
+		resp, regionErr, err := c.callScanWithFallback(ctx, region, currentKey, remaining, version, opts)
 		if err != nil {
 			if isTransportUnavailable(err) {
 				if err := c.waitRetry(ctx, 0, retryTransportUnavailable); err != nil {
@@ -357,12 +425,13 @@ func (c *Client) resolveReadLock(ctx context.Context, locked *kvrpcpb.Locked, re
 	}
 }
 
-func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64) (*kvrpcpb.ScanResponse, *errorpb.RegionError, error) {
-	cl, err := c.storeClient(ctx, region.leader)
+func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64, opts ReadOptions) (*kvrpcpb.ScanResponse, *errorpb.RegionError, error) {
+	targetStoreID := readTargetStore(region, opts)
+	cl, err := c.storeClient(ctx, targetStoreID)
 	if err != nil {
 		return nil, nil, err
 	}
-	header, err := buildContext(region)
+	header, err := buildReadContext(region, targetStoreID, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -379,6 +448,47 @@ func (c *Client) callScan(ctx context.Context, region regionSnapshot, startKey [
 		return nil, nil, normalizeRPCError(err)
 	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
+}
+
+func (c *Client) callScanWithFallback(ctx context.Context, region regionSnapshot, startKey []byte, limit uint32, version uint64, opts ReadOptions) (*kvrpcpb.ScanResponse, *errorpb.RegionError, error) {
+	resp, regionErr, err := c.callScan(ctx, region, startKey, limit, version, opts)
+	if err == nil && regionErr == nil {
+		return resp, nil, nil
+	}
+	if !followerPrefer(opts) {
+		return resp, regionErr, err
+	}
+	if err != nil && !isTransportUnavailable(err) {
+		return nil, nil, err
+	}
+	if regionErr != nil && regionErr.GetStaleCommand() == nil {
+		return resp, regionErr, nil
+	}
+	return c.callScan(ctx, region, startKey, limit, version, leaderReadOptions(opts))
+}
+
+func leaderReadOptions(opts ReadOptions) ReadOptions {
+	opts = normalizeReadOptions(opts)
+	if opts.Consistency == kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE {
+		opts.Consistency = kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG
+		opts.MaxStaleReadIndex = 0
+		opts.MaxStaleReadMS = 0
+	}
+	opts.Preference = kvrpcpb.ReadPreference_READ_PREFERENCE_LEADER_ONLY
+	return opts
+}
+
+func readTargetStore(region regionSnapshot, opts ReadOptions) uint64 {
+	opts = normalizeReadOptions(opts)
+	if followerPrefer(opts) {
+		if follower := followerStoreID(region); follower != 0 {
+			return follower
+		}
+	}
+	if region.leader != 0 {
+		return region.leader
+	}
+	return defaultLeaderStoreID(region.desc)
 }
 
 // Mutate wraps TwoPhaseCommit with a ready-made mutation slice. The caller must

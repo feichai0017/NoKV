@@ -47,6 +47,7 @@ const (
 	AdmissionReasonNotLeader
 	AdmissionReasonCanceled
 	AdmissionReasonTimedOut
+	AdmissionReasonStale
 )
 
 func (r AdmissionReason) String() string {
@@ -69,6 +70,8 @@ func (r AdmissionReason) String() string {
 		return "canceled"
 	case AdmissionReasonTimedOut:
 		return "timed-out"
+	case AdmissionReasonStale:
+		return "stale"
 	default:
 		return "unknown"
 	}

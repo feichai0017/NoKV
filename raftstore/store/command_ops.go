@@ -3,12 +3,15 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"time"
+
 	errorpb "github.com/feichai0017/NoKV/pb/error"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"time"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -109,30 +112,38 @@ func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCm
 		}
 		return nil, meta, resp, nil
 	}
-	status := peer.Status()
-	if status.RaftState != myraft.StateLeader {
-		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
-		if class != AdmissionClassUnknown {
-			s.recordAdmission(Admission{
-				Class:     class,
-				Reason:    AdmissionReasonNotLeader,
-				RegionID:  regionID,
-				PeerID:    peer.ID(),
-				RequestID: req.Header.GetRequestId(),
-				Detail:    "local peer is not leader",
-			})
-		}
-		return nil, meta, resp, nil
-	}
 	req.Header.PeerId = peer.ID()
 	return peer, meta, nil, nil
+}
+
+func (s *Store) validateLeaderCommandClass(class AdmissionClass, req *raftcmdpb.RaftCmdRequest) (*peer.Peer, localmeta.RegionMeta, *raftcmdpb.RaftCmdResponse, error) {
+	peer, meta, resp, err := s.validateCommandClass(class, req)
+	if err != nil || resp != nil {
+		return peer, meta, resp, err
+	}
+	status := peer.Status()
+	if status.RaftState == myraft.StateLeader {
+		return peer, meta, nil, nil
+	}
+	resp = &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: notLeaderError(meta, status.Lead)}
+	if class != AdmissionClassUnknown {
+		s.recordAdmission(Admission{
+			Class:     class,
+			Reason:    AdmissionReasonNotLeader,
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    peer.ID(),
+			RequestID: req.Header.GetRequestId(),
+			Detail:    "local peer is not leader",
+		})
+	}
+	return peer, meta, resp, nil
 }
 
 // ProposeCommand submits a raft command to the leader hosting the target
 // region. When the store is not leader or the request header is invalid the
 // returned response includes an appropriate RegionError.
 func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-	peer, _, resp, err := s.validateCommandClass(AdmissionClassWrite, req)
+	peer, _, resp, err := s.validateLeaderCommandClass(AdmissionClassWrite, req)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +236,10 @@ func (s *Store) ProposeCommand(ctx context.Context, req *raftcmdpb.RaftCmdReques
 	}
 }
 
-// ReadCommand executes the provided read-only raft command locally on the
-// leader. The command must only include read operations (Get/Scan). The method
-// returns a RegionError when the store is not leader for the target region.
+// ReadCommand executes the provided read-only raft command locally after
+// applying the requested read policy. The default remains strong leader-only
+// reads. FOLLOWER_PREFER can serve through raft ReadIndex, while BOUNDED_STALE
+// can serve from local applied state only when the caller's stale budget admits it.
 func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	peer, meta, regionResp, err := s.validateCommandClass(AdmissionClassRead, req)
 	if err != nil {
@@ -286,7 +298,10 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 		PeerID:    peer.ID(),
 		RequestID: req.Header.GetRequestId(),
 	})
-	index, err := peer.LinearizableRead(ctx)
+	index, regionErr, err := s.readIndexForPolicy(ctx, peer, meta, req)
+	if regionErr != nil {
+		return &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionErr}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +319,74 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 		s.regionStats.recordRead(req.Header.GetRegionId(), uint64(len(req.GetRequests())))
 	}
 	return out, nil
+}
+
+func (s *Store) readIndexForPolicy(ctx context.Context, p *peer.Peer, meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdRequest) (uint64, *errorpb.RegionError, error) {
+	if p == nil || req == nil || req.Header == nil {
+		return 0, nil, errNilCommand
+	}
+	consistency := normalizeReadConsistency(req.Header.GetReadConsistency())
+	preference := normalizeReadPreference(req.Header.GetReadPreference())
+	status := p.Status()
+	if preference == kvrpcpb.ReadPreference_READ_PREFERENCE_LEADER_ONLY && status.RaftState != myraft.StateLeader {
+		s.recordAdmission(Admission{
+			Class:     AdmissionClassRead,
+			Reason:    AdmissionReasonNotLeader,
+			RegionID:  req.Header.GetRegionId(),
+			PeerID:    p.ID(),
+			RequestID: req.Header.GetRequestId(),
+			Detail:    "leader-only read rejected on follower",
+		})
+		return 0, notLeaderError(meta, status.Lead), nil
+	}
+	switch consistency {
+	case kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE:
+		maxAge := time.Duration(req.Header.GetMaxStaleReadMs()) * time.Millisecond
+		index, ok := p.BoundedStaleReadIndex(req.Header.GetMaxStaleReadIndex(), maxAge)
+		if !ok {
+			s.recordAdmission(Admission{
+				Class:     AdmissionClassRead,
+				Reason:    AdmissionReasonStale,
+				RegionID:  req.Header.GetRegionId(),
+				PeerID:    p.ID(),
+				RequestID: req.Header.GetRequestId(),
+				Detail:    "bounded-stale read outside local applied-index or leader-contact budget",
+			})
+			return 0, staleCommandError(), nil
+		}
+		return index, nil, nil
+	default:
+		index, err := p.LinearizableRead(ctx)
+		if err != nil && preference == kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER && status.RaftState != myraft.StateLeader {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return 0, nil, err
+			}
+			s.recordAdmission(Admission{
+				Class:     AdmissionClassRead,
+				Reason:    AdmissionReasonStale,
+				RegionID:  req.Header.GetRegionId(),
+				PeerID:    p.ID(),
+				RequestID: req.Header.GetRequestId(),
+				Detail:    fmt.Sprintf("strong follower read failed before local apply: %v", err),
+			})
+			return 0, staleCommandError(), nil
+		}
+		return index, nil, err
+	}
+}
+
+func normalizeReadConsistency(consistency kvrpcpb.ReadConsistency) kvrpcpb.ReadConsistency {
+	if consistency == kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE {
+		return consistency
+	}
+	return kvrpcpb.ReadConsistency_READ_CONSISTENCY_STRONG
+}
+
+func normalizeReadPreference(preference kvrpcpb.ReadPreference) kvrpcpb.ReadPreference {
+	if preference == kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER {
+		return preference
+	}
+	return kvrpcpb.ReadPreference_READ_PREFERENCE_LEADER_ONLY
 }
 
 func isReadOnlyRequest(req *raftcmdpb.RaftCmdRequest) bool {
@@ -525,6 +608,10 @@ func regionNotFoundError(regionID uint64) *errorpb.RegionError {
 	return &errorpb.RegionError{
 		RegionNotFound: &errorpb.RegionNotFound{RegionId: regionID},
 	}
+}
+
+func staleCommandError() *errorpb.RegionError {
+	return &errorpb.RegionError{StaleCommand: &errorpb.StaleCommand{}}
 }
 
 func keyNotInRegionError(meta localmeta.RegionMeta, key []byte) *errorpb.RegionError {
