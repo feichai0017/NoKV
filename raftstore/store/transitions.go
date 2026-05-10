@@ -368,6 +368,7 @@ func (s *Store) buildChildPeerConfig(child localmeta.RegionMeta) (*peer.Config, 
 	}
 	return cfg, peers, nil
 }
+
 type transitionTarget struct {
 	TransitionID string
 	RegionID     uint64

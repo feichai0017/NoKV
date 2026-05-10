@@ -71,7 +71,6 @@ func (c *compactor) priorityStats() (int64, float64) {
 	return int64(len(prios)), max
 }
 
-
 func (c *compactor) runDurations() (float64, float64, uint64) {
 	if c == nil {
 		return 0, 0, 0
@@ -1397,4 +1396,3 @@ func (c *compactor) subcompact(it index.Iterator, kr plan.KeyRange, cd compactDe
 		}
 	}
 }
-

@@ -22,10 +22,6 @@ import (
 // levelHandler. It binds landing.Buffer to the lsm package's *table.
 type landingBuffer = landing.Buffer[*table.Table]
 
-// landingShardCount mirrors landing.ShardCount for callers that index shards
-// directly inside the lsm package.
-const landingShardCount = landing.ShardCount
-
 // landingPickInput converts the landing-package shard summaries into the
 // shape expected by the compaction-plan picker. Both types are structurally
 // identical; the conversion stays in the lsm adapter so the landing package
@@ -59,12 +55,6 @@ type levelHandler struct {
 	// reads. Only populated when levelNum == 0; nil otherwise. Rebuilt by
 	// sortTablesLocked().
 	l0Sublevels []l0Sublevel
-}
-
-type tableRange struct {
-	min []byte
-	max []byte
-	tbl *table.Table
 }
 
 func (lh *levelHandler) close() error {
@@ -885,4 +875,3 @@ func l0CandidateTables(sublevels []l0Sublevel, key []byte) []*table.Table {
 	}
 	return out
 }
-

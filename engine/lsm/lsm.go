@@ -851,7 +851,6 @@ func (lsm *LSM) hasRangeTombstones() bool {
 	return false
 }
 
-
 // ---- Range tombstone view (merged from range_tombstone.go) ----
 //
 // The view pins a stable memtable snapshot for repeated coverage probes,

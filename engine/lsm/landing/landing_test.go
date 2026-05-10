@@ -26,14 +26,14 @@ type fakeTable struct {
 	released  bool
 }
 
-func (t *fakeTable) MinKey() []byte         { return t.min }
-func (t *fakeTable) MaxKey() []byte         { return t.max }
-func (t *fakeTable) Size() int64            { return t.size }
-func (t *fakeTable) ValueSize() uint64      { return t.valueSize }
-func (t *fakeTable) MaxVersionVal() uint64  { return t.maxVer }
-func (t *fakeTable) FID() uint64            { return t.id }
-func (t *fakeTable) CreatedAt() time.Time   { return t.createdAt }
-func (t *fakeTable) DecrRef() error         { t.released = true; return nil }
+func (t *fakeTable) MinKey() []byte        { return t.min }
+func (t *fakeTable) MaxKey() []byte        { return t.max }
+func (t *fakeTable) Size() int64           { return t.size }
+func (t *fakeTable) ValueSize() uint64     { return t.valueSize }
+func (t *fakeTable) MaxVersionVal() uint64 { return t.maxVer }
+func (t *fakeTable) FID() uint64           { return t.id }
+func (t *fakeTable) CreatedAt() time.Time  { return t.createdAt }
+func (t *fakeTable) DecrRef() error        { t.released = true; return nil }
 
 func (t *fakeTable) Search(key []byte, maxVs *uint64) (*kv.Entry, error) {
 	_, userKey, _, ok := kv.SplitInternalKey(key)

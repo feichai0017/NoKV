@@ -8,8 +8,8 @@ import (
 
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/metrics"
+	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )

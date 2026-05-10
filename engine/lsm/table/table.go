@@ -20,10 +20,10 @@ import (
 	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
-	storagepb "github.com/feichai0017/NoKV/pb/storage"
 )
 
 var (
@@ -34,11 +34,11 @@ var (
 
 // Table is one open SSTable plus its cached metadata.
 type Table struct {
-	rt   Runtime
-	opts Options
-	fid  uint64
+	rt             Runtime
+	opts           Options
+	fid            uint64
 	utils.RefCount // For file garbage collection. Atomic.
-	lvl atomic.Int32
+	lvl            atomic.Int32
 
 	minKey []byte
 	maxKey []byte
@@ -1029,10 +1029,7 @@ func (it *Iterator) advanceToBoundedValid() {
 }
 
 func (t *Table) shouldPinHandleLocked() bool {
-	if t == nil {
-		return false
-	}
-	return true
+	return t != nil
 }
 
 func (t *Table) refreshHandlePolicy() {

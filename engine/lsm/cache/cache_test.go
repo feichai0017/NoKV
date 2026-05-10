@@ -10,8 +10,8 @@ import (
 
 type fakeTable struct{}
 
-func (fakeTable) IncrRef()         {}
-func (fakeTable) DecrRef() error   { return nil }
+func (fakeTable) IncrRef()       {}
+func (fakeTable) DecrRef() error { return nil }
 
 func TestCacheHotColdMetrics(t *testing.T) {
 	c := New(Options{BlockBytes: 256})

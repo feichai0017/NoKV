@@ -11,8 +11,8 @@ import (
 
 // Sentinel errors returned by Manager.
 var (
-	ErrNil      = errors.New("raftstore/region: manager is nil")
-	ErrZeroID   = errors.New("raftstore/region: region id is zero")
+	ErrNil    = errors.New("raftstore/region: manager is nil")
+	ErrZeroID = errors.New("raftstore/region: region id is zero")
 )
 
 // ErrNotFound formats a not-found error for the given region id.

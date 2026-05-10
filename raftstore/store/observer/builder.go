@@ -3,8 +3,8 @@ package observer
 import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	myraft "github.com/feichai0017/NoKV/raft"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
 )
 
 // EventsFromCommand inspects one applied raft command (entry + paired

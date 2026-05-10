@@ -145,10 +145,10 @@ func (tb *Builder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		diffKey = tb.keyDiff(key)
 	}
 	utils.CondPanicFunc(len(key)-len(diffKey) > math.MaxUint16, func() error {
-		return fmt.Errorf("Builder.add: len(key)-len(diffKey) <= math.MaxUint16")
+		return fmt.Errorf("builder.add: overlap len(key)-len(diffKey)=%d exceeds math.MaxUint16", len(key)-len(diffKey))
 	})
 	utils.CondPanicFunc(len(diffKey) > math.MaxUint16, func() error {
-		return fmt.Errorf("Builder.add: len(diffKey) <= math.MaxUint16")
+		return fmt.Errorf("builder.add: len(diffKey)=%d exceeds math.MaxUint16", len(diffKey))
 	})
 
 	h := header{
@@ -281,7 +281,7 @@ func (tb *Builder) finishBlockEncoding(bl *block) {
 func (tb *Builder) append(data []byte) {
 	dst := tb.allocate(len(data))
 	utils.CondPanicFunc(len(data) != copy(dst, data), func() error {
-		return errors.New("Builder.append data")
+		return errors.New("builder.append: short copy")
 	})
 }
 

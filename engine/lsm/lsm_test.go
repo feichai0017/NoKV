@@ -47,15 +47,6 @@ func ikey(s string, ts uint64) []byte {
 	return kv.InternalKey(kv.CFDefault, []byte(s), ts)
 }
 
-// splitUserKey extracts the user-key portion of an internal key, asserting
-// that the input was a well-formed internal key.
-func splitUserKey(t *testing.T, internal []byte) []byte {
-	t.Helper()
-	_, userKey, _, ok := kv.SplitInternalKey(internal)
-	require.True(t, ok)
-	return userKey
-}
-
 func buildInternalTestEntry() *kv.Entry {
 	return newRandomTestEntry()
 }
@@ -412,28 +403,6 @@ func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.En
 		t.Fatalf("expected table from builder")
 	}
 	return tbl
-}
-
-func tableContainsRangeDelete(tbl *table.Table) bool {
-	if tbl == nil {
-		return false
-	}
-	it := tbl.NewIterator(&index.Options{IsAsc: true})
-	if it == nil {
-		return false
-	}
-	defer func() { _ = it.Close() }()
-
-	for it.Rewind(); it.Valid(); it.Next() {
-		item := it.Item()
-		if item == nil || item.Entry() == nil {
-			continue
-		}
-		if item.Entry().IsRangeDelete() {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLandingSearch(t *testing.T) {

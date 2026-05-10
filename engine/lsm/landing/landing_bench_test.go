@@ -40,7 +40,7 @@ func BenchmarkBufferAddBatch(b *testing.B) {
 // the compaction picker on every cycle.
 func BenchmarkBufferShardViews(b *testing.B) {
 	var buf Buffer[*fakeTable]
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		buf.Add(newTable(uint64(i), fmt.Sprintf("k%05d", i), 1, "v"))
 	}
 	b.ResetTimer()
@@ -53,7 +53,7 @@ func BenchmarkBufferShardViews(b *testing.B) {
 // indexes.
 func BenchmarkBufferSearch(b *testing.B) {
 	var buf Buffer[*fakeTable]
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		buf.Add(newTable(uint64(i), fmt.Sprintf("k%05d", i), uint64(i+1), "v"))
 	}
 	buf.SortShards()

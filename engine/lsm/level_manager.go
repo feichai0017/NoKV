@@ -329,6 +329,7 @@ func (lm *levelManager) maxVersion() uint64 {
 	}
 	return max
 }
+
 // rebuildRangeTombstones scans SST levels to repopulate the range tombstone
 // collector. Memtable tombstones are tracked separately in
 // memTable.rangeTombstones and must not be included here to avoid duplication

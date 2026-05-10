@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"sync"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 

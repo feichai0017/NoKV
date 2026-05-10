@@ -257,4 +257,3 @@ func TestStateIntraLevelEntryDeletesCleanly(t *testing.T) {
 	require.False(t, state.HasTable(1))
 	require.False(t, state.HasTable(4))
 }
-

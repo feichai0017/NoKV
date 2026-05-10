@@ -3,17 +3,10 @@ package store
 import (
 	"testing"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
-
-func requireNoError(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
 
 func TestStoreAndRouterHelpers(t *testing.T) {
 	store := NewStore(Config{})
