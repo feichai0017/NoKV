@@ -16,6 +16,7 @@ package percolator
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,15 @@ import (
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/feichai0017/NoKV/utils"
 )
+
+// parallelValidationThreshold is the smallest level size at which we
+// fan validation out to goroutines. Below this we run validations
+// serially; the goroutine bookkeeping cost dwarfs the per-validation
+// LSM read otherwise. The value is a heuristic chosen by benchmarking:
+// 4 was the break-even point on Apple M3 Pro for typical fsmeta key
+// shapes, where one validation costs ~5–15 µs and a goroutine launch
+// is ~1–2 µs.
+const parallelValidationThreshold = 4
 
 // Prewrite applies mutation prewrites for a single region transaction.
 func Prewrite(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.PrewriteRequest) []*kvrpcpb.KeyError {
@@ -296,6 +306,22 @@ func ApplyAtomicMutate(db txnstore.Store, latches *latch.Manager, req *kvrpcpb.T
 // ApplyAtomicMutateBatch applies a raft-entry batch of independent 1PC
 // attempts. It preserves per-request responses and only fuses requests when
 // their combined MVCC entries remain one local atomic apply group.
+//
+// Concurrency model:
+//
+// Items are grouped by a key-conflict DAG into topological levels. Within
+// a level all items have disjoint keys, so their predicate validations
+// (LSM reads at startVersion) cannot observe each other's writes — the
+// validations are run in parallel. Across levels, level k must complete
+// (validate AND apply) before level k+1 begins, so that level k+1's
+// validations can see level k's committed mutations. This preserves
+// raft-log ordering for any pair of conflicting requests while extracting
+// the maximum parallelism the input permits.
+//
+// The per-level apply still walks items in raft order, accumulating
+// non-conflicting plans into one atomic-apply group and flushing on LSM
+// shard boundaries. This keeps the existing fusion behaviour (one LSM
+// apply call per same-shard run) intact.
 func ApplyAtomicMutateBatch(db txnstore.Store, latches *latch.Manager, reqs []*kvrpcpb.TryAtomicMutateRequest) []AtomicMutateResult {
 	results := make([]AtomicMutateResult, len(reqs))
 	if len(reqs) == 0 {
@@ -323,41 +349,113 @@ func ApplyAtomicMutateBatch(db txnstore.Store, latches *latch.Manager, reqs []*k
 	defer guard.Release()
 
 	planner, hasPlanner := db.(txnstore.AtomicInternalApplyPlanner)
-	group := atomicMutateApplyGroup{}
+
+	// Build a per-item key view. Ineligible items (already resolved during
+	// prepare) contribute no keys, so they sit in level 0 and short-
+	// circuit during the apply walk below.
+	itemKeys := make([][][]byte, len(prepared))
 	for i, item := range prepared {
-		if !item.eligible {
+		if item.eligible {
+			itemKeys[i] = item.keys
+		}
+	}
+	levels := dependencyLevels(itemKeys)
+
+	for _, level := range levels {
+		plans := planLevel(db, prepared, level)
+		applyLevel(db, results, prepared, level, plans, planner, hasPlanner)
+	}
+	return results
+}
+
+// planLevel runs planAtomicMutateUnlocked for every eligible item in
+// the level. When the level holds enough eligible items to amortise
+// the goroutine launch cost, validations fan out to goroutines;
+// otherwise they run serially on the caller's goroutine.
+func planLevel(db txnstore.Store, prepared []atomicMutatePrepared, level []int) []atomicMutateLevelPlan {
+	plans := make([]atomicMutateLevelPlan, len(level))
+	eligible := 0
+	for _, idx := range level {
+		if prepared[idx].eligible {
+			eligible++
+		}
+	}
+	if eligible >= parallelValidationThreshold {
+		var wg sync.WaitGroup
+		for li, idx := range level {
+			if !prepared[idx].eligible {
+				continue
+			}
+			wg.Add(1)
+			go func(li, idx int) {
+				defer wg.Done()
+				p, r, ok := planAtomicMutateUnlocked(db, prepared[idx].req, prepared[idx].keys)
+				plans[li] = atomicMutateLevelPlan{plan: p, early: r, ok: ok}
+			}(li, idx)
+		}
+		wg.Wait()
+	} else {
+		for li, idx := range level {
+			if !prepared[idx].eligible {
+				continue
+			}
+			p, r, ok := planAtomicMutateUnlocked(db, prepared[idx].req, prepared[idx].keys)
+			plans[li] = atomicMutateLevelPlan{plan: p, early: r, ok: ok}
+		}
+	}
+	return plans
+}
+
+// applyLevel walks the level in raft order, fusing non-conflicting
+// plans into one atomic-apply group and flushing on LSM shard
+// boundaries or on level completion.
+func applyLevel(
+	db txnstore.Store,
+	results []AtomicMutateResult,
+	prepared []atomicMutatePrepared,
+	level []int,
+	plans []atomicMutateLevelPlan,
+	planner txnstore.AtomicInternalApplyPlanner,
+	hasPlanner bool,
+) {
+	group := atomicMutateApplyGroup{}
+	for li, idx := range level {
+		if !prepared[idx].eligible {
 			continue
 		}
-		// Overlapping requests must observe raft-log order. Flush before
-		// planning the later request so its predicates see earlier writes.
-		if group.conflicts(item.keys) {
-			group.flush(db, results)
-		}
-		plan, result, ok := planAtomicMutateUnlocked(db, item.req, item.keys)
-		if !ok {
-			results[i] = result
+		pr := plans[li]
+		if !pr.ok {
+			results[idx] = pr.early
 			continue
 		}
-		if len(plan.entries) == 0 {
-			results[i] = AtomicMutateResult{AppliedKeys: plan.appliedKeys}
+		if len(pr.plan.entries) == 0 {
+			results[idx] = AtomicMutateResult{AppliedKeys: pr.plan.appliedKeys}
 			continue
 		}
-		if !hasPlanner || !planner.CanApplyInternalEntriesAtomically(plan.entries) {
+		if !hasPlanner || !planner.CanApplyInternalEntriesAtomically(pr.plan.entries) {
 			percolatorStats.localFallbackTotal.Add(1)
-			releaseEntries(plan.entries)
-			results[i] = AtomicMutateResult{Fallback: true}
+			releaseEntries(pr.plan.entries)
+			results[idx] = AtomicMutateResult{Fallback: true}
 			continue
 		}
 		// A request can be locally atomic by itself while belonging to a
 		// different LSM shard than the current group. Split the group instead
 		// of turning a valid 1PC request into a 2PC fallback.
-		if !group.empty() && !planner.CanApplyInternalEntriesAtomically(group.entriesWith(plan.entries)) {
+		if !group.empty() && !planner.CanApplyInternalEntriesAtomically(group.entriesWith(pr.plan.entries)) {
 			group.flush(db, results)
 		}
-		group.add(i, plan)
+		group.add(idx, pr.plan)
 	}
 	group.flush(db, results)
-	return results
+}
+
+// atomicMutateLevelPlan captures the result of running
+// planAtomicMutateUnlocked for one item inside a DAG level so that
+// the apply phase can read it without re-running the planner.
+type atomicMutateLevelPlan struct {
+	plan  atomicMutatePlan
+	early AtomicMutateResult
+	ok    bool
 }
 
 type atomicMutatePrepared struct {
@@ -452,7 +550,6 @@ func planAtomicMutateUnlocked(db txnstore.Store, req *kvrpcpb.TryAtomicMutateReq
 type atomicMutateApplyGroup struct {
 	requests []atomicMutateGroupRequest
 	entries  []*kv.Entry
-	keys     map[string]struct{}
 }
 
 type atomicMutateGroupRequest struct {
@@ -462,18 +559,6 @@ type atomicMutateGroupRequest struct {
 
 func (g *atomicMutateApplyGroup) empty() bool {
 	return g == nil || len(g.requests) == 0
-}
-
-func (g *atomicMutateApplyGroup) conflicts(keys [][]byte) bool {
-	if g == nil || len(g.keys) == 0 {
-		return false
-	}
-	for _, key := range keys {
-		if _, ok := g.keys[string(key)]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func (g *atomicMutateApplyGroup) entriesWith(entries []*kv.Entry) []*kv.Entry {
@@ -486,12 +571,6 @@ func (g *atomicMutateApplyGroup) entriesWith(entries []*kv.Entry) []*kv.Entry {
 func (g *atomicMutateApplyGroup) add(index int, plan atomicMutatePlan) {
 	g.requests = append(g.requests, atomicMutateGroupRequest{index: index, appliedKeys: plan.appliedKeys})
 	g.entries = append(g.entries, plan.entries...)
-	if g.keys == nil {
-		g.keys = make(map[string]struct{}, len(plan.keys))
-	}
-	for _, key := range plan.keys {
-		g.keys[string(key)] = struct{}{}
-	}
 }
 
 func (g *atomicMutateApplyGroup) flush(db txnstore.Store, results []AtomicMutateResult) {
@@ -514,7 +593,6 @@ func (g *atomicMutateApplyGroup) flush(db txnstore.Store, results []AtomicMutate
 	}
 	g.requests = nil
 	g.entries = nil
-	g.keys = nil
 }
 
 func validateAtomicPredicate(reader *Reader, pred *kvrpcpb.AtomicPredicate, startVersion uint64) *kvrpcpb.KeyError {

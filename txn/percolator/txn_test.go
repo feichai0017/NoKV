@@ -431,6 +431,155 @@ func TestApplyAtomicMutateBatchApplyFailureMarksWholeFusedGroup(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
+// TestApplyAtomicMutateBatchParallelLevelAllDisjoint exercises the
+// parallel validation path: 16 disjoint requests fall into a single
+// DAG level, validations fan out to goroutines, then fuse into one
+// atomic apply.
+func TestApplyAtomicMutateBatchParallelLevelAllDisjoint(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newCountingAtomicStore(db)
+	const N = 16
+	reqs := make([]*kvrpcpb.TryAtomicMutateRequest, 0, N)
+	for i := 0; i < N; i++ {
+		reqs = append(reqs, atomicPutRequest(
+			uint64(100+2*i), uint64(101+2*i),
+			[]byte(fmt.Sprintf("parallel-disjoint-%02d", i)),
+			[]byte(fmt.Sprintf("v%02d", i)),
+		))
+	}
+
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(64), reqs)
+	require.Len(t, results, N)
+	for i, r := range results {
+		require.Nilf(t, r.Error, "result %d had error: %v", i, r.Error)
+		require.False(t, r.Fallback, "result %d unexpectedly fell back", i)
+		require.Equal(t, uint64(1), r.AppliedKeys)
+	}
+
+	// Disjoint keys + single shard => one atomic apply call. Short-value
+	// puts emit one CFWrite entry per request.
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{N}, store.appliedEntryCounts)
+
+	reader := NewReader(db)
+	for i := 0; i < N; i++ {
+		key := []byte(fmt.Sprintf("parallel-disjoint-%02d", i))
+		val, _, err := reader.GetValue(key, 200)
+		require.NoError(t, err)
+		require.Equal(t, []byte(fmt.Sprintf("v%02d", i)), val)
+	}
+}
+
+// TestApplyAtomicMutateBatchParallelChainedConflicts ensures that a
+// linear chain of conflicting requests still applies in raft order.
+// The DAG should produce one item per level; the second request to
+// touch any given key must observe the first's commit.
+func TestApplyAtomicMutateBatchParallelChainedConflicts(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newCountingAtomicStore(db)
+	keyA := []byte("chain-a")
+	keyB := []byte("chain-b")
+
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(16), []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(40, 41, keyA, []byte("v1")), // creates A
+		atomicPutRequest(42, 43, keyA, []byte("v2")), // conflicts with prior, AlreadyExists
+		atomicPutRequest(44, 45, keyB, []byte("w1")), // independent, creates B
+		atomicPutRequest(46, 47, keyB, []byte("w2")), // conflicts with prior, AlreadyExists
+	})
+	require.Len(t, results, 4)
+	// Items 0 and 2 are independent of the prior batch contents and of each
+	// other => they win their AssertNotExist predicates. Items 1 and 3
+	// must observe items 0 and 2's writes => they fail with AlreadyExists.
+	require.Nil(t, results[0].Error)
+	require.Equal(t, uint64(1), results[0].AppliedKeys)
+	require.NotNil(t, results[1].Error)
+	require.NotNil(t, results[1].Error.GetAlreadyExists())
+	require.Nil(t, results[2].Error)
+	require.Equal(t, uint64(1), results[2].AppliedKeys)
+	require.NotNil(t, results[3].Error)
+	require.NotNil(t, results[3].Error.GetAlreadyExists())
+
+	reader := NewReader(db)
+	v, _, err := reader.GetValue(keyA, 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("v1"), v)
+	v, _, err = reader.GetValue(keyB, 50)
+	require.NoError(t, err)
+	require.Equal(t, []byte("w1"), v)
+}
+
+// TestApplyAtomicMutateBatchParallelMixedLevels exercises a mix of
+// independent and conflicting requests that produces a multi-level
+// DAG. Each level's validations should run in parallel without
+// observing each other's writes; downstream levels must observe the
+// upstream level's commits.
+func TestApplyAtomicMutateBatchParallelMixedLevels(t *testing.T) {
+	opt := testOptionsForDir(t.TempDir())
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newCountingAtomicStore(db)
+	// Layout:
+	//   0: put(a)              level 0
+	//   1: put(b)              level 0
+	//   2: put(c)              level 0
+	//   3: put(d)              level 0
+	//   4: put(a)              level 1 (conflicts with 0)
+	//   5: put(e)              level 0 (independent of 0..3, but appears
+	//                                    after them so the algorithm gives
+	//                                    it its own first-touch slot)
+	//   6: put(b)              level 1 (conflicts with 1)
+	//   7: put(c)              level 1 (conflicts with 2)
+	results := ApplyAtomicMutateBatch(store, latch.NewManager(32), []*kvrpcpb.TryAtomicMutateRequest{
+		atomicPutRequest(10, 11, []byte("mix-a"), []byte("a1")),
+		atomicPutRequest(12, 13, []byte("mix-b"), []byte("b1")),
+		atomicPutRequest(14, 15, []byte("mix-c"), []byte("c1")),
+		atomicPutRequest(16, 17, []byte("mix-d"), []byte("d1")),
+		atomicPutRequest(18, 19, []byte("mix-a"), []byte("a2")),
+		atomicPutRequest(20, 21, []byte("mix-e"), []byte("e1")),
+		atomicPutRequest(22, 23, []byte("mix-b"), []byte("b2")),
+		atomicPutRequest(24, 25, []byte("mix-c"), []byte("c2")),
+	})
+	require.Len(t, results, 8)
+	// Successful first-touches.
+	for _, idx := range []int{0, 1, 2, 3, 5} {
+		require.Nilf(t, results[idx].Error, "expected idx=%d to succeed: %v", idx, results[idx].Error)
+		require.Equal(t, uint64(1), results[idx].AppliedKeys)
+	}
+	// Conflicts (must observe the level-0 commits).
+	for _, idx := range []int{4, 6, 7} {
+		require.NotNilf(t, results[idx].Error, "expected idx=%d to fail with AlreadyExists", idx)
+		require.NotNil(t, results[idx].Error.GetAlreadyExists())
+	}
+
+	reader := NewReader(db)
+	for _, kv := range []struct {
+		k, v []byte
+	}{
+		{[]byte("mix-a"), []byte("a1")},
+		{[]byte("mix-b"), []byte("b1")},
+		{[]byte("mix-c"), []byte("c1")},
+		{[]byte("mix-d"), []byte("d1")},
+		{[]byte("mix-e"), []byte("e1")},
+	} {
+		got, _, err := reader.GetValue(kv.k, 30)
+		require.NoError(t, err)
+		require.Equalf(t, kv.v, got, "wrong value for %s", kv.k)
+	}
+}
+
 func TestApplyAtomicMutateRejectsExistingDentry(t *testing.T) {
 	db := openTestDB(t)
 	latches := latch.NewManager(16)
