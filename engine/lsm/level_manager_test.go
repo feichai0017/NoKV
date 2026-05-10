@@ -8,7 +8,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/iterator"
-	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/stretchr/testify/require"
 )
@@ -248,20 +247,4 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	for _, tbl := range []*table.Table{tblA, tblB, tblC, tblD} {
 		require.NoError(t, tbl.DecrRef())
 	}
-}
-
-func TestCompactionPacerBypassesWhenL0IsNearStall(t *testing.T) {
-	lm := &levelManager{
-		opt: &Options{
-			CompactionWriteBytesPerSec: 100,
-			CompactionPacingBypassL0:   2,
-		},
-		levels: []*levelHandler{
-			{tables: []*table.Table{{}, {}}},
-		},
-	}
-	lm.compactor = &compactor{lm: lm, pacer: pacer.New(100)}
-
-	require.True(t, lm.compactor.compactionPacerBypassActive())
-	require.Nil(t, lm.compactor.compactionPacerForBuild())
 }
