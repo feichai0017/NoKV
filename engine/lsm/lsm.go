@@ -955,3 +955,75 @@ func (lsm *LSM) startFlushWorkers(n int) {
 		})
 	}
 }
+
+// ---- Range tombstone view (merged from range_tombstone.go) ----
+//
+// The view pins a stable memtable snapshot for repeated coverage probes,
+// avoiding per-key GetMemTables pin/unpin overhead on scan paths
+// (e.g. DB iterators / YCSB-E).
+
+// RangeTombstoneView captures a stable read-view for range tombstone checks.
+// Call Close when finished.
+type RangeTombstoneView struct {
+	lsm     *LSM
+	tables  []*memTable
+	release func()
+}
+
+// HasAnyRangeTombstone reports whether the current LSM state has any in-memory
+// or flushed range tombstones.
+func (lsm *LSM) HasAnyRangeTombstone() bool {
+	if lsm == nil {
+		return false
+	}
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		mem := s.memTable
+		immutables := s.immutables
+		s.lock.RUnlock()
+		if mem != nil && mem.hasRangeTombstones() {
+			return true
+		}
+		for _, mt := range immutables {
+			if mt != nil && mt.hasRangeTombstones() {
+				return true
+			}
+		}
+	}
+	return lsm.RangeTombstoneCount() > 0
+}
+
+// PinRangeTombstoneView captures and pins the current memtable set for repeated
+// range tombstone checks.
+func (lsm *LSM) PinRangeTombstoneView() *RangeTombstoneView {
+	if lsm == nil {
+		return nil
+	}
+	tables, release := lsm.getMemTables()
+	return &RangeTombstoneView{
+		lsm:     lsm,
+		tables:  tables,
+		release: release,
+	}
+}
+
+// IsKeyCovered checks whether userKey@version is covered in this pinned view.
+func (v *RangeTombstoneView) IsKeyCovered(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
+	if v == nil || v.lsm == nil {
+		return false
+	}
+	return v.lsm.checkRangeTombstone(cf, userKey, version, v.tables)
+}
+
+// Close releases pinned memtables held by this view.
+func (v *RangeTombstoneView) Close() {
+	if v == nil {
+		return
+	}
+	if v.release != nil {
+		v.release()
+	}
+	v.tables = nil
+	v.release = nil
+	v.lsm = nil
+}

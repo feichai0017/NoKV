@@ -9,10 +9,32 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/landing"
+	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
+
+// landingBuffer is the concrete landing buffer instantiation used by
+// levelHandler. It binds landing.Buffer to the lsm package's *table.
+type landingBuffer = landing.Buffer[*table]
+
+// landingShardCount mirrors landing.ShardCount for callers that index shards
+// directly inside the lsm package.
+const landingShardCount = landing.ShardCount
+
+// landingPickInput converts the landing-package shard summaries into the
+// shape expected by the compaction-plan picker. Both types are structurally
+// identical; the conversion stays in the lsm adapter so the landing package
+// does not need to import plan.
+func landingPickInput(views []landing.ShardView) plan.LandingPickInput {
+	out := make([]plan.LandingShardView, 0, len(views))
+	for _, v := range views {
+		out = append(out, plan.LandingShardView(v))
+	}
+	return plan.LandingPickInput{Shards: out}
+}
 
 type levelHandler struct {
 	sync.RWMutex
@@ -634,4 +656,230 @@ func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
 		lh.lm.recordRangeFilterBounded(total, candidates, fallback)
 	}
 	return itrs
+}
+
+// ---- Landing-buffer accessors on levelHandler ----
+//
+// All landing accessors live here because the landing buffer is owned by
+// levelHandler and shares its RWMutex. The underlying landing.Buffer has
+// no internal locking; these methods encapsulate that convention.
+
+func (lh *levelHandler) landingShardByBacklog() int {
+	lh.landing.EnsureInit()
+	return plan.PickShardByBacklog(landingPickInput(lh.landing.ShardViews()))
+}
+
+func (lh *levelHandler) landingShardOrderBySize() []int {
+	lh.landing.EnsureInit()
+	return plan.PickShardOrder(landingPickInput(lh.landing.ShardViews()))
+}
+
+// addLanding registers a table into the landing buffer under lh's write lock.
+func (lh *levelHandler) addLanding(t *table) {
+	if t == nil {
+		return
+	}
+	lh.Lock()
+	defer lh.Unlock()
+	lh.landing.EnsureInit()
+	t.setLevel(lh.levelNum)
+	lh.landing.Add(t)
+}
+
+func (lh *levelHandler) landingValueBytes() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.landing.TotalValueSize()
+}
+
+func (lh *levelHandler) landingValueDensity() float64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.landingDensityLocked()
+}
+
+// landingDensityLocked computes landing value density; caller must hold lh lock.
+func (lh *levelHandler) landingDensityLocked() float64 {
+	total := lh.landing.TotalSize()
+	if total <= 0 {
+		return 0
+	}
+	return float64(lh.landing.TotalValueSize()) / float64(total)
+}
+
+func (lh *levelHandler) maxLandingAgeSeconds() float64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.landing.MaxAgeSeconds()
+}
+
+func (lh *levelHandler) numLandingTables() int {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.landing.TableCount()
+}
+
+// numLandingTablesLocked returns the landing table count without acquiring the
+// lock. Caller must already hold at least a read lock.
+func (lh *levelHandler) numLandingTablesLocked() int {
+	return lh.landing.TableCount()
+}
+
+func (lh *levelHandler) landingDataSize() int64 {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.landing.TotalSize()
+}
+
+// ---- L0 sublevels ----
+//
+// L0 sublevels group overlapping L0 tables into stripes of non-overlapping
+// ranges so a point read can binary-search to a single candidate per stripe
+// instead of scanning every L0 table. Compaction picker still treats L0 as
+// one physical level; sublevels exist only to accelerate Get.
+
+// l0Sublevel groups L0 tables whose key ranges do not overlap. Within one
+// sublevel the tables are sorted ascending by MinKey, so a point read can
+// binary-search to a single candidate per sublevel instead of scanning every
+// L0 table.
+//
+// Sublevels are a Phase A read-path optimization: compaction picker and
+// trivial move still treat L0 as a single physical level. The sublevel layout
+// is rebuilt eagerly inside sortTablesLocked() each time L0 mutates so reads
+// always see a consistent snapshot.
+type l0Sublevel []*table
+
+// buildL0Sublevels arranges tables into the minimum number of sublevels such
+// that each sublevel contains only non-overlapping ranges. The greedy
+// placement is order-stable: tables sort by (MinKey asc, fid asc), and each
+// table goes into the first sublevel whose tail MaxKey strictly precedes the
+// table MinKey. New tables (higher fid) tend to fall into higher sublevels.
+//
+// Complexity: O(N log N) for the sort plus O(N * S) for placement where S is
+// the resulting sublevel count. For typical L0 sizes (10-30 tables, 3-6
+// sublevels), this is trivially cheap.
+func buildL0Sublevels(tables []*table) []l0Sublevel {
+	if len(tables) == 0 {
+		return nil
+	}
+
+	// Copy to avoid mutating the caller slice and filter nil entries.
+	sorted := make([]*table, 0, len(tables))
+	for _, t := range tables {
+		if t != nil {
+			sorted = append(sorted, t)
+		}
+	}
+	if len(sorted) == 0 {
+		return nil
+	}
+
+	sort.Slice(sorted, func(i, j int) bool {
+		if c := kv.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()); c != 0 {
+			return c < 0
+		}
+		return sorted[i].fid < sorted[j].fid
+	})
+
+	sublevels := make([]l0Sublevel, 0, 4)
+	for _, t := range sorted {
+		placed := false
+		for i := range sublevels {
+			tail := sublevels[i][len(sublevels[i])-1]
+			if kv.CompareBaseKeys(tail.MaxKey(), t.MinKey()) < 0 {
+				sublevels[i] = append(sublevels[i], t)
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			sublevels = append(sublevels, l0Sublevel{t})
+		}
+	}
+	return sublevels
+}
+
+// candidate returns the at-most-one table within this sublevel whose key
+// range covers key, or nil. Sublevel tables are sorted by MinKey so a binary
+// search by MinKey followed by a MaxKey check is enough.
+func (s l0Sublevel) candidate(key []byte) *table {
+	if len(s) == 0 {
+		return nil
+	}
+	idx := sort.Search(len(s), func(i int) bool {
+		return kv.CompareBaseKeys(s[i].MinKey(), key) > 0
+	})
+	if idx == 0 {
+		return nil
+	}
+	candidate := s[idx-1]
+	if kv.CompareBaseKeys(key, candidate.MaxKey()) > 0 {
+		return nil
+	}
+	return candidate
+}
+
+// l0GroupHasNoOtherOverlap reports whether the union range of group has no
+// overlap with any L0 table outside group. When true, the group can be safely
+// promoted to the next level via trivial move because nothing else in L0
+// shadows or extends its range.
+//
+// group is expected to be a set of L0 tables already chosen by the picker
+// (typically a contiguous overlapping batch). all is the full set of L0
+// tables, including group. Both are read without taking lh's mutex; callers
+// must already hold the appropriate level lock.
+func l0GroupHasNoOtherOverlap(group, all []*table) bool {
+	if len(group) == 0 {
+		return false
+	}
+
+	groupIDs := make(map[uint64]struct{}, len(group))
+	minKey := group[0].MinKey()
+	maxKey := group[0].MaxKey()
+	for _, t := range group {
+		if t == nil {
+			return false
+		}
+		groupIDs[t.fid] = struct{}{}
+		if kv.CompareBaseKeys(t.MinKey(), minKey) < 0 {
+			minKey = t.MinKey()
+		}
+		if kv.CompareBaseKeys(t.MaxKey(), maxKey) > 0 {
+			maxKey = t.MaxKey()
+		}
+	}
+
+	for _, t := range all {
+		if t == nil {
+			continue
+		}
+		if _, in := groupIDs[t.fid]; in {
+			continue
+		}
+		// Non-overlap iff t.MaxKey < group.MinKey or t.MinKey > group.MaxKey.
+		if kv.CompareBaseKeys(t.MaxKey(), minKey) < 0 {
+			continue
+		}
+		if kv.CompareBaseKeys(t.MinKey(), maxKey) > 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// l0CandidateTables returns up to one candidate table per sublevel whose
+// range covers key. The returned slice contains at most len(sublevels) entries
+// and may be empty if no sublevel covers the key.
+func l0CandidateTables(sublevels []l0Sublevel, key []byte) []*table {
+	if len(sublevels) == 0 {
+		return nil
+	}
+	out := make([]*table, 0, len(sublevels))
+	for _, sub := range sublevels {
+		if t := sub.candidate(key); t != nil {
+			out = append(out, t)
+		}
+	}
+	return out
 }
