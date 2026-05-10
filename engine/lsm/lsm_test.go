@@ -1081,7 +1081,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	lsm.levels.opt.WriteThrottleMaxRate = 512 << 20
 	l0 := lsm.levels.levels[0]
 	l0.tables = []*table.Table{{}, {}, {}}
-	lsm.levels.adjustThrottle()
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 1000 {
 		t.Fatalf("expected stop pressure=1000, got %d", got)
 	}
@@ -1089,7 +1089,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected stop rate=0, got %d", got)
 	}
 	l0.tables = []*table.Table{{}, {}}
-	lsm.levels.adjustThrottle()
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got == 0 || got >= 1000 {
 		t.Fatalf("expected slowdown pressure in (0,1000), got %d", got)
 	}
@@ -1097,7 +1097,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected slowdown rate > 0")
 	}
 	l0.tables = nil
-	lsm.levels.adjustThrottle()
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 0 {
 		t.Fatalf("expected clear pressure=0, got %d", got)
 	}
@@ -1115,8 +1115,8 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	//  the legacy Version.LogSegment/LogOffset diagnostic fields.
 	//  Recovery is per-shard via wal.Manager.Replay; the cache was dead.)
 
-	lsm.levels.recordCompactionMetrics(5 * time.Millisecond)
-	lastMs, maxMs, runs := lsm.levels.compactionDurations()
+	lsm.levels.compactor.recordCompactionMetrics(5 * time.Millisecond)
+	lastMs, maxMs, runs := lsm.levels.compactor.compactionDurations()
 	if runs == 0 || lastMs <= 0 || maxMs <= 0 {
 		t.Fatalf("unexpected compaction metrics: last=%f max=%f runs=%d", lastMs, maxMs, runs)
 	}
@@ -1142,7 +1142,7 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 	cd.top = []*table.Table{tables[0]}
 	cd.spec.ThisRange = getKeyRange(cd.top...)
 	cd.spec.NextRange = cd.spec.ThisRange
-	if err := lsm.levels.moveToLanding(cd); err != nil {
+	if err := lsm.levels.compactor.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
@@ -1157,10 +1157,10 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 		Level:       6,
 		Score:       5.0,
 		Adjusted:    5.0,
-		Target:      lsm.levels.levelTargets(),
+		Target:      lsm.levels.compactor.levelTargets(),
 		LandingMode: plan.LandingKeep,
 	}
-	if err := lsm.levels.doCompact(0, pri); err != nil {
+	if err := lsm.levels.compactor.doCompact(0, pri); err != nil {
 		t.Fatalf("landing merge compact failed: %v", err)
 	}
 
@@ -1239,7 +1239,7 @@ func TestLandingShardParallelSafety(t *testing.T) {
 	cd.top = []*table.Table{tables[0]}
 	cd.spec.ThisRange = getKeyRange(cd.top...)
 	cd.spec.NextRange = cd.spec.ThisRange
-	if err := lsm.levels.moveToLanding(cd); err != nil {
+	if err := lsm.levels.compactor.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
@@ -1248,10 +1248,10 @@ func TestLandingShardParallelSafety(t *testing.T) {
 		Level:       6,
 		Score:       6.0,
 		Adjusted:    6.0,
-		Target:      lsm.levels.levelTargets(),
+		Target:      lsm.levels.compactor.levelTargets(),
 		LandingMode: plan.LandingDrain,
 	}
-	if err := lsm.levels.doCompact(0, pri); err != nil {
+	if err := lsm.levels.compactor.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel landing compaction failed: %v", err)
 	}
 
@@ -1819,10 +1819,10 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	compactL0To := func(level int) {
 		t.Helper()
 		cd := buildCompactDef(lsm, 0, 0, level)
-		if ok := lsm.levels.fillTables(cd); !ok {
+		if ok := lsm.levels.compactor.fillTables(cd); !ok {
 			t.Fatalf("expected L0->L%d compaction plan", level)
 		}
-		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
+		if err := lsm.levels.compactor.runCompactDef(0, 0, *cd); err != nil {
 			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
 		}
 		require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))

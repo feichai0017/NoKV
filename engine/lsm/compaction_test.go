@@ -37,7 +37,7 @@ func TestCompactionMoveToLanding(t *testing.T) {
 	}
 
 	beforeLanding := cd.nextLevel.numLandingTables()
-	if err := lsm.levels.moveToLanding(cd); err != nil {
+	if err := lsm.levels.compactor.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 	afterLanding := cd.nextLevel.numLandingTables()
@@ -78,8 +78,8 @@ func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
 	cd.thisSize = tbl.Size()
 
 	beforeRef := tbl.Load()
-	require.True(t, lsm.levels.canMoveToNextLevel(cd))
-	require.NoError(t, lsm.levels.moveToNextLevel(cd))
+	require.True(t, lsm.levels.compactor.canMoveToNextLevel(cd))
+	require.NoError(t, lsm.levels.compactor.moveToNextLevel(cd))
 	require.Equal(t, beforeRef, tbl.Load())
 	require.Equal(t, 2, tbl.Level())
 
@@ -128,7 +128,7 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 		},
 	}
 
-	newTables, decr, err := lsm.levels.compactBuildTables(5, cd)
+	newTables, decr, err := lsm.levels.compactor.compactBuildTables(5, cd)
 	if err != nil {
 		t.Fatalf("compactBuildTables: %v", err)
 	}
@@ -469,7 +469,7 @@ func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToLanding(move); err != nil {
+	if err := lsm.levels.compactor.moveToLanding(move); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
@@ -481,14 +481,14 @@ func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	cd := buildCompactDef(lsm, 0, 6, 6)
 	cd.spec.LandingMode = plan.LandingDrain
 	cd.spec.StatsTag = "test-landing-drain"
-	if ok := lsm.levels.fillTablesLandingShard(cd, -1); !ok {
+	if ok := lsm.levels.compactor.fillTablesLandingShard(cd, -1); !ok {
 		t.Fatalf("fillTablesLandingShard failed for landing-drain path")
 	}
 	if len(cd.top) == 0 {
 		t.Fatalf("expected landing top tables for drain compaction")
 	}
 	before := tableRefSnapshot(cd.top)
-	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
+	if err := lsm.levels.compactor.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef landing-drain: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))
@@ -520,7 +520,7 @@ func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 	if move.nextLevel == nil {
 		move.nextLevel = lsm.levels.levels[6]
 	}
-	if err := lsm.levels.moveToLanding(move); err != nil {
+	if err := lsm.levels.compactor.moveToLanding(move); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
@@ -532,14 +532,14 @@ func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 	cd := buildCompactDef(lsm, 0, 6, 6)
 	cd.spec.LandingMode = plan.LandingKeep
 	cd.spec.StatsTag = "test-landing-keep"
-	if ok := lsm.levels.fillTablesLandingShard(cd, -1); !ok {
+	if ok := lsm.levels.compactor.fillTablesLandingShard(cd, -1); !ok {
 		t.Fatalf("fillTablesLandingShard failed for landing-keep path")
 	}
 	if len(cd.top) == 0 {
 		t.Fatalf("expected landing top tables for keep compaction")
 	}
 	before := tableRefSnapshot(cd.top)
-	if err := lsm.levels.runCompactDef(0, 6, *cd); err != nil {
+	if err := lsm.levels.compactor.runCompactDef(0, 6, *cd); err != nil {
 		t.Fatalf("runCompactDef landing-keep: %v", err)
 	}
 	require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))

@@ -109,14 +109,14 @@ func (cd *compactDef) unlockLevels() {
 }
 
 type scheduler struct {
-	owner     *levelManager
+	compactor *compactor
 	policy    *SchedulerPolicy
 	triggerCh chan struct{}
 	maxRuns   int
 	logger    *slog.Logger
 }
 
-func newScheduler(owner *levelManager, maxRuns int, mode string, logger *slog.Logger) *scheduler {
+func newScheduler(c *compactor, maxRuns int, mode string, logger *slog.Logger) *scheduler {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
@@ -126,7 +126,7 @@ func newScheduler(owner *levelManager, maxRuns int, mode string, logger *slog.Lo
 		logger = slog.Default()
 	}
 	cr := &scheduler{
-		owner:     owner,
+		compactor: c,
 		policy:    NewSchedulerPolicy(mode),
 		triggerCh: make(chan struct{}, 16),
 		maxRuns:   maxRuns,
@@ -174,26 +174,26 @@ func (cr *scheduler) runCycle(id int) {
 	ranAny := false
 	for range cr.maxRuns {
 		if id == 0 {
-			cr.owner.adjustThrottle()
+			cr.compactor.adjustThrottle()
 		}
 		if !cr.runOnce(id) {
 			break
 		}
 		ranAny = true
 		if id == 0 {
-			cr.owner.adjustThrottle()
+			cr.compactor.adjustThrottle()
 		}
-		if !cr.owner.needsCompaction() {
+		if !cr.compactor.needsCompaction() {
 			break
 		}
 	}
-	if ranAny && cr.owner.needsCompaction() {
+	if ranAny && cr.compactor.needsCompaction() {
 		cr.Trigger()
 	}
 }
 
 func (cr *scheduler) runOnce(id int) bool {
-	prios := cr.owner.pickCompactLevels()
+	prios := cr.compactor.pickCompactLevels()
 	prios = cr.policy.Arrange(id, prios)
 	for _, p := range prios {
 		if id == 0 && p.Level == 0 {
@@ -214,7 +214,7 @@ func (cr *scheduler) RunOnce(id int) bool {
 
 func (cr *scheduler) run(id int, p plan.Priority) bool {
 	start := time.Now()
-	err := cr.owner.doCompact(id, p)
+	err := cr.compactor.doCompact(id, p)
 	cr.policy.Observe(FeedbackEvent{
 		WorkerID: id,
 		Priority: p,
@@ -234,127 +234,6 @@ func (cr *scheduler) run(id int, p plan.Priority) bool {
 func (lsm *LSM) newCompactStatus() *plan.State {
 	return plan.NewState(lsm.option.MaxLevelNum)
 }
-
-// adjustThrottle updates write admission state using a two-stage model:
-// slowdown (pace writes) and stop (block writes). Hysteresis is applied to
-// avoid oscillation under heavy compaction pressure.
-func (lm *levelManager) adjustThrottle() {
-	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
-		return
-	}
-	l0Tables := lm.levels[0].numTables()
-	_, maxScore := lm.compactionStats()
-
-	l0Slow := lm.opt.L0SlowdownWritesTrigger
-	l0Stop := lm.opt.L0StopWritesTrigger
-	l0Resume := lm.opt.L0ResumeWritesTrigger
-
-	scoreSlow := lm.opt.CompactionSlowdownTrigger
-	scoreStop := lm.opt.CompactionStopTrigger
-	scoreResume := lm.opt.CompactionResumeTrigger
-
-	stopCond := l0Tables >= l0Stop
-	slowCond := l0Tables >= l0Slow || maxScore >= scoreSlow
-	resumeCond := l0Tables <= l0Resume && maxScore <= scoreResume
-
-	cur := lm.lsm.ThrottleState()
-	target := cur
-	switch cur {
-	case WriteThrottleStop:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if slowCond {
-			target = WriteThrottleSlowdown
-		} else if resumeCond {
-			target = WriteThrottleNone
-		}
-	case WriteThrottleSlowdown:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if resumeCond {
-			target = WriteThrottleNone
-		}
-	default:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if slowCond {
-			target = WriteThrottleSlowdown
-		} else {
-			target = WriteThrottleNone
-		}
-	}
-	l0Pressure := normalizedThrottlePressure(float64(l0Tables), float64(l0Slow), float64(l0Stop))
-	scorePressure := normalizedThrottlePressure(maxScore, scoreSlow, scoreStop)
-	pressure := max(l0Pressure, scorePressure)
-	switch target {
-	case WriteThrottleNone:
-		pressure = 0
-	case WriteThrottleStop:
-		pressure = 1000
-	case WriteThrottleSlowdown:
-		if pressure == 0 {
-			pressure = 1
-		}
-	}
-	rate := uint64(0)
-	if target == WriteThrottleSlowdown {
-		rate = throttleRateForPressure(
-			uint32(pressure),
-			lm.opt.WriteThrottleMinRate,
-			lm.opt.WriteThrottleMaxRate,
-		)
-	}
-	lm.lsm.throttle.Apply(target, uint32(pressure), rate)
-}
-
-func normalizedThrottlePressure(value, slowdown, stop float64) int {
-	if stop <= slowdown {
-		if value >= stop {
-			return 1000
-		}
-		return 0
-	}
-	if value <= slowdown {
-		return 0
-	}
-	if value >= stop {
-		return 1000
-	}
-	ratio := (value - slowdown) / (stop - slowdown)
-	if ratio <= 0 {
-		return 0
-	}
-	if ratio >= 1 {
-		return 1000
-	}
-	return int(ratio*1000 + 0.5)
-}
-
-func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
-	if pressure == 0 || maxRate <= 0 {
-		return 0
-	}
-	if minRate <= 0 {
-		minRate = maxRate
-	}
-	if maxRate < minRate {
-		maxRate = minRate
-	}
-	ratio := float64(pressure) / 1000
-	if ratio < 0 {
-		ratio = 0
-	}
-	if ratio > 1 {
-		ratio = 1
-	}
-	curve := ratio * ratio
-	rate := float64(maxRate) - (float64(maxRate-minRate) * curve)
-	if rate < float64(minRate) {
-		rate = float64(minRate)
-	}
-	return uint64(rate + 0.5)
-}
-
 const (
 	// PolicyLeveled keeps the default leveled-style execution ordering.
 	PolicyLeveled = "leveled"

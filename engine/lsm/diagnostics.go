@@ -69,8 +69,8 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		diag.Compaction.AlertThreshold = lsm.option.CompactionValueAlertThreshold
 	}
 	if lm := lsm.levels; lm != nil {
-		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactionStats()
-		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactionDurations()
+		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactor.compactionStats()
+		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactor.compactionDurations()
 		diag.RangeFilter = lm.rangeFilterDiagnostics()
 		diag.Levels = lm.levelMetricsSnapshot()
 		diag.Cache = lm.cacheMetrics()

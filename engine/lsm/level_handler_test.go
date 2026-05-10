@@ -235,7 +235,7 @@ func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
 	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = a.Size()
 
-	require.True(t, lsm.levels.canMoveToNextLevel(cd),
+	require.True(t, lsm.levels.compactor.canMoveToNextLevel(cd),
 		"a single L0 table whose keyrange does not overlap any other L0 table should trivial-move")
 }
 
@@ -260,7 +260,7 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = b.Size()
 
-	require.False(t, lsm.levels.canMoveToNextLevel(cd),
+	require.False(t, lsm.levels.compactor.canMoveToNextLevel(cd),
 		"trivial move must refuse a partial L0 group whose range overlaps untouched L0 tables")
 }
 

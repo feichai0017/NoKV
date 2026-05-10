@@ -262,6 +262,6 @@ func TestCompactionPacerBypassesWhenL0IsNearStall(t *testing.T) {
 	}
 	lm.compactor = &compactor{lm: lm, pacer: pacer.New(100)}
 
-	require.True(t, lm.compactionPacerBypassActive())
-	require.Nil(t, lm.compactionPacerForBuild())
+	require.True(t, lm.compactor.compactionPacerBypassActive())
+	require.Nil(t, lm.compactor.compactionPacerForBuild())
 }
