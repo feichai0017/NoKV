@@ -60,8 +60,7 @@ func BenchmarkBufferSearch(b *testing.B) {
 	probe := ikey("k00128", 0)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var maxV uint64
-		entry, err := buf.Search(probe, &maxV)
+		entry, _, err := buf.Search(probe, 0)
 		if err == nil && entry != nil {
 			entry.DecrRef()
 		}

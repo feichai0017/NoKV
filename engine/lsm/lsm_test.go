@@ -243,7 +243,7 @@ func TestHitStorage(t *testing.T) {
 		if len(tables) == 0 {
 			t.Fatalf("expected L0 tables for bloom test")
 		}
-		v, err := tables[0].Search(ee.Key, &ee.Version)
+		v, _, err := tables[0].Search(ee.Key, ee.Version)
 		utils.CondPanic(v != nil, fmt.Errorf("[hitBloom] v != nil"))
 		utils.CondPanic(err != utils.ErrKeyNotFound, fmt.Errorf("[hitBloom] err != utils.ErrKeyNotFound"))
 	}
@@ -418,7 +418,7 @@ func TestLandingSearch(t *testing.T) {
 	var buf landingBuffer
 	buf.Add(tbl)
 
-	found, err := buf.Search(key, nil)
+	found, _, err := buf.Search(key, 0)
 	if err != nil {
 		t.Fatalf("landing search: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestLandingSearch(t *testing.T) {
 	}
 	found.DecrRef()
 
-	_, err = buf.Search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
+	_, _, err = buf.Search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), 0)
 	if err != utils.ErrKeyNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -452,7 +452,7 @@ func TestLandingSearchPrefersLatestVersion(t *testing.T) {
 	buf.Add(tblNew)
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
-	found, err := buf.Search(key, nil)
+	found, _, err := buf.Search(key, 0)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
@@ -579,8 +579,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	lh := &levelHandler{levelNum: 3, tables: []*table.Table{tbl}}
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 
-	maxVer := uint64(5)
-	got, err := lh.searchLNSST(key, &maxVer)
+	got, _, err := lh.searchLNSST(key, 5)
 	if err != utils.ErrKeyNotFound || got != nil {
 		t.Fatalf("expected not found, got err=%v entry=%v", err, got)
 	}
@@ -598,14 +597,14 @@ func TestLevelSearchLandingAndLN(t *testing.T) {
 
 	lh := &levelHandler{levelNum: 3}
 	lh.landing.Add(tbl)
-	found, err := lh.landing.Search(key, nil)
+	found, _, err := lh.landing.Search(key, 0)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
 	found.DecrRef()
 
 	lh.tables = []*table.Table{tbl}
-	found, err = lh.searchLNSST(key, nil)
+	found, _, err = lh.searchLNSST(key, 0)
 	if err != nil || found == nil {
 		t.Fatalf("level search err=%v entry=%v", err, found)
 	}

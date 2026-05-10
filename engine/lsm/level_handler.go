@@ -216,12 +216,15 @@ func (lh *levelHandler) get(key []byte) (*kv.Entry, error) {
 		best   *kv.Entry
 		maxVer uint64
 	)
-	if entry, err := lh.landing.Search(key, &maxVer); err == nil {
+	entry, newMax, err := lh.landing.Search(key, maxVer)
+	if err == nil {
 		best = entry
+		maxVer = newMax
 	} else if err != utils.ErrKeyNotFound {
 		return nil, err
 	}
-	if entry, err := lh.searchLNSST(key, &maxVer); err == nil {
+	entry, _, err = lh.searchLNSST(key, maxVer)
+	if err == nil {
 		if best != nil {
 			best.DecrRef()
 		}
@@ -291,11 +294,13 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		if tbl.MaxVersionVal() <= version {
 			continue
 		}
-		if entry, err := tbl.Search(key, &version); err == nil {
+		entry, newVer, err := tbl.Search(key, version)
+		if err == nil {
 			if best != nil {
 				best.DecrRef()
 			}
 			best = entry
+			version = newVer
 			continue
 		} else if err != utils.ErrKeyNotFound {
 			if best != nil {
@@ -310,11 +315,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	if maxVersion == nil {
-		var tmp uint64
-		maxVersion = &tmp
-	}
+func (lh *levelHandler) searchLNSST(key []byte, maxVersion uint64) (*kv.Entry, uint64, error) {
 	if lh.levelNum > 0 && lh.filter.SpanCount() >= rangefilter.MinSpanCount && lh.filter.NonOverlapping() {
 		total := len(lh.tables)
 		tbl, ok := lh.filter.TableForPoint(key)
@@ -326,48 +327,45 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 			lh.lm.recordRangeFilterPoint(total, candidates, false)
 		}
 		if !ok {
-			return nil, utils.ErrKeyNotFound
+			return nil, maxVersion, utils.ErrKeyNotFound
 		}
-		if tbl.MaxVersionVal() <= *maxVersion {
-			return nil, utils.ErrKeyNotFound
+		if tbl.MaxVersionVal() <= maxVersion {
+			return nil, maxVersion, utils.ErrKeyNotFound
 		}
 		return tbl.SearchExactCandidate(key, maxVersion)
 	}
 	tables := lh.selectTablesForKey(key, true)
 	if len(tables) == 0 {
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVersion, utils.ErrKeyNotFound
 	}
 	var best *kv.Entry
 	for _, tbl := range tables {
 		if tbl == nil {
 			continue
 		}
-		if tbl.MaxVersionVal() <= *maxVersion {
+		if tbl.MaxVersionVal() <= maxVersion {
 			continue
 		}
-		var (
-			entry *kv.Entry
-			err   error
-		)
-		entry, err = tbl.Search(key, maxVersion)
+		entry, newMax, err := tbl.Search(key, maxVersion)
 		if err == nil {
 			if best != nil {
 				best.DecrRef()
 			}
 			best = entry
+			maxVersion = newMax
 			continue
 		}
 		if err != utils.ErrKeyNotFound {
 			if best != nil {
 				best.DecrRef()
 			}
-			return nil, err
+			return nil, maxVersion, err
 		}
 	}
 	if best != nil {
-		return best, nil
+		return best, maxVersion, nil
 	}
-	return nil, utils.ErrKeyNotFound
+	return nil, maxVersion, utils.ErrKeyNotFound
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table.Table {
