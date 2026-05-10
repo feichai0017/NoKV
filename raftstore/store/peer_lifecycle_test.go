@@ -10,6 +10,7 @@ import (
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 	"github.com/stretchr/testify/require"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
@@ -216,8 +217,8 @@ func TestStoreInstallRegionSnapshotRejectsCorruptPayloadWithoutHostingPeer(t *te
 }
 
 func TestStorePeerLifecycle(t *testing.T) {
-	router := NewRouter()
-	rs := NewStore(Config{Router: router})
+	rt := router.New()
+	rs := NewStore(Config{Router: rt})
 
 	cfg := &peer.Config{
 		RaftConfig: myraft.Config{
@@ -244,12 +245,12 @@ func TestStorePeerLifecycle(t *testing.T) {
 	require.Len(t, metas, 1)
 	require.Equal(t, uint64(100), metas[0].ID)
 
-	require.NoError(t, router.SendTick(peer.ID()))
-	require.NoError(t, router.BroadcastTick())
-	require.NoError(t, router.BroadcastFlush())
+	require.NoError(t, rt.SendTick(peer.ID()))
+	require.NoError(t, rt.BroadcastTick())
+	require.NoError(t, rt.BroadcastFlush())
 
 	rs.StopPeer(peer.ID())
-	_, ok := router.Peer(peer.ID())
+	_, ok := rt.Peer(peer.ID())
 	require.False(t, ok)
 }
 

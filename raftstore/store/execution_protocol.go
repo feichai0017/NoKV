@@ -442,11 +442,11 @@ func (s *Store) TopologyExecutions() []TopologyExecution {
 // RestartStatus returns the current store-local recovery posture derived from
 // local metadata and raft replay pointers.
 func (s *Store) RestartStatus() RestartStatus {
-	if s == nil || s.regionMgr() == nil || s.regionMgr().localMeta == nil {
+	if s == nil || s.regions == nil || s.regions.LocalMeta() == nil {
 		return RestartStatus{State: RestartStateReady}
 	}
-	regions := s.regionMgr().localMeta.Snapshot()
-	pointers := s.regionMgr().localMeta.RaftPointerSnapshot()
+	regions := s.regions.LocalMeta().Snapshot()
+	pointers := s.regions.LocalMeta().RaftPointerSnapshot()
 	out := RestartStatus{
 		State:          RestartStateReady,
 		RegionCount:    len(regions),
@@ -468,9 +468,9 @@ func (s *Store) RestartStatus() RestartStatus {
 			out.MissingRaftPointer = missing
 		}
 	}
-	out.PendingRootEventCount = len(s.regionMgr().localMeta.PendingRootEvents())
-	out.BlockedRootEventCount = len(s.regionMgr().localMeta.BlockedRootEvents())
-	out.PendingSchedulerOpCount = len(s.regionMgr().localMeta.PendingSchedulerOperations())
+	out.PendingRootEventCount = len(s.regions.LocalMeta().PendingRootEvents())
+	out.BlockedRootEventCount = len(s.regions.LocalMeta().BlockedRootEvents())
+	out.PendingSchedulerOpCount = len(s.regions.LocalMeta().PendingSchedulerOperations())
 	if out.PendingRootEventCount > 0 || out.BlockedRootEventCount > 0 || out.PendingSchedulerOpCount > 0 {
 		out.State = RestartStateDegraded
 	}

@@ -1,13 +1,15 @@
 package lsm
 
 import (
+	"sync/atomic"
+
 	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/metrics"
 )
 
-// CompactionDiagnostics groups compaction runtime counters for diagnostics and
-// observability consumers. It is intentionally a snapshot view, not a control
-// surface.
+// CompactionDiagnostics groups compaction runtime counters for diagnostics
+// and observability consumers.
 type CompactionDiagnostics struct {
 	Backlog        int64
 	MaxScore       float64
@@ -18,6 +20,7 @@ type CompactionDiagnostics struct {
 	AlertThreshold float64
 }
 
+// RangeFilterDiagnostics groups range-filter hit/miss counters.
 type RangeFilterDiagnostics struct {
 	PointCandidates   uint64
 	PointPruned       uint64
@@ -26,9 +29,9 @@ type RangeFilterDiagnostics struct {
 	Fallbacks         uint64
 }
 
-// Diagnostics exposes a stable read-only snapshot of LSM internals for
-// observability code. It keeps runtime metrics grouped behind one API instead
-// of leaking internal structures through many top-level getters.
+// Diagnostics is a stable read-only snapshot of LSM internals for
+// observability code. It keeps runtime metrics grouped behind one API
+// instead of leaking internal structures through many top-level getters.
 type Diagnostics struct {
 	Entries     int64
 	Flush       metrics.FlushMetrics
@@ -45,7 +48,7 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		return Diagnostics{}
 	}
 	diag := Diagnostics{
-		MaxVersion: lsm.MaxVersion(),
+		MaxVersion: lsm.maxVersion(),
 	}
 	if tables, release := lsm.getMemTables(); tables != nil {
 		if release != nil {
@@ -58,35 +61,22 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 			diag.Entries += countMemIndexEntries(mt.index)
 		}
 	}
-	if lsm.flushQueue != nil {
-		diag.Flush = lsm.flushQueue.stats()
+	if lsm.flushPool != nil {
+		diag.Flush = lsm.flushPool.Stats()
 	}
 	if lsm.option != nil {
 		diag.Compaction.ValueWeight = lsm.option.CompactionValueWeight
 		diag.Compaction.AlertThreshold = lsm.option.CompactionValueAlertThreshold
 	}
 	if lm := lsm.levels; lm != nil {
-		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactionStats()
-		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactionDurations()
+		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactor.priorityStats()
+		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactor.runDurations()
 		diag.RangeFilter = lm.rangeFilterDiagnostics()
 		diag.Levels = lm.levelMetricsSnapshot()
 		diag.Cache = lm.cacheMetrics()
 		diag.Entries += lm.entryCount()
 	}
 	return diag
-}
-
-func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
-	if lm == nil {
-		return RangeFilterDiagnostics{}
-	}
-	return RangeFilterDiagnostics{
-		PointCandidates:   lm.rangeFilter.pointCandidates.Load(),
-		PointPruned:       lm.rangeFilter.pointPruned.Load(),
-		BoundedCandidates: lm.rangeFilter.boundedCandidates.Load(),
-		BoundedPruned:     lm.rangeFilter.boundedPruned.Load(),
-		Fallbacks:         lm.rangeFilter.fallbacks.Load(),
-	}
 }
 
 func countMemIndexEntries(idx memIndex) int64 {
@@ -104,6 +94,63 @@ func countMemIndexEntries(idx memIndex) int64 {
 		count++
 	}
 	return count
+}
+
+// rangeFilterMetrics is the in-memory hit/miss counter set used to populate
+// RangeFilterDiagnostics.
+type rangeFilterMetrics struct {
+	pointCandidates   atomic.Uint64
+	pointPruned       atomic.Uint64
+	boundedCandidates atomic.Uint64
+	boundedPruned     atomic.Uint64
+	fallbacks         atomic.Uint64
+}
+
+func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
+	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
+	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
+	if lm == nil {
+		return RangeFilterDiagnostics{}
+	}
+	return RangeFilterDiagnostics{
+		PointCandidates:   lm.rangeFilter.pointCandidates.Load(),
+		PointPruned:       lm.rangeFilter.pointPruned.Load(),
+		BoundedCandidates: lm.rangeFilter.boundedCandidates.Load(),
+		BoundedPruned:     lm.rangeFilter.boundedPruned.Load(),
+		Fallbacks:         lm.rangeFilter.fallbacks.Load(),
+	}
 }
 
 func (lm *levelManager) entryCount() int64 {
@@ -125,13 +172,13 @@ func (lm *levelManager) entryCount() int64 {
 	return total
 }
 
-func (lh *levelHandler) tablesSnapshot() []*table {
+func (lh *levelHandler) tablesSnapshot() []*table.Table {
 	if lh == nil {
 		return nil
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	out := make([]*table, len(lh.tables))
+	out := make([]*table.Table, len(lh.tables))
 	copy(out, lh.tables)
 	return out
 }

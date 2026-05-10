@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/tombstone"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
@@ -94,28 +93,8 @@ func (m *memTable) close() error {
 	return nil
 }
 
-// Set inserts one entry into the memtable and appends it to WAL.
-func (m *memTable) Set(entry *kv.Entry) error {
-	if m == nil {
-		return ErrMemtableNotInitialized
-	}
-	if entry == nil || len(entry.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	info, err := m.shard.wal.AppendEntry(wal.DurabilityFlushed, entry)
-	if err != nil {
-		return err
-	}
-	m.walSize.Add(int64(info.Length) + 8)
-	if m.index != nil {
-		m.index.Add(entry)
-		m.trackRangeTombstone(entry)
-	}
-	return nil
-}
-
 // Get reads key from the memtable index and returns a pooled entry wrapper.
-func (m *memTable) Get(key []byte) (*kv.Entry, error) {
+func (m *memTable) get(key []byte) (*kv.Entry, error) {
 	var (
 		foundKey []byte
 		vs       kv.ValueStruct
@@ -127,7 +106,7 @@ func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 }
 
 // Size returns the memory footprint reported by the backing mem index.
-func (m *memTable) Size() int64 {
+func (m *memTable) size() int64 {
 	if m == nil || m.index == nil {
 		return 0
 	}
@@ -141,11 +120,8 @@ func (m *memTable) applyBatch(entries []*kv.Entry, walBytes int64) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	for _, entry := range entries {
-		if entry == nil || len(entry.Key) == 0 {
-			return utils.ErrEmptyKey
-		}
-	}
+	// Entries are pre-validated by validateWriteEntries on the write path; no
+	// re-check here.
 	if walBytes > 0 {
 		m.walSize.Add(walBytes)
 	}
@@ -212,7 +188,7 @@ func (lsm *LSM) recoverShard(s *lsmShard) (*memTable, []*memTable, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if mt.Size() == 0 {
+		if mt.size() == 0 {
 			continue
 		}
 		tables = append(tables, mt)
@@ -295,15 +271,15 @@ func (mt *memTable) canReserve(need, limit int64) bool {
 }
 
 // reference counting helpers, delegate to the backing index.
-func (mt *memTable) IncrRef() {
+func (mt *memTable) incrRef() {
 	if mt == nil || mt.index == nil {
 		return
 	}
 	mt.index.IncrRef()
 }
 
-// DecrRef decrements the underlying mem index reference count.
-func (mt *memTable) DecrRef() {
+// decrRef decrements the underlying mem index reference count.
+func (mt *memTable) decrRef() {
 	if mt == nil || mt.index == nil {
 		return
 	}
@@ -383,4 +359,89 @@ func newMemIndex(opt *Options) memIndex {
 	default:
 		return index.NewART(arenaSizeFor(opt.MemTableSize))
 	}
+}
+
+// NewIterators builds iterators over mutable/immutable memtables across all
+// shards plus the SST levels. Per-shard ordering is preserved (active first,
+// then immutables newest-to-oldest); cross-shard ordering is resolved by
+// MVCC timestamps at the merge layer.
+func (lsm *LSM) NewIterators(opt *index.Options) []index.Iterator {
+	iters := make([]index.Iterator, 0)
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		mem := s.memTable
+		immutables := append([]*memTable(nil), s.immutables...)
+		s.lock.RUnlock()
+		if mem != nil {
+			iters = append(iters, mem.newIterator(opt))
+		}
+		for _, imm := range immutables {
+			if imm == nil {
+				continue
+			}
+			iters = append(iters, imm.newIterator(opt))
+		}
+	}
+	iters = append(iters, lsm.levels.iterators(opt)...)
+	return iters
+}
+
+// memIterator wraps the underlying index iterator with nil-safety so
+// callers can iterate empty/disabled memtables without panicking.
+type memIterator struct {
+	innerIter index.Iterator
+}
+
+// NewIterator creates an iterator over entries stored in this memtable.
+func (m *memTable) newIterator(opt *index.Options) index.Iterator {
+	if m == nil || m.index == nil {
+		return nil
+	}
+	inner := m.index.NewIterator(opt)
+	if inner == nil {
+		return nil
+	}
+	return &memIterator{innerIter: inner}
+}
+
+func (iter *memIterator) Next() {
+	if iter.innerIter == nil {
+		return
+	}
+	iter.innerIter.Next()
+}
+
+func (iter *memIterator) Valid() bool {
+	if iter.innerIter == nil {
+		return false
+	}
+	return iter.innerIter.Valid()
+}
+
+func (iter *memIterator) Rewind() {
+	if iter.innerIter == nil {
+		return
+	}
+	iter.innerIter.Rewind()
+}
+
+func (iter *memIterator) Item() index.Item {
+	if iter.innerIter == nil {
+		return nil
+	}
+	return iter.innerIter.Item()
+}
+
+func (iter *memIterator) Close() error {
+	if iter.innerIter == nil {
+		return nil
+	}
+	return iter.innerIter.Close()
+}
+
+func (iter *memIterator) Seek(key []byte) {
+	if iter.innerIter == nil {
+		return
+	}
+	iter.innerIter.Seek(key)
 }

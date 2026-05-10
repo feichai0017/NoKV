@@ -59,21 +59,50 @@ type Client interface {
 	Close() error
 }
 
-// GRPCClient wraps the generated FSMetadata client with typed fsmeta records.
+// ClientConfig controls the typed client assembly around the gRPC transport.
+type ClientConfig struct {
+	LookupCache        LookupCacheConfig
+	DisableLookupCache bool
+}
+
+// GRPCClient wraps the generated FSMetadata client with typed fsmeta records
+// and the default client-side components.
 type GRPCClient struct {
-	conn *grpc.ClientConn
-	rpc  fsmetapb.FSMetadataClient
+	conn   *grpc.ClientConn
+	rpc    fsmetapb.FSMetadataClient
+	lookup *LookupCache
 }
 
 // New wraps an existing generated FSMetadata client.
 func New(rpc fsmetapb.FSMetadataClient) *GRPCClient {
-	return &GRPCClient{rpc: rpc}
+	cli, _ := NewWithConfig(rpc, ClientConfig{})
+	return cli
+}
+
+// NewWithConfig wraps an existing generated FSMetadata client with explicit
+// client-side component configuration.
+func NewWithConfig(rpc fsmetapb.FSMetadataClient, cfg ClientConfig) (*GRPCClient, error) {
+	lookup, err := newLookupCacheForClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &GRPCClient{rpc: rpc, lookup: lookup}, nil
 }
 
 // NewGRPCClient dials one FSMetadata endpoint and returns a typed client.
 func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
+	return NewGRPCClientWithConfig(ctx, addr, ClientConfig{}, dialOpts...)
+}
+
+// NewGRPCClientWithConfig dials one FSMetadata endpoint and returns a typed
+// client with explicit client-side component configuration.
+func NewGRPCClientWithConfig(ctx context.Context, addr string, cfg ClientConfig, dialOpts ...grpc.DialOption) (*GRPCClient, error) {
 	if addr == "" {
 		return nil, errAddressRequired
+	}
+	lookup, err := newLookupCacheForClient(cfg)
+	if err != nil {
+		return nil, err
 	}
 	opts := normalizeDialOptions(dialOpts)
 	conn, err := grpc.NewClient(addr, opts...)
@@ -85,9 +114,26 @@ func NewGRPCClient(ctx context.Context, addr string, dialOpts ...grpc.DialOption
 		return nil, err
 	}
 	return &GRPCClient{
-		conn: conn,
-		rpc:  fsmetapb.NewFSMetadataClient(conn),
+		conn:   conn,
+		rpc:    fsmetapb.NewFSMetadataClient(conn),
+		lookup: lookup,
 	}, nil
+}
+
+func newLookupCacheForClient(cfg ClientConfig) (*LookupCache, error) {
+	if cfg.DisableLookupCache {
+		return nil, nil
+	}
+	return NewLookupCache(cfg.LookupCache)
+}
+
+// LookupCacheStats returns a point-in-time copy of the default lookup cache
+// counters. It returns zero counters when lookup caching is disabled.
+func (c *GRPCClient) LookupCacheStats() LookupCacheStats {
+	if c == nil || c.lookup == nil {
+		return LookupCacheStats{}
+	}
+	return c.lookup.Stats()
 }
 
 func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
@@ -98,10 +144,12 @@ func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsme
 	if err != nil {
 		return fsmeta.CreateResult{}, translateRPCError(err)
 	}
-	return fsmeta.CreateResult{
+	result := fsmeta.CreateResult{
 		Dentry: dentryFromProto(resp.GetDentry()),
 		Inode:  inodeFromProto(resp.GetInode()),
-	}, nil
+	}
+	c.lookup.Put(req.Mount, result.Dentry)
+	return result, nil
 }
 
 func (c *GRPCClient) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
@@ -119,11 +167,16 @@ func (c *GRPCClient) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsme
 	if err := c.requireRPC(); err != nil {
 		return fsmeta.DentryRecord{}, err
 	}
+	if record, ok := c.lookup.Get(req.Mount, req.Parent, req.Name); ok {
+		return record, nil
+	}
 	resp, err := c.rpc.Lookup(ctx, lookupRequestToProto(req))
 	if err != nil {
 		return fsmeta.DentryRecord{}, translateRPCError(err)
 	}
-	return dentryFromProto(resp.GetDentry()), nil
+	record := dentryFromProto(resp.GetDentry())
+	c.lookup.Put(req.Mount, record)
+	return record, nil
 }
 
 func (c *GRPCClient) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
@@ -137,6 +190,9 @@ func (c *GRPCClient) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]
 	out := make([]fsmeta.DentryRecord, 0, len(resp.GetEntries()))
 	for _, entry := range resp.GetEntries() {
 		out = append(out, dentryFromProto(entry))
+	}
+	if req.SnapshotVersion == 0 {
+		c.lookup.PutMany(req.Mount, out)
 	}
 	return out, nil
 }
@@ -152,6 +208,11 @@ func (c *GRPCClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest)
 	out := make([]fsmeta.DentryAttrPair, 0, len(resp.GetEntries()))
 	for _, entry := range resp.GetEntries() {
 		out = append(out, pairFromProto(entry))
+	}
+	if req.SnapshotVersion == 0 {
+		for _, pair := range out {
+			c.lookup.Put(req.Mount, pair.Dentry)
+		}
 	}
 	return out, nil
 }
@@ -225,16 +286,42 @@ func (c *GRPCClient) Rename(ctx context.Context, req fsmeta.RenameRequest) error
 	if err := c.requireRPC(); err != nil {
 		return err
 	}
+	from := lookupCacheKey{mount: req.Mount, parent: req.FromParent, name: req.FromName}
+	to := lookupCacheKey{mount: req.Mount, parent: req.ToParent, name: req.ToName}
+	record, hadSource := c.lookup.peek(from)
 	_, err := c.rpc.Rename(ctx, renameRequestToProto(req))
-	return translateRPCError(err)
+	if err != nil {
+		return translateRPCError(err)
+	}
+	c.lookup.invalidate(from)
+	c.lookup.invalidate(to)
+	if hadSource {
+		record.Parent = req.ToParent
+		record.Name = req.ToName
+		c.lookup.Put(req.Mount, record)
+	}
+	return nil
 }
 
 func (c *GRPCClient) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRequest) error {
 	if err := c.requireRPC(); err != nil {
 		return err
 	}
+	from := lookupCacheKey{mount: req.Mount, parent: req.FromParent, name: req.FromName}
+	to := lookupCacheKey{mount: req.Mount, parent: req.ToParent, name: req.ToName}
+	record, hadSource := c.lookup.peek(from)
 	_, err := c.rpc.RenameSubtree(ctx, renameSubtreeRequestToProto(req))
-	return translateRPCError(err)
+	if err != nil {
+		return translateRPCError(err)
+	}
+	c.lookup.invalidate(from)
+	c.lookup.invalidate(to)
+	if hadSource {
+		record.Parent = req.ToParent
+		record.Name = req.ToName
+		c.lookup.Put(req.Mount, record)
+	}
+	return nil
 }
 
 func (c *GRPCClient) Link(ctx context.Context, req fsmeta.LinkRequest) error {
@@ -242,7 +329,11 @@ func (c *GRPCClient) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	_, err := c.rpc.Link(ctx, linkRequestToProto(req))
-	return translateRPCError(err)
+	if err != nil {
+		return translateRPCError(err)
+	}
+	c.lookup.Invalidate(req.Mount, req.ToParent, req.ToName)
+	return nil
 }
 
 func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
@@ -250,7 +341,11 @@ func (c *GRPCClient) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error
 		return err
 	}
 	_, err := c.rpc.Unlink(ctx, unlinkRequestToProto(req))
-	return translateRPCError(err)
+	if err != nil {
+		return translateRPCError(err)
+	}
+	c.lookup.Invalidate(req.Mount, req.Parent, req.Name)
+	return nil
 }
 
 func (c *GRPCClient) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
@@ -380,6 +475,9 @@ func (s *WatchStream) Close() error {
 
 // Close closes the underlying connection when this client owns one.
 func (c *GRPCClient) Close() error {
+	if c != nil && c.lookup != nil {
+		c.lookup.Clear()
+	}
 	if c == nil || c.conn == nil {
 		return nil
 	}

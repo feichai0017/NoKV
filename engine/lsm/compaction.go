@@ -1,31 +1,122 @@
 package lsm
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/rand"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/utils"
+	"github.com/feichai0017/NoKV/engine/lsm/plan"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 )
 
-type compaction struct {
-	owner     *levelManager
+// compactDef carries one in-flight compaction's executable state. It binds a
+// pure plan.Plan (from the plan subpackage) to live tables and level handlers
+// for the duration of one compaction run.
+//
+// Compaction flow: the picker chooses a Priority, the planner produces a
+// plan.Plan from snapshot table metadata, then the executor binds that Plan
+// into a compactDef so it can resolve table IDs back to live *table.Table handles
+// and drive the merge.
+type compactDef struct {
+	compactorId int
+	spec        plan.Plan
+	thisLevel   *levelHandler
+	nextLevel   *levelHandler
+
+	top []*table.Table
+	bot []*table.Table
+
+	splits []plan.KeyRange
+
+	thisSize int64
+
+	adjusted float64
+}
+
+// targetFileSize returns the per-file size budget configured for the compaction
+// destination. SSTable builders use this to know when to flush the current
+// builder and start a new file.
+func (cd *compactDef) targetFileSize() int64 {
+	return cd.fileSize(cd.spec.ThisLevel)
+}
+
+// fileSize returns the per-file size budget for the requested level. Returns
+// zero when level is neither this nor next, so callers can detect mis-routed
+// queries explicitly.
+func (cd *compactDef) fileSize(level int) int64 {
+	switch level {
+	case cd.spec.ThisLevel:
+		return cd.spec.ThisFileSize
+	case cd.spec.NextLevel:
+		return cd.spec.NextFileSize
+	default:
+		return 0
+	}
+}
+
+// stateEntry derives the conflict-state entry registered with plan.State so
+// concurrent compactors can detect overlap by table id and key range.
+func (cd *compactDef) stateEntry() plan.StateEntry {
+	return cd.spec.StateEntry(cd.thisSize)
+}
+
+// setNextLevel binds the destination level handler for the compaction and
+// updates the embedded plan.Plan with the level's per-file size target.
+// Passing a nil next leaves the embedded plan untouched.
+func (cd *compactDef) setNextLevel(t plan.Targets, next *levelHandler) {
+	cd.nextLevel = next
+	if next == nil {
+		return
+	}
+	cd.spec.NextLevel = next.levelNum
+	cd.spec.NextFileSize = t.FileSizeForLevel(next.levelNum)
+}
+
+// applyPlan replaces the embedded plan with p while preserving the
+// builder-relevant fields (file sizes, landing mode, drop prefixes, stats
+// tag) that the executor already populated.
+func (cd *compactDef) applyPlan(p plan.Plan) {
+	p.ThisFileSize = cd.spec.ThisFileSize
+	p.NextFileSize = cd.spec.NextFileSize
+	p.LandingMode = cd.spec.LandingMode
+	p.DropPrefixes = cd.spec.DropPrefixes
+	p.StatsTag = cd.spec.StatsTag
+	cd.spec = p
+}
+
+// lockLevels takes read locks on the source and (when distinct) destination
+// level handlers. It is intentionally separate from the constructor so the
+// caller can choose whether to lock; e.g. L0→L0 takes one shared lock to
+// avoid double-RLock deadlocks on the same handler.
+func (cd *compactDef) lockLevels() {
+	cd.thisLevel.RLock()
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RLock()
+	}
+}
+
+// unlockLevels releases the locks taken by lockLevels in reverse order.
+func (cd *compactDef) unlockLevels() {
+	if cd.nextLevel != cd.thisLevel {
+		cd.nextLevel.RUnlock()
+	}
+	cd.thisLevel.RUnlock()
+}
+
+type scheduler struct {
+	compactor *compactor
 	policy    *SchedulerPolicy
 	triggerCh chan struct{}
 	maxRuns   int
 	logger    *slog.Logger
 }
 
-func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.Logger) *compaction {
+func newScheduler(c *compactor, maxRuns int, mode string, logger *slog.Logger) *scheduler {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
@@ -34,8 +125,8 @@ func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.L
 	if logger == nil {
 		logger = slog.Default()
 	}
-	cr := &compaction{
-		owner:     owner,
+	cr := &scheduler{
+		compactor: c,
 		policy:    NewSchedulerPolicy(mode),
 		triggerCh: make(chan struct{}, 16),
 		maxRuns:   maxRuns,
@@ -45,14 +136,14 @@ func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.L
 	return cr
 }
 
-func (cr *compaction) Trigger() {
+func (cr *scheduler) Trigger() {
 	select {
 	case cr.triggerCh <- struct{}{}:
 	default:
 	}
 }
 
-func (cr *compaction) Start(id int, closeCh <-chan struct{}, done func()) {
+func (cr *scheduler) Start(id int, closeCh <-chan struct{}, done func()) {
 	if done != nil {
 		defer done()
 	}
@@ -79,30 +170,30 @@ func (cr *compaction) Start(id int, closeCh <-chan struct{}, done func()) {
 	}
 }
 
-func (cr *compaction) runCycle(id int) {
+func (cr *scheduler) runCycle(id int) {
 	ranAny := false
 	for range cr.maxRuns {
 		if id == 0 {
-			cr.owner.adjustThrottle()
+			cr.compactor.adjustThrottle()
 		}
 		if !cr.runOnce(id) {
 			break
 		}
 		ranAny = true
 		if id == 0 {
-			cr.owner.adjustThrottle()
+			cr.compactor.adjustThrottle()
 		}
-		if !cr.owner.needsCompaction() {
+		if !cr.compactor.needsCompaction() {
 			break
 		}
 	}
-	if ranAny && cr.owner.needsCompaction() {
+	if ranAny && cr.compactor.needsCompaction() {
 		cr.Trigger()
 	}
 }
 
-func (cr *compaction) runOnce(id int) bool {
-	prios := cr.owner.pickCompactLevels()
+func (cr *scheduler) runOnce(id int) bool {
+	prios := cr.compactor.pickCompactLevels()
 	prios = cr.policy.Arrange(id, prios)
 	for _, p := range prios {
 		if id == 0 && p.Level == 0 {
@@ -117,13 +208,13 @@ func (cr *compaction) runOnce(id int) bool {
 	return false
 }
 
-func (cr *compaction) RunOnce(id int) bool {
+func (cr *scheduler) RunOnce(id int) bool {
 	return cr.runOnce(id)
 }
 
-func (cr *compaction) run(id int, p Priority) bool {
+func (cr *scheduler) run(id int, p plan.Priority) bool {
 	start := time.Now()
-	err := cr.owner.doCompact(id, p)
+	err := cr.compactor.doCompact(id, p)
 	cr.policy.Observe(FeedbackEvent{
 		WorkerID: id,
 		Priority: p,
@@ -138,130 +229,6 @@ func (cr *compaction) run(id int, p Priority) bool {
 		cr.logger.Error("doCompact failed", "worker", id, "level", p.Level, "score", p.Score, "adjusted", p.Adjusted, "err", err)
 	}
 	return false
-}
-
-func (lsm *LSM) newCompactStatus() *State {
-	return NewState(lsm.option.MaxLevelNum)
-}
-
-// adjustThrottle updates write admission state using a two-stage model:
-// slowdown (pace writes) and stop (block writes). Hysteresis is applied to
-// avoid oscillation under heavy compaction pressure.
-func (lm *levelManager) adjustThrottle() {
-	if lm == nil || lm.lsm == nil || len(lm.levels) == 0 {
-		return
-	}
-	l0Tables := lm.levels[0].numTables()
-	_, maxScore := lm.compactionStats()
-
-	l0Slow := lm.opt.L0SlowdownWritesTrigger
-	l0Stop := lm.opt.L0StopWritesTrigger
-	l0Resume := lm.opt.L0ResumeWritesTrigger
-
-	scoreSlow := lm.opt.CompactionSlowdownTrigger
-	scoreStop := lm.opt.CompactionStopTrigger
-	scoreResume := lm.opt.CompactionResumeTrigger
-
-	stopCond := l0Tables >= l0Stop
-	slowCond := l0Tables >= l0Slow || maxScore >= scoreSlow
-	resumeCond := l0Tables <= l0Resume && maxScore <= scoreResume
-
-	cur := lm.lsm.ThrottleState()
-	target := cur
-	switch cur {
-	case WriteThrottleStop:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if slowCond {
-			target = WriteThrottleSlowdown
-		} else if resumeCond {
-			target = WriteThrottleNone
-		}
-	case WriteThrottleSlowdown:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if resumeCond {
-			target = WriteThrottleNone
-		}
-	default:
-		if stopCond {
-			target = WriteThrottleStop
-		} else if slowCond {
-			target = WriteThrottleSlowdown
-		} else {
-			target = WriteThrottleNone
-		}
-	}
-	l0Pressure := normalizedThrottlePressure(float64(l0Tables), float64(l0Slow), float64(l0Stop))
-	scorePressure := normalizedThrottlePressure(maxScore, scoreSlow, scoreStop)
-	pressure := max(l0Pressure, scorePressure)
-	switch target {
-	case WriteThrottleNone:
-		pressure = 0
-	case WriteThrottleStop:
-		pressure = 1000
-	case WriteThrottleSlowdown:
-		if pressure == 0 {
-			pressure = 1
-		}
-	}
-	rate := uint64(0)
-	if target == WriteThrottleSlowdown {
-		rate = throttleRateForPressure(
-			uint32(pressure),
-			lm.opt.WriteThrottleMinRate,
-			lm.opt.WriteThrottleMaxRate,
-		)
-	}
-	lm.lsm.throttleWrites(target, uint32(pressure), rate)
-}
-
-func normalizedThrottlePressure(value, slowdown, stop float64) int {
-	if stop <= slowdown {
-		if value >= stop {
-			return 1000
-		}
-		return 0
-	}
-	if value <= slowdown {
-		return 0
-	}
-	if value >= stop {
-		return 1000
-	}
-	ratio := (value - slowdown) / (stop - slowdown)
-	if ratio <= 0 {
-		return 0
-	}
-	if ratio >= 1 {
-		return 1000
-	}
-	return int(ratio*1000 + 0.5)
-}
-
-func throttleRateForPressure(pressure uint32, minRate, maxRate int64) uint64 {
-	if pressure == 0 || maxRate <= 0 {
-		return 0
-	}
-	if minRate <= 0 {
-		minRate = maxRate
-	}
-	if maxRate < minRate {
-		maxRate = minRate
-	}
-	ratio := float64(pressure) / 1000
-	if ratio < 0 {
-		ratio = 0
-	}
-	if ratio > 1 {
-		ratio = 1
-	}
-	curve := ratio * ratio
-	rate := float64(maxRate) - (float64(maxRate-minRate) * curve)
-	if rate < float64(minRate) {
-		rate = float64(minRate)
-	}
-	return uint64(rate + 0.5)
 }
 
 const (
@@ -291,10 +258,10 @@ type queueQuota struct {
 }
 
 type priorityQueues struct {
-	l0      []Priority
-	keep    []Priority
-	drain   []Priority
-	regular []Priority
+	l0      []plan.Priority
+	keep    []plan.Priority
+	drain   []plan.Priority
+	regular []plan.Priority
 }
 
 // FeedbackEvent captures one compaction execution outcome.
@@ -303,7 +270,7 @@ type priorityQueues struct {
 // subsequent rounds without modifying picker behavior.
 type FeedbackEvent struct {
 	WorkerID int
-	Priority Priority
+	Priority plan.Priority
 	Err      error
 	Duration time.Duration
 }
@@ -338,7 +305,7 @@ func normalizePolicyMode(name string) string {
 }
 
 // Arrange reorders priorities according to the configured compaction mode.
-func (p *SchedulerPolicy) Arrange(workerID int, priorities []Priority) []Priority {
+func (p *SchedulerPolicy) Arrange(workerID int, priorities []plan.Priority) []plan.Priority {
 	mode := PolicyLeveled
 	if p != nil {
 		mode = p.mode
@@ -370,9 +337,9 @@ func (p *SchedulerPolicy) Observe(event FeedbackEvent) {
 // Design:
 // - Worker 0 keeps L0 relief first to reduce write stalls quickly.
 // - Other workers keep picker order untouched.
-func arrangeLeveled(workerID int, priorities []Priority) []Priority {
+func arrangeLeveled(workerID int, priorities []plan.Priority) []plan.Priority {
 	if workerID == 0 {
-		return MoveL0ToFront(priorities)
+		return plan.MoveL0ToFront(priorities)
 	}
 	return priorities
 }
@@ -385,11 +352,11 @@ func arrangeLeveled(workerID int, priorities []Priority) []Priority {
 //   - Interleave queues by pressure-aware quotas instead of draining one queue
 //     completely, to avoid starvation.
 //   - Worker 0 reserves one hard L0 slot under critical backlog.
-func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []Priority) []Priority {
+func (p *SchedulerPolicy) arrangeTiered(workerID int, priorities []plan.Priority) []plan.Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
-	ordered := append([]Priority(nil), priorities...)
+	ordered := append([]plan.Priority(nil), priorities...)
 	if !hasLandingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
@@ -429,11 +396,11 @@ func (p *SchedulerPolicy) observeTiered(event FeedbackEvent) {
 // Design:
 // - Low landing pressure: keep leveled behavior for stable mixed workloads.
 // - High landing pressure: switch to tiered queue scheduling.
-func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []Priority {
+func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []plan.Priority) []plan.Priority {
 	if len(priorities) <= 1 {
 		return priorities
 	}
-	ordered := append([]Priority(nil), priorities...)
+	ordered := append([]plan.Priority(nil), priorities...)
 	if !hasLandingWork(ordered) {
 		return arrangeLeveled(workerID, ordered)
 	}
@@ -446,21 +413,21 @@ func (p *SchedulerPolicy) arrangeHybrid(workerID int, priorities []Priority) []P
 	return arrangeByQueues(workerID, queues, quota)
 }
 
-func hasLandingWork(priorities []Priority) bool {
-	return slices.ContainsFunc(priorities, func(p Priority) bool {
+func hasLandingWork(priorities []plan.Priority) bool {
+	return slices.ContainsFunc(priorities, func(p plan.Priority) bool {
 		return p.LandingMode.UsesLanding()
 	})
 }
 
-func classifyQueues(priorities []Priority) priorityQueues {
+func classifyQueues(priorities []plan.Priority) priorityQueues {
 	var q priorityQueues
 	for _, p := range priorities {
 		switch {
 		case p.Level == 0 && p.Adjusted >= l0ReliefScoreMin:
 			q.l0 = append(q.l0, p)
-		case p.LandingMode == LandingKeep:
+		case p.LandingMode == plan.LandingKeep:
 			q.keep = append(q.keep, p)
-		case p.LandingMode == LandingDrain:
+		case p.LandingMode == plan.LandingDrain:
 			q.drain = append(q.drain, p)
 		default:
 			q.regular = append(q.regular, p)
@@ -555,7 +522,7 @@ func clampI32(v, lo, hi int32) int32 {
 	return v
 }
 
-func maxScore(slices ...[]Priority) float64 {
+func maxScore(slices ...[]plan.Priority) float64 {
 	maxScore := 0.0
 	for _, items := range slices {
 		for _, p := range items {
@@ -567,12 +534,12 @@ func maxScore(slices ...[]Priority) float64 {
 	return maxScore
 }
 
-func arrangeByQueues(workerID int, q priorityQueues, quota queueQuota) []Priority {
+func arrangeByQueues(workerID int, q priorityQueues, quota queueQuota) []plan.Priority {
 	total := len(q.l0) + len(q.keep) + len(q.drain) + len(q.regular)
 	if total == 0 {
 		return nil
 	}
-	out := make([]Priority, 0, total)
+	out := make([]plan.Priority, 0, total)
 
 	// Worker 0 reserves one critical L0 slot to quickly relieve write pressure.
 	if workerID == 0 && len(q.l0) > 0 && q.l0[0].Adjusted >= l0CriticalScore {
@@ -580,7 +547,7 @@ func arrangeByQueues(workerID int, q priorityQueues, quota queueQuota) []Priorit
 		q.l0 = q.l0[1:]
 	}
 
-	emit := func(queue *[]Priority, n int) {
+	emit := func(queue *[]plan.Priority, n int) {
 		if n <= 0 {
 			return
 		}
@@ -611,308 +578,11 @@ func arrangeByQueues(workerID int, q priorityQueues, quota queueQuota) []Priorit
 	return out
 }
 
-func sortByAdjustedDesc(priorities []Priority) {
+func sortByAdjustedDesc(priorities []plan.Priority) {
 	sort.SliceStable(priorities, func(i, j int) bool {
 		if priorities[i].Adjusted == priorities[j].Adjusted {
 			return priorities[i].Score > priorities[j].Score
 		}
 		return priorities[i].Adjusted > priorities[j].Adjusted
 	})
-}
-
-// KeyRange describes a compaction key span.
-type KeyRange struct {
-	Left  []byte
-	Right []byte
-	Inf   bool
-}
-
-// InfRange matches all keys.
-var InfRange = KeyRange{Inf: true}
-
-func (r KeyRange) IsEmpty() bool {
-	return len(r.Left) == 0 && len(r.Right) == 0 && !r.Inf
-}
-
-func (r KeyRange) String() string {
-	return fmt.Sprintf("[left=%x, right=%x, inf=%v]", r.Left, r.Right, r.Inf)
-}
-
-func (r KeyRange) Equals(dst KeyRange) bool {
-	return bytes.Equal(r.Left, dst.Left) &&
-		bytes.Equal(r.Right, dst.Right) &&
-		r.Inf == dst.Inf
-}
-
-func (r *KeyRange) Extend(kr KeyRange) {
-	if kr.IsEmpty() {
-		return
-	}
-	if r.IsEmpty() {
-		*r = kr
-	}
-	if len(r.Left) == 0 || kv.CompareInternalKeys(kr.Left, r.Left) < 0 {
-		r.Left = kr.Left
-	}
-	if len(r.Right) == 0 || kv.CompareInternalKeys(kr.Right, r.Right) > 0 {
-		r.Right = kr.Right
-	}
-	if kr.Inf {
-		r.Inf = true
-	}
-}
-
-func (r KeyRange) OverlapsWith(dst KeyRange) bool {
-	// Empty keyRange always overlaps.
-	if r.IsEmpty() {
-		return true
-	}
-	// Empty dst doesn't overlap with anything.
-	if dst.IsEmpty() {
-		return false
-	}
-	if r.Inf || dst.Inf {
-		return true
-	}
-
-	// [dst.left, dst.right] ... [r.left, r.right]
-	if kv.CompareInternalKeys(r.Left, dst.Right) > 0 {
-		return false
-	}
-	// [r.left, r.right] ... [dst.left, dst.right]
-	if kv.CompareInternalKeys(r.Right, dst.Left) < 0 {
-		return false
-	}
-	return true
-}
-
-// StateEntry captures the metadata tracked during compaction scheduling.
-//
-// IntraLevel marks the entry as a within-level compaction (e.g. L0→L0) that
-// claims its input by table ID only and does NOT register a key range with
-// the level. This lets multiple workers run concurrent intra-level
-// compactions on disjoint table sets even when the picked SSTs have
-// overlapping keyranges (the common case for L0 random writes). Inter-level
-// compactions (L0→Lbase, Ln→Ln+1) keep the original range-based locking.
-type StateEntry struct {
-	ThisLevel  int
-	NextLevel  int
-	ThisRange  KeyRange
-	NextRange  KeyRange
-	ThisSize   int64
-	TableIDs   []uint64
-	IntraLevel bool
-}
-
-// LevelsLocked is a marker to indicate level locks are held by the caller.
-type LevelsLocked struct{}
-
-// State tracks compaction ranges and in-flight table IDs.
-type State struct {
-	sync.RWMutex
-	levels []*levelState
-	tables map[uint64]struct{}
-}
-
-type levelState struct {
-	ranges  []KeyRange
-	delSize int64
-}
-
-// NewState allocates a compaction state tracker.
-func NewState(maxLevels int) *State {
-	cs := &State{
-		levels: make([]*levelState, 0, maxLevels),
-		tables: make(map[uint64]struct{}),
-	}
-	for range maxLevels {
-		cs.levels = append(cs.levels, &levelState{})
-	}
-	return cs
-}
-
-// Overlaps reports whether the range overlaps with an in-flight compaction.
-func (cs *State) Overlaps(level int, kr KeyRange) bool {
-	cs.RLock()
-	defer cs.RUnlock()
-	if level < 0 || level >= len(cs.levels) {
-		return false
-	}
-	return cs.levels[level].overlapsWith(kr)
-}
-
-// DelSize returns the accumulated compaction size for a level.
-func (cs *State) DelSize(level int) int64 {
-	cs.RLock()
-	defer cs.RUnlock()
-	if level < 0 || level >= len(cs.levels) {
-		return 0
-	}
-	return cs.levels[level].delSize
-}
-
-// HasRanges returns true if any level currently tracks a compaction range.
-func (cs *State) HasRanges() bool {
-	cs.RLock()
-	defer cs.RUnlock()
-	for _, lvl := range cs.levels {
-		if len(lvl.ranges) != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// HasTable reports whether a table fid is already being compacted.
-func (cs *State) HasTable(fid uint64) bool {
-	cs.RLock()
-	defer cs.RUnlock()
-	_, ok := cs.tables[fid]
-	return ok
-}
-
-// AddRangeWithTables records a range and table IDs under compaction.
-func (cs *State) AddRangeWithTables(level int, kr KeyRange, tableIDs []uint64) {
-	cs.Lock()
-	defer cs.Unlock()
-	if level < 0 || level >= len(cs.levels) {
-		return
-	}
-	cs.levels[level].ranges = append(cs.levels[level].ranges, kr)
-	for _, fid := range tableIDs {
-		cs.tables[fid] = struct{}{}
-	}
-}
-
-// Delete clears state for a completed compaction.
-//
-// IntraLevel entries (L0→L0) only registered table IDs, so Delete only
-// undoes the table claims and skips the range bookkeeping.
-func (cs *State) Delete(entry StateEntry) error {
-	cs.Lock()
-	defer cs.Unlock()
-
-	if entry.ThisLevel < 0 || entry.ThisLevel >= len(cs.levels) {
-		return nil
-	}
-	if entry.NextLevel < 0 || entry.NextLevel >= len(cs.levels) {
-		return nil
-	}
-
-	thisLevel := cs.levels[entry.ThisLevel]
-	nextLevel := cs.levels[entry.NextLevel]
-
-	if !entry.IntraLevel {
-		// Validate all affected ranges first so Delete remains atomic on error.
-		found := thisLevel.contains(entry.ThisRange)
-		if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
-			found = nextLevel.contains(entry.NextRange) && found
-		}
-		if !found {
-			return fmt.Errorf(
-				"compact state delete: keyRange not found; this=%s thisLevel=%d thisState=%s next=%s nextLevel=%d nextState=%s",
-				entry.ThisRange,
-				entry.ThisLevel,
-				thisLevel.debug(),
-				entry.NextRange,
-				entry.NextLevel,
-				nextLevel.debug(),
-			)
-		}
-		_ = thisLevel.remove(entry.ThisRange)
-		if entry.ThisLevel != entry.NextLevel && !entry.NextRange.IsEmpty() {
-			_ = nextLevel.remove(entry.NextRange)
-		}
-	}
-
-	thisLevel.delSize -= entry.ThisSize
-
-	for _, fid := range entry.TableIDs {
-		_, ok := cs.tables[fid]
-		utils.CondPanicFunc(!ok, func() error {
-			return fmt.Errorf("cs.tables is nil")
-		})
-		delete(cs.tables, fid)
-	}
-	return nil
-}
-
-// CompareAndAdd reserves ranges and table IDs if they do not overlap.
-//
-// IntraLevel entries (L0→L0) skip range overlap checks entirely and only
-// claim by table ID — multiple concurrent within-level compactions are
-// safe as long as their table sets are disjoint (which the picker
-// guarantees via state.HasTable).
-func (cs *State) CompareAndAdd(_ LevelsLocked, entry StateEntry) bool {
-	cs.Lock()
-	defer cs.Unlock()
-
-	if entry.ThisLevel < 0 || entry.ThisLevel >= len(cs.levels) {
-		return false
-	}
-	if entry.NextLevel < 0 || entry.NextLevel >= len(cs.levels) {
-		return false
-	}
-
-	thisLevel := cs.levels[entry.ThisLevel]
-	nextLevel := cs.levels[entry.NextLevel]
-
-	if !entry.IntraLevel {
-		if thisLevel.overlapsWith(entry.ThisRange) {
-			return false
-		}
-		if nextLevel.overlapsWith(entry.NextRange) {
-			return false
-		}
-		thisLevel.ranges = append(thisLevel.ranges, entry.ThisRange)
-		nextLevel.ranges = append(nextLevel.ranges, entry.NextRange)
-	}
-	// Intra-level entries do not register a range — the table-id set is the
-	// only claim. Other workers checking state.HasTable will skip these
-	// tables; range overlap from peer L0→Lbase is correctly NOT blocked.
-	thisLevel.delSize += entry.ThisSize
-	for _, fid := range entry.TableIDs {
-		cs.tables[fid] = struct{}{}
-	}
-	return true
-}
-
-func (ls *levelState) overlapsWith(dst KeyRange) bool {
-	for _, r := range ls.ranges {
-		if r.OverlapsWith(dst) {
-			return true
-		}
-	}
-	return false
-}
-
-func (ls *levelState) remove(dst KeyRange) bool {
-	final := ls.ranges[:0]
-	var found bool
-	for _, r := range ls.ranges {
-		if !r.Equals(dst) {
-			final = append(final, r)
-		} else {
-			found = true
-		}
-	}
-	ls.ranges = final
-	return found
-}
-
-func (ls *levelState) contains(dst KeyRange) bool {
-	for _, r := range ls.ranges {
-		if r.Equals(dst) {
-			return true
-		}
-	}
-	return false
-}
-
-func (ls *levelState) debug() string {
-	var b bytes.Buffer
-	for _, r := range ls.ranges {
-		b.WriteString(r.String())
-	}
-	return b.String()
 }

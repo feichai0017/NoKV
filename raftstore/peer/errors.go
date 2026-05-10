@@ -27,9 +27,6 @@ var (
 	errFastLeaseReadRequiresLeaseRead               = errors.New("raftstore: fast lease read requires CheckQuorum and ReadOnlyLeaseBased")
 )
 
-func IsPeerStopped(err error) bool { return errors.Is(err, errPeerStopped) }
-func IsNilPeer(err error) bool     { return errors.Is(err, errNilPeer) }
-
 func errAdminCommandPayloadTooShort() error {
 	return fmt.Errorf("raftstore: admin command payload too short")
 }

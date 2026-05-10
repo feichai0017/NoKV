@@ -3,18 +3,19 @@ package store
 import (
 	"context"
 	"fmt"
-	metaregion "github.com/feichai0017/NoKV/meta/region"
 
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
 // Router exposes the underlying router reference so transports can reuse the
 // same registration hub.
-func (s *Store) Router() *Router {
+func (s *Store) Router() *router.Router {
 	if s == nil {
 		return nil
 	}
@@ -51,12 +52,12 @@ func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publis
 		return nil, err
 	}
 	id := p.ID()
-	if err := s.router.add(p); err != nil {
+	if err := s.router.Register(p); err != nil {
 		_ = p.Close()
 		return nil, err
 	}
 	if regionMeta != nil && regionMeta.ID != 0 {
-		s.regionMgr().setPeer(regionMeta.ID, p)
+		s.regions.SetPeer(regionMeta.ID, p)
 	}
 
 	if regionMeta != nil {
@@ -65,8 +66,8 @@ func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publis
 			applyMeta = s.applyRegionMetaSilent
 		}
 		if err := applyMeta(*regionMeta); err != nil {
-			s.router.remove(id)
-			s.regionMgr().setPeer(regionMeta.ID, nil)
+			s.router.Deregister(id)
+			s.regions.SetPeer(regionMeta.ID, nil)
 			_ = p.Close()
 			return nil, err
 		}
@@ -89,7 +90,7 @@ func (s *Store) stopPeer(id uint64, publishCatalog bool) {
 	if s == nil || id == 0 {
 		return
 	}
-	p := s.router.remove(id)
+	p := s.router.Deregister(id)
 	var regionID uint64
 	if p != nil {
 		if meta := p.RegionMeta(); meta != nil {
@@ -97,7 +98,7 @@ func (s *Store) stopPeer(id uint64, publishCatalog bool) {
 		}
 	}
 	if regionID != 0 {
-		s.regionMgr().setPeer(regionID, nil)
+		s.regions.SetPeer(regionID, nil)
 		if publishCatalog {
 			_ = s.applyRegionState(regionID, metaregion.ReplicaStateRemoving)
 		}
@@ -125,7 +126,7 @@ func (s *Store) Close() {
 		s.cancel()
 	}
 	if s.observers != nil {
-		s.observers.close()
+		s.observers.Close()
 	}
 }
 
@@ -136,7 +137,7 @@ func (s *Store) VisitPeers(fn func(*peer.Peer)) {
 	if s == nil || fn == nil {
 		return
 	}
-	s.router.visit(fn)
+	s.router.Visit(fn)
 }
 
 // Peer returns the peer registered with the provided ID.
@@ -144,7 +145,7 @@ func (s *Store) Peer(id uint64) (*peer.Peer, bool) {
 	if s == nil || id == 0 {
 		return nil, false
 	}
-	return s.router.get(id)
+	return s.router.Peer(id)
 }
 
 // Step forwards the provided raft message to the target peer hosted on this
@@ -281,14 +282,14 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (localmeta.RegionMet
 		_ = p.Close()
 		return localmeta.RegionMeta{}, errFailpointAfterSnapshotApply
 	}
-	if err := s.router.add(p); err != nil {
+	if err := s.router.Register(p); err != nil {
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
-	s.regionMgr().setPeer(meta.ID, p)
+	s.regions.SetPeer(meta.ID, p)
 	if err := s.applyRegionMeta(meta); err != nil {
-		s.router.remove(localPeer.PeerID)
-		s.regionMgr().setPeer(meta.ID, nil)
+		s.router.Deregister(localPeer.PeerID)
+		s.regions.SetPeer(meta.ID, nil)
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
@@ -383,16 +384,16 @@ func (s *Store) InstallRegionSSTSnapshot(ctx context.Context, snap myraft.Snapsh
 		_ = p.Close()
 		return localmeta.RegionMeta{}, errFailpointAfterSnapshotApply
 	}
-	if err := s.router.add(p); err != nil {
+	if err := s.router.Register(p); err != nil {
 		cleanup()
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
-	s.regionMgr().setPeer(meta.ID, p)
+	s.regions.SetPeer(meta.ID, p)
 	if err := s.applyRegionMeta(meta); err != nil {
 		cleanup()
-		s.router.remove(localPeer.PeerID)
-		s.regionMgr().setPeer(meta.ID, nil)
+		s.router.Deregister(localPeer.PeerID)
+		s.regions.SetPeer(meta.ID, nil)
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
@@ -404,7 +405,7 @@ func (s *Store) Peers() []PeerHandle {
 	if s == nil {
 		return nil
 	}
-	raw := s.router.list()
+	raw := s.router.List()
 	handles := make([]PeerHandle, 0, len(raw))
 	for _, p := range raw {
 		handles = append(handles, PeerHandle{

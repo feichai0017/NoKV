@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -44,33 +43,13 @@ type LSM struct {
 	levels           *levelManager
 	option           *Options
 	closer           *utils.Closer
-	flushQueue       *flushRuntime
-	flushWG          sync.WaitGroup
+	flushPool        *flushPool
 	logger           *slog.Logger
 
-	throttleFn    func(WriteThrottleState)
-	throttleState atomic.Int32
-	// throttlePressure stores pacing pressure in permille [0,1000].
-	throttlePressure atomic.Uint32
-	// throttleRate stores the current slowdown target in bytes/sec.
-	throttleRate atomic.Uint64
+	throttle *writeThrottle
 
 	closed atomic.Bool
 }
-
-// WriteThrottleState models write admission control at the DB layer.
-//
-// Design:
-// - WriteThrottleNone: writes proceed without extra delay.
-// - WriteThrottleSlowdown: writes are accepted but paced.
-// - WriteThrottleStop: writes are blocked until backlog recovers.
-type WriteThrottleState int32
-
-const (
-	WriteThrottleNone WriteThrottleState = iota
-	WriteThrottleSlowdown
-	WriteThrottleStop
-)
 
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
 // memtables. This avoids a redundant GetMemTables call when the caller
@@ -92,14 +71,6 @@ func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVer
 	return lsm.levels.rtCollector.IsKeyCovered(cf, userKey, entryVersion)
 }
 
-// RangeTombstoneCount returns the number of tracked range tombstones.
-func (lsm *LSM) RangeTombstoneCount() int {
-	if lsm == nil || lsm.levels == nil || lsm.levels.rtCollector == nil {
-		return 0
-	}
-	return lsm.levels.rtCollector.Count()
-}
-
 // Close  _
 func (lsm *LSM) Close() error {
 	if lsm == nil {
@@ -110,14 +81,13 @@ func (lsm *LSM) Close() error {
 	}
 	var closeErr error
 	// wait for all api calls to finish
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
 	if lsm.closer != nil {
 		lsm.closer.Close()
 	}
-	if lsm.flushQueue != nil {
-		closeErr = errors.Join(closeErr, lsm.flushQueue.close())
+	if lsm.flushPool != nil {
+		closeErr = errors.Join(closeErr, lsm.flushPool.Close())
 	}
-	lsm.flushWG.Wait()
 
 	var orphans []*memTable
 	for _, s := range lsm.shards {
@@ -172,16 +142,10 @@ func (lsm *LSM) getLogger() *slog.Logger {
 
 // ThrottleState reports the current write admission state.
 func (lsm *LSM) ThrottleState() WriteThrottleState {
-	return normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Load()))
-}
-
-func normalizeWriteThrottleState(state WriteThrottleState) WriteThrottleState {
-	switch state {
-	case WriteThrottleNone, WriteThrottleSlowdown, WriteThrottleStop:
-		return state
-	default:
+	if lsm == nil {
 		return WriteThrottleNone
 	}
+	return lsm.throttle.State()
 }
 
 // ThrottlePressurePermille returns current write pacing pressure [0,1000].
@@ -189,11 +153,7 @@ func (lsm *LSM) ThrottlePressurePermille() uint32 {
 	if lsm == nil {
 		return 0
 	}
-	p := lsm.throttlePressure.Load()
-	if p > 1000 {
-		return 1000
-	}
-	return p
+	return lsm.throttle.PressurePermille()
 }
 
 // ThrottleRateBytesPerSec returns the current slowdown target in bytes/sec.
@@ -201,46 +161,21 @@ func (lsm *LSM) ThrottleRateBytesPerSec() uint64 {
 	if lsm == nil {
 		return 0
 	}
-	return lsm.throttleRate.Load()
+	return lsm.throttle.RateBytesPerSec()
 }
 
-func (lsm *LSM) throttleWrites(state WriteThrottleState, pressure uint32, rate uint64) {
-	state = normalizeWriteThrottleState(state)
-	if pressure > 1000 {
-		pressure = 1000
-	}
-	switch state {
-	case WriteThrottleNone:
-		pressure = 0
-		rate = 0
-	case WriteThrottleStop:
-		pressure = 1000
-		rate = 0
-	default:
-	}
-	lsm.throttlePressure.Store(pressure)
-	lsm.throttleRate.Store(rate)
-	prev := normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Swap(int32(state))))
-	if prev == state {
-		return
-	}
-	fn := lsm.throttleFn
-	if fn == nil {
-		return
-	}
-	fn(state)
-}
-
-// FlushPending returns the number of pending flush tasks.
-func (lsm *LSM) FlushPending() int64 {
-	if lsm == nil || lsm.flushQueue == nil {
+// flushPending reports queued+in-flight flush tasks. Internal helper
+// (tests use it; external callers go via Diagnostics().Flush.Pending).
+func (lsm *LSM) flushPending() int64 {
+	if lsm == nil {
 		return 0
 	}
-	return lsm.flushQueue.stats().Pending
+	return lsm.flushPool.Pending()
 }
 
-// MaxVersion returns the largest commit timestamp known to the LSM tree.
-func (lsm *LSM) MaxVersion() uint64 {
+// maxVersion returns the largest commit timestamp known to the LSM tree.
+// Internal; external callers go via Diagnostics().MaxVersion.
+func (lsm *LSM) maxVersion() uint64 {
 	if lsm == nil {
 		return 0
 	}
@@ -302,6 +237,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		option:     frozen,
 		shards:     shards,
 		shardHints: newShardHintTable(),
+		throttle:   newWriteThrottle(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
 	}
@@ -330,8 +266,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
 	}
-	lsm.throttleFn = frozen.ThrottleCallback
-	lsm.flushQueue = newFlushRuntime(len(lsm.shards))
+	lsm.throttle.SetCallback(frozen.ThrottleCallback)
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -358,10 +293,11 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 			return nil, fmt.Errorf("lsm recovery shard %d: %w", s.id, err)
 		}
 	}
-	lsm.startFlushWorkers(len(lsm.shards))
+	lsm.flushPool = newFlushPool(len(lsm.shards), lsm.levels.flush)
+	lsm.flushPool.Start(len(lsm.shards))
 	for _, s := range lsm.shards {
 		for _, mt := range s.immutables {
-			if err := lsm.submitFlush(mt); err != nil {
+			if err := lsm.flushPool.Submit(mt); err != nil {
 				_ = lsm.Close()
 				return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
 			}
@@ -375,14 +311,24 @@ func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
 	for i := range n {
-		go lsm.levels.compaction.Start(i, lsm.closer.Closed(), lsm.closer.Done)
+		go lsm.levels.compactor.sched.Start(i, lsm.closer.Closed(), lsm.closer.Done)
 	}
 }
 
 const (
-	walRecordOverhead     int64 = 9 // length(4) + type(1) + crc(4)
-	walBatchCountOverhead int64 = 4 // uint32 entry count
-	walBatchLenOverhead   int64 = 4 // uint32 per-entry encoded length
+	// walRecordOverhead is the conservative pre-write per-record budget:
+	// length(4) + type(1) + crc(4). Used by estimators that price a record
+	// before encoding.
+	walRecordOverhead int64 = 9
+	// walEnvelopeOverhead is the on-disk framing applied to a written
+	// record: length(4) + crc(4). Use this with EntryInfo.Length (which
+	// already includes the type byte) to derive the byte count consumed
+	// on disk.
+	walEnvelopeOverhead int64 = 8
+	// walBatchCountOverhead is the uint32 entry count prefix per batch payload.
+	walBatchCountOverhead int64 = 4
+	// walBatchLenOverhead is the uint32 per-entry length prefix inside a batch payload.
+	walBatchLenOverhead int64 = 4
 )
 
 func estimatePipelineBatchWALSize(entries []*kv.Entry) int64 {
@@ -449,7 +395,7 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		return 0, err
 	}
-	walBytes := int64(info.Length) + 8
+	walBytes := int64(info.Length) + walEnvelopeOverhead
 	if estimate > 0 && walBytes > estimate {
 		// The estimator is conservative for admission, but the persisted byte
 		// count is the WAL return value. Keep this guard to catch encoder drift
@@ -461,9 +407,12 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
 	}
+	s.lock.RUnlock()
+	// Negative cache and shard-hint updates touch lsm-global state, not
+	// shard state, so they run after RUnlock to keep the shard lock window
+	// tight on the write hot path.
 	lsm.invalidateNegativeCache(entries)
 	lsm.recordShardHints(s.id, entries)
-	s.lock.RUnlock()
 	return n, nil
 }
 
@@ -530,7 +479,7 @@ func (lsm *LSM) rotateForWriteShard(s *lsmShard) error {
 	if err != nil {
 		return err
 	}
-	return lsm.submitFlush(old)
+	return lsm.flushPool.Submit(old)
 }
 
 func (lsm *LSM) prepareWrite() error {
@@ -548,19 +497,16 @@ func (lsm *LSM) prepareWrite() error {
 	return nil
 }
 
-// Set writes one entry into shard 0's memtable/WAL. Use SetBatchGroup for
-// commit-pipeline writes that need explicit shard routing.
-// entry.Key must be an InternalKey (CF + user key + timestamp suffix).
-func (lsm *LSM) Set(entry *kv.Entry) (err error) {
-	if entry == nil || len(entry.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	return lsm.SetBatch([]*kv.Entry{entry})
+// set is a single-entry shard-0 write convenience for tests; production
+// callers use SetBatchGroup with explicit shard routing.
+func (lsm *LSM) set(entry *kv.Entry) error {
+	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{{entry}})
+	return err
 }
 
-// SetBatch atomically writes a batch of entries into shard 0's WAL record.
-// Used by non-pipeline callers (admin tools, recovery glue, tests).
-func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
+// setBatch is the multi-entry shard-0 convenience for tests; production
+// callers use SetBatchGroup.
+func (lsm *LSM) setBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -657,7 +603,7 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 		best = nil
 	}
 	// query from the levels runtime
-	entry, err := lsm.levels.Get(key)
+	entry, err := lsm.levels.get(key)
 	if err != nil && err != utils.ErrKeyNotFound {
 		if best != nil {
 			best.DecrRef()
@@ -747,7 +693,7 @@ func bestMemtableEntry(key []byte, tables []*memTable) *kv.Entry {
 		if mt == nil {
 			continue
 		}
-		entry, _ := mt.Get(key)
+		entry, _ := mt.get(key)
 		if !isMemtableHit(entry) {
 			if entry != nil {
 				entry.DecrRef()
@@ -773,13 +719,13 @@ func isMemtableHit(entry *kv.Entry) bool {
 	return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 }
 
-// MemSize returns the active memtable memory usage summed across shards.
-func (lsm *LSM) MemSize() int64 {
+// memSize returns the active-memtable memory usage summed across shards. Internal helper.
+func (lsm *LSM) memSize() int64 {
 	var total int64
 	for _, s := range lsm.shards {
 		s.lock.RLock()
 		if s.memTable != nil {
-			total += s.memTable.Size()
+			total += s.memTable.size()
 		}
 		s.lock.RUnlock()
 	}
@@ -800,7 +746,10 @@ func (lsm *LSM) memTableIsNil() bool {
 }
 
 // Rotate seals every shard's active memtable, creates fresh ones, and
-// schedules each old memtable for flush.
+// schedules each old memtable for flush. Admin/test entry point — production
+// rotation is driven implicitly by the write path (rotateForWriteShard) when
+// a memtable can no longer fit a batch. Exposed so tests/admin tools can
+// force a flush window without write traffic.
 func (lsm *LSM) Rotate() error {
 	for _, s := range lsm.shards {
 		s.lock.Lock()
@@ -809,7 +758,7 @@ func (lsm *LSM) Rotate() error {
 		if err != nil {
 			return err
 		}
-		if err := lsm.submitFlush(old); err != nil {
+		if err := lsm.flushPool.Submit(old); err != nil {
 			return err
 		}
 	}
@@ -838,18 +787,18 @@ func (lsm *LSM) getMemTables() ([]*memTable, func()) {
 		s.lock.RLock()
 		if s.memTable != nil {
 			tables = append(tables, s.memTable)
-			s.memTable.IncrRef()
+			s.memTable.incrRef()
 		}
 		last := len(s.immutables) - 1
 		for i := range s.immutables {
 			tables = append(tables, s.immutables[last-i])
-			s.immutables[last-i].IncrRef()
+			s.immutables[last-i].incrRef()
 		}
 		s.lock.RUnlock()
 	}
 	return tables, func() {
 		for _, tbl := range tables {
-			tbl.DecrRef()
+			tbl.decrRef()
 		}
 	}
 }
@@ -864,16 +813,16 @@ func (lsm *LSM) getMemTablesForShard(shardID int) ([]*memTable, func()) {
 	tables := make([]*memTable, 0, 1+len(s.immutables))
 	if s.memTable != nil {
 		tables = append(tables, s.memTable)
-		s.memTable.IncrRef()
+		s.memTable.incrRef()
 	}
 	last := len(s.immutables) - 1
 	for i := range s.immutables {
 		tables = append(tables, s.immutables[last-i])
-		s.immutables[last-i].IncrRef()
+		s.immutables[last-i].incrRef()
 	}
 	return tables, func() {
 		for _, tbl := range tables {
-			tbl.DecrRef()
+			tbl.decrRef()
 		}
 	}
 }
@@ -902,56 +851,77 @@ func (lsm *LSM) hasRangeTombstones() bool {
 	return false
 }
 
-func (lsm *LSM) submitFlush(mt *memTable) error {
-	if mt == nil {
-		return nil
-	}
-	mt.IncrRef()
-	if err := lsm.flushQueue.enqueue(mt); err != nil {
-		mt.DecrRef()
-		return err
-	}
-	return nil
+// ---- Range tombstone view (merged from range_tombstone.go) ----
+//
+// The view pins a stable memtable snapshot for repeated coverage probes,
+// avoiding per-key GetMemTables pin/unpin overhead on scan paths
+// (e.g. DB iterators / YCSB-E).
+
+// RangeTombstoneView captures a stable read-view for range tombstone checks.
+// Call Close when finished.
+type RangeTombstoneView struct {
+	lsm     *LSM
+	tables  []*memTable
+	release func()
 }
 
-func (lsm *LSM) startFlushWorkers(n int) {
-	if n <= 0 {
-		n = 1
+// HasAnyRangeTombstone reports whether the current LSM state has any in-memory
+// or flushed range tombstones.
+func (lsm *LSM) HasAnyRangeTombstone() bool {
+	if lsm == nil {
+		return false
 	}
-	for i := 0; i < n; i++ {
-		lsm.flushWG.Go(func() {
-			for {
-				task, ok := lsm.flushQueue.next()
-				if !ok {
-					return
-				}
-				mt := task.memTable
-				if mt == nil {
-					lsm.flushQueue.markDone(task)
-					continue
-				}
-
-				func() {
-					defer mt.DecrRef()
-					if err := lsm.levels.flush(mt); err != nil {
-						lsm.flushQueue.markDone(task)
-						return
-					}
-					lsm.flushQueue.markInstalled(task)
-					if s := mt.shard; s != nil {
-						s.lock.Lock()
-						for idx, imm := range s.immutables {
-							if imm == mt {
-								s.immutables = append(s.immutables[:idx], s.immutables[idx+1:]...)
-								break
-							}
-						}
-						s.lock.Unlock()
-					}
-					_ = mt.close()
-					lsm.flushQueue.markDone(task)
-				}()
+	for _, s := range lsm.shards {
+		s.lock.RLock()
+		mem := s.memTable
+		immutables := s.immutables
+		s.lock.RUnlock()
+		if mem != nil && mem.hasRangeTombstones() {
+			return true
+		}
+		for _, mt := range immutables {
+			if mt != nil && mt.hasRangeTombstones() {
+				return true
 			}
-		})
+		}
 	}
+	if lsm.levels == nil || lsm.levels.rtCollector == nil {
+		return false
+	}
+	return lsm.levels.rtCollector.Count() > 0
+}
+
+// PinRangeTombstoneView captures and pins the current memtable set for repeated
+// range tombstone checks.
+func (lsm *LSM) PinRangeTombstoneView() *RangeTombstoneView {
+	if lsm == nil {
+		return nil
+	}
+	tables, release := lsm.getMemTables()
+	return &RangeTombstoneView{
+		lsm:     lsm,
+		tables:  tables,
+		release: release,
+	}
+}
+
+// IsKeyCovered checks whether userKey@version is covered in this pinned view.
+func (v *RangeTombstoneView) IsKeyCovered(cf kv.ColumnFamily, userKey []byte, version uint64) bool {
+	if v == nil || v.lsm == nil {
+		return false
+	}
+	return v.lsm.checkRangeTombstone(cf, userKey, version, v.tables)
+}
+
+// Close releases pinned memtables held by this view.
+func (v *RangeTombstoneView) Close() {
+	if v == nil {
+		return
+	}
+	if v.release != nil {
+		v.release()
+	}
+	v.tables = nil
+	v.release = nil
+	v.lsm = nil
 }

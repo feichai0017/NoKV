@@ -6,6 +6,7 @@ import (
 
 	enginekv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/lsm/flush"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -96,7 +97,7 @@ func TestClassifyMapsEmbeddedEngineErrors(t *testing.T) {
 		},
 		{
 			name: "nil runtime protocol violation",
-			err:  lsm.ErrFlushRuntimeNil,
+			err:  flush.ErrNil,
 			kind: nokverrors.KindProtocolViolation,
 		},
 		{

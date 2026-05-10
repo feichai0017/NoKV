@@ -16,17 +16,21 @@ package store
 
 import (
 	"context"
-	"github.com/feichai0017/NoKV/meta/topology"
-	"github.com/feichai0017/NoKV/metrics"
 	"sync"
 	"time"
+
+	"github.com/feichai0017/NoKV/meta/topology"
+	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/store/observer"
+	"github.com/feichai0017/NoKV/raftstore/store/region"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
 // Store hosts a collection of peers and exposes the concrete runtime helpers
 // used by raftstore. It owns peer registration, region metadata, optional
 // control-plane heartbeats, and command application.
 type Store struct {
-	router      *Router
+	router      *router.Router
 	peerBuilder PeerBuilder
 	workDir     string
 	storeID     uint64
@@ -35,12 +39,12 @@ type Store struct {
 	raftAddr    string
 	ctx         context.Context
 	cancel      context.CancelFunc
-	regions     *regionRuntime
+	regions     *region.Manager
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
 	exec        *executionRuntime
-	observers   *applyObserverRuntime
-	regionStats *regionStatsRuntime
+	observers   *observer.Runtime
+	regionStats *region.Stats
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer
@@ -48,9 +52,9 @@ type Store struct {
 // routing them through callback chains.
 func NewStore(cfg Config) *Store {
 	ctx, cancel := context.WithCancel(context.Background())
-	router := cfg.Router
-	if router == nil {
-		router = NewRouter()
+	rt := cfg.Router
+	if rt == nil {
+		rt = router.New()
 	}
 	regionMetrics := metrics.NewRegionMetrics()
 	queueSize := max(cfg.OperationQueueSize, 0)
@@ -82,7 +86,7 @@ func NewStore(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:      router,
+		router:      rt,
 		peerBuilder: cfg.PeerBuilder,
 		workDir:     cfg.WorkDir,
 		storeID:     cfg.StoreID,
@@ -112,13 +116,10 @@ func NewStore(cfg Config) *Store {
 			timeout: commandTimeout,
 		},
 		exec:        newExecutionRuntime(),
-		observers:   newApplyObserverRuntime(),
-		regionStats: newRegionStatsRuntime(),
+		observers:   observer.New(),
+		regionStats: region.NewStats(),
 	}
-	s.regions = &regionRuntime{
-		metrics: regionMetrics,
-		mgr:     newRegionManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionEvent),
-	}
+	s.regions = region.NewManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionRootEvent)
 	if s.workDir == "" && cfg.LocalMeta != nil {
 		s.workDir = cfg.LocalMeta.WorkDir()
 	}
@@ -129,7 +130,7 @@ func NewStore(cfg Config) *Store {
 		go s.runOperationLoop()
 	}
 	if cfg.LocalMeta != nil {
-		s.regionMgr().loadBootstrapSnapshot(cfg.LocalMeta.Snapshot())
+		s.regions.LoadBootstrap(cfg.LocalMeta.Snapshot())
 		s.enqueueRecoveredPendingRegionEvents(cfg.LocalMeta.PendingRootEvents())
 		s.enqueueRecoveredPendingSchedulerOperations(cfg.LocalMeta.PendingSchedulerOperations())
 	}

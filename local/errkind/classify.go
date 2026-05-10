@@ -5,6 +5,7 @@ import (
 
 	enginekv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/engine/lsm/flush"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -44,7 +45,7 @@ func Classify(err error) nokverrors.Kind {
 		stderrors.Is(err, wal.ErrWALBackpressure):
 		return nokverrors.KindRetryable
 	case stderrors.Is(err, utils.ErrDBClosed),
-		stderrors.Is(err, lsm.ErrFlushRuntimeClosed),
+		stderrors.Is(err, flush.ErrClosed),
 		stderrors.Is(err, lsm.ErrLSMClosed):
 		return nokverrors.KindAborted
 	case stderrors.Is(err, enginekv.ErrChecksumMismatch),
@@ -54,8 +55,8 @@ func Classify(err error) nokverrors.Kind {
 		stderrors.Is(err, wal.ErrEmptyRecord):
 		return nokverrors.KindCorruption
 	case stderrors.Is(err, lsm.ErrMemtableNotInitialized),
-		stderrors.Is(err, lsm.ErrFlushRuntimeNil),
-		stderrors.Is(err, lsm.ErrFlushRuntimeNilMemtable),
+		stderrors.Is(err, flush.ErrNil),
+		stderrors.Is(err, lsm.ErrFlushNilMemtable),
 		stderrors.Is(err, lsm.ErrLSMNil):
 		return nokverrors.KindProtocolViolation
 	default:

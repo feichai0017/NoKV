@@ -50,11 +50,6 @@ type ReportResult struct {
 	Cluster       *ClusterSummary  `json:"cluster,omitempty"`
 }
 
-// BuildReport returns one consolidated migration report for a local workdir.
-func BuildReport(workDir string) (ReportResult, error) {
-	return BuildReportWithConfig(StatusConfig{WorkDir: workDir})
-}
-
 // BuildReportWithConfig returns one consolidated migration report and may
 // include a best-effort remote runtime view when an admin address is provided.
 func BuildReportWithConfig(cfg StatusConfig) (ReportResult, error) {

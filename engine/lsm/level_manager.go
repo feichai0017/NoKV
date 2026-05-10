@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/lsm/tombstone"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -26,7 +29,6 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 			_ = lm.close()
 		}
 	}()
-	lm.compactState = lsm.newCompactStatus()
 	lm.opt = opt
 	// read the manifest file to build the levels runtime
 	if err := lm.loadManifest(); err != nil {
@@ -40,74 +42,26 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 		return nil, err
 	}
 	lm.rtCollector = tombstone.NewCollector()
-	lm.compactionPacer = newCompactionPacer(opt.CompactionWriteBytesPerSec)
-	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
+	lm.compactor = newCompactor(lm, opt)
 	return lm, nil
 }
 
 type levelManager struct {
-	maxFID           atomic.Uint64
-	opt              *Options
-	cache            *cache
-	manifestMgr      *manifest.Manager
-	levels           []*levelHandler
-	lsm              *LSM
-	compactState     *State
-	compaction       *compaction
-	compactionPacer  *compactionPacer
-	rtCollector      *tombstone.Collector
-	compactionLastNs atomic.Int64
-	compactionMaxNs  atomic.Int64
-	compactionRuns   atomic.Uint64
-	rangeFilter      rangeFilterMetrics
-}
-
-type rangeFilterMetrics struct {
-	pointCandidates   atomic.Uint64
-	pointPruned       atomic.Uint64
-	boundedCandidates atomic.Uint64
-	boundedPruned     atomic.Uint64
-	fallbacks         atomic.Uint64
-}
-
-func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
-	if lm == nil {
-		return
-	}
-	if candidates < 0 {
-		candidates = 0
-	}
-	if total < candidates {
-		total = candidates
-	}
-	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
-	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
-	if fallback {
-		lm.rangeFilter.fallbacks.Add(1)
-	}
-}
-
-func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
-	if lm == nil {
-		return
-	}
-	if candidates < 0 {
-		candidates = 0
-	}
-	if total < candidates {
-		total = candidates
-	}
-	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
-	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
-	if fallback {
-		lm.rangeFilter.fallbacks.Add(1)
-	}
+	maxFID      atomic.Uint64
+	opt         *Options
+	cache       *cachepkg.Cache
+	manifestMgr *manifest.Manager
+	levels      []*levelHandler
+	lsm         *LSM
+	rtCollector *tombstone.Collector
+	compactor   *compactor
+	rangeFilter rangeFilterMetrics
 }
 
 func (lm *levelManager) close() error {
 	var closeErr error
 	if lm.cache != nil {
-		closeErr = errors.Join(closeErr, lm.cache.close())
+		closeErr = errors.Join(closeErr, lm.cache.Close())
 	}
 	if lm.manifestMgr != nil {
 		closeErr = errors.Join(closeErr, lm.manifestMgr.Close())
@@ -137,10 +91,10 @@ func (lm *levelManager) iterators(opt *index.Options) []index.Iterator {
 }
 
 // Get searches every level and returns the highest visible version for key.
-func (lm *levelManager) Get(key []byte) (*kv.Entry, error) {
+func (lm *levelManager) get(key []byte) (*kv.Entry, error) {
 	var best *kv.Entry
 	for level := 0; level < lm.opt.MaxLevelNum; level++ {
-		entry, err := lm.levels[level].Get(key)
+		entry, err := lm.levels[level].get(key)
 		if err != nil && err != utils.ErrKeyNotFound {
 			if best != nil {
 				best.DecrRef()
@@ -175,15 +129,18 @@ func (lm *levelManager) build() error {
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
 		lh := &levelHandler{
 			levelNum: i,
-			tables:   make([]*table, 0),
+			tables:   make([]*table.Table, 0),
 			lm:       lm,
 		}
-		lh.landing.ensureInit()
+		lh.landing.EnsureInit()
 		lm.levels = append(lm.levels, lh)
 	}
 
 	version := lm.manifestMgr.Current()
-	lm.cache = newCache(lm.opt)
+	lm.cache = cachepkg.New(cachepkg.Options{
+		IndexBytes: lm.opt.IndexCacheBytes,
+		BlockBytes: lm.opt.BlockCacheBytes,
+	})
 	var maxFID uint64
 	for level, files := range version.Levels {
 		for _, meta := range files {
@@ -195,27 +152,27 @@ func (lm *levelManager) build() error {
 				maxFID = meta.FileID
 			}
 			if meta.Landing {
-				lm.levels[level].addLanding(t)
+				lm.levels[level].addLandingTable(t)
 				continue
 			}
-			lm.levels[level].add(t)
+			lm.levels[level].addTable(t)
 		}
 	}
 	// sort each level
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
-		lm.levels[i].Sort()
+		lm.levels[i].sort()
 	}
 	// get the maximum fid value
 	lm.maxFID.Store(maxFID)
 	return nil
 }
 
-func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.FileMeta) (*table, error) {
+func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.FileMeta) (*table.Table, error) {
 	fileName := vfs.FileNameSSTable(lm.opt.WorkDir, meta.FileID)
 	if _, err := fs.Stat(fileName); err != nil {
 		return nil, fmt.Errorf("lsm startup: manifest references missing sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
 	}
-	t, err := openTable(lm, fileName, nil)
+	t, err := table.Open(lm, fileName, nil)
 	if err != nil {
 		return nil, fmt.Errorf("lsm startup: open sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
 	}
@@ -231,7 +188,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	fid := uint64(immutable.segmentID)
 	sstName := vfs.FileNameSSTable(lm.opt.WorkDir, fid)
 
-	iter := immutable.NewIterator(&index.Options{IsAsc: true})
+	iter := immutable.newIterator(&index.Options{IsAsc: true})
 	if iter == nil {
 		return nil
 	}
@@ -246,7 +203,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 
 	// build a builder and collect range tombstones
-	builder := newTableBuiler(lm.opt)
+	builder := table.NewBuilder(tableOptionsFor(lm.opt))
 	var newTombstones []tombstone.Range
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
@@ -264,21 +221,21 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 		builder.AddKey(entry)
 	}
-	table, err := openTable(lm, sstName, builder)
+	tbl, err := table.Open(lm, sstName, builder)
 	if err != nil {
 		return fmt.Errorf("failed to build sstable %s: %w", sstName, err)
 	}
-	if table == nil {
+	if tbl == nil {
 		return fmt.Errorf("failed to build sstable %s: nil table", sstName)
 	}
 	meta := &manifest.FileMeta{
 		Level:     0,
 		FileID:    fid,
-		Size:      uint64(table.Size()),
-		Smallest:  kv.SafeCopy(nil, table.MinKey()),
-		Largest:   kv.SafeCopy(nil, table.MaxKey()),
+		Size:      uint64(tbl.Size()),
+		Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
+		Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
 		CreatedAt: uint64(time.Now().Unix()),
-		ValueSize: table.ValueSize(),
+		ValueSize: tbl.ValueSize(),
 	}
 	fileEdit := manifest.Edit{
 		Type:   manifest.EditAddFile,
@@ -304,17 +261,15 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 	if shard := immutable.shard; shard != nil {
 		// Monotonic per-shard high-water. Per-shard flush serialization
-		// is enforced by flushRuntime (see flush_runtime.go: per-shard
-		// queue + inFlight flag) so this Store cannot race against a
-		// later same-shard flush. The `> cur` guard is kept as a belt-
-		// and-braces against future runtime regressions; without
-		// flushRuntime serialization the WAL retention mark below
-		// would advance out of order and recovery could lose segments.
+		// is enforced by flush.Runtime (per-shard queue + inFlight flag)
+		// so this Store cannot race against a later same-shard flush.
+		// The `> cur` guard is kept as belt-and-braces against future
+		// runtime regressions.
 		if cur := shard.highestFlushedSeg.Load(); immutable.segmentID > cur {
 			shard.highestFlushedSeg.Store(immutable.segmentID)
 		}
 	}
-	lm.levels[0].add(table)
+	lm.levels[0].addTable(tbl)
 	// Register any range tombstones discovered during this flush.
 	if lm.rtCollector != nil {
 		for _, rt := range newTombstones {
@@ -324,24 +279,10 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	if err := immutable.shard.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 		return err
 	}
-	if lm.compaction != nil {
-		lm.compaction.Trigger()
+	if lm.compactor.sched != nil {
+		lm.compactor.sched.Trigger()
 	}
 	return nil
-}
-
-func (lm *levelManager) compactionStats() (int64, float64) {
-	if lm == nil {
-		return 0, 0
-	}
-	prios := lm.pickCompactLevels()
-	var max float64
-	for _, p := range prios {
-		if p.Adjusted > max {
-			max = p.Adjusted
-		}
-	}
-	return int64(len(prios)), max
 }
 
 func (lm *levelManager) levelMetricsSnapshot() []metrics.LevelMetrics {
@@ -358,36 +299,11 @@ func (lm *levelManager) levelMetricsSnapshot() []metrics.LevelMetrics {
 	return out
 }
 
-func (lm *levelManager) compactionDurations() (float64, float64, uint64) {
-	if lm == nil {
-		return 0, 0, 0
-	}
-	lastNs := lm.compactionLastNs.Load()
-	maxNs := lm.compactionMaxNs.Load()
-	runs := lm.compactionRuns.Load()
-	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
-}
-
-func (lm *levelManager) recordCompactionMetrics(duration time.Duration) {
-	lm.compactionRuns.Add(1)
-	last := duration.Nanoseconds()
-	lm.compactionLastNs.Store(last)
-	for {
-		prev := lm.compactionMaxNs.Load()
-		if last <= prev {
-			break
-		}
-		if lm.compactionMaxNs.CompareAndSwap(prev, last) {
-			break
-		}
-	}
-}
-
 func (lm *levelManager) cacheMetrics() metrics.CacheSnapshot {
 	if lm == nil || lm.cache == nil {
 		return metrics.CacheSnapshot{}
 	}
-	return lm.cache.metricsSnapshot()
+	return lm.cache.MetricsSnapshot()
 }
 
 func (lm *levelManager) maxVersion() uint64 {
@@ -412,4 +328,93 @@ func (lm *levelManager) maxVersion() uint64 {
 		lh.RUnlock()
 	}
 	return max
+}
+
+// rebuildRangeTombstones scans SST levels to repopulate the range tombstone
+// collector. Memtable tombstones are tracked separately in
+// memTable.rangeTombstones and must not be included here to avoid duplication
+// when those memtables flush. Called at startup and after max-level
+// compaction (which may drop tombstones).
+func (lm *levelManager) rebuildRangeTombstones() {
+	if lm == nil || lm.rtCollector == nil || len(lm.levels) == 0 {
+		return
+	}
+	var ranges []tombstone.Range
+	opt := &index.Options{IsAsc: true}
+	// Only scan SST levels — memtable tombstones are tracked separately
+	// in memTable.rangeTombstones and must not be duplicated here.
+	iters := lm.iterators(opt)
+	defer func() {
+		for _, it := range iters {
+			if it != nil {
+				_ = it.Close()
+			}
+		}
+	}()
+	for _, it := range iters {
+		if it == nil {
+			continue
+		}
+		it.Rewind()
+		for it.Valid() {
+			if item := it.Item(); item != nil {
+				if e := item.Entry(); e != nil && e.IsRangeDelete() {
+					cf, start, version, ok := kv.SplitInternalKey(e.Key)
+					if !ok {
+						it.Next()
+						continue
+					}
+					if bytes.Compare(start, e.RangeEnd()) >= 0 {
+						it.Next()
+						continue
+					}
+					ranges = append(ranges, tombstone.Range{
+						CF:      cf,
+						Start:   kv.SafeCopy(nil, start),
+						End:     kv.SafeCopy(nil, e.RangeEnd()),
+						Version: version,
+					})
+				}
+			}
+			it.Next()
+		}
+	}
+	lm.rtCollector.Rebuild(ranges)
+}
+
+func (lm *levelManager) Cache() *cachepkg.Cache {
+	if lm == nil {
+		return nil
+	}
+	return lm.cache
+}
+
+func (lm *levelManager) Options() table.Options {
+	return tableOptionsFor(lm.opt)
+}
+
+func tableOptionsFor(o *Options) table.Options {
+	if o == nil {
+		return table.Options{}
+	}
+	out := table.Options{
+		WorkDir:            o.WorkDir,
+		FS:                 o.FS,
+		SSTableMaxSize:     o.SSTableMaxSz,
+		BlockSize:          int64(o.BlockSize),
+		BloomFalsePositive: o.BloomFalsePositive,
+		BlockCompression:   o.BlockCompression,
+		ManifestSync:       o.ManifestSync,
+	}
+	if o.PrefixExtractor != nil {
+		out.PrefixExtractor = func(b []byte) []byte { return o.PrefixExtractor(b) }
+	}
+	return out
+}
+
+func entryValueLen(e *kv.Entry) uint32 {
+	if e == nil {
+		return 0
+	}
+	return uint32(len(e.Value))
 }

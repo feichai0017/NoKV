@@ -25,30 +25,6 @@ var batchedWriteCommandTypes = []raftcmdpb.CmdType{
 	raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
 }
 
-// ServiceOption configures StoreKV service runtime behavior.
-type ServiceOption func(*serviceOptions)
-
-type serviceOptions struct {
-	writeCommandBatchMaxSize int
-	writeCommandBatchMaxWait time.Duration
-}
-
-func defaultServiceOptions() serviceOptions {
-	return serviceOptions{
-		writeCommandBatchMaxSize: defaultWriteCommandBatchMaxSize,
-		writeCommandBatchMaxWait: defaultWriteCommandBatchMaxWait,
-	}
-}
-
-// WithWriteCommandBatch configures StoreKV write-command proposal batching.
-// A maxSize <= 1 or maxWait <= 0 disables batching and preserves direct submit.
-func WithWriteCommandBatch(maxSize int, maxWait time.Duration) ServiceOption {
-	return func(opts *serviceOptions) {
-		opts.writeCommandBatchMaxSize = maxSize
-		opts.writeCommandBatchMaxWait = maxWait
-	}
-}
-
 type writeCommandProposer func(context.Context, *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 
 type writeCommandBatchKey struct {

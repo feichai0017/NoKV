@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
@@ -13,12 +14,13 @@ import (
 // for that key.
 type PrefixExtractor func(userKey []byte) []byte
 
-// BlockCompression selects the SST data-block compression codec.
-type BlockCompression uint32
+// BlockCompression aliases table.Compression so existing engine-level code
+// can keep using the lsm-package name. See engine/lsm/table.Compression.
+type BlockCompression = table.Compression
 
 const (
-	BlockCompressionNone BlockCompression = iota
-	BlockCompressionSnappy
+	BlockCompressionNone   = table.CompressionNone
+	BlockCompressionSnappy = table.CompressionSnappy
 )
 
 const (

@@ -8,12 +8,16 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
+	"github.com/feichai0017/NoKV/engine/lsm/plan"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -37,6 +41,11 @@ var (
 		NumCompactors:       3,
 	}
 )
+
+// ikey builds an internal key for tests using the default column family.
+func ikey(s string, ts uint64) []byte {
+	return kv.InternalKey(kv.CFDefault, []byte(s), ts)
+}
 
 func buildInternalTestEntry() *kv.Entry {
 	return newRandomTestEntry()
@@ -142,7 +151,7 @@ func TestRotateReturnsSubmitError(t *testing.T) {
 	defer func() { _ = wlog.Close() }()
 	defer func() { _ = lsm.Close() }()
 
-	if err := lsm.flushQueue.close(); err != nil {
+	if err := lsm.flushPool.Close(); err != nil {
 		t.Fatalf("close flush queue: %v", err)
 	}
 	if err := lsm.Rotate(); err == nil {
@@ -167,7 +176,7 @@ func TestCloseBestEffortAggregatesErrors(t *testing.T) {
 
 	for i := range 2 {
 		entry := kv.NewInternalEntry(kv.CFDefault, []byte{byte('a' + i)}, uint64(i+1), []byte("v"), 0, 0)
-		if err := lsm.Set(entry); err != nil {
+		if err := lsm.set(entry); err != nil {
 			entry.DecrRef()
 			t.Fatalf("set entry %d: %v", i, err)
 		}
@@ -182,8 +191,8 @@ func TestCloseBestEffortAggregatesErrors(t *testing.T) {
 	if len(l0Tables) < 2 {
 		t.Fatalf("expected at least 2 L0 tables, got %d", len(l0Tables))
 	}
-	path1 := vfs.FileNameSSTable(dir, l0Tables[0].fid)
-	path2 := vfs.FileNameSSTable(dir, l0Tables[1].fid)
+	path1 := vfs.FileNameSSTable(dir, l0Tables[0].FID())
+	path2 := vfs.FileNameSSTable(dir, l0Tables[1].FID())
 	closeErr1 := errors.New("close table 1 injected")
 	closeErr2 := errors.New("close table 2 injected")
 	policy.AddRule(vfs.FailOnceRule(vfs.OpFileClose, path1, closeErr1))
@@ -205,12 +214,12 @@ func TestHitStorage(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 	e := buildInternalTestEntry()
 	defer e.DecrRef()
-	if err := lsm.Set(e); err != nil {
+	if err := lsm.set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
 	// Hit the memtable path.
 	hitMemtable := func() {
-		v, err := lsm.shards[0].memTable.Get(e.Key)
+		v, err := lsm.shards[0].memTable.get(e.Key)
 		require.NoError(t, err)
 		utils.CondPanic(!bytes.Equal(v.Value, e.Value), fmt.Errorf("[hitMemtable] !equal(v.Value, e.Value)"))
 	}
@@ -222,7 +231,7 @@ func TestHitStorage(t *testing.T) {
 	// Hit a non-L0 path.
 	hitNotL0 := func() {
 		// Compaction produces non-L0 data; this should hit L6.
-		lsm.levels.compaction.RunOnce(0)
+		lsm.levels.compactor.sched.RunOnce(0)
 		baseTest(t, lsm, 128)
 	}
 	// Exercise the bloom-filter miss path.
@@ -251,17 +260,17 @@ func TestLSMThrottleCallback(t *testing.T) {
 		mu     sync.Mutex
 		events []WriteThrottleState
 	)
-	lsm.throttleFn = func(state WriteThrottleState) {
+	lsm.throttle.SetCallback(func(state WriteThrottleState) {
 		mu.Lock()
 		events = append(events, state)
 		mu.Unlock()
-	}
+	})
 
-	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
-	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
-	lsm.throttleWrites(WriteThrottleSlowdown, 400, 256<<20)
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleStop, 1000, 0)
+	lsm.throttle.Apply(WriteThrottleStop, 1000, 0)
+	lsm.throttle.Apply(WriteThrottleSlowdown, 400, 256<<20)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -285,9 +294,9 @@ func TestPsarameter(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 	testNil := func() {
-		utils.CondPanic(lsm.Set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
+		utils.CondPanic(lsm.set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.set(nil) != err"))
 		_, err := lsm.Get(nil)
-		utils.CondPanic(err != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
+		utils.CondPanic(err != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.set(nil) != err"))
 	}
 	// TODO: skip p2 priority cases for now.
 	runTest(1, testNil)
@@ -302,7 +311,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	val := []byte("value")
 
 	e := kv.NewEntry(key, val)
-	if err := lsm.Set(e); err != nil {
+	if err := lsm.set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
 
@@ -313,7 +322,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 
 	del := kv.NewEntry(key, nil)
 	del.Meta = kv.BitDelete
-	if err := lsm.Set(del); err != nil {
+	if err := lsm.set(del); err != nil {
 		t.Fatalf("lsm.Set tombstone: %v", err)
 	}
 
@@ -329,475 +338,12 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	}
 }
 
-func TestLandingBufferAccounting(t *testing.T) {
-	now := time.Now()
-	t1 := &table{
-		fid:           1,
-		minKey:        kv.InternalKey(kv.CFDefault, []byte{0x00, 'a'}, 1),
-		maxKey:        kv.InternalKey(kv.CFDefault, []byte{0x00, 'z'}, 1),
-		size:          100,
-		valueSize:     40,
-		createdAt:     now.Add(-2 * time.Minute),
-		maxVersion:    7,
-		staleDataSize: 2,
-	}
-	t2 := &table{
-		fid:        2,
-		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'a'}, 1),
-		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'z'}, 1),
-		size:       200,
-		valueSize:  100,
-		createdAt:  now.Add(-1 * time.Minute),
-		maxVersion: 5,
-	}
-	t3 := &table{
-		fid:        3,
-		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x40, 'a'}, 1),
-		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x40, 'z'}, 1),
-		size:       50,
-		valueSize:  10,
-		createdAt:  now.Add(-3 * time.Minute),
-		maxVersion: 4,
-	}
-
-	var buf landingBuffer
-	buf.add(t1)
-	buf.addBatch([]*table{t2, t3})
-
-	if got := buf.tableCount(); got != 3 {
-		t.Fatalf("expected 3 tables, got %d", got)
-	}
-	if got := buf.totalSize(); got != 350 {
-		t.Fatalf("expected size 350, got %d", got)
-	}
-	if got := buf.totalValueSize(); got != 150 {
-		t.Fatalf("expected value size 150, got %d", got)
-	}
-	if buf.maxAgeSeconds() <= 0 {
-		t.Fatalf("expected max age > 0")
-	}
-
-	order := buf.shardOrderBySize()
-	if len(order) != 3 {
-		t.Fatalf("expected 3 shard order entries, got %d", len(order))
-	}
-	if order[0] != shardIndexForRange(t2.minKey) {
-		t.Fatalf("expected largest shard first, got %v", order)
-	}
-
-	meta := buf.allMeta()
-	if len(meta) != 3 {
-		t.Fatalf("expected 3 metas, got %d", len(meta))
-	}
-	if meta[0].MaxVersion == 0 {
-		t.Fatalf("expected max version in meta")
-	}
-	if buf.shardMetaByIndex(99) != nil {
-		t.Fatalf("expected nil shard meta for invalid index")
-	}
-
-	buf.sortShards()
-	views := buf.shardViews()
-	if len(views) != 3 {
-		t.Fatalf("expected 3 shard views, got %d", len(views))
-	}
-
-	buf.remove(map[uint64]struct{}{1: {}})
-	if got := buf.tableCount(); got != 2 {
-		t.Fatalf("expected 2 tables after remove, got %d", got)
-	}
-}
-
-func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	builderOpt := *opt
-	builderOpt.BlockSize = 64
-	builderOpt.BloomFalsePositive = 0.01
-	builder := newTableBuiler(&builderOpt)
-
-	for i := range 20 {
-		key := kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "k%02d", i), 1)
-		value := bytes.Repeat([]byte{'v'}, 48)
-		builder.AddKey(kv.NewEntry(key, value))
-	}
-
-	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 1)
-	tbl, err := openTable(lsm.levels, tableName, builder)
-	if err != nil {
-		t.Fatalf("openTable: %v", err)
-	}
-	if tbl == nil {
-		t.Fatalf("expected table from builder, got nil")
-	}
-	defer func() {
-		_ = tbl.DecrRef()
-	}()
-
-	tbl.mu.Lock()
-	tbl.closeSSTableLocked()
-	tbl.mu.Unlock()
-
-	tbl.idx.Store(nil)
-	tbl.lm.cache.delIndex(tbl.fid)
-	tbl.keyCount = 0
-	tbl.maxVersion = 0
-	tbl.hasBloom = false
-
-	if tbl.KeyCount() == 0 {
-		t.Fatalf("expected key count to be available")
-	}
-	if tbl.MaxVersionVal() == 0 {
-		t.Fatalf("expected max version to be available")
-	}
-	if !tbl.HasBloomFilter() {
-		t.Fatalf("expected bloom filter to be available")
-	}
-
-	idx := tbl.index()
-	if idx == nil {
-		t.Fatalf("expected table index")
-	}
-	if _, ok := tbl.blockOffset(len(idx.GetOffsets())); !ok {
-		t.Fatalf("expected block offset lookup to succeed")
-	}
-
-	it := tbl.NewIterator(&index.Options{IsAsc: true, PrefetchBlocks: 1, PrefetchWorkers: 1})
-	tblIter, ok := it.(*tableIterator)
-	if !ok {
-		t.Fatalf("expected table iterator, got %T", it)
-	}
-	tblIter.Rewind()
-	if !tblIter.Valid() {
-		t.Fatalf("expected iterator to be valid after rewind")
-	}
-	if tblIter.bi != nil {
-		_ = tblIter.bi.Rewind()
-	}
-	seekKey := kv.InternalKey(kv.CFDefault, []byte("k10"), 1)
-	tblIter.Seek(seekKey)
-	if tblIter.Valid() {
-		_ = tblIter.Item()
-	}
-	tblIter.Next()
-	_ = tblIter.Valid()
-	if err := tblIter.Close(); err != nil {
-		t.Fatalf("iterator close: %v", err)
-	}
-
-	it = tbl.NewIterator(&index.Options{IsAsc: false})
-	tblIter = it.(*tableIterator)
-	tblIter.Rewind()
-	if tblIter.Valid() {
-		_ = tblIter.Item()
-	}
-	tblIter.Seek(seekKey)
-	_ = tblIter.Valid()
-	_ = tblIter.Close()
-}
-
-func TestFillMaxLevelTables(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	maxLevel := lsm.option.MaxLevelNum - 1
-	if maxLevel < 1 {
-		t.Fatalf("invalid max level %d", maxLevel)
-	}
-
-	tbl := &table{
-		fid:           101,
-		minKey:        kv.InternalKey(kv.CFDefault, []byte("a"), 1),
-		maxKey:        kv.InternalKey(kv.CFDefault, []byte("z"), 1),
-		size:          1 << 20,
-		staleDataSize: 11 << 20,
-		createdAt:     time.Now().Add(-2 * time.Hour),
-		maxVersion:    1,
-	}
-
-	lsm.levels.levels[maxLevel].tables = []*table{tbl}
-	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
-	cd.lockLevels()
-	defer cd.unlockLevels()
-
-	ok := lsm.levels.fillMaxLevelTables([]*table{tbl}, cd)
-	if !ok {
-		t.Fatalf("expected max-level compaction plan")
-	}
-	if len(cd.top) != 1 || cd.top[0] != tbl {
-		t.Fatalf("expected compaction to select the max-level table")
-	}
-}
-
-// TestMaxLevelCompactionNoRangeDeleteResurrection verifies that a max-level
-// compaction which rewrites only the tombstone table does not resurrect older
-// covered point keys that remain in other max-level tables.
-func TestMaxLevelCompactionNoRangeDeleteResurrection(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	maxLevel := lsm.option.MaxLevelNum - 1
-	if maxLevel < 1 {
-		t.Fatalf("invalid max level %d", maxLevel)
-	}
-
-	// Table A: range tombstone [a, z)@10.
-	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
-	rt.Meta = kv.BitRangeDelete
-	tombstoneTbl := buildTableWithEntries(t, lsm, 1001, rt)
-
-	// Table B: older covered point key y@1.
-	pointTbl := buildTableWithEntry(t, lsm, 1002, "y", 1, "old-y")
-
-	lh := lsm.levels.levels[maxLevel]
-	lh.add(tombstoneTbl)
-	lh.add(pointTbl)
-	lh.Sort()
-
-	// Force max-level planner to pick only tombstoneTbl.
-	tombstoneTbl.staleDataSize = 11 << 20
-	tombstoneTbl.createdAt = time.Now().Add(-2 * time.Hour)
-	pointTbl.staleDataSize = 0
-	pointTbl.createdAt = time.Now().Add(-2 * time.Hour)
-
-	// We inserted tables directly, so rebuild the in-memory tombstone index.
-	lsm.levels.rebuildRangeTombstones()
-	if lsm.RangeTombstoneCount() == 0 {
-		t.Fatalf("expected range tombstone collector to contain tombstones")
-	}
-
-	seek := kv.InternalKey(kv.CFDefault, []byte("y"), math.MaxUint64)
-	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
-		if got != nil {
-			got.DecrRef()
-		}
-		t.Fatalf("before compaction: expected key y to be hidden by range tombstone, got err=%v", err)
-	}
-
-	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
-	// Keep target size tiny so collectBotTables does not include pointTbl.
-	cd.plan.ThisFileSize = 1
-	cd.plan.NextFileSize = 1
-	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("expected max-level compaction plan")
-	}
-	if len(cd.top) != 1 || cd.top[0].fid != tombstoneTbl.fid {
-		t.Fatalf("expected compaction to select only tombstone table, got top=%v", tablesToString(cd.top))
-	}
-	if len(cd.bot) != 0 {
-		t.Fatalf("expected no bot tables to be compacted, got %d", len(cd.bot))
-	}
-
-	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
-		t.Fatalf("runCompactDef max-level: %v", err)
-	}
-	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-
-	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
-		if got != nil {
-			got.DecrRef()
-		}
-		t.Fatalf("after compaction: key resurrected, expected ErrKeyNotFound, got err=%v", err)
-	}
-}
-
-// TestMaxLevelCompactionRangeDeleteResurrection is a regression test for the
-// bug where dropping a max-level range tombstone during partial rewrite could
-// resurrect older covered point keys once tombstone state is rebuilt.
-func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	maxLevel := lsm.option.MaxLevelNum - 1
-	if maxLevel < 1 {
-		t.Fatalf("invalid max level %d", maxLevel)
-	}
-
-	compactL0To := func(level int) {
-		t.Helper()
-		cd := buildCompactDef(lsm, 0, 0, level)
-		if ok := lsm.levels.fillTables(cd); !ok {
-			t.Fatalf("expected L0->L%d compaction plan", level)
-		}
-		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
-			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
-		}
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-	}
-	seek := kv.InternalKey(kv.CFDefault, []byte("y"), math.MaxUint64)
-
-	// 1) Create older point key in one max-level table.
-	point := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("y"), 1), []byte("old-y"))
-	if err := lsm.Set(point); err != nil {
-		t.Fatalf("set point: %v", err)
-	}
-	if err := lsm.Rotate(); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	waitForL0(t, lsm)
-	compactL0To(maxLevel)
-	if got, err := lsm.Get(seek); err != nil {
-		t.Fatalf("expected point key visible before tombstone, got err=%v", err)
-	} else {
-		if !bytes.Equal(got.Value, []byte("old-y")) {
-			got.DecrRef()
-			t.Fatalf("expected point value old-y, got %q", got.Value)
-		}
-		got.DecrRef()
-	}
-
-	// 2) Create newer range tombstone in a separate max-level table.
-	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
-	rt.Meta = kv.BitRangeDelete
-	if err := lsm.Set(rt); err != nil {
-		t.Fatalf("set range tombstone: %v", err)
-	}
-	if err := lsm.Rotate(); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	waitForL0(t, lsm)
-	compactL0To(maxLevel)
-
-	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
-		if got != nil {
-			got.DecrRef()
-		}
-		t.Fatalf("precondition failed: expected y hidden by tombstone, got err=%v", err)
-	}
-
-	// 3) Force max-level planner to rewrite only the tombstone table.
-	maxTables := lsm.levels.levels[maxLevel].tablesSnapshot()
-	if len(maxTables) < 2 {
-		t.Fatalf("expected at least two max-level tables, got %d", len(maxTables))
-	}
-	var tombstoneTbl *table
-	oldEnough := time.Now().Add(-2 * time.Hour)
-	for _, tbl := range maxTables {
-		tbl.createdAt = oldEnough
-		tbl.staleDataSize = 0
-		if tableContainsRangeDelete(tbl) {
-			tombstoneTbl = tbl
-		}
-	}
-	if tombstoneTbl == nil {
-		t.Fatalf("expected one max-level table containing range tombstone")
-	}
-	tombstoneTbl.staleDataSize = 11 << 20
-
-	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
-	// Keep target size tiny so collectBotTables does not include adjacent tables.
-	cd.plan.ThisFileSize = 1
-	cd.plan.NextFileSize = 1
-	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("expected max-level compaction plan")
-	}
-	if len(cd.top) != 1 || cd.top[0].fid != tombstoneTbl.fid {
-		t.Fatalf("expected compaction top to be only tombstone table, got %v", tablesToString(cd.top))
-	}
-	if len(cd.bot) != 0 {
-		t.Fatalf("expected bot to be empty for partial max-level rewrite, got %d", len(cd.bot))
-	}
-
-	if err := lsm.levels.runCompactDef(0, maxLevel, *cd); err != nil {
-		t.Fatalf("runCompactDef max-level: %v", err)
-	}
-	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-
-	// Sanity: point key table should still exist because only tombstone table was compacted.
-	hasPointInSST := false
-	for _, tbl := range lsm.levels.levels[maxLevel].tablesSnapshot() {
-		if tbl == nil {
-			continue
-		}
-		var v uint64
-		e, err := tbl.Search(seek, &v)
-		if err == nil && e != nil {
-			hasPointInSST = true
-			e.DecrRef()
-			break
-		}
-	}
-	if !hasPointInSST {
-		t.Fatalf("sanity failed: no max-level SST contains key y after tombstone-only compaction")
-	}
-
-	// 4) Restart to ensure visibility comes only from persisted state.
-	// If tombstone was dropped too early, y becomes visible again (resurrection).
-	workDir := lsm.option.WorkDir
-	if err := lsm.Close(); err != nil {
-		t.Fatalf("close before reopen: %v", err)
-	}
-	opt.WorkDir = workDir
-	lsm = buildLSM()
-
-	if got, err := lsm.Get(seek); err != utils.ErrKeyNotFound {
-		if got != nil {
-			got.DecrRef()
-		}
-		t.Fatalf("regression: key y resurrected after max-level tombstone drop, err=%v", err)
-	}
-}
-
-func TestLevelHandlerLandingMetrics(t *testing.T) {
-	now := time.Now()
-	t1 := &table{
-		fid:        10,
-		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x00, 'a'}, 1),
-		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x00, 'z'}, 1),
-		size:       120,
-		valueSize:  30,
-		createdAt:  now.Add(-time.Minute),
-		maxVersion: 1,
-	}
-	t2 := &table{
-		fid:        11,
-		minKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'a'}, 1),
-		maxKey:     kv.InternalKey(kv.CFDefault, []byte{0x80, 'z'}, 1),
-		size:       60,
-		valueSize:  10,
-		createdAt:  now.Add(-2 * time.Minute),
-		maxVersion: 1,
-	}
-
-	lh := &levelHandler{levelNum: 3}
-	lh.addLanding(t1)
-	lh.addLanding(t2)
-
-	if got := lh.numLandingTables(); got != 2 {
-		t.Fatalf("expected 2 landing tables, got %d", got)
-	}
-	if got := lh.landingDataSize(); got != 180 {
-		t.Fatalf("expected landing size 180, got %d", got)
-	}
-	if got := lh.landingValueBytes(); got != 40 {
-		t.Fatalf("expected landing value bytes 40, got %d", got)
-	}
-	expectDensity := float64(40) / float64(180)
-	if math.Abs(lh.landingValueDensity()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected landing density")
-	}
-	if math.Abs(lh.landingDensityLocked()-expectDensity) > 1e-9 {
-		t.Fatalf("unexpected landing density locked")
-	}
-	if lh.maxLandingAgeSeconds() <= 0 {
-		t.Fatalf("expected non-zero max landing age")
-	}
-	if idx := lh.landingShardByBacklog(); idx < 0 {
-		t.Fatalf("expected valid landing shard index")
-	}
-}
-
-func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
+func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table.Table {
 	t.Helper()
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
 	builderOpt.BloomFalsePositive = 0.01
-	builder := newTableBuiler(&builderOpt)
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	keys := []string{"a", "b", "c"}
 	for _, k := range keys {
@@ -806,7 +352,7 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 	}
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable: %v", err)
 	}
@@ -816,18 +362,18 @@ func buildTestTable(t *testing.T, lsm *LSM, fid uint64) *table {
 	return tbl
 }
 
-func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uint64, val string) *table {
+func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uint64, val string) *table.Table {
 	t.Helper()
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
 	builderOpt.BloomFalsePositive = 0.01
-	builder := newTableBuiler(&builderOpt)
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	ikey := kv.InternalKey(kv.CFDefault, []byte(key), ver)
 	builder.AddKey(kv.NewEntry(ikey, []byte(val)))
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable: %v", err)
 	}
@@ -837,19 +383,19 @@ func buildTableWithEntry(t *testing.T, lsm *LSM, fid uint64, key string, ver uin
 	return tbl
 }
 
-func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.Entry) *table {
+func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.Entry) *table.Table {
 	t.Helper()
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
 	builderOpt.BloomFalsePositive = 0.01
-	builder := newTableBuiler(&builderOpt)
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	for _, e := range entries {
 		builder.AddKey(e)
 	}
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fid)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	if err != nil {
 		t.Fatalf("openTable failed: %v", err)
 	}
@@ -857,28 +403,6 @@ func buildTableWithEntries(t *testing.T, lsm *LSM, fid uint64, entries ...*kv.En
 		t.Fatalf("expected table from builder")
 	}
 	return tbl
-}
-
-func tableContainsRangeDelete(tbl *table) bool {
-	if tbl == nil {
-		return false
-	}
-	it := tbl.NewIterator(&index.Options{IsAsc: true})
-	if it == nil {
-		return false
-	}
-	defer func() { _ = it.Close() }()
-
-	for it.Rewind(); it.Valid(); it.Next() {
-		item := it.Item()
-		if item == nil || item.Entry() == nil {
-			continue
-		}
-		if item.Entry().IsRangeDelete() {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLandingSearch(t *testing.T) {
@@ -892,9 +416,9 @@ func TestLandingSearch(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 
 	var buf landingBuffer
-	buf.add(tbl)
+	buf.Add(tbl)
 
-	found, err := buf.search(key, nil)
+	found, err := buf.Search(key, nil)
 	if err != nil {
 		t.Fatalf("landing search: %v", err)
 	}
@@ -907,7 +431,7 @@ func TestLandingSearch(t *testing.T) {
 	}
 	found.DecrRef()
 
-	_, err = buf.search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
+	_, err = buf.Search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
 	if err != utils.ErrKeyNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -924,11 +448,11 @@ func TestLandingSearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblNew.DecrRef() }()
 
 	var buf landingBuffer
-	buf.add(tblOld)
-	buf.add(tblNew)
+	buf.Add(tblOld)
+	buf.Add(tblNew)
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
-	found, err := buf.search(key, nil)
+	found, err := buf.Search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
@@ -949,11 +473,11 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3}
-	lh.landing.add(landingTbl)
-	lh.tables = []*table{mainTbl}
+	lh.landing.Add(landingTbl)
+	lh.tables = []*table.Table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
-	got, err := lh.Get(key)
+	got, err := lh.get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
 	}
@@ -972,10 +496,10 @@ func TestLevelGetMainWhenLandingEmpty(t *testing.T) {
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 2}
-	lh.tables = []*table{mainTbl}
+	lh.tables = []*table.Table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
-	got, err := lh.Get(key)
+	got, err := lh.get(key)
 	if err != nil || got == nil {
 		t.Fatalf("level get err=%v entry=%v", err, got)
 	}
@@ -998,7 +522,7 @@ func TestL0SearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblNew.DecrRef() }()
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
-	l0 := &levelHandler{levelNum: 0, tables: []*table{tblOther, tblOld, tblNew}}
+	l0 := &levelHandler{levelNum: 0, tables: []*table.Table{tblOther, tblOld, tblNew}}
 	got, err := l0.searchL0SST(key)
 	if err != nil || got == nil {
 		t.Fatalf("l0 search err=%v entry=%v", err, got)
@@ -1008,7 +532,7 @@ func TestL0SearchPrefersLatestVersion(t *testing.T) {
 	}
 	got.DecrRef()
 
-	l0 = &levelHandler{levelNum: 0, tables: []*table{tblNew, tblOld}}
+	l0 = &levelHandler{levelNum: 0, tables: []*table.Table{tblNew, tblOld}}
 	got, err = l0.searchL0SST(key)
 	if err != nil || got == nil {
 		t.Fatalf("l0 search err=%v entry=%v", err, got)
@@ -1033,7 +557,7 @@ func TestL0SearchPrefersNewestTableForSameVersion(t *testing.T) {
 	defer func() { _ = tblNew.DecrRef() }()
 
 	query := kv.InternalKey(kv.CFLock, key, kv.MaxVersion)
-	l0 := &levelHandler{levelNum: 0, tables: []*table{tblOld, tblNew}}
+	l0 := &levelHandler{levelNum: 0, tables: []*table.Table{tblOld, tblNew}}
 	got, err := l0.searchL0SST(query)
 	if err != nil || got == nil {
 		t.Fatalf("l0 search err=%v entry=%v", err, got)
@@ -1052,7 +576,7 @@ func TestLevelSearchRespectsMaxVersion(t *testing.T) {
 	tbl := buildTableWithEntry(t, lsm, 41, "k", 2, "v2")
 	defer func() { _ = tbl.DecrRef() }()
 
-	lh := &levelHandler{levelNum: 3, tables: []*table{tbl}}
+	lh := &levelHandler{levelNum: 3, tables: []*table.Table{tbl}}
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
 
 	maxVer := uint64(5)
@@ -1073,14 +597,14 @@ func TestLevelSearchLandingAndLN(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("c"), 1)
 
 	lh := &levelHandler{levelNum: 3}
-	lh.landing.add(tbl)
-	found, err := lh.landing.search(key, nil)
+	lh.landing.Add(tbl)
+	found, err := lh.landing.Search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
 	found.DecrRef()
 
-	lh.tables = []*table{tbl}
+	lh.tables = []*table.Table{tbl}
 	found, err = lh.searchLNSST(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("level search err=%v entry=%v", err, found)
@@ -1091,21 +615,21 @@ func TestLevelSearchLandingAndLN(t *testing.T) {
 		t.Fatalf("expected no table for key")
 	}
 
-	landingHit, err := lh.Get(key)
+	landingHit, err := lh.get(key)
 	if err != nil || landingHit == nil {
 		t.Fatalf("level get err=%v entry=%v", err, landingHit)
 	}
 	landingHit.DecrRef()
 
-	l0 := &levelHandler{levelNum: 0, tables: []*table{tbl}}
-	l0Hit, err := l0.Get(key)
+	l0 := &levelHandler{levelNum: 0, tables: []*table.Table{tbl}}
+	l0Hit, err := l0.get(key)
 	if err != nil || l0Hit == nil {
 		t.Fatalf("l0 get err=%v entry=%v", err, l0Hit)
 	}
 	l0Hit.DecrRef()
 
-	lsm.levels.levels[0].tables = []*table{tbl}
-	lmHit, err := lsm.levels.Get(key)
+	lsm.levels.levels[0].tables = []*table.Table{tbl}
+	lmHit, err := lsm.levels.get(key)
 	if err != nil || lmHit == nil {
 		t.Fatalf("levels get err=%v entry=%v", err, lmHit)
 	}
@@ -1126,7 +650,7 @@ func TestGetTableForKeyBinarySearchBoundariesAndGap(t *testing.T) {
 
 	lh := &levelHandler{
 		levelNum: 2,
-		tables:   []*table{tblA, tblD, tblG},
+		tables:   []*table.Table{tblA, tblD, tblG},
 	}
 
 	if got := lh.getTableForKey(kv.InternalKey(kv.CFDefault, []byte("a"), math.MaxUint64)); got != tblA {
@@ -1169,12 +693,12 @@ func TestLSMMetricsAPIs(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
-	requireNoError(lsm.Set(entry))
+	requireNoError(lsm.set(entry))
 
-	_ = lsm.FlushPending()
+	_ = lsm.flushPending()
 	diag := lsm.Diagnostics()
-	if diag.MaxVersion != lsm.MaxVersion() {
-		t.Fatalf("expected diagnostics max version %d to match lsm max version %d", diag.MaxVersion, lsm.MaxVersion())
+	if diag.MaxVersion != lsm.maxVersion() {
+		t.Fatalf("expected diagnostics max version %d to match lsm max version %d", diag.MaxVersion, lsm.maxVersion())
 	}
 	if diag.Compaction.ValueWeight <= 0 {
 		t.Fatalf("expected compaction value weight to be positive")
@@ -1193,20 +717,20 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b1"), 1), []byte("v1")),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b2"), 1), []byte("v2")),
 	}
-	if err := lsm.SetBatch(nil); err != nil {
+	if err := lsm.setBatch(nil); err != nil {
 		t.Fatalf("unexpected error on empty batch: %v", err)
 	}
-	if err := lsm.SetBatch(entries); err != nil {
+	if err := lsm.setBatch(entries); err != nil {
 		t.Fatalf("set batch: %v", err)
 	}
-	if err := lsm.SetBatch([]*kv.Entry{{}}); err == nil {
+	if err := lsm.setBatch([]*kv.Entry{{}}); err == nil {
 		t.Fatalf("expected empty key error")
 	}
 
 	if lsm.memTableIsNil() {
 		t.Fatalf("expected memtable to be initialized")
 	}
-	if lsm.MemSize() <= 0 {
+	if lsm.memSize() <= 0 {
 		t.Fatalf("expected memtable size to be positive")
 	}
 	if _, ok := lsm.shards[0].memTable.index.(*index.ART); !ok {
@@ -1220,11 +744,6 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 	if release != nil {
 		release()
 	}
-
-	lsm.levels.levels[0].tables = []*table{{keyCount: 2, maxVersion: 1}}
-	if count := lsm.Diagnostics().Entries; count <= 0 {
-		t.Fatalf("expected entry count > 0, got %d", count)
-	}
 }
 
 func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
@@ -1236,7 +755,7 @@ func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab1"), 1), []byte("v1")),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab2"), 1), []byte("v2")),
 	}
-	if err := lsm.SetBatch(entries); err != nil {
+	if err := lsm.setBatch(entries); err != nil {
 		t.Fatalf("set batch: %v", err)
 	}
 	shard := lsm.shards[0]
@@ -1277,7 +796,7 @@ func TestLSMSetBatchRejectsOversizedAtomicBatch(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big1"), 1), large),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big2"), 1), large),
 	}
-	err := lsm.SetBatch(entries)
+	err := lsm.setBatch(entries)
 	if !errors.Is(err, utils.ErrTxnTooBig) {
 		t.Fatalf("expected ErrTxnTooBig, got %v", err)
 	}
@@ -1308,7 +827,7 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-a", workerID, i), 1), value),
 					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-b", workerID, i), 1), value),
 				}
-				err := lsm.SetBatch(entries)
+				err := lsm.setBatch(entries)
 				for _, entry := range entries {
 					entry.DecrRef()
 				}
@@ -1416,7 +935,7 @@ func TestWriteBatchesWALFailureDoesNotApplyMemtable(t *testing.T) {
 	require.Equal(t, 0, failedAt)
 	require.Error(t, err)
 
-	got, err := shard.memTable.Get(entry.Key)
+	got, err := shard.memTable.get(entry.Key)
 	require.NoError(t, err)
 	require.Empty(t, got.Value)
 	got.DecrRef()
@@ -1516,9 +1035,9 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	var events []WriteThrottleState
-	lsm.throttleFn = func(state WriteThrottleState) {
+	lsm.throttle.SetCallback(func(state WriteThrottleState) {
 		events = append(events, state)
-	}
+	})
 
 	// Force explicit thresholds so we can validate stop -> slowdown -> none.
 	lsm.levels.opt.L0SlowdownWritesTrigger = 2
@@ -1530,16 +1049,16 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	lsm.levels.opt.WriteThrottleMinRate = 64 << 20
 	lsm.levels.opt.WriteThrottleMaxRate = 512 << 20
 	l0 := lsm.levels.levels[0]
-	l0.tables = []*table{{}, {}, {}}
-	lsm.levels.adjustThrottle()
+	l0.tables = []*table.Table{{}, {}, {}}
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 1000 {
 		t.Fatalf("expected stop pressure=1000, got %d", got)
 	}
 	if got := lsm.ThrottleRateBytesPerSec(); got != 0 {
 		t.Fatalf("expected stop rate=0, got %d", got)
 	}
-	l0.tables = []*table{{}, {}}
-	lsm.levels.adjustThrottle()
+	l0.tables = []*table.Table{{}, {}}
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got == 0 || got >= 1000 {
 		t.Fatalf("expected slowdown pressure in (0,1000), got %d", got)
 	}
@@ -1547,7 +1066,7 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 		t.Fatalf("expected slowdown rate > 0")
 	}
 	l0.tables = nil
-	lsm.levels.adjustThrottle()
+	lsm.levels.compactor.adjustThrottle()
 	if got := lsm.ThrottlePressurePermille(); got != 0 {
 		t.Fatalf("expected clear pressure=0, got %d", got)
 	}
@@ -1565,213 +1084,13 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	//  the legacy Version.LogSegment/LogOffset diagnostic fields.
 	//  Recovery is per-shard via wal.Manager.Replay; the cache was dead.)
 
-	lsm.levels.recordCompactionMetrics(5 * time.Millisecond)
-	lastMs, maxMs, runs := lsm.levels.compactionDurations()
+	lsm.levels.compactor.recordRun(5 * time.Millisecond)
+	lastMs, maxMs, runs := lsm.levels.compactor.runDurations()
 	if runs == 0 || lastMs <= 0 || maxMs <= 0 {
 		t.Fatalf("unexpected compaction metrics: last=%f max=%f runs=%d", lastMs, maxMs, runs)
 	}
 
-	l0.tables = []*table{{maxVersion: 7, keyCount: 2}}
-	if v := lsm.levels.maxVersion(); v != 7 {
-		t.Fatalf("expected max version 7, got %d", v)
-	}
-
 	_ = lsm.levels.cacheMetrics()
-}
-
-func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
-	min := kv.InternalKey(kv.CFDefault, []byte("a"), 1)
-	max := kv.InternalKey(kv.CFDefault, []byte("z"), 1)
-	lh := &levelHandler{levelNum: 2}
-	lh.tables = []*table{
-		{minKey: min, maxKey: max},
-	}
-	lh.landing.ensureInit()
-	lh.landing.add(&table{
-		minKey:    kv.InternalKey(kv.CFDefault, []byte("k"), 1),
-		maxKey:    kv.InternalKey(kv.CFDefault, []byte("p"), 1),
-		size:      50,
-		valueSize: 20,
-	})
-
-	lh.totalSize = 100
-	lh.totalValueSize = 40
-	lh.totalStaleSize = 10
-	metrics := lh.metricsSnapshot()
-	if metrics.ValueDensity <= 0 || metrics.LandingValueDensity <= 0 {
-		t.Fatalf("expected non-zero density metrics")
-	}
-
-	tbl := &table{hasBloom: true}
-	if !tbl.HasBloomFilter() {
-		t.Fatalf("expected bloom filter to be reported")
-	}
-}
-
-// TestCompact exercises L0->Lmax compaction.
-func TestCompact(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-	ok := false
-	hasTable := func(lh *levelHandler, fid uint64) bool {
-		if lh == nil {
-			return false
-		}
-		lh.RLock()
-		defer lh.RUnlock()
-		for _, t := range lh.tables {
-			if t.fid == fid {
-				return true
-			}
-		}
-		for _, sh := range lh.landing.shards {
-			for _, t := range sh.tables {
-				if t.fid == fid {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	l0TOLMax := func() {
-		// Ensure L0 accumulates enough tables to trigger the landing path. Newer Go versions
-		// batch allocations slightly differently, so loop until we hit the configured limit.
-		required := lsm.levels.opt.NumLevelZeroTables
-		for tries := 0; tries < 8 && lsm.levels.levels[0].numTables() < required; tries++ {
-			baseTest(t, lsm, 256)
-		}
-		if lsm.levels.levels[0].numTables() < required {
-			t.Fatalf("expected at least %d L0 tables before compaction, got %d",
-				required, lsm.levels.levels[0].numTables())
-		}
-
-		before := make(map[uint64]struct{})
-		for _, tbl := range lsm.levels.levels[0].tablesSnapshot() {
-			before[tbl.fid] = struct{}{}
-		}
-		lsm.levels.compaction.RunOnce(1)
-		ok = false
-		for fid := range before {
-			if hasTable(lsm.levels.levels[6], fid) {
-				ok = true
-				break
-			}
-		}
-		utils.CondPanic(!ok, fmt.Errorf("[l0TOLMax] fid not found"))
-	}
-	l0ToL0 := func() {
-		// Seed some data first.
-		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID.Load() + 1
-		cd := buildCompactDef(lsm, 0, 0, 0)
-		// Use a test-only tweak to satisfy validation checks.
-		tricky(cd.thisLevel.tablesSnapshot())
-		ok := lsm.levels.fillTablesL0ToL0(cd)
-		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] lsm.levels.fillTablesL0ToL0(cd) ret == false"))
-		err := lsm.levels.runCompactDef(0, 0, *cd)
-		// Clear global state to isolate downstream tests.
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		require.NoError(t, err)
-		ok = hasTable(lsm.levels.levels[0], fid)
-		utils.CondPanic(!ok, fmt.Errorf("[l0ToL0] fid not found"))
-	}
-	nextCompact := func() {
-		baseTest(t, lsm, 128)
-		fid := lsm.levels.maxFID.Load() + 1
-		cd := buildCompactDef(lsm, 0, 0, 1)
-		// Use a test-only tweak to satisfy validation checks.
-		tricky(cd.thisLevel.tablesSnapshot())
-		ok := lsm.levels.fillTables(cd)
-		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] lsm.levels.fillTables(cd) ret == false"))
-		err := lsm.levels.runCompactDef(0, 0, *cd)
-		// Clear global state to isolate downstream tests.
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		require.NoError(t, err)
-		ok = hasTable(lsm.levels.levels[1], fid)
-		utils.CondPanic(!ok, fmt.Errorf("[nextCompact] fid not found"))
-	}
-
-	maxToMax := func() {
-		baseTest(t, lsm, 128)
-		prevMax := lsm.levels.maxFID.Load()
-		cd := buildCompactDef(lsm, 6, 6, 6)
-		// Use a test-only tweak to satisfy validation checks.
-		tricky(cd.thisLevel.tablesSnapshot())
-		ok := lsm.levels.fillTables(cd)
-		if !ok && lsm.levels.levels[6].numLandingTables() > 0 {
-			pri := Priority{
-				Level:       6,
-				LandingMode: LandingDrain,
-				Target:      lsm.levels.levelTargets(),
-				Score:       2,
-				Adjusted:    2,
-			}
-			require.NoError(t, lsm.levels.doCompact(0, pri))
-			tricky(cd.thisLevel.tablesSnapshot())
-			ok = lsm.levels.fillTables(cd)
-		}
-		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] lsm.levels.fillTables(cd) ret == false"))
-		err := lsm.levels.runCompactDef(0, 6, *cd)
-		// Clear global state to isolate downstream tests.
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-		require.NoError(t, err)
-		ok = false
-		if hasTable(lsm.levels.levels[6], prevMax+1) {
-			ok = true
-		} else {
-			level := lsm.levels.levels[6]
-			level.RLock()
-			for _, tbl := range level.tables {
-				if tbl.fid > prevMax {
-					ok = true
-					break
-				}
-			}
-			if !ok {
-				for _, sh := range level.landing.shards {
-					for _, tbl := range sh.tables {
-						if tbl.fid > prevMax {
-							ok = true
-							break
-						}
-					}
-					if ok {
-						break
-					}
-				}
-			}
-			level.RUnlock()
-		}
-		utils.CondPanic(!ok, fmt.Errorf("[maxToMax] fid not found"))
-	}
-	parallerCompact := func() {
-		baseTest(t, lsm, 128)
-		cd := buildCompactDef(lsm, 0, 0, 1)
-		// Use a test-only tweak to satisfy validation checks.
-		tricky(cd.thisLevel.tablesSnapshot())
-		ok := lsm.levels.fillTables(cd)
-		utils.CondPanic(!ok, fmt.Errorf("[parallerCompact] lsm.levels.fillTables(cd) ret == false"))
-		// Execute two identical compaction plans to simulate contention.
-		errCh := make(chan error, 1)
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			errCh <- lsm.levels.runCompactDef(0, 0, *cd)
-		})
-		errMain := lsm.levels.runCompactDef(0, 0, *cd)
-		wg.Wait()
-		errBg := <-errCh
-		if errBg != nil {
-			t.Fatalf("parallel compaction error: %v", errBg)
-		}
-		if errMain != nil {
-			t.Fatalf("parallel compaction error: %v", errMain)
-		}
-		// Verify compaction status reflects parallel work.
-		utils.CondPanic(!lsm.levels.compactState.HasRanges(), fmt.Errorf("[parallerCompact] not is paralle"))
-	}
-	// Run N times to exercise multiple SSTables.
-	runTest(1, l0TOLMax, l0ToL0, nextCompact, maxToMax, parallerCompact)
 }
 
 func TestLandingMergeStaysInLanding(t *testing.T) {
@@ -1789,10 +1108,10 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 		t.Fatalf("expected L0 tables before landing merge test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
-	cd.top = []*table{tables[0]}
-	cd.plan.ThisRange = getKeyRange(cd.top...)
-	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToLanding(cd); err != nil {
+	cd.top = []*table.Table{tables[0]}
+	cd.spec.ThisRange = getKeyRange(cd.top...)
+	cd.spec.NextRange = cd.spec.ThisRange
+	if err := lsm.levels.compactor.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
@@ -1803,14 +1122,14 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 	}
 	beforeMain := target.numTables()
 
-	pri := Priority{
+	pri := plan.Priority{
 		Level:       6,
 		Score:       5.0,
 		Adjusted:    5.0,
-		Target:      lsm.levels.levelTargets(),
-		LandingMode: LandingKeep,
+		Target:      lsm.levels.compactor.levelTargets(),
+		LandingMode: plan.LandingKeep,
 	}
-	if err := lsm.levels.doCompact(0, pri); err != nil {
+	if err := lsm.levels.compactor.doCompact(0, pri); err != nil {
 		t.Fatalf("landing merge compact failed: %v", err)
 	}
 
@@ -1820,6 +1139,51 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 	}
 	if target.numTables() != beforeMain {
 		t.Fatalf("main table count changed unexpectedly: before=%d after=%d", beforeMain, target.numTables())
+	}
+}
+
+// TestLevelHandlerLandingAggregates exercises landing-buffer accessors on a
+// freshly built levelHandler with two real Builder-built tables.
+func TestLevelHandlerLandingAggregates(t *testing.T) {
+	clearDir()
+	lsm := buildLSM()
+	defer func() { _ = lsm.Close() }()
+
+	t1 := buildTableWithEntry(t, lsm, 9001, "aa", 1, "v1")
+	t2 := buildTableWithEntry(t, lsm, 9002, "zz", 1, "v22")
+
+	lh := &levelHandler{levelNum: 3}
+	lh.addLandingTable(t1)
+	lh.addLandingTable(t2)
+
+	if got := lh.numLandingTables(); got != 2 {
+		t.Fatalf("expected 2 landing tables, got %d", got)
+	}
+	totalSize := lh.landingDataSize()
+	if totalSize <= 0 {
+		t.Fatalf("expected positive landing data size, got %d", totalSize)
+	}
+	totalValues := lh.landingValueBytes()
+	if totalValues <= 0 {
+		t.Fatalf("expected positive landing value bytes, got %d", totalValues)
+	}
+	density := lh.landingValueDensity()
+	expected := float64(totalValues) / float64(totalSize)
+	if math.Abs(density-expected) > 1e-9 {
+		t.Fatalf("density mismatch: got %f want %f", density, expected)
+	}
+	if lh.maxLandingAgeSeconds() < 0 {
+		t.Fatalf("expected non-negative landing age, got %f", lh.maxLandingAgeSeconds())
+	}
+	if idx := lh.landingShardByBacklog(); idx < 0 {
+		t.Fatalf("expected valid landing shard index, got %d", idx)
+	}
+
+	lh.totalSize = totalSize
+	lh.totalValueSize = totalValues
+	snap := lh.metricsSnapshot()
+	if snap.LandingValueDensity <= 0 {
+		t.Fatalf("expected non-zero landing value density in snapshot")
 	}
 }
 
@@ -1841,22 +1205,22 @@ func TestLandingShardParallelSafety(t *testing.T) {
 		t.Fatalf("expected L0 tables for parallel landing test")
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
-	cd.top = []*table{tables[0]}
-	cd.plan.ThisRange = getKeyRange(cd.top...)
-	cd.plan.NextRange = cd.plan.ThisRange
-	if err := lsm.levels.moveToLanding(cd); err != nil {
+	cd.top = []*table.Table{tables[0]}
+	cd.spec.ThisRange = getKeyRange(cd.top...)
+	cd.spec.NextRange = cd.spec.ThisRange
+	if err := lsm.levels.compactor.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
 	// Trigger parallel landing-only compactions across shards.
-	pri := Priority{
+	pri := plan.Priority{
 		Level:       6,
 		Score:       6.0,
 		Adjusted:    6.0,
-		Target:      lsm.levels.levelTargets(),
-		LandingMode: LandingDrain,
+		Target:      lsm.levels.compactor.levelTargets(),
+		LandingMode: plan.LandingDrain,
 	}
-	if err := lsm.levels.doCompact(0, pri); err != nil {
+	if err := lsm.levels.compactor.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel landing compaction failed: %v", err)
 	}
 
@@ -1880,11 +1244,11 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//caseList = append(caseList, e)
 
 	// Randomized data to exercise write paths.
-	require.NoError(t, lsm.Set(e))
+	require.NoError(t, lsm.set(e))
 	for i := 1; i < n; i++ {
 		ee := buildInternalTestEntry()
 		defer ee.DecrRef()
-		require.NoError(t, lsm.Set(ee))
+		require.NoError(t, lsm.set(ee))
 		// caseList = append(caseList, ee)
 	}
 	// Read back from the levels.
@@ -1919,7 +1283,7 @@ func runTest(n int, testFunList ...func()) {
 
 // buildCompactDef constructs a compaction definition for tests.
 func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
-	t := Targets{
+	t := plan.Targets{
 		TargetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
 		FileSz:    []int64{1024, 2097152, 2097152, 2097152, 2097152, 2097152, 2097152},
 		BaseLevel: nextLevel,
@@ -1938,7 +1302,7 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 		compactorId: id,
 		thisLevel:   lsm.levels.levels[thisLevel],
 		nextLevel:   lsm.levels.levels[nextLevel],
-		plan: Plan{
+		spec: plan.Plan{
 			ThisLevel:    thisLevel,
 			NextLevel:    nextLevel,
 			ThisFileSize: levelFileSize(thisLevel),
@@ -1950,21 +1314,12 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 }
 
 // buildCompactionPriority constructs a compaction priority for tests.
-func buildCompactionPriority(lsm *LSM, thisLevel int, t Targets) Priority {
-	return Priority{
+func buildCompactionPriority(lsm *LSM, thisLevel int, t plan.Targets) plan.Priority {
+	return plan.Priority{
 		Level:    thisLevel,
 		Score:    8.6,
 		Adjusted: 860,
 		Target:   t,
-	}
-}
-
-func tricky(tables []*table) {
-	// Use a test-only tweak to satisfy validation checks across branches.
-	for _, table := range tables {
-		table.staleDataSize = 10 << 20
-		t, _ := time.Parse("2006-01-02 15:04:05", "1995-08-10 00:00:00")
-		table.createdAt = t
 	}
 }
 
@@ -1979,13 +1334,13 @@ func waitForL0Tables(t *testing.T, lsm *LSM, atLeast int) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if lsm.FlushPending() == 0 && lsm.levels.levels[0].numTables() >= atLeast {
+		if lsm.flushPending() == 0 && lsm.levels.levels[0].numTables() >= atLeast {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for L0 table (pending=%d tables=%d, need>=%d)",
-		lsm.FlushPending(), lsm.levels.levels[0].numTables(), atLeast)
+		lsm.flushPending(), lsm.levels.levels[0].numTables(), atLeast)
 }
 
 func clearDir() {
@@ -2021,16 +1376,16 @@ func TestImportExternalSST(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	testFilePath := opt.WorkDir + "/99999.sst"
-	builder := newTableBuiler(opt)
+	builder := table.NewBuilder(tableOptionsFor(opt))
 	builder.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("key"), 1),
 		Value: []byte("value"),
 	})
-	testTable, err := builder.flush(lsm.levels, testFilePath)
+	testTable, err := builder.Flush(lsm.levels, testFilePath)
 	if err != nil {
 		t.Fatalf("Failed to build SST file: %v", err)
 	}
-	require.NoError(t, testTable.closeHandle())
+	require.NoError(t, testTable.CloseHandle())
 	builder.Close()
 
 	_, err = lsm.ImportExternalSST([]string{testFilePath})
@@ -2082,25 +1437,25 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 
 	// Test 4: Import multiple SSTs with overlapping key ranges
 	sst1Path := workDir + "/99997.sst"
-	builder1 := newTableBuiler(opt)
+	builder1 := table.NewBuilder(tableOptionsFor(opt))
 	builder1.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("a"), 1),
 		Value: []byte("val1"),
 	})
-	tbl1, err := builder1.flush(lsm.levels, sst1Path)
+	tbl1, err := builder1.Flush(lsm.levels, sst1Path)
 	require.NoError(t, err)
-	require.NoError(t, tbl1.closeHandle())
+	require.NoError(t, tbl1.CloseHandle())
 	builder1.Close()
 
 	sst2Path := workDir + "/99996.sst"
-	builder2 := newTableBuiler(opt)
+	builder2 := table.NewBuilder(tableOptionsFor(opt))
 	builder2.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("a"), 2),
 		Value: []byte("val2"),
 	})
-	tbl2, err := builder2.flush(lsm.levels, sst2Path)
+	tbl2, err := builder2.Flush(lsm.levels, sst2Path)
 	require.NoError(t, err)
-	require.NoError(t, tbl2.closeHandle())
+	require.NoError(t, tbl2.CloseHandle())
 	builder2.Close()
 
 	_, err = lsm.ImportExternalSST([]string{sst1Path, sst2Path})
@@ -2109,14 +1464,14 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 
 	// Test 5: Verify valid non-overlapping SST can be imported successfully
 	validSSTPath := workDir + "/99995.sst"
-	builderValid := newTableBuiler(opt)
+	builderValid := table.NewBuilder(tableOptionsFor(opt))
 	builderValid.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("b"), 1),
 		Value: []byte("valid"),
 	})
-	tblValid, err := builderValid.flush(lsm.levels, validSSTPath)
+	tblValid, err := builderValid.Flush(lsm.levels, validSSTPath)
 	require.NoError(t, err)
-	require.NoError(t, tblValid.closeHandle())
+	require.NoError(t, tblValid.CloseHandle())
 	builderValid.Close()
 	_, err = lsm.ImportExternalSST([]string{validSSTPath})
 	require.NoError(t, err)
@@ -2128,14 +1483,14 @@ func TestImportExternalSSTValidationFailure(t *testing.T) {
 
 	// Test 6: Import SST that overlaps with existing L0 table
 	overlapSSTPath := workDir + "/99994.sst"
-	builderOverlap := newTableBuiler(opt)
+	builderOverlap := table.NewBuilder(tableOptionsFor(opt))
 	builderOverlap.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("b"), 2),
 		Value: []byte("overlap"),
 	})
-	tblOverlap, err := builderOverlap.flush(lsm.levels, overlapSSTPath)
+	tblOverlap, err := builderOverlap.Flush(lsm.levels, overlapSSTPath)
 	require.NoError(t, err)
-	require.NoError(t, tblOverlap.closeHandle())
+	require.NoError(t, tblOverlap.CloseHandle())
 	builderOverlap.Close()
 
 	_, err = lsm.ImportExternalSST([]string{overlapSSTPath})
@@ -2173,14 +1528,14 @@ func TestImportExternalSSTAtomicityOnManifestWriteFailure(t *testing.T) {
 	}()
 
 	testSSTPath := workDir + "/99999.sst"
-	builder := newTableBuiler(opt)
+	builder := table.NewBuilder(tableOptionsFor(opt))
 	builder.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, []byte("key"), 1),
 		Value: []byte("value"),
 	})
-	tbl, err := builder.flush(lsm1.levels, testSSTPath)
+	tbl, err := builder.Flush(lsm1.levels, testSSTPath)
 	require.NoError(t, err)
-	require.NoError(t, tbl.closeHandle())
+	require.NoError(t, tbl.CloseHandle())
 	builder.Close()
 
 	_, err = lsm1.ImportExternalSST([]string{testSSTPath})
@@ -2241,15 +1596,15 @@ func TestImportExternalSSTIdempotency(t *testing.T) {
 	defer func() { require.NoError(t, lsm.Close()) }()
 
 	testSSTPath := workDir + "/99999.sst"
-	builder := newTableBuiler(opt)
+	builder := table.NewBuilder(tableOptionsFor(opt))
 	testKey := []byte("key")
 	builder.AddKey(&kv.Entry{
 		Key:   kv.InternalKey(kv.CFDefault, testKey, 1),
 		Value: []byte("value"),
 	})
-	tbl, err := builder.flush(lsm.levels, testSSTPath)
+	tbl, err := builder.Flush(lsm.levels, testSSTPath)
 	require.NoError(t, err)
-	require.NoError(t, tbl.closeHandle())
+	require.NoError(t, tbl.CloseHandle())
 	builder.Close()
 
 	// Test 1: First import should succeed and key should be accessible
@@ -2433,20 +1788,20 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	compactL0To := func(level int) {
 		t.Helper()
 		cd := buildCompactDef(lsm, 0, 0, level)
-		if ok := lsm.levels.fillTables(cd); !ok {
+		if ok := lsm.levels.compactor.fillTables(cd); !ok {
 			t.Fatalf("expected L0->L%d compaction plan", level)
 		}
-		if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
+		if err := lsm.levels.compactor.runCompactDef(0, 0, *cd); err != nil {
 			t.Fatalf("runCompactDef L0->L%d: %v", level, err)
 		}
-		require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
+		require.Nil(t, lsm.levels.compactor.state.Delete(cd.stateEntry()))
 	}
 
 	// --- Even keys (key00, key02, ..., key98) @ version 10 -> maxLevel ---
 	for i := 0; i < 100; i += 2 {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 10, []byte("even"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -2457,7 +1812,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 1; i < 100; i += 2 {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 20, []byte("odd"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -2468,7 +1823,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 50; i < 60; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 30, []byte("l0-new"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -2478,14 +1833,14 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 90; i < 100; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 40, []byte("mem-new"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 
 	// Range tombstone [key30, key50) @ version 50.
 	// Hides key30~key49 across both maxLevel (even) and maxLevel-1 (odd).
 	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key30"), 50, []byte("key50"), kv.BitRangeDelete, 0)
-	require.NoError(t, lsm.Set(rtEntry))
+	require.NoError(t, lsm.set(rtEntry))
 	rtEntry.DecrRef()
 
 	rtv := lsm.PinRangeTombstoneView()
@@ -2502,7 +1857,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	upper := []byte("key95")
 
 	iters := lsm.NewIterators(&index.Options{LowerBound: lower, UpperBound: upper, IsAsc: true})
-	mit := NewMergeIterator(iters, false)
+	mit := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, mit.Close()) }()
 
 	var resultsAsc []string
@@ -2540,7 +1895,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 
 	// Bounded descending scan [key10, key95).
 	itersDesc := lsm.NewIterators(&index.Options{LowerBound: lower, UpperBound: upper, IsAsc: false})
-	mitDesc := NewMergeIterator(itersDesc, true)
+	mitDesc := iterator.NewMergeIterator(itersDesc, true)
 	defer func() { require.NoError(t, mitDesc.Close()) }()
 
 	var resultsDesc []string
@@ -2586,12 +1941,12 @@ func TestLSMBoundedRangeSeek(t *testing.T) {
 	for i := 10; i <= 20; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 100, fmt.Appendf(nil, "val%02d", i), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 
 	iters := lsm.NewIterators(&index.Options{LowerBound: []byte("key12"), UpperBound: []byte("key18"), IsAsc: true})
-	mit := NewMergeIterator(iters, false)
+	mit := iterator.NewMergeIterator(iters, false)
 	defer func() { require.NoError(t, mit.Close()) }()
 
 	// Seek below data range — lands on first key (>= semantic).
@@ -2626,7 +1981,7 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 	for i := range n {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 100, []byte("val"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 
@@ -2641,7 +1996,7 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 
 	for _, r := range emptyRanges {
 		iters := lsm.NewIterators(&index.Options{LowerBound: r.lower, UpperBound: r.upper, IsAsc: true})
-		mit := NewMergeIterator(iters, false)
+		mit := iterator.NewMergeIterator(iters, false)
 
 		count := 0
 		for mit.Rewind(); mit.Valid(); mit.Next() {
@@ -2654,4 +2009,71 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 		require.Equal(t, 0, count, "range [%s, %s) should be empty", r.lower, r.upper)
 		require.NoError(t, mit.Close())
 	}
+}
+
+// ---- Recovery tests (merged from lsm_recovery_test.go) ----
+//
+// These tests exercise LSM recovery semantics by injecting manifest
+// corruption and re-opening the engine, verifying restart behavior.
+
+// TestBaseManifest validates manifest integrity across restarts.
+func TestBaseManifest(t *testing.T) {
+	clearDir()
+	recovery := func() {
+		// Each run simulates an unexpected restart.
+		lsm := buildLSM()
+		// Validate correctness after recovery.
+		baseTest(t, lsm, 128)
+		_ = lsm.Close()
+	}
+	// Run the closure multiple times to exercise recovery.
+	runTest(5, recovery)
+}
+
+func TestManifestMagic(t *testing.T) {
+	helpTestManifestFileCorruption(t, 3, "bad magic")
+}
+
+func TestManifestVersion(t *testing.T) {
+	helpTestManifestFileCorruption(t, 4, "")
+}
+
+func TestManifestChecksum(t *testing.T) {
+	helpTestManifestFileCorruption(t, 15, "")
+}
+
+func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string) {
+	clearDir()
+	// Create the LSM and close it to generate a manifest.
+	{
+		lsm := buildLSM()
+		require.NoError(t, lsm.Close())
+	}
+	currentData, err := os.ReadFile(filepath.Join(opt.WorkDir, "CURRENT"))
+	require.NoError(t, err)
+	manifestName := strings.TrimSpace(string(currentData))
+	fp, err := os.OpenFile(filepath.Join(opt.WorkDir, manifestName), os.O_RDWR, 0)
+	require.NoError(t, err)
+	// Inject a bad byte at the given offset.
+	_, err = fp.WriteAt([]byte{'X'}, off)
+	require.NoError(t, err)
+	require.NoError(t, fp.Close())
+	defer func() {
+		if err := recover(); err != nil && errorContent != "" {
+			require.Contains(t, err.(error).Error(), errorContent)
+		}
+	}()
+	// Re-open LSM; it should panic on corruption.
+	lsm := buildLSM()
+	require.NoError(t, lsm.Close())
+}
+
+// buildTestLSM is the canonical helper for tests that need a live LSM with a
+// fresh WAL Manager. Used by iterator/external_sst/level_handler tests.
+func buildTestLSM(t *testing.T, opt *Options) *LSM {
+	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
+	require.NoError(t, err)
+	lsm, err := NewLSM(opt, []*wal.Manager{wlog})
+	require.NoError(t, err)
+	return lsm
 }

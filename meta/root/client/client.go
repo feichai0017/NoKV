@@ -56,29 +56,6 @@ type clientEndpoint struct {
 	conn *grpc.ClientConn
 }
 
-// NewClient wraps an existing gRPC client connection.
-func NewClient(conn grpc.ClientConnInterface) *Client {
-	return &Client{
-		endpoints:   []clientEndpoint{{rpc: metapb.NewMetadataRootClient(conn)}},
-		byID:        make(map[uint64]int),
-		callTimeout: defaultCallTimeout,
-	}
-}
-
-// Dial opens a metadata-root client connection.
-func Dial(ctx context.Context, target string, opts ...grpc.DialOption) (*Client, error) {
-	if strings.TrimSpace(target) == "" {
-		return nil, errEmptyTarget
-	}
-	conn, err := dialEndpoint(ctx, target, opts...)
-	if err != nil {
-		return nil, err
-	}
-	client := NewClient(conn)
-	client.endpoints[0].conn = conn
-	return client, nil
-}
-
 // DialCluster opens a multi-endpoint metadata-root client. The map key is the
 // stable metadata-root node id returned as leader_id by Status and not-leader
 // errors.

@@ -147,7 +147,7 @@ func (s *Store) handleMergeCommand(merge *raftcmdpb.MergeCommand) error {
 			if err := s.applyRegionMetaSilent(updated); err != nil {
 				return err
 			}
-			if peer := s.regionMgr().peer(sourceMeta.ID); peer != nil {
+			if peer := s.regions.Peer(sourceMeta.ID); peer != nil {
 				s.stopPeer(peer.ID(), false)
 			}
 			return s.applyRegionRemovalSilent(sourceMeta.ID)

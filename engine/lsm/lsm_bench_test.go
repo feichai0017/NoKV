@@ -10,6 +10,9 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/iterator"
+	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -89,7 +92,7 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 	b.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if lsm.FlushPending() == 0 {
+		if lsm.flushPending() == 0 {
 			pending := 0
 			for _, s := range lsm.shards {
 				s.lock.RLock()
@@ -102,7 +105,7 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	b.Fatalf("timeout waiting for flush (pending=%d)", lsm.FlushPending())
+	b.Fatalf("timeout waiting for flush (pending=%d)", lsm.flushPending())
 }
 
 func BenchmarkLSMSetBatch(b *testing.B) {
@@ -116,7 +119,7 @@ func BenchmarkLSMSetBatch(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				entries := makeLSMBatch(batchSize, valueSize)
-				if err := lsm.SetBatch(entries); err != nil {
+				if err := lsm.setBatch(entries); err != nil {
 					b.Fatalf("set batch: %v", err)
 				}
 			}
@@ -132,7 +135,7 @@ func BenchmarkLSMRotateFlush(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := lsm.SetBatch(entries); err != nil {
+				if err := lsm.setBatch(entries); err != nil {
 					b.Fatalf("set batch: %v", err)
 				}
 				if err := lsm.Rotate(); err != nil {
@@ -164,7 +167,7 @@ func BenchmarkLSMGetMemtableHit(b *testing.B) {
 					CF:      kv.CFDefault,
 					Version: uint64(i + 1),
 				}
-				if err := lsm.Set(entry); err != nil {
+				if err := lsm.set(entry); err != nil {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
@@ -204,11 +207,11 @@ func BenchmarkLSMMemtableIterSeek(b *testing.B) {
 					CF:      kv.CFDefault,
 					Version: uint64(i + 1),
 				}
-				if err := lsm.Set(entry); err != nil {
+				if err := lsm.set(entry); err != nil {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
-			it := lsm.shards[0].memTable.NewIterator(&index.Options{IsAsc: true})
+			it := lsm.shards[0].memTable.newIterator(&index.Options{IsAsc: true})
 			defer func() { _ = it.Close() }()
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -238,23 +241,23 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.0
-		builder := newTableBuiler(&builderOpt)
+		builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 		userKey := benchUserKey(start + i)
 		builder.AddKey(kv.NewEntry(
 			kv.InternalKey(kv.CFDefault, userKey, 1),
 			[]byte("value"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := table.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table: %v", err)
 		}
 		if tbl == nil {
 			b.Fatalf("expected bench table")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -270,7 +273,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
-		builder := newTableBuiler(&builderOpt)
+		builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 		left := benchUserKey(start + i*4)
 		right := benchUserKey(start + i*4 + 2)
 		builder.AddKey(kv.NewEntry(
@@ -282,16 +285,16 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 			[]byte("value-right"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := table.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table with gap: %v", err)
 		}
 		if tbl == nil {
 			b.Fatalf("expected bench table with gap")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -302,7 +305,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
-		builder := newTableBuiler(&builderOpt)
+		builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 		left := benchUserKey(i * 4)
 		right := benchUserKey(i*4 + 2048)
 		builder.AddKey(kv.NewEntry(
@@ -314,16 +317,16 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 			[]byte("value-right"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(30000+i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := table.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open overlapping L0 table: %v", err)
 		}
 		if tbl == nil {
 			b.Fatalf("expected overlapping L0 table")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
-	lh.Sort()
+	lh.sort()
 	return lh
 }
 
@@ -333,7 +336,7 @@ func disableBenchRangeFilter(levels ...*levelHandler) {
 			continue
 		}
 		lh.Lock()
-		lh.filter = rangeFilter{}
+		lh.filter = rangefilter.Filter[*table.Table]{}
 		lh.Unlock()
 	}
 }
@@ -350,14 +353,14 @@ func BenchmarkLevelPointMissPruning(b *testing.B) {
 			lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table.Table]{}
 				lh.Unlock()
 			}
 			missKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount+1024), kv.MaxVersion)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(missKey)
+				entry, err := lh.get(missKey)
 				if err != utils.ErrKeyNotFound {
 					b.Fatalf("expected miss, got entry=%v err=%v", entry, err)
 				}
@@ -381,14 +384,14 @@ func BenchmarkLevelPointHitPruning(b *testing.B) {
 			lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table.Table]{}
 				lh.Unlock()
 			}
 			hitKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount/2), kv.MaxVersion)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(hitKey)
+				entry, err := lh.get(hitKey)
 				if err != nil {
 					b.Fatalf("expected hit, got err=%v", err)
 				}
@@ -413,14 +416,14 @@ func BenchmarkLevelPointInRangeMissPruning(b *testing.B) {
 			lh := buildBenchLevelTablesWithInRangeGap(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table.Table]{}
 				lh.Unlock()
 			}
 			missKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount*2+1), kv.MaxVersion)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				entry, err := lh.Get(missKey)
+				entry, err := lh.get(missKey)
 				if err != utils.ErrKeyNotFound {
 					b.Fatalf("expected in-range miss, got entry=%v err=%v", entry, err)
 				}
@@ -449,7 +452,7 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 					lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 					if !useGuide {
 						lh.Lock()
-						lh.filter = rangeFilter{}
+						lh.filter = rangefilter.Filter[*table.Table]{}
 						lh.Unlock()
 					}
 					opt := &index.Options{
@@ -461,7 +464,7 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						iters := lh.iterators(opt)
-						merge := NewMergeIterator(iters, false)
+						merge := iterator.NewMergeIterator(iters, false)
 						merge.Rewind()
 						count := 0
 						for ; merge.Valid(); merge.Next() {
@@ -496,7 +499,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 					builderOpt := *lsm.option
 					builderOpt.BlockSize = 128
 					builderOpt.BloomFalsePositive = 0.0
-					builder := newTableBuiler(&builderOpt)
+					builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 					for i := range totalKeys {
 						key := fmt.Appendf(nil, "k%06d", i)
 						builder.AddKey(kv.NewEntry(
@@ -505,7 +508,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 						))
 					}
 					tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(90000+width))
-					tbl, err := openTable(lsm.levels, tableName, builder)
+					tbl, err := table.Open(lsm.levels, tableName, builder)
 					if err != nil {
 						b.Fatalf("open bench multi-block table: %v", err)
 					}
@@ -647,7 +650,7 @@ func BenchmarkLevelL0OverlapFallback(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						entry, err := l0.Get(query.key)
+						entry, err := l0.get(query.key)
 						if query.hit {
 							if err != nil {
 								b.Fatalf("expected hit, got err=%v", err)
@@ -789,7 +792,7 @@ func BenchmarkLSMMultiLevelIteratorBoundsPruning(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						iters := lsm.NewIterators(opt)
-						merge := NewMergeIterator(iters, false)
+						merge := iterator.NewMergeIterator(iters, false)
 						merge.Rewind()
 						count := 0
 						for ; merge.Valid(); merge.Next() {

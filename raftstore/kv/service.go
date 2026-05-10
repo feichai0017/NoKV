@@ -20,17 +20,9 @@ type Service struct {
 }
 
 // NewService constructs a StoreKV service bound to the provided store.
-func NewService(st *store.Store, opts ...ServiceOption) *Service {
-	options := defaultServiceOptions()
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&options)
-		}
-	}
+func NewService(st *store.Store) *Service {
 	s := &Service{store: st}
-	if options.writeCommandBatchMaxSize > 1 && options.writeCommandBatchMaxWait > 0 {
-		s.writeBatcher = newWriteCommandBatcher(s.propose, options.writeCommandBatchMaxSize, options.writeCommandBatchMaxWait)
-	}
+	s.writeBatcher = newWriteCommandBatcher(s.propose, defaultWriteCommandBatchMaxSize, defaultWriteCommandBatchMaxWait)
 	return s
 }
 
