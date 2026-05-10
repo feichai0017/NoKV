@@ -567,6 +567,14 @@ func atomicNotExists(key []byte) *kvrpcpb.AtomicPredicate {
 	return &kvrpcpb.AtomicPredicate{Key: cloneBytes(key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS}
 }
 
+func atomicValueEquals(key, value []byte) *kvrpcpb.AtomicPredicate {
+	return &kvrpcpb.AtomicPredicate{
+		Key:           cloneBytes(key),
+		Kind:          kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS,
+		ExpectedValue: cloneBytes(value),
+	}
+}
+
 // UpdateInode updates mutable inode attributes and applies the size quota delta
 // in the same transaction. The parent field is required because quota and
 // DirPage invalidation are directory-scoped by parent inode and page token.
@@ -589,6 +597,10 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		if err != nil {
 			return err
 		}
+		dentryValue, err := fsmeta.EncodeDentryValue(dentry)
+		if err != nil {
+			return err
+		}
 		if dentry.Inode != req.Inode {
 			return fsmeta.ErrInvalidRequest
 		}
@@ -607,6 +619,10 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		// parent, so reject it rather than silently corrupting accounting.
 		if inode.LinkCount != 1 {
 			return fsmeta.ErrInvalidRequest
+		}
+		oldInodeValue, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return err
 		}
 		sizeDelta := int64(0)
 		if req.SetSize {
@@ -644,13 +660,15 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 			mutations = append(mutations, quotaMutations...)
 		}
 		if sizeDelta == 0 || len(mutations) == 1 {
-			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, []*kvrpcpb.AtomicPredicate{atomicExists(plan.MutateKeys[0])}, mutations, startVersion, commitVersion); err != nil {
+			predicates := []*kvrpcpb.AtomicPredicate{
+				atomicValueEquals(plan.ReadKeys[0], dentryValue),
+				atomicValueEquals(plan.MutateKeys[0], oldInodeValue),
+			}
+			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 				return err
 			}
-		} else {
-			if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
-				return err
-			}
+		} else if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+			return err
 		}
 		updated = inode
 		return nil
@@ -1024,6 +1042,10 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		if err != nil {
 			return err
 		}
+		sourceDentryValue, err := fsmeta.EncodeDentryValue(record)
+		if err != nil {
+			return err
+		}
 		if record.Type == fsmeta.InodeTypeDirectory {
 			return fsmeta.ErrInvalidRequest
 		}
@@ -1047,6 +1069,10 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		}
 		if inode.LinkCount == 0 {
 			inode.LinkCount = 1
+		}
+		oldInodeValue, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return err
 		}
 		inode.LinkCount++
 
@@ -1092,7 +1118,15 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		}
 		mutations = append(mutations, quotaMutations...)
 		if len(quotaMutations) == 0 {
-			predicates := []*kvrpcpb.AtomicPredicate{atomicNotExists(plan.ReadKeys[1]), atomicExists(inodeKey)}
+			// Link is safe on 1PC only when the source dentry and inode still
+			// equal the records read by this attempt. These value predicates are
+			// the correctness boundary that prevents overwriting a concurrent
+			// UpdateInode with an older inode body.
+			predicates := []*kvrpcpb.AtomicPredicate{
+				atomicValueEquals(plan.ReadKeys[0], sourceDentryValue),
+				atomicNotExists(plan.ReadKeys[1]),
+				atomicValueEquals(inodeKey, oldInodeValue),
+			}
 			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
 		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
@@ -1124,11 +1158,15 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		if err != nil {
 			return err
 		}
+		dentryValue, err := fsmeta.EncodeDentryValue(record)
+		if err != nil {
+			return err
+		}
 		mutations := []*kvrpcpb.Mutation{{
 			Op:  kvrpcpb.Mutation_Delete,
 			Key: cloneBytes(plan.MutateKeys[0]),
 		}}
-		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.PrimaryKey)}
+		predicates := []*kvrpcpb.AtomicPredicate{atomicValueEquals(plan.PrimaryKey, dentryValue)}
 		if inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
@@ -1136,7 +1174,11 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			if err != nil {
 				return err
 			}
-			predicates = append(predicates, atomicExists(inodeKey))
+			oldInodeValue, err := fsmeta.EncodeInodeValue(inode)
+			if err != nil {
+				return err
+			}
+			predicates = append(predicates, atomicValueEquals(inodeKey, oldInodeValue))
 			if inode.LinkCount <= 1 {
 				mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: inodeKey})
 			} else {
@@ -1204,6 +1246,14 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		if inode.Type != fsmeta.InodeTypeFile {
 			return fsmeta.ErrInvalidRequest
 		}
+		inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
+		if err != nil {
+			return err
+		}
+		inodeValue, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return err
+		}
 		nowTime := e.clock()
 		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
 		if !ok {
@@ -1211,13 +1261,17 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		}
 		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
 		now := nowTime.UnixNano()
-		predicates := make([]*kvrpcpb.AtomicPredicate, 0, 2)
+		predicates := make([]*kvrpcpb.AtomicPredicate, 0, 4)
 		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
 			return err
 		} else if ok && sessionLive(existing, now) {
 			return fsmeta.ErrExists
 		} else if ok {
-			predicates = append(predicates, atomicExists(plan.ReadKeys[1]))
+			existingValue, err := fsmeta.EncodeSessionValue(existing)
+			if err != nil {
+				return err
+			}
+			predicates = append(predicates, atomicValueEquals(plan.ReadKeys[1], existingValue))
 		} else {
 			predicates = append(predicates, atomicNotExists(plan.ReadKeys[1]))
 		}
@@ -1228,19 +1282,20 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			if sessionLive(owner, now) {
 				return fsmeta.ErrExists
 			}
-			predicates = append(predicates, atomicExists(plan.ReadKeys[2]))
+			ownerValue, err := fsmeta.EncodeSessionValue(owner)
+			if err != nil {
+				return err
+			}
+			predicates = append(predicates, atomicValueEquals(plan.ReadKeys[2], ownerValue))
 			staleSessionKey, err := fsmeta.EncodeSessionKey(mount, owner.Inode, owner.Session)
 			if err != nil {
 				return err
 			}
 			if string(staleSessionKey) != string(plan.ReadKeys[1]) {
-				ownerValue, err := fsmeta.EncodeSessionValue(owner)
-				if err != nil {
-					return err
-				}
 				if value, ok, err := e.runner.Get(ctx, staleSessionKey, startVersion); err != nil {
 					return err
 				} else if ok && bytes.Equal(value, ownerValue) {
+					predicates = append(predicates, atomicValueEquals(staleSessionKey, ownerValue))
 					mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: staleSessionKey})
 				}
 			}
@@ -1255,13 +1310,12 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		// Deleting an arbitrary stale session needs value-compare semantics that
-		// AtomicMutate does not expose; keep that rare cleanup case on 2PC.
-		if len(mutations) == 2 {
-			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
-				return err
-			}
-		} else if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		predicates = append(predicates, atomicValueEquals(inodeKey, inodeValue))
+		// Open is a value-sensitive admission path: the session-id key, owner
+		// key, inode key, and any stale cleanup key must still match the values
+		// read above. Value predicates make the 1PC attempt a real CAS instead
+		// of an existence-only overwrite.
+		if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -1303,12 +1357,20 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		if !ok || !sessionLive(session, now) || session.Inode != req.Inode {
 			return fsmeta.ErrNotFound
 		}
+		sessionValue, err := fsmeta.EncodeSessionValue(session)
+		if err != nil {
+			return err
+		}
 		owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion)
 		if err != nil {
 			return err
 		}
 		if !ok || !sessionLive(owner, now) || owner.Session != req.Session || owner.Inode != req.Inode {
 			return fsmeta.ErrNotFound
+		}
+		ownerValue, err := fsmeta.EncodeSessionValue(owner)
+		if err != nil {
+			return err
 		}
 		value, err := fsmeta.EncodeSessionValue(candidate)
 		if err != nil {
@@ -1318,7 +1380,10 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			{Op: kvrpcpb.Mutation_Put, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
-		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0]), atomicExists(plan.ReadKeys[1])}
+		predicates := []*kvrpcpb.AtomicPredicate{
+			atomicValueEquals(plan.ReadKeys[0], sessionValue),
+			atomicValueEquals(plan.ReadKeys[1], ownerValue),
+		}
 		if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
@@ -1353,7 +1418,12 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		if session.Inode != req.Inode {
 			return fsmeta.ErrNotFound
 		}
+		sessionValue, err := fsmeta.EncodeSessionValue(session)
+		if err != nil {
+			return err
+		}
 		mutations := []*kvrpcpb.Mutation{{Op: kvrpcpb.Mutation_Delete, Key: cloneBytes(plan.MutateKeys[0])}}
+		predicates := []*kvrpcpb.AtomicPredicate{atomicValueEquals(plan.ReadKeys[0], sessionValue)}
 		ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, session.Inode)
 		if err != nil {
 			return err
@@ -1361,11 +1431,12 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		if owner, ok, err := e.readSessionByKey(ctx, ownerKey, startVersion); err != nil {
 			return err
 		} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
+			ownerValue, err := fsmeta.EncodeSessionValue(owner)
+			if err != nil {
+				return err
+			}
+			predicates = append(predicates, atomicValueEquals(ownerKey, ownerValue))
 			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: ownerKey})
-		}
-		predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0])}
-		if len(mutations) > 1 {
-			predicates = append(predicates, atomicExists(ownerKey))
 		}
 		return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 	}); err != nil {
@@ -1963,9 +2034,10 @@ func cloneAtomicPredicates(in []*kvrpcpb.AtomicPredicate) []*kvrpcpb.AtomicPredi
 			continue
 		}
 		out = append(out, &kvrpcpb.AtomicPredicate{
-			Key:         cloneBytes(pred.GetKey()),
-			Kind:        pred.GetKind(),
-			ReadVersion: pred.GetReadVersion(),
+			Key:           cloneBytes(pred.GetKey()),
+			Kind:          pred.GetKind(),
+			ReadVersion:   pred.GetReadVersion(),
+			ExpectedValue: cloneBytes(pred.GetExpectedValue()),
 		})
 	}
 	return out

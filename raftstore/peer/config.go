@@ -42,6 +42,18 @@ type Config struct {
 	BatchMaxWait time.Duration
 }
 
+// EnableLeaseRead configures etcd/raft's lease-based ReadIndex path. Reads
+// still flow through RawNode.ReadIndex and wait for the returned committed
+// index to be applied, but the leader can answer from its local lease instead
+// of broadcasting every read to a quorum. CheckQuorum is required by
+// etcd/raft for this mode: it is the fence that makes a partitioned old leader
+// step down once its quorum lease is no longer defensible.
+func EnableLeaseRead(cfg myraft.Config) myraft.Config {
+	cfg.CheckQuorum = true
+	cfg.ReadOnlyOption = myraft.ReadOnlyLeaseBased
+	return cfg
+}
+
 // ResolveStorage chooses the backing log engine (in-memory, on-disk, or WAL).
 func ResolveStorage(cfg *Config) (raftlog.PeerStorage, error) {
 	if cfg == nil {

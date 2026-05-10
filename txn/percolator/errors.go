@@ -15,6 +15,7 @@ var (
 	errEmptyRollbackKey            = errors.New("percolator: empty key in rollback")
 	errUnsupportedMutationOp       = errors.New("percolator: unsupported mutation op")
 	errInvalidAtomicMutate         = errors.New("percolator: invalid atomic mutate")
+	errAtomicPredicateMismatch     = errors.New("percolator: atomic predicate mismatch")
 	errCommitVersionNotAfterStart  = errors.New("percolator: commit version must be greater than start version")
 	errTxnAlreadyRolledBack        = errors.New("percolator: transaction already rolled back")
 	errLockNotFound                = errors.New("percolator: lock not found")

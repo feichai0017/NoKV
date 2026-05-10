@@ -51,9 +51,12 @@ func main() {
 		scopeName := fmt.Sprintf("%s-%06d-%d", *scope, seed, unique)
 		scopeInode := fsmeta.InodeID(9_000_000_000 + seed*1_000_000 + unique%1_000_000)
 		scopeOp := scopeCreateOperation(mountID, scopeName, scopeInode)
-		if err := createScopeWithRetry(ctx, cli, scopeOp); err != nil {
+		scopeResult, err := createScopeWithRetry(ctx, cli, scopeOp)
+		if err != nil {
 			log.Fatalf("create history scope seed=%d: %v", seed, err)
 		}
+		scopeOp.Inode = scopeResult.Inode.Inode
+		scopeInode = scopeResult.Inode.Inode
 		if got := model.Apply(scopeOp); got.Err != nil {
 			log.Fatalf("apply history scope seed=%d: %v", seed, got.Err)
 		}
@@ -61,8 +64,12 @@ func main() {
 		if len(ops) == 0 {
 			log.Fatalf("seed %d generated no external-safe operations", seed)
 		}
+		historyExec, err := fsmetacontract.NewInodeMappingExecutor(cli)
+		if err != nil {
+			log.Fatalf("open history inode mapper: %v", err)
+		}
 		opts := fsmetacontract.HistoryOptions{AllowIndeterminateErrors: *allowIndeterminate}
-		if err := fsmetacontract.RunConcurrentBatches(ctx, cli, model, ops, *batch, opts); err != nil {
+		if err := fsmetacontract.RunConcurrentBatches(ctx, historyExec, model, ops, *batch, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "fsmeta history failed seed=%d steps=%d filtered_ops=%d\n", seed, *steps, len(ops))
 			log.Fatal(err)
 		}
@@ -82,10 +89,10 @@ func scopeCreateOperation(mount fsmeta.MountID, scopeName string, scopeInode fsm
 	}
 }
 
-func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmetacontract.Operation) error {
+func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmetacontract.Operation) (fsmeta.CreateResult, error) {
 	delay := 100 * time.Millisecond
 	for {
-		_, err := cli.Create(ctx, fsmeta.CreateRequest{
+		req := fsmeta.CreateRequest{
 			Mount:  op.Mount,
 			Parent: op.Parent,
 			Name:   op.Name,
@@ -93,22 +100,29 @@ func createScopeWithRetry(ctx context.Context, cli fsmetaclient.Client, op fsmet
 				Type: op.Type,
 				Mode: op.Mode,
 			},
-		})
+		}
+		result, err := cli.Create(ctx, req)
 		if err == nil || errors.Is(err, fsmeta.ErrExists) {
-			return nil
+			if err == nil {
+				return result, nil
+			}
+			dentry, lookupErr := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: op.Mount, Parent: op.Parent, Name: op.Name})
+			if lookupErr == nil {
+				return fsmeta.CreateResult{Dentry: dentry, Inode: req.Attrs.InodeRecord(dentry.Inode)}, nil
+			}
 		}
 		// Compose startup can return NotFound until the fsmeta gateway observes
 		// rooted mount/root admission. The scope create is an admission barrier,
 		// so retrying here keeps startup synchronization out of the generated
 		// correctness history.
 		if !nokverrors.Retryable(err) && !nokverrors.IsKind(err, nokverrors.KindNotFound) {
-			return err
+			return fsmeta.CreateResult{}, err
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return fsmeta.CreateResult{}, ctx.Err()
 		case <-timer.C:
 		}
 		if delay < time.Second {

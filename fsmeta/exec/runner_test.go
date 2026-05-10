@@ -456,6 +456,10 @@ func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, pr
 			if !exists {
 				return true, fsmeta.ErrNotFound
 			}
+		case kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS:
+			if !exists || !bytes.Equal(r.data[string(pred.GetKey())], pred.GetExpectedValue()) {
+				return true, fsmeta.ErrInvalidValue
+			}
 		default:
 			return true, fsmeta.ErrInvalidRequest
 		}
@@ -687,7 +691,7 @@ func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	require.Equal(t, quotaKey, base.mutations[0][2].GetKey())
 }
 
-func TestExecutorUpdateInodeUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+func TestExecutorUpdateInodeUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
@@ -708,6 +712,8 @@ func TestExecutorUpdateInodeUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T)
 	require.Len(t, runner.atomicCalls, 1)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "success_total", 1)
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[0].GetKind())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[1].GetKind())
 
 	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
@@ -985,7 +991,7 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NotContains(t, runner.data, string(ownerKey))
 }
 
-func TestExecutorWriteSessionLifecycleUsesAtomicMutate(t *testing.T) {
+func TestExecutorWriteSessionLifecycleUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
@@ -1016,9 +1022,11 @@ func TestExecutorWriteSessionLifecycleUsesAtomicMutate(t *testing.T) {
 	requireAtomicStatUint(t, stats, fsmeta.OperationOpenWriteSession, "success_total", 1)
 	requireAtomicStatUint(t, stats, fsmeta.OperationHeartbeatSession, "success_total", 1)
 	requireAtomicStatUint(t, stats, fsmeta.OperationCloseSession, "success_total", 1)
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[1].predicates[0].GetKind())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[2].predicates[0].GetKind())
 }
 
-func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *testing.T) {
+func TestExecutorOpenWriteSessionUsesAtomicMutateForStaleSessionCleanup(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedInode(t, runner.fakeRunner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
@@ -1042,10 +1050,11 @@ func TestExecutorOpenWriteSessionSkipsAtomicMutateForStaleSessionCleanup(t *test
 	})
 	require.NoError(t, err)
 
-	require.Empty(t, runner.atomicCalls)
-	require.Len(t, base.mutations, 1)
+	require.Len(t, runner.atomicCalls, 1)
+	require.Empty(t, base.mutations)
 	require.NotContains(t, runner.data, string(oldSessionKey))
-	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationOpenWriteSession, "skip_total", 1)
+	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationOpenWriteSession, "success_total", 1)
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[2].GetKind())
 }
 
 func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {
@@ -1300,7 +1309,7 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
-func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+func TestExecutorLinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
@@ -1320,6 +1329,9 @@ func TestExecutorLinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	require.Len(t, runner.atomicCalls, 1)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationLink, "success_total", 1)
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[0].GetKind())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS, runner.atomicCalls[0].predicates[1].GetKind())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[2].GetKind())
 	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -1771,7 +1783,7 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestExecutorUnlinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
+func TestExecutorUnlinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
@@ -1785,6 +1797,8 @@ func TestExecutorUnlinkUsesAtomicMutateWhenQuotaDoesNotMutate(t *testing.T) {
 	require.Len(t, runner.atomicCalls, 1)
 	require.Empty(t, base.mutations)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUnlink, "success_total", 1)
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[0].GetKind())
+	require.Equal(t, kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS, runner.atomicCalls[0].predicates[1].GetKind())
 	_, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.False(t, ok)

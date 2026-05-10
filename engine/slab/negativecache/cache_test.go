@@ -161,3 +161,25 @@ func TestPersistenceMissingFileIsClean(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 }
+
+func TestSnapshotCodecRejectsBadChecksum(t *testing.T) {
+	body, written := encodeSnapshotKeys([][]byte{[]byte("alpha"), []byte("beta")}, 1<<20)
+	require.Equal(t, 2, written)
+	body[len(body)-1] ^= 0xff
+
+	keys, ok := decodeSnapshotKeys(body)
+	require.False(t, ok)
+	require.Nil(t, keys)
+}
+
+func TestSnapshotCodecRestoresValidPrefixFromTruncatedTail(t *testing.T) {
+	body, written := encodeSnapshotKeys([][]byte{[]byte("alpha"), []byte("beta")}, 1<<20)
+	require.Equal(t, 2, written)
+	body = body[:len(body)-2]
+
+	keys, ok := decodeSnapshotKeys(body)
+	require.True(t, ok)
+	require.Len(t, keys, 2)
+	require.Equal(t, []byte("alpha"), keys[0])
+	require.Equal(t, []byte("beta"), keys[1])
+}

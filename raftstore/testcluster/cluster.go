@@ -42,11 +42,12 @@ import (
 )
 
 type Node struct {
-	StoreID   uint64
-	WorkDir   string
-	DB        *local.DB
-	LocalMeta *localmeta.Store
-	Server    *serverpkg.Node
+	StoreID         uint64
+	WorkDir         string
+	EnableLeaseRead bool
+	DB              *local.DB
+	LocalMeta       *localmeta.Store
+	Server          *serverpkg.Node
 }
 
 type NodeConfig struct {
@@ -54,6 +55,7 @@ type NodeConfig struct {
 	StartPeers        bool
 	Scheduler         storecontrol.Client
 	HeartbeatInterval time.Duration
+	EnableLeaseRead   bool
 }
 
 type Coordinator struct {
@@ -114,13 +116,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 			Scheduler:         cfg.Scheduler,
 			HeartbeatInterval: cfg.HeartbeatInterval,
 		},
-		Raft: myraft.Config{
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-			PreVote:         true,
-		},
+		Raft:          raftConfig(0, cfg.EnableLeaseRead),
 		TransportAddr: "127.0.0.1:0",
 	})
 	if err != nil {
@@ -128,7 +124,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 		_ = localMeta.Close()
 		tb.Fatalf("new server: %v", err)
 	}
-	node := &Node{StoreID: storeID, WorkDir: dir, DB: db, LocalMeta: localMeta, Server: srv}
+	node := &Node{StoreID: storeID, WorkDir: dir, EnableLeaseRead: cfg.EnableLeaseRead, DB: db, LocalMeta: localMeta, Server: srv}
 	if cfg.StartPeers {
 		StartPeers(tb, node)
 	}
@@ -495,8 +491,13 @@ func (n *Node) Restart(tb testing.TB, allowedModes []workdirmode.Mode, startPeer
 	tb.Helper()
 	workDir := n.WorkDir
 	storeID := n.StoreID
+	enableLeaseRead := n.EnableLeaseRead
 	n.Close(tb)
-	restarted := StartNode(tb, storeID, workDir, allowedModes, startPeers)
+	restarted := StartNodeWithConfig(tb, storeID, workDir, NodeConfig{
+		AllowedModes:    allowedModes,
+		StartPeers:      startPeers,
+		EnableLeaseRead: enableLeaseRead,
+	})
 	*n = *restarted
 }
 
@@ -692,14 +693,7 @@ func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage ra
 		return result.Meta.Region, nil
 	}
 	return &peer.Config{
-		RaftConfig: myraft.Config{
-			ID:              peerID,
-			ElectionTick:    5,
-			HeartbeatTick:   1,
-			MaxSizePerMsg:   1 << 20,
-			MaxInflightMsgs: 256,
-			PreVote:         true,
-		},
+		RaftConfig:     raftConfig(peerID, node.EnableLeaseRead),
 		Transport:      node.Server.Transport(),
 		Apply:          raftkv.NewEntryApplier(node.DB),
 		SnapshotExport: snapshotStore.ExportSnapshot,
@@ -708,6 +702,21 @@ func peerConfig(node *Node, meta localmeta.RegionMeta, peerID uint64, storage ra
 		GroupID:        meta.ID,
 		Region:         localmeta.CloneRegionMetaPtr(&meta),
 	}
+}
+
+func raftConfig(peerID uint64, enableLeaseRead bool) myraft.Config {
+	cfg := myraft.Config{
+		ID:              peerID,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   1 << 20,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	}
+	if enableLeaseRead {
+		return peer.EnableLeaseRead(cfg)
+	}
+	return cfg
 }
 
 func EnsureRegionPeer(tb testing.TB, node *Node, regionID, peerID uint64) {

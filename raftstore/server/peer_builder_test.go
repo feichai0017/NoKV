@@ -38,6 +38,8 @@ func TestDefaultRaftConfigAppliesDefaults(t *testing.T) {
 	require.Equal(t, 2, cfg.HeartbeatTick)
 	require.Equal(t, uint64(1<<20), cfg.MaxSizePerMsg)
 	require.Equal(t, 256, cfg.MaxInflightMsgs)
+	require.True(t, cfg.CheckQuorum)
+	require.Equal(t, myraft.ReadOnlyLeaseBased, cfg.ReadOnlyOption)
 }
 
 func TestDefaultRaftConfigPreservesExplicitValues(t *testing.T) {
@@ -52,6 +54,8 @@ func TestDefaultRaftConfigPreservesExplicitValues(t *testing.T) {
 	require.Equal(t, 4, cfg.HeartbeatTick)
 	require.Equal(t, uint64(4096), cfg.MaxSizePerMsg)
 	require.Equal(t, 32, cfg.MaxInflightMsgs)
+	require.True(t, cfg.CheckQuorum)
+	require.Equal(t, myraft.ReadOnlyLeaseBased, cfg.ReadOnlyOption)
 }
 
 func TestDefaultPeerBuilderRequiresLocalPeer(t *testing.T) {
