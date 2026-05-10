@@ -18,6 +18,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
+	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/golang/snappy"
@@ -113,7 +115,7 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
 		t.rangeDeletes = idx.GetRangeTombstoneCount()
-		t.lm.cache.addIndex(t.fid, idx)
+		t.lm.cache.AddIndex(t.fid, idx)
 	}
 	t.hasBloom = t.ss.HasBloomFilter()
 	t.size = t.ss.Size()
@@ -153,7 +155,7 @@ func (t *table) index() *storagepb.TableIndex {
 	if idx := t.idx.Load(); idx != nil {
 		return idx
 	}
-	if cached, ok := t.lm.cache.getIndex(t.fid); ok {
+	if cached, ok := t.lm.cache.GetIndex(t.fid); ok {
 		t.idx.Store(cached)
 		return cached
 	}
@@ -170,7 +172,7 @@ func (t *table) index() *storagepb.TableIndex {
 	idx := t.ss.Indexs()
 	if idx != nil {
 		t.idx.Store(idx)
-		t.lm.cache.addIndex(t.fid, idx)
+		t.lm.cache.AddIndex(t.fid, idx)
 		t.keyCount = idx.GetKeyCount()
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
@@ -179,6 +181,12 @@ func (t *table) index() *storagepb.TableIndex {
 	}
 	return idx
 }
+
+// FID returns the SSTable file id.
+func (t *table) FID() uint64 { return t.fid }
+
+// CreatedAt returns the table's creation timestamp (zero if unknown).
+func (t *table) CreatedAt() time.Time { return t.createdAt }
 
 // MinKey returns the smallest user key stored in this SSTable.
 func (t *table) MinKey() []byte { return t.minKey }
@@ -392,7 +400,7 @@ func (t *table) loadBlock(idx int) (*block, error) {
 	lvl := t.level()
 	ko, ok := t.blockOffset(idx)
 	utils.CondPanicFunc(!ok || ko == nil, func() error { return fmt.Errorf("block t.offset id=%d", idx) })
-	if cached, ok := t.lm.cache.getBlock(lvl, key); ok && cached != nil {
+	if cached, ok := t.lm.cache.GetBlock(lvl, key); ok && cached != nil {
 		return t.decodeCachedBlock(ko, cached)
 	}
 
@@ -417,16 +425,20 @@ func (t *table) loadBlock(idx int) (*block, error) {
 		return nil, err
 	}
 
-	t.lm.cache.addBlock(lvl, t, key, b)
+	t.lm.cache.AddBlock(lvl, t, key, cachepkg.Block{
+		DiskData:    b.diskData,
+		Compression: uint32(b.compression),
+		RawLen:      b.rawLen,
+	})
 
 	return b, nil
 }
 
-func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *blockEntry) (*block, error) {
+func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *cachepkg.Entry) (*block, error) {
 	if cached == nil {
 		return nil, errors.New("nil cached block")
 	}
-	data, err := decodeBlockPayload(cached.diskData, cached.compression, cached.rawLen)
+	data, err := decodeBlockPayload(cached.DiskData, BlockCompression(cached.Compression), cached.RawLen)
 	if err != nil {
 		return nil, err
 	}
@@ -434,10 +446,10 @@ func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *blockEntry)
 		offset:      int(ko.GetOffset()),
 		tbl:         t,
 		data:        data,
-		diskData:    cached.diskData,
-		diskEnd:     len(cached.diskData),
-		compression: cached.compression,
-		rawLen:      cached.rawLen,
+		diskData:    cached.DiskData,
+		diskEnd:     len(cached.DiskData),
+		compression: BlockCompression(cached.Compression),
+		rawLen:      cached.RawLen,
 	}
 	if err := decodeBlockMetadata(b); err != nil {
 		return nil, err
@@ -606,8 +618,8 @@ func (t *table) NewIterator(options *index.Options) index.Iterator {
 		index:      index,
 		blockStart: blockStart,
 		blockEnd:   blockEnd,
-		lowerUser:  guideUserKey(options.LowerBound),
-		upperUser:  guideUserKey(options.UpperBound),
+		lowerUser:  rangefilter.GuideUserKey(options.LowerBound),
+		upperUser:  rangefilter.GuideUserKey(options.UpperBound),
 	}
 
 	// Initialize prefetch optimization if requested
@@ -837,7 +849,7 @@ func blockRangeForBounds(index *storagepb.TableIndex, lower, upper []byte) (int,
 	end := len(offsets)
 
 	if len(lower) > 0 {
-		lower = guideBaseKey(lower)
+		lower = rangefilter.GuideBaseKey(lower)
 		idx := searchFirstBlockWithBaseKeyGE(offsets, lower)
 		switch {
 		case idx == 0:
@@ -851,7 +863,7 @@ func blockRangeForBounds(index *storagepb.TableIndex, lower, upper []byte) (int,
 		}
 	}
 	if len(upper) > 0 {
-		upper = guideBaseKey(upper)
+		upper = rangefilter.GuideBaseKey(upper)
 		end = searchFirstBlockWithBaseKeyGE(offsets, upper)
 	}
 	if end < start {
@@ -1073,7 +1085,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.staleDataSize = idx.GetStaleDataSize()
 			t.valueSize = idx.GetValueSize()
 			t.rangeDeletes = idx.GetRangeTombstoneCount()
-			t.lm.cache.addIndex(t.fid, idx)
+			t.lm.cache.AddIndex(t.fid, idx)
 		}
 		t.hasBloom = ss.HasBloomFilter()
 		t.size = ss.Size()
@@ -1151,7 +1163,7 @@ func (t *table) Delete() error {
 			return err
 		}
 	}
-	t.lm.cache.delIndex(t.fid)
+	t.lm.cache.DelIndex(t.fid)
 	if t.ss == nil {
 		return nil
 	}

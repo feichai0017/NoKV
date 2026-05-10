@@ -263,10 +263,6 @@ func NewGlobalMonotoneDuty(duty DutyID, upper uint64) DutyGrant {
 	}
 }
 
-func NewGlobalDutyKey(duty DutyID) DutyKey {
-	return DutyKey{DutyID: duty, Scope: DutyScope{Kind: DutyScopeGlobal}}
-}
-
 func (g DutyGrant) Key() DutyKey {
 	return DutyKey{DutyID: g.DutyID, Scope: g.Scope}
 }

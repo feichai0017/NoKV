@@ -245,7 +245,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 	rollback := func() {
 		for _, tbl := range importedTables {
 			if tbl != nil {
-				lm.cache.delIndex(tbl.fid)
+				lm.cache.DelIndex(tbl.fid)
 				_ = tbl.closeHandle()
 			}
 		}

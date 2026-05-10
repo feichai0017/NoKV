@@ -10,6 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -333,7 +334,7 @@ func disableBenchRangeFilter(levels ...*levelHandler) {
 			continue
 		}
 		lh.Lock()
-		lh.filter = rangeFilter{}
+		lh.filter = rangefilter.Filter[*table]{}
 		lh.Unlock()
 	}
 }
@@ -350,7 +351,7 @@ func BenchmarkLevelPointMissPruning(b *testing.B) {
 			lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table]{}
 				lh.Unlock()
 			}
 			missKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount+1024), kv.MaxVersion)
@@ -381,7 +382,7 @@ func BenchmarkLevelPointHitPruning(b *testing.B) {
 			lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table]{}
 				lh.Unlock()
 			}
 			hitKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount/2), kv.MaxVersion)
@@ -413,7 +414,7 @@ func BenchmarkLevelPointInRangeMissPruning(b *testing.B) {
 			lh := buildBenchLevelTablesWithInRangeGap(b, lsm, 1, tableCount)
 			if !useGuide {
 				lh.Lock()
-				lh.filter = rangeFilter{}
+				lh.filter = rangefilter.Filter[*table]{}
 				lh.Unlock()
 			}
 			missKey := kv.InternalKey(kv.CFDefault, benchUserKey(tableCount*2+1), kv.MaxVersion)
@@ -449,7 +450,7 @@ func BenchmarkLevelIteratorBoundsPruning(b *testing.B) {
 					lh := buildBenchLevelTables(b, lsm, 1, tableCount)
 					if !useGuide {
 						lh.Lock()
-						lh.filter = rangeFilter{}
+						lh.filter = rangefilter.Filter[*table]{}
 						lh.Unlock()
 					}
 					opt := &index.Options{

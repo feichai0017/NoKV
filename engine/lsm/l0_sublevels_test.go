@@ -229,9 +229,9 @@ func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table{a}
-	cd.plan.TopIDs = []uint64{a.fid}
-	cd.plan.ThisRange = getKeyRange(a)
-	cd.plan.NextRange = cd.plan.ThisRange
+	cd.spec.TopIDs = []uint64{a.fid}
+	cd.spec.ThisRange = getKeyRange(a)
+	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = a.Size()
 
 	require.True(t, lsm.levels.canMoveToNextLevel(cd),
@@ -254,9 +254,9 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table{b} // pick only one of an overlapping pair
-	cd.plan.TopIDs = []uint64{b.fid}
-	cd.plan.ThisRange = getKeyRange(b)
-	cd.plan.NextRange = cd.plan.ThisRange
+	cd.spec.TopIDs = []uint64{b.fid}
+	cd.spec.ThisRange = getKeyRange(b)
+	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = b.Size()
 
 	require.False(t, lsm.levels.canMoveToNextLevel(cd),

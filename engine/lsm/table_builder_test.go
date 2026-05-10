@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -128,9 +129,9 @@ func TestBuildDataCopyChargesCompactionPacerPerBlock(t *testing.T) {
 	bd, err := builder.done()
 	require.NoError(t, err)
 
-	pacer := newCompactionPacer(1 << 30)
-	pacer.tokens = 1 << 30
-	bd.pacer = pacer
+	p := pacer.New(1 << 30)
+	p.PrefillForTest(1 << 30)
+	bd.pacer = p
 	var expected int64
 	for _, bl := range bd.blockList {
 		expected += int64(bl.diskEnd)
@@ -138,7 +139,7 @@ func TestBuildDataCopyChargesCompactionPacerPerBlock(t *testing.T) {
 
 	dst := make([]byte, bd.size)
 	require.Equal(t, bd.size, bd.Copy(dst))
-	require.Equal(t, expected, pacer.charged.Load())
+	require.Equal(t, expected, p.Stats().BytesCharged)
 }
 
 func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {

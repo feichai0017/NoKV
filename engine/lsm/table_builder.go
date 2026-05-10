@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/golang/snappy"
@@ -33,14 +34,14 @@ type tableBuilder struct {
 	estimateSz    int64
 	valueSize     int64
 	rangeDeletes  uint32
-	pacer         *compactionPacer
+	pacer         *pacer.Pacer
 }
 type buildData struct {
 	blockList []*block
 	index     []byte
 	checksum  []byte
 	size      int
-	pacer     *compactionPacer
+	pacer     *pacer.Pacer
 }
 type block struct {
 	offset            int // Offset of the block start within the table.
@@ -414,9 +415,7 @@ func (tb *tableBuilder) flush(lm *levelManager, tableName string) (t *table, err
 func (bd *buildData) Copy(dst []byte) int {
 	var written int
 	for _, bl := range bd.blockList {
-		if bd.pacer != nil {
-			bd.pacer.charge(bl.diskEnd)
-		}
+		bd.pacer.Charge(bl.diskEnd)
 		written += copy(dst[written:], bl.diskData[:bl.diskEnd])
 	}
 	written += copy(dst[written:], bd.index)

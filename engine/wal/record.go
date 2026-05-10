@@ -132,26 +132,6 @@ func EncodeRecordTo(dst []byte, recType RecordType, payload []byte) []byte {
 	return dst
 }
 
-// EncodedRecordSize returns the number of on-disk bytes produced by
-// EncodeRecordTo for a payload of length n.
-//
-//	[4 length][1 type][n payload][4 CRC] = 9 + n
-func EncodedRecordSize(payloadLen int) int {
-	return 9 + payloadLen
-}
-
-// EncodeRecord is a convenience wrapper that streams one record's encoding to
-// w. Retained for callers that already have a writer; AppendRecords no longer
-// uses it on the hot path.
-func EncodeRecord(w io.Writer, recType RecordType, payload []byte) (int, error) {
-	encoded := EncodeRecordTo(nil, recType, payload)
-	n, err := w.Write(encoded)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
-}
-
 // recordBufPool reuses scratch byte slices for AppendRecords' lock-free
 // encoding phase. The slice is filled outside m.mu and copied into the WAL
 // bufio writer under the lock, so the pool is safe to reuse.

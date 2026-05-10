@@ -1,4 +1,4 @@
-package lsm
+package plan
 
 import (
 	"testing"
@@ -67,7 +67,7 @@ func TestPickPrioritiesBoostsRangeTombstoneDenseLevels(t *testing.T) {
 	require.Greater(t, prios[0].Score, 1.0)
 }
 
-func TestBuildTargetsAndPickPriorities(t *testing.T) {
+func TestPickPrioritiesPrefersLandingDrain(t *testing.T) {
 	targets := BuildTargets([]int64{0, 0, 100}, TargetOptions{
 		BaseLevelSize:       10,
 		LevelSizeMultiplier: 10,

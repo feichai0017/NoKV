@@ -86,15 +86,6 @@ func WithRetry(maxRetries int, backoff time.Duration) GRPCOption {
 	}
 }
 
-// WithServerRegistrar registers additional gRPC services on the transport
-// before it starts serving. Callers can pass multiple functions to register
-// several services.
-func WithServerRegistrar(regs ...func(grpc.ServiceRegistrar)) GRPCOption {
-	return func(cfg *grpcTransportConfig) {
-		cfg.registrars = append(cfg.registrars, regs...)
-	}
-}
-
 type raftServiceServer interface {
 	Step(context.Context, *raftpb.Message) (*emptypb.Empty, error)
 }

@@ -137,20 +137,18 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 
 func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.Client, func()) {
 	t.Helper()
-	cli, err := fsmetaclient.NewGRPCClient(ctx, *fsmetaAddr)
-	if err != nil {
-		t.Fatalf("dial fsmeta: %v", err)
+	cfg := fsmetaclient.ClientConfig{
+		DisableLookupCache: *fsmetaLookupCache <= 0,
 	}
 	if *fsmetaLookupCache > 0 {
-		cached, err := fsmetaclient.NewCachedClient(cli, fsmetaclient.LookupCacheConfig{
+		cfg.LookupCache = fsmetaclient.LookupCacheConfig{
 			MaxEntries: *fsmetaLookupCache,
 			TTL:        *fsmetaLookupCacheTTL,
-		})
-		if err != nil {
-			_ = cli.Close()
-			t.Fatalf("open fsmeta lookup cache: %v", err)
 		}
-		return cached, func() { _ = cached.Close() }
+	}
+	cli, err := fsmetaclient.NewGRPCClientWithConfig(ctx, *fsmetaAddr, cfg)
+	if err != nil {
+		t.Fatalf("dial fsmeta: %v", err)
 	}
 	return cli, func() { _ = cli.Close() }
 }

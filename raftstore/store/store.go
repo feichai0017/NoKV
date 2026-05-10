@@ -16,17 +16,19 @@ package store
 
 import (
 	"context"
-	"github.com/feichai0017/NoKV/meta/topology"
-	"github.com/feichai0017/NoKV/metrics"
 	"sync"
 	"time"
+
+	"github.com/feichai0017/NoKV/meta/topology"
+	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
 // Store hosts a collection of peers and exposes the concrete runtime helpers
 // used by raftstore. It owns peer registration, region metadata, optional
 // control-plane heartbeats, and command application.
 type Store struct {
-	router      *Router
+	router      *router.Router
 	peerBuilder PeerBuilder
 	workDir     string
 	storeID     uint64
@@ -48,9 +50,9 @@ type Store struct {
 // routing them through callback chains.
 func NewStore(cfg Config) *Store {
 	ctx, cancel := context.WithCancel(context.Background())
-	router := cfg.Router
-	if router == nil {
-		router = NewRouter()
+	rt := cfg.Router
+	if rt == nil {
+		rt = router.New()
 	}
 	regionMetrics := metrics.NewRegionMetrics()
 	queueSize := max(cfg.OperationQueueSize, 0)
@@ -82,7 +84,7 @@ func NewStore(cfg Config) *Store {
 		commandTimeout = 3 * time.Second
 	}
 	s := &Store{
-		router:      router,
+		router:      rt,
 		peerBuilder: cfg.PeerBuilder,
 		workDir:     cfg.WorkDir,
 		storeID:     cfg.StoreID,

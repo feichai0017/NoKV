@@ -1,4 +1,4 @@
-package lsm
+package plan
 
 import (
 	"bytes"
@@ -21,35 +21,23 @@ func splitUserKey(t *testing.T, internal []byte) []byte {
 	return userKey
 }
 
-func TestKeyRangeOperations(t *testing.T) {
-	empty := KeyRange{}
-	require.True(t, empty.IsEmpty())
+func TestTableHelpers(t *testing.T) {
+	require.Nil(t, tableIDsFromMeta(nil))
 
-	left := ikey("a", 10)
-	right := ikey("c", 5)
-	r := KeyRange{Left: left, Right: right}
-	require.False(t, r.IsEmpty())
-	require.True(t, empty.OverlapsWith(r))
-	require.False(t, r.OverlapsWith(KeyRange{}))
+	t1 := TableMeta{ID: 1, MinKey: ikey("a", 10), MaxKey: ikey("b", 1), Size: 4}
+	t2 := TableMeta{ID: 2, MinKey: ikey("b", 10), MaxKey: ikey("c", 1), Size: 4}
+	t3 := TableMeta{ID: 3, MinKey: ikey("c", 10), MaxKey: ikey("d", 1), Size: 4}
+	tables := []TableMeta{t1, t2, t3}
 
-	r2 := KeyRange{Left: ikey("b", 9), Right: ikey("d", 1)}
-	require.True(t, r.OverlapsWith(r2))
+	bot := collectBotTables(t1, tables, 10)
+	require.Len(t, bot, 1)
 
-	r3 := KeyRange{Left: ikey("d", 9), Right: ikey("e", 1)}
-	require.False(t, r.OverlapsWith(r3))
-
-	copyRange := KeyRange{Left: append([]byte(nil), left...), Right: append([]byte(nil), right...)}
-	require.True(t, r.Equals(copyRange))
-
-	var ext KeyRange
-	ext.Extend(r)
-	require.True(t, ext.Equals(r))
-	ext.Extend(r3)
-	require.True(t, ext.OverlapsWith(r3))
+	bot = collectBotTables(TableMeta{ID: 99, MinKey: ikey("z", 1)}, tables, 10)
+	require.Nil(t, bot)
 }
 
 func TestPlanStateEntry(t *testing.T) {
-	plan := Plan{
+	p := Plan{
 		ThisLevel: 0,
 		NextLevel: 1,
 		TopIDs:    []uint64{1},
@@ -57,7 +45,7 @@ func TestPlanStateEntry(t *testing.T) {
 		ThisRange: KeyRange{Left: ikey("a", 10), Right: ikey("b", 1)},
 		NextRange: KeyRange{Left: ikey("c", 10), Right: ikey("d", 1)},
 	}
-	entry := plan.StateEntry(64)
+	entry := p.StateEntry(64)
 	require.ElementsMatch(t, []uint64{1, 2}, entry.TableIDs)
 
 	empty := Plan{ThisLevel: 1, NextLevel: 1}
@@ -79,30 +67,30 @@ func TestPlanBuilderSelections(t *testing.T) {
 	require.Equal(t, 0, left)
 	require.Equal(t, 2, right)
 
-	plan, ok := PlanForLandingFallback(2, []TableMeta{t1})
+	p, ok := ForLandingFallback(2, []TableMeta{t1})
 	require.True(t, ok)
-	require.Equal(t, 2, plan.ThisLevel)
+	require.Equal(t, 2, p.ThisLevel)
 
-	plan, ok = PlanForRegular(1, tables, 2, []TableMeta{t3}, nil)
+	p, ok = ForRegular(1, tables, 2, []TableMeta{t3}, nil)
 	require.True(t, ok)
-	require.Equal(t, uint64(2), plan.TopIDs[0])
+	require.Equal(t, uint64(2), p.TopIDs[0])
 
 	old := time.Now().Add(-2 * time.Hour)
 	recent := time.Now().Add(-5 * time.Second)
 	t4 := TableMeta{ID: 4, MinKey: ikey("f", 10), MaxKey: ikey("g", 1), StaleSize: 12 << 20, CreatedAt: old, Size: 8 << 20}
 	t5 := TableMeta{ID: 5, MinKey: ikey("h", 10), MaxKey: ikey("i", 1), StaleSize: 1, CreatedAt: old, Size: 8 << 20}
-	plan, ok = PlanForMaxLevel(6, []TableMeta{t4, t5}, 20<<20, nil, time.Now(), 0)
+	p, ok = ForMaxLevel(6, []TableMeta{t4, t5}, 20<<20, nil, time.Now(), 0)
 	require.True(t, ok)
-	require.Equal(t, uint64(4), plan.TopIDs[0])
+	require.Equal(t, uint64(4), p.TopIDs[0])
 
 	ttlCandidate := TableMeta{ID: 6, MinKey: ikey("j", 10), MaxKey: ikey("k", 1), StaleSize: 1, CreatedAt: old, Size: 8 << 20}
-	plan, ok = PlanForMaxLevel(6, []TableMeta{ttlCandidate}, 20<<20, nil, time.Now(), time.Hour)
+	p, ok = ForMaxLevel(6, []TableMeta{ttlCandidate}, 20<<20, nil, time.Now(), time.Hour)
 	require.True(t, ok)
-	require.Equal(t, uint64(6), plan.TopIDs[0])
-	require.Equal(t, "ttl", plan.StatsTag)
+	require.Equal(t, uint64(6), p.TopIDs[0])
+	require.Equal(t, "ttl", p.StatsTag)
 
 	recentTTL := TableMeta{ID: 13, MinKey: ikey("l", 10), MaxKey: ikey("m", 1), StaleSize: 1, CreatedAt: recent, Size: 8 << 20}
-	_, ok = PlanForMaxLevel(6, []TableMeta{recentTTL}, 20<<20, nil, time.Now(), time.Hour)
+	_, ok = ForMaxLevel(6, []TableMeta{recentTTL}, 20<<20, nil, time.Now(), time.Hour)
 	require.False(t, ok)
 
 	shard := []TableMeta{
@@ -110,18 +98,18 @@ func TestPlanBuilderSelections(t *testing.T) {
 		{ID: 8, MinKey: ikey("b", 9), MaxKey: ikey("c", 1), Size: 4 << 20},
 		{ID: 9, MinKey: ikey("c", 9), MaxKey: ikey("d", 1), Size: 4 << 20},
 	}
-	plan, ok = PlanForLandingShard(0, shard, 1, []TableMeta{}, 4<<20, 1, nil)
+	p, ok = ForLandingShard(0, shard, 1, []TableMeta{}, 4<<20, 1, nil)
 	require.True(t, ok)
-	require.Len(t, plan.TopIDs, 3)
+	require.Len(t, p.TopIDs, 3)
 
 	l0 := []TableMeta{
 		{ID: 10, MinKey: ikey("a", 9), MaxKey: ikey("b", 1)},
 		{ID: 11, MinKey: ikey("b", 9), MaxKey: ikey("c", 1)},
 		{ID: 12, MinKey: ikey("d", 9), MaxKey: ikey("e", 1)},
 	}
-	plan, ok = PlanForL0ToLbase(l0, 1, []TableMeta{t3}, nil)
+	p, ok = ForL0ToLbase(l0, 1, []TableMeta{t3}, nil)
 	require.True(t, ok)
-	require.Equal(t, 2, len(plan.TopIDs))
+	require.Equal(t, 2, len(p.TopIDs))
 
 	l0 = []TableMeta{
 		{ID: 20, MinKey: ikey("a", 9), MaxKey: ikey("b", 1), Size: 5 << 20, CreatedAt: old},
@@ -131,49 +119,30 @@ func TestPlanBuilderSelections(t *testing.T) {
 		{ID: 24, MinKey: ikey("e", 9), MaxKey: ikey("f", 1), Size: 200 << 20, CreatedAt: old},
 		{ID: 25, MinKey: ikey("f", 9), MaxKey: ikey("g", 1), Size: 5 << 20, CreatedAt: recent},
 	}
-	plan, ok = PlanForL0ToL0(0, l0, 90<<20, NewState(1), time.Now())
+	p, ok = ForL0ToL0(0, l0, 90<<20, NewState(1), time.Now())
 	require.True(t, ok)
-	require.Equal(t, 4, len(plan.TopIDs))
-}
-
-func TestTableHelpers(t *testing.T) {
-	require.Nil(t, tableIDsFromMeta(nil))
-
-	t1 := TableMeta{ID: 1, MinKey: ikey("a", 10), MaxKey: ikey("b", 1), Size: 4}
-	t2 := TableMeta{ID: 2, MinKey: ikey("b", 10), MaxKey: ikey("c", 1), Size: 4}
-	t3 := TableMeta{ID: 3, MinKey: ikey("c", 10), MaxKey: ikey("d", 1), Size: 4}
-	tables := []TableMeta{t1, t2, t3}
-
-	bot := collectBotTables(t1, tables, 10)
-	require.Len(t, bot, 1)
-
-	bot = collectBotTables(TableMeta{ID: 99, MinKey: ikey("z", 1)}, tables, 10)
-	require.Nil(t, bot)
+	require.Equal(t, 4, len(p.TopIDs))
 }
 
 // TestPlanForL0ToL0AllowsConcurrentWorkers verifies that two consecutive
-// PlanForL0ToL0 calls (simulating two compactor workers) each receive a
-// disjoint slice of L0 tables and that the second call is NOT blocked by
-// the first claiming an InfRange entry on level 0. With the IntraLevel
-// flag the state machine claims by table ID only, so peer workers see
-// the right tables filtered out via state.HasTable but no range overlap
-// blocks them.
+// ForL0ToL0 calls (simulating two compactor workers) each receive a disjoint
+// slice of L0 tables and that the second call is NOT blocked by the first
+// claiming an InfRange entry on level 0. With the IntraLevel flag the state
+// machine claims by table ID only.
 func TestPlanForL0ToL0AllowsConcurrentWorkers(t *testing.T) {
 	state := NewState(8)
 	tables := makeL0PlannerTestTables(t, 16)
 
-	// Worker 0 picks first.
-	plan0, ok0 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	plan0, ok0 := ForL0ToL0(0, tables, 0, state, time.Time{})
 	require.True(t, ok0)
 	require.True(t, plan0.IntraLevel)
-	require.Len(t, plan0.TopIDs, l0ToL0MaxTablesPerWorker)
+	require.Len(t, plan0.TopIDs, L0ToL0MaxTablesPerWorker)
 	require.True(t, state.CompareAndAdd(LevelsLocked{}, plan0.StateEntry(0)))
 
-	// Worker 1 picks second; should get the remaining tables.
-	plan1, ok1 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	plan1, ok1 := ForL0ToL0(0, tables, 0, state, time.Time{})
 	require.True(t, ok1, "second worker must find a non-conflicting plan")
 	require.True(t, plan1.IntraLevel)
-	require.Len(t, plan1.TopIDs, l0ToL0MaxTablesPerWorker)
+	require.Len(t, plan1.TopIDs, L0ToL0MaxTablesPerWorker)
 	for _, fid := range plan0.TopIDs {
 		for _, fid2 := range plan1.TopIDs {
 			require.NotEqual(t, fid, fid2, "plans must hold disjoint table sets")
@@ -181,17 +150,13 @@ func TestPlanForL0ToL0AllowsConcurrentWorkers(t *testing.T) {
 	}
 	require.True(t, state.CompareAndAdd(LevelsLocked{}, plan1.StateEntry(0)))
 
-	// Worker 2 finds nothing usable (only 16 tables / cap=8 each = 2 plans max).
-	_, ok2 := PlanForL0ToL0(0, tables, 0, state, time.Time{})
+	_, ok2 := ForL0ToL0(0, tables, 0, state, time.Time{})
 	require.False(t, ok2)
 }
 
 // TestPlanForL0ToL0DoesNotBlockL0ToLbase verifies the core PR motivation:
-// an in-flight L0→L0 compaction must NOT prevent a peer worker from
-// running L0→Lbase on a different (non-overlapping) range. Pre-fix,
-// L0→L0 used InfRange and any subsequent L0→Lbase hit
-// `state.Overlaps(0, anything)`. With IntraLevel the L0 entry only
-// claims tables, so L0→Lbase can claim a fresh range slice.
+// an in-flight L0→L0 compaction must NOT prevent a peer worker from running
+// L0→Lbase on a different (non-overlapping) range.
 func TestPlanForL0ToL0DoesNotBlockL0ToLbase(t *testing.T) {
 	state := NewState(8)
 	l0 := makeL0PlannerTestTables(t, 12)
@@ -199,12 +164,12 @@ func TestPlanForL0ToL0DoesNotBlockL0ToLbase(t *testing.T) {
 		{ID: 100, MinKey: ikey("a", 10), MaxKey: ikey("z", 1), Size: 32 << 20},
 	}
 
-	planA, okA := PlanForL0ToL0(0, l0, 0, state, time.Time{})
+	planA, okA := ForL0ToL0(0, l0, 0, state, time.Time{})
 	require.True(t, okA)
 	require.True(t, planA.IntraLevel)
 	require.True(t, state.CompareAndAdd(LevelsLocked{}, planA.StateEntry(0)))
 
-	planB, okB := PlanForL0ToLbase(l0, 1, lbase, state)
+	planB, okB := ForL0ToLbase(l0, 1, lbase, state)
 	require.True(t, okB, "L0→Lbase must not be blocked by an in-flight L0→L0")
 	require.False(t, planB.IntraLevel)
 	planAIDs := make(map[uint64]struct{}, len(planA.TopIDs))
@@ -228,7 +193,7 @@ func makeL0PlannerTestTables(t *testing.T, n int) []TableMeta {
 			MinKey:    ikey(formatL0Key(i*2), 10),
 			MaxKey:    ikey(formatL0Key(i*2+10), 1),
 			Size:      8 << 20,
-			CreatedAt: time.Time{}, // skip "younger than 10s" filter
+			CreatedAt: time.Time{},
 		}
 	}
 	return out

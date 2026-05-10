@@ -407,11 +407,6 @@ func (c *Coordinator) JoinStore(tb testing.TB, storeID uint64) {
 	c.PublishRootEvent(tb, rootevent.StoreJoined(storeID))
 }
 
-func (c *Coordinator) RetireStore(tb testing.TB, storeID uint64) {
-	tb.Helper()
-	c.PublishRootEvent(tb, rootevent.StoreRetired(storeID))
-}
-
 func NewScheduler(tb testing.TB, coordAddr string, timeout time.Duration) storecontrol.Client {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -717,14 +712,6 @@ func raftConfig(peerID uint64, enableLeaseRead bool) myraft.Config {
 		return peer.EnableLeaseRead(cfg)
 	}
 	return cfg
-}
-
-func EnsureRegionPeer(tb testing.TB, node *Node, regionID, peerID uint64) {
-	tb.Helper()
-	status := FetchRuntimeStatus(tb, context.Background(), node.Addr(), regionID)
-	if !status.GetKnown() || !status.GetHosted() || status.GetLocalPeerId() != peerID {
-		tb.Fatalf("region %d on store %d not hosted as peer %d: %+v", regionID, node.StoreID, peerID, status)
-	}
 }
 
 func DumpStatus(tb testing.TB, ctx context.Context, regionID uint64, nodes ...*Node) string {

@@ -9,6 +9,7 @@ import (
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
 func TestRegionManagerLoadAndMeta(t *testing.T) {
@@ -125,20 +126,20 @@ func TestStoreAndRouterHelpers(t *testing.T) {
 		t.Fatalf("expected region metrics to be initialized")
 	}
 
-	router := NewRouter()
-	if err := router.SendRaft(1, myraft.Message{To: 1}); err == nil {
+	rt := router.New()
+	if err := rt.SendRaft(1, myraft.Message{To: 1}); err == nil {
 		t.Fatalf("expected SendRaft to fail for missing peer")
 	}
-	if err := router.SendPropose(1, []byte("data")); err == nil {
+	if err := rt.SendPropose(1, []byte("data")); err == nil {
 		t.Fatalf("expected SendPropose to fail for missing peer")
 	}
-	if err := router.SendCommand(1, nil); err == nil {
+	if err := rt.SendCommand(1, nil); err == nil {
 		t.Fatalf("expected SendCommand to fail for nil request")
 	}
-	if err := router.SendCommand(1, &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}); err == nil {
+	if err := rt.SendCommand(1, &raftcmdpb.RaftCmdRequest{Header: &raftcmdpb.CmdHeader{RegionId: 1}}); err == nil {
 		t.Fatalf("expected SendCommand to fail for missing peer")
 	}
-	if err := router.SendTick(1); err == nil {
+	if err := rt.SendTick(1); err == nil {
 		t.Fatalf("expected SendTick to fail for missing peer")
 	}
 }

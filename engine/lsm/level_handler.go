@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -17,7 +18,7 @@ type levelHandler struct {
 	sync.RWMutex
 	levelNum                    int
 	tables                      []*table
-	filter                      rangeFilter
+	filter                      rangefilter.Filter[*table]
 	landing                     landingBuffer
 	totalSize                   int64
 	totalStaleSize              int64
@@ -45,7 +46,7 @@ type tableRange struct {
 func (lh *levelHandler) close() error {
 	lh.RLock()
 	tables := append([]*table(nil), lh.tables...)
-	landingTables := append([]*table(nil), lh.landing.allTables()...)
+	landingTables := append([]*table(nil), lh.landing.AllTables()...)
 	lh.RUnlock()
 
 	var closeErr error
@@ -80,13 +81,13 @@ func (lh *levelHandler) add(t *table) {
 func (lh *levelHandler) getTotalSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalSize + lh.landing.totalSize()
+	return lh.totalSize + lh.landing.TotalSize()
 }
 
 func (lh *levelHandler) getTotalValueSize() int64 {
 	lh.RLock()
 	defer lh.RUnlock()
-	return lh.totalValueSize + lh.landing.totalValueSize()
+	return lh.totalValueSize + lh.landing.TotalValueSize()
 }
 
 func (lh *levelHandler) keyCount() uint64 {
@@ -98,7 +99,7 @@ func (lh *levelHandler) keyCount() uint64 {
 			total += uint64(t.keyCount)
 		}
 	}
-	for _, t := range lh.landing.allTables() {
+	for _, t := range lh.landing.AllTables() {
 		if t != nil {
 			total += uint64(t.keyCount)
 		}
@@ -115,7 +116,7 @@ func (lh *levelHandler) rangeTombstoneCount() uint64 {
 			total += uint64(t.RangeTombstoneCount())
 		}
 	}
-	for _, t := range lh.landing.allTables() {
+	for _, t := range lh.landing.AllTables() {
 		if t != nil {
 			total += uint64(t.RangeTombstoneCount())
 		}
@@ -156,9 +157,9 @@ func (lh *levelHandler) metricsSnapshot() metrics.LevelMetrics {
 		SizeBytes:              lh.totalSize,
 		ValueBytes:             lh.totalValueSize,
 		StaleBytes:             lh.totalStaleSize,
-		LandingTableCount:      lh.landing.tableCount(),
-		LandingSizeBytes:       lh.landing.totalSize(),
-		LandingValueBytes:      lh.landing.totalValueSize(),
+		LandingTableCount:      lh.landing.TableCount(),
+		LandingSizeBytes:       lh.landing.TotalSize(),
+		LandingValueBytes:      lh.landing.TotalValueSize(),
 		ValueDensity:           lh.densityLocked(),
 		LandingValueDensity:    lh.landingDensityLocked(),
 		LandingRuns:            int64(lh.landingRuns.Load()),
@@ -201,7 +202,7 @@ func (lh *levelHandler) Get(key []byte) (*kv.Entry, error) {
 		best   *kv.Entry
 		maxVer uint64
 	)
-	if entry, err := lh.landing.search(key, &maxVer); err == nil {
+	if entry, err := lh.landing.Search(key, &maxVer); err == nil {
 		best = entry
 	} else if err != utils.ErrKeyNotFound {
 		return nil, err
@@ -228,7 +229,7 @@ func (lh *levelHandler) Sort() {
 	lh.Lock()
 	defer lh.Unlock()
 	lh.refreshTableIndexesLocked()
-	lh.landing.sortShards()
+	lh.landing.SortShards()
 }
 
 // sortTablesLocked sorts lh.tables using level-specific ordering semantics.
@@ -300,17 +301,17 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		var tmp uint64
 		maxVersion = &tmp
 	}
-	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
+	if lh.levelNum > 0 && lh.filter.SpanCount() >= rangefilter.MinSpanCount && lh.filter.NonOverlapping() {
 		total := len(lh.tables)
-		table := lh.filter.tableForPoint(key)
+		table, ok := lh.filter.TableForPoint(key)
 		if lh.lm != nil {
 			candidates := 0
-			if table != nil {
+			if ok {
 				candidates = 1
 			}
 			lh.lm.recordRangeFilterPoint(total, candidates, false)
 		}
-		if table == nil {
+		if !ok {
 			return nil, utils.ErrKeyNotFound
 		}
 		if table.MaxVersionVal() <= *maxVersion {
@@ -356,8 +357,9 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 }
 
 func (lh *levelHandler) getTableForKey(key []byte) *table {
-	if lh.levelNum > 0 && len(lh.filter.spans) >= rangeFilterMinSpanCount && lh.filter.nonOverlapping {
-		return lh.filter.tableForPoint(key)
+	if lh.levelNum > 0 && lh.filter.SpanCount() >= rangefilter.MinSpanCount && lh.filter.NonOverlapping() {
+		tbl, _ := lh.filter.TableForPoint(key)
+		return tbl
 	}
 	tables := lh.selectTablesForKey(key, false)
 	if len(tables) == 0 {
@@ -381,14 +383,14 @@ func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 			fallback = true
 			tables = lh.getTablesForKeyLinear(key)
 		}
-	} else if len(lh.filter.spans) < rangeFilterMinSpanCount {
+	} else if lh.filter.SpanCount() < rangefilter.MinSpanCount {
 		fallback = true
 		tables = lh.getTablesForKeyLinear(key)
 	} else {
-		if !lh.filter.nonOverlapping {
+		if !lh.filter.NonOverlapping() {
 			fallback = true
 		}
-		tables = lh.filter.tablesForPoint(key)
+		tables = lh.filter.TablesForPoint(key)
 	}
 	if record && lh.lm != nil {
 		lh.lm.recordRangeFilterPoint(total, len(tables), fallback)
@@ -429,14 +431,14 @@ func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) 
 	total := len(lh.tables)
 	fallback := false
 	var tables []*table
-	if lh.levelNum == 0 || len(lh.filter.spans) < rangeFilterMinSpanCount {
+	if lh.levelNum == 0 || lh.filter.SpanCount() < rangefilter.MinSpanCount {
 		fallback = true
-		tables = filterTablesByBounds(lh.tables, lower, upper)
+		tables = rangefilter.FilterByBounds(lh.tables, lower, upper)
 	} else {
-		if lh.levelNum > 0 && !lh.filter.nonOverlapping {
+		if lh.levelNum > 0 && !lh.filter.NonOverlapping() {
 			fallback = true
 		}
-		tables = lh.filter.tablesForBounds(lower, upper)
+		tables = lh.filter.TablesForBounds(lower, upper)
 	}
 	if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
 		lh.lm.recordRangeFilterBounded(total, len(tables), fallback)
@@ -445,7 +447,7 @@ func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) 
 }
 
 func (lh *levelHandler) rebuildRangeFilterLocked() {
-	lh.filter = buildRangeFilter(lh.levelNum, lh.tables)
+	lh.filter = rangefilter.Build(lh.levelNum, lh.tables)
 }
 
 func (lh *levelHandler) refreshTableIndexesLocked() {
@@ -519,7 +521,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 	lh.tables = newTables
 	lh.refreshTableIndexesLocked()
 
-	lh.landing.remove(toDelMap)
+	lh.landing.Remove(toDelMap)
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
@@ -535,7 +537,7 @@ func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
 	}
 	removed := lh.collectLandingTablesLocked(toDelMap)
 
-	lh.landing.remove(toDelMap)
+	lh.landing.Remove(toDelMap)
 
 	lh.Unlock()
 
@@ -553,9 +555,9 @@ func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
 		toDelMap[t.fid] = struct{}{}
 	}
 	removed := lh.collectLandingTablesLocked(toDelMap)
-	lh.landing.remove(toDelMap)
+	lh.landing.Remove(toDelMap)
 	if len(toAdd) > 0 {
-		lh.landing.addBatch(toAdd)
+		lh.landing.AddBatch(toAdd)
 	}
 
 	lh.Unlock()
@@ -568,14 +570,12 @@ func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) [
 		return nil
 	}
 	var out []*table
-	for _, sh := range lh.landing.shards {
-		for _, t := range sh.tables {
-			if t == nil {
-				continue
-			}
-			if _, ok := fidSet[t.fid]; ok {
-				out = append(out, t)
-			}
+	for _, t := range lh.landing.AllTables() {
+		if t == nil {
+			continue
+		}
+		if _, ok := fidSet[t.fid]; ok {
+			out = append(out, t)
 		}
 	}
 	return out
@@ -617,7 +617,7 @@ func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
 	}
 
 	var itrs []index.Iterator
-	landingTables := lh.landing.tablesWithinBounds(topt.LowerBound, topt.UpperBound)
+	landingTables := lh.landing.TablesWithinBounds(topt.LowerBound, topt.UpperBound)
 	itrs = append(itrs, iteratorsReversed(landingTables, topt)...)
 	if len(mainTables) == 1 {
 		itrs = append(itrs, mainTables[0].NewIterator(topt))
@@ -625,10 +625,10 @@ func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
 		itrs = append(itrs, NewConcatIterator(mainTables, topt))
 	}
 	if bounded && lh.lm != nil {
-		total := len(lh.tables) + lh.landing.tableCount()
+		total := len(lh.tables) + lh.landing.TableCount()
 		candidates := len(mainTables) + len(landingTables)
-		fallback := len(lh.filter.spans) == 0
-		if lh.levelNum > 0 && len(lh.filter.spans) > 0 && !lh.filter.nonOverlapping {
+		fallback := lh.filter.SpanCount() == 0
+		if lh.levelNum > 0 && lh.filter.SpanCount() > 0 && !lh.filter.NonOverlapping() {
 			fallback = true
 		}
 		lh.lm.recordRangeFilterBounded(total, candidates, fallback)

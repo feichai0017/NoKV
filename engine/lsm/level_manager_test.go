@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +84,7 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	lh.tables = []*table{tblV, tblG, tblA, tblP, tblD, tblS, tblJ, tblM}
 	lh.Sort()
 
-	require.Len(t, lh.filter.spans, 8)
+	require.Equal(t, 8, lh.filter.SpanCount())
 
 	point := lh.selectTablesForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 5), true)
 	require.Len(t, point, 1)
@@ -123,8 +124,8 @@ func TestLevelHandlerAddRefreshesRangeFilter(t *testing.T) {
 	lh.add(tblB)
 	lh.add(tblA)
 
-	require.Len(t, lh.filter.spans, 2)
-	require.True(t, lh.filter.nonOverlapping)
+	require.Equal(t, 2, lh.filter.SpanCount())
+	require.True(t, lh.filter.NonOverlapping())
 	require.Equal(t, uint64(302), lh.tables[0].fid)
 	require.Equal(t, uint64(301), lh.tables[1].fid)
 
@@ -180,7 +181,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 	landingE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
 
 	lh.tables = []*table{tblA, tblD, tblG}
-	lh.landing.addBatch([]*table{landingB, landingE})
+	lh.landing.AddBatch([]*table{landingB, landingE})
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{
@@ -245,4 +246,20 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	for _, tbl := range []*table{tblA, tblB, tblC, tblD} {
 		require.NoError(t, tbl.DecrRef())
 	}
+}
+
+func TestCompactionPacerBypassesWhenL0IsNearStall(t *testing.T) {
+	lm := &levelManager{
+		opt: &Options{
+			CompactionWriteBytesPerSec: 100,
+			CompactionPacingBypassL0:   2,
+		},
+		compactionPacer: pacer.New(100),
+		levels: []*levelHandler{
+			{tables: []*table{{}, {}}},
+		},
+	}
+
+	require.True(t, lm.compactionPacerBypassActive())
+	require.Nil(t, lm.compactionPacerForBuild())
 }

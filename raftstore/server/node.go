@@ -17,6 +17,7 @@ import (
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	"github.com/feichai0017/NoKV/raftstore/store"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	"github.com/feichai0017/NoKV/utils"
 	"google.golang.org/grpc"
@@ -70,10 +71,10 @@ func NewNode(cfg Config) (*Node, error) {
 	if storeCfg.CommandApplier == nil {
 		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil)
 	}
-	router := storeCfg.Router
-	if router == nil {
-		router = store.NewRouter()
-		storeCfg.Router = router
+	rt := storeCfg.Router
+	if rt == nil {
+		rt = router.New()
+		storeCfg.Router = rt
 	}
 
 	if cfg.EnableRaftDebugLog {
@@ -141,7 +142,22 @@ func NewNode(cfg Config) (*Node, error) {
 		node.mvccGCPlanTask = utils.NewPeriodicTask(taskCfg)
 		node.mvccGCPlanTask.Start()
 	}
-	if worker, ok := newMVCCMaintenanceWorker(cfg.MVCCMaintenance, cfg.Storage.MVCC, st); ok {
+	if worker, ok := storemvcc.NewMaintenanceWorker(storemvcc.MaintenanceWorkerConfig{
+		MVCCStore:           cfg.Storage.MVCC,
+		MaintenanceProposer: st,
+		LockResolver:        cfg.MVCCMaintenance.LockResolver,
+		Interval:            cfg.MVCCMaintenance.Interval,
+		Timeout:             cfg.MVCCMaintenance.Timeout,
+		SafePoint:           cfg.MVCCMaintenance.SafePoint,
+		CurrentTs:           cfg.MVCCMaintenance.CurrentTs,
+		CurrentTime:         cfg.MVCCMaintenance.CurrentTime,
+		Retention:           cfg.MVCCMaintenance.Retention,
+		Mount:               cfg.MVCCMaintenance.Mount,
+		Apply:               cfg.MVCCMaintenance.Apply,
+		ResolveLocks:        cfg.MVCCMaintenance.ResolveLocks,
+		RunOrphanDefaults:   cfg.MVCCMaintenance.RunOrphanDefaults,
+		OrphanDefaults:      cfg.MVCCMaintenance.OrphanDefaults,
+	}); ok {
 		node.mvccMaintenance = worker
 		worker.Start()
 	}

@@ -171,36 +171,6 @@ func (c *Cluster) RestartService(nodeID uint64) *coordserver.Service {
 	return svc
 }
 
-func (c *Cluster) Campaign(nodeID uint64) {
-	c.tb.Helper()
-	driver, ok := c.Drivers[nodeID]
-	require.True(c.tb, ok, "missing root driver %d", nodeID)
-	_ = driver.Campaign()
-}
-
-func (c *Cluster) PauseTicks(nodeID uint64) {
-	c.tb.Helper()
-	driver, ok := c.Drivers[nodeID]
-	require.True(c.tb, ok, "missing root driver %d", nodeID)
-	driver.PauseTicks()
-}
-
-func (c *Cluster) ResumeTicks(nodeID uint64) {
-	c.tb.Helper()
-	driver, ok := c.Drivers[nodeID]
-	require.True(c.tb, ok, "missing root driver %d", nodeID)
-	driver.ResumeTicks()
-}
-
-func (c *Cluster) TickNode(nodeID uint64, n int) {
-	c.tb.Helper()
-	driver, ok := c.Drivers[nodeID]
-	require.True(c.tb, ok, "missing root driver %d", nodeID)
-	for range n {
-		_ = driver.Tick()
-	}
-}
-
 func (c *Cluster) FollowerIDs(leaderID uint64) []uint64 {
 	c.tb.Helper()
 	out := make([]uint64, 0, len(c.RootStores)-1)
@@ -221,14 +191,6 @@ func (c *Cluster) SubscribeTail(nodeID uint64, after rootstorage.TailToken) *roo
 	store, ok := c.RootStores[nodeID]
 	require.True(c.tb, ok, "missing root store %d", nodeID)
 	return store.SubscribeTail(after)
-}
-
-func (c *Cluster) WaitRegionVisible(serviceID, regionID uint64, key []byte) {
-	c.tb.Helper()
-	require.Eventually(c.tb, func() bool {
-		resp, err := c.Services[serviceID].GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: key})
-		return err == nil && !resp.GetNotFound() && resp.GetRegionDescriptor().GetRegionId() == regionID
-	}, 8*time.Second, 50*time.Millisecond)
 }
 
 func (c *Cluster) WaitReloaded(serviceID uint64, sub *rootstorage.TailSubscription, key []byte, regionID uint64) {

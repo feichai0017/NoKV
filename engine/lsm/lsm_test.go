@@ -8,12 +8,15 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/landing"
+	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -37,6 +40,20 @@ var (
 		NumCompactors:       3,
 	}
 )
+
+// ikey builds an internal key for tests using the default column family.
+func ikey(s string, ts uint64) []byte {
+	return kv.InternalKey(kv.CFDefault, []byte(s), ts)
+}
+
+// splitUserKey extracts the user-key portion of an internal key, asserting
+// that the input was a well-formed internal key.
+func splitUserKey(t *testing.T, internal []byte) []byte {
+	t.Helper()
+	_, userKey, _, ok := kv.SplitInternalKey(internal)
+	require.True(t, ok)
+	return userKey
+}
 
 func buildInternalTestEntry() *kv.Entry {
 	return newRandomTestEntry()
@@ -361,49 +378,49 @@ func TestLandingBufferAccounting(t *testing.T) {
 	}
 
 	var buf landingBuffer
-	buf.add(t1)
-	buf.addBatch([]*table{t2, t3})
+	buf.Add(t1)
+	buf.AddBatch([]*table{t2, t3})
 
-	if got := buf.tableCount(); got != 3 {
+	if got := buf.TableCount(); got != 3 {
 		t.Fatalf("expected 3 tables, got %d", got)
 	}
-	if got := buf.totalSize(); got != 350 {
+	if got := buf.TotalSize(); got != 350 {
 		t.Fatalf("expected size 350, got %d", got)
 	}
-	if got := buf.totalValueSize(); got != 150 {
+	if got := buf.TotalValueSize(); got != 150 {
 		t.Fatalf("expected value size 150, got %d", got)
 	}
-	if buf.maxAgeSeconds() <= 0 {
+	if buf.MaxAgeSeconds() <= 0 {
 		t.Fatalf("expected max age > 0")
 	}
 
-	order := buf.shardOrderBySize()
+	order := plan.PickShardOrder(landingPickInput(buf.ShardViews()))
 	if len(order) != 3 {
 		t.Fatalf("expected 3 shard order entries, got %d", len(order))
 	}
-	if order[0] != shardIndexForRange(t2.minKey) {
+	if order[0] != landing.ShardIndex(t2.minKey) {
 		t.Fatalf("expected largest shard first, got %v", order)
 	}
 
-	meta := buf.allMeta()
+	meta := tableMetaSnapshot(buf.AllTables())
 	if len(meta) != 3 {
 		t.Fatalf("expected 3 metas, got %d", len(meta))
 	}
 	if meta[0].MaxVersion == 0 {
 		t.Fatalf("expected max version in meta")
 	}
-	if buf.shardMetaByIndex(99) != nil {
-		t.Fatalf("expected nil shard meta for invalid index")
+	if buf.ShardTablesByIndex(99) != nil {
+		t.Fatalf("expected nil shard tables for invalid index")
 	}
 
-	buf.sortShards()
-	views := buf.shardViews()
+	buf.SortShards()
+	views := buf.ShardViews()
 	if len(views) != 3 {
 		t.Fatalf("expected 3 shard views, got %d", len(views))
 	}
 
-	buf.remove(map[uint64]struct{}{1: {}})
-	if got := buf.tableCount(); got != 2 {
+	buf.Remove(map[uint64]struct{}{1: {}})
+	if got := buf.TableCount(); got != 2 {
 		t.Fatalf("expected 2 tables after remove, got %d", got)
 	}
 }
@@ -441,7 +458,7 @@ func TestTableIteratorSeekAndIteratorPrefetch(t *testing.T) {
 	tbl.mu.Unlock()
 
 	tbl.idx.Store(nil)
-	tbl.lm.cache.delIndex(tbl.fid)
+	tbl.lm.cache.DelIndex(tbl.fid)
 	tbl.keyCount = 0
 	tbl.maxVersion = 0
 	tbl.hasBloom = false
@@ -580,8 +597,8 @@ func TestMaxLevelCompactionNoRangeDeleteResurrection(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
 	// Keep target size tiny so collectBotTables does not include pointTbl.
-	cd.plan.ThisFileSize = 1
-	cd.plan.NextFileSize = 1
+	cd.spec.ThisFileSize = 1
+	cd.spec.NextFileSize = 1
 	if ok := lsm.levels.fillTables(cd); !ok {
 		t.Fatalf("expected max-level compaction plan")
 	}
@@ -691,8 +708,8 @@ func TestMaxLevelCompactionRangeDeleteResurrection(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, maxLevel, maxLevel)
 	// Keep target size tiny so collectBotTables does not include adjacent tables.
-	cd.plan.ThisFileSize = 1
-	cd.plan.NextFileSize = 1
+	cd.spec.ThisFileSize = 1
+	cd.spec.NextFileSize = 1
 	if ok := lsm.levels.fillTables(cd); !ok {
 		t.Fatalf("expected max-level compaction plan")
 	}
@@ -892,9 +909,9 @@ func TestLandingSearch(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), 1)
 
 	var buf landingBuffer
-	buf.add(tbl)
+	buf.Add(tbl)
 
-	found, err := buf.search(key, nil)
+	found, err := buf.Search(key, nil)
 	if err != nil {
 		t.Fatalf("landing search: %v", err)
 	}
@@ -907,7 +924,7 @@ func TestLandingSearch(t *testing.T) {
 	}
 	found.DecrRef()
 
-	_, err = buf.search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
+	_, err = buf.Search(kv.InternalKey(kv.CFDefault, []byte("missing"), 1), nil)
 	if err != utils.ErrKeyNotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -924,11 +941,11 @@ func TestLandingSearchPrefersLatestVersion(t *testing.T) {
 	defer func() { _ = tblNew.DecrRef() }()
 
 	var buf landingBuffer
-	buf.add(tblOld)
-	buf.add(tblNew)
+	buf.Add(tblOld)
+	buf.Add(tblNew)
 
 	key := kv.InternalKey(kv.CFDefault, []byte("b"), math.MaxUint64)
-	found, err := buf.search(key, nil)
+	found, err := buf.Search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
@@ -949,7 +966,7 @@ func TestLevelGetPrefersMainVersion(t *testing.T) {
 	defer func() { _ = mainTbl.DecrRef() }()
 
 	lh := &levelHandler{levelNum: 3}
-	lh.landing.add(landingTbl)
+	lh.landing.Add(landingTbl)
 	lh.tables = []*table{mainTbl}
 
 	key := kv.InternalKey(kv.CFDefault, []byte("k"), math.MaxUint64)
@@ -1073,8 +1090,8 @@ func TestLevelSearchLandingAndLN(t *testing.T) {
 	key := kv.InternalKey(kv.CFDefault, []byte("c"), 1)
 
 	lh := &levelHandler{levelNum: 3}
-	lh.landing.add(tbl)
-	found, err := lh.landing.search(key, nil)
+	lh.landing.Add(tbl)
+	found, err := lh.landing.Search(key, nil)
 	if err != nil || found == nil {
 		t.Fatalf("landing search err=%v entry=%v", err, found)
 	}
@@ -1586,8 +1603,8 @@ func TestLevelHandlerOverlapAndMetrics(t *testing.T) {
 	lh.tables = []*table{
 		{minKey: min, maxKey: max},
 	}
-	lh.landing.ensureInit()
-	lh.landing.add(&table{
+	lh.landing.EnsureInit()
+	lh.landing.Add(&table{
 		minKey:    kv.InternalKey(kv.CFDefault, []byte("k"), 1),
 		maxKey:    kv.InternalKey(kv.CFDefault, []byte("p"), 1),
 		size:      50,
@@ -1625,11 +1642,9 @@ func TestCompact(t *testing.T) {
 				return true
 			}
 		}
-		for _, sh := range lh.landing.shards {
-			for _, t := range sh.tables {
-				if t.fid == fid {
-					return true
-				}
+		for _, t := range lh.landing.AllTables() {
+			if t.fid == fid {
+				return true
 			}
 		}
 		return false
@@ -1700,9 +1715,9 @@ func TestCompact(t *testing.T) {
 		tricky(cd.thisLevel.tablesSnapshot())
 		ok := lsm.levels.fillTables(cd)
 		if !ok && lsm.levels.levels[6].numLandingTables() > 0 {
-			pri := Priority{
+			pri := plan.Priority{
 				Level:       6,
-				LandingMode: LandingDrain,
+				LandingMode: plan.LandingDrain,
 				Target:      lsm.levels.levelTargets(),
 				Score:       2,
 				Adjusted:    2,
@@ -1729,14 +1744,9 @@ func TestCompact(t *testing.T) {
 				}
 			}
 			if !ok {
-				for _, sh := range level.landing.shards {
-					for _, tbl := range sh.tables {
-						if tbl.fid > prevMax {
-							ok = true
-							break
-						}
-					}
-					if ok {
+				for _, tbl := range level.landing.AllTables() {
+					if tbl != nil && tbl.fid > prevMax {
+						ok = true
 						break
 					}
 				}
@@ -1790,8 +1800,8 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
-	cd.plan.ThisRange = getKeyRange(cd.top...)
-	cd.plan.NextRange = cd.plan.ThisRange
+	cd.spec.ThisRange = getKeyRange(cd.top...)
+	cd.spec.NextRange = cd.spec.ThisRange
 	if err := lsm.levels.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
@@ -1803,12 +1813,12 @@ func TestLandingMergeStaysInLanding(t *testing.T) {
 	}
 	beforeMain := target.numTables()
 
-	pri := Priority{
+	pri := plan.Priority{
 		Level:       6,
 		Score:       5.0,
 		Adjusted:    5.0,
 		Target:      lsm.levels.levelTargets(),
-		LandingMode: LandingKeep,
+		LandingMode: plan.LandingKeep,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("landing merge compact failed: %v", err)
@@ -1842,19 +1852,19 @@ func TestLandingShardParallelSafety(t *testing.T) {
 	}
 	cd := buildCompactDef(lsm, 0, 0, 6)
 	cd.top = []*table{tables[0]}
-	cd.plan.ThisRange = getKeyRange(cd.top...)
-	cd.plan.NextRange = cd.plan.ThisRange
+	cd.spec.ThisRange = getKeyRange(cd.top...)
+	cd.spec.NextRange = cd.spec.ThisRange
 	if err := lsm.levels.moveToLanding(cd); err != nil {
 		t.Fatalf("moveToLanding: %v", err)
 	}
 
 	// Trigger parallel landing-only compactions across shards.
-	pri := Priority{
+	pri := plan.Priority{
 		Level:       6,
 		Score:       6.0,
 		Adjusted:    6.0,
 		Target:      lsm.levels.levelTargets(),
-		LandingMode: LandingDrain,
+		LandingMode: plan.LandingDrain,
 	}
 	if err := lsm.levels.doCompact(0, pri); err != nil {
 		t.Fatalf("parallel landing compaction failed: %v", err)
@@ -1919,7 +1929,7 @@ func runTest(n int, testFunList ...func()) {
 
 // buildCompactDef constructs a compaction definition for tests.
 func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
-	t := Targets{
+	t := plan.Targets{
 		TargetSz:  []int64{0, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760},
 		FileSz:    []int64{1024, 2097152, 2097152, 2097152, 2097152, 2097152, 2097152},
 		BaseLevel: nextLevel,
@@ -1938,7 +1948,7 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 		compactorId: id,
 		thisLevel:   lsm.levels.levels[thisLevel],
 		nextLevel:   lsm.levels.levels[nextLevel],
-		plan: Plan{
+		spec: plan.Plan{
 			ThisLevel:    thisLevel,
 			NextLevel:    nextLevel,
 			ThisFileSize: levelFileSize(thisLevel),
@@ -1950,8 +1960,8 @@ func buildCompactDef(lsm *LSM, id, thisLevel, nextLevel int) *compactDef {
 }
 
 // buildCompactionPriority constructs a compaction priority for tests.
-func buildCompactionPriority(lsm *LSM, thisLevel int, t Targets) Priority {
-	return Priority{
+func buildCompactionPriority(lsm *LSM, thisLevel int, t plan.Targets) plan.Priority {
+	return plan.Priority{
 		Level:    thisLevel,
 		Score:    8.6,
 		Adjusted: 860,
@@ -2654,4 +2664,61 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 		require.Equal(t, 0, count, "range [%s, %s) should be empty", r.lower, r.upper)
 		require.NoError(t, mit.Close())
 	}
+}
+
+// ---- Recovery tests (merged from lsm_recovery_test.go) ----
+//
+// These tests exercise LSM recovery semantics by injecting manifest
+// corruption and re-opening the engine, verifying restart behavior.
+
+// TestBaseManifest validates manifest integrity across restarts.
+func TestBaseManifest(t *testing.T) {
+	clearDir()
+	recovery := func() {
+		// Each run simulates an unexpected restart.
+		lsm := buildLSM()
+		// Validate correctness after recovery.
+		baseTest(t, lsm, 128)
+		_ = lsm.Close()
+	}
+	// Run the closure multiple times to exercise recovery.
+	runTest(5, recovery)
+}
+
+func TestManifestMagic(t *testing.T) {
+	helpTestManifestFileCorruption(t, 3, "bad magic")
+}
+
+func TestManifestVersion(t *testing.T) {
+	helpTestManifestFileCorruption(t, 4, "")
+}
+
+func TestManifestChecksum(t *testing.T) {
+	helpTestManifestFileCorruption(t, 15, "")
+}
+
+func helpTestManifestFileCorruption(t *testing.T, off int64, errorContent string) {
+	clearDir()
+	// Create the LSM and close it to generate a manifest.
+	{
+		lsm := buildLSM()
+		require.NoError(t, lsm.Close())
+	}
+	currentData, err := os.ReadFile(filepath.Join(opt.WorkDir, "CURRENT"))
+	require.NoError(t, err)
+	manifestName := strings.TrimSpace(string(currentData))
+	fp, err := os.OpenFile(filepath.Join(opt.WorkDir, manifestName), os.O_RDWR, 0)
+	require.NoError(t, err)
+	// Inject a bad byte at the given offset.
+	_, err = fp.WriteAt([]byte{'X'}, off)
+	require.NoError(t, err)
+	require.NoError(t, fp.Close())
+	defer func() {
+		if err := recover(); err != nil && errorContent != "" {
+			require.Contains(t, err.(error).Error(), errorContent)
+		}
+	}()
+	// Re-open LSM; it should panic on corruption.
+	lsm := buildLSM()
+	require.NoError(t, lsm.Close())
 }

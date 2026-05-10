@@ -35,11 +35,6 @@ func Open(tb testing.TB) *Cluster {
 	return OpenWithOptions(tb, Options{})
 }
 
-func OpenWithTickIntervals(tb testing.TB, tickIntervals map[uint64]time.Duration) *Cluster {
-	tb.Helper()
-	return OpenWithOptions(tb, Options{TickIntervals: tickIntervals})
-}
-
 func OpenWithOptions(tb testing.TB, opts Options) *Cluster {
 	tb.Helper()
 
@@ -178,14 +173,6 @@ func (c *Cluster) ResumeTicks(nodeID uint64) {
 	c.driver(nodeID).ResumeTicks()
 }
 
-func (c *Cluster) TickNode(nodeID uint64, n int) {
-	c.tb.Helper()
-	driver := c.driver(nodeID)
-	for range n {
-		require.NoError(c.tb, driver.Tick())
-	}
-}
-
 func (c *Cluster) FollowerIDs(leaderID uint64) []uint64 {
 	c.tb.Helper()
 	out := make([]uint64, 0, len(clusterNodeIDs)-1)
@@ -220,23 +207,6 @@ func (c *Cluster) ReopenStore(nodeID uint64) *rootreplicated.Store {
 	require.NoError(c.tb, err)
 	c.Stores[nodeID] = store
 	return store
-}
-
-func (c *Cluster) IsolateNode(nodeID uint64) {
-	c.tb.Helper()
-	for _, id := range clusterNodeIDs {
-		transport := c.transport(id)
-		if id == nodeID {
-			for _, peerID := range clusterNodeIDs {
-				if peerID == nodeID {
-					continue
-				}
-				transport.SetPeer(peerID, c.blockedPeerAddrs[peerID])
-			}
-			continue
-		}
-		transport.SetPeer(nodeID, c.blockedPeerAddrs[nodeID])
-	}
 }
 
 func (c *Cluster) IsolateNodeEgress(nodeID uint64) {

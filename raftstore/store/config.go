@@ -7,6 +7,7 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
 // PeerBuilder constructs peer configuration for the provided region metadata.
@@ -17,7 +18,7 @@ type PeerBuilder func(meta localmeta.RegionMeta) (*peer.Config, error)
 // Config configures Store construction. Only the Router field is optional; the
 // store fills in a default router when omitted.
 type Config struct {
-	Router             *Router
+	Router             *router.Router
 	PeerBuilder        PeerBuilder
 	LocalMeta          *localmeta.Store
 	WorkDir            string

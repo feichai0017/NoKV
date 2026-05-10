@@ -154,10 +154,6 @@ func Wrap(kind Kind, op string, err error) error {
 	return &Error{Kind: kind, Op: op, Err: err}
 }
 
-func Mark(kind Kind, err error) error {
-	return Wrap(kind, "", err)
-}
-
 func (e *Error) Error() string {
 	if e == nil {
 		return "nokv: unknown error"

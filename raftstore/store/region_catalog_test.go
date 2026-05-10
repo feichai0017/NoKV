@@ -7,13 +7,14 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/peer"
+	"github.com/feichai0017/NoKV/raftstore/store/router"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStorePeersSnapshot(t *testing.T) {
-	router := NewRouter()
+	rt := router.New()
 	rs := NewStore(Config{
-		Router: router,
+		Router: rt,
 	})
 
 	cfg := &peer.Config{

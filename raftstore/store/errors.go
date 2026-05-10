@@ -14,7 +14,6 @@ var (
 	errZeroPeerID                             = errors.New("raftstore: peer id is zero")
 	errNilPeerConfig                          = errors.New("raftstore: peer config is nil")
 	errNilRouter                              = errors.New("raftstore: router is nil")
-	errNilRaftCommandRequest                  = errors.New("raftstore: nil raft command request")
 	errCommandApplyWithoutHandler             = errors.New("raftstore: command apply without handler")
 	errNilCommand                             = errors.New("raftstore: command is nil")
 	errRegionIDMissing                        = errors.New("raftstore: region id missing")
@@ -45,16 +44,11 @@ var (
 	errInstallRegionSSTRequiresCallback       = errors.New("raftstore: install region sst snapshot requires install callback")
 	errInstallRegionSSTRequiresPeerBuild      = errors.New("raftstore: install region sst snapshot requires peer builder")
 	errFailpointAfterSnapshotApply            = errors.New("raftstore: failpoint after snapshot apply before publish")
-	errRouterRegisterNilPeer                  = errors.New("raftstore: router cannot register nil peer")
 	errResolveLocksStartVersionRequired       = errors.New("raftstore: resolve locks start version is required")
 	errEmptyResolveLockKey                    = errors.New("raftstore: empty resolve-lock key")
 	errCheckTxnStatusPrimaryRequired          = errors.New("raftstore: primary key is required for check txn status")
 	errTxnHeartBeatPrimaryRequired            = errors.New("raftstore: primary key is required for txn heartbeat")
 )
-
-func IsNilStore(err error) bool     { return errors.Is(err, errNilStore) }
-func IsZeroRegionID(err error) bool { return errors.Is(err, errZeroRegionID) }
-func IsZeroPeerID(err error) bool   { return errors.Is(err, errZeroPeerID) }
 
 // RegionRoutingError records stable region routing failures for store-local
 // transaction maintenance commands.
@@ -166,10 +160,6 @@ func errRegionKeyError(operation string, regionID uint64, keyErr *kvrpcpb.KeyErr
 	)
 }
 
-func errPeerNotFound(id uint64) error { return fmt.Errorf("raftstore: peer %d not found", id) }
-func errPeerAlreadyRegistered(id uint64) error {
-	return fmt.Errorf("raftstore: peer %d already registered", id)
-}
 func errRegionNotFound(id uint64) error { return fmt.Errorf("raftstore: region %d not found", id) }
 func errParentRegionNotFound(id uint64) error {
 	return fmt.Errorf("raftstore: parent region %d not found", id)

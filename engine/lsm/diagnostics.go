@@ -1,6 +1,8 @@
 package lsm
 
 import (
+	"sync/atomic"
+
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/metrics"
 )
@@ -74,6 +76,51 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		diag.Entries += lm.entryCount()
 	}
 	return diag
+}
+
+// rangeFilterMetrics is the in-memory hit/miss counter set used to populate
+// RangeFilterDiagnostics. It lives next to the diagnostics that read it so
+// the metric layout and the snapshot view stay in one place.
+type rangeFilterMetrics struct {
+	pointCandidates   atomic.Uint64
+	pointPruned       atomic.Uint64
+	boundedCandidates atomic.Uint64
+	boundedPruned     atomic.Uint64
+	fallbacks         atomic.Uint64
+}
+
+func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
+	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
+	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
 }
 
 func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {

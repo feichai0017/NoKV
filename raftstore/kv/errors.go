@@ -26,10 +26,6 @@ const (
 	reasonInternal              = "internal"
 )
 
-func IsStoreNotInitialized(err error) bool {
-	return errors.Is(err, errStoreNotInitialized)
-}
-
 func rpcInvalidArgument(message string) error {
 	return rpcKVError(nokverrors.KindInvalidArgument, codes.InvalidArgument, message, reasonInvalidRequest)
 }

@@ -19,7 +19,9 @@ import (
 )
 
 type fakeExecutor struct {
-	err error
+	err              error
+	lookupCount      int
+	readDirPlusCount int
 }
 
 func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
@@ -49,6 +51,7 @@ func (e *fakeExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequ
 }
 
 func (e *fakeExecutor) Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	e.lookupCount++
 	if e.err != nil {
 		return fsmeta.DentryRecord{}, e.err
 	}
@@ -63,6 +66,7 @@ func (e *fakeExecutor) ReadDir(context.Context, fsmeta.ReadDirRequest) ([]fsmeta
 }
 
 func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	e.readDirPlusCount++
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -77,6 +81,75 @@ func (e *fakeExecutor) ReadDirPlus(context.Context, fsmeta.ReadDirRequest) ([]fs
 			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
 		},
 	}}, nil
+}
+
+func TestTypedClientDefaultLookupCacheHit(t *testing.T) {
+	exec := &fakeExecutor{}
+	cli, cleanup := openBufconnClient(t, exec)
+	defer cleanup()
+
+	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "checkpoint"}
+	first, err := cli.Lookup(context.Background(), req)
+	require.NoError(t, err)
+	second, err := cli.Lookup(context.Background(), req)
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
+	require.Equal(t, 1, exec.lookupCount)
+	require.Equal(t, LookupCacheStats{Hits: 1, Misses: 1, Inserts: 1}, cli.LookupCacheStats())
+}
+
+func TestTypedClientCanDisableLookupCache(t *testing.T) {
+	exec := &fakeExecutor{}
+	cli, cleanup := openBufconnClientWithConfig(t, exec, ClientConfig{DisableLookupCache: true})
+	defer cleanup()
+
+	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "checkpoint"}
+	_, err := cli.Lookup(context.Background(), req)
+	require.NoError(t, err)
+	_, err = cli.Lookup(context.Background(), req)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, exec.lookupCount)
+	require.Equal(t, LookupCacheStats{}, cli.LookupCacheStats())
+}
+
+func TestTypedClientPopulatesLookupCacheFromReadDirPlus(t *testing.T) {
+	exec := &fakeExecutor{}
+	cli, cleanup := openBufconnClient(t, exec)
+	defer cleanup()
+
+	_, err := cli.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode})
+	require.NoError(t, err)
+	record, err := cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "checkpoint"})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.InodeID(42), record.Inode)
+	require.Equal(t, 0, exec.lookupCount)
+	require.Equal(t, 1, exec.readDirPlusCount)
+	require.Equal(t, uint64(1), cli.LookupCacheStats().Hits)
+}
+
+func TestTypedClientMovesLookupCacheAfterRename(t *testing.T) {
+	exec := &fakeExecutor{}
+	cli, cleanup := openBufconnClient(t, exec)
+	defer cleanup()
+
+	_, err := cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "checkpoint"})
+	require.NoError(t, err)
+	require.NoError(t, cli.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fsmeta.RootInode,
+		FromName:   "checkpoint",
+		ToParent:   8,
+		ToName:     "published",
+	}))
+	record, err := cli.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "published"})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.InodeID(42), record.Inode)
+	require.Equal(t, 1, exec.lookupCount)
+	require.Equal(t, uint64(1), cli.LookupCacheStats().Hits)
 }
 
 func (e *fakeExecutor) GetReadVersion(context.Context, fsmeta.ReadVersionRequest) (uint64, error) {
@@ -534,6 +607,10 @@ func (s *stubWatchSubscription) Close() error {
 }
 
 func openBufconnClient(t *testing.T, executor fsmetaserver.Executor, opts ...fsmetaserver.Option) (*GRPCClient, func()) {
+	return openBufconnClientWithConfig(t, executor, ClientConfig{}, opts...)
+}
+
+func openBufconnClientWithConfig(t *testing.T, executor fsmetaserver.Executor, cfg ClientConfig, opts ...fsmetaserver.Option) (*GRPCClient, func()) {
 	t.Helper()
 	const bufSize = 1 << 20
 	listener := bufconn.Listen(bufSize)
@@ -546,7 +623,7 @@ func openBufconnClient(t *testing.T, executor fsmetaserver.Executor, opts ...fsm
 		return listener.Dial()
 	}
 	ctx := context.Background()
-	cli, err := NewGRPCClient(ctx, "passthrough:///fsmeta-bufnet",
+	cli, err := NewGRPCClientWithConfig(ctx, "passthrough:///fsmeta-bufnet", cfg,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(dialer),
 	)
