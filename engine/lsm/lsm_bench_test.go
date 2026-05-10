@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
+	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -239,14 +240,14 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.0
-		builder := newTableBuiler(&builderOpt)
+		builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
 		userKey := benchUserKey(start + i)
 		builder.AddKey(kv.NewEntry(
 			kv.InternalKey(kv.CFDefault, userKey, 1),
 			[]byte("value"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table: %v", err)
 		}
@@ -271,7 +272,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
-		builder := newTableBuiler(&builderOpt)
+		builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
 		left := benchUserKey(start + i*4)
 		right := benchUserKey(start + i*4 + 2)
 		builder.AddKey(kv.NewEntry(
@@ -283,7 +284,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 			[]byte("value-right"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, fidBase+uint64(i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open bench table with gap: %v", err)
 		}
@@ -303,7 +304,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 		builderOpt := *lsm.option
 		builderOpt.BlockSize = 4 << 10
 		builderOpt.BloomFalsePositive = 0.01
-		builder := newTableBuiler(&builderOpt)
+		builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
 		left := benchUserKey(i * 4)
 		right := benchUserKey(i*4 + 2048)
 		builder.AddKey(kv.NewEntry(
@@ -315,7 +316,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 			[]byte("value-right"),
 		))
 		tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(30000+i))
-		tbl, err := openTable(lsm.levels, tableName, builder)
+		tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
 		if err != nil {
 			b.Fatalf("open overlapping L0 table: %v", err)
 		}
@@ -497,7 +498,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 					builderOpt := *lsm.option
 					builderOpt.BlockSize = 128
 					builderOpt.BloomFalsePositive = 0.0
-					builder := newTableBuiler(&builderOpt)
+					builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
 					for i := range totalKeys {
 						key := fmt.Appendf(nil, "k%06d", i)
 						builder.AddKey(kv.NewEntry(
@@ -506,7 +507,7 @@ func BenchmarkTableIteratorBlockBounds(b *testing.B) {
 						))
 					}
 					tableName := vfs.FileNameSSTable(lsm.option.WorkDir, uint64(90000+width))
-					tbl, err := openTable(lsm.levels, tableName, builder)
+					tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
 					if err != nil {
 						b.Fatalf("open bench multi-block table: %v", err)
 					}

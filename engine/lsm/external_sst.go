@@ -10,6 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/kv"
+	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
@@ -72,7 +73,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		return nil, fmt.Errorf("lsm: stat external sst target %s: %w", path, err)
 	}
 
-	builder := newTableBuiler(cfg)
+	builder := tablepkg.NewBuilder(tableOptionsFor(cfg))
 	var valueBytes uint64
 	for i, entry := range entries {
 		if entry == nil {
@@ -89,11 +90,11 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		valueBytes += uint64(vlen)
 	}
 
-	build, err := builder.done()
+	build, err := builder.Done()
 	if err != nil {
 		return nil, fmt.Errorf("lsm: build external sst %s: %w", path, err)
 	}
-	if build.size == 0 {
+	if build.Size == 0 {
 		return nil, fmt.Errorf("lsm: external sst build for %s is empty", path)
 	}
 
@@ -101,7 +102,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 	tmp := file.OpenSStable(&file.Options{
 		FileName: tmpPath,
 		Flag:     os.O_CREATE | os.O_EXCL | os.O_RDWR,
-		MaxSz:    build.size,
+		MaxSz:    build.Size,
 		FS:       cfg.FS,
 	})
 	if tmp == nil {
@@ -119,7 +120,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		}
 	}()
 
-	if err := writeBuildDataToSST(tmp, build); err != nil {
+	if err := tablepkg.WriteBuildData(tmp, build); err != nil {
 		return nil, fmt.Errorf("lsm: write external sst %s: %w", tmpPath, err)
 	}
 	if err := tmp.Sync(); err != nil {
@@ -205,7 +206,7 @@ func checkTablesOverlap(tables []*table) error {
 		curr := sorted[i]
 		if kv.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
 			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
-				prev.fid, curr.fid)
+				prev.FID(), curr.FID())
 		}
 	}
 	return nil
@@ -224,7 +225,7 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
 			if kv.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
 				kv.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
 				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
-					tbl.fid, existing.fid)
+					tbl.FID(), existing.FID())
 			}
 		}
 	}
@@ -245,8 +246,8 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 	rollback := func() {
 		for _, tbl := range importedTables {
 			if tbl != nil {
-				lm.cache.DelIndex(tbl.fid)
-				_ = tbl.closeHandle()
+				lm.cache.DelIndex(tbl.FID())
+				_ = tbl.CloseHandle()
 			}
 		}
 		for sourcePath, targetPath := range pathMappings {
@@ -308,7 +309,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 		}
 		pathMappings[path] = targetPath
 
-		tbl, err := openTable(lm, targetPath, nil)
+		tbl, err := tablepkg.Open(lm, targetPath, nil)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("open imported sst failed: %s, err: %w", targetPath, err)
@@ -333,7 +334,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 	for _, tbl := range importedTables {
 		meta := &manifest.FileMeta{
 			Level:     0,
-			FileID:    tbl.fid,
+			FileID:    tbl.FID(),
 			Size:      uint64(tbl.Size()),
 			Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
 			Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
@@ -370,12 +371,12 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 		if tbl == nil {
 			continue
 		}
-		tbl.setLevel(l0.levelNum)
+		tbl.SetLevel(l0.levelNum)
 		l0.tables = append(l0.tables, tbl)
 		l0.totalSize += tbl.Size()
 		l0.totalStaleSize += int64(tbl.StaleDataSize())
 		l0.totalValueSize += int64(tbl.ValueSize())
-		result.FileIDs = append(result.FileIDs, tbl.fid)
+		result.FileIDs = append(result.FileIDs, tbl.FID())
 		result.ImportedBytes += uint64(tbl.Size())
 	}
 	l0.sortTablesLocked()
@@ -397,7 +398,7 @@ func (lm *levelManager) removeExternalSST(fileIDs []uint64) error {
 	tablesByID := make(map[uint64]*table, len(fileIDs))
 	for _, tbl := range l0.tables {
 		if tbl != nil {
-			tablesByID[tbl.fid] = tbl
+			tablesByID[tbl.FID()] = tbl
 		}
 	}
 	toDelete := make([]*table, 0, len(fileIDs))

@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm/landing"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
+	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -76,13 +77,13 @@ func (lh *levelHandler) close() error {
 		if t == nil {
 			continue
 		}
-		closeErr = errors.Join(closeErr, t.closeHandle())
+		closeErr = errors.Join(closeErr, t.CloseHandle())
 	}
 	for _, t := range landingTables {
 		if t == nil {
 			continue
 		}
-		closeErr = errors.Join(closeErr, t.closeHandle())
+		closeErr = errors.Join(closeErr, t.CloseHandle())
 	}
 	return closeErr
 }
@@ -92,7 +93,7 @@ func (lh *levelHandler) add(t *table) {
 	}
 	lh.Lock()
 	defer lh.Unlock()
-	t.setLevel(lh.levelNum)
+	t.SetLevel(lh.levelNum)
 	lh.tables = append(lh.tables, t)
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
@@ -118,12 +119,12 @@ func (lh *levelHandler) keyCount() uint64 {
 	var total uint64
 	for _, t := range lh.tables {
 		if t != nil {
-			total += uint64(t.keyCount)
+			total += uint64(t.CachedKeyCount())
 		}
 	}
 	for _, t := range lh.landing.AllTables() {
 		if t != nil {
-			total += uint64(t.keyCount)
+			total += uint64(t.CachedKeyCount())
 		}
 	}
 	return total
@@ -260,7 +261,7 @@ func (lh *levelHandler) sortTablesLocked() {
 	if lh.levelNum == 0 {
 		// L0 key ranges may overlap, so ordering follows file creation order.
 		sort.Slice(lh.tables, func(i, j int) bool {
-			return lh.tables[i].fid < lh.tables[j].fid
+			return lh.tables[i].FID() < lh.tables[j].FID()
 		})
 		// Rebuild sublevel layout for the read path. Compaction picker still
 		// reads lh.tables directly; sublevels exist only to accelerate Get.
@@ -286,7 +287,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		if candidates[j] == nil {
 			return true
 		}
-		return candidates[i].fid > candidates[j].fid
+		return candidates[i].FID() > candidates[j].FID()
 	})
 	for _, table := range candidates {
 		if table == nil {
@@ -339,7 +340,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		if table.MaxVersionVal() <= *maxVersion {
 			return nil, utils.ErrKeyNotFound
 		}
-		return table.searchExactCandidate(key, maxVersion)
+		return table.SearchExactCandidate(key, maxVersion)
 	}
 	tables := lh.selectTablesForKey(key, true)
 	if len(tables) == 0 {
@@ -491,12 +492,12 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 
 	toDelMap := make(map[uint64]struct{})
 	for _, t := range toDel {
-		toDelMap[t.fid] = struct{}{}
+		toDelMap[t.FID()] = struct{}{}
 	}
 	var removed []*table
 	var newTables []*table
 	for _, t := range lh.tables {
-		_, found := toDelMap[t.fid]
+		_, found := toDelMap[t.FID()]
 		if !found {
 			newTables = append(newTables, t)
 			continue
@@ -508,7 +509,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	// Increase totalSize first.
 	for _, t := range toAdd {
 		lh.addSize(t)
-		t.setLevel(lh.levelNum)
+		t.SetLevel(lh.levelNum)
 		newTables = append(newTables, t)
 	}
 
@@ -516,7 +517,7 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	lh.tables = newTables
 	lh.refreshTableIndexesLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
-	return decrRefs(removed)
+	return tablepkg.DecrAll(removed)
 }
 
 // deleteTables remove tables idx0, ..., idx1-1.
@@ -525,14 +526,14 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 
 	toDelMap := make(map[uint64]struct{})
 	for _, t := range toDel {
-		toDelMap[t.fid] = struct{}{}
+		toDelMap[t.FID()] = struct{}{}
 	}
 
 	// Make a copy as iterators might be keeping a slice of tables.
 	var removed []*table
 	var newTables []*table
 	for _, t := range lh.tables {
-		_, found := toDelMap[t.fid]
+		_, found := toDelMap[t.FID()]
 		if !found {
 			newTables = append(newTables, t)
 			continue
@@ -547,7 +548,7 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
-	return decrRefs(removed)
+	return tablepkg.DecrAll(removed)
 }
 
 func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
@@ -555,7 +556,7 @@ func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
 
 	toDelMap := make(map[uint64]struct{})
 	for _, t := range toDel {
-		toDelMap[t.fid] = struct{}{}
+		toDelMap[t.FID()] = struct{}{}
 	}
 	removed := lh.collectLandingTablesLocked(toDelMap)
 
@@ -563,7 +564,7 @@ func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
 
 	lh.Unlock()
 
-	return decrRefs(removed)
+	return tablepkg.DecrAll(removed)
 }
 
 func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
@@ -574,7 +575,7 @@ func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
 		if t == nil {
 			continue
 		}
-		toDelMap[t.fid] = struct{}{}
+		toDelMap[t.FID()] = struct{}{}
 	}
 	removed := lh.collectLandingTablesLocked(toDelMap)
 	lh.landing.Remove(toDelMap)
@@ -584,7 +585,7 @@ func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
 
 	lh.Unlock()
 
-	return decrRefs(removed)
+	return tablepkg.DecrAll(removed)
 }
 
 func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) []*table {
@@ -596,7 +597,7 @@ func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) [
 		if t == nil {
 			continue
 		}
-		if _, ok := fidSet[t.fid]; ok {
+		if _, ok := fidSet[t.FID()]; ok {
 			out = append(out, t)
 		}
 	}
@@ -682,7 +683,7 @@ func (lh *levelHandler) addLanding(t *table) {
 	lh.Lock()
 	defer lh.Unlock()
 	lh.landing.EnsureInit()
-	t.setLevel(lh.levelNum)
+	t.SetLevel(lh.levelNum)
 	lh.landing.Add(t)
 }
 
@@ -778,7 +779,7 @@ func buildL0Sublevels(tables []*table) []l0Sublevel {
 		if c := kv.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()); c != 0 {
 			return c < 0
 		}
-		return sorted[i].fid < sorted[j].fid
+		return sorted[i].FID() < sorted[j].FID()
 	})
 
 	sublevels := make([]l0Sublevel, 0, 4)
@@ -840,7 +841,7 @@ func l0GroupHasNoOtherOverlap(group, all []*table) bool {
 		if t == nil {
 			return false
 		}
-		groupIDs[t.fid] = struct{}{}
+		groupIDs[t.FID()] = struct{}{}
 		if kv.CompareBaseKeys(t.MinKey(), minKey) < 0 {
 			minKey = t.MinKey()
 		}
@@ -853,7 +854,7 @@ func l0GroupHasNoOtherOverlap(group, all []*table) bool {
 		if t == nil {
 			continue
 		}
-		if _, in := groupIDs[t.fid]; in {
+		if _, in := groupIDs[t.FID()]; in {
 			continue
 		}
 		// Non-overlap iff t.MaxKey < group.MinKey or t.MinKey > group.MaxKey.

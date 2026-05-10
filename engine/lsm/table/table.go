@@ -1,10 +1,10 @@
-package lsm
+package table
 
 import (
 	"bytes"
+	stderrors "errors"
 	"expvar"
 	"fmt"
-	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"io"
 	"log/slog"
 	"math"
@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	stderrors "errors"
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -24,6 +23,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 )
 
 var (
@@ -32,11 +32,13 @@ var (
 	prefetchCompleted = expvar.NewInt("NoKV.Prefetch.Completed")
 )
 
-type table struct {
-	lm             *levelManager
-	fid            uint64
+// Table is one open SSTable plus its cached metadata.
+type Table struct {
+	rt   Runtime
+	opts Options
+	fid  uint64
 	utils.RefCount // For file garbage collection. Atomic.
-	lvl            atomic.Int32
+	lvl atomic.Int32
 
 	minKey []byte
 	maxKey []byte
@@ -57,7 +59,9 @@ type table struct {
 	pins int32
 }
 
-func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *table, err error) {
+// Open returns a Table backed by tableName. When builder is non-nil the
+// builder is flushed to disk first; pass nil to open an existing SST file.
+func Open(rt Runtime, tableName string, builder *Builder) (out *Table, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if out != nil && out.ss != nil {
@@ -68,38 +72,34 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		}
 	}()
 
-	sstSize := int(lm.opt.SSTableMaxSz)
+	if rt == nil {
+		return nil, errors.New("table.Open: nil runtime")
+	}
+	opts := rt.Options()
+	sstSize := int(opts.SSTableMaxSize)
 	var (
-		t       *table
+		t       *Table
 		openErr error
 	)
 	fid := vfs.FID(tableName)
 	// if builder is not nil, flush the buffer to disk
 	if builder != nil {
-		if t, openErr = builder.flush(lm, tableName); openErr != nil {
+		if t, openErr = builder.flush(rt, opts, tableName, nil); openErr != nil {
 			return nil, openErr
 		}
 	} else {
-		t = &table{lm: lm, fid: fid}
+		t = &Table{rt: rt, opts: opts, fid: fid}
 		// if builder is nil, open an existing sst file
 		t.ss = file.OpenSStable(&file.Options{
 			FileName: tableName,
-			Dir:      lm.opt.WorkDir,
+			Dir:      opts.WorkDir,
 			Flag:     os.O_CREATE | os.O_RDWR,
-			MaxSz:    int(sstSize),
-			FS:       lm.opt.FS})
+			MaxSz:    sstSize,
+			FS:       opts.FS})
 	}
 	if t == nil || t.ss == nil {
 		return nil, fmt.Errorf("open table %s: nil sstable handle", tableName)
 	}
-	// initialize the sst file, load the index
-	// The Index Block is stored as a Protobuf message (storagepb.TableIndex).
-	// The overall SSTable structure is:
-	// +--------------------+ ... +--------------------+--------------------+
-	// | Data Block 1       |     | Data Block N       | Index Block (Proto)|
-	// +--------------------+ ... +--------------------+--------------------+
-	// | Index Block Length (4B) | SSTable Checksum (8B) | SSTable Checksum Length (4B) |
-	// +-------------------------+-----------------------+------------------------------+
 	if err := t.ss.Init(); err != nil {
 		_ = t.ss.Close()
 		return nil, err
@@ -115,7 +115,9 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 		t.staleDataSize = idx.GetStaleDataSize()
 		t.valueSize = idx.GetValueSize()
 		t.rangeDeletes = idx.GetRangeTombstoneCount()
-		t.lm.cache.AddIndex(t.fid, idx)
+		if c := t.cache(); c != nil {
+			c.AddIndex(t.fid, idx)
+		}
 	}
 	t.hasBloom = t.ss.HasBloomFilter()
 	t.size = t.ss.Size()
@@ -127,10 +129,8 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 	// get the max key of sst, need to use iterator
 	itr := t.NewIterator(&index.Options{}) // default is descending
 	defer func() { _ = itr.Close() }()
-	// locate to the initial position is the max key
 	itr.Rewind()
 	if !itr.Valid() {
-		// Empty table should not happen, but keep minKey as maxKey fallback.
 		t.maxKey = kv.SafeCopy(nil, t.minKey)
 		return t, nil
 	}
@@ -147,17 +147,27 @@ func openTable(lm *levelManager, tableName string, builder *tableBuilder) (out *
 	return out, nil
 }
 
+// cache returns the runtime's cache, or nil.
+func (t *Table) cache() *cachepkg.Cache {
+	if t == nil || t.rt == nil {
+		return nil
+	}
+	return t.rt.Cache()
+}
+
 // Metadata accessors and cached table metadata.
-func (t *table) index() *storagepb.TableIndex {
+func (t *Table) index() *storagepb.TableIndex {
 	if t == nil {
 		return nil
 	}
 	if idx := t.idx.Load(); idx != nil {
 		return idx
 	}
-	if cached, ok := t.lm.cache.GetIndex(t.fid); ok {
-		t.idx.Store(cached)
-		return cached
+	if c := t.cache(); c != nil {
+		if cached, ok := c.GetIndex(t.fid); ok {
+			t.idx.Store(cached)
+			return cached
+		}
 	}
 
 	t.mu.Lock()
@@ -172,7 +182,9 @@ func (t *table) index() *storagepb.TableIndex {
 	idx := t.ss.Indexs()
 	if idx != nil {
 		t.idx.Store(idx)
-		t.lm.cache.AddIndex(t.fid, idx)
+		if c := t.cache(); c != nil {
+			c.AddIndex(t.fid, idx)
+		}
 		t.keyCount = idx.GetKeyCount()
 		t.maxVersion = idx.GetMaxVersion()
 		t.staleDataSize = idx.GetStaleDataSize()
@@ -183,19 +195,20 @@ func (t *table) index() *storagepb.TableIndex {
 }
 
 // FID returns the SSTable file id.
-func (t *table) FID() uint64 { return t.fid }
+func (t *Table) FID() uint64 { return t.fid }
 
 // CreatedAt returns the table's creation timestamp (zero if unknown).
-func (t *table) CreatedAt() time.Time { return t.createdAt }
+func (t *Table) CreatedAt() time.Time { return t.createdAt }
 
 // MinKey returns the smallest user key stored in this SSTable.
-func (t *table) MinKey() []byte { return t.minKey }
+func (t *Table) MinKey() []byte { return t.minKey }
 
 // MaxKey returns the largest user key stored in this SSTable.
-func (t *table) MaxKey() []byte { return t.maxKey }
+func (t *Table) MaxKey() []byte { return t.maxKey }
 
-// KeyCount returns the approximate number of keys indexed by this table.
-func (t *table) KeyCount() uint32 {
+// KeyCount returns the approximate number of keys indexed by this table. It
+// will lazy-load the index from disk if not yet cached.
+func (t *Table) KeyCount() uint32 {
 	if t.keyCount != 0 {
 		return t.keyCount
 	}
@@ -206,8 +219,18 @@ func (t *table) KeyCount() uint32 {
 	return 0
 }
 
+// CachedKeyCount returns the cached key count without triggering a disk
+// load. Used by hot-path aggregations (per-level key sums, throttle
+// thresholds) that must not block on cold tables.
+func (t *Table) CachedKeyCount() uint32 {
+	if t == nil {
+		return 0
+	}
+	return t.keyCount
+}
+
 // MaxVersionVal returns the maximum MVCC version recorded in this table index.
-func (t *table) MaxVersionVal() uint64 {
+func (t *Table) MaxVersionVal() uint64 {
 	if t.maxVersion != 0 {
 		return t.maxVersion
 	}
@@ -219,7 +242,7 @@ func (t *table) MaxVersionVal() uint64 {
 }
 
 // HasBloomFilter reports whether this table carries a bloom filter in its index.
-func (t *table) HasBloomFilter() bool {
+func (t *Table) HasBloomFilter() bool {
 	if t.hasBloom {
 		return true
 	}
@@ -230,12 +253,12 @@ func (t *table) HasBloomFilter() bool {
 	return false
 }
 
-func (t *table) blockOffset(i int) (*storagepb.BlockOffset, bool) {
-	index := t.index()
-	if index == nil {
+func (t *Table) blockOffset(i int) (*storagepb.BlockOffset, bool) {
+	idx := t.index()
+	if idx == nil {
 		return nil, false
 	}
-	offsets := index.GetOffsets()
+	offsets := idx.GetOffsets()
 	if i < 0 || i > len(offsets) {
 		return nil, false
 	}
@@ -246,10 +269,10 @@ func (t *table) blockOffset(i int) (*storagepb.BlockOffset, bool) {
 }
 
 // Size is its file size in bytes
-func (t *table) Size() int64 { return t.size }
+func (t *Table) Size() int64 { return t.size }
 
 // GetCreatedAt
-func (t *table) GetCreatedAt() *time.Time {
+func (t *Table) GetCreatedAt() *time.Time {
 	if t.createdAt.IsZero() {
 		return nil
 	}
@@ -258,17 +281,18 @@ func (t *table) GetCreatedAt() *time.Time {
 }
 
 // StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
-func (t *table) StaleDataSize() uint32 { return t.staleDataSize }
+func (t *Table) StaleDataSize() uint32 { return t.staleDataSize }
 
 // ValueSize reports total inline value bytes referenced by this table.
-func (t *table) ValueSize() uint64 { return t.valueSize }
+func (t *Table) ValueSize() uint64 { return t.valueSize }
 
 // RangeTombstoneCount reports range deletion markers stored in this table.
-func (t *table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
+func (t *Table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
 
-// Point-read and block lookup path.
-// Search search for a key in the table
-func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+// Search looks up key with bloom-filter prefilter. maxVs is in/out: an entry is
+// returned only if its version is strictly greater than *maxVs, and on success
+// *maxVs is advanced to the matched version.
+func (t *Table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
 	defer func() {
 		_ = t.DecrRef()
@@ -292,7 +316,10 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
-func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+// SearchExactCandidate is like Search but skips bloom filtering. Callers pass
+// it when the range filter has already pinpointed this table as the unique
+// candidate, so the bloom check is redundant work.
+func (t *Table) SearchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
 	defer func() {
 		_ = t.DecrRef()
@@ -304,7 +331,7 @@ func (t *table) searchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
-func (t *table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+func (t *Table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	offsets := idx.GetOffsets()
 	if len(offsets) == 0 {
 		return nil, utils.ErrKeyNotFound
@@ -320,8 +347,8 @@ func (t *table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxV
 	return t.searchPointInBlock(blockIdx, key, maxVs)
 }
 
-func (t *table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool {
-	if t == nil || t.lm == nil || t.lm.opt == nil || t.lm.opt.PrefixExtractor == nil || idx == nil {
+func (t *Table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool {
+	if t == nil || t.opts.PrefixExtractor == nil || idx == nil {
 		return false
 	}
 	filter := utils.Filter(idx.GetPrefixBloomFilter())
@@ -332,14 +359,14 @@ func (t *table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool 
 	if !ok {
 		return false
 	}
-	prefix := t.lm.opt.PrefixExtractor(userKey)
+	prefix := t.opts.PrefixExtractor(userKey)
 	if len(prefix) == 0 {
 		return false
 	}
 	return !filter.MayContainKey(prefix)
 }
 
-func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
+func (t *Table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
 	block, err := t.loadBlock(blockIdx)
 	if err != nil {
 		return nil, err
@@ -385,23 +412,25 @@ func (t *table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv
 	return nil, utils.ErrKeyNotFound
 }
 
-func (t *table) loadBlock(idx int) (*block, error) {
+func (t *Table) loadBlock(idx int) (*block, error) {
 	utils.CondPanicFunc(idx < 0, func() error { return fmt.Errorf("idx=%d", idx) })
-	index := t.index()
-	if index == nil {
+	tableIndex := t.index()
+	if tableIndex == nil {
 		return nil, errors.New("missing table index")
 	}
-	offsets := index.GetOffsets()
+	offsets := tableIndex.GetOffsets()
 	if idx >= len(offsets) {
 		return nil, errors.New("block out of index")
 	}
 	var b *block
 	key := t.blockCacheKey(idx)
-	lvl := t.level()
+	lvl := t.Level()
 	ko, ok := t.blockOffset(idx)
 	utils.CondPanicFunc(!ok || ko == nil, func() error { return fmt.Errorf("block t.offset id=%d", idx) })
-	if cached, ok := t.lm.cache.GetBlock(lvl, key); ok && cached != nil {
-		return t.decodeCachedBlock(ko, cached)
+	if c := t.cache(); c != nil {
+		if cached, ok := c.GetBlock(lvl, key); ok && cached != nil {
+			return t.decodeCachedBlock(ko, cached)
+		}
 	}
 
 	b = &block{
@@ -416,7 +445,7 @@ func (t *table) loadBlock(idx int) (*block, error) {
 			t.fid, b.offset, ko.GetLen())
 	}
 	b.diskEnd = len(b.diskData)
-	b.compression = BlockCompression(ko.GetCompression())
+	b.compression = Compression(ko.GetCompression())
 	b.rawLen = int(ko.GetRawLen())
 	if b.data, err = decodeBlockPayload(b.diskData, b.compression, b.rawLen); err != nil {
 		return nil, err
@@ -425,20 +454,22 @@ func (t *table) loadBlock(idx int) (*block, error) {
 		return nil, err
 	}
 
-	t.lm.cache.AddBlock(lvl, t, key, cachepkg.Block{
-		DiskData:    b.diskData,
-		Compression: uint32(b.compression),
-		RawLen:      b.rawLen,
-	})
+	if c := t.cache(); c != nil {
+		c.AddBlock(lvl, t, key, cachepkg.Block{
+			DiskData:    b.diskData,
+			Compression: uint32(b.compression),
+			RawLen:      b.rawLen,
+		})
+	}
 
 	return b, nil
 }
 
-func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *cachepkg.Entry) (*block, error) {
+func (t *Table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *cachepkg.Entry) (*block, error) {
 	if cached == nil {
 		return nil, errors.New("nil cached block")
 	}
-	data, err := decodeBlockPayload(cached.DiskData, BlockCompression(cached.Compression), cached.RawLen)
+	data, err := decodeBlockPayload(cached.DiskData, Compression(cached.Compression), cached.RawLen)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +479,7 @@ func (t *table) decodeCachedBlock(ko *storagepb.BlockOffset, cached *cachepkg.En
 		data:        data,
 		diskData:    cached.DiskData,
 		diskEnd:     len(cached.DiskData),
-		compression: BlockCompression(cached.Compression),
+		compression: Compression(cached.Compression),
 		rawLen:      cached.RawLen,
 	}
 	if err := decodeBlockMetadata(b); err != nil {
@@ -461,15 +492,6 @@ func decodeBlockMetadata(b *block) error {
 	if b == nil {
 		return errors.New("nil block")
 	}
-	// Binary Format for a Data Block (read from disk):
-	// +--------------------------------+--------------------------------+
-	// | ... (Key-Value Entries) ...    | Entry Offsets List (var length)|
-	// +--------------------------------+--------------------------------+
-	// | Entry Offsets List Length (4B) | Block Checksum (8B)            |
-	// +--------------------------------+--------------------------------+
-	// | Block Checksum Length (4B)     |
-	// +--------------------------------+
-
 	if len(b.data) < 4 {
 		return errors.New("block data too small")
 	}
@@ -507,7 +529,7 @@ func decodeBlockMetadata(b *block) error {
 	return nil
 }
 
-func (t *table) read(off, sz int) ([]byte, error) {
+func (t *Table) read(off, sz int) ([]byte, error) {
 	ss, release, err := t.pinSSTable()
 	if err != nil {
 		return nil, err
@@ -516,11 +538,11 @@ func (t *table) read(off, sz int) ([]byte, error) {
 	return ss.Bytes(off, sz)
 }
 
-func decodeBlockPayload(payload []byte, compression BlockCompression, rawLen int) ([]byte, error) {
+func decodeBlockPayload(payload []byte, compression Compression, rawLen int) ([]byte, error) {
 	switch compression {
-	case BlockCompressionNone:
+	case CompressionNone:
 		return payload, nil
-	case BlockCompressionSnappy:
+	case CompressionSnappy:
 		decoded, err := snappy.Decode(nil, payload)
 		if err != nil {
 			return nil, err
@@ -537,16 +559,17 @@ func decodeBlockPayload(payload []byte, compression BlockCompression, rawLen int
 const maxUint32 = uint64(math.MaxUint32)
 
 // blockCacheKey is used to store blocks in the block cache.
-func (t *table) blockCacheKey(idx int) uint64 {
+func (t *Table) blockCacheKey(idx int) uint64 {
 	utils.CondPanicFunc(t.fid > maxUint32, func() error { return fmt.Errorf("table fid %d exceeds 32-bit limit", t.fid) })
 	utils.CondPanicFunc(idx < 0 || uint64(idx) > maxUint32, func() error { return fmt.Errorf("invalid block index %d", idx) })
 	return (t.fid << 32) | uint64(uint32(idx))
 }
 
-type tableIterator struct {
+// Iterator owns a positioned scan over one Table. Use NewIterator to construct.
+type Iterator struct {
 	it           index.Item
 	opt          *index.Options
-	t            *table
+	t            *Table
 	blockPos     int
 	blockStart   int
 	blockEnd     int
@@ -562,20 +585,19 @@ type tableIterator struct {
 	prefetchPool *utils.Pool
 }
 
-// Iteration and prefetch path.
-func (it *tableIterator) fetchBlock(idx int) (*block, error) {
+func (it *Iterator) fetchBlock(idx int) (*block, error) {
 	return it.t.loadBlock(idx)
 }
 
-func (it *tableIterator) hasBlockRange() bool {
+func (it *Iterator) hasBlockRange() bool {
 	return it.index != nil && it.blockEnd > it.blockStart
 }
 
-func (it *tableIterator) inBlockRange(idx int) bool {
+func (it *Iterator) inBlockRange(idx int) bool {
 	return idx >= it.blockStart && idx < it.blockEnd
 }
 
-func (it *tableIterator) prefetchNext(idx int) {
+func (it *Iterator) prefetchNext(idx int) {
 	if it.opt == nil || !it.opt.IsAsc || it.opt.PrefetchBlocks <= 0 || it.prefetchRing == nil {
 		return
 	}
@@ -603,35 +625,28 @@ func (it *tableIterator) prefetchNext(idx int) {
 }
 
 // NewIterator opens a table iterator with optional prefetch behavior.
-func (t *table) NewIterator(options *index.Options) index.Iterator {
+func (t *Table) NewIterator(options *index.Options) index.Iterator {
 	t.IncrRef()
 	if options == nil {
 		options = &index.Options{IsAsc: true}
 	}
-	index := t.index()
-	blockStart, blockEnd := blockRangeForBounds(index, options.LowerBound, options.UpperBound)
+	idx := t.index()
+	blockStart, blockEnd := blockRangeForBounds(idx, options.LowerBound, options.UpperBound)
 
-	it := &tableIterator{
+	it := &Iterator{
 		opt:        options,
 		t:          t,
 		bi:         getBlockIterator(),
-		index:      index,
+		index:      idx,
 		blockStart: blockStart,
 		blockEnd:   blockEnd,
 		lowerUser:  rangefilter.GuideUserKey(options.LowerBound),
 		upperUser:  rangefilter.GuideUserKey(options.UpperBound),
 	}
 
-	// Initialize prefetch optimization if requested
 	if options.PrefetchBlocks > 0 {
-		// Issue madvise hints for both forward and reverse iteration
-		// Forward uses Sequential pattern, reverse uses Random pattern
 		t.adviseIterator(options)
 
-		// Only initialize prefetch infrastructure for forward iteration
-		// Reverse iteration doesn't benefit from block prefetching because:
-		// 1. prefetchNext only prefetches forward (idx + n, not idx - n)
-		// 2. Reverse access patterns are already handled by madvise Random hint
 		if options.IsAsc {
 			it.closeCh = make(chan struct{})
 			it.prefetchRing = utils.NewRing[int](options.PrefetchBlocks)
@@ -672,7 +687,7 @@ func (t *table) NewIterator(options *index.Options) index.Iterator {
 }
 
 // adviseIterator is an optional helper to issue madvise hints for long scans.
-func (t *table) adviseIterator(options *index.Options) {
+func (t *Table) adviseIterator(options *index.Options) {
 	if options == nil {
 		return
 	}
@@ -694,7 +709,7 @@ func (t *table) adviseIterator(options *index.Options) {
 }
 
 // Next advances to the next key within the current block or next block.
-func (it *tableIterator) Next() {
+func (it *Iterator) Next() {
 	if !it.hasBlockRange() {
 		it.it = nil
 		it.err = io.EOF
@@ -713,12 +728,12 @@ func (it *tableIterator) Next() {
 }
 
 // Valid reports whether table iterator has a readable current item.
-func (it *tableIterator) Valid() bool {
+func (it *Iterator) Valid() bool {
 	return it.err == nil
 }
 
 // Rewind resets iterator position to the first/last key by scan direction.
-func (it *tableIterator) Rewind() {
+func (it *Iterator) Rewind() {
 	if it.opt.IsAsc {
 		it.seekToFirst()
 	} else {
@@ -727,12 +742,12 @@ func (it *tableIterator) Rewind() {
 }
 
 // Item returns the current table iterator item.
-func (it *tableIterator) Item() index.Item {
+func (it *Iterator) Item() index.Item {
 	return it.it
 }
 
 // Close releases block iterators, prefetch workers, and table references.
-func (it *tableIterator) Close() error {
+func (it *Iterator) Close() error {
 	it.closeOnce.Do(func() {
 		if it.closeCh != nil {
 			close(it.closeCh)
@@ -750,7 +765,8 @@ func (it *tableIterator) Close() error {
 	it.bi = nil
 	return it.t.DecrRef()
 }
-func (it *tableIterator) seekToFirst() {
+
+func (it *Iterator) seekToFirst() {
 	if !it.hasBlockRange() {
 		it.err = io.EOF
 		it.it = nil
@@ -776,7 +792,7 @@ func (it *tableIterator) seekToFirst() {
 	it.advanceToBoundedValid()
 }
 
-func (it *tableIterator) seekToLast() {
+func (it *Iterator) seekToLast() {
 	if !it.hasBlockRange() {
 		it.err = io.EOF
 		it.it = nil
@@ -802,7 +818,6 @@ func (it *tableIterator) seekToLast() {
 }
 
 // searchFirstBlockWithBaseKeyGT returns the first block index whose base key is > key.
-// If none exists it returns len(offsets).
 func searchFirstBlockWithBaseKeyGT(offsets []*storagepb.BlockOffset, key []byte) int {
 	lo, hi := 0, len(offsets)
 	for lo < hi {
@@ -873,10 +888,7 @@ func blockRangeForBounds(index *storagepb.TableIndex, lower, upper []byte) (int,
 }
 
 // Seek positions the iterator at the appropriate entry for the given key.
-// Both modes first locate the block that could contain the key (last block where baseKey <= key).
-// Forward (IsAsc=true): within the block, seeks to the first entry >= key.
-// Reverse (IsAsc=false): within the block, seeks to the last entry <= key.
-func (it *tableIterator) Seek(key []byte) {
+func (it *Iterator) Seek(key []byte) {
 	if !it.hasBlockRange() {
 		it.err = io.EOF
 		it.it = nil
@@ -888,25 +900,19 @@ func (it *tableIterator) Seek(key []byte) {
 		it.it = nil
 		return
 	}
-	// idx is the first block where baseKey > key. Candidate block is idx-1.
 	idx := searchFirstBlockWithBaseKeyGT(offsets, key)
 
 	if it.opt.IsAsc {
 		if idx == 0 {
-			// All blocks have baseKey > key, start from first block
 			it.seekHelper(it.blockStart, key)
 			return
 		}
 		it.seekHelper(it.blockStart+idx-1, key)
-		// Internal-key ordering is (userKey ASC, ts DESC). For point-lookups we seek
-		// with ts=MaxVersion, which can place idx-1 on a previous block whose largest
-		// key is still < target. When that happens, retry the next block once.
 		if it.err == io.EOF && idx < len(offsets) {
 			it.seekHelper(it.blockStart+idx, key)
 		}
 		return
 	}
-	// Reverse mode: if every base key is > target, there is no <= target entry.
 	if idx == 0 {
 		it.err = io.EOF
 		it.it = nil
@@ -915,7 +921,7 @@ func (it *tableIterator) Seek(key []byte) {
 	it.seekHelper(it.blockStart+idx-1, key)
 }
 
-func (it *tableIterator) seekHelper(blockIdx int, key []byte) {
+func (it *Iterator) seekHelper(blockIdx int, key []byte) {
 	if !it.inBlockRange(blockIdx) {
 		it.err = io.EOF
 		it.it = nil
@@ -948,7 +954,7 @@ func iteratorUserKey(key []byte) []byte {
 	return userKey
 }
 
-func (it *tableIterator) advanceToBoundedValid() {
+func (it *Iterator) advanceToBoundedValid() {
 	for {
 		if !it.inBlockRange(it.blockPos) {
 			it.err = io.EOF
@@ -1029,18 +1035,14 @@ func (it *tableIterator) advanceToBoundedValid() {
 }
 
 // Handle lifecycle and reference tracking.
-// shouldPinHandleLocked reports handle policy; caller must hold t.mu.
-func (t *table) shouldPinHandleLocked() bool {
+func (t *Table) shouldPinHandleLocked() bool {
 	if t == nil {
 		return false
 	}
-	// keep SSTable handles pinned for the
-	// lifetime of the table to avoid invalidating mmap-backed blocks cached
-	// elsewhere. This prevents close/reopen races that can invalidate slices.
 	return true
 }
 
-func (t *table) refreshHandlePolicy() {
+func (t *Table) refreshHandlePolicy() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.pins == 0 && !t.shouldPinHandleLocked() {
@@ -1048,29 +1050,32 @@ func (t *table) refreshHandlePolicy() {
 	}
 }
 
-func (t *table) setLevel(level int) {
+// SetLevel records the LSM level the table currently lives in. Safe to call
+// from multiple goroutines; reads observe a consistent snapshot via Level.
+func (t *Table) SetLevel(level int) {
 	t.lvl.Store(int32(level))
 	t.refreshHandlePolicy()
 }
 
-func (t *table) level() int {
+// Level returns the most-recently-recorded LSM level for this table.
+func (t *Table) Level() int {
 	return int(t.lvl.Load())
 }
 
 // openSSTableLocked opens the SSTable handle; caller must hold t.mu.
-func (t *table) openSSTableLocked(loadIndex bool) error {
+func (t *Table) openSSTableLocked(loadIndex bool) error {
 	if t.ss != nil {
 		return nil
 	}
 	opt := &file.Options{
-		FileName: vfs.FileNameSSTable(t.lm.opt.WorkDir, t.fid),
-		Dir:      t.lm.opt.WorkDir,
+		FileName: vfs.FileNameSSTable(t.opts.WorkDir, t.fid),
+		Dir:      t.opts.WorkDir,
 		Flag:     os.O_RDONLY,
 		MaxSz:    int(t.size),
-		FS:       t.lm.opt.FS,
+		FS:       t.opts.FS,
 	}
 	if opt.MaxSz <= 0 {
-		opt.MaxSz = int(t.lm.opt.SSTableMaxSz)
+		opt.MaxSz = int(t.opts.SSTableMaxSize)
 	}
 	ss := file.OpenSStable(opt)
 	if loadIndex {
@@ -1085,7 +1090,9 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 			t.staleDataSize = idx.GetStaleDataSize()
 			t.valueSize = idx.GetValueSize()
 			t.rangeDeletes = idx.GetRangeTombstoneCount()
-			t.lm.cache.AddIndex(t.fid, idx)
+			if c := t.cache(); c != nil {
+				c.AddIndex(t.fid, idx)
+			}
 		}
 		t.hasBloom = ss.HasBloomFilter()
 		t.size = ss.Size()
@@ -1104,7 +1111,7 @@ func (t *table) openSSTableLocked(loadIndex bool) error {
 }
 
 // closeSSTableLocked closes the SSTable handle; caller must hold t.mu.
-func (t *table) closeSSTableLocked() {
+func (t *Table) closeSSTableLocked() {
 	if t.ss == nil {
 		return
 	}
@@ -1112,7 +1119,9 @@ func (t *table) closeSSTableLocked() {
 	t.ss = nil
 }
 
-func (t *table) closeHandle() error {
+// CloseHandle closes the underlying SSTable file handle. Used by levelHandler
+// at shutdown when the table will not be reopened in this process.
+func (t *Table) CloseHandle() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.ss == nil {
@@ -1123,7 +1132,7 @@ func (t *table) closeHandle() error {
 	return err
 }
 
-func (t *table) pinSSTable() (*file.SSTable, func(), error) {
+func (t *Table) pinSSTable() (*file.SSTable, func(), error) {
 	if t == nil {
 		return nil, nil, errors.New("nil table")
 	}
@@ -1155,7 +1164,7 @@ func (t *table) pinSSTable() (*file.SSTable, func(), error) {
 }
 
 // Delete removes the backing SST file and cache metadata for this table.
-func (t *table) Delete() error {
+func (t *Table) Delete() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.ss == nil {
@@ -1163,7 +1172,9 @@ func (t *table) Delete() error {
 			return err
 		}
 	}
-	t.lm.cache.DelIndex(t.fid)
+	if c := t.cache(); c != nil {
+		c.DelIndex(t.fid)
+	}
 	if t.ss == nil {
 		return nil
 	}
@@ -1174,20 +1185,23 @@ func (t *table) Delete() error {
 	return nil
 }
 
+// IncrRef increments the table reference count.
+func (t *Table) IncrRef() { t.Incr() }
+
 // DecrRef decrements the refcount and possibly deletes the table.
 // It panics on refcount underflow to surface lifecycle bugs early.
-func (t *table) IncrRef() { t.Incr() }
-
-func (t *table) DecrRef() error {
+func (t *Table) DecrRef() error {
 	if t.Decr() == 0 {
 		return t.Delete()
 	}
 	return nil
 }
-func decrRefs(tables []*table) error {
+
+// DecrAll calls DecrRef on every table in tables, joining errors.
+func DecrAll(tables []*Table) error {
 	var decrRefsErr error
-	for _, table := range tables {
-		if err := table.DecrRef(); err != nil {
+	for _, t := range tables {
+		if err := t.DecrRef(); err != nil {
 			decrRefsErr = stderrors.Join(decrRefsErr, err)
 		}
 	}

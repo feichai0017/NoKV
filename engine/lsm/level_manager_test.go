@@ -88,11 +88,11 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 
 	point := lh.selectTablesForKey(kv.InternalKey(kv.CFDefault, []byte("d"), 5), true)
 	require.Len(t, point, 1)
-	require.Equal(t, uint64(102), point[0].fid)
+	require.Equal(t, uint64(102), point[0].FID())
 
 	bounded := lh.selectTablesForBounds([]byte("c"), []byte("f"), true)
 	require.Len(t, bounded, 1)
-	require.Equal(t, uint64(102), bounded[0].fid)
+	require.Equal(t, uint64(102), bounded[0].FID())
 
 	miss := lh.selectTablesForKey(kv.InternalKey(kv.CFDefault, []byte("z"), 5), true)
 	require.Empty(t, miss)
@@ -126,8 +126,8 @@ func TestLevelHandlerAddRefreshesRangeFilter(t *testing.T) {
 
 	require.Equal(t, 2, lh.filter.SpanCount())
 	require.True(t, lh.filter.NonOverlapping())
-	require.Equal(t, uint64(302), lh.tables[0].fid)
-	require.Equal(t, uint64(301), lh.tables[1].fid)
+	require.Equal(t, uint64(302), lh.tables[0].FID())
+	require.Equal(t, uint64(301), lh.tables[1].FID())
 
 	for _, tbl := range []*table{tblA, tblB} {
 		require.NoError(t, tbl.DecrRef())

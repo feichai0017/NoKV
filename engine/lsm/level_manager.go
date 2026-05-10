@@ -19,6 +19,7 @@ import (
 	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
 	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
+	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/lsm/tombstone"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
@@ -186,7 +187,7 @@ func (lm *levelManager) openManifestTable(fs vfs.FS, level int, meta manifest.Fi
 	if _, err := fs.Stat(fileName); err != nil {
 		return nil, fmt.Errorf("lsm startup: manifest references missing sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
 	}
-	t, err := openTable(lm, fileName, nil)
+	t, err := tablepkg.Open(lm, fileName, nil)
 	if err != nil {
 		return nil, fmt.Errorf("lsm startup: open sstable L%d F%d (%s): %w", level, meta.FileID, fileName, err)
 	}
@@ -217,7 +218,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	}
 
 	// build a builder and collect range tombstones
-	builder := newTableBuiler(lm.opt)
+	builder := tablepkg.NewBuilder(tableOptionsFor(lm.opt))
 	var newTombstones []tombstone.Range
 	for ; iter.Valid(); iter.Next() {
 		entry := iter.Item().Entry()
@@ -235,7 +236,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 		}
 		builder.AddKey(entry)
 	}
-	table, err := openTable(lm, sstName, builder)
+	table, err := tablepkg.Open(lm, sstName, builder)
 	if err != nil {
 		return fmt.Errorf("failed to build sstable %s: %w", sstName, err)
 	}
@@ -619,7 +620,7 @@ func resolveTablesLocked(lh *levelHandler, ids []uint64, landing bool) []*table 
 	byID := make(map[uint64]*table, len(tables))
 	for _, t := range tables {
 		if t != nil {
-			byID[t.fid] = t
+			byID[t.FID()] = t
 		}
 	}
 	out := make([]*table, 0, len(ids))
@@ -643,7 +644,7 @@ func tableMetaSnapshot(tables []*table) []plan.TableMeta {
 			continue
 		}
 		meta := plan.TableMeta{
-			ID:         t.fid,
+			ID:         t.FID(),
 			MinKey:     t.MinKey(),
 			MaxKey:     t.MaxKey(),
 			Size:       t.Size(),
@@ -660,7 +661,7 @@ func tableMetaSnapshot(tables []*table) []plan.TableMeta {
 
 func findTableByID(tables []*table, fid uint64) *table {
 	for _, t := range tables {
-		if t.fid == fid {
+		if t.FID() == fid {
 			return t
 		}
 	}
@@ -749,14 +750,14 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 		}
 		del := manifest.Edit{
 			Type: manifest.EditDeleteFile,
-			File: &manifest.FileMeta{FileID: tbl.fid, Level: cd.thisLevel.levelNum},
+			File: &manifest.FileMeta{FileID: tbl.FID(), Level: cd.thisLevel.levelNum},
 		}
 		edits = append(edits, del)
 		add := manifest.Edit{
 			Type: manifest.EditAddFile,
 			File: &manifest.FileMeta{
 				Level:     cd.nextLevel.levelNum,
-				FileID:    tbl.fid,
+				FileID:    tbl.FID(),
 				Size:      uint64(tbl.Size()),
 				Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
 				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
@@ -776,7 +777,7 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 		if tbl == nil {
 			continue
 		}
-		toDel[tbl.fid] = struct{}{}
+		toDel[tbl.FID()] = struct{}{}
 	}
 
 	// Update in-memory state atomically across the source and target levels to avoid
@@ -789,7 +790,7 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 	second.Lock()
 	var remaining []*table
 	for _, tbl := range cd.thisLevel.tables {
-		if _, found := toDel[tbl.fid]; found {
+		if _, found := toDel[tbl.FID()]; found {
 			cd.thisLevel.subtractSize(tbl)
 			continue
 		}
@@ -803,7 +804,7 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 		if t == nil {
 			continue
 		}
-		t.setLevel(cd.nextLevel.levelNum)
+		t.SetLevel(cd.nextLevel.levelNum)
 	}
 	cd.nextLevel.landing.AddBatch(cd.top)
 	cd.nextLevel.landing.SortShards()
@@ -1091,10 +1092,10 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 	var manifestEdits []manifest.Edit
 	levelByID := make(map[uint64]int, len(cd.top)+len(cd.bot))
 	for _, t := range cd.top {
-		levelByID[t.fid] = cd.thisLevel.levelNum
+		levelByID[t.FID()] = cd.thisLevel.levelNum
 	}
 	for _, t := range cd.bot {
-		levelByID[t.fid] = cd.nextLevel.levelNum
+		levelByID[t.FID()] = cd.nextLevel.levelNum
 	}
 	for _, ch := range changeSet.Changes {
 		switch ch.Op {
@@ -1107,7 +1108,7 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 				Type: manifest.EditAddFile,
 				File: &manifest.FileMeta{
 					Level:     int(ch.Level),
-					FileID:    tbl.fid,
+					FileID:    tbl.FID(),
 					Size:      uint64(tbl.Size()),
 					Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
 					Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
@@ -1222,13 +1223,13 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 		}
 		edits = append(edits, manifest.Edit{
 			Type: manifest.EditDeleteFile,
-			File: &manifest.FileMeta{FileID: tbl.fid, Level: cd.thisLevel.levelNum},
+			File: &manifest.FileMeta{FileID: tbl.FID(), Level: cd.thisLevel.levelNum},
 		})
 		add := manifest.Edit{
 			Type: manifest.EditAddFile,
 			File: &manifest.FileMeta{
 				Level:     cd.nextLevel.levelNum,
-				FileID:    tbl.fid,
+				FileID:    tbl.FID(),
 				Size:      uint64(tbl.Size()),
 				Smallest:  kv.SafeCopy(nil, tbl.MinKey()),
 				Largest:   kv.SafeCopy(nil, tbl.MaxKey()),
@@ -1250,7 +1251,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 	toMove := make(map[uint64]*table, len(cd.top))
 	for _, tbl := range cd.top {
 		if tbl != nil {
-			toMove[tbl.fid] = tbl
+			toMove[tbl.FID()] = tbl
 		}
 	}
 
@@ -1263,7 +1264,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 
 	remaining := cd.thisLevel.tables[:0]
 	for _, tbl := range cd.thisLevel.tables {
-		if _, found := toMove[tbl.fid]; found {
+		if _, found := toMove[tbl.FID()]; found {
 			cd.thisLevel.subtractSize(tbl)
 			continue
 		}
@@ -1276,7 +1277,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 		if tbl == nil {
 			continue
 		}
-		tbl.setLevel(cd.nextLevel.levelNum)
+		tbl.SetLevel(cd.nextLevel.levelNum)
 		cd.nextLevel.addSize(tbl)
 		cd.nextLevel.tables = append(cd.nextLevel.tables, tbl)
 	}
@@ -1291,7 +1292,7 @@ func (lm *levelManager) moveToNextLevel(cd *compactDef) error {
 func tablesToString(tables []*table) []string {
 	var res []string
 	for _, t := range tables {
-		res = append(res, fmt.Sprintf("%05d", t.fid))
+		res = append(res, fmt.Sprintf("%05d", t.FID()))
 	}
 	res = append(res, ".")
 	return res
@@ -1301,13 +1302,13 @@ func tablesToString(tables []*table) []string {
 func buildChangeSet(cd *compactDef, newTables []*table) storagepb.ManifestChangeSet {
 	changes := []*storagepb.ManifestChange{}
 	for _, table := range newTables {
-		changes = append(changes, newCreateChange(table.fid, cd.nextLevel.levelNum))
+		changes = append(changes, newCreateChange(table.FID(), cd.nextLevel.levelNum))
 	}
 	for _, table := range cd.top {
-		changes = append(changes, newDeleteChange(table.fid))
+		changes = append(changes, newDeleteChange(table.FID()))
 	}
 	for _, table := range cd.bot {
-		changes = append(changes, newDeleteChange(table.fid))
+		changes = append(changes, newDeleteChange(table.FID()))
 	}
 	return storagepb.ManifestChangeSet{Changes: changes}
 }
@@ -1410,14 +1411,14 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 
 	if err != nil {
 		// On error, delete newly created files.
-		_ = decrRefs(newTables)
+		_ = tablepkg.DecrAll(newTables)
 		return nil, nil, fmt.Errorf("while running compactions for: %+v, %v", cd, err)
 	}
 
 	sort.Slice(newTables, func(i, j int) bool {
 		return kv.CompareInternalKeys(newTables[i].MaxKey(), newTables[j].MaxKey()) < 0
 	})
-	return newTables, func() error { return decrRefs(newTables) }, nil
+	return newTables, func() error { return tablepkg.DecrAll(newTables) }, nil
 }
 
 func iteratorsReversed(th []*table, opt *index.Options) []index.Iterator {
@@ -1461,7 +1462,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr plan.KeyRange, cd compa
 	// Keep tombstone state across builder splits.
 	rtTracker := tombstone.NewCompactionTracker()
 
-	addKeys := func(builder *tableBuilder) {
+	addKeys := func(builder *tablepkg.Builder) {
 		var tableKr plan.KeyRange
 
 		for ; it.Valid(); it.Next() {
@@ -1535,17 +1536,17 @@ func (lm *levelManager) subcompact(it index.Iterator, kr plan.KeyRange, cd compa
 		}
 		// Copy Options so background tuning does not affect the active compaction.
 		builderOpt := lm.opt.Clone()
-		builder := newTableBuilerWithSSTSize(builderOpt, cd.spec.NextFileSize)
-		builder.pacer = lm.compactionPacerForBuild()
+		builder := tablepkg.NewBuilderWithSize(tableOptionsFor(builderOpt), cd.spec.NextFileSize)
+		builder.SetPacer(lm.compactionPacerForBuild())
 
 		// This would do the iteration and add keys to builder.
 		addKeys(builder)
 
 		// It was true that it.Valid() at least once in the loop above, which means we
 		// called Add() at least once, and builder is not Empty().
-		if builder.empty() {
+		if builder.Empty() {
 			// Cleanup builder resources:
-			_, _ = builder.finish()
+			_, _ = builder.Finish()
 			builder.Close()
 			continue
 		}
@@ -1555,7 +1556,7 @@ func (lm *levelManager) subcompact(it index.Iterator, kr plan.KeyRange, cd compa
 			defer b.Close()
 			newFID := lm.maxFID.Add(1) // Compaction does not allocate memtables; advance maxFID.
 			sstName := vfs.FileNameSSTable(lm.opt.WorkDir, newFID)
-			tbl, err := openTable(lm, sstName, b)
+			tbl, err := tablepkg.Open(lm, sstName, b)
 			if err != nil || tbl == nil {
 				slog.Default().Error("open compacted table", "path", sstName, "error", err)
 				return nil

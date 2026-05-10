@@ -24,12 +24,12 @@ func TestBuildL0SublevelsArrangesNonOverlappingTablesPerSublevel(t *testing.T) {
 	// First sublevel takes a (smallest fid wins ties for same MinKey) and c
 	// (because c's MinKey > a's MaxKey, so c can sit alongside a).
 	require.Len(t, subs[0], 2)
-	require.Equal(t, a.fid, subs[0][0].fid)
-	require.Equal(t, c.fid, subs[0][1].fid)
+	require.Equal(t, a.FID(), subs[0][0].FID())
+	require.Equal(t, c.FID(), subs[0][1].FID())
 
 	// Second sublevel takes b alone.
 	require.Len(t, subs[1], 1)
-	require.Equal(t, b.fid, subs[1][0].fid)
+	require.Equal(t, b.FID(), subs[1][0].FID())
 }
 
 func TestL0SublevelCandidateBinarySearch(t *testing.T) {
@@ -49,9 +49,9 @@ func TestL0SublevelCandidateBinarySearch(t *testing.T) {
 	keyBefore := []byte(kv.InternalKey(kv.CFDefault, []byte("0"), 0))
 	keyGap := []byte(kv.InternalKey(kv.CFDefault, []byte("g"), 0))
 
-	require.Equal(t, a.fid, sub.candidate(keyA).fid)
-	require.Equal(t, m.fid, sub.candidate(keyM).fid)
-	require.Equal(t, z.fid, sub.candidate(keyZ).fid)
+	require.Equal(t, a.FID(), sub.candidate(keyA).FID())
+	require.Equal(t, m.FID(), sub.candidate(keyM).FID())
+	require.Equal(t, z.FID(), sub.candidate(keyZ).FID())
 	require.Nil(t, sub.candidate(keyBefore), "key before all tables returns nil")
 	require.Nil(t, sub.candidate(keyGap), "key in gap returns nil")
 }
@@ -75,11 +75,11 @@ func TestL0SublevelsLookupReturnsCandidatePerSublevel(t *testing.T) {
 	// happens in searchL0SST.
 	gotFids := map[uint64]struct{}{}
 	for _, t := range candidates {
-		gotFids[t.fid] = struct{}{}
+		gotFids[t.FID()] = struct{}{}
 	}
-	require.Contains(t, gotFids, a.fid)
-	require.Contains(t, gotFids, b.fid)
-	require.Contains(t, gotFids, c.fid)
+	require.Contains(t, gotFids, a.FID())
+	require.Contains(t, gotFids, b.FID())
+	require.Contains(t, gotFids, c.FID())
 }
 
 func TestSelectTablesForKeyL0UsesSublevels(t *testing.T) {
@@ -104,7 +104,7 @@ func TestSelectTablesForKeyL0UsesSublevels(t *testing.T) {
 	keyM := []byte(kv.InternalKey(kv.CFDefault, []byte("m"), 0))
 	got := l0.selectTablesForKey(keyM, false)
 	require.Len(t, got, 1)
-	require.Equal(t, m.fid, got[0].fid)
+	require.Equal(t, m.FID(), got[0].FID())
 
 	keyGap := []byte(kv.InternalKey(kv.CFDefault, []byte("g"), 0))
 	none := l0.selectTablesForKey(keyGap, false)
@@ -229,7 +229,7 @@ func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table{a}
-	cd.spec.TopIDs = []uint64{a.fid}
+	cd.spec.TopIDs = []uint64{a.FID()}
 	cd.spec.ThisRange = getKeyRange(a)
 	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = a.Size()
@@ -254,7 +254,7 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
 	cd.top = []*table{b} // pick only one of an overlapping pair
-	cd.spec.TopIDs = []uint64{b.fid}
+	cd.spec.TopIDs = []uint64{b.FID()}
 	cd.spec.ThisRange = getKeyRange(b)
 	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = b.Size()

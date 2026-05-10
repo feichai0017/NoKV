@@ -48,14 +48,14 @@ func TestCompactionMoveToLanding(t *testing.T) {
 	found := false
 	cd.nextLevel.RLock()
 	for _, tbl := range cd.nextLevel.landing.AllTables() {
-		if tbl != nil && tbl.fid == cd.top[0].fid {
+		if tbl != nil && tbl.FID() == cd.top[0].FID() {
 			found = true
 			break
 		}
 	}
 	cd.nextLevel.RUnlock()
 	if !found {
-		t.Fatalf("table %d not found in landing buffer", cd.top[0].fid)
+		t.Fatalf("table %d not found in landing buffer", cd.top[0].FID())
 	}
 }
 
@@ -71,7 +71,7 @@ func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
 
 	cd := buildCompactDef(lsm, 0, 1, 2)
 	cd.top = []*table{tbl}
-	cd.spec.TopIDs = []uint64{tbl.fid}
+	cd.spec.TopIDs = []uint64{tbl.FID()}
 	cd.spec.ThisRange = getKeyRange(tbl)
 	cd.spec.NextRange = cd.spec.ThisRange
 	cd.thisSize = tbl.Size()
@@ -80,17 +80,17 @@ func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
 	require.True(t, lsm.levels.canMoveToNextLevel(cd))
 	require.NoError(t, lsm.levels.moveToNextLevel(cd))
 	require.Equal(t, beforeRef, tbl.Load())
-	require.Equal(t, int32(2), tbl.lvl.Load())
+	require.Equal(t, 2, tbl.Level())
 
 	require.Empty(t, src.tablesSnapshot())
 	got := dst.tablesSnapshot()
 	require.Len(t, got, 1)
-	require.Equal(t, tbl.fid, got[0].fid)
+	require.Equal(t, tbl.FID(), got[0].FID())
 
 	version := lsm.levels.manifestMgr.Current()
 	require.Empty(t, version.Levels[1])
 	require.Len(t, version.Levels[2], 1)
-	require.Equal(t, tbl.fid, version.Levels[2][0].FileID)
+	require.Equal(t, tbl.FID(), version.Levels[2][0].FileID)
 }
 
 func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
@@ -428,10 +428,10 @@ func requireDecrOnce(t *testing.T, before map[*table]int32) {
 	for tbl, ref := range before {
 		after := tbl.Load()
 		if after != ref-1 {
-			t.Fatalf("table %d ref mismatch: before=%d after=%d expected=%d", tbl.fid, ref, after, ref-1)
+			t.Fatalf("table %d ref mismatch: before=%d after=%d expected=%d", tbl.FID(), ref, after, ref-1)
 		}
 		if after < 0 {
-			t.Fatalf("table %d ref underflow: after=%d", tbl.fid, after)
+			t.Fatalf("table %d ref underflow: after=%d", tbl.FID(), after)
 		}
 	}
 }
@@ -440,7 +440,7 @@ func hasLandingTable(lh *levelHandler, fid uint64) bool {
 	lh.RLock()
 	defer lh.RUnlock()
 	for _, tbl := range lh.landing.AllTables() {
-		if tbl != nil && tbl.fid == fid {
+		if tbl != nil && tbl.FID() == fid {
 			return true
 		}
 	}
@@ -517,8 +517,8 @@ func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
 	requireDecrOnce(t, before)
 	for tbl := range before {
-		if hasLandingTable(target, tbl.fid) {
-			t.Fatalf("drained table %d still present in landing buffer", tbl.fid)
+		if hasLandingTable(target, tbl.FID()) {
+			t.Fatalf("drained table %d still present in landing buffer", tbl.FID())
 		}
 	}
 }
@@ -571,8 +571,8 @@ func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 		t.Fatalf("expected landing tables to remain after landing-keep compaction")
 	}
 	for tbl := range before {
-		if hasLandingTable(target, tbl.fid) {
-			t.Fatalf("replaced table %d still present in landing buffer", tbl.fid)
+		if hasLandingTable(target, tbl.FID()) {
+			t.Fatalf("replaced table %d still present in landing buffer", tbl.FID())
 		}
 	}
 }

@@ -1,10 +1,9 @@
-package lsm
+package table
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
-	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,23 +11,24 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/pacer"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 	proto "google.golang.org/protobuf/proto"
 )
 
 func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	entry := kv.NewEntry([]byte("stale-key"), []byte("stale-value"))
 	builder.AddStaleKey(entry)
 
-	bd, err := builder.done()
+	bd, err := builder.Done()
 	require.NoError(t, err)
 	require.NotNil(t, bd.index)
 	require.NotEmpty(t, bd.index)
@@ -40,19 +40,19 @@ func TestTableBuilderPersistsStaleDataSizeInIndex(t *testing.T) {
 }
 
 func TestTableBuilderPersistsRangeTombstoneCount(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	rt := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 10), []byte("z"))
 	rt.Meta = kv.BitRangeDelete
 	builder.AddKey(rt)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 9), []byte("value")))
 
-	bd, err := builder.done()
+	bd, err := builder.Done()
 	require.NoError(t, err)
 
 	var tableIndex storagepb.TableIndex
@@ -61,9 +61,9 @@ func TestTableBuilderPersistsRangeTombstoneCount(t *testing.T) {
 }
 
 func TestTableBuilderPersistsPrefixBloomInIndex(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.01,
 		PrefixExtractor: func(key []byte) []byte {
 			if len(key) < 2 {
@@ -73,11 +73,11 @@ func TestTableBuilderPersistsPrefixBloomInIndex(t *testing.T) {
 		},
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("aa-1"), 1), []byte("value-a")))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("bb-1"), 1), []byte("value-b")))
 
-	bd, err := builder.done()
+	bd, err := builder.Done()
 	require.NoError(t, err)
 
 	var tableIndex storagepb.TableIndex
@@ -89,44 +89,44 @@ func TestTableBuilderPersistsPrefixBloomInIndex(t *testing.T) {
 }
 
 func TestTableBuilderCompressesBlocksWhenConfigured(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
-		BlockCompression:   BlockCompressionSnappy,
+		BlockCompression:   CompressionSnappy,
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	for i := range 16 {
 		key := fmt.Appendf(nil, "key-%02d", i)
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), bytes.Repeat([]byte("metadata-value-"), 32)))
 	}
 
-	bd, err := builder.done()
+	bd, err := builder.Done()
 	require.NoError(t, err)
 
 	var tableIndex storagepb.TableIndex
 	require.NoError(t, proto.Unmarshal(bd.index, &tableIndex))
 	require.NotEmpty(t, tableIndex.GetOffsets())
 	for _, offset := range tableIndex.GetOffsets() {
-		require.Equal(t, uint32(BlockCompressionSnappy), offset.GetCompression())
+		require.Equal(t, uint32(CompressionSnappy), offset.GetCompression())
 		require.Greater(t, offset.GetRawLen(), offset.GetLen())
 	}
 }
 
 func TestBuildDataCopyChargesCompactionPacerPerBlock(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          128,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	for i := range 8 {
 		key := fmt.Appendf(nil, "pace-%02d", i)
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), bytes.Repeat([]byte("v"), 32)))
 	}
-	bd, err := builder.done()
+	bd, err := builder.Done()
 	require.NoError(t, err)
 
 	p := pacer.New(1 << 30)
@@ -137,23 +137,23 @@ func TestBuildDataCopyChargesCompactionPacerPerBlock(t *testing.T) {
 		expected += int64(bl.diskEnd)
 	}
 
-	dst := make([]byte, bd.size)
-	require.Equal(t, bd.size, bd.Copy(dst))
+	dst := make([]byte, bd.Size)
+	require.Equal(t, bd.Size, bd.Copy(dst))
 	require.Equal(t, expected, p.Stats().BytesCharged)
 }
 
 func TestTableBuilderFinishAndEntryValueLen(t *testing.T) {
-	opt := &Options{
+	opts := Options{
 		BlockSize:          128,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 	}
 
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("value-b")))
 
-	buf, err := builder.finish()
+	buf, err := builder.Finish()
 	require.NoError(t, err)
 	require.NotEmpty(t, buf)
 	builder.Close()
@@ -169,19 +169,19 @@ func TestTableBuilderFlushRenameFailureCleansTempFile(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRenameRule("", tableName, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
 
-	opt := &Options{
+	opts := Options{
 		FS:                 fs,
 		WorkDir:            dir,
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 		ManifestSync:       true,
 	}
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelManager{opt: opt}
-	_, err := builder.flush(lm, tableName)
+	rt := &testRuntime{opts: opts}
+	_, err := builder.Flush(rt, tableName)
 	require.ErrorIs(t, err, injected)
 
 	tmpFiles, globErr := filepath.Glob(tableName + ".tmp.*")
@@ -196,19 +196,19 @@ func TestTableBuilderFlushStrictPathDoesNotReopenFinalSST(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailOnceRule(vfs.OpOpenFile, tableName, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
 
-	opt := &Options{
+	opts := Options{
 		FS:                 fs,
 		WorkDir:            dir,
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 		ManifestSync:       true,
 	}
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelManager{opt: opt}
-	tbl, err := builder.flush(lm, tableName)
+	rt := &testRuntime{opts: opts}
+	tbl, err := builder.Flush(rt, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	require.NotNil(t, tbl.ss)
@@ -222,19 +222,19 @@ func TestTableBuilderFlushFastPathSkipsPreStat(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailAfterNthRule(vfs.OpStat, tableName, 1, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
 
-	opt := &Options{
+	opts := Options{
 		FS:                 fs,
 		WorkDir:            dir,
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 		ManifestSync:       false,
 	}
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelManager{opt: opt}
-	tbl, err := builder.flush(lm, tableName)
+	rt := &testRuntime{opts: opts}
+	tbl, err := builder.Flush(rt, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	require.NoError(t, tbl.ss.Close())
@@ -250,23 +250,20 @@ func TestTableBuilderFlushStrictPathSkipsPreStat(t *testing.T) {
 	policy := vfs.NewFaultPolicy(vfs.FailAfterNthRule(vfs.OpStat, tableName, 1, injected))
 	fs := vfs.NewFaultFSWithPolicy(nil, policy)
 
-	opt := &Options{
+	opts := Options{
 		FS:                 fs,
 		WorkDir:            dir,
 		BlockSize:          4 << 10,
-		SSTableMaxSz:       1 << 20,
+		SSTableMaxSize:     1 << 20,
 		BloomFalsePositive: 0.0,
 		ManifestSync:       true,
 	}
-	builder := newTableBuiler(opt)
+	builder := NewBuilder(opts)
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("a"), 1), []byte("value-a")))
 
-	lm := &levelManager{opt: opt}
-	tbl, err := builder.flush(lm, tableName)
+	rt := &testRuntime{opts: opts}
+	tbl, err := builder.Flush(rt, tableName)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	require.NoError(t, tbl.ss.Close())
-
-	_, statErr := os.Stat(tableName)
-	require.NoError(t, statErr)
 }

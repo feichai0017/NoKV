@@ -1,27 +1,17 @@
-package lsm
+package table
 
 import (
 	"bytes"
 	"fmt"
-	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"os"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/vfs"
-	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/utils"
+	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"github.com/stretchr/testify/require"
 )
-
-func buildTestLSM(t *testing.T, opt *Options) *LSM {
-	wlog, err := wal.Open(wal.Config{Dir: opt.WorkDir})
-	require.NoError(t, err)
-	lsm, err := NewLSM(opt, []*wal.Manager{wlog})
-	require.NoError(t, err)
-	return lsm
-}
 
 func splitTableUserKey(t *testing.T, internal []byte) []byte {
 	t.Helper()
@@ -30,31 +20,30 @@ func splitTableUserKey(t *testing.T, internal []byte) []byte {
 	return userKey
 }
 
-// TestTableReverseIteration tests reverse iteration behavior on a single table.
+func newTestOptions(workDir string) Options {
+	return Options{
+		WorkDir:            workDir,
+		SSTableMaxSize:     1 << 20,
+		BlockSize:          4 << 10,
+		BloomFalsePositive: 0.01,
+	}
+}
+
+// TestTableReverseIteration exercises reverse iteration over a single table.
 func TestTableReverseIteration(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-test")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          4 << 10,
-		BloomFalsePositive: 0.01,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	rt := newTestRuntime(newTestOptions(dir))
+	builder := NewBuilder(rt.Options())
 	for i := range 10 {
 		key := []byte{byte('a' + i)}
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value")))
 	}
 
 	tableName := vfs.FileNameSSTable(dir, 1)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -124,24 +113,15 @@ func TestTableSearchCompressedBlock(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          4 << 10,
-		BloomFalsePositive: 0.01,
-		BlockCompression:   BlockCompressionSnappy,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	opts := newTestOptions(dir)
+	opts.BlockCompression = CompressionSnappy
+	rt := newTestRuntime(opts)
+	builder := NewBuilder(rt.Options())
 	key := []byte("compressed-key")
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 7), bytes.Repeat([]byte("metadata-value-"), 32)))
 
 	tableName := vfs.FileNameSSTable(dir, 10)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	defer func() { _ = tbl.DecrRef() }()
 
@@ -154,31 +134,22 @@ func TestTableSearchCompressedBlock(t *testing.T) {
 	require.Equal(t, bytes.Repeat([]byte("metadata-value-"), 32), got.Value)
 }
 
-// TestTableReverseIterationMultiBlock tests reverse iteration across multiple blocks.
 func TestTableReverseIterationMultiBlock(t *testing.T) {
 	dir, err := os.MkdirTemp("", "nokv-table-multiblock")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          128, // Force multiple blocks.
-		BloomFalsePositive: 0.01,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	opts := newTestOptions(dir)
+	opts.BlockSize = 128 // force multiple blocks
+	rt := newTestRuntime(opts)
+	builder := NewBuilder(rt.Options())
 	for i := range 20 {
 		key := []byte{byte('a' + i)}
 		builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, key, 1), []byte("value-with-more-data")))
 	}
 
 	tableName := vfs.FileNameSSTable(dir, 2)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -220,18 +191,11 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          128, // force many blocks; reproduces cross-block seek edge.
-		BloomFalsePositive: 0.0,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	opts := newTestOptions(dir)
+	opts.BlockSize = 128
+	opts.BloomFalsePositive = 0.0
+	rt := newTestRuntime(opts)
+	builder := NewBuilder(rt.Options())
 	const total = 500
 	for i := range total {
 		userKey := fmt.Appendf(nil, "k%06d", i)
@@ -242,7 +206,7 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 	}
 
 	tableName := vfs.FileNameSSTable(dir, 3)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -264,18 +228,11 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          128,
-		BloomFalsePositive: 0.0,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	opts := newTestOptions(dir)
+	opts.BlockSize = 128
+	opts.BloomFalsePositive = 0.0
+	rt := newTestRuntime(opts)
+	builder := NewBuilder(rt.Options())
 	for i := range 200 {
 		key := fmt.Appendf(nil, "k%03d", i)
 		builder.AddKey(kv.NewEntry(
@@ -285,7 +242,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 	}
 
 	tableName := vfs.FileNameSSTable(dir, 4)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -326,7 +283,7 @@ func TestTableIteratorBoundsAcrossBlocks(t *testing.T) {
 }
 
 func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
-	index := &storagepb.TableIndex{
+	idx := &storagepb.TableIndex{
 		Offsets: []*storagepb.BlockOffset{
 			{Key: kv.InternalKey(kv.CFDefault, []byte("z"), 5)},
 			{Key: kv.InternalKey(kv.CFLock, []byte("a"), 5)},
@@ -336,7 +293,7 @@ func TestBlockRangeForBoundsUsesBaseKeyOrdering(t *testing.T) {
 	}
 
 	start, end := blockRangeForBounds(
-		index,
+		idx,
 		kv.InternalKey(kv.CFWrite, []byte("a"), kv.MaxVersion),
 		kv.InternalKey(kv.CFWrite, []byte("e"), kv.MaxVersion),
 	)
@@ -349,25 +306,17 @@ func TestTableIteratorSingleKeyRespectsForwardBounds(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
 
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          4 << 10,
-		BloomFalsePositive: 0.0,
-	}
-
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	builder := newTableBuiler(opt)
+	opts := newTestOptions(dir)
+	opts.BloomFalsePositive = 0.0
+	rt := newTestRuntime(opts)
+	builder := NewBuilder(rt.Options())
 	builder.AddKey(kv.NewEntry(
 		kv.InternalKey(kv.CFDefault, []byte("k00000010"), 1),
 		[]byte("value"),
 	))
 
 	tableName := vfs.FileNameSSTable(dir, 40)
-	tbl, err := openTable(lsm.levels, tableName, builder)
+	tbl, err := Open(rt, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -386,59 +335,8 @@ func TestTableIteratorSingleKeyRespectsForwardBounds(t *testing.T) {
 	require.False(t, it.Valid())
 }
 
-func TestLevelGetHandlesOverlappingRanges(t *testing.T) {
-	dir, err := os.MkdirTemp("", "nokv-level-overlap")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.RemoveAll(dir)) }()
-
-	opt := &Options{
-		WorkDir:            dir,
-		MemTableSize:       1 << 20,
-		SSTableMaxSz:       1 << 20,
-		BlockSize:          4 << 10,
-		BloomFalsePositive: 0.0,
-		MaxLevelNum:        utils.MaxLevelNum,
-	}
-	lsm := buildTestLSM(t, opt)
-	defer func() { require.NoError(t, lsm.Close()) }()
-
-	buildTable := func(fid uint64, keys ...string) *table {
-		builder := newTableBuiler(opt)
-		for _, k := range keys {
-			builder.AddKey(kv.NewEntry(
-				kv.InternalKey(kv.CFDefault, []byte(k), 1),
-				[]byte("v-"+k),
-			))
-		}
-		name := vfs.FileNameSSTable(dir, fid)
-		tbl, err := openTable(lsm.levels, name, builder)
-		require.NoError(t, err)
-		require.NotNil(t, tbl)
-		return tbl
-	}
-
-	// Two tables overlap on user-key ranges:
-	// t1 covers [a, c], t2 covers [b, d]. Key "b" only exists in t2.
-	t1 := buildTable(11, "a", "c")
-	t2 := buildTable(12, "b", "d")
-	defer func() { _ = t1.DecrRef() }()
-	defer func() { _ = t2.DecrRef() }()
-
-	lh := lsm.levels.levels[6]
-	lh.add(t1)
-	lh.add(t2)
-	lh.Sort()
-
-	query := kv.InternalKey(kv.CFDefault, []byte("b"), kv.MaxVersion)
-	entry, err := lh.Get(query)
-	require.NoError(t, err)
-	require.NotNil(t, entry)
-	require.Equal(t, []byte("b"), splitTableUserKey(t, entry.Key))
-	entry.DecrRef()
-}
-
 func TestTableDecrRefUnderflow(t *testing.T) {
-	tbl := &table{fid: 1}
+	tbl := &Table{fid: 1}
 	tbl.Init(2)
 	require.NoError(t, tbl.DecrRef())
 	require.Equal(t, int32(1), tbl.Load())
