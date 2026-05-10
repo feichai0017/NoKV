@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/index"
@@ -10,6 +11,7 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
+	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -28,8 +30,22 @@ func (fakeBuilderRaftLog) Open(groupID uint64, meta *localmeta.Store) (raftlog.P
 	return nil, nil
 }
 
+type fakeBuilderSnapshotStore struct{}
+
+func (fakeBuilderSnapshotStore) ExportSnapshot(localmeta.RegionMeta) ([]byte, error) { return nil, nil }
+func (fakeBuilderSnapshotStore) ImportSnapshot([]byte) (*snapshotpkg.ImportResult, error) {
+	return &snapshotpkg.ImportResult{}, nil
+}
+func (fakeBuilderSnapshotStore) ExportSnapshotTo(io.Writer, localmeta.RegionMeta) (snapshotpkg.Meta, error) {
+	return snapshotpkg.Meta{}, nil
+}
+func (fakeBuilderSnapshotStore) ImportSnapshotFrom(io.Reader) (*snapshotpkg.ImportResult, error) {
+	return &snapshotpkg.ImportResult{}, nil
+}
+
 var _ txnstore.Store = fakeBuilderMVCCStore{}
 var _ RaftLog = fakeBuilderRaftLog{}
+var _ snapshotpkg.SnapshotStore = fakeBuilderSnapshotStore{}
 
 func TestDefaultRaftConfigAppliesDefaults(t *testing.T) {
 	cfg := defaultRaftConfig(myraft.Config{}, 17)
@@ -79,4 +95,20 @@ func TestDefaultPeerBuilderRequiresSnapshotStorage(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot storage")
+}
+
+func TestDefaultPeerBuilderEnablesFastLeaseRead(t *testing.T) {
+	builder := defaultPeerBuilder(Storage{
+		MVCC:     fakeBuilderMVCCStore{},
+		Raft:     fakeBuilderRaftLog{},
+		Snapshot: fakeBuilderSnapshotStore{},
+	}, nil, 1, myraft.Config{}, nil)
+	cfg, err := builder(localmeta.RegionMeta{
+		ID:    7,
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 11}},
+	})
+	require.NoError(t, err)
+	require.True(t, cfg.FastLeaseRead)
+	require.True(t, cfg.RaftConfig.CheckQuorum)
+	require.Equal(t, myraft.ReadOnlyLeaseBased, cfg.RaftConfig.ReadOnlyOption)
 }

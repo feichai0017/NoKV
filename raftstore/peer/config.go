@@ -34,6 +34,10 @@ type Config struct {
 	// state that was previously written by an unpublished install attempt. It is
 	// only intended for store-local install-before-publish retry paths.
 	AllowSnapshotInstallRetry bool
+	// FastLeaseRead requires the raft group to use etcd/raft lease-based
+	// ReadIndex. Reads still enter RawNode.ReadIndex; quorum freshness remains
+	// owned by raft instead of a store-local shortcut.
+	FastLeaseRead bool
 	// BatchMaxSize is the number of proposals collected before flushing
 	// as a single Ready cycle. Defaults to 64 when zero.
 	BatchMaxSize int

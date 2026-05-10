@@ -38,22 +38,24 @@ type clusterPending struct {
 }
 
 type clusterRegion struct {
-	meta         *metapb.RegionDescriptor
-	leaderStore  uint64
-	pending      map[uint64]map[string]clusterPending // startVersion -> key
-	committed    map[string]clusterValue
-	prewriteHits int
-	commitHits   int
-	rollbackHits int
-	resolveHits  int
-	getHits      int
-	scanHits     int
+	meta          *metapb.RegionDescriptor
+	leaderStore   uint64
+	pending       map[uint64]map[string]clusterPending // startVersion -> key
+	committed     map[string]clusterValue
+	followerStale bool
+	prewriteHits  int
+	commitHits    int
+	rollbackHits  int
+	resolveHits   int
+	getHits       int
+	scanHits      int
 }
 
 type mockCluster struct {
 	mu             sync.Mutex
 	regions        map[uint64]*clusterRegion
 	notLeaderCount int32
+	lastReadStore  uint64
 }
 
 func newMockCluster(regions ...clusterRegion) *mockCluster {
@@ -435,14 +437,21 @@ func (mc *mockCluster) get(storeID uint64, req *kvrpcpb.KvGetRequest) (*kvrpcpb.
 		return nil, statusInvalidArgument("region not found")
 	}
 	if storeID != region.leaderStore {
-		atomic.AddInt32(&mc.notLeaderCount, 1)
-		return &kvrpcpb.KvGetResponse{RegionError: notLeaderError(region)}, nil
+		if ctx.GetReadPreference() == kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER {
+			if region.followerStale {
+				return &kvrpcpb.KvGetResponse{RegionError: &errorpb.RegionError{StaleCommand: &errorpb.StaleCommand{}}}, nil
+			}
+		} else {
+			atomic.AddInt32(&mc.notLeaderCount, 1)
+			return &kvrpcpb.KvGetResponse{RegionError: notLeaderError(region)}, nil
+		}
 	}
 	if req.GetRequest() == nil {
 		return &kvrpcpb.KvGetResponse{}, nil
 	}
 	key := req.GetRequest().GetKey()
 	version := req.GetRequest().GetVersion()
+	mc.lastReadStore = storeID
 	region.getHits++
 	val, ok := region.committed[string(key)]
 	if !ok || val.commitVersion > version {
@@ -466,8 +475,14 @@ func (mc *mockCluster) scan(storeID uint64, req *kvrpcpb.KvScanRequest) (*kvrpcp
 		return nil, statusInvalidArgument("region not found")
 	}
 	if storeID != region.leaderStore {
-		atomic.AddInt32(&mc.notLeaderCount, 1)
-		return &kvrpcpb.KvScanResponse{RegionError: notLeaderError(region)}, nil
+		if ctx.GetReadPreference() == kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER {
+			if region.followerStale {
+				return &kvrpcpb.KvScanResponse{RegionError: &errorpb.RegionError{StaleCommand: &errorpb.StaleCommand{}}}, nil
+			}
+		} else {
+			atomic.AddInt32(&mc.notLeaderCount, 1)
+			return &kvrpcpb.KvScanResponse{RegionError: notLeaderError(region)}, nil
+		}
 	}
 	scanReq := req.GetRequest()
 	if scanReq == nil {
@@ -476,6 +491,7 @@ func (mc *mockCluster) scan(storeID uint64, req *kvrpcpb.KvScanRequest) (*kvrpcp
 	startKey := scanReq.GetStartKey()
 	version := scanReq.GetVersion()
 	limit := scanReq.GetLimit()
+	mc.lastReadStore = storeID
 	if limit == 0 {
 		limit = 1
 	}

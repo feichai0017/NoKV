@@ -69,6 +69,94 @@ func TestEnableLeaseReadConfig(t *testing.T) {
 	require.Equal(t, uint64(7), cfg.ID)
 }
 
+func TestFastLeaseReadRequiresLeaseReadConfig(t *testing.T) {
+	_, err := NewPeer(&Config{
+		RaftConfig: myraft.Config{
+			ID:              11,
+			ElectionTick:    5,
+			HeartbeatTick:   1,
+			MaxSizePerMsg:   1 << 20,
+			MaxInflightMsgs: 256,
+			PreVote:         true,
+		},
+		Transport:     noopPayloadTransport{},
+		Apply:         func([]myraft.Entry) error { return nil },
+		Storage:       newPayloadTestStorage(),
+		FastLeaseRead: true,
+		GroupID:       1,
+	})
+	require.ErrorIs(t, err, errFastLeaseReadRequiresLeaseRead)
+}
+
+func TestFastLeaseReadSingleNodeLinearizableReadCompletes(t *testing.T) {
+	storage := newPayloadTestStorage()
+	cfg := EnableLeaseRead(myraft.Config{
+		ID:              11,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   1 << 20,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	})
+	p, err := NewPeer(&Config{
+		RaftConfig:    cfg,
+		Transport:     noopPayloadTransport{},
+		Apply:         func([]myraft.Entry) error { return nil },
+		Storage:       storage,
+		FastLeaseRead: true,
+		GroupID:       1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Close() })
+	require.NoError(t, p.Bootstrap([]myraft.Peer{{ID: 11}}))
+	require.NoError(t, p.Campaign())
+	require.NoError(t, p.Flush())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	index, err := p.LinearizableRead(ctx)
+	require.NoError(t, err)
+	require.Greater(t, index, uint64(0))
+	require.NoError(t, p.WaitApplied(ctx, index))
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
+	require.Empty(t, p.pendingReads)
+}
+
+func TestBoundedStaleReadIndexUsesAppliedProgress(t *testing.T) {
+	storage := newPayloadTestStorage()
+	cfg := EnableLeaseRead(myraft.Config{
+		ID:              11,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   1 << 20,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	})
+	p, err := NewPeer(&Config{
+		RaftConfig:    cfg,
+		Transport:     noopPayloadTransport{},
+		Apply:         func([]myraft.Entry) error { return nil },
+		Storage:       storage,
+		FastLeaseRead: true,
+		GroupID:       1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Close() })
+
+	index, ok := p.BoundedStaleReadIndex(0, 0)
+	require.False(t, ok)
+	require.Zero(t, index)
+
+	require.NoError(t, p.Bootstrap([]myraft.Peer{{ID: 11}}))
+	require.NoError(t, p.Campaign())
+	require.NoError(t, p.Flush())
+
+	index, ok = p.BoundedStaleReadIndex(0, 0)
+	require.True(t, ok)
+	require.Equal(t, p.AppliedIndex(), index)
+}
+
 func TestSnapshotExportsPayloadAndRefreshesMetadata(t *testing.T) {
 	storage := newPayloadTestStorage()
 	require.NoError(t, storage.ApplySnapshot(myraft.Snapshot{

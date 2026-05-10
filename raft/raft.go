@@ -13,6 +13,7 @@ type (
 	RawNode          = etcdraft.RawNode
 	Ready            = etcdraft.Ready
 	SoftState        = etcdraft.SoftState
+	BasicStatus      = etcdraft.BasicStatus
 	Status           = etcdraft.Status
 	Peer             = etcdraft.Peer
 	ReadState        = etcdraft.ReadState
