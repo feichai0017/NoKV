@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
@@ -122,7 +123,7 @@ func TestGetChoosesHighestVisibleVersionAcrossMemtablesAndLevels(t *testing.T) {
 	levelPut := kv.NewInternalEntry(kv.CFDefault, userKey, 396, []byte("v396"), 0, 0)
 	memDelete := kv.NewInternalEntry(kv.CFDefault, userKey, 393, nil, kv.BitDelete, 0)
 	t1 := buildTableWithEntries(t, lsm, 91, levelPut)
-	lsm.levels.levels[1].tables = []*table{t1}
+	lsm.levels.levels[1].tables = []*table.Table{t1}
 	lsm.levels.levels[1].Sort()
 	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{{memDelete}})
 	require.NoError(t, err)

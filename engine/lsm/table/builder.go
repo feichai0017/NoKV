@@ -85,8 +85,7 @@ func (h header) encode() []byte {
 	return b[:]
 }
 
-// NewBuilder constructs a Builder using opts.SSTableMaxSize as the per-file
-// size cap.
+// NewBuilder constructs a Builder using opts.SSTableMaxSize as the per-file size cap.
 func NewBuilder(opts Options) *Builder {
 	return &Builder{
 		opts:    opts,
@@ -95,7 +94,6 @@ func NewBuilder(opts Options) *Builder {
 }
 
 // NewBuilderWithSize constructs a Builder with an explicit per-file size cap.
-// Used by compaction paths that override SSTableMaxSize per build.
 func NewBuilderWithSize(opts Options, sstSize int64) *Builder {
 	return &Builder{
 		opts:    opts,
@@ -103,8 +101,7 @@ func NewBuilderWithSize(opts Options, sstSize int64) *Builder {
 	}
 }
 
-// SetPacer attaches a token-bucket pacer that throttles disk write throughput
-// at Copy time. Nil is allowed and disables pacing.
+// SetPacer attaches a pacer that throttles Copy-time write throughput. Nil disables pacing.
 func (tb *Builder) SetPacer(p *pacer.Pacer) { tb.pacer = p }
 
 func (tb *Builder) add(e *kv.Entry, valueLen uint32, isStale bool) {
@@ -232,9 +229,7 @@ func (tb *Builder) AddKeyWithLen(e *kv.Entry, valueLen uint32) {
 	tb.add(e, valueLen, false)
 }
 
-// Close releases builder-side resources. The current implementation is a
-// no-op; callers should still call it for forward compatibility with future
-// pooled allocators.
+// Close releases builder-side resources.
 func (tb *Builder) Close() {}
 
 func entryValueLen(e *kv.Entry) uint32 {
@@ -318,9 +313,7 @@ func (tb *Builder) keyDiff(newKey []byte) []byte {
 }
 
 // WriteBuildData copies bd into ss starting at offset zero and emits a
-// drop-after-write madvise hint. Used by compaction paths that own the
-// destination SSTable handle and want to bypass the temp-file +
-// rename dance.
+// drop-after-write madvise hint.
 func WriteBuildData(ss *file.SSTable, bd BuildData) error {
 	return writeBuildDataToSST(ss, bd)
 }
@@ -338,10 +331,7 @@ func writeBuildDataToSST(ss *file.SSTable, bd BuildData) error {
 	return nil
 }
 
-// Flush writes the accumulated builder state into a new SST file at
-// tableName and returns an opened Table over it. When opts.ManifestSync is
-// false the data goes directly into the final path; otherwise the bytes are
-// written to a temp file then atomically renamed into place.
+// Flush writes the builder state into a new SST file at tableName and returns an opened Table over it.
 func (tb *Builder) Flush(rt Runtime, tableName string) (t *Table, err error) {
 	if rt == nil {
 		return nil, errors.New("Builder.Flush: nil runtime")
@@ -354,8 +344,6 @@ func (tb *Builder) Flush(rt Runtime, tableName string) (t *Table, err error) {
 	return tb.flush(rt, opts, tableName, &bd)
 }
 
-// flush is the shared implementation called by Open (which already has a
-// Builder + Options snapshot) and by Builder.Flush (the public entry).
 func (tb *Builder) flush(rt Runtime, opts Options, tableName string, predone *BuildData) (t *Table, err error) {
 	bd := BuildData{}
 	if predone != nil {
@@ -446,9 +434,7 @@ func (bd BuildData) Copy(dst []byte) int {
 	return written
 }
 
-// Done finalizes the builder and returns the serializable BuildData. The
-// builder must not be reused after Done. Pacer charge happens on the eventual
-// Copy call, not here.
+// Done finalizes the builder and returns the serializable BuildData. The builder must not be reused after Done.
 func (tb *Builder) Done() (BuildData, error) {
 	tb.finishBlock()
 	if len(tb.blockList) == 0 {
@@ -544,8 +530,7 @@ func (b block) verifyCheckSum() error {
 	return kv.VerifyChecksum(b.data, b.checksum)
 }
 
-// entryItem is a minimal index.Item impl used by blockIterator. It mirrors
-// the lsm-package shape but stays private to the table package.
+// entryItem is a minimal index.Item impl used by blockIterator.
 type entryItem struct{ e *kv.Entry }
 
 func (it *entryItem) Entry() *kv.Entry { return it.e }

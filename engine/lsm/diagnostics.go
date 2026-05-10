@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/metrics"
 )
 
@@ -172,13 +173,13 @@ func (lm *levelManager) entryCount() int64 {
 	return total
 }
 
-func (lh *levelHandler) tablesSnapshot() []*table {
+func (lh *levelHandler) tablesSnapshot() []*table.Table {
 	if lh == nil {
 		return nil
 	}
 	lh.RLock()
 	defer lh.RUnlock()
-	out := make([]*table, len(lh.tables))
+	out := make([]*table.Table, len(lh.tables))
 	copy(out, lh.tables)
 	return out
 }

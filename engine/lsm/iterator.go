@@ -6,6 +6,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -116,12 +117,12 @@ func (iter *memIterator) Seek(key []byte) {
 type ConcatIterator struct {
 	idx     int // Which iterator is active now.
 	cur     index.Iterator
-	tables  []*table       // Disregarding reversed, this is in ascending order.
+	tables  []*table.Table       // Disregarding reversed, this is in ascending order.
 	options *index.Options // Valid options are REVERSED and NOCACHE.
 }
 
 // NewConcatIterator creates a new concatenated iterator
-func NewConcatIterator(tbls []*table, opt *index.Options) *ConcatIterator {
+func NewConcatIterator(tbls []*table.Table, opt *index.Options) *ConcatIterator {
 	return &ConcatIterator{
 		options: opt,
 		tables:  tbls,

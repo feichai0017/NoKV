@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
 
@@ -16,11 +16,11 @@ type PrefixExtractor func(userKey []byte) []byte
 
 // BlockCompression aliases table.Compression so existing engine-level code
 // can keep using the lsm-package name. See engine/lsm/table.Compression.
-type BlockCompression = tablepkg.Compression
+type BlockCompression = table.Compression
 
 const (
-	BlockCompressionNone   = tablepkg.CompressionNone
-	BlockCompressionSnappy = tablepkg.CompressionSnappy
+	BlockCompressionNone   = table.CompressionNone
+	BlockCompressionSnappy = table.CompressionSnappy
 )
 
 const (

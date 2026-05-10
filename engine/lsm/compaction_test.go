@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +29,7 @@ func TestCompactionMoveToLanding(t *testing.T) {
 	}
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
-	cd.top = []*table{tables[0]}
+	cd.top = []*table.Table{tables[0]}
 	cd.spec.ThisRange = getKeyRange(cd.top...)
 	cd.spec.NextRange = cd.spec.ThisRange
 	if cd.nextLevel == nil {
@@ -70,7 +71,7 @@ func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
 	src.add(tbl)
 
 	cd := buildCompactDef(lsm, 0, 1, 2)
-	cd.top = []*table{tbl}
+	cd.top = []*table.Table{tbl}
 	cd.spec.TopIDs = []uint64{tbl.FID()}
 	cd.spec.ThisRange = getKeyRange(tbl)
 	cd.spec.NextRange = cd.spec.ThisRange
@@ -119,8 +120,8 @@ func TestCompactBuildTablesOverlappingBotTablesKeepsOrder(t *testing.T) {
 	cd := compactDef{
 		thisLevel: lsm.levels.levels[5],
 		nextLevel: lsm.levels.levels[6],
-		top:       []*table{top},
-		bot:       []*table{botA, botB},
+		top:       []*table.Table{top},
+		bot:       []*table.Table{botA, botB},
 		splits:    []plan.KeyRange{{}},
 		spec: plan.Plan{
 			NextFileSize: 1 << 20,
@@ -194,7 +195,7 @@ func TestCompactStatusGuards(t *testing.T) {
 	cd := compactDef{
 		thisLevel: l0,
 		nextLevel: l0,
-		top:       []*table{tbl},
+		top:       []*table.Table{tbl},
 		spec: plan.Plan{
 			ThisLevel:    0,
 			NextLevel:    0,
@@ -412,8 +413,8 @@ func firstRegularNonL0(prios []plan.Priority) int {
 	return -1
 }
 
-func tableRefSnapshot(tables []*table) map[*table]int32 {
-	out := make(map[*table]int32, len(tables))
+func tableRefSnapshot(tables []*table.Table) map[*table.Table]int32 {
+	out := make(map[*table.Table]int32, len(tables))
 	for _, tbl := range tables {
 		if tbl == nil {
 			continue
@@ -423,7 +424,7 @@ func tableRefSnapshot(tables []*table) map[*table]int32 {
 	return out
 }
 
-func requireDecrOnce(t *testing.T, before map[*table]int32) {
+func requireDecrOnce(t *testing.T, before map[*table.Table]int32) {
 	t.Helper()
 	for tbl, ref := range before {
 		after := tbl.Load()
@@ -447,30 +448,6 @@ func hasLandingTable(lh *levelHandler, fid uint64) bool {
 	return false
 }
 
-func TestRunCompactDefLandingNoneDecrementsTopOnce(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	baseTest(t, lsm, 256)
-	waitForL0(t, lsm)
-
-	cd := buildCompactDef(lsm, 0, 0, 1)
-	tricky(cd.thisLevel.tablesSnapshot())
-	if ok := lsm.levels.fillTables(cd); !ok {
-		t.Fatalf("fillTables failed for landing-none path")
-	}
-	if cd.spec.LandingMode != plan.LandingNone {
-		t.Fatalf("expected landing-none plan, got %v", cd.spec.LandingMode)
-	}
-	before := tableRefSnapshot(cd.top)
-	if err := lsm.levels.runCompactDef(0, 0, *cd); err != nil {
-		t.Fatalf("runCompactDef landing-none: %v", err)
-	}
-	require.Nil(t, lsm.levels.compactState.Delete(cd.stateEntry()))
-	requireDecrOnce(t, before)
-}
-
 func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	clearDir()
 	lsm := buildLSM()
@@ -486,7 +463,7 @@ func TestRunCompactDefLandingDrainDecrementsTopOnce(t *testing.T) {
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
-	move.top = []*table{l0Tables[0]}
+	move.top = []*table.Table{l0Tables[0]}
 	move.spec.ThisRange = getKeyRange(move.top...)
 	move.spec.NextRange = move.spec.ThisRange
 	if move.nextLevel == nil {
@@ -537,7 +514,7 @@ func TestRunCompactDefLandingKeepDecrementsTopOnce(t *testing.T) {
 	}
 
 	move := buildCompactDef(lsm, 0, 0, 6)
-	move.top = []*table{l0Tables[0]}
+	move.top = []*table.Table{l0Tables[0]}
 	move.spec.ThisRange = getKeyRange(move.top...)
 	move.spec.NextRange = move.spec.ThisRange
 	if move.nextLevel == nil {

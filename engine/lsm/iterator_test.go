@@ -7,7 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/stretchr/testify/require"
 )
@@ -191,15 +191,15 @@ func TestConcatIteratorSeekAndNext(t *testing.T) {
 	lsm := buildTestLSM(t, opt)
 	defer func() { require.NoError(t, lsm.Close()) }()
 
-	builder := tablepkg.NewBuilder(tableOptionsFor(opt))
+	builder := table.NewBuilder(tableOptionsFor(opt))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b"), 1), []byte("vb")))
 	builder.AddKey(kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("d"), 1), []byte("vd")))
-	tbl, err := tablepkg.Open(lsm.levels, vfs.FileNameSSTable(dir, 100), builder)
+	tbl, err := table.Open(lsm.levels, vfs.FileNameSSTable(dir, 100), builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
 
-	ci := NewConcatIterator([]*table{tbl}, &index.Options{IsAsc: true})
+	ci := NewConcatIterator([]*table.Table{tbl}, &index.Options{IsAsc: true})
 
 	ci.Rewind()
 	if !ci.Valid() {
@@ -231,7 +231,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
-	builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	// Add test data
 	for i := range 10 {
@@ -241,7 +241,7 @@ func TestBlockIteratorReverse(t *testing.T) {
 	}
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 1)
-	tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -280,7 +280,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
-	builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	// Add test data with multiple blocks
 	for i := range 20 {
@@ -290,7 +290,7 @@ func TestTableIteratorReverseSeek(t *testing.T) {
 	}
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 2)
-	tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()
@@ -330,7 +330,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 
 	builderOpt := *opt
 	builderOpt.BlockSize = 64
-	builder := tablepkg.NewBuilder(tableOptionsFor(&builderOpt))
+	builder := table.NewBuilder(tableOptionsFor(&builderOpt))
 
 	// Add enough data to create multiple blocks
 	for i := range 30 {
@@ -340,7 +340,7 @@ func TestTableIteratorReverseMultiBlock(t *testing.T) {
 	}
 
 	tableName := vfs.FileNameSSTable(lsm.option.WorkDir, 3)
-	tbl, err := tablepkg.Open(lsm.levels, tableName, builder)
+	tbl, err := table.Open(lsm.levels, tableName, builder)
 	require.NoError(t, err)
 	require.NotNil(t, tbl)
 	defer func() { _ = tbl.DecrRef() }()

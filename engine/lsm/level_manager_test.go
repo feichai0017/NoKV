@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/pacer"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,11 +26,11 @@ func TestL0ReplaceTablesOrdering(t *testing.T) {
 	t4 := buildTableWithEntry(t, lsm, 4, "A", 2, "new")
 
 	levelHandler := lsm.levels.levels[0]
-	levelHandler.tables = []*table{t1, t2, t3}
-	toDel := []*table{t2, t3}
-	toAdd := []*table{t4}
+	levelHandler.tables = []*table.Table{t1, t2, t3}
+	toDel := []*table.Table{t2, t3}
+	toAdd := []*table.Table{t4}
 	require.NoError(t, levelHandler.replaceTables(toDel, toAdd))
-	require.Equal(t, []*table{t1, t4}, levelHandler.tables)
+	require.Equal(t, []*table.Table{t1, t4}, levelHandler.tables)
 
 	require.NoError(t, t1.DecrRef())
 	require.NoError(t, t4.DecrRef())
@@ -48,9 +49,9 @@ func TestLevelManagerGetChoosesHighestVisibleVersionAcrossLevels(t *testing.T) {
 	l1Put := kv.NewInternalEntry(kv.CFDefault, key, 396, []byte("v396"), 0, 0)
 	t0 := buildTableWithEntries(t, lsm, 11, l0Delete)
 	t1 := buildTableWithEntries(t, lsm, 12, l1Put)
-	lsm.levels.levels[0].tables = []*table{t0}
+	lsm.levels.levels[0].tables = []*table.Table{t0}
 	lsm.levels.levels[0].Sort()
-	lsm.levels.levels[1].tables = []*table{t1}
+	lsm.levels.levels[1].tables = []*table.Table{t1}
 	lsm.levels.levels[1].Sort()
 
 	got, err := lsm.levels.Get(kv.InternalKey(kv.CFDefault, key, 396))
@@ -81,7 +82,7 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	tblS := buildTableWithEntry(t, lsm, 107, "s", 1, "vs")
 	tblV := buildTableWithEntry(t, lsm, 108, "v", 1, "vv")
 
-	lh.tables = []*table{tblV, tblG, tblA, tblP, tblD, tblS, tblJ, tblM}
+	lh.tables = []*table.Table{tblV, tblG, tblA, tblP, tblD, tblS, tblJ, tblM}
 	lh.Sort()
 
 	require.Equal(t, 8, lh.filter.SpanCount())
@@ -104,7 +105,7 @@ func TestLevelHandlerRangeFilterPrunesPointAndBounds(t *testing.T) {
 	require.Equal(t, uint64(7), diag.RangeFilter.BoundedPruned)
 	require.Equal(t, uint64(0), diag.RangeFilter.Fallbacks)
 
-	for _, tbl := range []*table{tblA, tblD, tblG, tblJ, tblM, tblP, tblS, tblV} {
+	for _, tbl := range []*table.Table{tblA, tblD, tblG, tblJ, tblM, tblP, tblS, tblV} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
@@ -129,7 +130,7 @@ func TestLevelHandlerAddRefreshesRangeFilter(t *testing.T) {
 	require.Equal(t, uint64(302), lh.tables[0].FID())
 	require.Equal(t, uint64(301), lh.tables[1].FID())
 
-	for _, tbl := range []*table{tblA, tblB} {
+	for _, tbl := range []*table.Table{tblA, tblB} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
@@ -145,7 +146,7 @@ func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
 	lh := lsm.levels.levels[0]
 	tblA := buildTableWithEntry(t, lsm, 401, "a", 1, "va")
 	tblD := buildTableWithEntry(t, lsm, 402, "d", 1, "vd")
-	lh.tables = []*table{tblA, tblD}
+	lh.tables = []*table.Table{tblA, tblD}
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{
@@ -160,7 +161,7 @@ func TestLevelHandlerL0BoundedMetricsRecordFallback(t *testing.T) {
 	diag := lsm.Diagnostics()
 	require.Equal(t, uint64(1), diag.RangeFilter.Fallbacks)
 
-	for _, tbl := range []*table{tblA, tblD} {
+	for _, tbl := range []*table.Table{tblA, tblD} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
@@ -180,8 +181,8 @@ func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 	landingB := buildTableWithEntry(t, lsm, 204, "b", 1, "vb")
 	landingE := buildTableWithEntry(t, lsm, 205, "e", 1, "ve")
 
-	lh.tables = []*table{tblA, tblD, tblG}
-	lh.landing.AddBatch([]*table{landingB, landingE})
+	lh.tables = []*table.Table{tblA, tblD, tblG}
+	lh.landing.AddBatch([]*table.Table{landingB, landingE})
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{
@@ -204,7 +205,7 @@ func TestLevelHandlerIteratorsRespectBoundsWithLanding(t *testing.T) {
 	require.True(t, bytes.Equal(keys[1], []byte("d")) || bytes.Equal(keys[1], []byte("e")))
 	require.NotEqual(t, string(keys[0]), string(keys[1]))
 
-	for _, tbl := range []*table{tblA, tblD, tblG, landingB, landingE} {
+	for _, tbl := range []*table.Table{tblA, tblD, tblG, landingB, landingE} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
@@ -223,7 +224,7 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	tblC := buildTableWithEntry(t, lsm, 503, "c", 1, "vc")
 	tblD := buildTableWithEntry(t, lsm, 504, "d", 1, "vd")
 
-	lh.tables = []*table{tblA, tblB, tblC, tblD}
+	lh.tables = []*table.Table{tblA, tblB, tblC, tblD}
 	lh.Sort()
 
 	iters := lh.iterators(&index.Options{
@@ -243,7 +244,7 @@ func TestLevelHandlerIteratorsSkipLeadingEmptyBoundedTables(t *testing.T) {
 	}
 	require.Equal(t, []string{"c", "d"}, keys)
 
-	for _, tbl := range []*table{tblA, tblB, tblC, tblD} {
+	for _, tbl := range []*table.Table{tblA, tblB, tblC, tblD} {
 		require.NoError(t, tbl.DecrRef())
 	}
 }
@@ -256,7 +257,7 @@ func TestCompactionPacerBypassesWhenL0IsNearStall(t *testing.T) {
 		},
 		compactionPacer: pacer.New(100),
 		levels: []*levelHandler{
-			{tables: []*table{{}, {}}},
+			{tables: []*table.Table{{}, {}}},
 		},
 	}
 

@@ -155,7 +155,6 @@ func (t *Table) cache() *cachepkg.Cache {
 	return t.rt.Cache()
 }
 
-// Metadata accessors and cached table metadata.
 func (t *Table) index() *storagepb.TableIndex {
 	if t == nil {
 		return nil
@@ -219,9 +218,7 @@ func (t *Table) KeyCount() uint32 {
 	return 0
 }
 
-// CachedKeyCount returns the cached key count without triggering a disk
-// load. Used by hot-path aggregations (per-level key sums, throttle
-// thresholds) that must not block on cold tables.
+// CachedKeyCount returns the cached key count without triggering a disk load.
 func (t *Table) CachedKeyCount() uint32 {
 	if t == nil {
 		return 0
@@ -268,10 +265,10 @@ func (t *Table) blockOffset(i int) (*storagepb.BlockOffset, bool) {
 	return offsets[i], true
 }
 
-// Size is its file size in bytes
+// Size returns the SSTable file size in bytes.
 func (t *Table) Size() int64 { return t.size }
 
-// GetCreatedAt
+// GetCreatedAt returns the table's creation timestamp, or nil if unknown.
 func (t *Table) GetCreatedAt() *time.Time {
 	if t.createdAt.IsZero() {
 		return nil
@@ -280,7 +277,7 @@ func (t *Table) GetCreatedAt() *time.Time {
 	return &created
 }
 
-// StaleDataSize is the amount of stale data (that can be dropped by a compaction )in this SST.
+// StaleDataSize is the amount of stale data (droppable by compaction) in this SST.
 func (t *Table) StaleDataSize() uint32 { return t.staleDataSize }
 
 // ValueSize reports total inline value bytes referenced by this table.
@@ -289,9 +286,8 @@ func (t *Table) ValueSize() uint64 { return t.valueSize }
 // RangeTombstoneCount reports range deletion markers stored in this table.
 func (t *Table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
 
-// Search looks up key with bloom-filter prefilter. maxVs is in/out: an entry is
-// returned only if its version is strictly greater than *maxVs, and on success
-// *maxVs is advanced to the matched version.
+// Search looks up key with bloom-filter prefilter. An entry is returned only if its
+// version is strictly greater than *maxVs; on success *maxVs is advanced to the matched version.
 func (t *Table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
 	defer func() {
@@ -316,9 +312,7 @@ func (t *Table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
-// SearchExactCandidate is like Search but skips bloom filtering. Callers pass
-// it when the range filter has already pinpointed this table as the unique
-// candidate, so the bloom check is redundant work.
+// SearchExactCandidate is like Search but skips bloom filtering.
 func (t *Table) SearchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 	t.IncrRef()
 	defer func() {
@@ -1034,7 +1028,6 @@ func (it *Iterator) advanceToBoundedValid() {
 	}
 }
 
-// Handle lifecycle and reference tracking.
 func (t *Table) shouldPinHandleLocked() bool {
 	if t == nil {
 		return false
@@ -1050,8 +1043,7 @@ func (t *Table) refreshHandlePolicy() {
 	}
 }
 
-// SetLevel records the LSM level the table currently lives in. Safe to call
-// from multiple goroutines; reads observe a consistent snapshot via Level.
+// SetLevel records the LSM level the table currently lives in.
 func (t *Table) SetLevel(level int) {
 	t.lvl.Store(int32(level))
 	t.refreshHandlePolicy()
@@ -1119,8 +1111,7 @@ func (t *Table) closeSSTableLocked() {
 	t.ss = nil
 }
 
-// CloseHandle closes the underlying SSTable file handle. Used by levelHandler
-// at shutdown when the table will not be reopened in this process.
+// CloseHandle closes the underlying SSTable file handle.
 func (t *Table) CloseHandle() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1188,8 +1179,7 @@ func (t *Table) Delete() error {
 // IncrRef increments the table reference count.
 func (t *Table) IncrRef() { t.Incr() }
 
-// DecrRef decrements the refcount and possibly deletes the table.
-// It panics on refcount underflow to surface lifecycle bugs early.
+// DecrRef decrements the refcount and deletes the table when it reaches zero.
 func (t *Table) DecrRef() error {
 	if t.Decr() == 0 {
 		return t.Delete()

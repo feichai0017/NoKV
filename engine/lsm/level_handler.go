@@ -12,14 +12,14 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm/landing"
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
-	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
 
 // landingBuffer is the concrete landing buffer instantiation used by
 // levelHandler. It binds landing.Buffer to the lsm package's *table.
-type landingBuffer = landing.Buffer[*table]
+type landingBuffer = landing.Buffer[*table.Table]
 
 // landingShardCount mirrors landing.ShardCount for callers that index shards
 // directly inside the lsm package.
@@ -40,8 +40,8 @@ func landingPickInput(views []landing.ShardView) plan.LandingPickInput {
 type levelHandler struct {
 	sync.RWMutex
 	levelNum                    int
-	tables                      []*table
-	filter                      rangefilter.Filter[*table]
+	tables                      []*table.Table
+	filter                      rangefilter.Filter[*table.Table]
 	landing                     landingBuffer
 	totalSize                   int64
 	totalStaleSize              int64
@@ -63,13 +63,13 @@ type levelHandler struct {
 type tableRange struct {
 	min []byte
 	max []byte
-	tbl *table
+	tbl *table.Table
 }
 
 func (lh *levelHandler) close() error {
 	lh.RLock()
-	tables := append([]*table(nil), lh.tables...)
-	landingTables := append([]*table(nil), lh.landing.AllTables()...)
+	tables := append([]*table.Table(nil), lh.tables...)
+	landingTables := append([]*table.Table(nil), lh.landing.AllTables()...)
 	lh.RUnlock()
 
 	var closeErr error
@@ -87,7 +87,7 @@ func (lh *levelHandler) close() error {
 	}
 	return closeErr
 }
-func (lh *levelHandler) add(t *table) {
+func (lh *levelHandler) add(t *table.Table) {
 	if t == nil {
 		return
 	}
@@ -147,13 +147,13 @@ func (lh *levelHandler) rangeTombstoneCount() uint64 {
 	return total
 }
 
-func (lh *levelHandler) addSize(t *table) {
+func (lh *levelHandler) addSize(t *table.Table) {
 	lh.totalSize += t.Size()
 	lh.totalStaleSize += int64(t.StaleDataSize())
 	lh.totalValueSize += int64(t.ValueSize())
 }
 
-func (lh *levelHandler) subtractSize(t *table) {
+func (lh *levelHandler) subtractSize(t *table.Table) {
 	lh.totalSize -= t.Size()
 	lh.totalStaleSize -= int64(t.StaleDataSize())
 	lh.totalValueSize -= int64(t.ValueSize())
@@ -279,7 +279,7 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		version uint64
 		best    *kv.Entry
 	)
-	candidates := append([]*table(nil), lh.selectTablesForKey(key, true)...)
+	candidates := append([]*table.Table(nil), lh.selectTablesForKey(key, true)...)
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i] == nil {
 			return false
@@ -289,18 +289,18 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		}
 		return candidates[i].FID() > candidates[j].FID()
 	})
-	for _, table := range candidates {
-		if table == nil {
+	for _, tbl := range candidates {
+		if tbl == nil {
 			continue
 		}
-		if kv.CompareBaseKeys(key, table.MinKey()) < 0 ||
-			kv.CompareBaseKeys(key, table.MaxKey()) > 0 {
+		if kv.CompareBaseKeys(key, tbl.MinKey()) < 0 ||
+			kv.CompareBaseKeys(key, tbl.MaxKey()) > 0 {
 			continue
 		}
-		if table.MaxVersionVal() <= version {
+		if tbl.MaxVersionVal() <= version {
 			continue
 		}
-		if entry, err := table.Search(key, &version); err == nil {
+		if entry, err := tbl.Search(key, &version); err == nil {
 			if best != nil {
 				best.DecrRef()
 			}
@@ -326,7 +326,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 	}
 	if lh.levelNum > 0 && lh.filter.SpanCount() >= rangefilter.MinSpanCount && lh.filter.NonOverlapping() {
 		total := len(lh.tables)
-		table, ok := lh.filter.TableForPoint(key)
+		tbl, ok := lh.filter.TableForPoint(key)
 		if lh.lm != nil {
 			candidates := 0
 			if ok {
@@ -337,28 +337,28 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 		if !ok {
 			return nil, utils.ErrKeyNotFound
 		}
-		if table.MaxVersionVal() <= *maxVersion {
+		if tbl.MaxVersionVal() <= *maxVersion {
 			return nil, utils.ErrKeyNotFound
 		}
-		return table.SearchExactCandidate(key, maxVersion)
+		return tbl.SearchExactCandidate(key, maxVersion)
 	}
 	tables := lh.selectTablesForKey(key, true)
 	if len(tables) == 0 {
 		return nil, utils.ErrKeyNotFound
 	}
 	var best *kv.Entry
-	for _, table := range tables {
-		if table == nil {
+	for _, tbl := range tables {
+		if tbl == nil {
 			continue
 		}
-		if table.MaxVersionVal() <= *maxVersion {
+		if tbl.MaxVersionVal() <= *maxVersion {
 			continue
 		}
 		var (
 			entry *kv.Entry
 			err   error
 		)
-		entry, err = table.Search(key, maxVersion)
+		entry, err = tbl.Search(key, maxVersion)
 		if err == nil {
 			if best != nil {
 				best.DecrRef()
@@ -379,7 +379,7 @@ func (lh *levelHandler) searchLNSST(key []byte, maxVersion *uint64) (*kv.Entry, 
 	return nil, utils.ErrKeyNotFound
 }
 
-func (lh *levelHandler) getTableForKey(key []byte) *table {
+func (lh *levelHandler) getTableForKey(key []byte) *table.Table {
 	if lh.levelNum > 0 && lh.filter.SpanCount() >= rangefilter.MinSpanCount && lh.filter.NonOverlapping() {
 		tbl, _ := lh.filter.TableForPoint(key)
 		return tbl
@@ -391,13 +391,13 @@ func (lh *levelHandler) getTableForKey(key []byte) *table {
 	return tables[0]
 }
 
-func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
+func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table.Table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
 	total := len(lh.tables)
 	fallback := false
-	var tables []*table
+	var tables []*table.Table
 	if lh.levelNum == 0 {
 		// L0 first tries the sublevel index, falling back to a linear scan
 		// if sublevels have not been built yet (e.g. between mutations).
@@ -421,14 +421,14 @@ func (lh *levelHandler) selectTablesForKey(key []byte, record bool) []*table {
 	return tables
 }
 
-func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
+func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table.Table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
 	if lh.levelNum > 0 && kv.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
-	out := make([]*table, 0, 1)
+	out := make([]*table.Table, 0, 1)
 	for _, t := range lh.tables {
 		if t == nil {
 			continue
@@ -444,7 +444,7 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table {
 	return out
 }
 
-func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) []*table {
+func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) []*table.Table {
 	if len(lh.tables) == 0 {
 		if record && lh.lm != nil && (len(lower) > 0 || len(upper) > 0) {
 			lh.lm.recordRangeFilterBounded(0, 0, false)
@@ -453,7 +453,7 @@ func (lh *levelHandler) selectTablesForBounds(lower, upper []byte, record bool) 
 	}
 	total := len(lh.tables)
 	fallback := false
-	var tables []*table
+	var tables []*table.Table
 	if lh.levelNum == 0 || lh.filter.SpanCount() < rangefilter.MinSpanCount {
 		fallback = true
 		tables = rangefilter.FilterByBounds(lh.tables, lower, upper)
@@ -484,7 +484,7 @@ func (lh *levelHandler) isLastLevel() bool {
 
 // replaceTables will replace tables[left:right] with newTables. Note this EXCLUDES tables[right].
 // You must call decr() to delete the old tables _after_ writing the update to the manifest.
-func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
+func (lh *levelHandler) replaceTables(toDel, toAdd []*table.Table) error {
 	// Need to re-search the range of tables in this level to be replaced as other goroutines might
 	// be changing it as well.  (They can't touch our tables, but if they add/remove other tables,
 	// the indices get shifted around.)
@@ -494,8 +494,8 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	for _, t := range toDel {
 		toDelMap[t.FID()] = struct{}{}
 	}
-	var removed []*table
-	var newTables []*table
+	var removed []*table.Table
+	var newTables []*table.Table
 	for _, t := range lh.tables {
 		_, found := toDelMap[t.FID()]
 		if !found {
@@ -517,11 +517,11 @@ func (lh *levelHandler) replaceTables(toDel, toAdd []*table) error {
 	lh.tables = newTables
 	lh.refreshTableIndexesLocked()
 	lh.Unlock() // s.Unlock before we DecrRef tables -- that can be slow.
-	return tablepkg.DecrAll(removed)
+	return table.DecrAll(removed)
 }
 
 // deleteTables remove tables idx0, ..., idx1-1.
-func (lh *levelHandler) deleteTables(toDel []*table) error {
+func (lh *levelHandler) deleteTables(toDel []*table.Table) error {
 	lh.Lock() // s.Unlock() below
 
 	toDelMap := make(map[uint64]struct{})
@@ -530,8 +530,8 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 	}
 
 	// Make a copy as iterators might be keeping a slice of tables.
-	var removed []*table
-	var newTables []*table
+	var removed []*table.Table
+	var newTables []*table.Table
 	for _, t := range lh.tables {
 		_, found := toDelMap[t.FID()]
 		if !found {
@@ -548,10 +548,10 @@ func (lh *levelHandler) deleteTables(toDel []*table) error {
 
 	lh.Unlock() // Unlock s _before_ we DecrRef our tables, which can be slow.
 
-	return tablepkg.DecrAll(removed)
+	return table.DecrAll(removed)
 }
 
-func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
+func (lh *levelHandler) deleteLandingTables(toDel []*table.Table) error {
 	lh.Lock() // s.Unlock() below
 
 	toDelMap := make(map[uint64]struct{})
@@ -564,10 +564,10 @@ func (lh *levelHandler) deleteLandingTables(toDel []*table) error {
 
 	lh.Unlock()
 
-	return tablepkg.DecrAll(removed)
+	return table.DecrAll(removed)
 }
 
-func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
+func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table.Table) error {
 	lh.Lock()
 
 	toDelMap := make(map[uint64]struct{})
@@ -585,14 +585,14 @@ func (lh *levelHandler) replaceLandingTables(toDel, toAdd []*table) error {
 
 	lh.Unlock()
 
-	return tablepkg.DecrAll(removed)
+	return table.DecrAll(removed)
 }
 
-func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) []*table {
+func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) []*table.Table {
 	if len(fidSet) == 0 {
 		return nil
 	}
-	var out []*table
+	var out []*table.Table
 	for _, t := range lh.landing.AllTables() {
 		if t == nil {
 			continue
@@ -676,7 +676,7 @@ func (lh *levelHandler) landingShardOrderBySize() []int {
 }
 
 // addLanding registers a table into the landing buffer under lh's write lock.
-func (lh *levelHandler) addLanding(t *table) {
+func (lh *levelHandler) addLanding(t *table.Table) {
 	if t == nil {
 		return
 	}
@@ -748,7 +748,7 @@ func (lh *levelHandler) landingDataSize() int64 {
 // trivial move still treat L0 as a single physical level. The sublevel layout
 // is rebuilt eagerly inside sortTablesLocked() each time L0 mutates so reads
 // always see a consistent snapshot.
-type l0Sublevel []*table
+type l0Sublevel []*table.Table
 
 // buildL0Sublevels arranges tables into the minimum number of sublevels such
 // that each sublevel contains only non-overlapping ranges. The greedy
@@ -759,13 +759,13 @@ type l0Sublevel []*table
 // Complexity: O(N log N) for the sort plus O(N * S) for placement where S is
 // the resulting sublevel count. For typical L0 sizes (10-30 tables, 3-6
 // sublevels), this is trivially cheap.
-func buildL0Sublevels(tables []*table) []l0Sublevel {
+func buildL0Sublevels(tables []*table.Table) []l0Sublevel {
 	if len(tables) == 0 {
 		return nil
 	}
 
 	// Copy to avoid mutating the caller slice and filter nil entries.
-	sorted := make([]*table, 0, len(tables))
+	sorted := make([]*table.Table, 0, len(tables))
 	for _, t := range tables {
 		if t != nil {
 			sorted = append(sorted, t)
@@ -803,7 +803,7 @@ func buildL0Sublevels(tables []*table) []l0Sublevel {
 // candidate returns the at-most-one table within this sublevel whose key
 // range covers key, or nil. Sublevel tables are sorted by MinKey so a binary
 // search by MinKey followed by a MaxKey check is enough.
-func (s l0Sublevel) candidate(key []byte) *table {
+func (s l0Sublevel) candidate(key []byte) *table.Table {
 	if len(s) == 0 {
 		return nil
 	}
@@ -829,7 +829,7 @@ func (s l0Sublevel) candidate(key []byte) *table {
 // (typically a contiguous overlapping batch). all is the full set of L0
 // tables, including group. Both are read without taking lh's mutex; callers
 // must already hold the appropriate level lock.
-func l0GroupHasNoOtherOverlap(group, all []*table) bool {
+func l0GroupHasNoOtherOverlap(group, all []*table.Table) bool {
 	if len(group) == 0 {
 		return false
 	}
@@ -872,11 +872,11 @@ func l0GroupHasNoOtherOverlap(group, all []*table) bool {
 // l0CandidateTables returns up to one candidate table per sublevel whose
 // range covers key. The returned slice contains at most len(sublevels) entries
 // and may be empty if no sublevel covers the key.
-func l0CandidateTables(sublevels []l0Sublevel, key []byte) []*table {
+func l0CandidateTables(sublevels []l0Sublevel, key []byte) []*table.Table {
 	if len(sublevels) == 0 {
 		return nil
 	}
-	out := make([]*table, 0, len(sublevels))
+	out := make([]*table.Table, 0, len(sublevels))
 	for _, sub := range sublevels {
 		if t := sub.candidate(key); t != nil {
 			out = append(out, t)

@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"github.com/feichai0017/NoKV/engine/lsm/plan"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 )
 
 // compactDef carries one in-flight compaction's executable state. It binds a
@@ -10,7 +11,7 @@ import (
 //
 // Compaction flow: the picker chooses a Priority, the planner produces a
 // plan.Plan from snapshot table metadata, then the executor binds that Plan
-// into a compactDef so it can resolve table IDs back to live *table handles
+// into a compactDef so it can resolve table IDs back to live *table.Table handles
 // and drive the merge.
 type compactDef struct {
 	compactorId int
@@ -18,8 +19,8 @@ type compactDef struct {
 	thisLevel   *levelHandler
 	nextLevel   *levelHandler
 
-	top []*table
-	bot []*table
+	top []*table.Table
+	bot []*table.Table
 
 	splits []plan.KeyRange
 

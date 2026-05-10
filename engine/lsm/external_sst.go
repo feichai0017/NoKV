@@ -10,7 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/file"
 	"github.com/feichai0017/NoKV/engine/kv"
-	tablepkg "github.com/feichai0017/NoKV/engine/lsm/table"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/manifest"
 	"github.com/feichai0017/NoKV/engine/vfs"
 )
@@ -73,7 +73,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		return nil, fmt.Errorf("lsm: stat external sst target %s: %w", path, err)
 	}
 
-	builder := tablepkg.NewBuilder(tableOptionsFor(cfg))
+	builder := table.NewBuilder(tableOptionsFor(cfg))
 	var valueBytes uint64
 	for i, entry := range entries {
 		if entry == nil {
@@ -120,7 +120,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 		}
 	}()
 
-	if err := tablepkg.WriteBuildData(tmp, build); err != nil {
+	if err := table.WriteBuildData(tmp, build); err != nil {
 		return nil, fmt.Errorf("lsm: write external sst %s: %w", tmpPath, err)
 	}
 	if err := tmp.Sync(); err != nil {
@@ -193,8 +193,8 @@ func (lsm *LSM) RollbackExternalSST(fileIDs []uint64) error {
 	return lsm.levels.removeExternalSST(fileIDs)
 }
 
-func checkTablesOverlap(tables []*table) error {
-	sorted := make([]*table, len(tables))
+func checkTablesOverlap(tables []*table.Table) error {
+	sorted := make([]*table.Table, len(tables))
 	copy(sorted, tables)
 
 	sort.Slice(sorted, func(i, j int) bool {
@@ -214,7 +214,7 @@ func checkTablesOverlap(tables []*table) error {
 
 // checkTablesOverlapWithL0Locked checks imported tables against existing L0
 // tables. Caller must hold l0.Lock().
-func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table) error {
+func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table.Table) error {
 	l0 := lm.levels[0]
 
 	for _, tbl := range tables {
@@ -236,7 +236,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 	fs := vfs.Ensure(lm.opt.FS)
 	workDir := lm.opt.WorkDir
 	var (
-		importedTables []*table
+		importedTables []*table.Table
 		importedMetas  []*manifest.FileMeta
 		tempFIDs       []uint64
 		pathMappings   = make(map[string]string)
@@ -309,7 +309,7 @@ func (lm *levelManager) importExternalSST(paths []string) (*ExternalSSTImportRes
 		}
 		pathMappings[path] = targetPath
 
-		tbl, err := tablepkg.Open(lm, targetPath, nil)
+		tbl, err := table.Open(lm, targetPath, nil)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("open imported sst failed: %s, err: %w", targetPath, err)
@@ -395,13 +395,13 @@ func (lm *levelManager) removeExternalSST(fileIDs []uint64) error {
 
 	l0 := lm.levels[0]
 	l0.RLock()
-	tablesByID := make(map[uint64]*table, len(fileIDs))
+	tablesByID := make(map[uint64]*table.Table, len(fileIDs))
 	for _, tbl := range l0.tables {
 		if tbl != nil {
 			tablesByID[tbl.FID()] = tbl
 		}
 	}
-	toDelete := make([]*table, 0, len(fileIDs))
+	toDelete := make([]*table.Table, 0, len(fileIDs))
 	edits := make([]manifest.Edit, 0, len(fileIDs))
 	for _, fid := range fileIDs {
 		tbl, ok := tablesByID[fid]

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +19,7 @@ func TestBuildL0SublevelsArrangesNonOverlappingTablesPerSublevel(t *testing.T) {
 	b := buildTableWithEntry(t, lsm, 5002, "a", 2, "va2") // overlaps a
 	c := buildTableWithEntry(t, lsm, 5003, "z", 1, "vz")  // disjoint
 
-	subs := buildL0Sublevels([]*table{a, b, c})
+	subs := buildL0Sublevels([]*table.Table{a, b, c})
 	require.Len(t, subs, 2, "expected two sublevels for overlapping a/b plus disjoint c")
 
 	// First sublevel takes a (smallest fid wins ties for same MinKey) and c
@@ -65,7 +66,7 @@ func TestL0SublevelsLookupReturnsCandidatePerSublevel(t *testing.T) {
 	b := buildTableWithEntry(t, lsm, 7002, "a", 2, "va2") // overlaps a -> separate sublevel
 	c := buildTableWithEntry(t, lsm, 7003, "a", 3, "va3") // overlaps a/b -> third sublevel
 
-	subs := buildL0Sublevels([]*table{a, b, c})
+	subs := buildL0Sublevels([]*table.Table{a, b, c})
 	require.Len(t, subs, 3)
 
 	keyA := []byte(kv.InternalKey(kv.CFDefault, []byte("a"), 0))
@@ -150,7 +151,7 @@ func TestL0DeleteRefreshesSublevelsForPointLookup(t *testing.T) {
 	keyZ := []byte(kv.InternalKey(kv.CFDefault, []byte("z"), 100))
 	require.NotEmpty(t, l0.selectTablesForKey(keyZ, false))
 
-	require.NoError(t, l0.deleteTables([]*table{z}))
+	require.NoError(t, l0.deleteTables([]*table.Table{z}))
 	require.Empty(t, l0.selectTablesForKey(keyZ, false),
 		"deleted L0 tables must disappear from the sublevel read index")
 }
@@ -187,12 +188,12 @@ func TestL0GroupHasNoOtherOverlapAcceptsLonelyIsland(t *testing.T) {
 	a := buildTableWithEntry(t, lsm, 11001, "a", 1, "va")
 	c := buildTableWithEntry(t, lsm, 11002, "c", 1, "vc")
 	z := buildTableWithEntry(t, lsm, 11003, "z", 1, "vz")
-	all := []*table{a, c, z}
+	all := []*table.Table{a, c, z}
 
 	// {a} is a lonely island: keyrange "a" does not overlap "c" or "z".
-	require.True(t, l0GroupHasNoOtherOverlap([]*table{a}, all))
-	require.True(t, l0GroupHasNoOtherOverlap([]*table{c}, all))
-	require.True(t, l0GroupHasNoOtherOverlap([]*table{z}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table.Table{a}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table.Table{c}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table.Table{z}, all))
 }
 
 func TestL0GroupHasNoOtherOverlapRejectsOverlappedGroup(t *testing.T) {
@@ -203,15 +204,15 @@ func TestL0GroupHasNoOtherOverlapRejectsOverlappedGroup(t *testing.T) {
 	a := buildTableWithEntry(t, lsm, 12001, "a", 1, "v1") // overlaps b
 	b := buildTableWithEntry(t, lsm, 12002, "a", 2, "v2") // overlaps a
 	z := buildTableWithEntry(t, lsm, 12003, "z", 1, "vz") // disjoint
-	all := []*table{a, b, z}
+	all := []*table.Table{a, b, z}
 
 	// {a} overlaps b, so it cannot trivial move alone.
-	require.False(t, l0GroupHasNoOtherOverlap([]*table{a}, all))
-	require.False(t, l0GroupHasNoOtherOverlap([]*table{b}, all))
+	require.False(t, l0GroupHasNoOtherOverlap([]*table.Table{a}, all))
+	require.False(t, l0GroupHasNoOtherOverlap([]*table.Table{b}, all))
 	// {a, b} together cover their overlap so external overlaps are zero.
-	require.True(t, l0GroupHasNoOtherOverlap([]*table{a, b}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table.Table{a, b}, all))
 	// {z} is still a lonely island.
-	require.True(t, l0GroupHasNoOtherOverlap([]*table{z}, all))
+	require.True(t, l0GroupHasNoOtherOverlap([]*table.Table{z}, all))
 }
 
 func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
@@ -228,7 +229,7 @@ func TestCanMoveToNextLevelAllowsL0LonelyIsland(t *testing.T) {
 	src.Sort()
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
-	cd.top = []*table{a}
+	cd.top = []*table.Table{a}
 	cd.spec.TopIDs = []uint64{a.FID()}
 	cd.spec.ThisRange = getKeyRange(a)
 	cd.spec.NextRange = cd.spec.ThisRange
@@ -253,7 +254,7 @@ func TestCanMoveToNextLevelRejectsL0OverlappingGroup(t *testing.T) {
 	src.Sort()
 
 	cd := buildCompactDef(lsm, 0, 0, 1)
-	cd.top = []*table{b} // pick only one of an overlapping pair
+	cd.top = []*table.Table{b} // pick only one of an overlapping pair
 	cd.spec.TopIDs = []uint64{b.FID()}
 	cd.spec.ThisRange = getKeyRange(b)
 	cd.spec.NextRange = cd.spec.ThisRange
