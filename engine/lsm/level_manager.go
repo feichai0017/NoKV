@@ -53,7 +53,7 @@ func (lsm *LSM) initLevelManager(opt *Options) (_ *levelManager, err error) {
 	}
 	lm.rtCollector = tombstone.NewCollector()
 	lm.compactionPacer = pacer.New(opt.CompactionWriteBytesPerSec)
-	lm.compaction = newCompaction(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
+	lm.sched = newScheduler(lm, lm.opt.NumCompactors, lm.opt.CompactionPolicy, lsm.getLogger())
 	return lm, nil
 }
 
@@ -65,7 +65,7 @@ type levelManager struct {
 	levels           []*levelHandler
 	lsm              *LSM
 	compactState     *plan.State
-	compaction       *compaction
+	sched            *scheduler
 	compactionPacer  *pacer.Pacer
 	rtCollector      *tombstone.Collector
 	compactionLastNs atomic.Int64
@@ -295,8 +295,8 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 	if err := immutable.shard.wal.RemoveSegment(uint32(fid)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, wal.ErrSegmentRetained) {
 		return err
 	}
-	if lm.compaction != nil {
-		lm.compaction.Trigger()
+	if lm.sched != nil {
+		lm.sched.Trigger()
 	}
 	return nil
 }
@@ -810,8 +810,8 @@ func (lm *levelManager) moveToLanding(cd *compactDef) error {
 	second.Unlock()
 	first.Unlock()
 
-	if lm.compaction != nil {
-		lm.compaction.Trigger()
+	if lm.sched != nil {
+		lm.sched.Trigger()
 	}
 	return nil
 }

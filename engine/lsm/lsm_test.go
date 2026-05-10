@@ -240,7 +240,7 @@ func TestHitStorage(t *testing.T) {
 	// Hit a non-L0 path.
 	hitNotL0 := func() {
 		// Compaction produces non-L0 data; this should hit L6.
-		lsm.levels.compaction.RunOnce(0)
+		lsm.levels.sched.RunOnce(0)
 		baseTest(t, lsm, 128)
 	}
 	// Exercise the bloom-filter miss path.

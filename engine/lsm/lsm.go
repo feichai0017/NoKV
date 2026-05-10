@@ -317,7 +317,7 @@ func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
 	for i := range n {
-		go lsm.levels.compaction.Start(i, lsm.closer.Closed(), lsm.closer.Done)
+		go lsm.levels.sched.Start(i, lsm.closer.Closed(), lsm.closer.Done)
 	}
 }
 

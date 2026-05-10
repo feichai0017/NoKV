@@ -108,7 +108,7 @@ func (cd *compactDef) unlockLevels() {
 	cd.thisLevel.RUnlock()
 }
 
-type compaction struct {
+type scheduler struct {
 	owner     *levelManager
 	policy    *SchedulerPolicy
 	triggerCh chan struct{}
@@ -116,7 +116,7 @@ type compaction struct {
 	logger    *slog.Logger
 }
 
-func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.Logger) *compaction {
+func newScheduler(owner *levelManager, maxRuns int, mode string, logger *slog.Logger) *scheduler {
 	if maxRuns <= 0 {
 		maxRuns = 1
 	} else if maxRuns > 4 {
@@ -125,7 +125,7 @@ func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.L
 	if logger == nil {
 		logger = slog.Default()
 	}
-	cr := &compaction{
+	cr := &scheduler{
 		owner:     owner,
 		policy:    NewSchedulerPolicy(mode),
 		triggerCh: make(chan struct{}, 16),
@@ -136,14 +136,14 @@ func newCompaction(owner *levelManager, maxRuns int, mode string, logger *slog.L
 	return cr
 }
 
-func (cr *compaction) Trigger() {
+func (cr *scheduler) Trigger() {
 	select {
 	case cr.triggerCh <- struct{}{}:
 	default:
 	}
 }
 
-func (cr *compaction) Start(id int, closeCh <-chan struct{}, done func()) {
+func (cr *scheduler) Start(id int, closeCh <-chan struct{}, done func()) {
 	if done != nil {
 		defer done()
 	}
@@ -170,7 +170,7 @@ func (cr *compaction) Start(id int, closeCh <-chan struct{}, done func()) {
 	}
 }
 
-func (cr *compaction) runCycle(id int) {
+func (cr *scheduler) runCycle(id int) {
 	ranAny := false
 	for range cr.maxRuns {
 		if id == 0 {
@@ -192,7 +192,7 @@ func (cr *compaction) runCycle(id int) {
 	}
 }
 
-func (cr *compaction) runOnce(id int) bool {
+func (cr *scheduler) runOnce(id int) bool {
 	prios := cr.owner.pickCompactLevels()
 	prios = cr.policy.Arrange(id, prios)
 	for _, p := range prios {
@@ -208,11 +208,11 @@ func (cr *compaction) runOnce(id int) bool {
 	return false
 }
 
-func (cr *compaction) RunOnce(id int) bool {
+func (cr *scheduler) RunOnce(id int) bool {
 	return cr.runOnce(id)
 }
 
-func (cr *compaction) run(id int, p plan.Priority) bool {
+func (cr *scheduler) run(id int, p plan.Priority) bool {
 	start := time.Now()
 	err := cr.owner.doCompact(id, p)
 	cr.policy.Observe(FeedbackEvent{
