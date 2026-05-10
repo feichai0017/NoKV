@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -564,21 +565,18 @@ func (lsm *LSM) Get(key []byte) (*kv.Entry, error) {
 
 	if kv.Timestamp(key) == kv.MaxVersion {
 		if shardID, ok := lsm.lookupShardHint(key); ok && !hasRangeTombstones {
-			tables, release := lsm.getMemTablesForShard(shardID)
-			best := bestMemtableEntry(key, tables)
-			if release != nil {
-				release()
-			}
+			view := lsm.getMemTablesForShard(shardID)
+			best := bestMemtableEntry(key, view.Tables())
+			view.DecrRef()
 			if best != nil {
 				return best, nil
 			}
 		}
 	}
 
-	tables, release := lsm.getMemTables()
-	if release != nil {
-		defer release()
-	}
+	view := lsm.getMemTables()
+	defer view.DecrRef()
+	tables := view.Tables()
 
 	// isCovered checks range tombstone coverage for a found entry using
 	// the already-pinned memtables, avoiding a second GetMemTables call.
@@ -777,54 +775,96 @@ func (lsm *LSM) rotateShardLocked(s *lsmShard) (*memTable, error) {
 	return old, nil
 }
 
-// getMemTables pins active+immutable memtables across all shards and returns
-// an unlock callback. Newest-first ordering within each shard is preserved
-// (active memtable, then immutables in reverse insertion order). Callers
-// that need MVCC ordering across shards rely on internal-key timestamps.
-func (lsm *LSM) getMemTables() ([]*memTable, func()) {
-	var tables []*memTable
+// memTableView pins a snapshot of memtables (active+immutables across one
+// or all shards). It is reference-counted via utils.RefCount so it can
+// be shared between cooperating goroutines without re-walking shards;
+// the standard single-owner Get path acquires it with refcount=1 and
+// releases via DecrRef. The view itself is pooled so the hot Get path
+// doesn't allocate a slice + release closure on every call.
+type memTableView struct {
+	utils.RefCount
+	tables []*memTable
+}
+
+var memTableViewPool = sync.Pool{
+	New: func() any { return &memTableView{} },
+}
+
+// Tables returns the pinned memtables. The slice is owned by the view;
+// callers must not mutate it or retain it past their final DecrRef.
+func (v *memTableView) Tables() []*memTable {
+	if v == nil {
+		return nil
+	}
+	return v.tables
+}
+
+// DecrRef drops one reference. When the count reaches zero the per-table
+// refs are released and the view is returned to its pool. Underflow
+// panics — that's a lifecycle bug in the caller (typically a double
+// Release).
+func (v *memTableView) DecrRef() {
+	if v == nil {
+		return
+	}
+	if v.Decr() != 0 {
+		return
+	}
+	for _, tbl := range v.tables {
+		tbl.decrRef()
+	}
+	v.tables = v.tables[:0]
+	memTableViewPool.Put(v)
+}
+
+// acquireMemTableView fetches a fresh view from the pool with the
+// refcount initialized to 1. Callers must DecrRef when done.
+func acquireMemTableView() *memTableView {
+	v := memTableViewPool.Get().(*memTableView)
+	v.Init(1)
+	return v
+}
+
+// getMemTables pins active+immutable memtables across all shards.
+// Newest-first ordering within each shard is preserved (active memtable,
+// then immutables in reverse insertion order). Callers that need MVCC
+// ordering across shards rely on internal-key timestamps.
+func (lsm *LSM) getMemTables() *memTableView {
+	v := acquireMemTableView()
 	for _, s := range lsm.shards {
 		s.lock.RLock()
 		if s.memTable != nil {
-			tables = append(tables, s.memTable)
+			v.tables = append(v.tables, s.memTable)
 			s.memTable.incrRef()
 		}
 		last := len(s.immutables) - 1
 		for i := range s.immutables {
-			tables = append(tables, s.immutables[last-i])
+			v.tables = append(v.tables, s.immutables[last-i])
 			s.immutables[last-i].incrRef()
 		}
 		s.lock.RUnlock()
 	}
-	return tables, func() {
-		for _, tbl := range tables {
-			tbl.decrRef()
-		}
-	}
+	return v
 }
 
-func (lsm *LSM) getMemTablesForShard(shardID int) ([]*memTable, func()) {
+func (lsm *LSM) getMemTablesForShard(shardID int) *memTableView {
 	if lsm == nil || shardID < 0 || shardID >= len(lsm.shards) {
-		return nil, nil
+		return nil
 	}
 	s := lsm.shards[shardID]
+	v := acquireMemTableView()
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	tables := make([]*memTable, 0, 1+len(s.immutables))
 	if s.memTable != nil {
-		tables = append(tables, s.memTable)
+		v.tables = append(v.tables, s.memTable)
 		s.memTable.incrRef()
 	}
 	last := len(s.immutables) - 1
 	for i := range s.immutables {
-		tables = append(tables, s.immutables[last-i])
+		v.tables = append(v.tables, s.immutables[last-i])
 		s.immutables[last-i].incrRef()
 	}
-	return tables, func() {
-		for _, tbl := range tables {
-			tbl.decrRef()
-		}
-	}
+	return v
 }
 
 func (lsm *LSM) hasRangeTombstones() bool {
@@ -860,9 +900,8 @@ func (lsm *LSM) hasRangeTombstones() bool {
 // RangeTombstoneView captures a stable read-view for range tombstone checks.
 // Call Close when finished.
 type RangeTombstoneView struct {
-	lsm     *LSM
-	tables  []*memTable
-	release func()
+	lsm  *LSM
+	view *memTableView
 }
 
 // HasAnyRangeTombstone reports whether the current LSM state has any in-memory
@@ -897,11 +936,9 @@ func (lsm *LSM) PinRangeTombstoneView() *RangeTombstoneView {
 	if lsm == nil {
 		return nil
 	}
-	tables, release := lsm.getMemTables()
 	return &RangeTombstoneView{
-		lsm:     lsm,
-		tables:  tables,
-		release: release,
+		lsm:  lsm,
+		view: lsm.getMemTables(),
 	}
 }
 
@@ -910,7 +947,7 @@ func (v *RangeTombstoneView) IsKeyCovered(cf kv.ColumnFamily, userKey []byte, ve
 	if v == nil || v.lsm == nil {
 		return false
 	}
-	return v.lsm.checkRangeTombstone(cf, userKey, version, v.tables)
+	return v.lsm.checkRangeTombstone(cf, userKey, version, v.view.Tables())
 }
 
 // Close releases pinned memtables held by this view.
@@ -918,10 +955,7 @@ func (v *RangeTombstoneView) Close() {
 	if v == nil {
 		return
 	}
-	if v.release != nil {
-		v.release()
-	}
-	v.tables = nil
-	v.release = nil
+	v.view.DecrRef()
+	v.view = nil
 	v.lsm = nil
 }

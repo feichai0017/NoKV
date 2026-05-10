@@ -736,13 +736,11 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		t.Fatalf("expected ART-backed memtable")
 	}
 
-	tables, release := lsm.getMemTables()
-	if len(tables) == 0 {
+	view := lsm.getMemTables()
+	if len(view.Tables()) == 0 {
 		t.Fatalf("expected memtables snapshot")
 	}
-	if release != nil {
-		release()
-	}
+	view.DecrRef()
 }
 
 func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {

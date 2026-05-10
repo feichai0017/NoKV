@@ -50,11 +50,9 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 	diag := Diagnostics{
 		MaxVersion: lsm.maxVersion(),
 	}
-	if tables, release := lsm.getMemTables(); tables != nil {
-		if release != nil {
-			defer release()
-		}
-		for _, mt := range tables {
+	if view := lsm.getMemTables(); view != nil {
+		defer view.DecrRef()
+		for _, mt := range view.Tables() {
 			if mt == nil || mt.index == nil {
 				continue
 			}
