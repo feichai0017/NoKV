@@ -17,6 +17,12 @@ var (
 
 func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
 	table := NewActiveAuthorities()
+	request := compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{2},
+		Parents:    []fsmeta.InodeID{10},
+	}
 	grant := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
@@ -25,25 +31,20 @@ func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
 	})
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
 
-	found, ok, err := table.Find(compile.AuthorityScope{
-		Mount:      testMount.MountID,
-		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{2},
-		Parents:    []fsmeta.InodeID{10},
-	}, testNow)
+	found, ok, err := table.Find(request, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "holder-a", found.HolderID)
 
-	holder, ok, err := table.HolderFor(found.Scope, testNow)
+	holder, ok, err := table.HolderFor(request, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "holder-a", holder)
 
-	held, err := table.HeldBy("holder-a", found.Scope, testNow)
+	held, err := table.HeldBy("holder-a", request, testNow)
 	require.NoError(t, err)
 	require.True(t, held)
-	held, err = table.HeldBy("holder-b", found.Scope, testNow)
+	held, err = table.HeldBy("holder-b", request, testNow)
 	require.NoError(t, err)
 	require.False(t, held)
 }
@@ -179,7 +180,7 @@ func TestActiveAuthoritiesSnapshotIsIsolated(t *testing.T) {
 	}, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, []fsmeta.AffinityBucket{1}, found.Scope.Buckets)
+	require.Equal(t, []uint16{1}, found.Scope.Buckets)
 }
 
 func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
@@ -196,12 +197,54 @@ func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
 	require.True(t, errors.Is(err, ErrAmbiguousAuthority))
 }
 
+func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
+	scope := AuthorityScopeFromDelta(compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1, 2},
+		Parents:    []fsmeta.InodeID{10},
+		Inodes:     []fsmeta.InodeID{20},
+	})
+
+	require.Equal(t, "vol", scope.MountID)
+	require.Equal(t, uint64(7), scope.MountKeyID)
+	require.Equal(t, []uint16{1, 2}, scope.Buckets)
+	require.Equal(t, []uint64{10}, scope.Parents)
+	require.Equal(t, []uint64{20}, scope.Inodes)
+}
+
+func BenchmarkActiveAuthoritiesFind(b *testing.B) {
+	b.ReportAllocs()
+	table := NewActiveAuthorities()
+	grants := make([]AuthorityGrant, 0, 16)
+	for bucket := range 16 {
+		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.AffinityBucket(bucket)},
+		}))
+	}
+	require.NoError(b, table.Replace(grants))
+	scope := compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{11},
+	}
+
+	for b.Loop() {
+		grant, ok, err := table.Find(scope, testNow)
+		if err != nil || !ok || grant.HolderID != "holder-a" {
+			b.Fatalf("unexpected lookup result: grant=%+v ok=%v err=%v", grant, ok, err)
+		}
+	}
+}
+
 func testGrant(id, holder string, scope compile.AuthorityScope) AuthorityGrant {
 	return AuthorityGrant{
 		GrantID:         id,
 		EpochID:         1,
 		HolderID:        holder,
-		Scope:           scope,
+		Scope:           AuthorityScopeFromDelta(scope),
 		ExpiresUnixNano: testNow.Add(time.Hour).UnixNano(),
 	}
 }
