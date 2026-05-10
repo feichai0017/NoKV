@@ -2,11 +2,18 @@ package lsm
 
 import "sync/atomic"
 
-// WriteThrottleState models write admission control at the DB layer.
+// WriteThrottleState reports the LSM's view of write admission pressure.
+// It is **advisory**: the LSM write path (SetBatchGroup → applyWriteBatches)
+// does NOT consult or block on this state. Callers above the LSM (typically
+// the local commit pipeline) read State / PressurePermille / RateBytesPerSec
+// and decide whether to delay or pace their submissions.
 //
-//   - WriteThrottleNone:     writes proceed without extra delay.
-//   - WriteThrottleSlowdown: writes are accepted but paced.
-//   - WriteThrottleStop:     writes are blocked until backlog recovers.
+//   - WriteThrottleNone:     no admission pressure; submit at full rate.
+//   - WriteThrottleSlowdown: callers should pace per RateBytesPerSec.
+//   - WriteThrottleStop:     callers should hold submissions until pressure recovers.
+//
+// State transitions are produced by the compactor (compactor.adjustThrottle)
+// based on L0 table count and per-level scoring; see compaction.go.
 type WriteThrottleState int32
 
 const (

@@ -185,7 +185,7 @@ func TestCloseBestEffortAggregatesErrors(t *testing.T) {
 
 	for i := range 2 {
 		entry := kv.NewInternalEntry(kv.CFDefault, []byte{byte('a' + i)}, uint64(i+1), []byte("v"), 0, 0)
-		if err := lsm.Set(entry); err != nil {
+		if err := lsm.set(entry); err != nil {
 			entry.DecrRef()
 			t.Fatalf("set entry %d: %v", i, err)
 		}
@@ -223,7 +223,7 @@ func TestHitStorage(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 	e := buildInternalTestEntry()
 	defer e.DecrRef()
-	if err := lsm.Set(e); err != nil {
+	if err := lsm.set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
 	// Hit the memtable path.
@@ -303,9 +303,9 @@ func TestPsarameter(t *testing.T) {
 	lsm := buildLSM()
 	defer func() { _ = lsm.Close() }()
 	testNil := func() {
-		utils.CondPanic(lsm.Set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
+		utils.CondPanic(lsm.set(nil) != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.set(nil) != err"))
 		_, err := lsm.Get(nil)
-		utils.CondPanic(err != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.Set(nil) != err"))
+		utils.CondPanic(err != utils.ErrEmptyKey, fmt.Errorf("[testNil] lsm.set(nil) != err"))
 	}
 	// TODO: skip p2 priority cases for now.
 	runTest(1, testNil)
@@ -320,7 +320,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 	val := []byte("value")
 
 	e := kv.NewEntry(key, val)
-	if err := lsm.Set(e); err != nil {
+	if err := lsm.set(e); err != nil {
 		t.Fatalf("lsm.Set: %v", err)
 	}
 
@@ -331,7 +331,7 @@ func TestMemtableTombstoneShadowsSST(t *testing.T) {
 
 	del := kv.NewEntry(key, nil)
 	del.Meta = kv.BitDelete
-	if err := lsm.Set(del); err != nil {
+	if err := lsm.set(del); err != nil {
 		t.Fatalf("lsm.Set tombstone: %v", err)
 	}
 
@@ -724,12 +724,12 @@ func TestLSMMetricsAPIs(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
-	requireNoError(lsm.Set(entry))
+	requireNoError(lsm.set(entry))
 
-	_ = lsm.FlushPending()
+	_ = lsm.flushPending()
 	diag := lsm.Diagnostics()
-	if diag.MaxVersion != lsm.MaxVersion() {
-		t.Fatalf("expected diagnostics max version %d to match lsm max version %d", diag.MaxVersion, lsm.MaxVersion())
+	if diag.MaxVersion != lsm.maxVersion() {
+		t.Fatalf("expected diagnostics max version %d to match lsm max version %d", diag.MaxVersion, lsm.maxVersion())
 	}
 	if diag.Compaction.ValueWeight <= 0 {
 		t.Fatalf("expected compaction value weight to be positive")
@@ -748,20 +748,20 @@ func TestLSMBatchAndMemHelpers(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b1"), 1), []byte("v1")),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("b2"), 1), []byte("v2")),
 	}
-	if err := lsm.SetBatch(nil); err != nil {
+	if err := lsm.setBatch(nil); err != nil {
 		t.Fatalf("unexpected error on empty batch: %v", err)
 	}
-	if err := lsm.SetBatch(entries); err != nil {
+	if err := lsm.setBatch(entries); err != nil {
 		t.Fatalf("set batch: %v", err)
 	}
-	if err := lsm.SetBatch([]*kv.Entry{{}}); err == nil {
+	if err := lsm.setBatch([]*kv.Entry{{}}); err == nil {
 		t.Fatalf("expected empty key error")
 	}
 
 	if lsm.memTableIsNil() {
 		t.Fatalf("expected memtable to be initialized")
 	}
-	if lsm.MemSize() <= 0 {
+	if lsm.memSize() <= 0 {
 		t.Fatalf("expected memtable size to be positive")
 	}
 	if _, ok := lsm.shards[0].memTable.index.(*index.ART); !ok {
@@ -786,7 +786,7 @@ func TestLSMSetBatchWritesSingleBatchRecord(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab1"), 1), []byte("v1")),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("ab2"), 1), []byte("v2")),
 	}
-	if err := lsm.SetBatch(entries); err != nil {
+	if err := lsm.setBatch(entries); err != nil {
 		t.Fatalf("set batch: %v", err)
 	}
 	shard := lsm.shards[0]
@@ -827,7 +827,7 @@ func TestLSMSetBatchRejectsOversizedAtomicBatch(t *testing.T) {
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big1"), 1), large),
 		kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("big2"), 1), large),
 	}
-	err := lsm.SetBatch(entries)
+	err := lsm.setBatch(entries)
 	if !errors.Is(err, utils.ErrTxnTooBig) {
 		t.Fatalf("expected ErrTxnTooBig, got %v", err)
 	}
@@ -858,7 +858,7 @@ func TestLSMSetBatchConcurrentReservations(t *testing.T) {
 					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-a", workerID, i), 1), value),
 					kv.NewEntry(kv.InternalKey(kv.CFDefault, fmt.Appendf(nil, "w%d-r%d-b", workerID, i), 1), value),
 				}
-				err := lsm.SetBatch(entries)
+				err := lsm.setBatch(entries)
 				for _, entry := range entries {
 					entry.DecrRef()
 				}
@@ -1275,11 +1275,11 @@ func baseTest(t *testing.T, lsm *LSM, n int) {
 	//caseList = append(caseList, e)
 
 	// Randomized data to exercise write paths.
-	require.NoError(t, lsm.Set(e))
+	require.NoError(t, lsm.set(e))
 	for i := 1; i < n; i++ {
 		ee := buildInternalTestEntry()
 		defer ee.DecrRef()
-		require.NoError(t, lsm.Set(ee))
+		require.NoError(t, lsm.set(ee))
 		// caseList = append(caseList, ee)
 	}
 	// Read back from the levels.
@@ -1365,13 +1365,13 @@ func waitForL0Tables(t *testing.T, lsm *LSM, atLeast int) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if lsm.FlushPending() == 0 && lsm.levels.levels[0].numTables() >= atLeast {
+		if lsm.flushPending() == 0 && lsm.levels.levels[0].numTables() >= atLeast {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for L0 table (pending=%d tables=%d, need>=%d)",
-		lsm.FlushPending(), lsm.levels.levels[0].numTables(), atLeast)
+		lsm.flushPending(), lsm.levels.levels[0].numTables(), atLeast)
 }
 
 func clearDir() {
@@ -1832,7 +1832,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 0; i < 100; i += 2 {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 10, []byte("even"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -1843,7 +1843,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 1; i < 100; i += 2 {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 20, []byte("odd"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -1854,7 +1854,7 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 50; i < 60; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 30, []byte("l0-new"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 	require.NoError(t, lsm.Rotate())
@@ -1864,14 +1864,14 @@ func TestLSMBoundedRangeMultiLevel(t *testing.T) {
 	for i := 90; i < 100; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 40, []byte("mem-new"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 
 	// Range tombstone [key30, key50) @ version 50.
 	// Hides key30~key49 across both maxLevel (even) and maxLevel-1 (odd).
 	rtEntry := kv.NewInternalEntry(kv.CFDefault, []byte("key30"), 50, []byte("key50"), kv.BitRangeDelete, 0)
-	require.NoError(t, lsm.Set(rtEntry))
+	require.NoError(t, lsm.set(rtEntry))
 	rtEntry.DecrRef()
 
 	rtv := lsm.PinRangeTombstoneView()
@@ -1972,7 +1972,7 @@ func TestLSMBoundedRangeSeek(t *testing.T) {
 	for i := 10; i <= 20; i++ {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 100, fmt.Appendf(nil, "val%02d", i), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 
@@ -2012,7 +2012,7 @@ func TestLSMBoundedRangeEmptyResult(t *testing.T) {
 	for i := range n {
 		k := fmt.Appendf(nil, "key%02d", i)
 		e := kv.NewInternalEntry(kv.CFDefault, k, 100, []byte("val"), 0, 0)
-		require.NoError(t, lsm.Set(e))
+		require.NoError(t, lsm.set(e))
 		e.DecrRef()
 	}
 

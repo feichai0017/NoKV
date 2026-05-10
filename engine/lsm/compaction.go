@@ -231,9 +231,6 @@ func (cr *scheduler) run(id int, p plan.Priority) bool {
 	return false
 }
 
-func (lsm *LSM) newCompactStatus() *plan.State {
-	return plan.NewState(lsm.option.MaxLevelNum)
-}
 const (
 	// PolicyLeveled keeps the default leveled-style execution ordering.
 	PolicyLeveled = "leveled"

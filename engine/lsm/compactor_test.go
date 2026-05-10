@@ -206,7 +206,7 @@ func TestCompactStatusGuards(t *testing.T) {
 		},
 		thisSize: tbl.Size(),
 	}
-	cs := lsm.newCompactStatus()
+	cs := plan.NewState(lsm.option.MaxLevelNum)
 	if !cs.CompareAndAdd(plan.LevelsLocked{}, cd.stateEntry()) {
 		t.Fatalf("expected first compareAndAdd to succeed")
 	}

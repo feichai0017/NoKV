@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/tombstone"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/pkg/errors"
 )
 
@@ -94,26 +93,6 @@ func (m *memTable) close() error {
 	return nil
 }
 
-// Set inserts one entry into the memtable and appends it to WAL.
-func (m *memTable) Set(entry *kv.Entry) error {
-	if m == nil {
-		return ErrMemtableNotInitialized
-	}
-	if entry == nil || len(entry.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	info, err := m.shard.wal.AppendEntry(wal.DurabilityFlushed, entry)
-	if err != nil {
-		return err
-	}
-	m.walSize.Add(int64(info.Length) + 8)
-	if m.index != nil {
-		m.index.Add(entry)
-		m.trackRangeTombstone(entry)
-	}
-	return nil
-}
-
 // Get reads key from the memtable index and returns a pooled entry wrapper.
 func (m *memTable) Get(key []byte) (*kv.Entry, error) {
 	var (
@@ -141,11 +120,8 @@ func (m *memTable) applyBatch(entries []*kv.Entry, walBytes int64) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	for _, entry := range entries {
-		if entry == nil || len(entry.Key) == 0 {
-			return utils.ErrEmptyKey
-		}
-	}
+	// Entries are pre-validated by validateWriteEntries on the write path; no
+	// re-check here.
 	if walBytes > 0 {
 		m.walSize.Add(walBytes)
 	}

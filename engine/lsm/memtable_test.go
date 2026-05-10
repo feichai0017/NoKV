@@ -9,7 +9,6 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm/table"
 	"github.com/feichai0017/NoKV/engine/vfs"
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,23 +74,6 @@ func TestOpenMemTableReplayDecodeError(t *testing.T) {
 	require.Contains(t, err.Error(), "while updating memtable index")
 }
 
-func TestMemTableSetRejectsInvalidInput(t *testing.T) {
-	clearDir()
-	lsm := buildLSM()
-	defer func() { _ = lsm.Close() }()
-
-	mt := lsm.shards[0].memTable
-	require.NotNil(t, mt)
-
-	require.ErrorIs(t, mt.Set(nil), utils.ErrEmptyKey)
-	require.ErrorIs(t, mt.Set(&kv.Entry{}), utils.ErrEmptyKey)
-
-	var nilMem *memTable
-	entry := kv.NewEntry(kv.InternalKey(kv.CFDefault, []byte("k"), 1), []byte("v"))
-	defer entry.DecrRef()
-	require.Error(t, nilMem.Set(entry))
-}
-
 func TestMemTableCanReserveUsesWALSize(t *testing.T) {
 	var mt memTable
 
@@ -111,7 +93,7 @@ func TestLSMNewIterators(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	entry := newRandomTestEntry()
-	require.NoError(t, lsm.Set(entry))
+	require.NoError(t, lsm.set(entry))
 
 	iters := lsm.NewIterators(&index.Options{IsAsc: true})
 	require.NotEmpty(t, iters)

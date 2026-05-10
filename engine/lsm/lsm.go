@@ -71,14 +71,6 @@ func (lsm *LSM) checkRangeTombstone(cf kv.ColumnFamily, userKey []byte, entryVer
 	return lsm.levels.rtCollector.IsKeyCovered(cf, userKey, entryVersion)
 }
 
-// RangeTombstoneCount returns the number of tracked range tombstones.
-func (lsm *LSM) RangeTombstoneCount() int {
-	if lsm == nil || lsm.levels == nil || lsm.levels.rtCollector == nil {
-		return 0
-	}
-	return lsm.levels.rtCollector.Count()
-}
-
 // Close  _
 func (lsm *LSM) Close() error {
 	if lsm == nil {
@@ -172,16 +164,18 @@ func (lsm *LSM) ThrottleRateBytesPerSec() uint64 {
 	return lsm.throttle.RateBytesPerSec()
 }
 
-// FlushPending returns the number of pending flush tasks.
-func (lsm *LSM) FlushPending() int64 {
+// flushPending reports queued+in-flight flush tasks. Internal helper
+// (tests use it; external callers go via Diagnostics().Flush.Pending).
+func (lsm *LSM) flushPending() int64 {
 	if lsm == nil {
 		return 0
 	}
 	return lsm.flushPool.Pending()
 }
 
-// MaxVersion returns the largest commit timestamp known to the LSM tree.
-func (lsm *LSM) MaxVersion() uint64 {
+// maxVersion returns the largest commit timestamp known to the LSM tree.
+// Internal; external callers go via Diagnostics().MaxVersion.
+func (lsm *LSM) maxVersion() uint64 {
 	if lsm == nil {
 		return 0
 	}
@@ -322,9 +316,19 @@ func (lsm *LSM) StartCompacter() {
 }
 
 const (
-	walRecordOverhead     int64 = 9 // length(4) + type(1) + crc(4)
-	walBatchCountOverhead int64 = 4 // uint32 entry count
-	walBatchLenOverhead   int64 = 4 // uint32 per-entry encoded length
+	// walRecordOverhead is the conservative pre-write per-record budget:
+	// length(4) + type(1) + crc(4). Used by estimators that price a record
+	// before encoding.
+	walRecordOverhead int64 = 9
+	// walEnvelopeOverhead is the on-disk framing applied to a written
+	// record: length(4) + crc(4). Use this with EntryInfo.Length (which
+	// already includes the type byte) to derive the byte count consumed
+	// on disk.
+	walEnvelopeOverhead int64 = 8
+	// walBatchCountOverhead is the uint32 entry count prefix per batch payload.
+	walBatchCountOverhead int64 = 4
+	// walBatchLenOverhead is the uint32 per-entry length prefix inside a batch payload.
+	walBatchLenOverhead int64 = 4
 )
 
 func estimatePipelineBatchWALSize(entries []*kv.Entry) int64 {
@@ -391,7 +395,7 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		return 0, err
 	}
-	walBytes := int64(info.Length) + 8
+	walBytes := int64(info.Length) + walEnvelopeOverhead
 	if estimate > 0 && walBytes > estimate {
 		// The estimator is conservative for admission, but the persisted byte
 		// count is the WAL return value. Keep this guard to catch encoder drift
@@ -403,9 +407,12 @@ func (lsm *LSM) writeSome(s *lsmShard, batches []*writeBatch) (int, error) {
 		s.lock.RUnlock()
 		panic(fmt.Sprintf("lsm: durable WAL batch could not be applied to memtable: %v", err))
 	}
+	s.lock.RUnlock()
+	// Negative cache and shard-hint updates touch lsm-global state, not
+	// shard state, so they run after RUnlock to keep the shard lock window
+	// tight on the write hot path.
 	lsm.invalidateNegativeCache(entries)
 	lsm.recordShardHints(s.id, entries)
-	s.lock.RUnlock()
 	return n, nil
 }
 
@@ -490,19 +497,16 @@ func (lsm *LSM) prepareWrite() error {
 	return nil
 }
 
-// Set writes one entry into shard 0's memtable/WAL. Use SetBatchGroup for
-// commit-pipeline writes that need explicit shard routing.
-// entry.Key must be an InternalKey (CF + user key + timestamp suffix).
-func (lsm *LSM) Set(entry *kv.Entry) (err error) {
-	if entry == nil || len(entry.Key) == 0 {
-		return utils.ErrEmptyKey
-	}
-	return lsm.SetBatch([]*kv.Entry{entry})
+// set is a single-entry shard-0 write convenience for tests; production
+// callers use SetBatchGroup with explicit shard routing.
+func (lsm *LSM) set(entry *kv.Entry) error {
+	_, err := lsm.SetBatchGroup(0, [][]*kv.Entry{{entry}})
+	return err
 }
 
-// SetBatch atomically writes a batch of entries into shard 0's WAL record.
-// Used by non-pipeline callers (admin tools, recovery glue, tests).
-func (lsm *LSM) SetBatch(entries []*kv.Entry) error {
+// setBatch is the multi-entry shard-0 convenience for tests; production
+// callers use SetBatchGroup.
+func (lsm *LSM) setBatch(entries []*kv.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -715,8 +719,8 @@ func isMemtableHit(entry *kv.Entry) bool {
 	return entry.Value != nil || entry.Meta != 0 || entry.ExpiresAt != 0
 }
 
-// MemSize returns the active memtable memory usage summed across shards.
-func (lsm *LSM) MemSize() int64 {
+// memSize returns the active-memtable memory usage summed across shards. Internal helper.
+func (lsm *LSM) memSize() int64 {
 	var total int64
 	for _, s := range lsm.shards {
 		s.lock.RLock()
@@ -879,7 +883,10 @@ func (lsm *LSM) HasAnyRangeTombstone() bool {
 			}
 		}
 	}
-	return lsm.RangeTombstoneCount() > 0
+	if lsm.levels == nil || lsm.levels.rtCollector == nil {
+		return false
+	}
+	return lsm.levels.rtCollector.Count() > 0
 }
 
 // PinRangeTombstoneView captures and pins the current memtable set for repeated

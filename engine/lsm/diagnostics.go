@@ -48,7 +48,7 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 		return Diagnostics{}
 	}
 	diag := Diagnostics{
-		MaxVersion: lsm.MaxVersion(),
+		MaxVersion: lsm.maxVersion(),
 	}
 	if tables, release := lsm.getMemTables(); tables != nil {
 		if release != nil {

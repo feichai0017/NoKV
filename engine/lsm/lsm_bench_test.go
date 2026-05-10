@@ -92,7 +92,7 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 	b.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if lsm.FlushPending() == 0 {
+		if lsm.flushPending() == 0 {
 			pending := 0
 			for _, s := range lsm.shards {
 				s.lock.RLock()
@@ -105,7 +105,7 @@ func waitForFlush(b *testing.B, lsm *LSM) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	b.Fatalf("timeout waiting for flush (pending=%d)", lsm.FlushPending())
+	b.Fatalf("timeout waiting for flush (pending=%d)", lsm.flushPending())
 }
 
 func BenchmarkLSMSetBatch(b *testing.B) {
@@ -119,7 +119,7 @@ func BenchmarkLSMSetBatch(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				entries := makeLSMBatch(batchSize, valueSize)
-				if err := lsm.SetBatch(entries); err != nil {
+				if err := lsm.setBatch(entries); err != nil {
 					b.Fatalf("set batch: %v", err)
 				}
 			}
@@ -135,7 +135,7 @@ func BenchmarkLSMRotateFlush(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := lsm.SetBatch(entries); err != nil {
+				if err := lsm.setBatch(entries); err != nil {
 					b.Fatalf("set batch: %v", err)
 				}
 				if err := lsm.Rotate(); err != nil {
@@ -167,7 +167,7 @@ func BenchmarkLSMGetMemtableHit(b *testing.B) {
 					CF:      kv.CFDefault,
 					Version: uint64(i + 1),
 				}
-				if err := lsm.Set(entry); err != nil {
+				if err := lsm.set(entry); err != nil {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
@@ -207,7 +207,7 @@ func BenchmarkLSMMemtableIterSeek(b *testing.B) {
 					CF:      kv.CFDefault,
 					Version: uint64(i + 1),
 				}
-				if err := lsm.Set(entry); err != nil {
+				if err := lsm.set(entry); err != nil {
 					b.Fatalf("seed memtable: %v", err)
 				}
 			}
