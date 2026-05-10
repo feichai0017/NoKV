@@ -84,7 +84,7 @@ func (sh *shard[T]) rebuildRanges() {
 	}
 	var max []byte
 	for _, rng := range sh.ranges {
-		if max == nil || kv.CompareBaseKeys(rng.max, max) > 0 {
+		if max == nil || kv.CompareBaseKeysAssumeValid(rng.max, max) > 0 {
 			max = rng.max
 		}
 		sh.prefixMax = append(sh.prefixMax, max)
@@ -309,21 +309,21 @@ func (b Buffer[T]) Search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
 		lo, hi := 0, len(ranges)
 		for lo < hi {
 			mid := (lo + hi) / 2
-			if kv.CompareBaseKeys(key, ranges[mid].min) >= 0 {
+			if kv.CompareBaseKeysAssumeValid(key, ranges[mid].min) >= 0 {
 				lo = mid + 1
 			} else {
 				hi = mid
 			}
 		}
 		for i := lo - 1; i >= 0; i-- {
-			if i < len(sh.prefixMax) && kv.CompareBaseKeys(key, sh.prefixMax[i]) > 0 {
+			if i < len(sh.prefixMax) && kv.CompareBaseKeysAssumeValid(key, sh.prefixMax[i]) > 0 {
 				break
 			}
 			rng := ranges[i]
 			if any(rng.tbl) == nil {
 				continue
 			}
-			if kv.CompareBaseKeys(key, rng.max) > 0 {
+			if kv.CompareBaseKeysAssumeValid(key, rng.max) > 0 {
 				continue
 			}
 			if rng.tbl.MaxVersionVal() <= *maxVersion {

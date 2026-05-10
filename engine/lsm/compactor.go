@@ -1273,7 +1273,7 @@ func tablesStrictlyOrdered(tables []*table.Table) bool {
 			return false
 		}
 		// Non-overlap requires prev.max base key < cur.min base key.
-		if kv.CompareBaseKeys(prev.MaxKey(), cur.MinKey()) >= 0 {
+		if kv.CompareBaseKeysAssumeValid(prev.MaxKey(), cur.MinKey()) >= 0 {
 			return false
 		}
 		prev = cur

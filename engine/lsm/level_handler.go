@@ -284,8 +284,8 @@ func (lh *levelHandler) searchL0SST(key []byte) (*kv.Entry, error) {
 		if tbl == nil {
 			continue
 		}
-		if kv.CompareBaseKeys(key, tbl.MinKey()) < 0 ||
-			kv.CompareBaseKeys(key, tbl.MaxKey()) > 0 {
+		if kv.CompareBaseKeysAssumeValid(key, tbl.MinKey()) < 0 ||
+			kv.CompareBaseKeysAssumeValid(key, tbl.MaxKey()) > 0 {
 			continue
 		}
 		if tbl.MaxVersionVal() <= version {
@@ -416,7 +416,7 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table.Table {
 	if len(lh.tables) == 0 {
 		return nil
 	}
-	if lh.levelNum > 0 && kv.CompareBaseKeys(key, lh.tables[0].MinKey()) < 0 {
+	if lh.levelNum > 0 && kv.CompareBaseKeysAssumeValid(key, lh.tables[0].MinKey()) < 0 {
 		return nil
 	}
 	out := make([]*table.Table, 0, 1)
@@ -424,11 +424,11 @@ func (lh *levelHandler) getTablesForKeyLinear(key []byte) []*table.Table {
 		if t == nil {
 			continue
 		}
-		if lh.levelNum > 0 && kv.CompareBaseKeys(t.MinKey(), key) > 0 {
+		if lh.levelNum > 0 && kv.CompareBaseKeysAssumeValid(t.MinKey(), key) > 0 {
 			break
 		}
-		if kv.CompareBaseKeys(key, t.MaxKey()) <= 0 &&
-			kv.CompareBaseKeys(key, t.MinKey()) >= 0 {
+		if kv.CompareBaseKeysAssumeValid(key, t.MaxKey()) <= 0 &&
+			kv.CompareBaseKeysAssumeValid(key, t.MinKey()) >= 0 {
 			out = append(out, t)
 		}
 	}
@@ -767,7 +767,7 @@ func buildL0Sublevels(tables []*table.Table) []l0Sublevel {
 	}
 
 	sort.Slice(sorted, func(i, j int) bool {
-		if c := kv.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()); c != 0 {
+		if c := kv.CompareBaseKeysAssumeValid(sorted[i].MinKey(), sorted[j].MinKey()); c != 0 {
 			return c < 0
 		}
 		return sorted[i].FID() < sorted[j].FID()
@@ -778,7 +778,7 @@ func buildL0Sublevels(tables []*table.Table) []l0Sublevel {
 		placed := false
 		for i := range sublevels {
 			tail := sublevels[i][len(sublevels[i])-1]
-			if kv.CompareBaseKeys(tail.MaxKey(), t.MinKey()) < 0 {
+			if kv.CompareBaseKeysAssumeValid(tail.MaxKey(), t.MinKey()) < 0 {
 				sublevels[i] = append(sublevels[i], t)
 				placed = true
 				break
@@ -799,13 +799,13 @@ func (s l0Sublevel) candidate(key []byte) *table.Table {
 		return nil
 	}
 	idx := sort.Search(len(s), func(i int) bool {
-		return kv.CompareBaseKeys(s[i].MinKey(), key) > 0
+		return kv.CompareBaseKeysAssumeValid(s[i].MinKey(), key) > 0
 	})
 	if idx == 0 {
 		return nil
 	}
 	candidate := s[idx-1]
-	if kv.CompareBaseKeys(key, candidate.MaxKey()) > 0 {
+	if kv.CompareBaseKeysAssumeValid(key, candidate.MaxKey()) > 0 {
 		return nil
 	}
 	return candidate
@@ -833,10 +833,10 @@ func l0GroupHasNoOtherOverlap(group, all []*table.Table) bool {
 			return false
 		}
 		groupIDs[t.FID()] = struct{}{}
-		if kv.CompareBaseKeys(t.MinKey(), minKey) < 0 {
+		if kv.CompareBaseKeysAssumeValid(t.MinKey(), minKey) < 0 {
 			minKey = t.MinKey()
 		}
-		if kv.CompareBaseKeys(t.MaxKey(), maxKey) > 0 {
+		if kv.CompareBaseKeysAssumeValid(t.MaxKey(), maxKey) > 0 {
 			maxKey = t.MaxKey()
 		}
 	}
@@ -849,10 +849,10 @@ func l0GroupHasNoOtherOverlap(group, all []*table.Table) bool {
 			continue
 		}
 		// Non-overlap iff t.MaxKey < group.MinKey or t.MinKey > group.MaxKey.
-		if kv.CompareBaseKeys(t.MaxKey(), minKey) < 0 {
+		if kv.CompareBaseKeysAssumeValid(t.MaxKey(), minKey) < 0 {
 			continue
 		}
-		if kv.CompareBaseKeys(t.MinKey(), maxKey) > 0 {
+		if kv.CompareBaseKeysAssumeValid(t.MinKey(), maxKey) > 0 {
 			continue
 		}
 		return false
