@@ -255,7 +255,7 @@ func buildBenchLevelTablesAtOffset(b *testing.B, lsm *LSM, levelNum int, start i
 		if tbl == nil {
 			b.Fatalf("expected bench table")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
 	lh.Sort()
 	return lh
@@ -292,7 +292,7 @@ func buildBenchLevelTablesWithInRangeGapAtOffset(b *testing.B, lsm *LSM, levelNu
 		if tbl == nil {
 			b.Fatalf("expected bench table with gap")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
 	lh.Sort()
 	return lh
@@ -324,7 +324,7 @@ func buildBenchL0OverlapTables(b *testing.B, lsm *LSM, tableCount int) *levelHan
 		if tbl == nil {
 			b.Fatalf("expected overlapping L0 table")
 		}
-		lh.add(tbl)
+		lh.addTable(tbl)
 	}
 	lh.Sort()
 	return lh

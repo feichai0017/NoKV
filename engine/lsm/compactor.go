@@ -57,7 +57,7 @@ func newCompactor(lm *levelManager, opt *Options) *compactor {
 
 // === metrics (compaction-run counters) ===
 
-func (c *compactor) compactionStats() (int64, float64) {
+func (c *compactor) priorityStats() (int64, float64) {
 	if c == nil {
 		return 0, 0
 	}
@@ -72,7 +72,7 @@ func (c *compactor) compactionStats() (int64, float64) {
 }
 
 
-func (c *compactor) compactionDurations() (float64, float64, uint64) {
+func (c *compactor) runDurations() (float64, float64, uint64) {
 	if c == nil {
 		return 0, 0, 0
 	}
@@ -82,7 +82,7 @@ func (c *compactor) compactionDurations() (float64, float64, uint64) {
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
-func (c *compactor) recordCompactionMetrics(duration time.Duration) {
+func (c *compactor) recordRun(duration time.Duration) {
 	c.metrics.Runs.Add(1)
 	last := duration.Nanoseconds()
 	c.metrics.LastNs.Store(last)
@@ -173,7 +173,7 @@ func (c *compactor) levelTargets() plan.Targets {
 
 // === pacer accessors ===
 
-// compactionPacerForBuild returns the active pacer for a new build, or nil
+// pacerForBuild returns the active pacer for a new build, or nil
 // when pacing is disabled or L0 backlog suggests bypass is appropriate.
 //
 // L0 bypass:
@@ -184,20 +184,20 @@ func (c *compactor) levelTargets() plan.Targets {
 //	write stall a paced compaction would not prevent. Bypass is decided at
 //	build start; an in-progress compaction does not switch mid-flight, which
 //	keeps the per-block charge() hot path branch-free past the nil check.
-func (c *compactor) compactionPacerForBuild() *pacer.Pacer {
+func (c *compactor) pacerForBuild() *pacer.Pacer {
 	if c == nil || c.pacer == nil {
 		return nil
 	}
-	if c.compactionPacerBypassActive() {
+	if c.pacerBypassActive() {
 		return nil
 	}
 	return c.pacer
 }
 
-// compactionPacerBypassActive reports whether L0 has reached the configured
+// pacerBypassActive reports whether L0 has reached the configured
 // bypass threshold. When true, new compaction builds run unpaced so that L0
 // can be drained quickly enough to avoid foreground write stalls.
-func (c *compactor) compactionPacerBypassActive() bool {
+func (c *compactor) pacerBypassActive() bool {
 	if c == nil || c.lm.opt == nil || c.lm.opt.CompactionPacingBypassL0 <= 0 || len(c.lm.levels) == 0 || c.lm.levels[0] == nil {
 		return false
 	}
@@ -214,7 +214,7 @@ func (c *compactor) adjustThrottle() {
 		return
 	}
 	l0Tables := c.lm.levels[0].numTables()
-	_, maxScore := c.compactionStats()
+	_, maxScore := c.priorityStats()
 
 	l0Slow := c.lm.opt.L0SlowdownWritesTrigger
 	l0Stop := c.lm.opt.L0StopWritesTrigger
@@ -1007,7 +1007,7 @@ func (c *compactor) runCompactDef(id, l int, cd compactDef) (err error) {
 		tablesCompacted := len(cd.top) + len(cd.bot)
 		cd.thisLevel.recordLandingMetrics(cd.spec.LandingMode == plan.LandingKeep, time.Since(timeStart), tablesCompacted)
 	}
-	c.recordCompactionMetrics(time.Since(timeStart))
+	c.recordRun(time.Since(timeStart))
 	// After max-level compaction, range tombstone layout may change.
 	// Rebuild the in-memory range tombstone index to keep read visibility correct.
 	if cd.nextLevel != nil && cd.nextLevel.levelNum == c.lm.opt.MaxLevelNum-1 && c.lm.rtCollector != nil {
@@ -1365,7 +1365,7 @@ func (c *compactor) subcompact(it index.Iterator, kr plan.KeyRange, cd compactDe
 		// Copy Options so background tuning does not affect the active compaction.
 		builderOpt := c.lm.opt.Clone()
 		builder := table.NewBuilderWithSize(tableOptionsFor(builderOpt), cd.spec.NextFileSize)
-		builder.SetPacer(c.compactionPacerForBuild())
+		builder.SetPacer(c.pacerForBuild())
 
 		// This would do the iteration and add keys to builder.
 		addKeys(builder)

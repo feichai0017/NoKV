@@ -68,7 +68,7 @@ func TestCompactionTrivialMoveToNextLevel(t *testing.T) {
 	tbl := buildTableWithEntry(t, lsm, 1101, "trivial-move", 3, "value")
 	src := lsm.levels.levels[1]
 	dst := lsm.levels.levels[2]
-	src.add(tbl)
+	src.addTable(tbl)
 
 	cd := buildCompactDef(lsm, 0, 1, 2)
 	cd.top = []*table.Table{tbl}
@@ -451,6 +451,6 @@ func TestCompactorPacerBypassesWhenL0IsNearStall(t *testing.T) {
 	}
 	lm.compactor = &compactor{lm: lm, pacer: pacer.New(100)}
 
-	require.True(t, lm.compactor.compactionPacerBypassActive())
-	require.Nil(t, lm.compactor.compactionPacerForBuild())
+	require.True(t, lm.compactor.pacerBypassActive())
+	require.Nil(t, lm.compactor.pacerForBuild())
 }

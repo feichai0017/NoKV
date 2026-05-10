@@ -1115,8 +1115,8 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	//  the legacy Version.LogSegment/LogOffset diagnostic fields.
 	//  Recovery is per-shard via wal.Manager.Replay; the cache was dead.)
 
-	lsm.levels.compactor.recordCompactionMetrics(5 * time.Millisecond)
-	lastMs, maxMs, runs := lsm.levels.compactor.compactionDurations()
+	lsm.levels.compactor.recordRun(5 * time.Millisecond)
+	lastMs, maxMs, runs := lsm.levels.compactor.runDurations()
 	if runs == 0 || lastMs <= 0 || maxMs <= 0 {
 		t.Fatalf("unexpected compaction metrics: last=%f max=%f runs=%d", lastMs, maxMs, runs)
 	}
@@ -1184,8 +1184,8 @@ func TestLevelHandlerLandingAggregates(t *testing.T) {
 	t2 := buildTableWithEntry(t, lsm, 9002, "zz", 1, "v22")
 
 	lh := &levelHandler{levelNum: 3}
-	lh.addLanding(t1)
-	lh.addLanding(t2)
+	lh.addLandingTable(t1)
+	lh.addLandingTable(t2)
 
 	if got := lh.numLandingTables(); got != 2 {
 		t.Fatalf("expected 2 landing tables, got %d", got)

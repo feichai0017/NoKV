@@ -88,7 +88,7 @@ func (lh *levelHandler) close() error {
 	}
 	return closeErr
 }
-func (lh *levelHandler) add(t *table.Table) {
+func (lh *levelHandler) addTable(t *table.Table) {
 	if t == nil {
 		return
 	}
@@ -677,7 +677,7 @@ func (lh *levelHandler) landingShardOrderBySize() []int {
 }
 
 // addLanding registers a table into the landing buffer under lh's write lock.
-func (lh *levelHandler) addLanding(t *table.Table) {
+func (lh *levelHandler) addLandingTable(t *table.Table) {
 	if t == nil {
 		return
 	}

@@ -122,8 +122,8 @@ func TestLevelHandlerAddRefreshesRangeFilter(t *testing.T) {
 	tblB := buildTableWithEntry(t, lsm, 301, "b", 1, "vb")
 	tblA := buildTableWithEntry(t, lsm, 302, "a", 1, "va")
 
-	lh.add(tblB)
-	lh.add(tblA)
+	lh.addTable(tblB)
+	lh.addTable(tblA)
 
 	require.Equal(t, 2, lh.filter.SpanCount())
 	require.True(t, lh.filter.NonOverlapping())

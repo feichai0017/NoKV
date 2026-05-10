@@ -152,10 +152,10 @@ func (lm *levelManager) build() error {
 				maxFID = meta.FileID
 			}
 			if meta.Landing {
-				lm.levels[level].addLanding(t)
+				lm.levels[level].addLandingTable(t)
 				continue
 			}
-			lm.levels[level].add(t)
+			lm.levels[level].addTable(t)
 		}
 	}
 	// sort each level
@@ -269,7 +269,7 @@ func (lm *levelManager) flush(immutable *memTable) (err error) {
 			shard.highestFlushedSeg.Store(immutable.segmentID)
 		}
 	}
-	lm.levels[0].add(tbl)
+	lm.levels[0].addTable(tbl)
 	// Register any range tombstones discovered during this flush.
 	if lm.rtCollector != nil {
 		for _, rt := range newTombstones {
