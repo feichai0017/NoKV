@@ -209,8 +209,8 @@ func (s *Store) hasDurableSchedulerQueue() bool {
 	if s == nil {
 		return false
 	}
-	rm := s.regionMgr()
-	return rm != nil && rm.localMeta != nil
+	rm := s.regions
+	return rm != nil && rm.LocalMeta() != nil
 }
 
 func (s *Store) startHeartbeatLoop() {
@@ -443,8 +443,8 @@ func (s *Store) persistPendingRegionEvent(ev *regionEvent) error {
 	s.sched.publish.nextRegionSeq++
 	ev.seq = s.sched.publish.nextRegionSeq
 	s.sched.publish.mu.Unlock()
-	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		if err := rm.localMeta.SavePendingRootEvent(localmeta.PendingRootEvent{
+	if rm := s.regions; rm != nil && rm.LocalMeta() != nil {
+		if err := rm.LocalMeta().SavePendingRootEvent(localmeta.PendingRootEvent{
 			Sequence: ev.seq,
 			Event:    ev.root,
 		}); err != nil {
@@ -458,11 +458,11 @@ func (s *Store) blockPendingRegionEvent(ev regionEvent, cause error) error {
 	if s == nil || ev.seq == 0 {
 		return nil
 	}
-	rm := s.regionMgr()
-	if rm == nil || rm.localMeta == nil {
+	rm := s.regions
+	if rm == nil || rm.LocalMeta() == nil {
 		return nil
 	}
-	return rm.localMeta.MovePendingRootEventToBlocked(ev.seq, localmeta.BlockedRootEvent{
+	return rm.LocalMeta().MovePendingRootEventToBlocked(ev.seq, localmeta.BlockedRootEvent{
 		Sequence:     ev.seq,
 		Event:        ev.root,
 		TransitionID: ev.transitionID,
@@ -474,8 +474,8 @@ func (s *Store) deletePendingRegionEvent(seq uint64) error {
 	if s == nil || seq == 0 {
 		return nil
 	}
-	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		return rm.localMeta.DeletePendingRootEvent(seq)
+	if rm := s.regions; rm != nil && rm.LocalMeta() != nil {
+		return rm.LocalMeta().DeletePendingRootEvent(seq)
 	}
 	return nil
 }
@@ -488,8 +488,8 @@ func (s *Store) persistPendingSchedulerOperation(item scheduledOp) error {
 	if !ok {
 		return nil
 	}
-	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		return rm.localMeta.SavePendingSchedulerOperation(op)
+	if rm := s.regions; rm != nil && rm.LocalMeta() != nil {
+		return rm.LocalMeta().SavePendingSchedulerOperation(op)
 	}
 	return nil
 }
@@ -502,8 +502,8 @@ func (s *Store) deletePendingSchedulerOperation(op storecontrol.Operation) error
 	if !ok {
 		return nil
 	}
-	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		return rm.localMeta.DeletePendingSchedulerOperation(item.Kind, item.RegionID)
+	if rm := s.regions; rm != nil && rm.LocalMeta() != nil {
+		return rm.LocalMeta().DeletePendingSchedulerOperation(item.Kind, item.RegionID)
 	}
 	return nil
 }
@@ -645,11 +645,11 @@ func (s *Store) retryPendingSchedulerOperations() {
 	if s == nil || s.sched == nil || s.sched.operation.input == nil {
 		return
 	}
-	rm := s.regionMgr()
-	if rm == nil || rm.localMeta == nil {
+	rm := s.regions
+	if rm == nil || rm.LocalMeta() == nil {
 		return
 	}
-	for _, item := range rm.localMeta.PendingSchedulerOperations() {
+	for _, item := range rm.LocalMeta().PendingSchedulerOperations() {
 		op, ok := storeOperationFromLocalMeta(item)
 		if !ok {
 			continue
@@ -923,7 +923,7 @@ func (s *Store) storeStatsSnapshot() storecontrol.StoreStats {
 		stats.Available = available
 	}
 	if s.regionStats != nil {
-		stats.RegionStats = s.regionStats.snapshot(metas, s.storeID, leaderSet, s.pendingAdminRegions())
+		stats.RegionStats = s.regionStats.Snapshot(metas, s.storeID, leaderSet, s.pendingAdminRegions())
 	}
 	return stats
 }
@@ -933,11 +933,11 @@ func (s *Store) pendingAdminRegions() map[uint64]bool {
 	if s == nil {
 		return out
 	}
-	rm := s.regionMgr()
-	if rm == nil || rm.localMeta == nil {
+	rm := s.regions
+	if rm == nil || rm.LocalMeta() == nil {
 		return out
 	}
-	for _, op := range rm.localMeta.PendingSchedulerOperations() {
+	for _, op := range rm.LocalMeta().PendingSchedulerOperations() {
 		if op.RegionID != 0 {
 			out[op.RegionID] = true
 		}

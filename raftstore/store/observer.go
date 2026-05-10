@@ -180,7 +180,11 @@ func (s *Store) emitApplyEvents(entry myraft.Entry, req *raftcmdpb.RaftCmdReques
 	}
 	for _, evt := range applyEventsFromCommand(entry, req, resp) {
 		if s.regionStats != nil {
-			s.regionStats.recordApply(evt)
+			var keyBytes uint64
+			for _, key := range evt.Keys {
+				keyBytes += uint64(len(key))
+			}
+			s.regionStats.RecordApply(evt.RegionID, keyBytes, evt.AtomicMutate)
 		}
 		if s.observers == nil {
 			continue

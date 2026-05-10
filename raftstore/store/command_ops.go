@@ -98,7 +98,7 @@ func (s *Store) validateCommandClass(class AdmissionClass, req *raftcmdpb.RaftCm
 		}
 		return nil, meta, resp, nil
 	}
-	peer := s.regionMgr().peer(regionID)
+	peer := s.regions.Peer(regionID)
 	if peer == nil {
 		resp := &raftcmdpb.RaftCmdResponse{Header: req.Header, RegionError: regionNotFoundError(regionID)}
 		if class != AdmissionClassUnknown {
@@ -316,7 +316,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 		trimScanResponse(meta, req, out)
 	}
 	if s.regionStats != nil {
-		s.regionStats.recordRead(req.Header.GetRegionId(), uint64(len(req.GetRequests())))
+		s.regionStats.RecordRead(req.Header.GetRegionId(), uint64(len(req.GetRequests())))
 	}
 	return out, nil
 }

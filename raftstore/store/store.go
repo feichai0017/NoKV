@@ -21,6 +21,7 @@ import (
 
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/store/region"
 	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
 
@@ -37,12 +38,12 @@ type Store struct {
 	raftAddr    string
 	ctx         context.Context
 	cancel      context.CancelFunc
-	regions     *regionRuntime
+	regions     *region.Manager
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
 	exec        *executionRuntime
 	observers   *applyObserverRuntime
-	regionStats *regionStatsRuntime
+	regionStats *region.Stats
 }
 
 // NewStore constructs a Store using concrete dependencies. It keeps peer
@@ -115,12 +116,9 @@ func NewStore(cfg Config) *Store {
 		},
 		exec:        newExecutionRuntime(),
 		observers:   newApplyObserverRuntime(),
-		regionStats: newRegionStatsRuntime(),
+		regionStats: region.NewStats(),
 	}
-	s.regions = &regionRuntime{
-		metrics: regionMetrics,
-		mgr:     newRegionManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionEvent),
-	}
+	s.regions = region.NewManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionRootEvent)
 	if s.workDir == "" && cfg.LocalMeta != nil {
 		s.workDir = cfg.LocalMeta.WorkDir()
 	}
@@ -131,7 +129,7 @@ func NewStore(cfg Config) *Store {
 		go s.runOperationLoop()
 	}
 	if cfg.LocalMeta != nil {
-		s.regionMgr().loadBootstrapSnapshot(cfg.LocalMeta.Snapshot())
+		s.regions.LoadBootstrap(cfg.LocalMeta.Snapshot())
 		s.enqueueRecoveredPendingRegionEvents(cfg.LocalMeta.PendingRootEvents())
 		s.enqueueRecoveredPendingSchedulerOperations(cfg.LocalMeta.PendingSchedulerOperations())
 	}

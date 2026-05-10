@@ -2,123 +2,91 @@ package store
 
 import (
 	metaregion "github.com/feichai0017/NoKV/meta/region"
-	myraft "github.com/feichai0017/NoKV/raft"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	"github.com/feichai0017/NoKV/raftstore/peer"
 
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/store/region"
 )
 
-type regionRuntime struct {
-	metrics *metrics.RegionMetrics
-	mgr     *regionManager
-}
+// RegionSnapshot, PeerHandle, and RegionRuntimeStatus are public facades over
+// the region subpackage's types. Aliasing keeps the Store's existing public
+// API stable while the implementation lives in raftstore/store/region.
+type (
+	RegionSnapshot      = region.Snapshot
+	PeerHandle          = region.PeerHandle
+	RegionRuntimeStatus = region.RuntimeStatus
+)
 
-// RegionSnapshot provides an external view of the tracked region metadata.
-type RegionSnapshot struct {
-	Regions []localmeta.RegionMeta `json:"regions"`
-}
-
-// PeerHandle is a lightweight view of a peer registered with the store. It is
-// designed for diagnostics and scheduling components so they can iterate over
-// the cluster topology without touching the internal map directly.
-type PeerHandle struct {
-	ID     uint64
-	Peer   *peer.Peer
-	Region *localmeta.RegionMeta
-}
-
-// RegionRuntimeStatus captures store-local runtime state for one region.
-type RegionRuntimeStatus struct {
-	Meta         localmeta.RegionMeta
-	Hosted       bool
-	LocalPeerID  uint64
-	LeaderPeerID uint64
-	Leader       bool
-	AppliedIndex uint64
-	AppliedTerm  uint64
+// enqueueRegionRootEvent is the bridge from the region.Manager notify hook
+// to the scheduler runtime's regionEvent queue.
+func (s *Store) enqueueRegionRootEvent(ev rootevent.Event) {
+	if s == nil {
+		return
+	}
+	s.enqueueRegionEvent(regionEvent{root: ev})
 }
 
 func (s *Store) applyRegionMeta(meta localmeta.RegionMeta) error {
 	if s == nil {
 		return errNilStore
 	}
-	return s.regionMgr().applyRegionMeta(meta, true)
+	return s.regions.Apply(meta, true)
 }
 
 func (s *Store) applyRegionMetaSilent(meta localmeta.RegionMeta) error {
 	if s == nil {
 		return errNilStore
 	}
-	return s.regionMgr().applyRegionMeta(meta, false)
+	return s.regions.Apply(meta, false)
 }
 
 func (s *Store) applyRegionRemoval(regionID uint64) error {
 	if s == nil {
 		return errNilStore
 	}
-	return s.regionMgr().applyRegionRemoval(regionID, true)
+	return s.regions.Remove(regionID, true)
 }
 
 func (s *Store) applyRegionRemovalSilent(regionID uint64) error {
 	if s == nil {
 		return errNilStore
 	}
-	return s.regionMgr().applyRegionRemoval(regionID, false)
+	return s.regions.Remove(regionID, false)
 }
 
 func (s *Store) applyRegionState(regionID uint64, state metaregion.ReplicaState) error {
 	if s == nil {
 		return errNilStore
 	}
-	return s.regionMgr().applyRegionState(regionID, state)
-}
-
-func (s *Store) regionMgr() *regionManager {
-	if s == nil || s.regions == nil {
-		return nil
-	}
-	return s.regions.mgr
-}
-
-func (s *Store) regionMetrics() *metrics.RegionMetrics {
-	if s == nil || s.regions == nil {
-		return nil
-	}
-	return s.regions.metrics
+	return s.regions.ApplyState(regionID, state)
 }
 
 // RegionMetas collects the known localmeta.RegionMeta entries from registered
 // peers. This mirrors the TinyKV store exposing region layout information to
 // schedulers and debugging endpoints.
 func (s *Store) RegionMetas() []localmeta.RegionMeta {
-	if s == nil {
+	if s == nil || s.regions == nil {
 		return nil
 	}
-	if s.regionMgr() == nil {
-		return nil
-	}
-	return s.regionMgr().listMetas()
+	return s.regions.Metas()
 }
 
 // RegionMetaByID returns the stored metadata for the provided region, along
 // with a boolean indicating whether it exists.
 func (s *Store) RegionMetaByID(regionID uint64) (localmeta.RegionMeta, bool) {
-	if s == nil || regionID == 0 {
+	if s == nil || regionID == 0 || s.regions == nil {
 		return localmeta.RegionMeta{}, false
 	}
-	if s.regionMgr() == nil {
-		return localmeta.RegionMeta{}, false
-	}
-	return s.regionMgr().meta(regionID)
+	return s.regions.Meta(regionID)
 }
 
 // RegionMetaByKey returns the stored region metadata that owns key.
 func (s *Store) RegionMetaByKey(key []byte) (localmeta.RegionMeta, bool) {
-	if s == nil || len(key) == 0 || s.regionMgr() == nil {
+	if s == nil || len(key) == 0 || s.regions == nil {
 		return localmeta.RegionMeta{}, false
 	}
-	return s.regionMgr().metaByKey(key)
+	return s.regions.MetaByKey(key)
 }
 
 // RegionSnapshot returns a snapshot containing all region metadata currently
@@ -129,33 +97,16 @@ func (s *Store) RegionSnapshot() RegionSnapshot {
 
 // RegionRuntimeStatus returns the store-local runtime status for one region.
 func (s *Store) RegionRuntimeStatus(regionID uint64) (RegionRuntimeStatus, bool) {
-	meta, ok := s.RegionMetaByID(regionID)
-	if !ok {
+	if s == nil || s.regions == nil {
 		return RegionRuntimeStatus{}, false
 	}
-	status := RegionRuntimeStatus{Meta: meta}
-	peerRef := s.regionMgr().peer(regionID)
-	if peerRef == nil {
-		return status, true
-	}
-	raftStatus := peerRef.Status()
-	status.Hosted = true
-	status.LocalPeerID = peerRef.ID()
-	status.LeaderPeerID = raftStatus.Lead
-	status.Leader = raftStatus.RaftState == myraft.StateLeader
-	if rm := s.regionMgr(); rm != nil && rm.localMeta != nil {
-		if ptr, ok := rm.localMeta.RaftPointer(regionID); ok {
-			status.AppliedIndex = ptr.AppliedIndex
-			status.AppliedTerm = ptr.AppliedTerm
-		}
-	}
-	return status, true
+	return s.regions.RuntimeStatus(regionID)
 }
 
 // RegionMetrics returns the metrics recorder tracking region state counts.
 func (s *Store) RegionMetrics() *metrics.RegionMetrics {
-	if s == nil {
+	if s == nil || s.regions == nil {
 		return nil
 	}
-	return s.regionMetrics()
+	return s.regions.Metrics()
 }

@@ -25,7 +25,6 @@ var (
 	errChildRegionStartKeyRequired            = errors.New("raftstore: child region start key required")
 	errSplitCommandMissingPayload             = errors.New("raftstore: split command missing payload")
 	errMergeCommandMissingPayload             = errors.New("raftstore: merge command missing payload")
-	errRegionManagerNil                       = errors.New("raftstore: region manager nil")
 	errInvalidPeerChangeTarget                = errors.New("raftstore: invalid peer change target")
 	errInvalidRegionIdentifiers               = errors.New("raftstore: invalid region identifiers")
 	errRegionMetaNil                          = errors.New("raftstore: region meta is nil")

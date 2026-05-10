@@ -57,7 +57,7 @@ func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publis
 		return nil, err
 	}
 	if regionMeta != nil && regionMeta.ID != 0 {
-		s.regionMgr().setPeer(regionMeta.ID, p)
+		s.regions.SetPeer(regionMeta.ID, p)
 	}
 
 	if regionMeta != nil {
@@ -67,7 +67,7 @@ func (s *Store) startPeer(cfg *peer.Config, bootstrapPeers []myraft.Peer, publis
 		}
 		if err := applyMeta(*regionMeta); err != nil {
 			s.router.Deregister(id)
-			s.regionMgr().setPeer(regionMeta.ID, nil)
+			s.regions.SetPeer(regionMeta.ID, nil)
 			_ = p.Close()
 			return nil, err
 		}
@@ -98,7 +98,7 @@ func (s *Store) stopPeer(id uint64, publishCatalog bool) {
 		}
 	}
 	if regionID != 0 {
-		s.regionMgr().setPeer(regionID, nil)
+		s.regions.SetPeer(regionID, nil)
 		if publishCatalog {
 			_ = s.applyRegionState(regionID, metaregion.ReplicaStateRemoving)
 		}
@@ -286,10 +286,10 @@ func (s *Store) InstallRegionSnapshot(snap myraft.Snapshot) (localmeta.RegionMet
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
-	s.regionMgr().setPeer(meta.ID, p)
+	s.regions.SetPeer(meta.ID, p)
 	if err := s.applyRegionMeta(meta); err != nil {
 		s.router.Deregister(localPeer.PeerID)
-		s.regionMgr().setPeer(meta.ID, nil)
+		s.regions.SetPeer(meta.ID, nil)
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
@@ -389,11 +389,11 @@ func (s *Store) InstallRegionSSTSnapshot(ctx context.Context, snap myraft.Snapsh
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}
-	s.regionMgr().setPeer(meta.ID, p)
+	s.regions.SetPeer(meta.ID, p)
 	if err := s.applyRegionMeta(meta); err != nil {
 		cleanup()
 		s.router.Deregister(localPeer.PeerID)
-		s.regionMgr().setPeer(meta.ID, nil)
+		s.regions.SetPeer(meta.ID, nil)
 		_ = p.Close()
 		return localmeta.RegionMeta{}, err
 	}

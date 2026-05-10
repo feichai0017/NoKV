@@ -39,7 +39,7 @@ func (s *Store) leaderPeer(regionID uint64) (*peer.Peer, error) {
 	if regionID == 0 {
 		return nil, errZeroRegionID
 	}
-	peerRef := s.regionMgr().peer(regionID)
+	peerRef := s.regions.Peer(regionID)
 	if peerRef == nil {
 		return nil, fmt.Errorf("raftstore: region %d not hosted on this store", regionID)
 	}
