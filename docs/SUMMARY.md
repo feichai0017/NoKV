@@ -34,6 +34,7 @@
 - [FSMetadata](fsmeta.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)
+- [Falcon (design)](falcon.md)
 
 # Operations & Tooling
 
