@@ -61,8 +61,8 @@ func (lsm *LSM) Diagnostics() Diagnostics {
 			diag.Entries += countMemIndexEntries(mt.index)
 		}
 	}
-	if lsm.flushQueue != nil {
-		diag.Flush = lsm.flushQueue.Stats()
+	if lsm.flushPool != nil {
+		diag.Flush = lsm.flushPool.Stats()
 	}
 	if lsm.option != nil {
 		diag.Compaction.ValueWeight = lsm.option.CompactionValueWeight

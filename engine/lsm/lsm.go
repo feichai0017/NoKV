@@ -22,11 +22,9 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/engine/kv"
-	"github.com/feichai0017/NoKV/engine/lsm/flush"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/utils"
@@ -45,8 +43,7 @@ type LSM struct {
 	levels           *levelManager
 	option           *Options
 	closer           *utils.Closer
-	flushQueue       *flush.Runtime[*memTable]
-	flushWG          sync.WaitGroup
+	flushPool        *flushPool
 	logger           *slog.Logger
 
 	throttle *writeThrottle
@@ -96,10 +93,9 @@ func (lsm *LSM) Close() error {
 	if lsm.closer != nil {
 		lsm.closer.Close()
 	}
-	if lsm.flushQueue != nil {
-		closeErr = errors.Join(closeErr, lsm.flushQueue.Close())
+	if lsm.flushPool != nil {
+		closeErr = errors.Join(closeErr, lsm.flushPool.Close())
 	}
-	lsm.flushWG.Wait()
 
 	var orphans []*memTable
 	for _, s := range lsm.shards {
@@ -178,10 +174,10 @@ func (lsm *LSM) ThrottleRateBytesPerSec() uint64 {
 
 // FlushPending returns the number of pending flush tasks.
 func (lsm *LSM) FlushPending() int64 {
-	if lsm == nil || lsm.flushQueue == nil {
+	if lsm == nil {
 		return 0
 	}
-	return lsm.flushQueue.Stats().Pending
+	return lsm.flushPool.Pending()
 }
 
 // MaxVersion returns the largest commit timestamp known to the LSM tree.
@@ -277,7 +273,6 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		lsm.logger = slog.Default()
 	}
 	lsm.throttle.SetCallback(frozen.ThrottleCallback)
-	lsm.flushQueue = flush.New[*memTable](len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -304,10 +299,11 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 			return nil, fmt.Errorf("lsm recovery shard %d: %w", s.id, err)
 		}
 	}
-	lsm.startFlushWorkers(len(lsm.shards))
+	lsm.flushPool = newFlushPool(len(lsm.shards), lsm.levels.flush)
+	lsm.flushPool.Start(len(lsm.shards))
 	for _, s := range lsm.shards {
 		for _, mt := range s.immutables {
-			if err := lsm.submitFlush(mt); err != nil {
+			if err := lsm.flushPool.Submit(mt); err != nil {
 				_ = lsm.Close()
 				return nil, fmt.Errorf("lsm submit recovered flush task: %w", err)
 			}
@@ -476,7 +472,7 @@ func (lsm *LSM) rotateForWriteShard(s *lsmShard) error {
 	if err != nil {
 		return err
 	}
-	return lsm.submitFlush(old)
+	return lsm.flushPool.Submit(old)
 }
 
 func (lsm *LSM) prepareWrite() error {
@@ -755,7 +751,7 @@ func (lsm *LSM) Rotate() error {
 		if err != nil {
 			return err
 		}
-		if err := lsm.submitFlush(old); err != nil {
+		if err := lsm.flushPool.Submit(old); err != nil {
 			return err
 		}
 	}
@@ -848,62 +844,6 @@ func (lsm *LSM) hasRangeTombstones() bool {
 	return false
 }
 
-func (lsm *LSM) submitFlush(mt *memTable) error {
-	if mt == nil {
-		return nil
-	}
-	if mt.shard == nil {
-		return ErrFlushNilMemtable
-	}
-	mt.IncrRef()
-	if err := lsm.flushQueue.Enqueue(mt.shard.id, mt); err != nil {
-		mt.DecrRef()
-		return err
-	}
-	return nil
-}
-
-func (lsm *LSM) startFlushWorkers(n int) {
-	if n <= 0 {
-		n = 1
-	}
-	for i := 0; i < n; i++ {
-		lsm.flushWG.Go(func() {
-			for {
-				task, ok := lsm.flushQueue.Next()
-				if !ok {
-					return
-				}
-				mt := task.Payload
-				if mt == nil {
-					lsm.flushQueue.MarkDone(task)
-					continue
-				}
-
-				func() {
-					defer mt.DecrRef()
-					if err := lsm.levels.flush(mt); err != nil {
-						lsm.flushQueue.MarkDone(task)
-						return
-					}
-					lsm.flushQueue.MarkInstalled(task)
-					if s := mt.shard; s != nil {
-						s.lock.Lock()
-						for idx, imm := range s.immutables {
-							if imm == mt {
-								s.immutables = append(s.immutables[:idx], s.immutables[idx+1:]...)
-								break
-							}
-						}
-						s.lock.Unlock()
-					}
-					_ = mt.close()
-					lsm.flushQueue.MarkDone(task)
-				}()
-			}
-		})
-	}
-}
 
 // ---- Range tombstone view (merged from range_tombstone.go) ----
 //

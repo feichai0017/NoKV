@@ -160,7 +160,7 @@ func TestRotateReturnsSubmitError(t *testing.T) {
 	defer func() { _ = wlog.Close() }()
 	defer func() { _ = lsm.Close() }()
 
-	if err := lsm.flushQueue.Close(); err != nil {
+	if err := lsm.flushPool.Close(); err != nil {
 		t.Fatalf("close flush queue: %v", err)
 	}
 	if err := lsm.Rotate(); err == nil {
