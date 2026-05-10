@@ -66,10 +66,11 @@ func openRealClusterRuntimeWithOptions(t *testing.T, ctx context.Context, opts .
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
-		StartPeers:        true,
-		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
-		HeartbeatInterval: 50 * time.Millisecond,
+		AllowedModes:          []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
+		StartPeers:            true,
+		Scheduler:             testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
+		HeartbeatInterval:     50 * time.Millisecond,
+		UserKeyShapeExtractor: fsmeta.UserKeyShape,
 	})
 	t.Cleanup(func() { node.Close(t) })
 
@@ -138,10 +139,11 @@ func openSplitRealClusterExecutorWithOptions(t *testing.T, ctx context.Context, 
 	require.NoError(t, err)
 
 	node := testcluster.StartNodeWithConfig(t, storeID, seedDir, testcluster.NodeConfig{
-		AllowedModes:      []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
-		StartPeers:        true,
-		Scheduler:         testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
-		HeartbeatInterval: 50 * time.Millisecond,
+		AllowedModes:          []workdirmode.Mode{workdirmode.ModeSeeded, workdirmode.ModeCluster},
+		StartPeers:            true,
+		Scheduler:             testcluster.NewScheduler(t, coord.Addr(), 100*time.Millisecond),
+		HeartbeatInterval:     50 * time.Millisecond,
+		UserKeyShapeExtractor: fsmeta.UserKeyShape,
 	})
 	t.Cleanup(func() { node.Close(t) })
 

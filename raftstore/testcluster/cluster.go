@@ -56,6 +56,11 @@ type NodeConfig struct {
 	Scheduler         storecontrol.Client
 	HeartbeatInterval time.Duration
 	EnableLeaseRead   bool
+	// UserKeyShapeExtractor wires shape-aware shard routing into the local
+	// engine. Production wires fsmeta.UserKeyShape via cmd/nokv. Tests that
+	// drive fsmeta-shaped workloads should set the same extractor here so
+	// 1PC admission and SST prefix bloom decisions match production.
+	UserKeyShapeExtractor local.UserKeyShapeExtractor
 }
 
 type Coordinator struct {
@@ -98,6 +103,9 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
+	}
+	if cfg.UserKeyShapeExtractor != nil {
+		opt.UserKeyShapeExtractor = cfg.UserKeyShapeExtractor
 	}
 	db, err := local.Open(opt)
 	if err != nil {
