@@ -211,7 +211,7 @@ func TestApplyTryAtomicMutateBatchFusesLocalApply(t *testing.T) {
 		require.Equal(t, uint64(1), atomicResp.GetAppliedKeys())
 	}
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{6}, store.appliedEntryCounts)
+	require.Equal(t, []int{2}, store.appliedEntryCounts)
 }
 
 func TestApplyPrewriteBatchFusesLocalApply(t *testing.T) {
@@ -242,7 +242,7 @@ func TestApplyPrewriteBatchFusesLocalApply(t *testing.T) {
 		require.Empty(t, prewriteResp.GetErrors())
 	}
 	require.Equal(t, 1, store.applyCalls)
-	require.Equal(t, []int{6}, store.appliedEntryCounts)
+	require.Equal(t, []int{2}, store.appliedEntryCounts)
 }
 
 func TestApplyTryAtomicMutateCommandFallsBackForCrossShardBatch(t *testing.T) {

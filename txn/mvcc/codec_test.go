@@ -16,6 +16,8 @@ func TestEncodeDecodeLockRoundTrip(t *testing.T) {
 		TTL:         20,
 		Kind:        kvrpcpb.Mutation_Put,
 		MinCommitTs: 30,
+		ShortValue:  []byte("short-lock"),
+		ExpiresAt:   12345,
 	}
 	encoded := EncodeLock(lock)
 	got, err := DecodeLock(encoded)
@@ -26,6 +28,8 @@ func TestEncodeDecodeLockRoundTrip(t *testing.T) {
 	require.Equal(t, lock.TTL, got.TTL)
 	require.Equal(t, lock.Kind, got.Kind)
 	require.Equal(t, lock.MinCommitTs, got.MinCommitTs)
+	require.Equal(t, lock.ShortValue, got.ShortValue)
+	require.Equal(t, lock.ExpiresAt, got.ExpiresAt)
 }
 
 func TestDecodeLockErrors(t *testing.T) {
@@ -65,6 +69,13 @@ func TestEncodeDecodeWriteRoundTrip(t *testing.T) {
 	require.Equal(t, write.StartTs, got.StartTs)
 	require.Equal(t, write.ShortValue, got.ShortValue)
 	require.Equal(t, write.ExpiresAt, got.ExpiresAt)
+}
+
+func TestCanInlineShortValue(t *testing.T) {
+	require.True(t, CanInlineShortValue(kvrpcpb.Mutation_Put, []byte("small")))
+	require.False(t, CanInlineShortValue(kvrpcpb.Mutation_Put, nil))
+	require.False(t, CanInlineShortValue(kvrpcpb.Mutation_Put, make([]byte, DefaultShortValueMaxBytes+1)))
+	require.False(t, CanInlineShortValue(kvrpcpb.Mutation_Delete, []byte("small")))
 }
 
 func TestDecodeWriteDefaultsMissingExpiresAtToZero(t *testing.T) {

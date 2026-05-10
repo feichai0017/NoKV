@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -85,8 +86,8 @@ func TestClusterSurvivesCoordinatorUnavailableAfterStartup(t *testing.T) {
 	updated := []byte("coordinator-outage-updated")
 	require.NoError(t, cli.Put(ctx, key, updated, 20, 21, 3000))
 	require.Eventually(t, func() bool {
-		entry, err := target.DB.Get(key)
-		return err == nil && string(entry.Value) == string(updated)
+		got, _, err := percolator.NewReader(target.DB).GetValue(key, 30)
+		return err == nil && string(got) == string(updated)
 	}, 5*time.Second, 20*time.Millisecond)
 
 	getResp, err = cli.Get(ctx, key, 30)

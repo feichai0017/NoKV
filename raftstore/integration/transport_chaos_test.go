@@ -2,14 +2,15 @@ package integration
 
 import (
 	"context"
-	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"testing"
 	"time"
 
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/migrate"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
+	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -84,7 +85,7 @@ func TestPartitionedFollowerCatchesUpAfterRecovery(t *testing.T) {
 	value := []byte("partitioned-follower-value")
 	require.NoError(t, cli.Put(ctx, key, value, 10, 11, 3000))
 
-	_, err = target3.DB.Get(key)
+	_, _, err = percolator.NewReader(target3.DB).GetValue(key, 12)
 	require.Error(t, err)
 
 	target3.Restart(t, nil, true)
@@ -102,8 +103,8 @@ func TestPartitionedFollowerCatchesUpAfterRecovery(t *testing.T) {
 	target2.UnblockPeer(301)
 
 	require.Eventually(t, func() bool {
-		entry, err := target3.DB.Get(key)
-		return err == nil && string(entry.Value) == string(value)
+		got, _, err := percolator.NewReader(target3.DB).GetValue(key, 12)
+		return err == nil && string(got) == string(value)
 	}, 5*time.Second, 50*time.Millisecond)
 }
 

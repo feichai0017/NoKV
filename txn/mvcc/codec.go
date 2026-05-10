@@ -22,6 +22,12 @@ const (
 //	ttl_ms uvarint
 //	mutation_kind byte
 //	min_commit_ts uvarint
+//	has_short_value byte
+//	if has_short_value == 1:
+//	  short_value_len uvarint
+//	  short_value bytes
+//	if short value or expires_at is present:
+//	  expires_at uvarint
 //
 // TTL is measured from start_time_unix_ms. start_ts remains the MVCC logical
 // timestamp and must not be used as a physical clock.
@@ -38,12 +44,14 @@ type Lock struct {
 	TTL         uint64
 	Kind        kvrpcpb.Mutation_Op
 	MinCommitTs uint64
+	ShortValue  []byte
+	ExpiresAt   uint64
 }
 
 // EncodeLock serialises a lock entry.
 func EncodeLock(lock Lock) []byte {
 	primaryLen := len(lock.Primary)
-	buf := make([]byte, 0, 1+binary.MaxVarintLen64*5+primaryLen)
+	buf := make([]byte, 0, 1+binary.MaxVarintLen64*7+primaryLen+len(lock.ShortValue))
 	buf = append(buf, lockCodecVersion)
 	buf = binary.AppendUvarint(buf, uint64(primaryLen))
 	buf = append(buf, lock.Primary...)
@@ -52,6 +60,16 @@ func EncodeLock(lock Lock) []byte {
 	buf = binary.AppendUvarint(buf, lock.TTL)
 	buf = append(buf, byte(lock.Kind))
 	buf = binary.AppendUvarint(buf, lock.MinCommitTs)
+	if len(lock.ShortValue) > 0 {
+		buf = append(buf, 1)
+		buf = binary.AppendUvarint(buf, uint64(len(lock.ShortValue)))
+		buf = append(buf, lock.ShortValue...)
+	} else {
+		buf = append(buf, 0)
+	}
+	if len(lock.ShortValue) > 0 || lock.ExpiresAt > 0 {
+		buf = binary.AppendUvarint(buf, lock.ExpiresAt)
+	}
 	return buf
 }
 
@@ -76,7 +94,7 @@ func DecodeLock(data []byte) (Lock, error) {
 	if err != nil {
 		return Lock{}, err
 	}
-	if pos+int(primaryLen) > len(data) {
+	if primaryLen > uint64(len(data)-pos) {
 		return Lock{}, fmt.Errorf("mvcc: lock primary truncated")
 	}
 	lock := Lock{
@@ -105,6 +123,30 @@ func DecodeLock(data []byte) (Lock, error) {
 			return Lock{}, err
 		}
 	}
+	if pos < len(data) {
+		hasShort := data[pos]
+		pos++
+		switch hasShort {
+		case 0:
+		case 1:
+			sz, err := readUvarint()
+			if err != nil {
+				return Lock{}, err
+			}
+			if sz > uint64(len(data)-pos) {
+				return Lock{}, fmt.Errorf("mvcc: lock short value truncated")
+			}
+			lock.ShortValue = append([]byte(nil), data[pos:pos+int(sz)]...)
+			pos += int(sz)
+		default:
+			return Lock{}, fmt.Errorf("mvcc: invalid lock short value marker %d", hasShort)
+		}
+	}
+	if pos < len(data) {
+		if lock.ExpiresAt, err = readUvarint(); err != nil {
+			return Lock{}, err
+		}
+	}
 	return lock, nil
 }
 
@@ -115,6 +157,16 @@ type Write struct {
 	StartTs    uint64
 	ShortValue []byte
 	ExpiresAt  uint64
+}
+
+const DefaultShortValueMaxBytes = 128
+
+// CanInlineShortValue reports whether a Put value can be carried by the MVCC
+// lock/write records instead of the default CF. Empty values stay on the
+// default CF because ShortValue's nil/empty representation is reserved for
+// "not inlined".
+func CanInlineShortValue(kind kvrpcpb.Mutation_Op, value []byte) bool {
+	return kind == kvrpcpb.Mutation_Put && len(value) > 0 && len(value) <= DefaultShortValueMaxBytes
 }
 
 // Write encoding layout:
