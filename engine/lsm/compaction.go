@@ -304,7 +304,7 @@ func (lm *levelManager) adjustThrottle() {
 			lm.opt.WriteThrottleMaxRate,
 		)
 	}
-	lm.lsm.throttleWrites(target, uint32(pressure), rate)
+	lm.lsm.throttle.Apply(target, uint32(pressure), rate)
 }
 
 func normalizedThrottlePressure(value, slowdown, stop float64) int {

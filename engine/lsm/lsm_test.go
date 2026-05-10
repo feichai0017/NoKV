@@ -269,17 +269,17 @@ func TestLSMThrottleCallback(t *testing.T) {
 		mu     sync.Mutex
 		events []WriteThrottleState
 	)
-	lsm.throttleFn = func(state WriteThrottleState) {
+	lsm.throttle.SetCallback(func(state WriteThrottleState) {
 		mu.Lock()
 		events = append(events, state)
 		mu.Unlock()
-	}
+	})
 
-	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
-	lsm.throttleWrites(WriteThrottleStop, 1000, 0)
-	lsm.throttleWrites(WriteThrottleSlowdown, 400, 256<<20)
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleStop, 1000, 0)
+	lsm.throttle.Apply(WriteThrottleStop, 1000, 0)
+	lsm.throttle.Apply(WriteThrottleSlowdown, 400, 256<<20)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1066,9 +1066,9 @@ func TestLevelsRuntimeAdjustThrottleAndPointers(t *testing.T) {
 	defer func() { _ = lsm.Close() }()
 
 	var events []WriteThrottleState
-	lsm.throttleFn = func(state WriteThrottleState) {
+	lsm.throttle.SetCallback(func(state WriteThrottleState) {
 		events = append(events, state)
-	}
+	})
 
 	// Force explicit thresholds so we can validate stop -> slowdown -> none.
 	lsm.levels.opt.L0SlowdownWritesTrigger = 2

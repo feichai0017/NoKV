@@ -49,29 +49,10 @@ type LSM struct {
 	flushWG          sync.WaitGroup
 	logger           *slog.Logger
 
-	throttleFn    func(WriteThrottleState)
-	throttleState atomic.Int32
-	// throttlePressure stores pacing pressure in permille [0,1000].
-	throttlePressure atomic.Uint32
-	// throttleRate stores the current slowdown target in bytes/sec.
-	throttleRate atomic.Uint64
+	throttle *writeThrottle
 
 	closed atomic.Bool
 }
-
-// WriteThrottleState models write admission control at the DB layer.
-//
-// Design:
-// - WriteThrottleNone: writes proceed without extra delay.
-// - WriteThrottleSlowdown: writes are accepted but paced.
-// - WriteThrottleStop: writes are blocked until backlog recovers.
-type WriteThrottleState int32
-
-const (
-	WriteThrottleNone WriteThrottleState = iota
-	WriteThrottleSlowdown
-	WriteThrottleStop
-)
 
 // checkRangeTombstone is the core tombstone coverage check using pre-pinned
 // memtables. This avoids a redundant GetMemTables call when the caller
@@ -111,7 +92,7 @@ func (lsm *LSM) Close() error {
 	}
 	var closeErr error
 	// wait for all api calls to finish
-	lsm.throttleWrites(WriteThrottleNone, 0, 0)
+	lsm.throttle.Apply(WriteThrottleNone, 0, 0)
 	if lsm.closer != nil {
 		lsm.closer.Close()
 	}
@@ -173,16 +154,10 @@ func (lsm *LSM) getLogger() *slog.Logger {
 
 // ThrottleState reports the current write admission state.
 func (lsm *LSM) ThrottleState() WriteThrottleState {
-	return normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Load()))
-}
-
-func normalizeWriteThrottleState(state WriteThrottleState) WriteThrottleState {
-	switch state {
-	case WriteThrottleNone, WriteThrottleSlowdown, WriteThrottleStop:
-		return state
-	default:
+	if lsm == nil {
 		return WriteThrottleNone
 	}
+	return lsm.throttle.State()
 }
 
 // ThrottlePressurePermille returns current write pacing pressure [0,1000].
@@ -190,11 +165,7 @@ func (lsm *LSM) ThrottlePressurePermille() uint32 {
 	if lsm == nil {
 		return 0
 	}
-	p := lsm.throttlePressure.Load()
-	if p > 1000 {
-		return 1000
-	}
-	return p
+	return lsm.throttle.PressurePermille()
 }
 
 // ThrottleRateBytesPerSec returns the current slowdown target in bytes/sec.
@@ -202,34 +173,7 @@ func (lsm *LSM) ThrottleRateBytesPerSec() uint64 {
 	if lsm == nil {
 		return 0
 	}
-	return lsm.throttleRate.Load()
-}
-
-func (lsm *LSM) throttleWrites(state WriteThrottleState, pressure uint32, rate uint64) {
-	state = normalizeWriteThrottleState(state)
-	if pressure > 1000 {
-		pressure = 1000
-	}
-	switch state {
-	case WriteThrottleNone:
-		pressure = 0
-		rate = 0
-	case WriteThrottleStop:
-		pressure = 1000
-		rate = 0
-	default:
-	}
-	lsm.throttlePressure.Store(pressure)
-	lsm.throttleRate.Store(rate)
-	prev := normalizeWriteThrottleState(WriteThrottleState(lsm.throttleState.Swap(int32(state))))
-	if prev == state {
-		return
-	}
-	fn := lsm.throttleFn
-	if fn == nil {
-		return
-	}
-	fn(state)
+	return lsm.throttle.RateBytesPerSec()
 }
 
 // FlushPending returns the number of pending flush tasks.
@@ -303,6 +247,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		option:     frozen,
 		shards:     shards,
 		shardHints: newShardHintTable(),
+		throttle:   newWriteThrottle(),
 		closer:     utils.NewCloser(),
 		logger:     frozen.Logger,
 	}
@@ -331,7 +276,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 	if lsm.logger == nil {
 		lsm.logger = slog.Default()
 	}
-	lsm.throttleFn = frozen.ThrottleCallback
+	lsm.throttle.SetCallback(frozen.ThrottleCallback)
 	lsm.flushQueue = flush.New[*memTable](len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
