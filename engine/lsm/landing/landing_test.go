@@ -35,23 +35,20 @@ func (t *fakeTable) FID() uint64           { return t.id }
 func (t *fakeTable) CreatedAt() time.Time  { return t.createdAt }
 func (t *fakeTable) DecrRef() error        { t.released = true; return nil }
 
-func (t *fakeTable) Search(key []byte, maxVs *uint64) (*kv.Entry, error) {
+func (t *fakeTable) Search(key []byte, maxVs uint64) (*kv.Entry, uint64, error) {
 	_, userKey, _, ok := kv.SplitInternalKey(key)
 	if !ok {
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
 	if string(userKey) != string(t.userKey) {
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
-	if maxVs != nil && t.version <= *maxVs {
-		return nil, utils.ErrKeyNotFound
-	}
-	if maxVs != nil {
-		*maxVs = t.version
+	if t.version <= maxVs {
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
 	entry := kv.NewEntry(kv.SafeCopy(nil, key), kv.SafeCopy(nil, t.value))
 	entry.Version = t.version
-	return entry, nil
+	return entry, t.version, nil
 }
 
 func ikey(s string, ts uint64) []byte {
@@ -147,14 +144,12 @@ func TestBufferSortShardsAndSearch(t *testing.T) {
 	buf.AddBatch([]*fakeTable{tC, tA, tB})
 	buf.SortShards()
 
-	var maxV uint64
-	entry, err := buf.Search(ikey("banana", 0), &maxV)
+	entry, _, err := buf.Search(ikey("banana", 0), 0)
 	require.NoError(t, err)
 	require.Equal(t, []byte("v-banana"), entry.Value)
 	entry.DecrRef()
 
-	maxV = 0
-	_, err = buf.Search(ikey("nonexistent", 0), &maxV)
+	_, _, err = buf.Search(ikey("nonexistent", 0), 0)
 	require.Equal(t, utils.ErrKeyNotFound, err)
 }
 
@@ -187,7 +182,6 @@ func TestEmptyBufferQueriesReturnZero(t *testing.T) {
 	require.Nil(t, buf.AllTables())
 	require.Empty(t, buf.ShardViews())
 
-	var maxV uint64
-	_, err := buf.Search(ikey("k", 0), &maxV)
+	_, _, err := buf.Search(ikey("k", 0), 0)
 	require.Equal(t, utils.ErrKeyNotFound, err)
 }

@@ -94,6 +94,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 	if err != nil {
 		return nil, fmt.Errorf("lsm: build external sst %s: %w", path, err)
 	}
+	defer build.Release()
 	if build.Size == 0 {
 		return nil, fmt.Errorf("lsm: external sst build for %s is empty", path)
 	}
@@ -198,13 +199,13 @@ func checkTablesOverlap(tables []*table.Table) error {
 	copy(sorted, tables)
 
 	sort.Slice(sorted, func(i, j int) bool {
-		return kv.CompareBaseKeys(sorted[i].MinKey(), sorted[j].MinKey()) < 0
+		return kv.CompareBaseKeysAssumeValid(sorted[i].MinKey(), sorted[j].MinKey()) < 0
 	})
 
 	for i := 1; i < len(sorted); i++ {
 		prev := sorted[i-1]
 		curr := sorted[i]
-		if kv.CompareBaseKeys(prev.MaxKey(), curr.MinKey()) >= 0 {
+		if kv.CompareBaseKeysAssumeValid(prev.MaxKey(), curr.MinKey()) >= 0 {
 			return fmt.Errorf("imported SSTs have key range overlap: fid=%d <-> fid=%d",
 				prev.FID(), curr.FID())
 		}
@@ -222,8 +223,8 @@ func (lm *levelManager) checkTablesOverlapWithL0Locked(tables []*table.Table) er
 			if existing == nil {
 				continue
 			}
-			if kv.CompareBaseKeys(tbl.MinKey(), existing.MaxKey()) <= 0 &&
-				kv.CompareBaseKeys(tbl.MaxKey(), existing.MinKey()) >= 0 {
+			if kv.CompareBaseKeysAssumeValid(tbl.MinKey(), existing.MaxKey()) <= 0 &&
+				kv.CompareBaseKeysAssumeValid(tbl.MaxKey(), existing.MinKey()) >= 0 {
 				return fmt.Errorf("SST(fid=%d) overlaps with L0 existing table(fid=%d)",
 					tbl.FID(), existing.FID())
 			}

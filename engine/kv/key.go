@@ -94,6 +94,19 @@ func CompareBaseKeys(key1, key2 []byte) int {
 	return bytes.Compare(InternalToBaseKey(key1), InternalToBaseKey(key2))
 }
 
+// CompareBaseKeysAssumeValid compares the CF+user-key portions of two
+// internal keys without validating the CF marker. Both arguments MUST be
+// canonical internal keys (length > 8, produced by InternalKey or read
+// out of an SST that was produced by it). Use CompareBaseKeys for
+// untrusted input. Hot paths that have already established the input is
+// internal — SST boundary checks, landing-buffer search, level handler
+// pruning — should prefer this variant: profiles show the validation
+// overhead in InternalToBaseKey + SplitBaseKey can dominate the actual
+// memcmp it wraps.
+func CompareBaseKeysAssumeValid(key1, key2 []byte) int {
+	return bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8])
+}
+
 // CompareUserKeys compares pure user-key portions of two internal keys.
 // Both inputs must use the InternalKey layout.
 func CompareUserKeys(key1, key2 []byte) int {

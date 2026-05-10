@@ -287,15 +287,19 @@ func (t *Table) ValueSize() uint64 { return t.valueSize }
 func (t *Table) RangeTombstoneCount() uint32 { return t.rangeDeletes }
 
 // Search looks up key with bloom-filter prefilter. An entry is returned only if its
-// version is strictly greater than *maxVs; on success *maxVs is advanced to the matched version.
-func (t *Table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+// version is strictly greater than maxVs. The returned newMaxVs equals
+// the matched version on success and the input maxVs otherwise; carry
+// it forward across multiple Search calls to honour MVCC visibility
+// across SSTs without sharing a heap-allocated *uint64 (which used to
+// dominate Get-path allocations).
+func (t *Table) Search(key []byte, maxVs uint64) (entry *kv.Entry, newMaxVs uint64, err error) {
 	t.IncrRef()
 	defer func() {
 		_ = t.DecrRef()
 	}()
 	idx := t.index()
 	if idx == nil {
-		return nil, errors.New("table index missing")
+		return nil, maxVs, errors.New("table index missing")
 	}
 	if bloomFilter := utils.Filter(idx.BloomFilter); len(bloomFilter) > 0 {
 		utils.CondPanicFunc(len(key) <= 8, func() error {
@@ -303,42 +307,42 @@ func (t *Table) Search(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
 		})
 		probe := kv.InternalToBaseKey(key)
 		if t.prefixBloomMiss(idx, probe) {
-			return nil, utils.ErrKeyNotFound
+			return nil, maxVs, utils.ErrKeyNotFound
 		}
 		if !bloomFilter.MayContainKey(probe) {
-			return nil, utils.ErrKeyNotFound
+			return nil, maxVs, utils.ErrKeyNotFound
 		}
 	}
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
 // SearchExactCandidate is like Search but skips bloom filtering.
-func (t *Table) SearchExactCandidate(key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+func (t *Table) SearchExactCandidate(key []byte, maxVs uint64) (entry *kv.Entry, newMaxVs uint64, err error) {
 	t.IncrRef()
 	defer func() {
 		_ = t.DecrRef()
 	}()
 	idx := t.index()
 	if idx == nil {
-		return nil, errors.New("table index missing")
+		return nil, maxVs, errors.New("table index missing")
 	}
 	return t.searchPointWithIndex(idx, key, maxVs)
 }
 
-func (t *Table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxVs *uint64) (entry *kv.Entry, err error) {
+func (t *Table) searchPointWithIndex(idx *storagepb.TableIndex, key []byte, maxVs uint64) (entry *kv.Entry, newMaxVs uint64, err error) {
 	offsets := idx.GetOffsets()
 	if len(offsets) == 0 {
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
 	blockIdx := searchFirstBlockWithBaseKeyGT(offsets, key)
 	if blockIdx == 0 {
 		return t.searchPointInBlock(0, key, maxVs)
 	}
-	entry, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
+	entry, newMaxVs, err = t.searchPointInBlock(blockIdx-1, key, maxVs)
 	if err == nil || err != utils.ErrKeyNotFound || blockIdx >= len(offsets) {
-		return entry, err
+		return entry, newMaxVs, err
 	}
-	return t.searchPointInBlock(blockIdx, key, maxVs)
+	return t.searchPointInBlock(blockIdx, key, newMaxVs)
 }
 
 func (t *Table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool {
@@ -360,10 +364,10 @@ func (t *Table) prefixBloomMiss(idx *storagepb.TableIndex, baseKey []byte) bool 
 	return !filter.MayContainKey(prefix)
 }
 
-func (t *Table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv.Entry, error) {
+func (t *Table) searchPointInBlock(blockIdx int, key []byte, maxVs uint64) (*kv.Entry, uint64, error) {
 	block, err := t.loadBlock(blockIdx)
 	if err != nil {
-		return nil, err
+		return nil, maxVs, err
 	}
 	bi := getBlockIterator()
 	defer func() {
@@ -377,17 +381,16 @@ func (t *Table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv
 	bi.seek(key)
 	if !bi.Valid() {
 		if err := bi.Error(); err != nil && err != io.EOF {
-			return nil, err
+			return nil, maxVs, err
 		}
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
 	item := bi.Item()
 	if item == nil || item.Entry() == nil {
-		return nil, utils.ErrKeyNotFound
+		return nil, maxVs, utils.ErrKeyNotFound
 	}
 	if e := item.Entry(); kv.SameBaseKey(key, e.Key) {
-		if version := kv.Timestamp(e.Key); *maxVs < version {
-			*maxVs = version
+		if version := kv.Timestamp(e.Key); maxVs < version {
 			buf := make([]byte, len(e.Key)+len(e.Value))
 			keyCopy := buf[:len(e.Key)]
 			copy(keyCopy, e.Key)
@@ -400,10 +403,10 @@ func (t *Table) searchPointInBlock(blockIdx int, key []byte, maxVs *uint64) (*kv
 			clone.Offset = e.Offset
 			clone.Hlen = e.Hlen
 			clone.ValThreshold = e.ValThreshold
-			return clone, nil
+			return clone, version, nil
 		}
 	}
-	return nil, utils.ErrKeyNotFound
+	return nil, maxVs, utils.ErrKeyNotFound
 }
 
 func (t *Table) loadBlock(idx int) (*block, error) {

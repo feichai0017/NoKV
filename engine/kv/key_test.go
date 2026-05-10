@@ -101,3 +101,34 @@ func TestCompareBaseAndUserKeys(t *testing.T) {
 		InternalKey(CFDefault, []byte("c"), 1),
 	))
 }
+
+// TestCompareBaseKeysAssumeValidMatchesSafe verifies the fast variant
+// agrees with the safe variant for every well-formed internal key the
+// hot path can produce. Cross-CF, identical-key-different-version, and
+// equal-key cases are all covered.
+func TestCompareBaseKeysAssumeValidMatchesSafe(t *testing.T) {
+	cases := []struct{ k1, k2 []byte }{
+		{InternalKey(CFDefault, []byte("a"), 1), InternalKey(CFDefault, []byte("b"), 1)},
+		{InternalKey(CFDefault, []byte("a"), 1), InternalKey(CFWrite, []byte("a"), 1)},
+		{InternalKey(CFDefault, []byte("c"), 10), InternalKey(CFDefault, []byte("c"), 1)},
+		{InternalKey(CFDefault, []byte(""), 1), InternalKey(CFDefault, []byte("a"), 1)},
+		{InternalKey(CFWrite, []byte("zzzz"), 99), InternalKey(CFWrite, []byte("zzzz"), 1)},
+	}
+	for _, tc := range cases {
+		safe := CompareBaseKeys(tc.k1, tc.k2)
+		fast := CompareBaseKeysAssumeValid(tc.k1, tc.k2)
+		require.Equal(t, sign(safe), sign(fast),
+			"safe=%d fast=%d k1=%x k2=%x", safe, fast, tc.k1, tc.k2)
+	}
+}
+
+func sign(x int) int {
+	switch {
+	case x < 0:
+		return -1
+	case x > 0:
+		return 1
+	default:
+		return 0
+	}
+}

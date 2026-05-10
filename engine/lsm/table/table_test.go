@@ -126,8 +126,7 @@ func TestTableSearchCompressedBlock(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tbl.DecrRef() }()
 
-	var maxVs uint64
-	got, err := tbl.Search(kv.InternalKey(kv.CFDefault, key, 7), &maxVs)
+	got, maxVs, err := tbl.Search(kv.InternalKey(kv.CFDefault, key, 7), 0)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	defer got.DecrRef()
@@ -214,8 +213,7 @@ func TestTableSearchMaxVersionAcrossBlocks(t *testing.T) {
 
 	for i := range total {
 		userKey := fmt.Appendf(nil, "k%06d", i)
-		maxVs := uint64(0)
-		entry, err := tbl.Search(kv.InternalKey(kv.CFDefault, userKey, kv.MaxVersion), &maxVs)
+		entry, maxVs, err := tbl.Search(kv.InternalKey(kv.CFDefault, userKey, kv.MaxVersion), 0)
 		require.NoError(t, err)
 		require.NotNil(t, entry)
 		require.Equal(t, userKey, splitTableUserKey(t, entry.Key))

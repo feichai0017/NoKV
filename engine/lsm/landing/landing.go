@@ -24,13 +24,14 @@ const (
 )
 
 // Table is the minimal contract a buffered table must satisfy. Search returns
-// utils.ErrKeyNotFound when nothing visible at maxVersion exists.
+// utils.ErrKeyNotFound when nothing visible above maxVs exists; the returned
+// newMaxVs is the matched version on success and the input maxVs otherwise.
 type Table interface {
 	rangefilter.Bounded
 	Size() int64
 	ValueSize() uint64
 	MaxVersionVal() uint64
-	Search(key []byte, maxVs *uint64) (*kv.Entry, error)
+	Search(key []byte, maxVs uint64) (entry *kv.Entry, newMaxVs uint64, err error)
 	FID() uint64
 	CreatedAt() time.Time
 	DecrRef() error
@@ -84,7 +85,7 @@ func (sh *shard[T]) rebuildRanges() {
 	}
 	var max []byte
 	for _, rng := range sh.ranges {
-		if max == nil || kv.CompareBaseKeys(rng.max, max) > 0 {
+		if max == nil || kv.CompareBaseKeysAssumeValid(rng.max, max) > 0 {
 			max = rng.max
 		}
 		sh.prefixMax = append(sh.prefixMax, max)
@@ -294,12 +295,9 @@ func (b Buffer[T]) ShardViews() []ShardView {
 
 // Search walks every shard whose prefix range may contain key and returns the
 // most recent visible Entry. Returns utils.ErrKeyNotFound when nothing
-// visible exists at maxVersion.
-func (b Buffer[T]) Search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
-	if maxVersion == nil {
-		var tmp uint64
-		maxVersion = &tmp
-	}
+// visible above maxVersion exists. newMaxVersion equals the matched
+// entry's version on success and the input maxVersion otherwise.
+func (b Buffer[T]) Search(key []byte, maxVersion uint64) (*kv.Entry, uint64, error) {
 	var best *kv.Entry
 	for _, sh := range b.shards {
 		if len(sh.ranges) == 0 {
@@ -309,46 +307,47 @@ func (b Buffer[T]) Search(key []byte, maxVersion *uint64) (*kv.Entry, error) {
 		lo, hi := 0, len(ranges)
 		for lo < hi {
 			mid := (lo + hi) / 2
-			if kv.CompareBaseKeys(key, ranges[mid].min) >= 0 {
+			if kv.CompareBaseKeysAssumeValid(key, ranges[mid].min) >= 0 {
 				lo = mid + 1
 			} else {
 				hi = mid
 			}
 		}
 		for i := lo - 1; i >= 0; i-- {
-			if i < len(sh.prefixMax) && kv.CompareBaseKeys(key, sh.prefixMax[i]) > 0 {
+			if i < len(sh.prefixMax) && kv.CompareBaseKeysAssumeValid(key, sh.prefixMax[i]) > 0 {
 				break
 			}
 			rng := ranges[i]
 			if any(rng.tbl) == nil {
 				continue
 			}
-			if kv.CompareBaseKeys(key, rng.max) > 0 {
+			if kv.CompareBaseKeysAssumeValid(key, rng.max) > 0 {
 				continue
 			}
-			if rng.tbl.MaxVersionVal() <= *maxVersion {
+			if rng.tbl.MaxVersionVal() <= maxVersion {
 				continue
 			}
-			entry, err := rng.tbl.Search(key, maxVersion)
+			entry, newMax, err := rng.tbl.Search(key, maxVersion)
 			if err == nil {
 				if best != nil {
 					best.DecrRef()
 				}
 				best = entry
+				maxVersion = newMax
 				continue
 			}
 			if err != utils.ErrKeyNotFound {
 				if best != nil {
 					best.DecrRef()
 				}
-				return nil, err
+				return nil, maxVersion, err
 			}
 		}
 	}
 	if best != nil {
-		return best, nil
+		return best, maxVersion, nil
 	}
-	return nil, utils.ErrKeyNotFound
+	return nil, maxVersion, utils.ErrKeyNotFound
 }
 
 // MaxAgeSeconds returns the maximum age (seconds since CreatedAt) of any
