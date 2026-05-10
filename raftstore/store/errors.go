@@ -159,7 +159,6 @@ func errRegionKeyError(operation string, regionID uint64, keyErr *kvrpcpb.KeyErr
 	)
 }
 
-func errRegionNotFound(id uint64) error { return fmt.Errorf("raftstore: region %d not found", id) }
 func errParentRegionNotFound(id uint64) error {
 	return fmt.Errorf("raftstore: parent region %d not found", id)
 }

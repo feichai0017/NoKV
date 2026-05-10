@@ -21,6 +21,7 @@ import (
 
 	"github.com/feichai0017/NoKV/meta/topology"
 	"github.com/feichai0017/NoKV/metrics"
+	"github.com/feichai0017/NoKV/raftstore/store/observer"
 	"github.com/feichai0017/NoKV/raftstore/store/region"
 	"github.com/feichai0017/NoKV/raftstore/store/router"
 )
@@ -42,7 +43,7 @@ type Store struct {
 	sched       *schedulerRuntime
 	cmds        *commandRuntime
 	exec        *executionRuntime
-	observers   *applyObserverRuntime
+	observers   *observer.Runtime
 	regionStats *region.Stats
 }
 
@@ -115,7 +116,7 @@ func NewStore(cfg Config) *Store {
 			timeout: commandTimeout,
 		},
 		exec:        newExecutionRuntime(),
-		observers:   newApplyObserverRuntime(),
+		observers:   observer.New(),
 		regionStats: region.NewStats(),
 	}
 	s.regions = region.NewManager(cfg.LocalMeta, regionMetrics, s.enqueueRegionRootEvent)

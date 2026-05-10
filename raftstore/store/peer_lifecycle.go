@@ -126,7 +126,7 @@ func (s *Store) Close() {
 		s.cancel()
 	}
 	if s.observers != nil {
-		s.observers.close()
+		s.observers.Close()
 	}
 }
 
