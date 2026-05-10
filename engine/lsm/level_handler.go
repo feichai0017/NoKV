@@ -885,3 +885,15 @@ func l0CandidateTables(sublevels []l0Sublevel, key []byte) []*table.Table {
 	}
 	return out
 }
+
+// tablesSnapshot returns a copy of lh.tables under read lock.
+func (lh *levelHandler) tablesSnapshot() []*table.Table {
+	if lh == nil {
+		return nil
+	}
+	lh.RLock()
+	defer lh.RUnlock()
+	out := make([]*table.Table, len(lh.tables))
+	copy(out, lh.tables)
+	return out
+}

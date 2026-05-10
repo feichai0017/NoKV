@@ -56,7 +56,6 @@ func Classify(err error) nokverrors.Kind {
 		return nokverrors.KindCorruption
 	case stderrors.Is(err, lsm.ErrMemtableNotInitialized),
 		stderrors.Is(err, flush.ErrNil),
-		stderrors.Is(err, flush.ErrNilPayload),
 		stderrors.Is(err, lsm.ErrFlushNilMemtable),
 		stderrors.Is(err, lsm.ErrLSMNil):
 		return nokverrors.KindProtocolViolation

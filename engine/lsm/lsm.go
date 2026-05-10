@@ -25,10 +25,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm/flush"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -45,7 +47,7 @@ type LSM struct {
 	levels           *levelManager
 	option           *Options
 	closer           *utils.Closer
-	flushQueue       *flush.Runtime
+	flushQueue       *flush.Runtime[*memTable]
 	flushWG          sync.WaitGroup
 	logger           *slog.Logger
 
@@ -58,6 +60,18 @@ type LSM struct {
 
 	closed atomic.Bool
 }
+
+// Sentinel errors returned by the lsm package.
+var (
+	ErrFillTables             = errors.New("lsm: fill tables")
+	ErrMemtableNotInitialized = errors.New("lsm: memtable not initialized")
+	ErrFlushNilMemtable       = errors.New("lsm: flush nil memtable")
+	ErrLSMNilOptions          = errors.New("lsm: nil options")
+	ErrLSMNilWALManager       = errors.New("lsm: nil wal manager")
+	ErrLSMNilClonedOptions    = errors.New("lsm: nil cloned options")
+	ErrLSMNil                 = errors.New("lsm: nil lsm")
+	ErrLSMClosed              = errors.New("lsm: closed")
+)
 
 // WriteThrottleState models write admission control at the DB layer.
 //
@@ -332,7 +346,7 @@ func NewLSM(opt *Options, walMgrs []*wal.Manager) (*LSM, error) {
 		lsm.logger = slog.Default()
 	}
 	lsm.throttleFn = frozen.ThrottleCallback
-	lsm.flushQueue = flush.New(len(lsm.shards))
+	lsm.flushQueue = flush.New[*memTable](len(lsm.shards))
 	// initialize levelManager
 	lm, err := lsm.initLevelManager(frozen)
 	if err != nil {
@@ -929,7 +943,7 @@ func (lsm *LSM) startFlushWorkers(n int) {
 				if !ok {
 					return
 				}
-				mt, _ := task.Payload.(*memTable)
+				mt := task.Payload
 				if mt == nil {
 					lsm.flushQueue.MarkDone(task)
 					continue
@@ -1030,4 +1044,92 @@ func (v *RangeTombstoneView) Close() {
 	v.tables = nil
 	v.release = nil
 	v.lsm = nil
+}
+
+// CompactionDiagnostics groups compaction runtime counters for diagnostics
+// and observability consumers.
+type CompactionDiagnostics struct {
+	Backlog        int64
+	MaxScore       float64
+	LastDurationMs float64
+	MaxDurationMs  float64
+	Runs           uint64
+	ValueWeight    float64
+	AlertThreshold float64
+}
+
+// RangeFilterDiagnostics groups range-filter hit/miss counters.
+type RangeFilterDiagnostics struct {
+	PointCandidates   uint64
+	PointPruned       uint64
+	BoundedCandidates uint64
+	BoundedPruned     uint64
+	Fallbacks         uint64
+}
+
+// Diagnostics is a stable read-only snapshot of LSM internals for
+// observability code. It keeps runtime metrics grouped behind one API
+// instead of leaking internal structures through many top-level getters.
+type Diagnostics struct {
+	Entries     int64
+	Flush       metrics.FlushMetrics
+	Compaction  CompactionDiagnostics
+	RangeFilter RangeFilterDiagnostics
+	Levels      []metrics.LevelMetrics
+	Cache       metrics.CacheSnapshot
+	MaxVersion  uint64
+}
+
+// Diagnostics returns a point-in-time snapshot of LSM diagnostic state.
+func (lsm *LSM) Diagnostics() Diagnostics {
+	if lsm == nil {
+		return Diagnostics{}
+	}
+	diag := Diagnostics{
+		MaxVersion: lsm.MaxVersion(),
+	}
+	if tables, release := lsm.getMemTables(); tables != nil {
+		if release != nil {
+			defer release()
+		}
+		for _, mt := range tables {
+			if mt == nil || mt.index == nil {
+				continue
+			}
+			diag.Entries += countMemIndexEntries(mt.index)
+		}
+	}
+	if lsm.flushQueue != nil {
+		diag.Flush = lsm.flushQueue.Stats()
+	}
+	if lsm.option != nil {
+		diag.Compaction.ValueWeight = lsm.option.CompactionValueWeight
+		diag.Compaction.AlertThreshold = lsm.option.CompactionValueAlertThreshold
+	}
+	if lm := lsm.levels; lm != nil {
+		diag.Compaction.Backlog, diag.Compaction.MaxScore = lm.compactionStats()
+		diag.Compaction.LastDurationMs, diag.Compaction.MaxDurationMs, diag.Compaction.Runs = lm.compactionDurations()
+		diag.RangeFilter = lm.rangeFilterDiagnostics()
+		diag.Levels = lm.levelMetricsSnapshot()
+		diag.Cache = lm.cacheMetrics()
+		diag.Entries += lm.entryCount()
+	}
+	return diag
+}
+
+func countMemIndexEntries(idx memIndex) int64 {
+	if idx == nil {
+		return 0
+	}
+	itr := idx.NewIterator(&index.Options{IsAsc: true})
+	if itr == nil {
+		return 0
+	}
+	defer func() { _ = itr.Close() }()
+	itr.Rewind()
+	var count int64
+	for ; itr.Valid(); itr.Next() {
+		count++
+	}
+	return count
 }

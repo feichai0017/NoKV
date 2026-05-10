@@ -1657,3 +1657,79 @@ func entryValueLen(e *kv.Entry) uint32 {
 	}
 	return uint32(len(e.Value))
 }
+
+// rangeFilterMetrics is the in-memory hit/miss counter set used to populate
+// RangeFilterDiagnostics.
+type rangeFilterMetrics struct {
+	pointCandidates   atomic.Uint64
+	pointPruned       atomic.Uint64
+	boundedCandidates atomic.Uint64
+	boundedPruned     atomic.Uint64
+	fallbacks         atomic.Uint64
+}
+
+func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
+	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
+	if lm == nil {
+		return
+	}
+	if candidates < 0 {
+		candidates = 0
+	}
+	if total < candidates {
+		total = candidates
+	}
+	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
+	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
+	if fallback {
+		lm.rangeFilter.fallbacks.Add(1)
+	}
+}
+
+func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
+	if lm == nil {
+		return RangeFilterDiagnostics{}
+	}
+	return RangeFilterDiagnostics{
+		PointCandidates:   lm.rangeFilter.pointCandidates.Load(),
+		PointPruned:       lm.rangeFilter.pointPruned.Load(),
+		BoundedCandidates: lm.rangeFilter.boundedCandidates.Load(),
+		BoundedPruned:     lm.rangeFilter.boundedPruned.Load(),
+		Fallbacks:         lm.rangeFilter.fallbacks.Load(),
+	}
+}
+
+func (lm *levelManager) entryCount() int64 {
+	if lm == nil {
+		return 0
+	}
+	var total int64
+	for _, level := range lm.levels {
+		if level == nil {
+			continue
+		}
+		for _, tbl := range level.tablesSnapshot() {
+			if tbl == nil {
+				continue
+			}
+			total += int64(tbl.KeyCount())
+		}
+	}
+	return total
+}

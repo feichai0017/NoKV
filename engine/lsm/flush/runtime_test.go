@@ -8,11 +8,11 @@ import (
 )
 
 // stubPayload stands in for a *memTable in tests; the runtime is generic
-// over whatever opaque payload callers attach.
+// over whatever payload callers attach.
 type stubPayload struct{ id int }
 
 func TestRuntimeEnqueueAndNext(t *testing.T) {
-	rt := New(1)
+	rt := New[*stubPayload](1)
 	defer func() { _ = rt.Close() }()
 
 	payload := &stubPayload{id: 7}
@@ -41,7 +41,7 @@ func TestRuntimeEnqueueAndNext(t *testing.T) {
 }
 
 func TestRuntimeNextBlocksUntilEnqueue(t *testing.T) {
-	rt := New(1)
+	rt := New[*stubPayload](1)
 	defer func() { _ = rt.Close() }()
 
 	var wg sync.WaitGroup
@@ -62,7 +62,7 @@ func TestRuntimeNextBlocksUntilEnqueue(t *testing.T) {
 }
 
 func TestRuntimeRejectsAfterClose(t *testing.T) {
-	rt := New(1)
+	rt := New[*stubPayload](1)
 	if err := rt.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestRuntimePerShardSerialization(t *testing.T) {
 		workers    = 4
 		perShard   = 32
 	)
-	rt := New(shardCount)
+	rt := New[*stubPayload](shardCount)
 
 	var inFlight [shardCount]atomic.Int32
 	var maxInFlight [shardCount]atomic.Int32
@@ -144,7 +144,7 @@ func TestRuntimePerShardSerialization(t *testing.T) {
 // in time.
 func TestRuntimeCrossShardParallelism(t *testing.T) {
 	const shardCount = 4
-	rt := New(shardCount)
+	rt := New[*stubPayload](shardCount)
 	for s := range shardCount {
 		if err := rt.Enqueue(s, &stubPayload{id: s}); err != nil {
 			t.Fatalf("enqueue shard=%d: %v", s, err)
