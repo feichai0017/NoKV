@@ -94,6 +94,7 @@ func ExportExternalSST(path string, entries []*kv.Entry, opt *Options) (_ *Exter
 	if err != nil {
 		return nil, fmt.Errorf("lsm: build external sst %s: %w", path, err)
 	}
+	defer build.Release()
 	if build.Size == 0 {
 		return nil, fmt.Errorf("lsm: external sst build for %s is empty", path)
 	}

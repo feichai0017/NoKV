@@ -85,19 +85,73 @@ func (h header) encode() []byte {
 	return b[:]
 }
 
+// blockBufPool reuses the byte buffer that backs a block's encoded
+// entries. A typical SST flush produces dozens of these per file; pooling
+// them takes the bulk of the per-flush allocation traffic out of the GC.
+//
+// Buffers larger than maxPooledBlockBuf are not retained — the pool's
+// purpose is to amortise allocations at the typical block size, not to
+// hold onto outlier buffers that would inflate steady-state RSS.
+var blockBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, defaultPooledBlockBuf)
+		return &b
+	},
+}
+
+const (
+	defaultPooledBlockBuf = 4 << 10  // 4 KiB matches the most common BlockSize
+	maxPooledBlockBuf     = 64 << 10 // refuse to pool >64 KiB blocks
+)
+
+func acquireBlockBuf(size int) []byte {
+	bp := blockBufPool.Get().(*[]byte)
+	if cap(*bp) < size {
+		// The pooled buffer is too small; let it return to GC and
+		// allocate a fresh slice that's the right size for this block.
+		*bp = make([]byte, size)
+	} else {
+		*bp = (*bp)[:size]
+	}
+	return *bp
+}
+
+func releaseBlockBuf(b []byte) {
+	if cap(b) == 0 || cap(b) > maxPooledBlockBuf {
+		return
+	}
+	bp := b[:0]
+	blockBufPool.Put(&bp)
+}
+
+// Pre-sized to typical per-flush counts: a 64 MiB SST holds ~16 blocks
+// at default BlockSize, and ~1024 keys in total. Avoids slice growth
+// reallocations on the common path.
+const (
+	preallocBlocks   = 16
+	preallocKeyHash  = 1024
+	preallocPrefixes = 1024
+)
+
 // NewBuilder constructs a Builder using opts.SSTableMaxSize as the per-file size cap.
 func NewBuilder(opts Options) *Builder {
 	return &Builder{
-		opts:    opts,
-		sstSize: opts.SSTableMaxSize,
+		opts:         opts,
+		sstSize:      opts.SSTableMaxSize,
+		blockList:    make([]*block, 0, preallocBlocks),
+		keyHashes:    make([]uint32, 0, preallocKeyHash),
+		prefixHashes: make([]uint32, 0, preallocPrefixes),
 	}
 }
 
 // NewBuilderWithSize constructs a Builder with an explicit per-file size cap.
 func NewBuilderWithSize(opts Options, sstSize int64) *Builder {
 	return &Builder{
-		opts:    opts,
-		sstSize: sstSize,
+		opts:         opts,
+		sstSize:      sstSize,
+		blockList:    make([]*block, 0, preallocBlocks),
+		keyHashes:    make([]uint32, 0, preallocKeyHash),
+		prefixHashes: make([]uint32, 0, preallocPrefixes),
 	}
 }
 
@@ -117,7 +171,7 @@ func (tb *Builder) add(e *kv.Entry, valueLen uint32, isStale bool) {
 		}
 		tb.finishBlock()
 		tb.curBlock = &block{
-			data: make([]byte, tb.opts.BlockSize),
+			data: acquireBlockBuf(int(tb.opts.BlockSize)),
 		}
 	}
 	baseKey := kv.InternalToBaseKey(key)
@@ -175,6 +229,7 @@ func (tb *Builder) Finish() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer bd.Release()
 	buf := make([]byte, bd.Size)
 	written := bd.Copy(buf)
 	utils.CondPanicFunc(written != len(buf), func() error {
@@ -345,7 +400,7 @@ func (tb *Builder) Flush(rt Runtime, tableName string) (t *Table, err error) {
 }
 
 func (tb *Builder) flush(rt Runtime, opts Options, tableName string, predone *BuildData) (t *Table, err error) {
-	bd := BuildData{}
+	var bd BuildData
 	if predone != nil {
 		bd = *predone
 	} else {
@@ -355,6 +410,7 @@ func (tb *Builder) flush(rt Runtime, opts Options, tableName string, predone *Bu
 			return nil, derr
 		}
 	}
+	defer bd.Release()
 	t = &Table{rt: rt, opts: opts, fid: vfs.FID(tableName)}
 	// Throughput-first mode: write directly to final SST when manifest sync is disabled.
 	if !opts.ManifestSync {
@@ -432,6 +488,26 @@ func (bd BuildData) Copy(dst []byte) int {
 	written += copy(dst[written:], bd.checksum)
 	written += copy(dst[written:], kv.U32ToBytes(uint32(len(bd.checksum))))
 	return written
+}
+
+// Release returns each block's data buffer to the pool. Callers must
+// invoke this after Copy completes — not before, since Copy reads from
+// the buffers (or from snappy-allocated diskData that aliases them when
+// compression was a no-op). Safe to call once.
+func (bd BuildData) Release() {
+	for _, bl := range bd.blockList {
+		if bl == nil {
+			continue
+		}
+		if bl.data != nil {
+			releaseBlockBuf(bl.data)
+			bl.data = nil
+		}
+		// diskData either aliases bl.data (already released) or is a
+		// fresh snappy-allocated buffer we let GC reclaim — its size
+		// distribution is too unpredictable to pool usefully.
+		bl.diskData = nil
+	}
 }
 
 // Done finalizes the builder and returns the serializable BuildData. The builder must not be reused after Done.
