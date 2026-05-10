@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
 var (
@@ -17,60 +18,10 @@ var (
 	ErrConflictingGrant   = errors.New("fsmeta capsule: conflicting authority grant")
 )
 
-// AuthorityGrant is the execution-side view of a root-issued fsmeta authority
-// grant. It is intentionally separate from meta/root's coordinator-duty grant:
-// Capsule grants cover fsmeta key scopes, not coordinator service duties.
-type AuthorityGrant struct {
-	GrantID           string
-	EpochID           uint64
-	HolderID          string
-	Scope             compile.AuthorityScope
-	ExpiresUnixNano   int64
-	PredecessorDigest [32]byte
-	QuotaCreditBytes  int64
-	QuotaCreditInodes int64
-}
-
-func (g AuthorityGrant) ActiveAt(now time.Time) bool {
-	if g.ExpiresUnixNano <= 0 {
-		return false
-	}
-	return now.UnixNano() < g.ExpiresUnixNano
-}
-
-func (g AuthorityGrant) Valid() bool {
-	return g.GrantID != "" &&
-		g.EpochID != 0 &&
-		g.HolderID != "" &&
-		g.Scope.MountKeyID != 0 &&
-		g.ExpiresUnixNano > 0
-}
-
-func (g AuthorityGrant) Covers(scope compile.AuthorityScope, now time.Time) bool {
-	if !g.Valid() || !g.ActiveAt(now) {
-		return false
-	}
-	if scope.MountKeyID == 0 || g.Scope.MountKeyID != scope.MountKeyID {
-		return false
-	}
-	if !subsetBuckets(g.Scope.Buckets, scope.Buckets) {
-		return false
-	}
-	if !subsetInodes(g.Scope.Parents, scope.Parents) {
-		return false
-	}
-	return subsetInodes(g.Scope.Inodes, scope.Inodes)
-}
-
-// Overlaps reports whether two grants might cover the same fsmeta storage
-// keys. The check is deliberately conservative: overlapping buckets in one
-// mount are treated as conflicting even when parent/inode sets look disjoint.
-func (g AuthorityGrant) Overlaps(other AuthorityGrant) bool {
-	if !g.Valid() || !other.Valid() || g.Scope.MountKeyID != other.Scope.MountKeyID {
-		return false
-	}
-	return bucketsOverlap(g.Scope.Buckets, other.Scope.Buckets)
-}
+// AuthorityGrant is the execution-side alias for the root-issued fsmeta
+// Capsule authority grant. The rooted protocol owns grant semantics; this
+// package only adapts fsmeta compiler scopes into that protocol type.
+type AuthorityGrant = rootproto.CapsuleAuthorityGrant
 
 type ActiveAuthorities struct {
 	mu     sync.RWMutex
@@ -94,10 +45,8 @@ func (a *ActiveAuthorities) Replace(grants []AuthorityGrant) error {
 		if _, ok := next[grant.GrantID]; ok {
 			return ErrInvalidGrant
 		}
-		for _, existing := range ordered {
-			if grant.Overlaps(existing) {
-				return ErrConflictingGrant
-			}
+		if slices.ContainsFunc(ordered, grant.Overlaps) {
+			return ErrConflictingGrant
 		}
 		next[grant.GrantID] = cloneGrant(grant)
 		ordered = append(ordered, grant)
@@ -137,8 +86,10 @@ func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (A
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	var found AuthorityGrant
+	rootScope := AuthorityScopeFromDelta(scope)
+	nowUnixNano := now.UnixNano()
 	for _, grant := range a.grants {
-		if !grant.Covers(scope, now) {
+		if !grant.Covers(rootScope, nowUnixNano) {
 			continue
 		}
 		if found.Valid() {
@@ -172,70 +123,31 @@ func (a *ActiveAuthorities) HeldBy(holderID string, scope compile.AuthorityScope
 }
 
 func cloneGrant(grant AuthorityGrant) AuthorityGrant {
-	grant.Scope = cloneScope(grant.Scope)
-	return grant
+	return rootproto.CloneCapsuleAuthorityGrant(grant)
 }
 
-func cloneScope(scope compile.AuthorityScope) compile.AuthorityScope {
-	return compile.AuthorityScope{
-		Mount:      scope.Mount,
-		MountKeyID: scope.MountKeyID,
-		Buckets:    append([]fsmeta.AffinityBucket(nil), scope.Buckets...),
-		Parents:    append([]fsmeta.InodeID(nil), scope.Parents...),
-		Inodes:     append([]fsmeta.InodeID(nil), scope.Inodes...),
+func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.CapsuleAuthorityScope {
+	return rootproto.CapsuleAuthorityScope{
+		MountID:    string(scope.Mount),
+		MountKeyID: uint64(scope.MountKeyID),
+		Buckets:    capsuleBucketsFromDelta(scope.Buckets),
+		Parents:    capsuleInodesFromDelta(scope.Parents),
+		Inodes:     capsuleInodesFromDelta(scope.Inodes),
 	}
 }
 
-func subsetBuckets(grant, requested []fsmeta.AffinityBucket) bool {
-	if len(grant) == 0 {
-		return true
+func capsuleBucketsFromDelta(buckets []fsmeta.AffinityBucket) []uint16 {
+	out := make([]uint16, len(buckets))
+	for i, bucket := range buckets {
+		out[i] = uint16(bucket)
 	}
-	if len(requested) == 0 {
-		return false
-	}
-	allowed := make(map[fsmeta.AffinityBucket]struct{}, len(grant))
-	for _, bucket := range grant {
-		allowed[bucket] = struct{}{}
-	}
-	for _, bucket := range requested {
-		if _, ok := allowed[bucket]; !ok {
-			return false
-		}
-	}
-	return true
+	return out
 }
 
-func subsetInodes(grant, requested []fsmeta.InodeID) bool {
-	if len(grant) == 0 {
-		return true
+func capsuleInodesFromDelta(inodes []fsmeta.InodeID) []uint64 {
+	out := make([]uint64, len(inodes))
+	for i, inode := range inodes {
+		out[i] = uint64(inode)
 	}
-	if len(requested) == 0 {
-		return true
-	}
-	allowed := make(map[fsmeta.InodeID]struct{}, len(grant))
-	for _, inode := range grant {
-		allowed[inode] = struct{}{}
-	}
-	for _, inode := range requested {
-		if _, ok := allowed[inode]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func bucketsOverlap(left, right []fsmeta.AffinityBucket) bool {
-	if len(left) == 0 || len(right) == 0 {
-		return true
-	}
-	seen := make(map[fsmeta.AffinityBucket]struct{}, len(left))
-	for _, bucket := range left {
-		seen[bucket] = struct{}{}
-	}
-	for _, bucket := range right {
-		if _, ok := seen[bucket]; ok {
-			return true
-		}
-	}
-	return false
+	return out
 }
