@@ -38,8 +38,8 @@ type Client interface {
 	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
-	ListCapsuleAuthorityGrants(ctx context.Context, req *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error)
-	ApplyCapsuleAuthority(ctx context.Context, req *coordpb.ApplyCapsuleAuthorityRequest) (*coordpb.ApplyCapsuleAuthorityResponse, error)
+	ListPerasAuthorityGrants(ctx context.Context, req *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
+	ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -310,16 +310,16 @@ func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuota
 	}, validateListQuotaFencesResponse)
 }
 
-func (c *GRPCClient) ListCapsuleAuthorityGrants(ctx context.Context, req *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
-	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
-		return coord.ListCapsuleAuthorityGrants(ctx, req)
-	}, validateListCapsuleAuthorityGrantsResponse)
+func (c *GRPCClient) ListPerasAuthorityGrants(ctx context.Context, req *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+		return coord.ListPerasAuthorityGrants(ctx, req)
+	}, validateListPerasAuthorityGrantsResponse)
 }
 
-func (c *GRPCClient) ApplyCapsuleAuthority(ctx context.Context, req *coordpb.ApplyCapsuleAuthorityRequest) (*coordpb.ApplyCapsuleAuthorityResponse, error) {
-	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.ApplyCapsuleAuthorityResponse, error) {
-		return coord.ApplyCapsuleAuthority(ctx, req)
-	}, validateApplyCapsuleAuthorityResponse)
+func (c *GRPCClient) ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.ApplyPerasAuthorityResponse, error) {
+		return coord.ApplyPerasAuthority(ctx, req)
+	}, validateApplyPerasAuthorityResponse)
 }
 
 func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -837,52 +837,52 @@ func validateListQuotaFencesResponse(resp *coordpb.ListQuotaFencesResponse) erro
 	return nil
 }
 
-func validateListCapsuleAuthorityGrantsResponse(resp *coordpb.ListCapsuleAuthorityGrantsResponse) error {
+func validateListPerasAuthorityGrantsResponse(resp *coordpb.ListPerasAuthorityGrantsResponse) error {
 	if resp == nil {
-		return fmt.Errorf("%w: list_capsule_authority_grants response is nil", errInvalidWitness)
+		return fmt.Errorf("%w: list_peras_authority_grants response is nil", errInvalidWitness)
 	}
 	seen := make(map[string]struct{}, len(resp.GetGrants()))
 	for _, grant := range resp.GetGrants() {
-		parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
+		parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
 		if !parsed.Valid() {
-			return fmt.Errorf("%w: list_capsule_authority_grants contains invalid grant", errInvalidWitness)
+			return fmt.Errorf("%w: list_peras_authority_grants contains invalid grant", errInvalidWitness)
 		}
 		if _, ok := seen[parsed.GrantID]; ok {
-			return fmt.Errorf("%w: list_capsule_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
+			return fmt.Errorf("%w: list_peras_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
 		}
 		seen[parsed.GrantID] = struct{}{}
 	}
 	return nil
 }
 
-func validateApplyCapsuleAuthorityResponse(resp *coordpb.ApplyCapsuleAuthorityResponse) error {
+func validateApplyPerasAuthorityResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
 	if resp == nil {
-		return fmt.Errorf("%w: apply_capsule_authority response is nil", errInvalidWitness)
+		return fmt.Errorf("%w: apply_peras_authority response is nil", errInvalidWitness)
 	}
 	status := resp.GetStatus()
 	switch status {
-	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED:
-		if parsed := metawire.RootCapsuleAuthorityGrantFromProto(resp.GetGrant()); !parsed.Valid() {
-			return fmt.Errorf("%w: apply_capsule_authority granted reply missing grant", errInvalidWitness)
+	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
+		if parsed := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant()); !parsed.Valid() {
+			return fmt.Errorf("%w: apply_peras_authority granted reply missing grant", errInvalidWitness)
 		}
-	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD:
+	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
 		if resp.GetGrant() != nil {
-			return fmt.Errorf("%w: apply_capsule_authority held reply carries grant", errInvalidWitness)
+			return fmt.Errorf("%w: apply_peras_authority held reply carries grant", errInvalidWitness)
 		}
 		if len(resp.GetActiveGrants()) == 0 {
-			return fmt.Errorf("%w: apply_capsule_authority held reply missing active grants", errInvalidWitness)
+			return fmt.Errorf("%w: apply_peras_authority held reply missing active grants", errInvalidWitness)
 		}
-	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED:
+	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
 	default:
-		return fmt.Errorf("%w: apply_capsule_authority invalid status=%d", errInvalidWitness, status)
+		return fmt.Errorf("%w: apply_peras_authority invalid status=%d", errInvalidWitness, status)
 	}
-	return validateCapsuleAuthorityGrantList("apply_capsule_authority", resp.GetActiveGrants())
+	return validatePerasAuthorityGrantList("apply_peras_authority", resp.GetActiveGrants())
 }
 
-func validateCapsuleAuthorityGrantList(kind string, grants []*metapb.RootCapsuleAuthorityGrant) error {
+func validatePerasAuthorityGrantList(kind string, grants []*metapb.RootPerasAuthorityGrant) error {
 	seen := make(map[string]struct{}, len(grants))
 	for _, grant := range grants {
-		parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
+		parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
 		if !parsed.Valid() {
 			return fmt.Errorf("%w: %s contains invalid grant", errInvalidWitness, kind)
 		}

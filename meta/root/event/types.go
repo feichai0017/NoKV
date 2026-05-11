@@ -43,8 +43,8 @@ const (
 	KindGrantSealed
 	KindGrantRetired
 	KindGrantInherited
-	KindCapsuleAuthorityGranted
-	KindCapsuleAuthorityRetired
+	KindPerasAuthorityGranted
+	KindPerasAuthorityRetired
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -161,7 +161,7 @@ type Event struct {
 	Grant            *rootproto.AuthorityGrant
 	GrantRetirement  *rootproto.GrantRetirement
 	GrantInheritance *rootproto.GrantInheritance
-	CapsuleGrant     *rootproto.CapsuleAuthorityGrant
+	PerasGrant       *rootproto.PerasAuthorityGrant
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
@@ -193,14 +193,14 @@ func GrantInherited(inheritance rootproto.GrantInheritance) Event {
 	return Event{Kind: KindGrantInherited, GrantInheritance: &inheritance}
 }
 
-func CapsuleAuthorityGranted(grant rootproto.CapsuleAuthorityGrant) Event {
-	grant = rootproto.CloneCapsuleAuthorityGrant(grant)
-	return Event{Kind: KindCapsuleAuthorityGranted, CapsuleGrant: &grant}
+func PerasAuthorityGranted(grant rootproto.PerasAuthorityGrant) Event {
+	grant = rootproto.ClonePerasAuthorityGrant(grant)
+	return Event{Kind: KindPerasAuthorityGranted, PerasGrant: &grant}
 }
 
-func CapsuleAuthorityRetired(grant rootproto.CapsuleAuthorityGrant) Event {
-	grant = rootproto.CloneCapsuleAuthorityGrant(grant)
-	return Event{Kind: KindCapsuleAuthorityRetired, CapsuleGrant: &grant}
+func PerasAuthorityRetired(grant rootproto.PerasAuthorityGrant) Event {
+	grant = rootproto.ClonePerasAuthorityGrant(grant)
+	return Event{Kind: KindPerasAuthorityRetired, PerasGrant: &grant}
 }
 
 func MountRegistered(mountID string, mountKeyID, rootInode uint64, schemaVersion uint32) Event {

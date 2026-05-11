@@ -14,8 +14,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -111,33 +111,33 @@ type SubtreeAuthorityResolver interface {
 	SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error)
 }
 
-// CapsuleAuthorityAdmitter is the fsmeta holder-side boundary for Capsule.
+// PerasAuthorityAdmitter is the fsmeta holder-side boundary for Peras.
 // It is intentionally narrower than the root protocol: the executor only asks
 // whether a compiled authority scope is locally owned before it can enter a
-// future Capsule fast path.
-type CapsuleAuthorityAdmitter interface {
-	AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
+// future Peras fast path.
+type PerasAuthorityAdmitter interface {
+	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
 
-// CapsuleShadowSubmitter is an experimental measurement hook for the Capsule
+// PerasShadowSubmitter is an experimental measurement hook for the Peras
 // holder+witness path. The executor still commits through the ordinary
 // Percolator/Raft runner; submitter failures are counted but do not affect the
 // current fsmeta result until seal/apply/recovery are complete.
-type CapsuleShadowSubmitter interface {
-	SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error)
+type PerasShadowSubmitter interface {
+	SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.CommitCertificateRecord, error)
 }
 
-// CapsuleCommitter is the experimental, opt-in Capsule fast commit boundary.
-// Unlike CapsuleShadowSubmitter, success replaces the ordinary Percolator/Raft
+// PerasCommitter is the experimental, opt-in Peras fast commit boundary.
+// Unlike PerasShadowSubmitter, success replaces the ordinary Percolator/Raft
 // commit for this fsmeta operation, so errors are returned and never silently
 // fall back after witness evidence may already exist.
-type CapsuleCommitter interface {
-	CommitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CapsuleSeal, error)
+type PerasCommitter interface {
+	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.PerasSeal, error)
 }
 
-type CapsuleOverlayReader interface {
-	GetCapsuleOverlay(key []byte) (value []byte, deleted bool, ok bool)
-	ScanCapsuleOverlay(start []byte, limit uint32) []fscapsule.OverlayKV
+type PerasOverlayReader interface {
+	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
+	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
 }
 
 // NegativeCache is the dentry-miss memo surface used by Lookup.
@@ -164,9 +164,9 @@ type Executor struct {
 	quotas                  QuotaResolver
 	subtrees                SubtreeHandoffPublisher
 	authorities             SubtreeAuthorityResolver
-	capsuleAuthority        CapsuleAuthorityAdmitter
-	capsuleShadowSubmitter  CapsuleShadowSubmitter
-	capsuleCommitter        CapsuleCommitter
+	perasAuthority          PerasAuthorityAdmitter
+	perasShadowSubmitter    PerasShadowSubmitter
+	perasCommitter          PerasCommitter
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -176,14 +176,14 @@ type Executor struct {
 	txnRetriesTotal         atomic.Uint64
 	txnRetryExhaustedTotal  atomic.Uint64
 	createTotal             atomic.Uint64
-	capsuleAdmission        capsuleAdmissionCounters
-	capsuleShadow           capsuleShadowCounters
-	capsuleFast             capsuleFastCounters
-	capsuleShadowSeq        atomic.Uint64
+	perasAdmission          perasAdmissionCounters
+	perasShadow             perasShadowCounters
+	perasFast               perasFastCounters
+	perasShadowSeq          atomic.Uint64
 	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
 }
 
-type capsuleAdmissionCounters struct {
+type perasAdmissionCounters struct {
 	eligibleTotal         atomic.Uint64
 	slowTotal             atomic.Uint64
 	slowReadOnlyTotal     atomic.Uint64
@@ -200,7 +200,7 @@ type capsuleAdmissionCounters struct {
 	errorTotal            atomic.Uint64
 }
 
-type capsuleShadowCounters struct {
+type perasShadowCounters struct {
 	submitTotal            atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
@@ -210,7 +210,7 @@ type capsuleShadowCounters struct {
 	latencyTotalNanosecond atomic.Uint64
 }
 
-type capsuleFastCounters struct {
+type perasFastCounters struct {
 	attemptTotal           atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
@@ -322,31 +322,31 @@ func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	}
 }
 
-// WithCapsuleAuthorityAdmitter enables holder-authority admission for
-// Capsule-eligible mutations. The executor still uses the existing
+// WithPerasAuthorityAdmitter enables holder-authority admission for
+// Peras-eligible mutations. The executor still uses the existing
 // Percolator/Raft write path until the witness and seal layers are wired.
-func WithCapsuleAuthorityAdmitter(admitter CapsuleAuthorityAdmitter) Option {
+func WithPerasAuthorityAdmitter(admitter PerasAuthorityAdmitter) Option {
 	return func(e *Executor) {
-		e.capsuleAuthority = admitter
+		e.perasAuthority = admitter
 	}
 }
 
-// WithCapsuleShadowSubmitter runs eligible, concrete fsmeta mutations through
-// the Capsule holder+witness path before the normal Raft commit. This is only a
+// WithPerasShadowSubmitter runs eligible, concrete fsmeta mutations through
+// the Peras holder+witness path before the normal Raft commit. This is only a
 // shadow measurement hook: success never replaces the existing transaction
 // commit, and errors are exposed through Stats rather than returned.
-func WithCapsuleShadowSubmitter(submitter CapsuleShadowSubmitter) Option {
+func WithPerasShadowSubmitter(submitter PerasShadowSubmitter) Option {
 	return func(e *Executor) {
-		e.capsuleShadowSubmitter = submitter
+		e.perasShadowSubmitter = submitter
 	}
 }
 
-// WithCapsuleCommitter enables the experimental Capsule fast commit path. This
+// WithPerasCommitter enables the experimental Peras fast commit path. This
 // option is intentionally separate from shadow submission so production callers
 // must opt in explicitly before Create can bypass the ordinary Raft write path.
-func WithCapsuleCommitter(committer CapsuleCommitter) Option {
+func WithPerasCommitter(committer PerasCommitter) Option {
 	return func(e *Executor) {
-		e.capsuleCommitter = committer
+		e.perasCommitter = committer
 	}
 }
 
@@ -377,9 +377,9 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retries_total":          uint64(0),
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
-			"capsule_admission":          capsuleAdmissionStats(nil, false),
-			"capsule_shadow":             capsuleShadowStats(nil, false),
-			"capsule_fastpath":           capsuleFastStats(nil, false),
+			"peras_admission":            perasAdmissionStats(nil, false),
+			"peras_shadow":               perasShadowStats(nil, false),
+			"peras_fastpath":             perasFastStats(nil, false),
 			"atomic_fastpath":            atomicFastPathStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -391,9 +391,9 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retries_total":          e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
-		"capsule_admission":          capsuleAdmissionStats(&e.capsuleAdmission, e.capsuleAuthority != nil),
-		"capsule_shadow":             capsuleShadowStats(&e.capsuleShadow, e.capsuleShadowSubmitter != nil),
-		"capsule_fastpath":           capsuleFastStats(&e.capsuleFast, e.capsuleCommitter != nil),
+		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
+		"peras_shadow":               perasShadowStats(&e.perasShadow, e.perasShadowSubmitter != nil),
+		"peras_fastpath":             perasFastStats(&e.perasFast, e.perasCommitter != nil),
 		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -401,8 +401,8 @@ func (e *Executor) Stats() map[string]any {
 	if stats, ok := e.runner.(statsProvider); ok {
 		out["runner"] = stats.Stats()
 	}
-	if stats, ok := e.capsuleCommitter.(statsProvider); ok {
-		out["capsule_committer"] = stats.Stats()
+	if stats, ok := e.perasCommitter.(statsProvider); ok {
+		out["peras_committer"] = stats.Stats()
 	}
 	if e.dirPages != nil {
 		stats := e.dirPages.Stats()
@@ -418,13 +418,13 @@ func (e *Executor) Stats() map[string]any {
 	return out
 }
 
-func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map[string]any {
+func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":        enabled,
 			"eligible_total": uint64(0),
 			"slow_total":     uint64(0),
-			"slow_by_reason": capsuleAdmissionSlowReasonStats(nil),
+			"slow_by_reason": perasAdmissionSlowReasonStats(nil),
 			"acquire_total":  uint64(0),
 			"owned_total":    uint64(0),
 			"held_total":     uint64(0),
@@ -435,7 +435,7 @@ func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map
 		"enabled":        enabled,
 		"eligible_total": counters.eligibleTotal.Load(),
 		"slow_total":     counters.slowTotal.Load(),
-		"slow_by_reason": capsuleAdmissionSlowReasonStats(counters),
+		"slow_by_reason": perasAdmissionSlowReasonStats(counters),
 		"acquire_total":  counters.acquireTotal.Load(),
 		"owned_total":    counters.ownedTotal.Load(),
 		"held_total":     counters.heldTotal.Load(),
@@ -443,7 +443,7 @@ func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map
 	}
 }
 
-func capsuleShadowStats(counters *capsuleShadowCounters, enabled bool) map[string]any {
+func perasShadowStats(counters *perasShadowCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":                    enabled,
@@ -476,7 +476,7 @@ func capsuleShadowStats(counters *capsuleShadowCounters, enabled bool) map[strin
 	}
 }
 
-func capsuleFastStats(counters *capsuleFastCounters, enabled bool) map[string]any {
+func perasFastStats(counters *perasFastCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":                    enabled,
@@ -509,7 +509,7 @@ func capsuleFastStats(counters *capsuleFastCounters, enabled bool) map[string]an
 	}
 }
 
-func capsuleAdmissionSlowReasonStats(counters *capsuleAdmissionCounters) map[string]uint64 {
+func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]uint64 {
 	if counters == nil {
 		return map[string]uint64{
 			string(compile.SlowReasonReadOnly):          0,
@@ -534,7 +534,7 @@ func capsuleAdmissionSlowReasonStats(counters *capsuleAdmissionCounters) map[str
 	}
 }
 
-func (s *capsuleAdmissionCounters) recordSlow(reason compile.SlowReason) {
+func (s *perasAdmissionCounters) recordSlow(reason compile.SlowReason) {
 	s.slowTotal.Add(1)
 	switch reason {
 	case compile.SlowReasonReadOnly:
@@ -630,11 +630,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	delta, err := compile.Create(req, mount, inodeID, compile.WithQuotaMode(e.capsuleQuotaMode()))
+	delta, err := compile.Create(req, mount, inodeID, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
 	plan := delta.Plan
@@ -654,7 +654,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		return fsmeta.CreateResult{}, err
 	}
 	e.createTotal.Add(1)
-	if committed, err := e.tryCapsuleFastCommit(ctx, delta); committed || err != nil {
+	if committed, err := e.tryPerasFastCommit(ctx, delta); committed || err != nil {
 		if err != nil {
 			return fsmeta.CreateResult{}, err
 		}
@@ -662,7 +662,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		e.invalidateDirPages(req.Mount, req.Parent)
 		return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 	}
-	e.submitCapsuleShadow(ctx, delta)
+	e.submitPerasShadow(ctx, delta)
 	mutations := []*kvrpcpb.Mutation{
 		{
 			Op:                kvrpcpb.Mutation_Put,
@@ -822,111 +822,111 @@ func (e *Executor) atomicFastPathCounters(kind fsmeta.OperationKind) *atomicFast
 	return e.atomicFastPath[kind]
 }
 
-func (e *Executor) admitCapsuleAuthority(ctx context.Context, delta compile.SemanticDelta) error {
-	if e == nil || e.capsuleAuthority == nil {
+func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.SemanticDelta) error {
+	if e == nil || e.perasAuthority == nil {
 		return nil
 	}
 	if delta.Eligibility != compile.EligibilityFastPath {
-		e.capsuleAdmission.recordSlow(delta.SlowReason)
+		e.perasAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
-	e.capsuleAdmission.eligibleTotal.Add(1)
-	e.capsuleAdmission.acquireTotal.Add(1)
-	owned, err := e.capsuleAuthority.AcquireCapsuleAuthority(ctx, delta.Authority)
+	e.perasAdmission.eligibleTotal.Add(1)
+	e.perasAdmission.acquireTotal.Add(1)
+	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)
 	if err != nil {
-		e.capsuleAdmission.errorTotal.Add(1)
+		e.perasAdmission.errorTotal.Add(1)
 		return err
 	}
 	if !owned {
-		e.capsuleAdmission.heldTotal.Add(1)
-		return errCapsuleAuthorityNotHeld
+		e.perasAdmission.heldTotal.Add(1)
+		return errPerasAuthorityNotHeld
 	}
-	e.capsuleAdmission.ownedTotal.Add(1)
+	e.perasAdmission.ownedTotal.Add(1)
 	return nil
 }
 
-func (e *Executor) tryCapsuleFastCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
-	if e == nil || e.capsuleCommitter == nil {
+func (e *Executor) tryPerasFastCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+	if e == nil || e.perasCommitter == nil {
 		return false, nil
 	}
-	if e.capsuleAuthority == nil {
-		e.capsuleFast.skipNoAuthorityTotal.Add(1)
+	if e.perasAuthority == nil {
+		e.perasFast.skipNoAuthorityTotal.Add(1)
 		return false, nil
 	}
 	if delta.Eligibility != compile.EligibilityFastPath {
-		e.capsuleFast.skipIneligibleTotal.Add(1)
+		e.perasFast.skipIneligibleTotal.Add(1)
 		return false, nil
 	}
-	if !capsuleDeltaHasConcreteWrites(delta) {
-		e.capsuleFast.skipNonConcreteTotal.Add(1)
+	if !perasDeltaHasConcreteWrites(delta) {
+		e.perasFast.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
-	id := e.nextCapsuleOperationID(delta.Kind)
-	e.capsuleFast.attemptTotal.Add(1)
+	id := e.nextPerasOperationID(delta.Kind)
+	e.perasFast.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.capsuleCommitter.CommitCapsule(ctx, id, delta)
-	e.capsuleFast.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
+	_, err := e.perasCommitter.CommitPeras(ctx, id, delta)
+	e.perasFast.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
-		e.capsuleFast.errorTotal.Add(1)
+		e.perasFast.errorTotal.Add(1)
 		return true, err
 	}
-	e.capsuleFast.successTotal.Add(1)
+	e.perasFast.successTotal.Add(1)
 	return true, nil
 }
 
-func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.SemanticDelta) {
-	if e == nil || e.capsuleShadowSubmitter == nil {
+func (e *Executor) submitPerasShadow(ctx context.Context, delta compile.SemanticDelta) {
+	if e == nil || e.perasShadowSubmitter == nil {
 		return
 	}
-	if e.capsuleAuthority == nil {
-		e.capsuleShadow.skipNoAuthorityTotal.Add(1)
+	if e.perasAuthority == nil {
+		e.perasShadow.skipNoAuthorityTotal.Add(1)
 		return
 	}
 	if delta.Eligibility != compile.EligibilityFastPath {
-		e.capsuleShadow.skipIneligibleTotal.Add(1)
+		e.perasShadow.skipIneligibleTotal.Add(1)
 		return
 	}
-	if !capsuleDeltaHasConcreteWrites(delta) {
-		e.capsuleShadow.skipNonConcreteTotal.Add(1)
+	if !perasDeltaHasConcreteWrites(delta) {
+		e.perasShadow.skipNonConcreteTotal.Add(1)
 		return
 	}
-	id := e.nextCapsuleOperationID(delta.Kind)
-	e.capsuleShadow.submitTotal.Add(1)
+	id := e.nextPerasOperationID(delta.Kind)
+	e.perasShadow.submitTotal.Add(1)
 	start := time.Now()
-	if _, err := e.capsuleShadowSubmitter.SubmitCapsule(ctx, id, delta); err != nil {
-		e.capsuleShadow.errorTotal.Add(1)
+	if _, err := e.perasShadowSubmitter.SubmitPeras(ctx, id, delta); err != nil {
+		e.perasShadow.errorTotal.Add(1)
 	} else {
-		e.capsuleShadow.successTotal.Add(1)
+		e.perasShadow.successTotal.Add(1)
 	}
-	e.capsuleShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
+	e.perasShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 }
 
-func (e *Executor) capsuleOverlay() CapsuleOverlayReader {
-	if e == nil || e.capsuleCommitter == nil {
+func (e *Executor) perasOverlay() PerasOverlayReader {
+	if e == nil || e.perasCommitter == nil {
 		return nil
 	}
-	overlay, ok := e.capsuleCommitter.(CapsuleOverlayReader)
+	overlay, ok := e.perasCommitter.(PerasOverlayReader)
 	if !ok {
 		return nil
 	}
 	return overlay
 }
 
-func (e *Executor) capsuleOverlayGet(key []byte) ([]byte, bool, bool) {
-	overlay := e.capsuleOverlay()
+func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
+	overlay := e.perasOverlay()
 	if overlay == nil {
 		return nil, false, false
 	}
-	return overlay.GetCapsuleOverlay(key)
+	return overlay.GetPerasOverlay(key)
 }
 
-func (e *Executor) mergeCapsuleOverlayValues(keys [][]byte, values map[string][]byte) {
-	overlay := e.capsuleOverlay()
+func (e *Executor) mergePerasOverlayValues(keys [][]byte, values map[string][]byte) {
+	overlay := e.perasOverlay()
 	if overlay == nil {
 		return
 	}
 	for _, key := range keys {
-		value, deleted, ok := overlay.GetCapsuleOverlay(key)
+		value, deleted, ok := overlay.GetPerasOverlay(key)
 		if !ok {
 			continue
 		}
@@ -938,12 +938,12 @@ func (e *Executor) mergeCapsuleOverlayValues(keys [][]byte, values map[string][]
 	}
 }
 
-func (e *Executor) mergeCapsuleOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
-	overlay := e.capsuleOverlay()
+func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
+	overlay := e.perasOverlay()
 	if overlay == nil || limit == 0 {
 		return kvs
 	}
-	overlayKVs := overlay.ScanCapsuleOverlay(start, limit)
+	overlayKVs := overlay.ScanPerasOverlay(start, limit)
 	if len(overlayKVs) == 0 {
 		return kvs
 	}
@@ -974,15 +974,15 @@ func (e *Executor) mergeCapsuleOverlayScan(kvs []KV, start []byte, limit uint32)
 	return out
 }
 
-func (e *Executor) nextCapsuleOperationID(kind fsmeta.OperationKind) fscapsule.OperationID {
+func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.OperationID {
 	seq := uint64(1)
 	if e != nil {
-		seq = e.capsuleShadowSeq.Add(1)
+		seq = e.perasShadowSeq.Add(1)
 	}
-	return fscapsule.OperationID{ClientID: "fsmeta-exec/" + string(kind), Seq: seq}
+	return fsperas.OperationID{ClientID: "fsmeta-exec/" + string(kind), Seq: seq}
 }
 
-func capsuleDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
+func perasDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
 	if len(delta.WriteEffects) == 0 {
 		return false
 	}
@@ -1000,9 +1000,9 @@ func capsuleDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
 	return true
 }
 
-func (e *Executor) capsuleQuotaMode() compile.QuotaMode {
-	if e != nil && e.capsuleCommitter != nil {
-		// The experimental Capsule fast path models quota as authority-scoped
+func (e *Executor) perasQuotaMode() compile.QuotaMode {
+	if e != nil && e.perasCommitter != nil {
+		// The experimental Peras fast path models quota as authority-scoped
 		// escrow. The runtime still falls back for operations whose concrete
 		// write-set cannot be replayed from the compiled delta.
 		return compile.QuotaModeEscrow
@@ -1038,11 +1038,11 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		return fsmeta.InodeRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.UpdateInode(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
+	delta, err := compile.UpdateInode(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
 	plan := delta.Plan
@@ -1159,7 +1159,7 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
 	}
-	if value, deleted, ok := e.capsuleOverlayGet(plan.PrimaryKey); ok {
+	if value, deleted, ok := e.perasOverlayGet(plan.PrimaryKey); ok {
 		if deleted {
 			return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 		}
@@ -1317,7 +1317,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 			return err
 		}
 		if includeOverlay {
-			e.mergeCapsuleOverlayValues(inodeKeys, inodeValues)
+			e.mergePerasOverlayValues(inodeKeys, inodeValues)
 		}
 		pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
 		for i, dentry := range dentries {
@@ -1480,7 +1480,7 @@ func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, 
 	}
 	prefix := plan.ReadPrefixes[0]
 	if includeOverlay {
-		kvs = e.mergeCapsuleOverlayScan(kvs, plan.StartKey, plan.Limit)
+		kvs = e.mergePerasOverlayScan(kvs, plan.StartKey, plan.Limit)
 	}
 	out := make([]fsmeta.DentryRecord, 0, len(kvs))
 	for _, kv := range kvs {
@@ -1504,11 +1504,11 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.Link(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
+	delta, err := compile.Link(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
@@ -1624,11 +1624,11 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.Unlink(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
+	delta, err := compile.Unlink(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
@@ -1710,7 +1710,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	plan := delta.Plan
@@ -1821,7 +1821,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	plan := delta.Plan
@@ -1894,7 +1894,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 	if err != nil {
 		return err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
@@ -1949,7 +1949,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	if err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	plan := delta.Plan
@@ -2086,7 +2086,7 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
@@ -2124,7 +2124,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	if err != nil {
 		return err
 	}
-	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan

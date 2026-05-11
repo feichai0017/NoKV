@@ -58,8 +58,8 @@ const (
 	RootEventKind_ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED   RootEventKind = 29
 	RootEventKind_ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED         RootEventKind = 30
 	RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED             RootEventKind = 31
-	RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED   RootEventKind = 32
-	RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED   RootEventKind = 33
+	RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED     RootEventKind = 32
+	RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED     RootEventKind = 33
 )
 
 // Enum value maps for RootEventKind.
@@ -97,8 +97,8 @@ var (
 		29: "ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED",
 		30: "ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED",
 		31: "ROOT_EVENT_KIND_GRANT_INHERITED",
-		32: "ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED",
-		33: "ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED",
+		32: "ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED",
+		33: "ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED",
 	}
 	RootEventKind_value = map[string]int32{
 		"ROOT_EVENT_KIND_UNSPECIFIED":                 0,
@@ -133,8 +133,8 @@ var (
 		"ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED":   29,
 		"ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED":         30,
 		"ROOT_EVENT_KIND_GRANT_INHERITED":             31,
-		"ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED":   32,
-		"ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED":   33,
+		"ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED":     32,
+		"ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED":     33,
 	}
 )
 
@@ -416,104 +416,104 @@ func (RootGrantRetirementMode) EnumDescriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{5}
 }
 
-type RootCapsuleAuthorityAct int32
+type RootPerasAuthorityAct int32
 
 const (
-	RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED RootCapsuleAuthorityAct = 0
-	RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE     RootCapsuleAuthorityAct = 1
-	RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_RETIRE      RootCapsuleAuthorityAct = 2
+	RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED RootPerasAuthorityAct = 0
+	RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_ACQUIRE     RootPerasAuthorityAct = 1
+	RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_RETIRE      RootPerasAuthorityAct = 2
 )
 
-// Enum value maps for RootCapsuleAuthorityAct.
+// Enum value maps for RootPerasAuthorityAct.
 var (
-	RootCapsuleAuthorityAct_name = map[int32]string{
-		0: "ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED",
-		1: "ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE",
-		2: "ROOT_CAPSULE_AUTHORITY_ACT_RETIRE",
+	RootPerasAuthorityAct_name = map[int32]string{
+		0: "ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED",
+		1: "ROOT_PERAS_AUTHORITY_ACT_ACQUIRE",
+		2: "ROOT_PERAS_AUTHORITY_ACT_RETIRE",
 	}
-	RootCapsuleAuthorityAct_value = map[string]int32{
-		"ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED": 0,
-		"ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE":     1,
-		"ROOT_CAPSULE_AUTHORITY_ACT_RETIRE":      2,
+	RootPerasAuthorityAct_value = map[string]int32{
+		"ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED": 0,
+		"ROOT_PERAS_AUTHORITY_ACT_ACQUIRE":     1,
+		"ROOT_PERAS_AUTHORITY_ACT_RETIRE":      2,
 	}
 )
 
-func (x RootCapsuleAuthorityAct) Enum() *RootCapsuleAuthorityAct {
-	p := new(RootCapsuleAuthorityAct)
+func (x RootPerasAuthorityAct) Enum() *RootPerasAuthorityAct {
+	p := new(RootPerasAuthorityAct)
 	*p = x
 	return p
 }
 
-func (x RootCapsuleAuthorityAct) String() string {
+func (x RootPerasAuthorityAct) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (RootCapsuleAuthorityAct) Descriptor() protoreflect.EnumDescriptor {
+func (RootPerasAuthorityAct) Descriptor() protoreflect.EnumDescriptor {
 	return file_meta_root_proto_enumTypes[6].Descriptor()
 }
 
-func (RootCapsuleAuthorityAct) Type() protoreflect.EnumType {
+func (RootPerasAuthorityAct) Type() protoreflect.EnumType {
 	return &file_meta_root_proto_enumTypes[6]
 }
 
-func (x RootCapsuleAuthorityAct) Number() protoreflect.EnumNumber {
+func (x RootPerasAuthorityAct) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use RootCapsuleAuthorityAct.Descriptor instead.
-func (RootCapsuleAuthorityAct) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use RootPerasAuthorityAct.Descriptor instead.
+func (RootPerasAuthorityAct) EnumDescriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{6}
 }
 
-type RootCapsuleAuthorityApplyStatus int32
+type RootPerasAuthorityApplyStatus int32
 
 const (
-	RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED RootCapsuleAuthorityApplyStatus = 0
-	RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED     RootCapsuleAuthorityApplyStatus = 1
-	RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD        RootCapsuleAuthorityApplyStatus = 2
-	RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED     RootCapsuleAuthorityApplyStatus = 3
+	RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED RootPerasAuthorityApplyStatus = 0
+	RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED     RootPerasAuthorityApplyStatus = 1
+	RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD        RootPerasAuthorityApplyStatus = 2
+	RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED     RootPerasAuthorityApplyStatus = 3
 )
 
-// Enum value maps for RootCapsuleAuthorityApplyStatus.
+// Enum value maps for RootPerasAuthorityApplyStatus.
 var (
-	RootCapsuleAuthorityApplyStatus_name = map[int32]string{
-		0: "ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED",
-		1: "ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED",
-		2: "ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD",
-		3: "ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED",
+	RootPerasAuthorityApplyStatus_name = map[int32]string{
+		0: "ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED",
+		1: "ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED",
+		2: "ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD",
+		3: "ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED",
 	}
-	RootCapsuleAuthorityApplyStatus_value = map[string]int32{
-		"ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED": 0,
-		"ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED":     1,
-		"ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD":        2,
-		"ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED":     3,
+	RootPerasAuthorityApplyStatus_value = map[string]int32{
+		"ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED": 0,
+		"ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED":     1,
+		"ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD":        2,
+		"ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED":     3,
 	}
 )
 
-func (x RootCapsuleAuthorityApplyStatus) Enum() *RootCapsuleAuthorityApplyStatus {
-	p := new(RootCapsuleAuthorityApplyStatus)
+func (x RootPerasAuthorityApplyStatus) Enum() *RootPerasAuthorityApplyStatus {
+	p := new(RootPerasAuthorityApplyStatus)
 	*p = x
 	return p
 }
 
-func (x RootCapsuleAuthorityApplyStatus) String() string {
+func (x RootPerasAuthorityApplyStatus) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (RootCapsuleAuthorityApplyStatus) Descriptor() protoreflect.EnumDescriptor {
+func (RootPerasAuthorityApplyStatus) Descriptor() protoreflect.EnumDescriptor {
 	return file_meta_root_proto_enumTypes[7].Descriptor()
 }
 
-func (RootCapsuleAuthorityApplyStatus) Type() protoreflect.EnumType {
+func (RootPerasAuthorityApplyStatus) Type() protoreflect.EnumType {
 	return &file_meta_root_proto_enumTypes[7]
 }
 
-func (x RootCapsuleAuthorityApplyStatus) Number() protoreflect.EnumNumber {
+func (x RootPerasAuthorityApplyStatus) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use RootCapsuleAuthorityApplyStatus.Descriptor instead.
-func (RootCapsuleAuthorityApplyStatus) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use RootPerasAuthorityApplyStatus.Descriptor instead.
+func (RootPerasAuthorityApplyStatus) EnumDescriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{7}
 }
 
@@ -824,20 +824,20 @@ func (x *RootCursor) GetIndex() uint64 {
 }
 
 type RootState struct {
-	state                 protoimpl.MessageState       `protogen:"open.v1"`
-	ClusterEpoch          uint64                       `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
-	MembershipEpoch       uint64                       `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
-	LastCommitted         *RootCursor                  `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
-	IdFence               uint64                       `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
-	TsoFence              uint64                       `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
-	ActiveGrants          []*RootAuthorityGrant        `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
-	RetiredGrants         []*RootGrantRetirement       `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
-	GrantInheritances     []*RootGrantInheritance      `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
-	RetiredEraFloor       uint64                       `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
-	ActiveCapsuleGrants   []*RootCapsuleAuthorityGrant `protobuf:"bytes,11,rep,name=active_capsule_grants,json=activeCapsuleGrants,proto3" json:"active_capsule_grants,omitempty"`
-	CapsuleAuthorityEpoch uint64                       `protobuf:"varint,12,opt,name=capsule_authority_epoch,json=capsuleAuthorityEpoch,proto3" json:"capsule_authority_epoch,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state               protoimpl.MessageState     `protogen:"open.v1"`
+	ClusterEpoch        uint64                     `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
+	MembershipEpoch     uint64                     `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
+	LastCommitted       *RootCursor                `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
+	IdFence             uint64                     `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
+	TsoFence            uint64                     `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
+	ActiveGrants        []*RootAuthorityGrant      `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
+	RetiredGrants       []*RootGrantRetirement     `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
+	GrantInheritances   []*RootGrantInheritance    `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
+	RetiredEraFloor     uint64                     `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
+	ActivePerasGrants   []*RootPerasAuthorityGrant `protobuf:"bytes,11,rep,name=active_peras_grants,json=activePerasGrants,proto3" json:"active_peras_grants,omitempty"`
+	PerasAuthorityEpoch uint64                     `protobuf:"varint,12,opt,name=peras_authority_epoch,json=perasAuthorityEpoch,proto3" json:"peras_authority_epoch,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RootState) Reset() {
@@ -933,16 +933,16 @@ func (x *RootState) GetRetiredEraFloor() uint64 {
 	return 0
 }
 
-func (x *RootState) GetActiveCapsuleGrants() []*RootCapsuleAuthorityGrant {
+func (x *RootState) GetActivePerasGrants() []*RootPerasAuthorityGrant {
 	if x != nil {
-		return x.ActiveCapsuleGrants
+		return x.ActivePerasGrants
 	}
 	return nil
 }
 
-func (x *RootState) GetCapsuleAuthorityEpoch() uint64 {
+func (x *RootState) GetPerasAuthorityEpoch() uint64 {
 	if x != nil {
-		return x.CapsuleAuthorityEpoch
+		return x.PerasAuthorityEpoch
 	}
 	return 0
 }
@@ -2353,7 +2353,7 @@ func (x *RootGrantInheritance) GetInheritedAt() *RootCursor {
 	return nil
 }
 
-type RootCapsuleAuthorityScope struct {
+type RootPerasAuthorityScope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MountId       string                 `protobuf:"bytes,1,opt,name=mount_id,json=mountId,proto3" json:"mount_id,omitempty"`
 	MountKeyId    uint64                 `protobuf:"varint,2,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
@@ -2364,20 +2364,20 @@ type RootCapsuleAuthorityScope struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RootCapsuleAuthorityScope) Reset() {
-	*x = RootCapsuleAuthorityScope{}
+func (x *RootPerasAuthorityScope) Reset() {
+	*x = RootPerasAuthorityScope{}
 	mi := &file_meta_root_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootCapsuleAuthorityScope) String() string {
+func (x *RootPerasAuthorityScope) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootCapsuleAuthorityScope) ProtoMessage() {}
+func (*RootPerasAuthorityScope) ProtoMessage() {}
 
-func (x *RootCapsuleAuthorityScope) ProtoReflect() protoreflect.Message {
+func (x *RootPerasAuthorityScope) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2389,74 +2389,74 @@ func (x *RootCapsuleAuthorityScope) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootCapsuleAuthorityScope.ProtoReflect.Descriptor instead.
-func (*RootCapsuleAuthorityScope) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootPerasAuthorityScope.ProtoReflect.Descriptor instead.
+func (*RootPerasAuthorityScope) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *RootCapsuleAuthorityScope) GetMountId() string {
+func (x *RootPerasAuthorityScope) GetMountId() string {
 	if x != nil {
 		return x.MountId
 	}
 	return ""
 }
 
-func (x *RootCapsuleAuthorityScope) GetMountKeyId() uint64 {
+func (x *RootPerasAuthorityScope) GetMountKeyId() uint64 {
 	if x != nil {
 		return x.MountKeyId
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityScope) GetBuckets() []uint32 {
+func (x *RootPerasAuthorityScope) GetBuckets() []uint32 {
 	if x != nil {
 		return x.Buckets
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityScope) GetParents() []uint64 {
+func (x *RootPerasAuthorityScope) GetParents() []uint64 {
 	if x != nil {
 		return x.Parents
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityScope) GetInodes() []uint64 {
+func (x *RootPerasAuthorityScope) GetInodes() []uint64 {
 	if x != nil {
 		return x.Inodes
 	}
 	return nil
 }
 
-type RootCapsuleAuthorityGrant struct {
-	state             protoimpl.MessageState     `protogen:"open.v1"`
-	GrantId           string                     `protobuf:"bytes,1,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
-	EpochId           uint64                     `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	HolderId          string                     `protobuf:"bytes,3,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	Scope             *RootCapsuleAuthorityScope `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
-	ExpiresUnixNano   int64                      `protobuf:"varint,5,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
-	PredecessorDigest []byte                     `protobuf:"bytes,6,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
-	QuotaCreditBytes  int64                      `protobuf:"varint,7,opt,name=quota_credit_bytes,json=quotaCreditBytes,proto3" json:"quota_credit_bytes,omitempty"`
-	QuotaCreditInodes int64                      `protobuf:"varint,8,opt,name=quota_credit_inodes,json=quotaCreditInodes,proto3" json:"quota_credit_inodes,omitempty"`
+type RootPerasAuthorityGrant struct {
+	state             protoimpl.MessageState   `protogen:"open.v1"`
+	GrantId           string                   `protobuf:"bytes,1,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	EpochId           uint64                   `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	HolderId          string                   `protobuf:"bytes,3,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	Scope             *RootPerasAuthorityScope `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
+	ExpiresUnixNano   int64                    `protobuf:"varint,5,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
+	PredecessorDigest []byte                   `protobuf:"bytes,6,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
+	QuotaCreditBytes  int64                    `protobuf:"varint,7,opt,name=quota_credit_bytes,json=quotaCreditBytes,proto3" json:"quota_credit_bytes,omitempty"`
+	QuotaCreditInodes int64                    `protobuf:"varint,8,opt,name=quota_credit_inodes,json=quotaCreditInodes,proto3" json:"quota_credit_inodes,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *RootCapsuleAuthorityGrant) Reset() {
-	*x = RootCapsuleAuthorityGrant{}
+func (x *RootPerasAuthorityGrant) Reset() {
+	*x = RootPerasAuthorityGrant{}
 	mi := &file_meta_root_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootCapsuleAuthorityGrant) String() string {
+func (x *RootPerasAuthorityGrant) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootCapsuleAuthorityGrant) ProtoMessage() {}
+func (*RootPerasAuthorityGrant) ProtoMessage() {}
 
-func (x *RootCapsuleAuthorityGrant) ProtoReflect() protoreflect.Message {
+func (x *RootPerasAuthorityGrant) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2468,96 +2468,96 @@ func (x *RootCapsuleAuthorityGrant) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootCapsuleAuthorityGrant.ProtoReflect.Descriptor instead.
-func (*RootCapsuleAuthorityGrant) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootPerasAuthorityGrant.ProtoReflect.Descriptor instead.
+func (*RootPerasAuthorityGrant) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *RootCapsuleAuthorityGrant) GetGrantId() string {
+func (x *RootPerasAuthorityGrant) GetGrantId() string {
 	if x != nil {
 		return x.GrantId
 	}
 	return ""
 }
 
-func (x *RootCapsuleAuthorityGrant) GetEpochId() uint64 {
+func (x *RootPerasAuthorityGrant) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityGrant) GetHolderId() string {
+func (x *RootPerasAuthorityGrant) GetHolderId() string {
 	if x != nil {
 		return x.HolderId
 	}
 	return ""
 }
 
-func (x *RootCapsuleAuthorityGrant) GetScope() *RootCapsuleAuthorityScope {
+func (x *RootPerasAuthorityGrant) GetScope() *RootPerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityGrant) GetExpiresUnixNano() int64 {
+func (x *RootPerasAuthorityGrant) GetExpiresUnixNano() int64 {
 	if x != nil {
 		return x.ExpiresUnixNano
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityGrant) GetPredecessorDigest() []byte {
+func (x *RootPerasAuthorityGrant) GetPredecessorDigest() []byte {
 	if x != nil {
 		return x.PredecessorDigest
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityGrant) GetQuotaCreditBytes() int64 {
+func (x *RootPerasAuthorityGrant) GetQuotaCreditBytes() int64 {
 	if x != nil {
 		return x.QuotaCreditBytes
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityGrant) GetQuotaCreditInodes() int64 {
+func (x *RootPerasAuthorityGrant) GetQuotaCreditInodes() int64 {
 	if x != nil {
 		return x.QuotaCreditInodes
 	}
 	return 0
 }
 
-type RootCapsuleAuthorityCommand struct {
-	state             protoimpl.MessageState     `protogen:"open.v1"`
-	Kind              RootCapsuleAuthorityAct    `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.RootCapsuleAuthorityAct" json:"kind,omitempty"`
-	HolderId          string                     `protobuf:"bytes,2,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	GrantId           string                     `protobuf:"bytes,3,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
-	Scope             *RootCapsuleAuthorityScope `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
-	ExpiresUnixNano   int64                      `protobuf:"varint,5,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
-	NowUnixNano       int64                      `protobuf:"varint,6,opt,name=now_unix_nano,json=nowUnixNano,proto3" json:"now_unix_nano,omitempty"`
-	PredecessorDigest []byte                     `protobuf:"bytes,7,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
-	QuotaCreditBytes  int64                      `protobuf:"varint,8,opt,name=quota_credit_bytes,json=quotaCreditBytes,proto3" json:"quota_credit_bytes,omitempty"`
-	QuotaCreditInodes int64                      `protobuf:"varint,9,opt,name=quota_credit_inodes,json=quotaCreditInodes,proto3" json:"quota_credit_inodes,omitempty"`
+type RootPerasAuthorityCommand struct {
+	state             protoimpl.MessageState   `protogen:"open.v1"`
+	Kind              RootPerasAuthorityAct    `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.RootPerasAuthorityAct" json:"kind,omitempty"`
+	HolderId          string                   `protobuf:"bytes,2,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	GrantId           string                   `protobuf:"bytes,3,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	Scope             *RootPerasAuthorityScope `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
+	ExpiresUnixNano   int64                    `protobuf:"varint,5,opt,name=expires_unix_nano,json=expiresUnixNano,proto3" json:"expires_unix_nano,omitempty"`
+	NowUnixNano       int64                    `protobuf:"varint,6,opt,name=now_unix_nano,json=nowUnixNano,proto3" json:"now_unix_nano,omitempty"`
+	PredecessorDigest []byte                   `protobuf:"bytes,7,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
+	QuotaCreditBytes  int64                    `protobuf:"varint,8,opt,name=quota_credit_bytes,json=quotaCreditBytes,proto3" json:"quota_credit_bytes,omitempty"`
+	QuotaCreditInodes int64                    `protobuf:"varint,9,opt,name=quota_credit_inodes,json=quotaCreditInodes,proto3" json:"quota_credit_inodes,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *RootCapsuleAuthorityCommand) Reset() {
-	*x = RootCapsuleAuthorityCommand{}
+func (x *RootPerasAuthorityCommand) Reset() {
+	*x = RootPerasAuthorityCommand{}
 	mi := &file_meta_root_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootCapsuleAuthorityCommand) String() string {
+func (x *RootPerasAuthorityCommand) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootCapsuleAuthorityCommand) ProtoMessage() {}
+func (*RootPerasAuthorityCommand) ProtoMessage() {}
 
-func (x *RootCapsuleAuthorityCommand) ProtoReflect() protoreflect.Message {
+func (x *RootPerasAuthorityCommand) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2569,68 +2569,68 @@ func (x *RootCapsuleAuthorityCommand) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootCapsuleAuthorityCommand.ProtoReflect.Descriptor instead.
-func (*RootCapsuleAuthorityCommand) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootPerasAuthorityCommand.ProtoReflect.Descriptor instead.
+func (*RootPerasAuthorityCommand) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *RootCapsuleAuthorityCommand) GetKind() RootCapsuleAuthorityAct {
+func (x *RootPerasAuthorityCommand) GetKind() RootPerasAuthorityAct {
 	if x != nil {
 		return x.Kind
 	}
-	return RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED
+	return RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED
 }
 
-func (x *RootCapsuleAuthorityCommand) GetHolderId() string {
+func (x *RootPerasAuthorityCommand) GetHolderId() string {
 	if x != nil {
 		return x.HolderId
 	}
 	return ""
 }
 
-func (x *RootCapsuleAuthorityCommand) GetGrantId() string {
+func (x *RootPerasAuthorityCommand) GetGrantId() string {
 	if x != nil {
 		return x.GrantId
 	}
 	return ""
 }
 
-func (x *RootCapsuleAuthorityCommand) GetScope() *RootCapsuleAuthorityScope {
+func (x *RootPerasAuthorityCommand) GetScope() *RootPerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityCommand) GetExpiresUnixNano() int64 {
+func (x *RootPerasAuthorityCommand) GetExpiresUnixNano() int64 {
 	if x != nil {
 		return x.ExpiresUnixNano
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityCommand) GetNowUnixNano() int64 {
+func (x *RootPerasAuthorityCommand) GetNowUnixNano() int64 {
 	if x != nil {
 		return x.NowUnixNano
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityCommand) GetPredecessorDigest() []byte {
+func (x *RootPerasAuthorityCommand) GetPredecessorDigest() []byte {
 	if x != nil {
 		return x.PredecessorDigest
 	}
 	return nil
 }
 
-func (x *RootCapsuleAuthorityCommand) GetQuotaCreditBytes() int64 {
+func (x *RootPerasAuthorityCommand) GetQuotaCreditBytes() int64 {
 	if x != nil {
 		return x.QuotaCreditBytes
 	}
 	return 0
 }
 
-func (x *RootCapsuleAuthorityCommand) GetQuotaCreditInodes() int64 {
+func (x *RootPerasAuthorityCommand) GetQuotaCreditInodes() int64 {
 	if x != nil {
 		return x.QuotaCreditInodes
 	}
@@ -3564,7 +3564,7 @@ type RootEvent struct {
 	//	*RootEvent_Mount
 	//	*RootEvent_SubtreeAuthority
 	//	*RootEvent_QuotaFence
-	//	*RootEvent_CapsuleAuthorityGrant
+	//	*RootEvent_PerasAuthorityGrant
 	Payload       isRootEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3740,10 +3740,10 @@ func (x *RootEvent) GetQuotaFence() *RootQuotaFence {
 	return nil
 }
 
-func (x *RootEvent) GetCapsuleAuthorityGrant() *RootCapsuleAuthorityGrant {
+func (x *RootEvent) GetPerasAuthorityGrant() *RootPerasAuthorityGrant {
 	if x != nil {
-		if x, ok := x.Payload.(*RootEvent_CapsuleAuthorityGrant); ok {
-			return x.CapsuleAuthorityGrant
+		if x, ok := x.Payload.(*RootEvent_PerasAuthorityGrant); ok {
+			return x.PerasAuthorityGrant
 		}
 	}
 	return nil
@@ -3809,8 +3809,8 @@ type RootEvent_QuotaFence struct {
 	QuotaFence *RootQuotaFence `protobuf:"bytes,15,opt,name=quota_fence,json=quotaFence,proto3,oneof"`
 }
 
-type RootEvent_CapsuleAuthorityGrant struct {
-	CapsuleAuthorityGrant *RootCapsuleAuthorityGrant `protobuf:"bytes,16,opt,name=capsule_authority_grant,json=capsuleAuthorityGrant,proto3,oneof"`
+type RootEvent_PerasAuthorityGrant struct {
+	PerasAuthorityGrant *RootPerasAuthorityGrant `protobuf:"bytes,16,opt,name=peras_authority_grant,json=perasAuthorityGrant,proto3,oneof"`
 }
 
 func (*RootEvent_StoreMembership) isRootEvent_Payload() {}
@@ -3841,7 +3841,7 @@ func (*RootEvent_SubtreeAuthority) isRootEvent_Payload() {}
 
 func (*RootEvent_QuotaFence) isRootEvent_Payload() {}
 
-func (*RootEvent_CapsuleAuthorityGrant) isRootEvent_Payload() {}
+func (*RootEvent_PerasAuthorityGrant) isRootEvent_Payload() {}
 
 type MetadataRootSnapshotRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -4475,27 +4475,27 @@ func (x *MetadataRootApplyGrantResponse) GetCertificate() *RootGrantCertificate 
 	return nil
 }
 
-type MetadataRootApplyCapsuleAuthorityRequest struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	Command       *RootCapsuleAuthorityCommand `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+type MetadataRootApplyPerasAuthorityRequest struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	Command       *RootPerasAuthorityCommand `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityRequest) Reset() {
-	*x = MetadataRootApplyCapsuleAuthorityRequest{}
+func (x *MetadataRootApplyPerasAuthorityRequest) Reset() {
+	*x = MetadataRootApplyPerasAuthorityRequest{}
 	mi := &file_meta_root_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityRequest) String() string {
+func (x *MetadataRootApplyPerasAuthorityRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MetadataRootApplyCapsuleAuthorityRequest) ProtoMessage() {}
+func (*MetadataRootApplyPerasAuthorityRequest) ProtoMessage() {}
 
-func (x *MetadataRootApplyCapsuleAuthorityRequest) ProtoReflect() protoreflect.Message {
+func (x *MetadataRootApplyPerasAuthorityRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4507,41 +4507,41 @@ func (x *MetadataRootApplyCapsuleAuthorityRequest) ProtoReflect() protoreflect.M
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MetadataRootApplyCapsuleAuthorityRequest.ProtoReflect.Descriptor instead.
-func (*MetadataRootApplyCapsuleAuthorityRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use MetadataRootApplyPerasAuthorityRequest.ProtoReflect.Descriptor instead.
+func (*MetadataRootApplyPerasAuthorityRequest) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{49}
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityRequest) GetCommand() *RootCapsuleAuthorityCommand {
+func (x *MetadataRootApplyPerasAuthorityRequest) GetCommand() *RootPerasAuthorityCommand {
 	if x != nil {
 		return x.Command
 	}
 	return nil
 }
 
-type MetadataRootApplyCapsuleAuthorityResponse struct {
-	state         protoimpl.MessageState          `protogen:"open.v1"`
-	State         *RootState                      `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	Status        RootCapsuleAuthorityApplyStatus `protobuf:"varint,2,opt,name=status,proto3,enum=nokv.meta.v1.RootCapsuleAuthorityApplyStatus" json:"status,omitempty"`
-	Grant         *RootCapsuleAuthorityGrant      `protobuf:"bytes,3,opt,name=grant,proto3" json:"grant,omitempty"`
+type MetadataRootApplyPerasAuthorityResponse struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	State         *RootState                    `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Status        RootPerasAuthorityApplyStatus `protobuf:"varint,2,opt,name=status,proto3,enum=nokv.meta.v1.RootPerasAuthorityApplyStatus" json:"status,omitempty"`
+	Grant         *RootPerasAuthorityGrant      `protobuf:"bytes,3,opt,name=grant,proto3" json:"grant,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) Reset() {
-	*x = MetadataRootApplyCapsuleAuthorityResponse{}
+func (x *MetadataRootApplyPerasAuthorityResponse) Reset() {
+	*x = MetadataRootApplyPerasAuthorityResponse{}
 	mi := &file_meta_root_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) String() string {
+func (x *MetadataRootApplyPerasAuthorityResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MetadataRootApplyCapsuleAuthorityResponse) ProtoMessage() {}
+func (*MetadataRootApplyPerasAuthorityResponse) ProtoMessage() {}
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) ProtoReflect() protoreflect.Message {
+func (x *MetadataRootApplyPerasAuthorityResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4553,26 +4553,26 @@ func (x *MetadataRootApplyCapsuleAuthorityResponse) ProtoReflect() protoreflect.
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MetadataRootApplyCapsuleAuthorityResponse.ProtoReflect.Descriptor instead.
-func (*MetadataRootApplyCapsuleAuthorityResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use MetadataRootApplyPerasAuthorityResponse.ProtoReflect.Descriptor instead.
+func (*MetadataRootApplyPerasAuthorityResponse) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{50}
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) GetState() *RootState {
+func (x *MetadataRootApplyPerasAuthorityResponse) GetState() *RootState {
 	if x != nil {
 		return x.State
 	}
 	return nil
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) GetStatus() RootCapsuleAuthorityApplyStatus {
+func (x *MetadataRootApplyPerasAuthorityResponse) GetStatus() RootPerasAuthorityApplyStatus {
 	if x != nil {
 		return x.Status
 	}
-	return RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED
+	return RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED
 }
 
-func (x *MetadataRootApplyCapsuleAuthorityResponse) GetGrant() *RootCapsuleAuthorityGrant {
+func (x *MetadataRootApplyPerasAuthorityResponse) GetGrant() *RootPerasAuthorityGrant {
 	if x != nil {
 		return x.Grant
 	}
@@ -5087,7 +5087,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"RootCursor\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
-	"\x05index\x18\x02 \x01(\x04R\x05index\"\xf9\x04\n" +
+	"\x05index\x18\x02 \x01(\x04R\x05index\"\xef\x04\n" +
 	"\tRootState\x12#\n" +
 	"\rcluster_epoch\x18\x01 \x01(\x04R\fclusterEpoch\x12)\n" +
 	"\x10membership_epoch\x18\x02 \x01(\x04R\x0fmembershipEpoch\x12?\n" +
@@ -5098,9 +5098,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0eretired_grants\x18\b \x03(\v2!.nokv.meta.v1.RootGrantRetirementR\rretiredGrants\x12Q\n" +
 	"\x12grant_inheritances\x18\t \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12*\n" +
 	"\x11retired_era_floor\x18\n" +
-	" \x01(\x04R\x0fretiredEraFloor\x12[\n" +
-	"\x15active_capsule_grants\x18\v \x03(\v2'.nokv.meta.v1.RootCapsuleAuthorityGrantR\x13activeCapsuleGrants\x126\n" +
-	"\x17capsule_authority_epoch\x18\f \x01(\x04R\x15capsuleAuthorityEpoch\"\xf5\x04\n" +
+	" \x01(\x04R\x0fretiredEraFloor\x12U\n" +
+	"\x13active_peras_grants\x18\v \x03(\v2%.nokv.meta.v1.RootPerasAuthorityGrantR\x11activePerasGrants\x122\n" +
+	"\x15peras_authority_epoch\x18\f \x01(\x04R\x13perasAuthorityEpoch\"\xf5\x04\n" +
 	"\x0eRootCheckpoint\x12-\n" +
 	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12@\n" +
 	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\x12\x1f\n" +
@@ -5227,28 +5227,28 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x14RootGrantInheritance\x120\n" +
 	"\x14predecessor_grant_id\x18\x01 \x01(\tR\x12predecessorGrantId\x12,\n" +
 	"\x12successor_grant_id\x18\x02 \x01(\tR\x10successorGrantId\x12;\n" +
-	"\finherited_at\x18\x03 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vinheritedAt\"\xa4\x01\n" +
-	"\x19RootCapsuleAuthorityScope\x12\x19\n" +
+	"\finherited_at\x18\x03 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vinheritedAt\"\xa2\x01\n" +
+	"\x17RootPerasAuthorityScope\x12\x19\n" +
 	"\bmount_id\x18\x01 \x01(\tR\amountId\x12 \n" +
 	"\fmount_key_id\x18\x02 \x01(\x04R\n" +
 	"mountKeyId\x12\x18\n" +
 	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
 	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
-	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xe6\x02\n" +
-	"\x19RootCapsuleAuthorityGrant\x12\x19\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xe2\x02\n" +
+	"\x17RootPerasAuthorityGrant\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x12\x19\n" +
 	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
-	"\tholder_id\x18\x03 \x01(\tR\bholderId\x12=\n" +
-	"\x05scope\x18\x04 \x01(\v2'.nokv.meta.v1.RootCapsuleAuthorityScopeR\x05scope\x12*\n" +
+	"\tholder_id\x18\x03 \x01(\tR\bholderId\x12;\n" +
+	"\x05scope\x18\x04 \x01(\v2%.nokv.meta.v1.RootPerasAuthorityScopeR\x05scope\x12*\n" +
 	"\x11expires_unix_nano\x18\x05 \x01(\x03R\x0fexpiresUnixNano\x12-\n" +
 	"\x12predecessor_digest\x18\x06 \x01(\fR\x11predecessorDigest\x12,\n" +
 	"\x12quota_credit_bytes\x18\a \x01(\x03R\x10quotaCreditBytes\x12.\n" +
-	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\"\xac\x03\n" +
-	"\x1bRootCapsuleAuthorityCommand\x129\n" +
-	"\x04kind\x18\x01 \x01(\x0e2%.nokv.meta.v1.RootCapsuleAuthorityActR\x04kind\x12\x1b\n" +
+	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\"\xa6\x03\n" +
+	"\x19RootPerasAuthorityCommand\x127\n" +
+	"\x04kind\x18\x01 \x01(\x0e2#.nokv.meta.v1.RootPerasAuthorityActR\x04kind\x12\x1b\n" +
 	"\tholder_id\x18\x02 \x01(\tR\bholderId\x12\x19\n" +
-	"\bgrant_id\x18\x03 \x01(\tR\agrantId\x12=\n" +
-	"\x05scope\x18\x04 \x01(\v2'.nokv.meta.v1.RootCapsuleAuthorityScopeR\x05scope\x12*\n" +
+	"\bgrant_id\x18\x03 \x01(\tR\agrantId\x12;\n" +
+	"\x05scope\x18\x04 \x01(\v2%.nokv.meta.v1.RootPerasAuthorityScopeR\x05scope\x12*\n" +
 	"\x11expires_unix_nano\x18\x05 \x01(\x03R\x0fexpiresUnixNano\x12\"\n" +
 	"\rnow_unix_nano\x18\x06 \x01(\x03R\vnowUnixNano\x12-\n" +
 	"\x12predecessor_digest\x18\a \x01(\fR\x11predecessorDigest\x12,\n" +
@@ -5330,7 +5330,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\tbase_left\x18\n" +
 	" \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\bbaseLeft\x12=\n" +
 	"\n" +
-	"base_right\x18\v \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\x93\t\n" +
+	"base_right\x18\v \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\tbaseRight\"\x8d\t\n" +
 	"\tRootEvent\x12/\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1b.nokv.meta.v1.RootEventKindR\x04kind\x12N\n" +
 	"\x10store_membership\x18\x02 \x01(\v2!.nokv.meta.v1.RootStoreMembershipH\x00R\x0fstoreMembership\x12K\n" +
@@ -5351,8 +5351,8 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05mount\x18\r \x01(\v2\x17.nokv.meta.v1.RootMountH\x00R\x05mount\x12Q\n" +
 	"\x11subtree_authority\x18\x0e \x01(\v2\".nokv.meta.v1.RootSubtreeAuthorityH\x00R\x10subtreeAuthority\x12?\n" +
 	"\vquota_fence\x18\x0f \x01(\v2\x1c.nokv.meta.v1.RootQuotaFenceH\x00R\n" +
-	"quotaFence\x12a\n" +
-	"\x17capsule_authority_grant\x18\x10 \x01(\v2'.nokv.meta.v1.RootCapsuleAuthorityGrantH\x00R\x15capsuleAuthorityGrantB\t\n" +
+	"quotaFence\x12[\n" +
+	"\x15peras_authority_grant\x18\x10 \x01(\v2%.nokv.meta.v1.RootPerasAuthorityGrantH\x00R\x13perasAuthorityGrantB\t\n" +
 	"\apayload\"\x1d\n" +
 	"\x1bMetadataRootSnapshotRequest\"\\\n" +
 	"\x1cMetadataRootSnapshotResponse\x12<\n" +
@@ -5392,13 +5392,13 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x1eMetadataRootApplyGrantResponse\x124\n" +
 	"\x05state\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RootEunomiaStateR\x05state\x12:\n" +
 	"\x06status\x18\x02 \x01(\x0e2\".nokv.meta.v1.RootGrantApplyStatusR\x06status\x12D\n" +
-	"\vcertificate\x18\x03 \x01(\v2\".nokv.meta.v1.RootGrantCertificateR\vcertificate\"o\n" +
-	"(MetadataRootApplyCapsuleAuthorityRequest\x12C\n" +
-	"\acommand\x18\x01 \x01(\v2).nokv.meta.v1.RootCapsuleAuthorityCommandR\acommand\"\xe0\x01\n" +
-	")MetadataRootApplyCapsuleAuthorityResponse\x12-\n" +
-	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12E\n" +
-	"\x06status\x18\x02 \x01(\x0e2-.nokv.meta.v1.RootCapsuleAuthorityApplyStatusR\x06status\x12=\n" +
-	"\x05grant\x18\x03 \x01(\v2'.nokv.meta.v1.RootCapsuleAuthorityGrantR\x05grant\"]\n" +
+	"\vcertificate\x18\x03 \x01(\v2\".nokv.meta.v1.RootGrantCertificateR\vcertificate\"k\n" +
+	"&MetadataRootApplyPerasAuthorityRequest\x12A\n" +
+	"\acommand\x18\x01 \x01(\v2'.nokv.meta.v1.RootPerasAuthorityCommandR\acommand\"\xda\x01\n" +
+	"'MetadataRootApplyPerasAuthorityResponse\x12-\n" +
+	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12C\n" +
+	"\x06status\x18\x02 \x01(\x0e2+.nokv.meta.v1.RootPerasAuthorityApplyStatusR\x06status\x12;\n" +
+	"\x05grant\x18\x03 \x01(\v2%.nokv.meta.v1.RootPerasAuthorityGrantR\x05grant\"]\n" +
 	"\rRootTailToken\x120\n" +
 	"\x06cursor\x18\x01 \x01(\v2\x18.nokv.meta.v1.RootCursorR\x06cursor\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\"u\n" +
@@ -5436,7 +5436,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"checkpoint\x18\x03 \x01(\v2\x1c.nokv.meta.v1.RootCheckpointR\n" +
 	"checkpoint\x123\n" +
-	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xf3\n" +
+	"\x04tail\x18\x04 \x01(\v2\x1f.nokv.meta.v1.RootCommittedTailR\x04tail*\xef\n" +
 	"\n" +
 	"\rRootEventKind\x12\x1f\n" +
 	"\x1bROOT_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
@@ -5471,9 +5471,9 @@ const file_meta_root_proto_rawDesc = "" +
 	"'ROOT_EVENT_KIND_SUBTREE_HANDOFF_STARTED\x10\x1c\x12-\n" +
 	")ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED\x10\x1d\x12'\n" +
 	"#ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED\x10\x1e\x12#\n" +
-	"\x1fROOT_EVENT_KIND_GRANT_INHERITED\x10\x1f\x12-\n" +
-	")ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED\x10 \x12-\n" +
-	")ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED\x10!*m\n" +
+	"\x1fROOT_EVENT_KIND_GRANT_INHERITED\x10\x1f\x12+\n" +
+	"'ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED\x10 \x12+\n" +
+	"'ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED\x10!*m\n" +
 	"\x0eRootStoreState\x12 \n" +
 	"\x1cROOT_STORE_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ROOT_STORE_STATE_ACTIVE\x10\x01\x12\x1c\n" +
@@ -5495,16 +5495,16 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x17RootGrantRetirementMode\x12*\n" +
 	"&ROOT_GRANT_RETIREMENT_MODE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'ROOT_GRANT_RETIREMENT_MODE_SEALED_EXACT\x10\x01\x12,\n" +
-	"(ROOT_GRANT_RETIREMENT_MODE_EXPIRED_BOUND\x10\x02*\x94\x01\n" +
-	"\x17RootCapsuleAuthorityAct\x12*\n" +
-	"&ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED\x10\x00\x12&\n" +
-	"\"ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE\x10\x01\x12%\n" +
-	"!ROOT_CAPSULE_AUTHORITY_ACT_RETIRE\x10\x02*\xe6\x01\n" +
-	"\x1fRootCapsuleAuthorityApplyStatus\x123\n" +
-	"/ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED\x10\x00\x12/\n" +
-	"+ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED\x10\x01\x12,\n" +
-	"(ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD\x10\x02\x12/\n" +
-	"+ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED\x10\x03*\xa1\x01\n" +
+	"(ROOT_GRANT_RETIREMENT_MODE_EXPIRED_BOUND\x10\x02*\x8c\x01\n" +
+	"\x15RootPerasAuthorityAct\x12(\n" +
+	"$ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED\x10\x00\x12$\n" +
+	" ROOT_PERAS_AUTHORITY_ACT_ACQUIRE\x10\x01\x12#\n" +
+	"\x1fROOT_PERAS_AUTHORITY_ACT_RETIRE\x10\x02*\xdc\x01\n" +
+	"\x1dRootPerasAuthorityApplyStatus\x121\n" +
+	"-ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED\x10\x00\x12-\n" +
+	")ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED\x10\x01\x12*\n" +
+	"&ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD\x10\x02\x12-\n" +
+	")ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED\x10\x03*\xa1\x01\n" +
 	"\x19RootPendingPeerChangeKind\x12-\n" +
 	")ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED\x10\x00\x12*\n" +
 	"&ROOT_PENDING_PEER_CHANGE_KIND_ADDITION\x10\x01\x12)\n" +
@@ -5527,15 +5527,15 @@ const file_meta_root_proto_rawDesc = "" +
 	"#ROOT_GRANT_APPLY_STATUS_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fROOT_GRANT_APPLY_STATUS_GRANTED\x10\x01\x12 \n" +
 	"\x1cROOT_GRANT_APPLY_STATUS_HELD\x10\x02\x12#\n" +
-	"\x1fROOT_GRANT_APPLY_STATUS_RETIRED\x10\x032\xde\a\n" +
+	"\x1fROOT_GRANT_APPLY_STATUS_RETIRED\x10\x032\xd8\a\n" +
 	"\fMetadataRoot\x12a\n" +
 	"\bSnapshot\x12).nokv.meta.v1.MetadataRootSnapshotRequest\x1a*.nokv.meta.v1.MetadataRootSnapshotResponse\x12[\n" +
 	"\x06Append\x12'.nokv.meta.v1.MetadataRootAppendRequest\x1a(.nokv.meta.v1.MetadataRootAppendResponse\x12s\n" +
 	"\x0eFenceAllocator\x12/.nokv.meta.v1.MetadataRootFenceAllocatorRequest\x1a0.nokv.meta.v1.MetadataRootFenceAllocatorResponse\x12[\n" +
 	"\x06Status\x12'.nokv.meta.v1.MetadataRootStatusRequest\x1a(.nokv.meta.v1.MetadataRootStatusResponse\x12g\n" +
 	"\n" +
-	"ApplyGrant\x12+.nokv.meta.v1.MetadataRootApplyGrantRequest\x1a,.nokv.meta.v1.MetadataRootApplyGrantResponse\x12\x88\x01\n" +
-	"\x15ApplyCapsuleAuthority\x126.nokv.meta.v1.MetadataRootApplyCapsuleAuthorityRequest\x1a7.nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse\x12y\n" +
+	"ApplyGrant\x12+.nokv.meta.v1.MetadataRootApplyGrantRequest\x1a,.nokv.meta.v1.MetadataRootApplyGrantResponse\x12\x82\x01\n" +
+	"\x13ApplyPerasAuthority\x124.nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest\x1a5.nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse\x12y\n" +
 	"\x10ObserveCommitted\x121.nokv.meta.v1.MetadataRootObserveCommittedRequest\x1a2.nokv.meta.v1.MetadataRootObserveCommittedResponse\x12j\n" +
 	"\vObserveTail\x12,.nokv.meta.v1.MetadataRootObserveTailRequest\x1a-.nokv.meta.v1.MetadataRootObserveTailResponse\x12a\n" +
 	"\bWaitTail\x12).nokv.meta.v1.MetadataRootWaitTailRequest\x1a*.nokv.meta.v1.MetadataRootWaitTailResponseB,Z*github.com/feichai0017/NoKV/pb/meta;metapbb\x06proto3"
@@ -5555,87 +5555,87 @@ func file_meta_root_proto_rawDescGZIP() []byte {
 var file_meta_root_proto_enumTypes = make([]protoimpl.EnumInfo, 13)
 var file_meta_root_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_meta_root_proto_goTypes = []any{
-	(RootEventKind)(0),                                // 0: nokv.meta.v1.RootEventKind
-	(RootStoreState)(0),                               // 1: nokv.meta.v1.RootStoreState
-	(RootMountState)(0),                               // 2: nokv.meta.v1.RootMountState
-	(RootSubtreeAuthorityState)(0),                    // 3: nokv.meta.v1.RootSubtreeAuthorityState
-	(RootDutyScopeKind)(0),                            // 4: nokv.meta.v1.RootDutyScopeKind
-	(RootGrantRetirementMode)(0),                      // 5: nokv.meta.v1.RootGrantRetirementMode
-	(RootCapsuleAuthorityAct)(0),                      // 6: nokv.meta.v1.RootCapsuleAuthorityAct
-	(RootCapsuleAuthorityApplyStatus)(0),              // 7: nokv.meta.v1.RootCapsuleAuthorityApplyStatus
-	(RootPendingPeerChangeKind)(0),                    // 8: nokv.meta.v1.RootPendingPeerChangeKind
-	(RootPendingRangeChangeKind)(0),                   // 9: nokv.meta.v1.RootPendingRangeChangeKind
-	(RootAllocatorKind)(0),                            // 10: nokv.meta.v1.RootAllocatorKind
-	(RootGrantAct)(0),                                 // 11: nokv.meta.v1.RootGrantAct
-	(RootGrantApplyStatus)(0),                         // 12: nokv.meta.v1.RootGrantApplyStatus
-	(*RootCursor)(nil),                                // 13: nokv.meta.v1.RootCursor
-	(*RootState)(nil),                                 // 14: nokv.meta.v1.RootState
-	(*RootCheckpoint)(nil),                            // 15: nokv.meta.v1.RootCheckpoint
-	(*RootStoreMembership)(nil),                       // 16: nokv.meta.v1.RootStoreMembership
-	(*RootStore)(nil),                                 // 17: nokv.meta.v1.RootStore
-	(*RootSnapshotEpoch)(nil),                         // 18: nokv.meta.v1.RootSnapshotEpoch
-	(*RootMount)(nil),                                 // 19: nokv.meta.v1.RootMount
-	(*RootSubtreeAuthority)(nil),                      // 20: nokv.meta.v1.RootSubtreeAuthority
-	(*RootQuotaFence)(nil),                            // 21: nokv.meta.v1.RootQuotaFence
-	(*RootAllocatorFence)(nil),                        // 22: nokv.meta.v1.RootAllocatorFence
-	(*RootDutyScope)(nil),                             // 23: nokv.meta.v1.RootDutyScope
-	(*RootMonotoneBound)(nil),                         // 24: nokv.meta.v1.RootMonotoneBound
-	(*RootVersionBound)(nil),                          // 25: nokv.meta.v1.RootVersionBound
-	(*RootBudgetBound)(nil),                           // 26: nokv.meta.v1.RootBudgetBound
-	(*RootEpochBound)(nil),                            // 27: nokv.meta.v1.RootEpochBound
-	(*RootDutyBound)(nil),                             // 28: nokv.meta.v1.RootDutyBound
-	(*RootDutyGrant)(nil),                             // 29: nokv.meta.v1.RootDutyGrant
-	(*RootAuthorityGrant)(nil),                        // 30: nokv.meta.v1.RootAuthorityGrant
-	(*RootGrantRetirement)(nil),                       // 31: nokv.meta.v1.RootGrantRetirement
-	(*RootGrantInheritance)(nil),                      // 32: nokv.meta.v1.RootGrantInheritance
-	(*RootCapsuleAuthorityScope)(nil),                 // 33: nokv.meta.v1.RootCapsuleAuthorityScope
-	(*RootCapsuleAuthorityGrant)(nil),                 // 34: nokv.meta.v1.RootCapsuleAuthorityGrant
-	(*RootCapsuleAuthorityCommand)(nil),               // 35: nokv.meta.v1.RootCapsuleAuthorityCommand
-	(*RootGrantCertificate)(nil),                      // 36: nokv.meta.v1.RootGrantCertificate
-	(*RootAuthorityUsage)(nil),                        // 37: nokv.meta.v1.RootAuthorityUsage
-	(*RootAuthorityEvidence)(nil),                     // 38: nokv.meta.v1.RootAuthorityEvidence
-	(*RootAuthorityVerifierKey)(nil),                  // 39: nokv.meta.v1.RootAuthorityVerifierKey
-	(*RootAuthorityVerifierState)(nil),                // 40: nokv.meta.v1.RootAuthorityVerifierState
-	(*RootAuthorityVerifierStore)(nil),                // 41: nokv.meta.v1.RootAuthorityVerifierStore
-	(*RootRegionDescriptor)(nil),                      // 42: nokv.meta.v1.RootRegionDescriptor
-	(*RootRegionRemoval)(nil),                         // 43: nokv.meta.v1.RootRegionRemoval
-	(*RootRangeSplit)(nil),                            // 44: nokv.meta.v1.RootRangeSplit
-	(*RootRangeMerge)(nil),                            // 45: nokv.meta.v1.RootRangeMerge
-	(*RootPeerChange)(nil),                            // 46: nokv.meta.v1.RootPeerChange
-	(*RootPendingPeerChange)(nil),                     // 47: nokv.meta.v1.RootPendingPeerChange
-	(*RootPendingRangeChange)(nil),                    // 48: nokv.meta.v1.RootPendingRangeChange
-	(*RootEvent)(nil),                                 // 49: nokv.meta.v1.RootEvent
-	(*MetadataRootSnapshotRequest)(nil),               // 50: nokv.meta.v1.MetadataRootSnapshotRequest
-	(*MetadataRootSnapshotResponse)(nil),              // 51: nokv.meta.v1.MetadataRootSnapshotResponse
-	(*MetadataRootAppendRequest)(nil),                 // 52: nokv.meta.v1.MetadataRootAppendRequest
-	(*MetadataRootAppendResponse)(nil),                // 53: nokv.meta.v1.MetadataRootAppendResponse
-	(*MetadataRootFenceAllocatorRequest)(nil),         // 54: nokv.meta.v1.MetadataRootFenceAllocatorRequest
-	(*MetadataRootFenceAllocatorResponse)(nil),        // 55: nokv.meta.v1.MetadataRootFenceAllocatorResponse
-	(*MetadataRootStatusRequest)(nil),                 // 56: nokv.meta.v1.MetadataRootStatusRequest
-	(*MetadataRootStatusResponse)(nil),                // 57: nokv.meta.v1.MetadataRootStatusResponse
-	(*RootEunomiaState)(nil),                          // 58: nokv.meta.v1.RootEunomiaState
-	(*RootGrantCommand)(nil),                          // 59: nokv.meta.v1.RootGrantCommand
-	(*MetadataRootApplyGrantRequest)(nil),             // 60: nokv.meta.v1.MetadataRootApplyGrantRequest
-	(*MetadataRootApplyGrantResponse)(nil),            // 61: nokv.meta.v1.MetadataRootApplyGrantResponse
-	(*MetadataRootApplyCapsuleAuthorityRequest)(nil),  // 62: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityRequest
-	(*MetadataRootApplyCapsuleAuthorityResponse)(nil), // 63: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse
-	(*RootTailToken)(nil),                             // 64: nokv.meta.v1.RootTailToken
-	(*RootCommittedEvent)(nil),                        // 65: nokv.meta.v1.RootCommittedEvent
-	(*RootCommittedTail)(nil),                         // 66: nokv.meta.v1.RootCommittedTail
-	(*MetadataRootObserveCommittedRequest)(nil),       // 67: nokv.meta.v1.MetadataRootObserveCommittedRequest
-	(*MetadataRootObserveCommittedResponse)(nil),      // 68: nokv.meta.v1.MetadataRootObserveCommittedResponse
-	(*MetadataRootObserveTailRequest)(nil),            // 69: nokv.meta.v1.MetadataRootObserveTailRequest
-	(*MetadataRootObserveTailResponse)(nil),           // 70: nokv.meta.v1.MetadataRootObserveTailResponse
-	(*MetadataRootWaitTailRequest)(nil),               // 71: nokv.meta.v1.MetadataRootWaitTailRequest
-	(*MetadataRootWaitTailResponse)(nil),              // 72: nokv.meta.v1.MetadataRootWaitTailResponse
-	(*RegionDescriptor)(nil),                          // 73: nokv.meta.v1.RegionDescriptor
+	(RootEventKind)(0),                              // 0: nokv.meta.v1.RootEventKind
+	(RootStoreState)(0),                             // 1: nokv.meta.v1.RootStoreState
+	(RootMountState)(0),                             // 2: nokv.meta.v1.RootMountState
+	(RootSubtreeAuthorityState)(0),                  // 3: nokv.meta.v1.RootSubtreeAuthorityState
+	(RootDutyScopeKind)(0),                          // 4: nokv.meta.v1.RootDutyScopeKind
+	(RootGrantRetirementMode)(0),                    // 5: nokv.meta.v1.RootGrantRetirementMode
+	(RootPerasAuthorityAct)(0),                      // 6: nokv.meta.v1.RootPerasAuthorityAct
+	(RootPerasAuthorityApplyStatus)(0),              // 7: nokv.meta.v1.RootPerasAuthorityApplyStatus
+	(RootPendingPeerChangeKind)(0),                  // 8: nokv.meta.v1.RootPendingPeerChangeKind
+	(RootPendingRangeChangeKind)(0),                 // 9: nokv.meta.v1.RootPendingRangeChangeKind
+	(RootAllocatorKind)(0),                          // 10: nokv.meta.v1.RootAllocatorKind
+	(RootGrantAct)(0),                               // 11: nokv.meta.v1.RootGrantAct
+	(RootGrantApplyStatus)(0),                       // 12: nokv.meta.v1.RootGrantApplyStatus
+	(*RootCursor)(nil),                              // 13: nokv.meta.v1.RootCursor
+	(*RootState)(nil),                               // 14: nokv.meta.v1.RootState
+	(*RootCheckpoint)(nil),                          // 15: nokv.meta.v1.RootCheckpoint
+	(*RootStoreMembership)(nil),                     // 16: nokv.meta.v1.RootStoreMembership
+	(*RootStore)(nil),                               // 17: nokv.meta.v1.RootStore
+	(*RootSnapshotEpoch)(nil),                       // 18: nokv.meta.v1.RootSnapshotEpoch
+	(*RootMount)(nil),                               // 19: nokv.meta.v1.RootMount
+	(*RootSubtreeAuthority)(nil),                    // 20: nokv.meta.v1.RootSubtreeAuthority
+	(*RootQuotaFence)(nil),                          // 21: nokv.meta.v1.RootQuotaFence
+	(*RootAllocatorFence)(nil),                      // 22: nokv.meta.v1.RootAllocatorFence
+	(*RootDutyScope)(nil),                           // 23: nokv.meta.v1.RootDutyScope
+	(*RootMonotoneBound)(nil),                       // 24: nokv.meta.v1.RootMonotoneBound
+	(*RootVersionBound)(nil),                        // 25: nokv.meta.v1.RootVersionBound
+	(*RootBudgetBound)(nil),                         // 26: nokv.meta.v1.RootBudgetBound
+	(*RootEpochBound)(nil),                          // 27: nokv.meta.v1.RootEpochBound
+	(*RootDutyBound)(nil),                           // 28: nokv.meta.v1.RootDutyBound
+	(*RootDutyGrant)(nil),                           // 29: nokv.meta.v1.RootDutyGrant
+	(*RootAuthorityGrant)(nil),                      // 30: nokv.meta.v1.RootAuthorityGrant
+	(*RootGrantRetirement)(nil),                     // 31: nokv.meta.v1.RootGrantRetirement
+	(*RootGrantInheritance)(nil),                    // 32: nokv.meta.v1.RootGrantInheritance
+	(*RootPerasAuthorityScope)(nil),                 // 33: nokv.meta.v1.RootPerasAuthorityScope
+	(*RootPerasAuthorityGrant)(nil),                 // 34: nokv.meta.v1.RootPerasAuthorityGrant
+	(*RootPerasAuthorityCommand)(nil),               // 35: nokv.meta.v1.RootPerasAuthorityCommand
+	(*RootGrantCertificate)(nil),                    // 36: nokv.meta.v1.RootGrantCertificate
+	(*RootAuthorityUsage)(nil),                      // 37: nokv.meta.v1.RootAuthorityUsage
+	(*RootAuthorityEvidence)(nil),                   // 38: nokv.meta.v1.RootAuthorityEvidence
+	(*RootAuthorityVerifierKey)(nil),                // 39: nokv.meta.v1.RootAuthorityVerifierKey
+	(*RootAuthorityVerifierState)(nil),              // 40: nokv.meta.v1.RootAuthorityVerifierState
+	(*RootAuthorityVerifierStore)(nil),              // 41: nokv.meta.v1.RootAuthorityVerifierStore
+	(*RootRegionDescriptor)(nil),                    // 42: nokv.meta.v1.RootRegionDescriptor
+	(*RootRegionRemoval)(nil),                       // 43: nokv.meta.v1.RootRegionRemoval
+	(*RootRangeSplit)(nil),                          // 44: nokv.meta.v1.RootRangeSplit
+	(*RootRangeMerge)(nil),                          // 45: nokv.meta.v1.RootRangeMerge
+	(*RootPeerChange)(nil),                          // 46: nokv.meta.v1.RootPeerChange
+	(*RootPendingPeerChange)(nil),                   // 47: nokv.meta.v1.RootPendingPeerChange
+	(*RootPendingRangeChange)(nil),                  // 48: nokv.meta.v1.RootPendingRangeChange
+	(*RootEvent)(nil),                               // 49: nokv.meta.v1.RootEvent
+	(*MetadataRootSnapshotRequest)(nil),             // 50: nokv.meta.v1.MetadataRootSnapshotRequest
+	(*MetadataRootSnapshotResponse)(nil),            // 51: nokv.meta.v1.MetadataRootSnapshotResponse
+	(*MetadataRootAppendRequest)(nil),               // 52: nokv.meta.v1.MetadataRootAppendRequest
+	(*MetadataRootAppendResponse)(nil),              // 53: nokv.meta.v1.MetadataRootAppendResponse
+	(*MetadataRootFenceAllocatorRequest)(nil),       // 54: nokv.meta.v1.MetadataRootFenceAllocatorRequest
+	(*MetadataRootFenceAllocatorResponse)(nil),      // 55: nokv.meta.v1.MetadataRootFenceAllocatorResponse
+	(*MetadataRootStatusRequest)(nil),               // 56: nokv.meta.v1.MetadataRootStatusRequest
+	(*MetadataRootStatusResponse)(nil),              // 57: nokv.meta.v1.MetadataRootStatusResponse
+	(*RootEunomiaState)(nil),                        // 58: nokv.meta.v1.RootEunomiaState
+	(*RootGrantCommand)(nil),                        // 59: nokv.meta.v1.RootGrantCommand
+	(*MetadataRootApplyGrantRequest)(nil),           // 60: nokv.meta.v1.MetadataRootApplyGrantRequest
+	(*MetadataRootApplyGrantResponse)(nil),          // 61: nokv.meta.v1.MetadataRootApplyGrantResponse
+	(*MetadataRootApplyPerasAuthorityRequest)(nil),  // 62: nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest
+	(*MetadataRootApplyPerasAuthorityResponse)(nil), // 63: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse
+	(*RootTailToken)(nil),                           // 64: nokv.meta.v1.RootTailToken
+	(*RootCommittedEvent)(nil),                      // 65: nokv.meta.v1.RootCommittedEvent
+	(*RootCommittedTail)(nil),                       // 66: nokv.meta.v1.RootCommittedTail
+	(*MetadataRootObserveCommittedRequest)(nil),     // 67: nokv.meta.v1.MetadataRootObserveCommittedRequest
+	(*MetadataRootObserveCommittedResponse)(nil),    // 68: nokv.meta.v1.MetadataRootObserveCommittedResponse
+	(*MetadataRootObserveTailRequest)(nil),          // 69: nokv.meta.v1.MetadataRootObserveTailRequest
+	(*MetadataRootObserveTailResponse)(nil),         // 70: nokv.meta.v1.MetadataRootObserveTailResponse
+	(*MetadataRootWaitTailRequest)(nil),             // 71: nokv.meta.v1.MetadataRootWaitTailRequest
+	(*MetadataRootWaitTailResponse)(nil),            // 72: nokv.meta.v1.MetadataRootWaitTailResponse
+	(*RegionDescriptor)(nil),                        // 73: nokv.meta.v1.RegionDescriptor
 }
 var file_meta_root_proto_depIdxs = []int32{
 	13,  // 0: nokv.meta.v1.RootState.last_committed:type_name -> nokv.meta.v1.RootCursor
 	30,  // 1: nokv.meta.v1.RootState.active_grants:type_name -> nokv.meta.v1.RootAuthorityGrant
 	31,  // 2: nokv.meta.v1.RootState.retired_grants:type_name -> nokv.meta.v1.RootGrantRetirement
 	32,  // 3: nokv.meta.v1.RootState.grant_inheritances:type_name -> nokv.meta.v1.RootGrantInheritance
-	34,  // 4: nokv.meta.v1.RootState.active_capsule_grants:type_name -> nokv.meta.v1.RootCapsuleAuthorityGrant
+	34,  // 4: nokv.meta.v1.RootState.active_peras_grants:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
 	14,  // 5: nokv.meta.v1.RootCheckpoint.state:type_name -> nokv.meta.v1.RootState
 	73,  // 6: nokv.meta.v1.RootCheckpoint.descriptors:type_name -> nokv.meta.v1.RegionDescriptor
 	47,  // 7: nokv.meta.v1.RootCheckpoint.pending_peer_changes:type_name -> nokv.meta.v1.RootPendingPeerChange
@@ -5673,9 +5673,9 @@ var file_meta_root_proto_depIdxs = []int32{
 	29,  // 39: nokv.meta.v1.RootGrantRetirement.bounds:type_name -> nokv.meta.v1.RootDutyGrant
 	13,  // 40: nokv.meta.v1.RootGrantRetirement.retired_at:type_name -> nokv.meta.v1.RootCursor
 	13,  // 41: nokv.meta.v1.RootGrantInheritance.inherited_at:type_name -> nokv.meta.v1.RootCursor
-	33,  // 42: nokv.meta.v1.RootCapsuleAuthorityGrant.scope:type_name -> nokv.meta.v1.RootCapsuleAuthorityScope
-	6,   // 43: nokv.meta.v1.RootCapsuleAuthorityCommand.kind:type_name -> nokv.meta.v1.RootCapsuleAuthorityAct
-	33,  // 44: nokv.meta.v1.RootCapsuleAuthorityCommand.scope:type_name -> nokv.meta.v1.RootCapsuleAuthorityScope
+	33,  // 42: nokv.meta.v1.RootPerasAuthorityGrant.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
+	6,   // 43: nokv.meta.v1.RootPerasAuthorityCommand.kind:type_name -> nokv.meta.v1.RootPerasAuthorityAct
+	33,  // 44: nokv.meta.v1.RootPerasAuthorityCommand.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
 	30,  // 45: nokv.meta.v1.RootGrantCertificate.grant:type_name -> nokv.meta.v1.RootAuthorityGrant
 	23,  // 46: nokv.meta.v1.RootAuthorityUsage.scope:type_name -> nokv.meta.v1.RootDutyScope
 	28,  // 47: nokv.meta.v1.RootAuthorityUsage.usage:type_name -> nokv.meta.v1.RootDutyBound
@@ -5721,7 +5721,7 @@ var file_meta_root_proto_depIdxs = []int32{
 	19,  // 87: nokv.meta.v1.RootEvent.mount:type_name -> nokv.meta.v1.RootMount
 	20,  // 88: nokv.meta.v1.RootEvent.subtree_authority:type_name -> nokv.meta.v1.RootSubtreeAuthority
 	21,  // 89: nokv.meta.v1.RootEvent.quota_fence:type_name -> nokv.meta.v1.RootQuotaFence
-	34,  // 90: nokv.meta.v1.RootEvent.capsule_authority_grant:type_name -> nokv.meta.v1.RootCapsuleAuthorityGrant
+	34,  // 90: nokv.meta.v1.RootEvent.peras_authority_grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
 	15,  // 91: nokv.meta.v1.MetadataRootSnapshotResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
 	49,  // 92: nokv.meta.v1.MetadataRootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
 	13,  // 93: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
@@ -5737,10 +5737,10 @@ var file_meta_root_proto_depIdxs = []int32{
 	58,  // 103: nokv.meta.v1.MetadataRootApplyGrantResponse.state:type_name -> nokv.meta.v1.RootEunomiaState
 	12,  // 104: nokv.meta.v1.MetadataRootApplyGrantResponse.status:type_name -> nokv.meta.v1.RootGrantApplyStatus
 	36,  // 105: nokv.meta.v1.MetadataRootApplyGrantResponse.certificate:type_name -> nokv.meta.v1.RootGrantCertificate
-	35,  // 106: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityRequest.command:type_name -> nokv.meta.v1.RootCapsuleAuthorityCommand
-	14,  // 107: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse.state:type_name -> nokv.meta.v1.RootState
-	7,   // 108: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse.status:type_name -> nokv.meta.v1.RootCapsuleAuthorityApplyStatus
-	34,  // 109: nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse.grant:type_name -> nokv.meta.v1.RootCapsuleAuthorityGrant
+	35,  // 106: nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest.command:type_name -> nokv.meta.v1.RootPerasAuthorityCommand
+	14,  // 107: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.state:type_name -> nokv.meta.v1.RootState
+	7,   // 108: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.status:type_name -> nokv.meta.v1.RootPerasAuthorityApplyStatus
+	34,  // 109: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
 	13,  // 110: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
 	13,  // 111: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
 	49,  // 112: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent
@@ -5762,7 +5762,7 @@ var file_meta_root_proto_depIdxs = []int32{
 	54,  // 128: nokv.meta.v1.MetadataRoot.FenceAllocator:input_type -> nokv.meta.v1.MetadataRootFenceAllocatorRequest
 	56,  // 129: nokv.meta.v1.MetadataRoot.Status:input_type -> nokv.meta.v1.MetadataRootStatusRequest
 	60,  // 130: nokv.meta.v1.MetadataRoot.ApplyGrant:input_type -> nokv.meta.v1.MetadataRootApplyGrantRequest
-	62,  // 131: nokv.meta.v1.MetadataRoot.ApplyCapsuleAuthority:input_type -> nokv.meta.v1.MetadataRootApplyCapsuleAuthorityRequest
+	62,  // 131: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:input_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest
 	67,  // 132: nokv.meta.v1.MetadataRoot.ObserveCommitted:input_type -> nokv.meta.v1.MetadataRootObserveCommittedRequest
 	69,  // 133: nokv.meta.v1.MetadataRoot.ObserveTail:input_type -> nokv.meta.v1.MetadataRootObserveTailRequest
 	71,  // 134: nokv.meta.v1.MetadataRoot.WaitTail:input_type -> nokv.meta.v1.MetadataRootWaitTailRequest
@@ -5771,7 +5771,7 @@ var file_meta_root_proto_depIdxs = []int32{
 	55,  // 137: nokv.meta.v1.MetadataRoot.FenceAllocator:output_type -> nokv.meta.v1.MetadataRootFenceAllocatorResponse
 	57,  // 138: nokv.meta.v1.MetadataRoot.Status:output_type -> nokv.meta.v1.MetadataRootStatusResponse
 	61,  // 139: nokv.meta.v1.MetadataRoot.ApplyGrant:output_type -> nokv.meta.v1.MetadataRootApplyGrantResponse
-	63,  // 140: nokv.meta.v1.MetadataRoot.ApplyCapsuleAuthority:output_type -> nokv.meta.v1.MetadataRootApplyCapsuleAuthorityResponse
+	63,  // 140: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:output_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse
 	68,  // 141: nokv.meta.v1.MetadataRoot.ObserveCommitted:output_type -> nokv.meta.v1.MetadataRootObserveCommittedResponse
 	70,  // 142: nokv.meta.v1.MetadataRoot.ObserveTail:output_type -> nokv.meta.v1.MetadataRootObserveTailResponse
 	72,  // 143: nokv.meta.v1.MetadataRoot.WaitTail:output_type -> nokv.meta.v1.MetadataRootWaitTailResponse
@@ -5809,7 +5809,7 @@ func file_meta_root_proto_init() {
 		(*RootEvent_Mount)(nil),
 		(*RootEvent_SubtreeAuthority)(nil),
 		(*RootEvent_QuotaFence)(nil),
-		(*RootEvent_CapsuleAuthorityGrant)(nil),
+		(*RootEvent_PerasAuthorityGrant)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

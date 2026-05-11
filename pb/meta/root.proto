@@ -40,8 +40,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
   ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
   ROOT_EVENT_KIND_GRANT_INHERITED = 31;
-  ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED = 32;
-  ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED = 33;
+  ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED = 32;
+  ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED = 33;
 }
 
 message RootCursor {
@@ -59,8 +59,8 @@ message RootState {
   repeated RootGrantRetirement retired_grants = 8;
   repeated RootGrantInheritance grant_inheritances = 9;
   uint64 retired_era_floor = 10;
-  repeated RootCapsuleAuthorityGrant active_capsule_grants = 11;
-  uint64 capsule_authority_epoch = 12;
+  repeated RootPerasAuthorityGrant active_peras_grants = 11;
+  uint64 peras_authority_epoch = 12;
 }
 
 message RootCheckpoint {
@@ -240,7 +240,7 @@ message RootGrantInheritance {
   RootCursor inherited_at = 3;
 }
 
-message RootCapsuleAuthorityScope {
+message RootPerasAuthorityScope {
   string mount_id = 1;
   uint64 mount_key_id = 2;
   repeated uint32 buckets = 3;
@@ -248,28 +248,28 @@ message RootCapsuleAuthorityScope {
   repeated uint64 inodes = 5;
 }
 
-message RootCapsuleAuthorityGrant {
+message RootPerasAuthorityGrant {
   string grant_id = 1;
   uint64 epoch_id = 2;
   string holder_id = 3;
-  RootCapsuleAuthorityScope scope = 4;
+  RootPerasAuthorityScope scope = 4;
   int64 expires_unix_nano = 5;
   bytes predecessor_digest = 6;
   int64 quota_credit_bytes = 7;
   int64 quota_credit_inodes = 8;
 }
 
-enum RootCapsuleAuthorityAct {
-  ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED = 0;
-  ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE = 1;
-  ROOT_CAPSULE_AUTHORITY_ACT_RETIRE = 2;
+enum RootPerasAuthorityAct {
+  ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED = 0;
+  ROOT_PERAS_AUTHORITY_ACT_ACQUIRE = 1;
+  ROOT_PERAS_AUTHORITY_ACT_RETIRE = 2;
 }
 
-message RootCapsuleAuthorityCommand {
-  RootCapsuleAuthorityAct kind = 1;
+message RootPerasAuthorityCommand {
+  RootPerasAuthorityAct kind = 1;
   string holder_id = 2;
   string grant_id = 3;
-  RootCapsuleAuthorityScope scope = 4;
+  RootPerasAuthorityScope scope = 4;
   int64 expires_unix_nano = 5;
   int64 now_unix_nano = 6;
   bytes predecessor_digest = 7;
@@ -277,11 +277,11 @@ message RootCapsuleAuthorityCommand {
   int64 quota_credit_inodes = 9;
 }
 
-enum RootCapsuleAuthorityApplyStatus {
-  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
-  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED = 1;
-  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD = 2;
-  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED = 3;
+enum RootPerasAuthorityApplyStatus {
+  ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
+  ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED = 1;
+  ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD = 2;
+  ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED = 3;
 }
 
 message RootGrantCertificate {
@@ -407,7 +407,7 @@ message RootEvent {
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
     RootQuotaFence quota_fence = 15;
-    RootCapsuleAuthorityGrant capsule_authority_grant = 16;
+    RootPerasAuthorityGrant peras_authority_grant = 16;
   }
 }
 
@@ -491,14 +491,14 @@ message MetadataRootApplyGrantResponse {
   RootGrantCertificate certificate = 3;
 }
 
-message MetadataRootApplyCapsuleAuthorityRequest {
-  RootCapsuleAuthorityCommand command = 1;
+message MetadataRootApplyPerasAuthorityRequest {
+  RootPerasAuthorityCommand command = 1;
 }
 
-message MetadataRootApplyCapsuleAuthorityResponse {
+message MetadataRootApplyPerasAuthorityResponse {
   RootState state = 1;
-  RootCapsuleAuthorityApplyStatus status = 2;
-  RootCapsuleAuthorityGrant grant = 3;
+  RootPerasAuthorityApplyStatus status = 2;
+  RootPerasAuthorityGrant grant = 3;
 }
 
 message RootTailToken {
@@ -556,7 +556,7 @@ service MetadataRoot {
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
   rpc ApplyGrant(MetadataRootApplyGrantRequest) returns (MetadataRootApplyGrantResponse);
-  rpc ApplyCapsuleAuthority(MetadataRootApplyCapsuleAuthorityRequest) returns (MetadataRootApplyCapsuleAuthorityResponse);
+  rpc ApplyPerasAuthority(MetadataRootApplyPerasAuthorityRequest) returns (MetadataRootApplyPerasAuthorityResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

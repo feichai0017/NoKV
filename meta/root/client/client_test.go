@@ -118,8 +118,8 @@ func TestRetryableRemoteErrorLeavesGenericInternalFatal(t *testing.T) {
 }
 
 type fakeMetadataRootClient struct {
-	statusFunc                func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
-	applyCapsuleAuthorityFunc func(context.Context, *metapb.MetadataRootApplyCapsuleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error)
+	statusFunc              func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
+	applyPerasAuthorityFunc func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error)
 }
 
 func (f *fakeMetadataRootClient) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest, ...grpc.CallOption) (*metapb.MetadataRootSnapshotResponse, error) {
@@ -145,11 +145,11 @@ func (f *fakeMetadataRootClient) ApplyGrant(context.Context, *metapb.MetadataRoo
 	return nil, status.Error(codes.Unimplemented, "grant")
 }
 
-func (f *fakeMetadataRootClient) ApplyCapsuleAuthority(ctx context.Context, req *metapb.MetadataRootApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
-	if f.applyCapsuleAuthorityFunc != nil {
-		return f.applyCapsuleAuthorityFunc(ctx, req, opts...)
+func (f *fakeMetadataRootClient) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataRootApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+	if f.applyPerasAuthorityFunc != nil {
+		return f.applyPerasAuthorityFunc(ctx, req, opts...)
 	}
-	return nil, status.Error(codes.Unimplemented, "capsule authority")
+	return nil, status.Error(codes.Unimplemented, "peras authority")
 }
 
 func (f *fakeMetadataRootClient) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest, ...grpc.CallOption) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -196,8 +196,8 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 
 	require.True(t, validGrantAct(1))
 	require.False(t, validGrantAct(99))
-	require.True(t, validCapsuleAuthorityAct(rootproto.CapsuleAuthorityActAcquire))
-	require.False(t, validCapsuleAuthorityAct(rootproto.CapsuleAuthorityAct(99)))
+	require.True(t, validPerasAuthorityAct(rootproto.PerasAuthorityActAcquire))
+	require.False(t, validPerasAuthorityAct(rootproto.PerasAuthorityAct(99)))
 
 	leaderID, ok := leaderHint(metadataRootNotLeaderErrorForTest(23))
 	require.True(t, ok)
@@ -210,17 +210,17 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.NoError(t, waitForReady(context.Background(), nil))
 }
 
-func TestClientApplyCapsuleAuthority(t *testing.T) {
-	state := rootstate.State{CapsuleAuthorityEpoch: 4}
-	grant := rootproto.CapsuleAuthorityGrant{
-		GrantID:         "capsule-4",
+func TestClientApplyPerasAuthority(t *testing.T) {
+	state := rootstate.State{PerasAuthorityEpoch: 4}
+	grant := rootproto.PerasAuthorityGrant{
+		GrantID:         "peras-4",
 		EpochID:         4,
 		HolderID:        "holder-a",
-		Scope:           rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7},
+		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
 		ExpiresUnixNano: 1_000,
 	}
-	cmd := rootproto.CapsuleAuthorityCommand{
-		Kind:            rootproto.CapsuleAuthorityActAcquire,
+	cmd := rootproto.PerasAuthorityCommand{
+		Kind:            rootproto.PerasAuthorityActAcquire,
 		HolderID:        grant.HolderID,
 		Scope:           grant.Scope,
 		ExpiresUnixNano: grant.ExpiresUnixNano,
@@ -232,11 +232,11 @@ func TestClientApplyCapsuleAuthority(t *testing.T) {
 			endpoints: []clientEndpoint{{
 				id: 1,
 				rpc: &fakeMetadataRootClient{
-					applyCapsuleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyCapsuleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyCapsuleAuthorityResponse{
+					applyPerasAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+						return &metapb.MetadataRootApplyPerasAuthorityResponse{
 							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED,
-							Grant:  metawire.RootCapsuleAuthorityGrantToProto(grant),
+							Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
+							Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
 						}, nil
 					},
 				},
@@ -244,7 +244,7 @@ func TestClientApplyCapsuleAuthority(t *testing.T) {
 			byID: map[uint64]int{1: 0},
 		}
 
-		gotState, gotGrant, err := c.ApplyCapsuleAuthority(context.Background(), cmd)
+		gotState, gotGrant, err := c.ApplyPerasAuthority(context.Background(), cmd)
 		require.NoError(t, err)
 		require.Equal(t, state, gotState)
 		require.Equal(t, grant, gotGrant)
@@ -255,10 +255,10 @@ func TestClientApplyCapsuleAuthority(t *testing.T) {
 			endpoints: []clientEndpoint{{
 				id: 1,
 				rpc: &fakeMetadataRootClient{
-					applyCapsuleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyCapsuleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyCapsuleAuthorityResponse{
+					applyPerasAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+						return &metapb.MetadataRootApplyPerasAuthorityResponse{
 							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD,
+							Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
 						}, nil
 					},
 				},
@@ -266,8 +266,8 @@ func TestClientApplyCapsuleAuthority(t *testing.T) {
 			byID: map[uint64]int{1: 0},
 		}
 
-		gotState, _, err := c.ApplyCapsuleAuthority(context.Background(), rootproto.CapsuleAuthorityCommand{
-			Kind:     rootproto.CapsuleAuthorityActRetire,
+		gotState, _, err := c.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
+			Kind:     rootproto.PerasAuthorityActRetire,
 			HolderID: grant.HolderID,
 			GrantID:  grant.GrantID,
 		})

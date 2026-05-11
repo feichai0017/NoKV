@@ -30,14 +30,14 @@ type fakeServiceBackend struct {
 	observeTailErr      error
 	waitTailErr         error
 	applyGrantErr       error
-	applyCapsuleErr     error
+	applyPerasErr       error
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
 	applyGrantResult    rootstate.EunomiaState
 	applyGrantCert      rootproto.GrantCertificate
-	applyCapsuleState   rootstate.State
-	applyCapsuleGrant   rootproto.CapsuleAuthorityGrant
+	applyPerasState     rootstate.State
+	applyPerasGrant     rootproto.PerasAuthorityGrant
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -120,8 +120,8 @@ func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand)
 	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
 }
 
-func (f *fakeServiceBackend) ApplyCapsuleAuthority(context.Context, rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
-	return f.applyCapsuleState, f.applyCapsuleGrant, f.applyCapsuleErr
+func (f *fakeServiceBackend) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	return f.applyPerasState, f.applyPerasGrant, f.applyPerasErr
 }
 
 type basicServiceBackend struct {
@@ -511,14 +511,14 @@ func TestServiceApplyGrant(t *testing.T) {
 	})
 }
 
-func TestServiceApplyCapsuleAuthority(t *testing.T) {
-	grant := testServerCapsuleAuthorityGrant()
+func TestServiceApplyPerasAuthority(t *testing.T) {
+	grant := testServerPerasAuthorityGrant()
 	state := rootstate.State{
-		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{grant},
-		CapsuleAuthorityEpoch: grant.EpochID,
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
+		PerasAuthorityEpoch: grant.EpochID,
 	}
-	cmd := rootproto.CapsuleAuthorityCommand{
-		Kind:            rootproto.CapsuleAuthorityActAcquire,
+	cmd := rootproto.PerasAuthorityCommand{
+		Kind:            rootproto.PerasAuthorityActAcquire,
 		HolderID:        grant.HolderID,
 		Scope:           grant.Scope,
 		ExpiresUnixNano: grant.ExpiresUnixNano,
@@ -527,62 +527,62 @@ func TestServiceApplyCapsuleAuthority(t *testing.T) {
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{})
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
-			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		_, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
 
 	t.Run("held maps to response status", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:          true,
-			applyCapsuleState: state,
-			applyCapsuleErr:   rootstate.ErrPrimacy,
+			isLeader:        true,
+			applyPerasState: state,
+			applyPerasErr:   rootstate.ErrPrimacy,
 		})
-		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
-			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
 		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
 	})
 
 	t.Run("success", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:          true,
-			applyCapsuleState: state,
-			applyCapsuleGrant: grant,
+			isLeader:        true,
+			applyPerasState: state,
+			applyPerasGrant: grant,
 		})
-		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
-			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
-		require.Equal(t, grant, metawire.RootCapsuleAuthorityGrantFromProto(resp.Grant))
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, grant, metawire.RootPerasAuthorityGrantFromProto(resp.Grant))
 		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
 	})
 
 	t.Run("retire status", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:          true,
-			applyCapsuleState: rootstate.State{CapsuleAuthorityEpoch: grant.EpochID},
+			isLeader:        true,
+			applyPerasState: rootstate.State{PerasAuthorityEpoch: grant.EpochID},
 		})
-		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
-			Command: metawire.RootCapsuleAuthorityCommandToProto(rootproto.CapsuleAuthorityCommand{
-				Kind:     rootproto.CapsuleAuthorityActRetire,
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(rootproto.PerasAuthorityCommand{
+				Kind:     rootproto.PerasAuthorityActRetire,
 				HolderID: grant.HolderID,
 				GrantID:  grant.GrantID,
 			}),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
 	})
 }
 
@@ -622,12 +622,12 @@ func testServerSnapshot() rootstate.Snapshot {
 	}
 }
 
-func testServerCapsuleAuthorityGrant() rootproto.CapsuleAuthorityGrant {
-	return rootproto.CapsuleAuthorityGrant{
-		GrantID:         "capsule-1",
+func testServerPerasAuthorityGrant() rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
+		GrantID:         "peras-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
+		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
 		ExpiresUnixNano: 1_000,
 	}
 }

@@ -101,8 +101,8 @@ func NewNode(cfg Config) (*Node, error) {
 
 	st := store.NewStore(storeCfg)
 	kvOpts := []kv.ServiceOption(nil)
-	if cfg.CapsuleWitness != nil {
-		kvOpts = append(kvOpts, kv.WithCapsuleWitness(cfg.CapsuleWitness))
+	if cfg.PerasWitness != nil {
+		kvOpts = append(kvOpts, kv.WithPerasWitness(cfg.PerasWitness))
 	}
 	kvService := kv.NewService(st, kvOpts...)
 	adminService := admin.NewServiceWithSnapshot(st, cfg.Storage.Snapshot)

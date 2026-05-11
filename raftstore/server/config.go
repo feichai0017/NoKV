@@ -44,9 +44,9 @@ type Config struct {
 	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
-	// CapsuleWitness enables StoreKV's experimental fsmeta Capsule witness RPCs.
+	// PerasWitness enables StoreKV's experimental fsmeta Peras witness RPCs.
 	// Nil keeps the wire surface registered but returns FailedPrecondition.
-	CapsuleWitness kv.CapsuleWitness
+	PerasWitness kv.PerasWitness
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore

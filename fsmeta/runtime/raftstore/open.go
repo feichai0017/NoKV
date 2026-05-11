@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
-	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
+	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -72,42 +72,42 @@ type Options struct {
 	// shape hints; this value belongs to fsmeta placement policy.
 	AffinityBuckets int
 
-	// CapsuleHolderID enables coordinator-mediated Capsule authority acquisition
-	// for this fsmeta runtime. Empty leaves Capsule execution disabled while the
+	// PerasHolderID enables coordinator-mediated Peras authority acquisition
+	// for this fsmeta runtime. Empty leaves Peras execution disabled while the
 	// active authority mirror still follows root events for diagnostics.
-	CapsuleHolderID string
+	PerasHolderID string
 
-	// CapsuleAuthorityTTL bounds one acquired Capsule authority grant. Zero uses
+	// PerasAuthorityTTL bounds one acquired Peras authority grant. Zero uses
 	// the runtime default; negative is rejected.
-	CapsuleAuthorityTTL time.Duration
+	PerasAuthorityTTL time.Duration
 
-	// CapsuleFastPath enables the experimental Capsule holder -> remote witness
-	// fast commit path. It requires CapsuleHolderID and store-side witnesses.
-	CapsuleFastPath bool
-	// CapsuleWitnessStoreIDs restricts the witness set to these store IDs. Empty
+	// PerasFastPath enables the experimental Peras holder -> remote witness
+	// fast commit path. It requires PerasHolderID and store-side witnesses.
+	PerasFastPath bool
+	// PerasWitnessStoreIDs restricts the witness set to these store IDs. Empty
 	// uses every currently UP store reported by the coordinator.
-	CapsuleWitnessStoreIDs []uint64
-	// CapsuleWitnessQuorum overrides the default majority of the witness set.
-	CapsuleWitnessQuorum int
-	// CapsuleSubmitRetries retries a submit when witnesses have not yet caught
+	PerasWitnessStoreIDs []uint64
+	// PerasWitnessQuorum overrides the default majority of the witness set.
+	PerasWitnessQuorum int
+	// PerasSubmitRetries retries a submit when witnesses have not yet caught
 	// up with the newly acquired active-authority grant. Zero uses the default.
-	CapsuleSubmitRetries int
-	// CapsuleSubmitRetryBackoff controls retry spacing for transient missing
+	PerasSubmitRetries int
+	// PerasSubmitRetryBackoff controls retry spacing for transient missing
 	// authority state on remote witnesses. Zero uses the default.
-	CapsuleSubmitRetryBackoff time.Duration
+	PerasSubmitRetryBackoff time.Duration
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
 // every client and goroutine it creates; Close releases all of them.
 type Runtime struct {
-	Executor           *fsmetaexec.Executor
-	Watcher            fsmeta.Watcher
-	SnapshotPublisher  fsmeta.SnapshotPublisher
-	MountResolver      fsmetaexec.MountResolver
-	QuotaResolver      fsmetaexec.QuotaResolver
-	SessionCleaner     interface{ Stats() map[string]any }
-	CapsuleAuthorities *capsuleauth.ActiveAuthorities
-	CapsuleAuthority   *CapsuleAuthorityManager
+	Executor          *fsmetaexec.Executor
+	Watcher           fsmeta.Watcher
+	SnapshotPublisher fsmeta.SnapshotPublisher
+	MountResolver     fsmetaexec.MountResolver
+	QuotaResolver     fsmetaexec.QuotaResolver
+	SessionCleaner    interface{ Stats() map[string]any }
+	PerasAuthorities  *perasauth.ActiveAuthorities
+	PerasAuthority    *PerasAuthorityManager
 
 	close func() error
 	once  sync.Once
@@ -139,11 +139,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.LockTTL < 0 {
 		return nil, errLockTTLInvalid
 	}
-	if opts.CapsuleAuthorityTTL < 0 {
-		return nil, errCapsuleAuthorityTTLInvalid
+	if opts.PerasAuthorityTTL < 0 {
+		return nil, errPerasAuthorityTTLInvalid
 	}
-	if opts.CapsuleFastPath && strings.TrimSpace(opts.CapsuleHolderID) == "" {
-		return nil, errCapsuleAuthorityHolderRequired
+	if opts.PerasFastPath && strings.TrimSpace(opts.PerasHolderID) == "" {
+		return nil, errPerasAuthorityHolderRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -204,18 +204,18 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
-	capsules := capsuleauth.NewActiveAuthorities()
-	var capsuleAuthority *CapsuleAuthorityManager
-	if holderID := strings.TrimSpace(opts.CapsuleHolderID); holderID != "" {
-		capsuleAuthorityTTL := opts.CapsuleAuthorityTTL
-		if capsuleAuthorityTTL == 0 {
-			capsuleAuthorityTTL = defaultCapsuleAuthorityTTL
+	peras := perasauth.NewActiveAuthorities()
+	var perasAuthority *PerasAuthorityManager
+	if holderID := strings.TrimSpace(opts.PerasHolderID); holderID != "" {
+		perasAuthorityTTL := opts.PerasAuthorityTTL
+		if perasAuthorityTTL == 0 {
+			perasAuthorityTTL = defaultPerasAuthorityTTL
 		}
-		capsuleAuthority, err = NewCapsuleAuthorityManager(coord, capsules, holderID, capsuleAuthorityTTL, nil)
+		perasAuthority, err = NewPerasAuthorityManager(coord, peras, holderID, perasAuthorityTTL, nil)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()
-			return nil, fmt.Errorf("init capsule authority manager: %w", err)
+			return nil, fmt.Errorf("init peras authority manager: %w", err)
 		}
 	}
 	pub := rootPublisher{coord: coord}
@@ -226,32 +226,32 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
 	}
-	if capsuleAuthority != nil {
-		execOpts = append(execOpts, fsmetaexec.WithCapsuleAuthorityAdmitter(capsuleAuthority))
+	if perasAuthority != nil {
+		execOpts = append(execOpts, fsmetaexec.WithPerasAuthorityAdmitter(perasAuthority))
 	}
-	var capsuleWitnesses *capsuleWitnessConnections
-	var capsuleCommitter *RemoteCapsuleCommitter
-	if opts.CapsuleFastPath {
-		capsuleWitnesses, err = buildRemoteCapsuleWitnesses(ctx, coord, dialOpts, opts.CapsuleWitnessStoreIDs)
+	var perasWitnesses *perasWitnessConnections
+	var perasCommitter *RemotePerasCommitter
+	if opts.PerasFastPath {
+		perasWitnesses, err = buildRemotePerasWitnesses(ctx, coord, dialOpts, opts.PerasWitnessStoreIDs)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()
-			return nil, fmt.Errorf("init capsule witnesses: %w", err)
+			return nil, fmt.Errorf("init peras witnesses: %w", err)
 		}
-		capsuleCommitter, err = NewRemoteCapsuleCommitter(RemoteCapsuleCommitterConfig{
-			Authority:     capsuleAuthority,
-			Witnesses:     capsuleWitnesses.witnesses,
-			Quorum:        opts.CapsuleWitnessQuorum,
-			SubmitRetries: opts.CapsuleSubmitRetries,
-			RetryBackoff:  opts.CapsuleSubmitRetryBackoff,
+		perasCommitter, err = NewRemotePerasCommitter(RemotePerasCommitterConfig{
+			Authority:     perasAuthority,
+			Witnesses:     perasWitnesses.witnesses,
+			Quorum:        opts.PerasWitnessQuorum,
+			SubmitRetries: opts.PerasSubmitRetries,
+			RetryBackoff:  opts.PerasSubmitRetryBackoff,
 		})
 		if err != nil {
-			_ = capsuleWitnesses.Close()
+			_ = perasWitnesses.Close()
 			_ = kv.Close()
 			_ = coord.Close()
-			return nil, fmt.Errorf("init capsule committer: %w", err)
+			return nil, fmt.Errorf("init peras committer: %w", err)
 		}
-		execOpts = append(execOpts, fsmetaexec.WithCapsuleCommitter(capsuleCommitter))
+		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasCommitter))
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
@@ -267,8 +267,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			},
 		)
 		if err != nil {
-			if capsuleWitnesses != nil {
-				_ = capsuleWitnesses.Close()
+			if perasWitnesses != nil {
+				_ = perasWitnesses.Close()
 			}
 			_ = kv.Close()
 			_ = coord.Close()
@@ -283,8 +283,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			Dir: opts.DirPageCacheDir,
 		})
 		if err != nil {
-			if capsuleWitnesses != nil {
-				_ = capsuleWitnesses.Close()
+			if perasWitnesses != nil {
+				_ = perasWitnesses.Close()
 			}
 			_ = kv.Close()
 			_ = coord.Close()
@@ -297,8 +297,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if capsuleWitnesses != nil {
-			_ = capsuleWitnesses.Close()
+		if perasWitnesses != nil {
+			_ = perasWitnesses.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -311,8 +311,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if capsuleWitnesses != nil {
-			_ = capsuleWitnesses.Close()
+		if perasWitnesses != nil {
+			_ = perasWitnesses.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -321,7 +321,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 
 	var mon *monitor
 	if opts.MonitorInterval >= 0 {
-		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, capsules, opts.MonitorInterval)
+		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, peras, opts.MonitorInterval)
 	}
 	var sessions *sessionCleaner
 	if opts.SessionCleanupInterval >= 0 {
@@ -329,14 +329,14 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		Executor:           exec,
-		Watcher:            watcher{Router: router, source: source, mounts: mounts},
-		SnapshotPublisher:  pub,
-		MountResolver:      mounts,
-		QuotaResolver:      quotas,
-		SessionCleaner:     sessions,
-		CapsuleAuthorities: capsules,
-		CapsuleAuthority:   capsuleAuthority,
+		Executor:          exec,
+		Watcher:           watcher{Router: router, source: source, mounts: mounts},
+		SnapshotPublisher: pub,
+		MountResolver:     mounts,
+		QuotaResolver:     quotas,
+		SessionCleaner:    sessions,
+		PerasAuthorities:  peras,
+		PerasAuthority:    perasAuthority,
 	}
 	rt.close = func() error {
 		var first error
@@ -363,11 +363,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 				first = err
 			}
 		}
-		if capsuleCommitter != nil {
-			capsuleCommitter.Close()
+		if perasCommitter != nil {
+			perasCommitter.Close()
 		}
-		if capsuleWitnesses != nil {
-			if err := capsuleWitnesses.Close(); err != nil && first == nil {
+		if perasWitnesses != nil {
+			if err := perasWitnesses.Close(); err != nil && first == nil {
 				first = err
 			}
 		}

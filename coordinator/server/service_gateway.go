@@ -180,24 +180,24 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
 }
 
-func (s *Service) ListCapsuleAuthorityGrants(ctx context.Context, _ *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+func (s *Service) ListPerasAuthorityGrants(ctx context.Context, _ *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, statusContext(err)
 	}
 	if s == nil || s.storage == nil {
-		return &coordpb.ListCapsuleAuthorityGrantsResponse{}, nil
+		return &coordpb.ListPerasAuthorityGrantsResponse{}, nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		return nil, statusInternalf("load rooted snapshot: %v", err)
 	}
-	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(snapshot.ActiveCapsuleGrants))
-	for _, grant := range snapshot.ActiveCapsuleGrants {
-		if pbGrant := metawire.RootCapsuleAuthorityGrantToProto(grant); pbGrant != nil {
+	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(snapshot.ActivePerasGrants))
+	for _, grant := range snapshot.ActivePerasGrants {
+		if pbGrant := metawire.RootPerasAuthorityGrantToProto(grant); pbGrant != nil {
 			out = append(out, pbGrant)
 		}
 	}
-	return &coordpb.ListCapsuleAuthorityGrantsResponse{Grants: out}, nil
+	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
 }
 
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {

@@ -10,36 +10,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestServiceListCapsuleAuthorityGrants(t *testing.T) {
-	grant := testServiceGatewayCapsuleGrant()
+func TestServiceListPerasAuthorityGrants(t *testing.T) {
+	grant := testServiceGatewayPerasGrant()
 	store := &fakeStorage{
 		snapshot: rootview.Snapshot{
-			ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{grant},
-			CapsuleAuthorityEpoch: grant.EpochID,
+			ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
+			PerasAuthorityEpoch: grant.EpochID,
 		},
 	}
 	svc := NewService(nil, nil, nil, store)
 
-	resp, err := svc.ListCapsuleAuthorityGrants(context.Background(), nil)
+	resp, err := svc.ListPerasAuthorityGrants(context.Background(), nil)
 	require.NoError(t, err)
 	require.Len(t, resp.GetGrants(), 1)
 	require.Equal(t, grant.GrantID, resp.GetGrants()[0].GetGrantId())
 	require.Equal(t, 1, store.loadCalls)
 }
 
-func TestServiceListCapsuleAuthorityGrantsWithoutStorage(t *testing.T) {
+func TestServiceListPerasAuthorityGrantsWithoutStorage(t *testing.T) {
 	svc := NewService(nil, nil, nil)
-	resp, err := svc.ListCapsuleAuthorityGrants(context.Background(), nil)
+	resp, err := svc.ListPerasAuthorityGrants(context.Background(), nil)
 	require.NoError(t, err)
 	require.Empty(t, resp.GetGrants())
 }
 
-func testServiceGatewayCapsuleGrant() rootproto.CapsuleAuthorityGrant {
-	return rootproto.CapsuleAuthorityGrant{
-		GrantID:  "capsule-1",
+func testServiceGatewayPerasGrant() rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
+		GrantID:  "peras-1",
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{1},

@@ -25,10 +25,10 @@ func TestOpenRejectsNegativeLockTTL(t *testing.T) {
 	require.ErrorIs(t, err, errLockTTLInvalid)
 }
 
-func TestOpenRejectsNegativeCapsuleAuthorityTTL(t *testing.T) {
+func TestOpenRejectsNegativePerasAuthorityTTL(t *testing.T) {
 	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:     "127.0.0.1:1",
-		CapsuleAuthorityTTL: -time.Millisecond,
+		CoordinatorAddr:   "127.0.0.1:1",
+		PerasAuthorityTTL: -time.Millisecond,
 	})
-	require.ErrorIs(t, err, errCapsuleAuthorityTTLInvalid)
+	require.ErrorIs(t, err, errPerasAuthorityTTLInvalid)
 }

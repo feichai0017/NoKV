@@ -68,19 +68,19 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		SuccessorGrantID:   "grant-1",
 		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
 	}
-	capsuleGrant := testWireCapsuleAuthorityGrant()
+	perasGrant := testWirePerasAuthorityGrant()
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:          7,
-		MembershipEpoch:       3,
-		LastCommitted:         rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:               100,
-		TSOFence:              200,
-		ActiveGrants:          []rootproto.AuthorityGrant{grant},
-		RetiredGrants:         []rootproto.GrantRetirement{retirement},
-		GrantInheritances:     []rootproto.GrantInheritance{inheritance},
-		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{capsuleGrant},
-		CapsuleAuthorityEpoch: capsuleGrant.EpochID,
+		ClusterEpoch:        7,
+		MembershipEpoch:     3,
+		LastCommitted:       rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:             100,
+		TSOFence:            200,
+		ActiveGrants:        []rootproto.AuthorityGrant{grant},
+		RetiredGrants:       []rootproto.GrantRetirement{retirement},
+		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
+		PerasAuthorityEpoch: perasGrant.EpochID,
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -94,8 +94,8 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, retirement, RootGrantRetirementFromProto(RootGrantRetirementToProto(retirement)))
 	require.Nil(t, RootGrantInheritanceToProto(rootproto.GrantInheritance{}))
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
-	require.Nil(t, RootCapsuleAuthorityGrantToProto(rootproto.CapsuleAuthorityGrant{}))
-	require.Equal(t, capsuleGrant, RootCapsuleAuthorityGrantFromProto(RootCapsuleAuthorityGrantToProto(capsuleGrant)))
+	require.Nil(t, RootPerasAuthorityGrantToProto(rootproto.PerasAuthorityGrant{}))
+	require.Equal(t, perasGrant, RootPerasAuthorityGrantFromProto(RootPerasAuthorityGrantToProto(perasGrant)))
 
 	protocolState := rootstate.EunomiaState{
 		ActiveGrants:      state.ActiveGrants,
@@ -117,19 +117,19 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
 
-	capsuleCmd := rootproto.CapsuleAuthorityCommand{
-		Kind:              rootproto.CapsuleAuthorityActAcquire,
-		HolderID:          capsuleGrant.HolderID,
-		GrantID:           capsuleGrant.GrantID,
-		Scope:             capsuleGrant.Scope,
-		ExpiresUnixNano:   capsuleGrant.ExpiresUnixNano,
+	perasCmd := rootproto.PerasAuthorityCommand{
+		Kind:              rootproto.PerasAuthorityActAcquire,
+		HolderID:          perasGrant.HolderID,
+		GrantID:           perasGrant.GrantID,
+		Scope:             perasGrant.Scope,
+		ExpiresUnixNano:   perasGrant.ExpiresUnixNano,
 		NowUnixNano:       321,
 		PredecessorDigest: [32]byte{1, 2, 3},
 		QuotaCreditBytes:  4096,
 		QuotaCreditInodes: 128,
 	}
-	require.Equal(t, capsuleCmd, RootCapsuleAuthorityCommandFromProto(RootCapsuleAuthorityCommandToProto(capsuleCmd)))
-	require.Equal(t, rootproto.CapsuleAuthorityCommand{}, RootCapsuleAuthorityCommandFromProto(nil))
+	require.Equal(t, perasCmd, RootPerasAuthorityCommandFromProto(RootPerasAuthorityCommandToProto(perasCmd)))
+	require.Equal(t, rootproto.PerasAuthorityCommand{}, RootPerasAuthorityCommandFromProto(nil))
 
 	cert := rootproto.GrantCertificate{
 		Grant:       grant,
@@ -313,8 +313,8 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.GrantIssued(grant),
 		rootevent.GrantSealed(retirement),
 		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
-		rootevent.CapsuleAuthorityGranted(testWireCapsuleAuthorityGrant()),
-		rootevent.CapsuleAuthorityRetired(testWireCapsuleAuthorityGrant()),
+		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
+		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
 		rootevent.SnapshotEpochPublished("vol", 1, 42, 99),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
@@ -378,8 +378,8 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindGrantSealed,
 		rootevent.KindGrantRetired,
 		rootevent.KindGrantInherited,
-		rootevent.KindCapsuleAuthorityGranted,
-		rootevent.KindCapsuleAuthorityRetired,
+		rootevent.KindPerasAuthorityGranted,
+		rootevent.KindPerasAuthorityRetired,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
@@ -401,14 +401,14 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
 }
 
-func testWireCapsuleAuthorityGrant() rootproto.CapsuleAuthorityGrant {
+func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
 	var predecessor [32]byte
 	predecessor[0] = 7
-	return rootproto.CapsuleAuthorityGrant{
-		GrantID:  "capsule-1",
+	return rootproto.PerasAuthorityGrant{
+		GrantID:  "peras-1",
 		EpochID:  11,
 		HolderID: "fsmeta-holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 42,
 			Buckets:    []uint16{1, 2},

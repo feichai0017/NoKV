@@ -361,44 +361,44 @@ func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (roo
 	}
 }
 
-func (s *Store) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (s *Store) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	if s == nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, nil
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch cmd.Kind {
-	case rootproto.CapsuleAuthorityActAcquire:
-		return s.acquireCapsuleAuthorityLocked(ctx, cmd)
-	case rootproto.CapsuleAuthorityActRetire:
-		return s.retireCapsuleAuthorityLocked(ctx, cmd)
+	case rootproto.PerasAuthorityActAcquire:
+		return s.acquirePerasAuthorityLocked(ctx, cmd)
+	case rootproto.PerasAuthorityActRetire:
+		return s.retirePerasAuthorityLocked(ctx, cmd)
 	default:
-		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
 }
 
-func (s *Store) acquireCapsuleAuthorityLocked(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	request := rootproto.CapsuleAuthorityGrant{
+	request := rootproto.PerasAuthorityGrant{
 		GrantID:         "request",
 		EpochID:         1,
 		HolderID:        holderID,
-		Scope:           rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+		Scope:           rootproto.ClonePerasAuthorityScope(cmd.Scope),
 		ExpiresUnixNano: cmd.ExpiresUnixNano,
 	}
 	requestedGrantID := strings.TrimSpace(cmd.GrantID)
 	if requestedGrantID != "" {
-		if active, ok := activeCapsuleGrantByID(s.state.ActiveCapsuleGrants, requestedGrantID); ok &&
+		if active, ok := activePerasGrantByID(s.state.ActivePerasGrants, requestedGrantID); ok &&
 			active.HolderID == holderID &&
 			active.ActiveAt(cmd.NowUnixNano) &&
 			active.Covers(cmd.Scope, cmd.NowUnixNano) {
@@ -407,64 +407,64 @@ func (s *Store) acquireCapsuleAuthorityLocked(ctx context.Context, cmd rootproto
 	}
 
 	events := make([]rootevent.Event, 0, 2)
-	for _, active := range s.state.ActiveCapsuleGrants {
+	for _, active := range s.state.ActivePerasGrants {
 		if !active.Overlaps(request) {
 			continue
 		}
 		if active.ActiveAt(cmd.NowUnixNano) {
 			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return rootstate.CloneState(s.state), rootproto.CloneCapsuleAuthorityGrant(active), nil
+				return rootstate.CloneState(s.state), rootproto.ClonePerasAuthorityGrant(active), nil
 			}
-			return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+			return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		events = append(events, rootevent.CapsuleAuthorityRetired(active))
+		events = append(events, rootevent.PerasAuthorityRetired(active))
 	}
 
-	epoch := s.state.CapsuleAuthorityEpoch + 1
+	epoch := s.state.PerasAuthorityEpoch + 1
 	grantID := requestedGrantID
-	if grantID == "" || activeCapsuleGrantIDExists(s.state.ActiveCapsuleGrants, grantID) {
+	if grantID == "" || activePerasGrantIDExists(s.state.ActivePerasGrants, grantID) {
 		grantID = fmt.Sprintf("%s/%d", holderID, epoch)
 	}
-	grant := rootproto.CapsuleAuthorityGrant{
+	grant := rootproto.PerasAuthorityGrant{
 		GrantID:           grantID,
 		EpochID:           epoch,
 		HolderID:          holderID,
-		Scope:             rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+		Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
 		ExpiresUnixNano:   cmd.ExpiresUnixNano,
 		PredecessorDigest: cmd.PredecessorDigest,
 		QuotaCreditBytes:  cmd.QuotaCreditBytes,
 		QuotaCreditInodes: cmd.QuotaCreditInodes,
 	}
-	events = append(events, rootevent.CapsuleAuthorityGranted(grant))
+	events = append(events, rootevent.PerasAuthorityGranted(grant))
 	commit, err := s.appendLocked(ctx, events...)
 	if err != nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
-	committed, ok := commit.State.ActiveCapsuleGrantByID(grantID)
+	committed, ok := commit.State.ActivePerasGrantByID(grantID)
 	if !ok {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, rootstate.ErrFinality
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrFinality
 	}
 	return rootstate.CloneState(commit.State), committed, nil
 }
 
-func (s *Store) retireCapsuleAuthorityLocked(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (s *Store) retirePerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	grantID := strings.TrimSpace(cmd.GrantID)
 	if holderID == "" || grantID == "" {
-		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	active, ok := activeCapsuleGrantByID(s.state.ActiveCapsuleGrants, grantID)
+	active, ok := activePerasGrantByID(s.state.ActivePerasGrants, grantID)
 	if !ok {
-		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, nil
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, nil
 	}
 	if active.HolderID != holderID {
-		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 	}
-	commit, err := s.appendLocked(ctx, rootevent.CapsuleAuthorityRetired(active))
+	commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityRetired(active))
 	if err != nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
-	return rootstate.CloneState(commit.State), rootproto.CapsuleAuthorityGrant{}, nil
+	return rootstate.CloneState(commit.State), rootproto.PerasAuthorityGrant{}, nil
 }
 
 func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
@@ -571,18 +571,18 @@ func activeGrantIDExists(grants []rootproto.AuthorityGrant, grantID string) bool
 	return ok
 }
 
-func activeCapsuleGrantIDExists(grants []rootproto.CapsuleAuthorityGrant, grantID string) bool {
-	_, ok := activeCapsuleGrantByID(grants, grantID)
+func activePerasGrantIDExists(grants []rootproto.PerasAuthorityGrant, grantID string) bool {
+	_, ok := activePerasGrantByID(grants, grantID)
 	return ok
 }
 
-func activeCapsuleGrantByID(grants []rootproto.CapsuleAuthorityGrant, grantID string) (rootproto.CapsuleAuthorityGrant, bool) {
+func activePerasGrantByID(grants []rootproto.PerasAuthorityGrant, grantID string) (rootproto.PerasAuthorityGrant, bool) {
 	for _, grant := range grants {
 		if grant.GrantID == grantID {
-			return rootproto.CloneCapsuleAuthorityGrant(grant), true
+			return rootproto.ClonePerasAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.CapsuleAuthorityGrant{}, false
+	return rootproto.PerasAuthorityGrant{}, false
 }
 
 func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {
