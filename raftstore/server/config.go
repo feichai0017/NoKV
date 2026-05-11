@@ -5,6 +5,7 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
@@ -43,6 +44,9 @@ type Config struct {
 	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
+	// CapsuleWitness enables StoreKV's experimental fsmeta Capsule witness RPCs.
+	// Nil keeps the wire surface registered but returns FailedPrecondition.
+	CapsuleWitness kv.CapsuleWitness
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore
