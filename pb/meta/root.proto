@@ -60,6 +60,7 @@ message RootState {
   repeated RootGrantInheritance grant_inheritances = 9;
   uint64 retired_era_floor = 10;
   repeated RootCapsuleAuthorityGrant active_capsule_grants = 11;
+  uint64 capsule_authority_epoch = 12;
 }
 
 message RootCheckpoint {
@@ -256,6 +257,31 @@ message RootCapsuleAuthorityGrant {
   bytes predecessor_digest = 6;
   int64 quota_credit_bytes = 7;
   int64 quota_credit_inodes = 8;
+}
+
+enum RootCapsuleAuthorityAct {
+  ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED = 0;
+  ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE = 1;
+  ROOT_CAPSULE_AUTHORITY_ACT_RETIRE = 2;
+}
+
+message RootCapsuleAuthorityCommand {
+  RootCapsuleAuthorityAct kind = 1;
+  string holder_id = 2;
+  string grant_id = 3;
+  RootCapsuleAuthorityScope scope = 4;
+  int64 expires_unix_nano = 5;
+  int64 now_unix_nano = 6;
+  bytes predecessor_digest = 7;
+  int64 quota_credit_bytes = 8;
+  int64 quota_credit_inodes = 9;
+}
+
+enum RootCapsuleAuthorityApplyStatus {
+  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
+  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED = 1;
+  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD = 2;
+  ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED = 3;
 }
 
 message RootGrantCertificate {
@@ -465,6 +491,16 @@ message MetadataRootApplyGrantResponse {
   RootGrantCertificate certificate = 3;
 }
 
+message MetadataRootApplyCapsuleAuthorityRequest {
+  RootCapsuleAuthorityCommand command = 1;
+}
+
+message MetadataRootApplyCapsuleAuthorityResponse {
+  RootState state = 1;
+  RootCapsuleAuthorityApplyStatus status = 2;
+  RootCapsuleAuthorityGrant grant = 3;
+}
+
 message RootTailToken {
   RootCursor cursor = 1;
   uint64 revision = 2;
@@ -520,6 +556,7 @@ service MetadataRoot {
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
   rpc ApplyGrant(MetadataRootApplyGrantRequest) returns (MetadataRootApplyGrantResponse);
+  rpc ApplyCapsuleAuthority(MetadataRootApplyCapsuleAuthorityRequest) returns (MetadataRootApplyCapsuleAuthorityResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

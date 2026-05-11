@@ -92,6 +92,9 @@ func TestCloneCapsuleAuthorityGrantIsIsolated(t *testing.T) {
 }
 
 func TestCapsuleAuthorityGrantValidity(t *testing.T) {
+	require.False(t, CapsuleAuthorityScope{}.Valid())
+	require.True(t, CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7}.Valid())
+
 	require.False(t, CapsuleAuthorityGrant{}.Valid())
 	require.False(t, CapsuleAuthorityGrant{GrantID: "g1", EpochID: 1, HolderID: "h1", ExpiresUnixNano: 1_000}.Valid())
 	require.True(t, testCapsuleGrant(CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7}).Valid())

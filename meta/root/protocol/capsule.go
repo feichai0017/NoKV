@@ -12,6 +12,10 @@ type CapsuleAuthorityScope struct {
 	Inodes     []uint64
 }
 
+func (s CapsuleAuthorityScope) Valid() bool {
+	return s.MountKeyID != 0
+}
+
 // CapsuleAuthorityGrant is the rooted authority object for fsmeta Capsule
 // holders. It is separate from AuthorityGrant, which grants coordinator service
 // duties such as TSO and region lookup.
@@ -26,11 +30,31 @@ type CapsuleAuthorityGrant struct {
 	QuotaCreditInodes int64
 }
 
+type CapsuleAuthorityAct uint8
+
+const (
+	CapsuleAuthorityActUnknown CapsuleAuthorityAct = iota
+	CapsuleAuthorityActAcquire
+	CapsuleAuthorityActRetire
+)
+
+type CapsuleAuthorityCommand struct {
+	Kind              CapsuleAuthorityAct
+	HolderID          string
+	GrantID           string
+	Scope             CapsuleAuthorityScope
+	ExpiresUnixNano   int64
+	NowUnixNano       int64
+	PredecessorDigest [32]byte
+	QuotaCreditBytes  int64
+	QuotaCreditInodes int64
+}
+
 func (g CapsuleAuthorityGrant) Valid() bool {
 	return g.GrantID != "" &&
 		g.EpochID != 0 &&
 		g.HolderID != "" &&
-		g.Scope.MountKeyID != 0 &&
+		g.Scope.Valid() &&
 		g.ExpiresUnixNano > 0
 }
 

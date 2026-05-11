@@ -19,6 +19,7 @@ func TestApplyCapsuleAuthorityGrantLifecycleToState(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, grant, found)
 	require.Equal(t, cursor, st.LastCommitted)
+	require.Equal(t, grant.EpochID, st.CapsuleAuthorityEpoch)
 
 	covered, ok := st.ActiveCapsuleGrantFor(rootproto.CapsuleAuthorityScope{
 		MountID:    "vol",
@@ -33,6 +34,7 @@ func TestApplyCapsuleAuthorityGrantLifecycleToState(t *testing.T) {
 	_, ok = st.ActiveCapsuleGrantByID(grant.GrantID)
 	require.False(t, ok)
 	require.Empty(t, st.ActiveCapsuleGrants)
+	require.Equal(t, grant.EpochID, st.CapsuleAuthorityEpoch)
 }
 
 func TestApplyCapsuleAuthorityRejectsInvalidAndConflictingGrants(t *testing.T) {
@@ -60,6 +62,12 @@ func TestApplyCapsuleAuthorityGrantLifecycleToSnapshot(t *testing.T) {
 
 	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.CapsuleAuthorityGranted(grant))
 	require.Len(t, snapshot.State.ActiveCapsuleGrants, 1)
+	require.Equal(t, grant.EpochID, snapshot.State.CapsuleAuthorityEpoch)
+
+	stateClone := rootstate.CloneState(snapshot.State)
+	stateClone.ActiveCapsuleGrants[0].Scope.Buckets[0] = 8
+	require.Equal(t, []uint16{1}, snapshot.State.ActiveCapsuleGrants[0].Scope.Buckets)
+
 	clone := rootstate.CloneSnapshot(snapshot)
 	clone.State.ActiveCapsuleGrants[0].Scope.Buckets[0] = 9
 	require.Equal(t, []uint16{1}, snapshot.State.ActiveCapsuleGrants[0].Scope.Buckets)

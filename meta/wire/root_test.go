@@ -71,15 +71,16 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	capsuleGrant := testWireCapsuleAuthorityGrant()
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:        7,
-		MembershipEpoch:     3,
-		LastCommitted:       rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:             100,
-		TSOFence:            200,
-		ActiveGrants:        []rootproto.AuthorityGrant{grant},
-		RetiredGrants:       []rootproto.GrantRetirement{retirement},
-		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
-		ActiveCapsuleGrants: []rootproto.CapsuleAuthorityGrant{capsuleGrant},
+		ClusterEpoch:          7,
+		MembershipEpoch:       3,
+		LastCommitted:         rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:               100,
+		TSOFence:              200,
+		ActiveGrants:          []rootproto.AuthorityGrant{grant},
+		RetiredGrants:         []rootproto.GrantRetirement{retirement},
+		GrantInheritances:     []rootproto.GrantInheritance{inheritance},
+		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{capsuleGrant},
+		CapsuleAuthorityEpoch: capsuleGrant.EpochID,
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -115,6 +116,20 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	}
 	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
+
+	capsuleCmd := rootproto.CapsuleAuthorityCommand{
+		Kind:              rootproto.CapsuleAuthorityActAcquire,
+		HolderID:          capsuleGrant.HolderID,
+		GrantID:           capsuleGrant.GrantID,
+		Scope:             capsuleGrant.Scope,
+		ExpiresUnixNano:   capsuleGrant.ExpiresUnixNano,
+		NowUnixNano:       321,
+		PredecessorDigest: [32]byte{1, 2, 3},
+		QuotaCreditBytes:  4096,
+		QuotaCreditInodes: 128,
+	}
+	require.Equal(t, capsuleCmd, RootCapsuleAuthorityCommandFromProto(RootCapsuleAuthorityCommandToProto(capsuleCmd)))
+	require.Equal(t, rootproto.CapsuleAuthorityCommand{}, RootCapsuleAuthorityCommandFromProto(nil))
 
 	cert := rootproto.GrantCertificate{
 		Grant:       grant,

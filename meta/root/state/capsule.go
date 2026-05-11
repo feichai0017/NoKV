@@ -34,6 +34,9 @@ func applyCapsuleAuthorityGrantedToState(state *State, event rootevent.Event) {
 	for i, current := range state.ActiveCapsuleGrants {
 		if current.GrantID == grant.GrantID {
 			state.ActiveCapsuleGrants[i] = grant
+			if grant.EpochID > state.CapsuleAuthorityEpoch {
+				state.CapsuleAuthorityEpoch = grant.EpochID
+			}
 			return
 		}
 		if current.Overlaps(grant) {
@@ -41,6 +44,9 @@ func applyCapsuleAuthorityGrantedToState(state *State, event rootevent.Event) {
 		}
 	}
 	state.ActiveCapsuleGrants = append(state.ActiveCapsuleGrants, grant)
+	if grant.EpochID > state.CapsuleAuthorityEpoch {
+		state.CapsuleAuthorityEpoch = grant.EpochID
+	}
 }
 
 func applyCapsuleAuthorityRetiredToState(state *State, event rootevent.Event) {

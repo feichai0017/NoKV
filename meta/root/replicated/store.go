@@ -361,6 +361,112 @@ func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (roo
 	}
 }
 
+func (s *Store) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	if s == nil {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch cmd.Kind {
+	case rootproto.CapsuleAuthorityActAcquire:
+		return s.acquireCapsuleAuthorityLocked(ctx, cmd)
+	case rootproto.CapsuleAuthorityActRetire:
+		return s.retireCapsuleAuthorityLocked(ctx, cmd)
+	default:
+		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+}
+
+func (s *Store) acquireCapsuleAuthorityLocked(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
+	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
+		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	request := rootproto.CapsuleAuthorityGrant{
+		GrantID:         "request",
+		EpochID:         1,
+		HolderID:        holderID,
+		Scope:           rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+		ExpiresUnixNano: cmd.ExpiresUnixNano,
+	}
+	requestedGrantID := strings.TrimSpace(cmd.GrantID)
+	if requestedGrantID != "" {
+		if active, ok := activeCapsuleGrantByID(s.state.ActiveCapsuleGrants, requestedGrantID); ok &&
+			active.HolderID == holderID &&
+			active.ActiveAt(cmd.NowUnixNano) &&
+			active.Covers(cmd.Scope, cmd.NowUnixNano) {
+			return rootstate.CloneState(s.state), active, nil
+		}
+	}
+
+	events := make([]rootevent.Event, 0, 2)
+	for _, active := range s.state.ActiveCapsuleGrants {
+		if !active.Overlaps(request) {
+			continue
+		}
+		if active.ActiveAt(cmd.NowUnixNano) {
+			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
+				return rootstate.CloneState(s.state), rootproto.CloneCapsuleAuthorityGrant(active), nil
+			}
+			return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		events = append(events, rootevent.CapsuleAuthorityRetired(active))
+	}
+
+	epoch := s.state.CapsuleAuthorityEpoch + 1
+	grantID := requestedGrantID
+	if grantID == "" || activeCapsuleGrantIDExists(s.state.ActiveCapsuleGrants, grantID) {
+		grantID = fmt.Sprintf("%s/%d", holderID, epoch)
+	}
+	grant := rootproto.CapsuleAuthorityGrant{
+		GrantID:           grantID,
+		EpochID:           epoch,
+		HolderID:          holderID,
+		Scope:             rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+		ExpiresUnixNano:   cmd.ExpiresUnixNano,
+		PredecessorDigest: cmd.PredecessorDigest,
+		QuotaCreditBytes:  cmd.QuotaCreditBytes,
+		QuotaCreditInodes: cmd.QuotaCreditInodes,
+	}
+	events = append(events, rootevent.CapsuleAuthorityGranted(grant))
+	commit, err := s.appendLocked(ctx, events...)
+	if err != nil {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+	}
+	committed, ok := commit.State.ActiveCapsuleGrantByID(grantID)
+	if !ok {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, rootstate.ErrFinality
+	}
+	return rootstate.CloneState(commit.State), committed, nil
+}
+
+func (s *Store) retireCapsuleAuthorityLocked(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
+	grantID := strings.TrimSpace(cmd.GrantID)
+	if holderID == "" || grantID == "" {
+		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	active, ok := activeCapsuleGrantByID(s.state.ActiveCapsuleGrants, grantID)
+	if !ok {
+		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, nil
+	}
+	if active.HolderID != holderID {
+		return rootstate.CloneState(s.state), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+	}
+	commit, err := s.appendLocked(ctx, rootevent.CapsuleAuthorityRetired(active))
+	if err != nil {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+	}
+	return rootstate.CloneState(commit.State), rootproto.CapsuleAuthorityGrant{}, nil
+}
+
 func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || len(cmd.RequestedDuties) == 0 {
@@ -463,6 +569,20 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 func activeGrantIDExists(grants []rootproto.AuthorityGrant, grantID string) bool {
 	_, ok := activeGrantByID(grants, grantID)
 	return ok
+}
+
+func activeCapsuleGrantIDExists(grants []rootproto.CapsuleAuthorityGrant, grantID string) bool {
+	_, ok := activeCapsuleGrantByID(grants, grantID)
+	return ok
+}
+
+func activeCapsuleGrantByID(grants []rootproto.CapsuleAuthorityGrant, grantID string) (rootproto.CapsuleAuthorityGrant, bool) {
+	for _, grant := range grants {
+		if grant.GrantID == grantID {
+			return rootproto.CloneCapsuleAuthorityGrant(grant), true
+		}
+	}
+	return rootproto.CapsuleAuthorityGrant{}, false
 }
 
 func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {
