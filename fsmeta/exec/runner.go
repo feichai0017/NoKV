@@ -123,18 +123,10 @@ type PerasAuthorityRetirer interface {
 	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
 }
 
-// PerasShadowSubmitter is an experimental measurement hook for the Peras
-// holder+witness path. The executor still commits through the ordinary
-// Percolator/Raft runner; submitter failures are counted but do not affect the
-// current fsmeta result until segment apply/recovery are complete.
-type PerasShadowSubmitter interface {
-	SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error)
-}
-
 // PerasCommitter is the experimental, opt-in Peras visible commit boundary.
-// Unlike PerasShadowSubmitter, success replaces the ordinary Percolator/Raft
-// commit for this fsmeta operation, so errors are returned and never silently
-// fall back after the holder overlay may already include the operation.
+// Success replaces the ordinary Percolator/Raft commit for this fsmeta
+// operation, so errors are returned and never silently fall back after the
+// holder overlay may already include the operation.
 type PerasCommitter interface {
 	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error)
 }
@@ -188,7 +180,6 @@ type Executor struct {
 	subtrees                SubtreeHandoffPublisher
 	authorities             SubtreeAuthorityResolver
 	perasAuthority          PerasAuthorityAdmitter
-	perasShadowSubmitter    PerasShadowSubmitter
 	perasCommitter          PerasCommitter
 	perasWatchFence         PerasWatchFence
 	negCache                NegativeCache
@@ -201,9 +192,8 @@ type Executor struct {
 	txnRetryExhaustedTotal  atomic.Uint64
 	createTotal             atomic.Uint64
 	perasAdmission          perasAdmissionCounters
-	perasShadow             perasShadowCounters
 	perasVisible            perasVisibleCounters
-	perasShadowSeq          atomic.Uint64
+	perasSeq                atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
 }
 
@@ -222,16 +212,6 @@ type perasAdmissionCounters struct {
 	ownedTotal            atomic.Uint64
 	heldTotal             atomic.Uint64
 	errorTotal            atomic.Uint64
-}
-
-type perasShadowCounters struct {
-	submitTotal            atomic.Uint64
-	successTotal           atomic.Uint64
-	errorTotal             atomic.Uint64
-	skipIneligibleTotal    atomic.Uint64
-	skipNoAuthorityTotal   atomic.Uint64
-	skipNonConcreteTotal   atomic.Uint64
-	latencyTotalNanosecond atomic.Uint64
 }
 
 type perasVisibleCounters struct {
@@ -356,18 +336,8 @@ func WithPerasAuthorityAdmitter(admitter PerasAuthorityAdmitter) Option {
 	}
 }
 
-// WithPerasShadowSubmitter runs eligible, concrete fsmeta mutations through
-// the Peras holder+witness path before the normal Raft commit. This is only a
-// shadow measurement hook: success never replaces the existing transaction
-// commit, and errors are exposed through Stats rather than returned.
-func WithPerasShadowSubmitter(submitter PerasShadowSubmitter) Option {
-	return func(e *Executor) {
-		e.perasShadowSubmitter = submitter
-	}
-}
-
 // WithPerasCommitter enables Peras visible commits. This option is intentionally
-// separate from shadow submission so production callers must opt in explicitly.
+// explicit so production callers choose the visible-commit contract.
 func WithPerasCommitter(committer PerasCommitter) Option {
 	return func(e *Executor) {
 		e.perasCommitter = committer
@@ -412,7 +382,6 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
 			"peras_admission":            perasAdmissionStats(nil, false),
-			"peras_shadow":               perasShadowStats(nil, false),
 			"peras_visible_commit":       perasVisibleStats(nil, false),
 			"atomic_one_phase":           atomicOnePhaseStats(nil),
 			"negative_cache_enabled":     false,
@@ -426,7 +395,6 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
 		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
-		"peras_shadow":               perasShadowStats(&e.perasShadow, e.perasShadowSubmitter != nil),
 		"peras_visible_commit":       perasVisibleStats(&e.perasVisible, e.perasCommitter != nil),
 		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
 		"negative_cache_enabled":     e.negCache != nil,
@@ -474,39 +442,6 @@ func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[str
 		"owned_total":    counters.ownedTotal.Load(),
 		"held_total":     counters.heldTotal.Load(),
 		"error_total":    counters.errorTotal.Load(),
-	}
-}
-
-func perasShadowStats(counters *perasShadowCounters, enabled bool) map[string]any {
-	if counters == nil {
-		return map[string]any{
-			"enabled":                    enabled,
-			"submit_total":               uint64(0),
-			"success_total":              uint64(0),
-			"error_total":                uint64(0),
-			"skip_ineligible_total":      uint64(0),
-			"skip_no_authority_total":    uint64(0),
-			"skip_non_concrete_total":    uint64(0),
-			"latency_total_nanosecond":   uint64(0),
-			"latency_average_nanosecond": uint64(0),
-		}
-	}
-	submits := counters.submitTotal.Load()
-	latency := counters.latencyTotalNanosecond.Load()
-	average := uint64(0)
-	if submits > 0 {
-		average = latency / submits
-	}
-	return map[string]any{
-		"enabled":                    enabled,
-		"submit_total":               submits,
-		"success_total":              counters.successTotal.Load(),
-		"error_total":                counters.errorTotal.Load(),
-		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
-		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
-		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
-		"latency_total_nanosecond":   latency,
-		"latency_average_nanosecond": average,
 	}
 }
 
@@ -718,7 +653,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 			return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 		}
 	}
-	e.submitPerasShadow(ctx, delta)
 	mutations := []*kvrpcpb.Mutation{
 		{
 			Op:                kvrpcpb.Mutation_Put,
@@ -1450,33 +1384,6 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
-func (e *Executor) submitPerasShadow(ctx context.Context, delta compile.SemanticDelta) {
-	if e == nil || e.perasShadowSubmitter == nil {
-		return
-	}
-	if e.perasAuthority == nil {
-		e.perasShadow.skipNoAuthorityTotal.Add(1)
-		return
-	}
-	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.perasShadow.skipIneligibleTotal.Add(1)
-		return
-	}
-	if !perasDeltaHasConcreteWrites(delta) {
-		e.perasShadow.skipNonConcreteTotal.Add(1)
-		return
-	}
-	id := e.nextPerasOperationID(delta.Kind)
-	e.perasShadow.submitTotal.Add(1)
-	start := time.Now()
-	if _, err := e.perasShadowSubmitter.SubmitPeras(ctx, id, delta); err != nil {
-		e.perasShadow.errorTotal.Add(1)
-	} else {
-		e.perasShadow.successTotal.Add(1)
-	}
-	e.perasShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
-}
-
 func (e *Executor) perasOverlay() PerasOverlayReader {
 	if e == nil || e.perasCommitter == nil {
 		return nil
@@ -1616,7 +1523,7 @@ func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) [
 func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.OperationID {
 	seq := uint64(1)
 	if e != nil {
-		seq = e.perasShadowSeq.Add(1)
+		seq = e.perasSeq.Add(1)
 	}
 	return fsperas.OperationID{ClientID: "fsmeta-exec/" + string(kind), Seq: seq}
 }

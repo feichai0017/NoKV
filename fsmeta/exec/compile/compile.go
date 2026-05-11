@@ -234,6 +234,10 @@ func Rename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta
 			{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
 		},
 	)
+	if req.FromParent != req.ToParent {
+		delta.Eligibility = EligibilitySlowPath
+		delta.SlowReason = SlowReasonCrossParent
+	}
 	return delta, nil
 }
 

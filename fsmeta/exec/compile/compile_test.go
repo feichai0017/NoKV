@@ -96,8 +96,8 @@ func TestRenameSameParentVisibleCrossParentSlow(t *testing.T) {
 		ToName:     "new",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilityVisibleCommit, crossParent.Eligibility)
-	require.Empty(t, crossParent.SlowReason)
+	require.Equal(t, EligibilitySlowPath, crossParent.Eligibility)
+	require.Equal(t, SlowReasonCrossParent, crossParent.SlowReason)
 	require.Equal(t, []fsmeta.InodeID{8, 9}, crossParent.Authority.Parents)
 }
 
