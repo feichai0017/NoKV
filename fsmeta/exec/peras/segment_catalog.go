@@ -1,0 +1,152 @@
+package peras
+
+import (
+	"bytes"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+)
+
+var perasSegmentCatalogMagic = [4]byte{'N', 'P', 'C', 1}
+
+// SegmentCatalogRecord is the single hidden raftstore record written with a
+// durable segment install. It is enough to rebuild the installed segment
+// frontier and operation completion table after restart without replaying
+// per-operation witness records.
+type SegmentCatalogRecord struct {
+	EpochID        uint64
+	InstallVersion uint64
+	Root           [32]byte
+
+	OperationCount     uint64
+	EntryCount         uint64
+	CompletionCount    uint64
+	InputMutationCount uint64
+	CoalescedMutations uint64
+
+	Completions []SegmentCompletion
+}
+
+func PerasSegmentCatalogKey(segment PerasSegment) ([]byte, error) {
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return nil, err
+	}
+	entries := segment.Entries()
+	if len(entries) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	parts, ok := fsmeta.InspectKey(entries[0].Key)
+	if !ok {
+		return nil, ErrInvalidPerasSegment
+	}
+	return fsmeta.EncodePerasSegmentCatalogKey(parts.MountKeyID, parts.Bucket, segment.Root)
+}
+
+func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64) ([]byte, error) {
+	if installVersion == 0 {
+		return nil, ErrReplayVersionRequired
+	}
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return nil, err
+	}
+	stats := segment.Stats()
+	var out bytes.Buffer
+	writeFixed(&out, perasSegmentCatalogMagic[:])
+	writeUint64(&out, segment.EpochID)
+	writeUint64(&out, installVersion)
+	writeFixed(&out, segment.Root[:])
+	writeUint64(&out, stats.OperationCount)
+	writeUint64(&out, stats.EntryCount)
+	writeUint64(&out, stats.CompletionCount)
+	writeUint64(&out, stats.InputMutationCount)
+	writeUint64(&out, stats.CoalescedMutations)
+	writeUint64(&out, uint64(len(segment.Completions)))
+	for _, completion := range segment.Completions {
+		writeOperationID(&out, completion.OpID)
+		writeString(&out, string(completion.Kind))
+		writeUint64(&out, completion.Version)
+		writeUint64(&out, uint64(completion.MutationCount))
+	}
+	return out.Bytes(), nil
+}
+
+func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, error) {
+	r := witnessReader{buf: payload}
+	if err := r.readMagic(perasSegmentCatalogMagic); err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	epochID, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	installVersion, err := r.readUint64()
+	if err != nil || installVersion == 0 {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	var root [32]byte
+	if err := r.readFixed(root[:]); err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	operationCount, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	entryCount, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	completionCount, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	inputMutationCount, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	coalescedMutations, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	encodedCompletionCount, err := r.readUint64()
+	if err != nil || encodedCompletionCount != completionCount || encodedCompletionCount > uint64(maxSegmentSliceLen()) {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	completions := make([]SegmentCompletion, 0, encodedCompletionCount)
+	for range encodedCompletionCount {
+		opID, err := r.readOperationID()
+		if err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
+		kind, err := r.readString()
+		if err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
+		version, err := r.readUint64()
+		if err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
+		mutationCount, err := r.readUint64()
+		if err != nil || mutationCount > uint64(^uint32(0)) {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
+		completions = append(completions, SegmentCompletion{
+			OpID:          opID,
+			Kind:          fsmeta.OperationKind(kind),
+			Version:       version,
+			MutationCount: uint32(mutationCount),
+		})
+	}
+	if !r.done() || epochID == 0 || root == ([32]byte{}) || operationCount == 0 || completionCount != uint64(len(completions)) {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	return SegmentCatalogRecord{
+		EpochID:            epochID,
+		InstallVersion:     installVersion,
+		Root:               root,
+		OperationCount:     operationCount,
+		EntryCount:         entryCount,
+		CompletionCount:    completionCount,
+		InputMutationCount: inputMutationCount,
+		CoalescedMutations: coalescedMutations,
+		Completions:        completions,
+	}, nil
+}

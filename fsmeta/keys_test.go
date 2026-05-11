@@ -33,6 +33,24 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
+func TestPerasSegmentCatalogKeyUsesRootedMountAndBucket(t *testing.T) {
+	var root [32]byte
+	root[0] = 7
+	key, err := EncodePerasSegmentCatalogKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindPeras, kind)
+	require.Equal(t, "peras", kind.String())
+
+	parts, ok := InspectKey(key)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, AffinityBucket(3), parts.Bucket)
+	require.Equal(t, root, parts.PerasRoot)
+}
+
 func TestAuxiliaryKeyEncoders(t *testing.T) {
 	mount, err := EncodeMountKey(testMount)
 	require.NoError(t, err)
