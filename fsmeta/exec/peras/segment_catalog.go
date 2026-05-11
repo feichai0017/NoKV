@@ -20,6 +20,10 @@ type SegmentCatalogRecord struct {
 	InstallVersion uint64
 	Root           [32]byte
 
+	SegmentPayloadDigest [32]byte
+	SegmentPayloadSize   uint64
+	SegmentPayload       []byte
+
 	OperationCount     uint64
 	EntryCount         uint64
 	CompletionCount    uint64
@@ -139,11 +143,29 @@ func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (S
 }
 
 func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64) ([]byte, error) {
+	payload, err := EncodePerasSegment(segment)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		return nil, err
+	}
+	return EncodePerasSegmentCatalogRecordWithPayload(segment, installVersion, payload, digest)
+}
+
+// EncodePerasSegmentCatalogRecordWithPayload writes a catalog record using a
+// segment payload the caller has already verified against segment.Root and
+// digest. This avoids re-encoding the payload on the raftstore install path.
+func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVersion uint64, payload []byte, digest [32]byte) ([]byte, error) {
 	if installVersion == 0 {
 		return nil, ErrReplayVersionRequired
 	}
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
+	}
+	if len(payload) == 0 || digest == ([32]byte{}) {
+		return nil, ErrInvalidPerasSegment
 	}
 	stats := segment.Stats()
 	var out bytes.Buffer
@@ -151,6 +173,9 @@ func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64
 	writeUint64(&out, segment.EpochID)
 	writeUint64(&out, installVersion)
 	writeFixed(&out, segment.Root[:])
+	writeFixed(&out, digest[:])
+	writeUint64(&out, uint64(len(payload)))
+	writeBytes(&out, payload)
 	writeUint64(&out, stats.OperationCount)
 	writeUint64(&out, stats.EntryCount)
 	writeUint64(&out, stats.CompletionCount)
@@ -181,6 +206,18 @@ func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, erro
 	}
 	var root [32]byte
 	if err := r.readFixed(root[:]); err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	var payloadDigest [32]byte
+	if err := r.readFixed(payloadDigest[:]); err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	payloadSize, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+	}
+	segmentPayload, err := r.readBytes()
+	if err != nil {
 		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
 	}
 	operationCount, err := r.readUint64()
@@ -235,15 +272,50 @@ func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, erro
 	if !r.done() || epochID == 0 || root == ([32]byte{}) || operationCount == 0 || completionCount != uint64(len(completions)) {
 		return SegmentCatalogRecord{}, ErrInvalidPerasSegment
 	}
-	return SegmentCatalogRecord{
-		EpochID:            epochID,
-		InstallVersion:     installVersion,
-		Root:               root,
-		OperationCount:     operationCount,
-		EntryCount:         entryCount,
-		CompletionCount:    completionCount,
-		InputMutationCount: inputMutationCount,
-		CoalescedMutations: coalescedMutations,
-		Completions:        completions,
-	}, nil
+	record := SegmentCatalogRecord{
+		EpochID:              epochID,
+		InstallVersion:       installVersion,
+		Root:                 root,
+		SegmentPayloadDigest: payloadDigest,
+		SegmentPayloadSize:   payloadSize,
+		SegmentPayload:       segmentPayload,
+		OperationCount:       operationCount,
+		EntryCount:           entryCount,
+		CompletionCount:      completionCount,
+		InputMutationCount:   inputMutationCount,
+		CoalescedMutations:   coalescedMutations,
+		Completions:          completions,
+	}
+	if err := validateSegmentCatalogPayload(record); err != nil {
+		return SegmentCatalogRecord{}, err
+	}
+	return record, nil
+}
+
+func validateSegmentCatalogPayload(record SegmentCatalogRecord) error {
+	if record.Root == ([32]byte{}) || record.SegmentPayloadDigest == ([32]byte{}) {
+		return ErrInvalidPerasSegment
+	}
+	if record.SegmentPayloadSize == 0 || uint64(len(record.SegmentPayload)) != record.SegmentPayloadSize {
+		return ErrInvalidPerasSegment
+	}
+	segment, err := VerifyPerasSegmentPayload(record.SegmentPayload, record.Root, record.SegmentPayloadDigest)
+	if err != nil {
+		return err
+	}
+	stats := segment.Stats()
+	if stats.OperationCount != record.OperationCount ||
+		stats.EntryCount != record.EntryCount ||
+		stats.CompletionCount != record.CompletionCount ||
+		stats.InputMutationCount != record.InputMutationCount ||
+		stats.CoalescedMutations != record.CoalescedMutations ||
+		len(segment.Completions) != len(record.Completions) {
+		return ErrInvalidPerasSegment
+	}
+	for i, completion := range segment.Completions {
+		if completion != record.Completions[i] {
+			return ErrInvalidPerasSegment
+		}
+	}
+	return nil
 }

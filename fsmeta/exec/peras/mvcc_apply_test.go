@@ -97,6 +97,10 @@ func TestBuildMVCCReplayEntriesKeepsLargeValuesInDefaultCF(t *testing.T) {
 
 func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
 	segment := fsmetaSegmentForTest(t)
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
 
 	entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
 	require.NoError(t, err)
@@ -116,9 +120,34 @@ func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
 			require.Equal(t, segment.Root, catalog.Root)
 			require.Equal(t, uint64(99), catalog.InstallVersion)
 			require.Equal(t, uint64(len(segment.Completions)), catalog.CompletionCount)
+			require.Equal(t, digest, catalog.SegmentPayloadDigest)
+			require.Equal(t, uint64(len(payload)), catalog.SegmentPayloadSize)
+			require.Equal(t, payload, catalog.SegmentPayload)
 		}
 	}
 	require.True(t, catalogFound)
+}
+
+func TestBuildMVCCSegmentCatalogInstallEntriesStoresOnlySegmentObject(t *testing.T) {
+	segment := fsmetaSegmentForTest(t)
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	entries, err := BuildMVCCSegmentCatalogInstallEntries(segment, 99)
+	require.NoError(t, err)
+	defer releaseMVCCReplayEntries(entries)
+	require.Len(t, entries, 1)
+
+	catalog, err := DecodePerasSegmentCatalogRecord(entries[0].Value)
+	require.NoError(t, err)
+	require.Equal(t, segment.Root, catalog.Root)
+	require.Equal(t, digest, catalog.SegmentPayloadDigest)
+	require.Equal(t, uint64(len(payload)), catalog.SegmentPayloadSize)
+	decoded, err := VerifyPerasSegmentPayload(catalog.SegmentPayload, segment.Root, digest)
+	require.NoError(t, err)
+	require.Equal(t, segment.Stats(), decoded.Stats())
 }
 
 func TestBuildMVCCSegmentInstallEntriesRequiresFSMetaKeys(t *testing.T) {
@@ -215,6 +244,52 @@ func BenchmarkMVCCReplayStoreApply64(b *testing.B) {
 		if stats.Operations != 64 {
 			b.Fatalf("unexpected operation count %d", stats.Operations)
 		}
+	}
+}
+
+func BenchmarkBuildMVCCSegmentCatalogInstallEntries1000(b *testing.B) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload, err := EncodePerasSegment(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	digest, err := PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		entries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment, 99, payload, digest)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(entries) != 1 {
+			b.Fatalf("unexpected catalog entry count %d", len(entries))
+		}
+		releaseMVCCReplayEntries(entries)
+	}
+}
+
+func BenchmarkBuildMVCCSegmentMaterializationEntries1000(b *testing.B) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(entries) <= 1 {
+			b.Fatalf("unexpected materialized entry count %d", len(entries))
+		}
+		releaseMVCCReplayEntries(entries)
 	}
 }
 

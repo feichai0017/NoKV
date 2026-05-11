@@ -156,6 +156,43 @@ func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*en
 	return entries, nil
 }
 
+// BuildMVCCSegmentCatalogInstallEntries installs the sealed segment object
+// itself. The ordinary per-key MVCC materialization remains a background
+// optimization; the durable commit unit is this catalog entry.
+func BuildMVCCSegmentCatalogInstallEntries(segment PerasSegment, version uint64) ([]*entrykv.Entry, error) {
+	payload, err := EncodePerasSegment(segment)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		return nil, err
+	}
+	return BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment, version, payload, digest)
+}
+
+// BuildMVCCSegmentCatalogInstallEntriesWithPayload is the raftstore install
+// path for an already verified segment payload.
+func BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment PerasSegment, version uint64, payload []byte, digest [32]byte) ([]*entrykv.Entry, error) {
+	if version == 0 || version == entrykv.MaxVersion {
+		return nil, ErrReplayVersionRequired
+	}
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return nil, err
+	}
+	catalogKey, err := PerasSegmentCatalogKey(segment)
+	if err != nil {
+		return nil, err
+	}
+	catalogValue, err := EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
+	if err != nil {
+		return nil, err
+	}
+	return []*entrykv.Entry{
+		entrykv.NewInternalEntry(entrykv.CFDefault, catalogKey, version, catalogValue, 0, 0),
+	}, nil
+}
+
 func buildMutationMVCCReplayEntries(mutation ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
 	if len(mutation.Key) == 0 {
 		return nil, ErrInvalidPerasSegment
