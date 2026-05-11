@@ -104,6 +104,25 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listMountsResp.GetMounts(), 1)
 
+	now := time.Now()
+	capsuleResp, err := cli.ApplyCapsuleAuthority(context.Background(), &coordpb.ApplyCapsuleAuthorityRequest{
+		Command: metawire.RootCapsuleAuthorityCommandToProto(rootproto.CapsuleAuthorityCommand{
+			Kind:            rootproto.CapsuleAuthorityActAcquire,
+			HolderID:        "fsmeta-holder",
+			NowUnixNano:     now.UnixNano(),
+			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+			Scope: rootproto.CapsuleAuthorityScope{
+				MountID:    "vol",
+				MountKeyID: 1,
+				Buckets:    []uint16{1},
+			},
+		}),
+	})
+	require.NoError(t, err)
+	require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED, capsuleResp.GetStatus())
+	require.Equal(t, "fsmeta-holder/1", capsuleResp.GetGrant().GetGrantId())
+	require.Len(t, capsuleResp.GetActiveGrants(), 1)
+
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 2,
@@ -239,6 +258,9 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
+func (f *followerStorage) ApplyCapsuleAuthority(context.Context, rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, nil
+}
 func (f *followerStorage) Refresh() error            { return nil }
 func (f *followerStorage) Close() error              { return nil }
 func (f *followerStorage) CanSubmitRootWrites() bool { return false }
@@ -372,6 +394,53 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	}
 }
 
+func (s *clientRootStorage) ApplyCapsuleAuthority(_ context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	holderID := strings.TrimSpace(cmd.HolderID)
+	switch cmd.Kind {
+	case rootproto.CapsuleAuthorityActAcquire:
+		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		}
+		if active, ok := s.snapshot.RootSnapshot().State.ActiveCapsuleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
+				return rootstate.CloneState(s.snapshot.RootSnapshot().State), active, nil
+			}
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		epoch := s.snapshot.CapsuleAuthorityEpoch + 1
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
+		}
+		grant := rootproto.CapsuleAuthorityGrant{
+			GrantID:           grantID,
+			EpochID:           epoch,
+			HolderID:          holderID,
+			Scope:             rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+			ExpiresUnixNano:   cmd.ExpiresUnixNano,
+			PredecessorDigest: cmd.PredecessorDigest,
+			QuotaCreditBytes:  cmd.QuotaCreditBytes,
+			QuotaCreditInodes: cmd.QuotaCreditInodes,
+		}
+		s.applyEventLocked(rootevent.CapsuleAuthorityGranted(grant))
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), grant, nil
+	case rootproto.CapsuleAuthorityActRetire:
+		active, ok := s.snapshot.ActiveCapsuleGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, nil
+		}
+		if active.HolderID != holderID {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		s.applyEventLocked(rootevent.CapsuleAuthorityRetired(active))
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, nil
+	default:
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+}
+
 func (s *clientRootStorage) Refresh() error            { return nil }
 func (s *clientRootStorage) Close() error              { return nil }
 func (s *clientRootStorage) CanSubmitRootWrites() bool { return s.leader }
@@ -488,6 +557,40 @@ func TestValidateListCapsuleAuthorityGrantsResponse(t *testing.T) {
 			metawire.RootCapsuleAuthorityGrantToProto(grant),
 			metawire.RootCapsuleAuthorityGrantToProto(grant),
 		},
+	}))
+}
+
+func TestValidateApplyCapsuleAuthorityResponse(t *testing.T) {
+	grant := rootproto.CapsuleAuthorityGrant{
+		GrantID:         "capsule-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
+	require.NoError(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status:       metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED,
+		Grant:        metawire.RootCapsuleAuthorityGrantToProto(grant),
+		ActiveGrants: []*metapb.RootCapsuleAuthorityGrant{metawire.RootCapsuleAuthorityGrantToProto(grant)},
+	}))
+	require.NoError(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status:       metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD,
+		ActiveGrants: []*metapb.RootCapsuleAuthorityGrant{metawire.RootCapsuleAuthorityGrantToProto(grant)},
+	}))
+	require.NoError(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED,
+	}))
+
+	require.Error(t, validateApplyCapsuleAuthorityResponse(nil))
+	require.Error(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED,
+	}))
+	require.Error(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD,
+		Grant:  metawire.RootCapsuleAuthorityGrantToProto(grant),
+	}))
+	require.Error(t, validateApplyCapsuleAuthorityResponse(&coordpb.ApplyCapsuleAuthorityResponse{
+		Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_UNSPECIFIED,
 	}))
 }
 

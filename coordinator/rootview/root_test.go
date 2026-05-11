@@ -27,6 +27,9 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
+func (f fakeLoadStore) ApplyCapsuleAuthority(context.Context, rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, nil
+}
 func (f fakeLoadStore) Refresh() error            { return nil }
 func (f fakeLoadStore) CanSubmitRootWrites() bool { return true }
 func (f fakeLoadStore) LeaderID() uint64          { return 1 }
@@ -55,6 +58,9 @@ type fakeRootBackend struct {
 	tailNotifyCh        chan struct{}
 	applyGrantResult    rootstate.EunomiaState
 	applyGrantCert      rootproto.GrantCertificate
+	applyCapsuleErr     error
+	applyCapsuleResult  rootstate.State
+	applyCapsuleGrant   rootproto.CapsuleAuthorityGrant
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -158,6 +164,18 @@ func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
 	return f.applyGrantResult, f.applyGrantCert, nil
+}
+
+func (f *fakeRootBackend) ApplyCapsuleAuthority(_ context.Context, _ rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	if f.applyCapsuleErr != nil {
+		return f.applyCapsuleResult, rootproto.CapsuleAuthorityGrant{}, f.applyCapsuleErr
+	}
+	f.snapshot.State.ActiveCapsuleGrants = cloneCapsuleAuthorityGrants(f.applyCapsuleResult.ActiveCapsuleGrants)
+	f.snapshot.State.CapsuleAuthorityEpoch = f.applyCapsuleResult.CapsuleAuthorityEpoch
+	if f.useObserved {
+		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
+	}
+	return f.applyCapsuleResult, f.applyCapsuleGrant, nil
 }
 
 func (f *fakeRootBackend) Close() error {
@@ -581,6 +599,81 @@ func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *test
 	require.Equal(t, uint64(3), loaded.ActiveGrants[0].Era)
 }
 
+func TestRootStoreMergesCapsuleAuthorityStateFromHeldRejection(t *testing.T) {
+	stale := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
+			ActiveCapsuleGrants: []rootproto.CapsuleAuthorityGrant{
+				testRootviewCapsuleGrant("capsule-stale", 1),
+			},
+			CapsuleAuthorityEpoch: 1,
+		},
+	}
+	authoritativeGrant := testRootviewCapsuleGrant("capsule-held", 2)
+	authoritativeGrant.EpochID = 2
+	authoritativeGrant.HolderID = "holder-b"
+	authoritative := rootstate.State{
+		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{authoritativeGrant},
+		CapsuleAuthorityEpoch: authoritativeGrant.EpochID,
+	}
+	fake := &fakeRootBackend{
+		snapshot:           stale,
+		observed:           rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:        true,
+		isLeader:           true,
+		applyCapsuleErr:    rootstate.ErrPrimacy,
+		applyCapsuleResult: authoritative,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, _, err := store.ApplyCapsuleAuthority(context.Background(), rootproto.CapsuleAuthorityCommand{Kind: rootproto.CapsuleAuthorityActAcquire})
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
+	require.Equal(t, authoritative, state)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "holder-b", loaded.ActiveCapsuleGrants[0].HolderID)
+	require.Equal(t, uint64(2), loaded.CapsuleAuthorityEpoch)
+}
+
+func TestRootStorePreservesAppliedCapsuleAuthorityAcrossStaleObservedReload(t *testing.T) {
+	staleGrant := testRootviewCapsuleGrant("capsule-stale", 1)
+	staleGrant.EpochID = 1
+	stale := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted:         rootstate.Cursor{Term: 1, Index: 10},
+			ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{staleGrant},
+			CapsuleAuthorityEpoch: staleGrant.EpochID,
+		},
+	}
+	appliedGrant := testRootviewCapsuleGrant("capsule-applied", 3)
+	appliedGrant.EpochID = 3
+	appliedGrant.HolderID = "holder-c"
+	applied := rootstate.State{
+		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{appliedGrant},
+		CapsuleAuthorityEpoch: appliedGrant.EpochID,
+	}
+	fake := &fakeRootBackend{
+		snapshot:           stale,
+		observed:           rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:        true,
+		isLeader:           true,
+		applyCapsuleResult: applied,
+		applyCapsuleGrant:  appliedGrant,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, grant, err := store.ApplyCapsuleAuthority(context.Background(), rootproto.CapsuleAuthorityCommand{Kind: rootproto.CapsuleAuthorityActAcquire})
+	require.NoError(t, err)
+	require.Equal(t, applied, state)
+	require.Equal(t, appliedGrant, grant)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "holder-c", loaded.ActiveCapsuleGrants[0].HolderID)
+	require.Equal(t, uint64(3), loaded.CapsuleAuthorityEpoch)
+}
+
 func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
 	observed := Snapshot{
 		ActiveGrants: []rootproto.AuthorityGrant{{
@@ -619,6 +712,9 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
+	require.ErrorIs(t, err, errGrantCommandUnsupported)
+
+	_, _, err = store.ApplyCapsuleAuthority(context.Background(), rootproto.CapsuleAuthorityCommand{})
 	require.ErrorIs(t, err, errGrantCommandUnsupported)
 }
 

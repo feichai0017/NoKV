@@ -39,6 +39,7 @@ type Client interface {
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
 	ListCapsuleAuthorityGrants(ctx context.Context, req *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error)
+	ApplyCapsuleAuthority(ctx context.Context, req *coordpb.ApplyCapsuleAuthorityRequest) (*coordpb.ApplyCapsuleAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -313,6 +314,12 @@ func (c *GRPCClient) ListCapsuleAuthorityGrants(ctx context.Context, req *coordp
 	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
 		return coord.ListCapsuleAuthorityGrants(ctx, req)
 	}, validateListCapsuleAuthorityGrantsResponse)
+}
+
+func (c *GRPCClient) ApplyCapsuleAuthority(ctx context.Context, req *coordpb.ApplyCapsuleAuthorityRequest) (*coordpb.ApplyCapsuleAuthorityResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.ApplyCapsuleAuthorityResponse, error) {
+		return coord.ApplyCapsuleAuthority(ctx, req)
+	}, validateApplyCapsuleAuthorityResponse)
 }
 
 func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -842,6 +849,45 @@ func validateListCapsuleAuthorityGrantsResponse(resp *coordpb.ListCapsuleAuthori
 		}
 		if _, ok := seen[parsed.GrantID]; ok {
 			return fmt.Errorf("%w: list_capsule_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
+		}
+		seen[parsed.GrantID] = struct{}{}
+	}
+	return nil
+}
+
+func validateApplyCapsuleAuthorityResponse(resp *coordpb.ApplyCapsuleAuthorityResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: apply_capsule_authority response is nil", errInvalidWitness)
+	}
+	status := resp.GetStatus()
+	switch status {
+	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED:
+		if parsed := metawire.RootCapsuleAuthorityGrantFromProto(resp.GetGrant()); !parsed.Valid() {
+			return fmt.Errorf("%w: apply_capsule_authority granted reply missing grant", errInvalidWitness)
+		}
+	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD:
+		if resp.GetGrant() != nil {
+			return fmt.Errorf("%w: apply_capsule_authority held reply carries grant", errInvalidWitness)
+		}
+		if len(resp.GetActiveGrants()) == 0 {
+			return fmt.Errorf("%w: apply_capsule_authority held reply missing active grants", errInvalidWitness)
+		}
+	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED:
+	default:
+		return fmt.Errorf("%w: apply_capsule_authority invalid status=%d", errInvalidWitness, status)
+	}
+	return validateCapsuleAuthorityGrantList("apply_capsule_authority", resp.GetActiveGrants())
+}
+
+func validateCapsuleAuthorityGrantList(kind string, grants []*metapb.RootCapsuleAuthorityGrant) error {
+	seen := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
+		if !parsed.Valid() {
+			return fmt.Errorf("%w: %s contains invalid grant", errInvalidWitness, kind)
+		}
+		if _, ok := seen[parsed.GrantID]; ok {
+			return fmt.Errorf("%w: %s duplicate grant_id=%s", errInvalidWitness, kind, parsed.GrantID)
 		}
 		seen[parsed.GrantID] = struct{}{}
 	}

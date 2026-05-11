@@ -171,6 +171,10 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 	}
 }
 
+func (s *protocolMatrixStorage) ApplyCapsuleAuthority(context.Context, rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+}
+
 func (s *protocolMatrixStorage) advanceRootToken() {
 	if s.snapshot.RootToken.Cursor.Term == 0 {
 		s.snapshot.RootToken.Cursor.Term = 1

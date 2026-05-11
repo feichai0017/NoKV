@@ -30,6 +30,7 @@ const (
 	Coordinator_GetQuotaFence_FullMethodName              = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
 	Coordinator_ListQuotaFences_FullMethodName            = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
 	Coordinator_ListCapsuleAuthorityGrants_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListCapsuleAuthorityGrants"
+	Coordinator_ApplyCapsuleAuthority_FullMethodName      = "/nokv.coordinator.v1.Coordinator/ApplyCapsuleAuthority"
 	Coordinator_WatchRootEvents_FullMethodName            = "/nokv.coordinator.v1.Coordinator/WatchRootEvents"
 	Coordinator_RegionLiveness_FullMethodName             = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
 	Coordinator_PublishRootEvent_FullMethodName           = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
@@ -54,6 +55,7 @@ type CoordinatorClient interface {
 	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
 	ListCapsuleAuthorityGrants(ctx context.Context, in *ListCapsuleAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListCapsuleAuthorityGrantsResponse, error)
+	ApplyCapsuleAuthority(ctx context.Context, in *ApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*ApplyCapsuleAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, in *WatchRootEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRootEventsResponse], error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
@@ -157,6 +159,16 @@ func (c *coordinatorClient) ListCapsuleAuthorityGrants(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListCapsuleAuthorityGrantsResponse)
 	err := c.cc.Invoke(ctx, Coordinator_ListCapsuleAuthorityGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ApplyCapsuleAuthority(ctx context.Context, in *ApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*ApplyCapsuleAuthorityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyCapsuleAuthorityResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ApplyCapsuleAuthority_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -275,6 +287,7 @@ type CoordinatorServer interface {
 	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
 	ListCapsuleAuthorityGrants(context.Context, *ListCapsuleAuthorityGrantsRequest) (*ListCapsuleAuthorityGrantsResponse, error)
+	ApplyCapsuleAuthority(context.Context, *ApplyCapsuleAuthorityRequest) (*ApplyCapsuleAuthorityResponse, error)
 	WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
@@ -319,6 +332,9 @@ func (UnimplementedCoordinatorServer) ListQuotaFences(context.Context, *ListQuot
 }
 func (UnimplementedCoordinatorServer) ListCapsuleAuthorityGrants(context.Context, *ListCapsuleAuthorityGrantsRequest) (*ListCapsuleAuthorityGrantsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListCapsuleAuthorityGrants not implemented")
+}
+func (UnimplementedCoordinatorServer) ApplyCapsuleAuthority(context.Context, *ApplyCapsuleAuthorityRequest) (*ApplyCapsuleAuthorityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyCapsuleAuthority not implemented")
 }
 func (UnimplementedCoordinatorServer) WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchRootEvents not implemented")
@@ -529,6 +545,24 @@ func _Coordinator_ListCapsuleAuthorityGrants_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Coordinator_ApplyCapsuleAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyCapsuleAuthorityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ApplyCapsuleAuthority(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ApplyCapsuleAuthority_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ApplyCapsuleAuthority(ctx, req.(*ApplyCapsuleAuthorityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Coordinator_WatchRootEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRootEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -726,6 +760,10 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListCapsuleAuthorityGrants",
 			Handler:    _Coordinator_ListCapsuleAuthorityGrants_Handler,
+		},
+		{
+			MethodName: "ApplyCapsuleAuthority",
+			Handler:    _Coordinator_ApplyCapsuleAuthority_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",
