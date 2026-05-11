@@ -329,6 +329,51 @@ func TestActiveAuthoritiesRejectsConflictingRootEvent(t *testing.T) {
 	require.Equal(t, left.GrantID, table.Snapshot()[0].GrantID)
 }
 
+func TestActiveAuthoritiesRootGrantReplacesOlderOverlap(t *testing.T) {
+	table := NewActiveAuthorities()
+	old := testGrant("g1", "holder-a", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+	next := testGrant("g2", "holder-b", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+	next.EpochID = old.EpochID + 1
+
+	require.NoError(t, table.ApplyRootEvent(rootevent.PerasAuthorityGranted(old)))
+	require.NoError(t, table.ApplyRootEvent(rootevent.PerasAuthorityGranted(next)))
+
+	snapshot := table.Snapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, next.GrantID, snapshot[0].GrantID)
+	require.Equal(t, next.HolderID, snapshot[0].HolderID)
+}
+
+func TestActiveAuthoritiesRootGrantIgnoresOlderOverlap(t *testing.T) {
+	table := NewActiveAuthorities()
+	current := testGrant("g2", "holder-b", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+	current.EpochID = 2
+	old := testGrant("g1", "holder-a", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+
+	require.NoError(t, table.ApplyRootEvent(rootevent.PerasAuthorityGranted(current)))
+	require.NoError(t, table.ApplyRootEvent(rootevent.PerasAuthorityGranted(old)))
+
+	snapshot := table.Snapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, current.GrantID, snapshot[0].GrantID)
+}
+
 func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
 	scope := AuthorityScopeFromDelta(compile.AuthorityScope{
 		Mount:      testMount.MountID,

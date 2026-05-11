@@ -86,15 +86,7 @@ func (a *ActiveAuthorities) ApplyRootEvent(event rootevent.Event) error {
 	}
 	switch event.Kind {
 	case rootevent.KindPerasAuthorityGranted:
-		next := a.Snapshot()
-		for i, grant := range next {
-			if grant.GrantID == event.PerasGrant.GrantID {
-				next[i] = cloneGrant(*event.PerasGrant)
-				return a.Replace(next)
-			}
-		}
-		next = append(next, cloneGrant(*event.PerasGrant))
-		return a.Replace(next)
+		return a.applyGranted(*event.PerasGrant)
 	case rootevent.KindPerasAuthorityRetired:
 		next := a.Snapshot()
 		for i := 0; i < len(next); i++ {
@@ -107,6 +99,33 @@ func (a *ActiveAuthorities) ApplyRootEvent(event rootevent.Event) error {
 	default:
 		return nil
 	}
+}
+
+func (a *ActiveAuthorities) applyGranted(grant AuthorityGrant) error {
+	if !grant.Valid() {
+		return ErrInvalidGrant
+	}
+	next := a.Snapshot()
+	for i := 0; i < len(next); i++ {
+		current := next[i]
+		if current.GrantID == grant.GrantID {
+			next[i] = cloneGrant(grant)
+			return a.Replace(next)
+		}
+		if !current.Overlaps(grant) {
+			continue
+		}
+		if current.EpochID > grant.EpochID {
+			return nil
+		}
+		if current.EpochID == grant.EpochID {
+			return ErrConflictingGrant
+		}
+		next = append(next[:i], next[i+1:]...)
+		i--
+	}
+	next = append(next, cloneGrant(grant))
+	return a.Replace(next)
 }
 
 func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (AuthorityGrant, bool, error) {
