@@ -67,6 +67,11 @@ func (m *CapsuleAuthorityManager) HolderID() string {
 	return m.holderID
 }
 
+func (m *CapsuleAuthorityManager) AcquireCapsuleAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
+	_, owned, err := m.Acquire(ctx, scope)
+	return owned, err
+}
+
 func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (fscapsule.AuthorityGrant, bool, error) {
 	if m == nil {
 		return fscapsule.AuthorityGrant{}, false, errCapsuleAuthorityClientRequired

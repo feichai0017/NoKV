@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -109,6 +110,14 @@ type SubtreeAuthorityResolver interface {
 	SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error)
 }
 
+// CapsuleAuthorityAdmitter is the fsmeta holder-side boundary for Capsule.
+// It is intentionally narrower than the root protocol: the executor only asks
+// whether a compiled authority scope is locally owned before it can enter a
+// future Capsule fast path.
+type CapsuleAuthorityAdmitter interface {
+	AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
+}
+
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -133,6 +142,7 @@ type Executor struct {
 	quotas                  QuotaResolver
 	subtrees                SubtreeHandoffPublisher
 	authorities             SubtreeAuthorityResolver
+	capsuleAuthority        CapsuleAuthorityAdmitter
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -142,7 +152,17 @@ type Executor struct {
 	txnRetriesTotal         atomic.Uint64
 	txnRetryExhaustedTotal  atomic.Uint64
 	createTotal             atomic.Uint64
+	capsuleAdmission        capsuleAdmissionCounters
 	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
+}
+
+type capsuleAdmissionCounters struct {
+	eligibleTotal atomic.Uint64
+	slowTotal     atomic.Uint64
+	acquireTotal  atomic.Uint64
+	ownedTotal    atomic.Uint64
+	heldTotal     atomic.Uint64
+	errorTotal    atomic.Uint64
 }
 
 type atomicFastPathCounters struct {
@@ -247,6 +267,15 @@ func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	}
 }
 
+// WithCapsuleAuthorityAdmitter enables holder-authority admission for
+// Capsule-eligible mutations. The executor still uses the existing
+// Percolator/Raft write path until the witness and seal layers are wired.
+func WithCapsuleAuthorityAdmitter(admitter CapsuleAuthorityAdmitter) Option {
+	return func(e *Executor) {
+		e.capsuleAuthority = admitter
+	}
+}
+
 // New constructs an fsmeta executor.
 func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	if runner == nil {
@@ -274,6 +303,7 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retries_total":          uint64(0),
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
+			"capsule_admission":          capsuleAdmissionStats(nil, false),
 			"atomic_fastpath":            atomicFastPathStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -285,6 +315,7 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retries_total":          e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
+		"capsule_admission":          capsuleAdmissionStats(&e.capsuleAdmission, e.capsuleAuthority != nil),
 		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -304,6 +335,29 @@ func (e *Executor) Stats() map[string]any {
 		out["inode_allocator"] = stats.Stats()
 	}
 	return out
+}
+
+func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map[string]any {
+	if counters == nil {
+		return map[string]any{
+			"enabled":        enabled,
+			"eligible_total": uint64(0),
+			"slow_total":     uint64(0),
+			"acquire_total":  uint64(0),
+			"owned_total":    uint64(0),
+			"held_total":     uint64(0),
+			"error_total":    uint64(0),
+		}
+	}
+	return map[string]any{
+		"enabled":        enabled,
+		"eligible_total": counters.eligibleTotal.Load(),
+		"slow_total":     counters.slowTotal.Load(),
+		"acquire_total":  counters.acquireTotal.Load(),
+		"owned_total":    counters.ownedTotal.Load(),
+		"held_total":     counters.heldTotal.Load(),
+		"error_total":    counters.errorTotal.Load(),
+	}
 }
 
 var atomicFastPathKinds = [...]fsmeta.OperationKind{
@@ -380,10 +434,14 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	plan, err := fsmeta.PlanCreate(req, mount, inodeID)
+	delta, err := compile.Create(req, mount, inodeID, compile.WithQuotaMode(e.capsuleQuotaMode()))
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return fsmeta.CreateResult{}, err
+	}
+	plan := delta.Plan
 	inode := req.Attrs.InodeRecord(inodeID)
 	dentry := fsmeta.DentryRecord{
 		Parent: req.Parent,
@@ -559,6 +617,36 @@ func (e *Executor) atomicFastPathCounters(kind fsmeta.OperationKind) *atomicFast
 	return e.atomicFastPath[kind]
 }
 
+func (e *Executor) admitCapsuleAuthority(ctx context.Context, delta compile.SemanticDelta) error {
+	if e == nil || e.capsuleAuthority == nil {
+		return nil
+	}
+	if delta.Eligibility != compile.EligibilityFastPath {
+		e.capsuleAdmission.slowTotal.Add(1)
+		return nil
+	}
+	e.capsuleAdmission.eligibleTotal.Add(1)
+	e.capsuleAdmission.acquireTotal.Add(1)
+	owned, err := e.capsuleAuthority.AcquireCapsuleAuthority(ctx, delta.Authority)
+	if err != nil {
+		e.capsuleAdmission.errorTotal.Add(1)
+		return err
+	}
+	if !owned {
+		e.capsuleAdmission.heldTotal.Add(1)
+		return errCapsuleAuthorityNotHeld
+	}
+	e.capsuleAdmission.ownedTotal.Add(1)
+	return nil
+}
+
+func (e *Executor) capsuleQuotaMode() compile.QuotaMode {
+	if e != nil && e.quotas != nil {
+		return compile.QuotaModeShared
+	}
+	return compile.QuotaModeNone
+}
+
 func atomicExists(key []byte) *kvrpcpb.AtomicPredicate {
 	return &kvrpcpb.AtomicPredicate{Key: cloneBytes(key), Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_EXISTS}
 }
@@ -584,10 +672,14 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		return fsmeta.InodeRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanUpdateInode(req, mount)
+	delta, err := compile.UpdateInode(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
 	if err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return fsmeta.InodeRecord{}, err
+	}
+	plan := delta.Plan
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return fsmeta.InodeRecord{}, fsmeta.ErrInvalidRequest
 	}
@@ -1033,10 +1125,14 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanLink(req, mount)
+	delta, err := compile.Link(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
 	if err != nil {
 		return err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return err
+	}
+	plan := delta.Plan
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
@@ -1149,10 +1245,14 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanUnlink(req, mount)
+	delta, err := compile.Unlink(req, mount, compile.WithQuotaMode(e.capsuleQuotaMode()))
 	if err != nil {
 		return err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return err
+	}
+	plan := delta.Plan
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
@@ -1227,10 +1327,14 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		return fsmeta.SessionRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanOpenWriteSession(req, mount)
+	delta, err := compile.OpenWriteSession(req, mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
@@ -1334,10 +1438,14 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		return fsmeta.SessionRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanHeartbeatWriteSession(req, mount)
+	delta, err := compile.HeartbeatWriteSession(req, mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return fsmeta.SessionRecord{}, err
+	}
+	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
@@ -1403,10 +1511,14 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		return err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanCloseWriteSession(req, mount)
+	delta, err := compile.CloseWriteSession(req, mount)
 	if err != nil {
 		return err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return err
+	}
+	plan := delta.Plan
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
@@ -1454,10 +1566,14 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanExpireWriteSessions(req, mount)
+	delta, err := compile.ExpireWriteSessions(req, mount)
 	if err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return fsmeta.ExpireWriteSessionsResult{}, err
+	}
+	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1584,13 +1700,17 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanRename(req, mount)
+	delta, err := compile.Rename(req, mount)
 	if err != nil {
 		return err
 	}
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return err
+	}
+	plan := delta.Plan
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
@@ -1621,10 +1741,14 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		return err
 	}
 	mount := mountRecord.Identity()
-	plan, err := fsmeta.PlanRenameSubtree(req, mount)
+	delta, err := compile.RenameSubtree(req, mount)
 	if err != nil {
 		return err
 	}
+	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
+		return err
+	}
+	plan := delta.Plan
 	authorityRoot := mountRecord.RootInode
 	if e.subtrees != nil && authorityRoot == 0 {
 		return fsmeta.ErrInvalidInodeID
