@@ -8,6 +8,7 @@
 - [Architecture](architecture.md)
 - [Runtime Call Chains](runtime.md)
 - [Control and Execution Plane Protocols](control_and_execution_protocols.md)
+- [Apodeixis Research Review](apodeixis.md)
 
 # Storage Engine
 
