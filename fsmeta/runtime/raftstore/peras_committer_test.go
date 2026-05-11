@@ -274,9 +274,19 @@ func TestRemotePerasCommitterDrainAuthorityFlushesAndRetires(t *testing.T) {
 	}
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
 	delta.Authority = scope
+	otherScope := compile.AuthorityScope{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Parents:    []fsmeta.InodeID{9},
+		Inodes:     []fsmeta.InodeID{10},
+	}
+	otherDelta := testRuntimePerasDelta([]byte("dentry/b"), []byte("inode/b"))
+	otherDelta.Authority = otherScope
 
 	ctx := context.Background()
 	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	require.NoError(t, err)
+	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, otherDelta, nil)
 	require.NoError(t, err)
 	retirer := &fakeRuntimePerasRetirer{}
 	require.NoError(t, committer.DrainAuthority(ctx, retirer, scope))
@@ -284,6 +294,7 @@ func TestRemotePerasCommitterDrainAuthorityFlushesAndRetires(t *testing.T) {
 	stats := committer.Stats()
 	require.Equal(t, uint64(1), stats["flush_total"])
 	require.Equal(t, uint64(1), stats["segment_total"])
+	require.Equal(t, uint64(2), stats["segment_operations_total"])
 	require.Equal(t, 0, stats["pending"])
 	require.Equal(t, 1, installer.calls)
 	require.Equal(t, 1, retirer.calls)

@@ -3,6 +3,7 @@ package peras
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -124,10 +125,11 @@ func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, epochID uint6
 		return err
 	}
 	if !ok {
-		return ErrWitnessAuthorityMissing
+		return fmt.Errorf("%w: want epoch=%d holder=%q", ErrWitnessAuthorityMissing, epochID, holderID)
 	}
 	if grant.EpochID != epochID || grant.HolderID != holderID {
-		return ErrWitnessAuthorityMismatch
+		return fmt.Errorf("%w: have grant=%q epoch=%d holder=%q want epoch=%d holder=%q",
+			ErrWitnessAuthorityMismatch, grant.GrantID, grant.EpochID, grant.HolderID, epochID, holderID)
 	}
 	return nil
 }
