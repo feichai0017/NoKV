@@ -129,7 +129,7 @@ func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*en
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
 	}
-	entries := make([]*entrykv.Entry, 0, len(segment.entries)*3)
+	entries := make([]*entrykv.Entry, 0, len(segment.entries)*3+1)
 	for _, entry := range segment.entries {
 		mutationEntries, err := buildMutationMVCCReplayEntries(ReplayMutation{
 			Key:    entry.Key,
@@ -142,6 +142,17 @@ func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*en
 		}
 		entries = append(entries, mutationEntries...)
 	}
+	catalogKey, err := PerasSegmentCatalogKey(segment)
+	if err != nil {
+		releaseMVCCReplayEntries(entries)
+		return nil, err
+	}
+	catalogValue, err := EncodePerasSegmentCatalogRecord(segment, version)
+	if err != nil {
+		releaseMVCCReplayEntries(entries)
+		return nil, err
+	}
+	entries = append(entries, entrykv.NewInternalEntry(entrykv.CFDefault, catalogKey, version, catalogValue, 0, 0))
 	return entries, nil
 }
 

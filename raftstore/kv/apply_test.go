@@ -152,6 +152,11 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
+	require.NoError(t, err)
 	plan := fsperas.ReplayPlan{
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{
@@ -159,15 +164,15 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 				OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
 				Kind: fsmeta.OperationCreate,
 				Mutations: []fsperas.ReplayMutation{
-					{Key: []byte("dentry/a"), Value: []byte("old")},
+					{Key: dentryKey, Value: []byte("old")},
 				},
 			},
 			{
 				OpID: fsperas.OperationID{ClientID: "client", Seq: 2},
 				Kind: fsmeta.OperationUpdateInode,
 				Mutations: []fsperas.ReplayMutation{
-					{Key: []byte("dentry/a"), Value: []byte("new")},
-					{Key: []byte("inode/1"), Value: []byte("attrs")},
+					{Key: dentryKey, Value: []byte("new")},
+					{Key: inodeKey, Value: []byte("attrs")},
 				},
 			},
 		},
@@ -183,7 +188,7 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           []byte("dentry/a"),
+				RoutingKey:           dentryKey,
 				SegmentRoot:          segment.Root[:],
 				SegmentPayloadDigest: digest[:],
 				SegmentPayload:       payload,
@@ -199,10 +204,10 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 	require.Equal(t, uint64(2), installResp.GetEntryCount())
 
 	reader := percolator.NewReader(db)
-	value, _, err := reader.GetValue([]byte("dentry/a"), 100)
+	value, _, err := reader.GetValue(dentryKey, 100)
 	require.NoError(t, err)
 	require.Equal(t, []byte("new"), value)
-	value, _, err = reader.GetValue([]byte("inode/1"), 100)
+	value, _, err = reader.GetValue(inodeKey, 100)
 	require.NoError(t, err)
 	require.Equal(t, []byte("attrs"), value)
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/local"
 	"github.com/feichai0017/NoKV/txn/percolator"
 	"github.com/feichai0017/NoKV/utils"
@@ -95,17 +96,38 @@ func TestBuildMVCCReplayEntriesKeepsLargeValuesInDefaultCF(t *testing.T) {
 }
 
 func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
-	segment, err := BuildPerasSegmentFromReplayPlan(replayPlanForTest(t))
-	require.NoError(t, err)
+	segment := fsmetaSegmentForTest(t)
 
 	entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
 	require.NoError(t, err)
 	defer releaseMVCCReplayEntries(entries)
 
-	require.NotEmpty(t, entries)
+	catalogKey, err := PerasSegmentCatalogKey(segment)
+	require.NoError(t, err)
+	var catalogFound bool
 	for _, entry := range entries {
 		require.Equal(t, uint64(99), entry.Version)
+		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
+		if cf == entrykv.CFDefault && bytes.Equal(userKey, catalogKey) {
+			catalogFound = true
+			catalog, err := DecodePerasSegmentCatalogRecord(entry.Value)
+			require.NoError(t, err)
+			require.Equal(t, segment.Root, catalog.Root)
+			require.Equal(t, uint64(99), catalog.InstallVersion)
+			require.Equal(t, uint64(len(segment.Completions)), catalog.CompletionCount)
+		}
 	}
+	require.True(t, catalogFound)
+}
+
+func TestBuildMVCCSegmentInstallEntriesRequiresFSMetaKeys(t *testing.T) {
+	segment, err := BuildPerasSegmentFromReplayPlan(replayPlanForTest(t))
+	require.NoError(t, err)
+
+	entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
+	require.Empty(t, entries)
 }
 
 func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
@@ -213,4 +235,37 @@ func versionedReplayPlanForTest(t *testing.T, firstVersion uint64) ReplayPlan {
 			replayOpForTest(opID("client-b", 1), "dentry/b", "inode=8", "inode/8", "attrs"),
 		},
 	}
+}
+
+func fsmetaSegmentForTest(t *testing.T) PerasSegment {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryA, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	dentryB, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "b")
+	require.NoError(t, err)
+	inodeA, err := fsmeta.EncodeInodeKey(mount, 7)
+	require.NoError(t, err)
+	segment, err := BuildPerasSegmentFromReplayPlan(ReplayPlan{
+		EpochID: 1,
+		Operations: []ReplayOperation{
+			{
+				OpID: opID("client-a", 1),
+				Kind: fsmeta.OperationCreate,
+				Mutations: []ReplayMutation{
+					{Key: dentryA, Value: []byte("inode=7")},
+					{Key: inodeA, Value: []byte("attrs")},
+				},
+			},
+			{
+				OpID: opID("client-b", 1),
+				Kind: fsmeta.OperationCreate,
+				Mutations: []ReplayMutation{
+					{Key: dentryB, Value: []byte("inode=8")},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return segment
 }
