@@ -138,6 +138,21 @@ func TestPerasAuthorityManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
 	require.Equal(t, []perasauth.AuthorityGrant{grantB}, table.Snapshot())
 }
 
+func TestPerasAuthorityManagerMountRetireScopeMatchesBucketGrants(t *testing.T) {
+	now := time.Unix(10, 0)
+	scopeA := testRuntimePerasScope(1)
+	scopeB := testRuntimePerasScope(2)
+	grantA := testRuntimePerasGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
+	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{grantA, grantB}))
+	manager, err := NewPerasAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+
+	grants := manager.ownedGrantsForScopes(compile.AuthorityScope{Mount: "vol", MountKeyID: 7})
+	require.ElementsMatch(t, []perasauth.AuthorityGrant{grantA, grantB}, grants)
+}
+
 func TestPerasAuthorityManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)

@@ -191,13 +191,26 @@ func (m *PerasAuthorityManager) ownedGrantsForScopes(scopes ...compile.Authority
 			continue
 		}
 		for _, scope := range scopes {
-			if perasAuthorityScopeEmpty(scope) || perasauth.GrantCoversDelta(grant, scope, now) {
+			if perasAuthorityScopeEmpty(scope) || perasGrantMatchesRetireScope(grant, scope, now) {
 				out = append(out, grant)
 				break
 			}
 		}
 	}
 	return out
+}
+
+func perasGrantMatchesRetireScope(grant perasauth.AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
+		return false
+	}
+	if scope.MountKeyID == 0 || grant.Scope.MountKeyID != uint64(scope.MountKeyID) {
+		return false
+	}
+	if len(scope.Buckets) == 0 && len(scope.Parents) == 0 && len(scope.Inodes) == 0 {
+		return true
+	}
+	return perasauth.GrantCoversDelta(grant, scope, now)
 }
 
 func perasAuthorityScopeEmpty(scope compile.AuthorityScope) bool {
