@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
@@ -626,6 +628,49 @@ func TestValidatePerasSegmentInstallResponseChecksRootAndCounts(t *testing.T) {
 	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), errPerasCommitterInvalid)
 }
 
+func TestRunnerPerasSegmentInstallerRetriesTimestampStaleEpoch(t *testing.T) {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: []byte("dentry/a"), Value: []byte("dentry-value")},
+				{Key: []byte("inode/a"), Value: []byte("inode-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	stats := segment.Stats()
+	kv := &fakeRunnerPerasInstallKV{resp: &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+		OperationCount: stats.OperationCount,
+		EntryCount:     stats.EntryCount,
+		AppliedEntries: 1,
+	}}
+	tso := &fakeRunnerTSO{
+		resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1},
+		errs: []error{
+			nokverrors.New(nokverrors.KindStaleEpoch, "stale witness era"),
+			nokverrors.New(nokverrors.KindStaleEpoch, "stale witness era"),
+		},
+	}
+	runner, err := NewRunner(kv, tso)
+	require.NoError(t, err)
+
+	installer := newRunnerPerasSegmentInstaller(runner)
+	require.NoError(t, installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, true))
+
+	require.Equal(t, 3, tso.calls)
+	require.NotNil(t, kv.req)
+	require.Equal(t, uint64(77), kv.req.GetInstallVersion())
+	require.True(t, kv.req.GetMaterializeMvcc())
+}
+
 func BenchmarkRemotePerasCommitterCreate(b *testing.B) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -712,6 +757,18 @@ func (i *blockingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.C
 	i.calls.Add(1)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type fakeRunnerPerasInstallKV struct {
+	fakeRunnerKV
+	req  *kvrpcpb.PerasInstallSegmentRequest
+	resp *kvrpcpb.PerasInstallSegmentResponse
+	err  error
+}
+
+func (f *fakeRunnerPerasInstallKV) InstallPerasSegment(_ context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	f.req = req
+	return f.resp, f.err
 }
 
 type fakeRuntimePerasGrantProvider struct {

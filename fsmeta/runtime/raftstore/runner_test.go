@@ -47,11 +47,21 @@ func (f *fakeCommitTimestampKV) MutateWithCommitTimestamp(ctx context.Context, _
 }
 
 type fakeRunnerTSO struct {
-	resp *coordpb.TsoResponse
-	err  error
+	resp  *coordpb.TsoResponse
+	err   error
+	errs  []error
+	calls int
 }
 
 func (f *fakeRunnerTSO) Tso(context.Context, *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+	f.calls++
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	return f.resp, f.err
 }
 
