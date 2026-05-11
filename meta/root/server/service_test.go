@@ -30,11 +30,14 @@ type fakeServiceBackend struct {
 	observeTailErr      error
 	waitTailErr         error
 	applyGrantErr       error
+	applyCapsuleErr     error
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
 	applyGrantResult    rootstate.EunomiaState
 	applyGrantCert      rootproto.GrantCertificate
+	applyCapsuleState   rootstate.State
+	applyCapsuleGrant   rootproto.CapsuleAuthorityGrant
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -115,6 +118,10 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 
 func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
+}
+
+func (f *fakeServiceBackend) ApplyCapsuleAuthority(context.Context, rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	return f.applyCapsuleState, f.applyCapsuleGrant, f.applyCapsuleErr
 }
 
 type basicServiceBackend struct {
@@ -504,6 +511,81 @@ func TestServiceApplyGrant(t *testing.T) {
 	})
 }
 
+func TestServiceApplyCapsuleAuthority(t *testing.T) {
+	grant := testServerCapsuleAuthorityGrant()
+	state := rootstate.State{
+		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{grant},
+		CapsuleAuthorityEpoch: grant.EpochID,
+	}
+	cmd := rootproto.CapsuleAuthorityCommand{
+		Kind:            rootproto.CapsuleAuthorityActAcquire,
+		HolderID:        grant.HolderID,
+		Scope:           grant.Scope,
+		ExpiresUnixNano: grant.ExpiresUnixNano,
+		NowUnixNano:     100,
+	}
+
+	t.Run("nil service", func(t *testing.T) {
+		var svc *Service
+		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("unimplemented", func(t *testing.T) {
+		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
+		_, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
+			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		})
+		require.Equal(t, codes.Unimplemented, status.Code(err))
+	})
+
+	t.Run("held maps to response status", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:          true,
+			applyCapsuleState: state,
+			applyCapsuleErr:   rootstate.ErrPrimacy,
+		})
+		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
+			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
+	})
+
+	t.Run("success", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:          true,
+			applyCapsuleState: state,
+			applyCapsuleGrant: grant,
+		})
+		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
+			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, grant, metawire.RootCapsuleAuthorityGrantFromProto(resp.Grant))
+		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
+	})
+
+	t.Run("retire status", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:          true,
+			applyCapsuleState: rootstate.State{CapsuleAuthorityEpoch: grant.EpochID},
+		})
+		resp, err := svc.ApplyCapsuleAuthority(context.Background(), &metapb.MetadataRootApplyCapsuleAuthorityRequest{
+			Command: metawire.RootCapsuleAuthorityCommandToProto(rootproto.CapsuleAuthorityCommand{
+				Kind:     rootproto.CapsuleAuthorityActRetire,
+				HolderID: grant.HolderID,
+				GrantID:  grant.GrantID,
+			}),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
+	})
+}
+
 func TestCoordinatorApplyErrorMappings(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInvalidGrant)))
 	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInheritance)))
@@ -537,5 +619,15 @@ func testServerSnapshot() rootstate.Snapshot {
 		},
 		PendingPeerChanges:  map[uint64]rootstate.PendingPeerChange{},
 		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{},
+	}
+}
+
+func testServerCapsuleAuthorityGrant() rootproto.CapsuleAuthorityGrant {
+	return rootproto.CapsuleAuthorityGrant{
+		GrantID:         "capsule-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
+		ExpiresUnixNano: 1_000,
 	}
 }

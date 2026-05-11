@@ -44,6 +44,10 @@ type leaseBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
+type capsuleAuthorityBackend interface {
+	ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error)
+}
+
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
 type Service struct {
 	metapb.UnimplementedMetadataRootServer
@@ -162,6 +166,39 @@ func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyG
 		State:       metawire.RootEunomiaStateToProto(protocolState),
 		Status:      applyStatus,
 		Certificate: metawire.RootGrantCertificateToProto(cert),
+	}, nil
+}
+
+func (s *Service) ApplyCapsuleAuthority(ctx context.Context, req *metapb.MetadataRootApplyCapsuleAuthorityRequest) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
+	if s == nil || s.backend == nil {
+		return &metapb.MetadataRootApplyCapsuleAuthorityResponse{}, nil
+	}
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	backend, ok := s.backend.(capsuleAuthorityBackend)
+	if !ok {
+		return nil, statusUnimplemented("metadata root backend does not implement Capsule authority protocol")
+	}
+	cmd := metawire.RootCapsuleAuthorityCommandFromProto(req.GetCommand())
+	state, grant, err := backend.ApplyCapsuleAuthority(ctx, cmd)
+	if err != nil {
+		if errors.Is(err, rootstate.ErrPrimacy) {
+			return &metapb.MetadataRootApplyCapsuleAuthorityResponse{
+				State:  metawire.RootStateToProto(state),
+				Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD,
+			}, nil
+		}
+		return nil, rpcError(err)
+	}
+	applyStatus := metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED
+	if cmd.Kind == rootproto.CapsuleAuthorityActRetire {
+		applyStatus = metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED
+	}
+	return &metapb.MetadataRootApplyCapsuleAuthorityResponse{
+		State:  metawire.RootStateToProto(state),
+		Status: applyStatus,
+		Grant:  metawire.RootCapsuleAuthorityGrantToProto(grant),
 	}, nil
 }
 

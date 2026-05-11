@@ -221,6 +221,26 @@ func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (ro
 	return protocolState, cert, nil
 }
 
+func (c *Client) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	if !validCapsuleAuthorityAct(cmd.Kind) {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
+		return rpc.ApplyCapsuleAuthority(ctx, &metapb.MetadataRootApplyCapsuleAuthorityRequest{
+			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+		})
+	})
+	if err != nil {
+		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+	}
+	state := metawire.RootStateFromProto(resp.GetState())
+	grant := metawire.RootCapsuleAuthorityGrantFromProto(resp.GetGrant())
+	if resp.GetStatus() == metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD {
+		return state, grant, rootstate.ErrPrimacy
+	}
+	return state, grant, nil
+}
+
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
 		return rpc.ObserveCommitted(ctx, &metapb.MetadataRootObserveCommittedRequest{})
@@ -407,6 +427,16 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 		rootproto.GrantActSeal,
 		rootproto.GrantActRetireExpired,
 		rootproto.GrantActInherit:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCapsuleAuthorityAct(kind rootproto.CapsuleAuthorityAct) bool {
+	switch kind {
+	case rootproto.CapsuleAuthorityActAcquire,
+		rootproto.CapsuleAuthorityActRetire:
 		return true
 	default:
 		return false

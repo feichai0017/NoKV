@@ -21,16 +21,17 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:        state.ClusterEpoch,
-		MembershipEpoch:     state.MembershipEpoch,
-		LastCommitted:       RootCursorToProto(state.LastCommitted),
-		IdFence:             state.IDFence,
-		TsoFence:            state.TSOFence,
-		ActiveGrants:        RootAuthorityGrantsToProto(state.ActiveGrants),
-		RetiredGrants:       RootGrantRetirementsToProto(state.RetiredGrants),
-		GrantInheritances:   RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:     state.RetiredEraFloor,
-		ActiveCapsuleGrants: RootCapsuleAuthorityGrantsToProto(state.ActiveCapsuleGrants),
+		ClusterEpoch:          state.ClusterEpoch,
+		MembershipEpoch:       state.MembershipEpoch,
+		LastCommitted:         RootCursorToProto(state.LastCommitted),
+		IdFence:               state.IDFence,
+		TsoFence:              state.TSOFence,
+		ActiveGrants:          RootAuthorityGrantsToProto(state.ActiveGrants),
+		RetiredGrants:         RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances:     RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloor:       state.RetiredEraFloor,
+		ActiveCapsuleGrants:   RootCapsuleAuthorityGrantsToProto(state.ActiveCapsuleGrants),
+		CapsuleAuthorityEpoch: state.CapsuleAuthorityEpoch,
 	}
 }
 
@@ -39,16 +40,17 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:        pbState.ClusterEpoch,
-		MembershipEpoch:     pbState.MembershipEpoch,
-		LastCommitted:       RootCursorFromProto(pbState.LastCommitted),
-		IDFence:             pbState.IdFence,
-		TSOFence:            pbState.TsoFence,
-		ActiveGrants:        RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
-		RetiredGrants:       RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
-		GrantInheritances:   RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
-		ActiveCapsuleGrants: RootCapsuleAuthorityGrantsFromProto(pbState.GetActiveCapsuleGrants()),
+		ClusterEpoch:          pbState.ClusterEpoch,
+		MembershipEpoch:       pbState.MembershipEpoch,
+		LastCommitted:         RootCursorFromProto(pbState.LastCommitted),
+		IDFence:               pbState.IdFence,
+		TSOFence:              pbState.TsoFence,
+		ActiveGrants:          RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
+		RetiredGrants:         RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
+		GrantInheritances:     RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
+		RetiredEraFloor:       pbState.GetRetiredEraFloor(),
+		ActiveCapsuleGrants:   RootCapsuleAuthorityGrantsFromProto(pbState.GetActiveCapsuleGrants()),
+		CapsuleAuthorityEpoch: pbState.GetCapsuleAuthorityEpoch(),
 	}
 }
 
@@ -296,6 +298,61 @@ func RootCapsuleAuthorityGrantsFromProto(grants []*metapb.RootCapsuleAuthorityGr
 		}
 	}
 	return out
+}
+
+func RootCapsuleAuthorityCommandToProto(cmd rootproto.CapsuleAuthorityCommand) *metapb.RootCapsuleAuthorityCommand {
+	return &metapb.RootCapsuleAuthorityCommand{
+		Kind:              RootCapsuleAuthorityActToProto(cmd.Kind),
+		HolderId:          cmd.HolderID,
+		GrantId:           cmd.GrantID,
+		Scope:             RootCapsuleAuthorityScopeToProto(cmd.Scope),
+		ExpiresUnixNano:   cmd.ExpiresUnixNano,
+		NowUnixNano:       cmd.NowUnixNano,
+		PredecessorDigest: append([]byte(nil), cmd.PredecessorDigest[:]...),
+		QuotaCreditBytes:  cmd.QuotaCreditBytes,
+		QuotaCreditInodes: cmd.QuotaCreditInodes,
+	}
+}
+
+func RootCapsuleAuthorityCommandFromProto(cmd *metapb.RootCapsuleAuthorityCommand) rootproto.CapsuleAuthorityCommand {
+	if cmd == nil {
+		return rootproto.CapsuleAuthorityCommand{}
+	}
+	var predecessorDigest [32]byte
+	copy(predecessorDigest[:], cmd.GetPredecessorDigest())
+	return rootproto.CapsuleAuthorityCommand{
+		Kind:              RootCapsuleAuthorityActFromProto(cmd.GetKind()),
+		HolderID:          cmd.GetHolderId(),
+		GrantID:           cmd.GetGrantId(),
+		Scope:             RootCapsuleAuthorityScopeFromProto(cmd.GetScope()),
+		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
+		NowUnixNano:       cmd.GetNowUnixNano(),
+		PredecessorDigest: predecessorDigest,
+		QuotaCreditBytes:  cmd.GetQuotaCreditBytes(),
+		QuotaCreditInodes: cmd.GetQuotaCreditInodes(),
+	}
+}
+
+func RootCapsuleAuthorityActToProto(act rootproto.CapsuleAuthorityAct) metapb.RootCapsuleAuthorityAct {
+	switch act {
+	case rootproto.CapsuleAuthorityActAcquire:
+		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE
+	case rootproto.CapsuleAuthorityActRetire:
+		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_RETIRE
+	default:
+		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED
+	}
+}
+
+func RootCapsuleAuthorityActFromProto(act metapb.RootCapsuleAuthorityAct) rootproto.CapsuleAuthorityAct {
+	switch act {
+	case metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE:
+		return rootproto.CapsuleAuthorityActAcquire
+	case metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_RETIRE:
+		return rootproto.CapsuleAuthorityActRetire
+	default:
+		return rootproto.CapsuleAuthorityActUnknown
+	}
 }
 
 func rootCapsuleBucketsToProto(buckets []uint16) []uint32 {

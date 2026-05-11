@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func openNetworkTestCluster(t *testing.T, maxRetainedRecords int) (map[uint64]*Store, map[uint64]*NetworkDriver, uint64) {
+func openNetworkTestCluster(t testing.TB, maxRetainedRecords int) (map[uint64]*Store, map[uint64]*NetworkDriver, uint64) {
 	t.Helper()
 
 	transports := map[uint64]Transport{}
