@@ -123,10 +123,15 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 		return CommitCertificateRecord{}, err
 	}
 
-	deltaDigest, predicateDigest, authorityDigest := digestSemanticDelta(delta)
+	deltaPayload, deltaDigest, predicateDigest, authorityDigest, err := digestSemanticDelta(delta)
+	if err != nil {
+		h.detector.Remove(id)
+		return CommitCertificateRecord{}, err
+	}
 	prepare := PrepareRecord{
 		EpochID:              h.epochID,
 		OpID:                 id,
+		DeltaPayload:         deltaPayload,
 		DeltaDigest:          deltaDigest,
 		PredicateDigest:      predicateDigest,
 		AuthorityProofDigest: authorityDigest,
@@ -229,29 +234,16 @@ func (h *Holder) broadcastCommit(ctx context.Context, scope compile.AuthoritySco
 	return acks
 }
 
-func digestSemanticDelta(delta compile.SemanticDelta) ([32]byte, [32]byte, [32]byte) {
-	return hashDelta(delta), hashPredicates(delta.ReadPredicates), hashAuthority(delta.Authority)
-}
-
-func hashDelta(delta compile.SemanticDelta) [32]byte {
-	h := sha256.New()
-	writeString(h, string(delta.Kind))
-	writeKeySetHash(h, delta.Plan.ReadKeys)
-	writeKeySetHash(h, delta.Plan.ReadPrefixes)
-	writeKeySetHash(h, delta.Plan.MutateKeys)
-	for _, predicate := range delta.ReadPredicates {
-		writeUint64(h, uint64(predicate.Kind))
-		writeBytesHash(h, predicate.Key)
+func digestSemanticDelta(delta compile.SemanticDelta) ([]byte, [32]byte, [32]byte, [32]byte, error) {
+	payload, err := EncodeSemanticDeltaPayload(delta)
+	if err != nil {
+		return nil, [32]byte{}, [32]byte{}, [32]byte{}, err
 	}
-	for _, effect := range delta.WriteEffects {
-		writeUint64(h, uint64(effect.Kind))
-		writeBytesHash(h, effect.Key)
-		writeBytesHash(h, effect.Value)
+	digest, err := SemanticDeltaPayloadDigest(payload)
+	if err != nil {
+		return nil, [32]byte{}, [32]byte{}, [32]byte{}, err
 	}
-	for _, guard := range delta.RuntimeGuards {
-		writeString(h, string(guard))
-	}
-	return digestFromHash(h.Sum(nil))
+	return payload, digest, hashPredicates(delta.ReadPredicates), hashAuthority(delta.Authority), nil
 }
 
 func hashPredicates(predicates []compile.Predicate) [32]byte {
@@ -277,12 +269,6 @@ func hashAuthority(scope compile.AuthorityScope) [32]byte {
 		writeUint64(h, uint64(inode))
 	}
 	return digestFromHash(h.Sum(nil))
-}
-
-func writeKeySetHash(h interface{ Write([]byte) (int, error) }, keys [][]byte) {
-	for _, key := range keys {
-		writeBytesHash(h, key)
-	}
 }
 
 func writeBytesHash(h interface{ Write([]byte) (int, error) }, value []byte) {
