@@ -51,6 +51,9 @@ func TestPerasAuthorityManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	require.Equal(t, rootproto.PerasAuthorityActAcquire, client.last.Kind)
 	require.Equal(t, "holder-a", client.last.HolderID)
 	require.Equal(t, now.Add(time.Minute).UnixNano(), client.last.ExpiresUnixNano)
+	require.Equal(t, []uint16{1}, client.last.Scope.Buckets)
+	require.Empty(t, client.last.Scope.Parents)
+	require.Empty(t, client.last.Scope.Inodes)
 	require.Equal(t, []perasauth.AuthorityGrant{grant}, table.Snapshot())
 }
 
