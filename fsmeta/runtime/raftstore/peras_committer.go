@@ -28,8 +28,8 @@ const (
 	// Keep the request below the local write-batch entry cap while preserving
 	// large catalog-only segments on the common path.
 	defaultPerasMaterializeMaxReplayMutations = 20
-	defaultPerasSegmentFlushEvery             = 25 * time.Millisecond
-	defaultPerasBackgroundFlushTimeout        = 2 * time.Second
+	defaultPerasSegmentFlushEvery             = 100 * time.Millisecond
+	defaultPerasBackgroundFlushTimeout        = 10 * time.Second
 	defaultPerasBackgroundErrorBackoff        = time.Second
 	defaultPerasInstallTimestampRetries       = 6
 	defaultPerasInstallTimestampBackoff       = 2 * time.Millisecond
