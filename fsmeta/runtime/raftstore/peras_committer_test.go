@@ -236,6 +236,91 @@ func TestRemotePerasCommitterRecoversWitnessSegment(t *testing.T) {
 	require.Equal(t, []byte("dentry-value"), value)
 }
 
+func TestRemotePerasCommitterRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
+	witnesses := testRuntimePerasWitnessesWithDurability(t, 3, wal.DurabilityFsync)
+	predecessorProvider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	predecessor, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         predecessorProvider,
+		Witnesses:         witnesses,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer predecessor.Close()
+
+	holder, err := fsperas.NewHolder(fsperas.HolderConfig{EpochID: 1, HolderID: "holder-a"})
+	require.NoError(t, err)
+	recoveredDelta := testRuntimePerasDelta([]byte("dentry/recovered"), []byte("inode/recovered"))
+	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
+	require.NoError(t, err)
+	plan, scope, err := holder.BuildPendingReplayPlan(10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	require.NoError(t, predecessor.appendSegmentWitnesses(context.Background(), scope, holder, segment, payload, digest))
+
+	nextGrant := testRuntimeCommitterGrant()
+	nextGrant.GrantID = "grant-2"
+	nextGrant.EpochID = 2
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	recoverer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: nextGrant},
+		Witnesses:         witnesses,
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer recoverer.Close()
+
+	require.NoError(t, commitRuntimePeras(context.Background(), recoverer, 2, []byte("dentry/new"), []byte("inode/new")))
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, segment.Root, installer.segment.Root)
+
+	value, deleted, ok := recoverer.GetPerasOverlay([]byte("dentry/recovered"))
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+	value, deleted, ok = recoverer.GetPerasOverlay([]byte("dentry/new"))
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+}
+
+func TestPerasSegmentWithinScopeRejectsDifferentBucket(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
+	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationUpdateInode,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: leftA, Value: []byte("a")},
+				{Key: leftB, Value: []byte("b")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	require.True(t, perasSegmentWithinScope(segment, compile.AuthorityScope{
+		Mount:      mount.MountID,
+		MountKeyID: mount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	}))
+	require.False(t, perasSegmentWithinScope(segment, compile.AuthorityScope{
+		Mount:      mount.MountID,
+		MountKeyID: mount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{2},
+	}))
+	require.NotEqual(t, leftA, rightA)
+}
+
 func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}

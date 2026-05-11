@@ -257,7 +257,7 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(errPerasAuthorityNotHeld)
 		return fsperas.VisibleAck{}, errPerasAuthorityNotHeld
 	}
-	holder, err := c.holderForGrant(grant)
+	holder, err := c.holderForGrant(ctx, grant, delta.Authority)
 	if err != nil {
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
@@ -287,21 +287,38 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 	return ack, nil
 }
 
-func (c *RemotePerasCommitter) holderForGrant(grant perasauth.AuthorityGrant) (*fsperas.Holder, error) {
+func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasauth.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
 		return nil, errPerasCommitterInvalid
 	}
 	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
 	if holder := c.holders[grant.EpochID]; holder != nil {
+		c.holdersMu.Unlock()
 		return holder, nil
 	}
+	c.holdersMu.Unlock()
+
+	if grant.EpochID > 1 && c.installer != nil {
+		recoveryScope := perasAuthorityScopeFromGrant(grant)
+		if authorityScopeEmpty(recoveryScope) {
+			recoveryScope = scope
+		}
+		if err := c.RecoverWitnessSegments(ctx, recoveryScope, grant.EpochID-1); err != nil {
+			return nil, err
+		}
+	}
+
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  grant.EpochID,
 		HolderID: grant.HolderID,
 	})
 	if err != nil {
 		return nil, err
+	}
+	c.holdersMu.Lock()
+	defer c.holdersMu.Unlock()
+	if current := c.holders[grant.EpochID]; current != nil {
+		return current, nil
 	}
 	c.holders[grant.EpochID] = holder
 	return holder, nil
@@ -373,6 +390,9 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
 		if err != nil {
 			return c.recordErrorf("decode peras witness segment: %w", err)
+		}
+		if !perasSegmentWithinScope(segment, scope) {
+			continue
 		}
 		stats := segment.Stats()
 		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
@@ -695,6 +715,77 @@ func (c *RemotePerasCommitter) segmentInstalled(root [32]byte) bool {
 		}
 	}
 	return false
+}
+
+func perasAuthorityScopeFromGrant(grant perasauth.AuthorityGrant) compile.AuthorityScope {
+	scope := compile.AuthorityScope{
+		Mount:      fsmeta.MountID(grant.Scope.MountID),
+		MountKeyID: fsmeta.MountKeyID(grant.Scope.MountKeyID),
+		Parents:    rootInodesToFSMeta(grant.Scope.Parents),
+		Inodes:     rootInodesToFSMeta(grant.Scope.Inodes),
+	}
+	if len(grant.Scope.Buckets) > 0 {
+		scope.Buckets = make([]fsmeta.AffinityBucket, len(grant.Scope.Buckets))
+		for i, bucket := range grant.Scope.Buckets {
+			scope.Buckets[i] = fsmeta.AffinityBucket(bucket)
+		}
+	}
+	return scope
+}
+
+func rootInodesToFSMeta(in []uint64) []fsmeta.InodeID {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fsmeta.InodeID, len(in))
+	for i, inode := range in {
+		out[i] = fsmeta.InodeID(inode)
+	}
+	return out
+}
+
+func perasSegmentWithinScope(segment fsperas.PerasSegment, scope compile.AuthorityScope) bool {
+	if authorityScopeEmpty(scope) {
+		return true
+	}
+	checked := false
+	for _, entry := range segment.EntriesView() {
+		parts, ok := fsmeta.InspectKey(entry.Key)
+		if !ok {
+			if checked {
+				return false
+			}
+			continue
+		}
+		checked = true
+		if !perasScopeCoversKeyParts(scope, parts) {
+			return false
+		}
+	}
+	return true
+}
+
+func authorityScopeEmpty(scope compile.AuthorityScope) bool {
+	return scope.Mount == "" || scope.MountKeyID == 0
+}
+
+func perasScopeCoversKeyParts(scope compile.AuthorityScope, parts fsmeta.KeyParts) bool {
+	if scope.MountKeyID == 0 || parts.MountKeyID != scope.MountKeyID {
+		return false
+	}
+	if len(scope.Buckets) > 0 && !slices.Contains(scope.Buckets, parts.Bucket) {
+		return false
+	}
+	switch parts.Kind {
+	case fsmeta.KeyKindDentry:
+		return len(scope.Parents) == 0 || slices.Contains(scope.Parents, parts.Parent)
+	case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+		return len(scope.Inodes) == 0 || slices.Contains(scope.Inodes, parts.Inode)
+	case fsmeta.KeyKindUsage:
+		return len(scope.Parents) == 0 || slices.Contains(scope.Parents, parts.UsageScope)
+	default:
+		return true
+	}
 }
 
 func (c *RemotePerasCommitter) flushBackground() {
