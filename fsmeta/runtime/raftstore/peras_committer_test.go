@@ -14,6 +14,7 @@ import (
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,6 +224,37 @@ func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing
 	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.Error(t, err)
 	require.Equal(t, 0, committer.Stats()["pending"])
+}
+
+func TestValidatePerasSegmentInstallResponseChecksRootAndCounts(t *testing.T) {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: []byte("dentry/a"), Value: []byte("dentry-value")},
+				{Key: []byte("inode/a"), Value: []byte("inode-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	stats := segment.Stats()
+	resp := &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+		OperationCount: stats.OperationCount,
+		EntryCount:     stats.EntryCount,
+		AppliedEntries: 1,
+	}
+	require.NoError(t, validatePerasSegmentInstallResponse(segment, resp))
+
+	resp.SegmentRoot[0] ^= 0xff
+	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), errPerasCommitterInvalid)
+
+	resp.SegmentRoot = append([]byte(nil), segment.Root[:]...)
+	resp.EntryCount++
+	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), errPerasCommitterInvalid)
 }
 
 func BenchmarkRemotePerasCommitterCreate(b *testing.B) {
