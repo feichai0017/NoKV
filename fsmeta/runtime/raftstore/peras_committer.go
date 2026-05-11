@@ -333,26 +333,32 @@ func (c *RemotePerasCommitter) freezeFlushJobs(target *compile.AuthorityScope) (
 	}
 	jobs := make([]runtimePerasFlushJob, 0, len(plans))
 	for _, frozen := range plans {
-		segment, err := fsperas.BuildPerasSegmentFromReplayPlan(frozen.plan)
+		parts, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
 		if err != nil {
-			return nil, c.recordErrorf("build peras segment: %w", err)
+			return nil, c.recordErrorf("split peras replay plan: %w", err)
 		}
-		payload, err := fsperas.EncodePerasSegment(segment)
-		if err != nil {
-			return nil, c.recordErrorf("encode peras segment: %w", err)
+		for _, plan := range parts {
+			segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+			if err != nil {
+				return nil, c.recordErrorf("build peras segment: %w", err)
+			}
+			payload, err := fsperas.EncodePerasSegment(segment)
+			if err != nil {
+				return nil, c.recordErrorf("encode peras segment: %w", err)
+			}
+			digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+			if err != nil {
+				return nil, c.recordErrorf("digest peras segment: %w", err)
+			}
+			jobs = append(jobs, runtimePerasFlushJob{
+				holder:  frozen.holder,
+				scope:   frozen.scope,
+				plan:    plan,
+				segment: segment,
+				payload: payload,
+				digest:  digest,
+			})
 		}
-		digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-		if err != nil {
-			return nil, c.recordErrorf("digest peras segment: %w", err)
-		}
-		jobs = append(jobs, runtimePerasFlushJob{
-			holder:  frozen.holder,
-			scope:   frozen.scope,
-			plan:    frozen.plan,
-			segment: segment,
-			payload: payload,
-			digest:  digest,
-		})
 	}
 	return jobs, nil
 }
