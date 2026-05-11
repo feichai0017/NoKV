@@ -2,7 +2,10 @@ package peras
 
 import (
 	"bytes"
+	"slices"
 
+	"github.com/feichai0017/NoKV/engine/index"
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
@@ -26,6 +29,10 @@ type SegmentCatalogRecord struct {
 	Completions []SegmentCompletion
 }
 
+type SegmentCatalogStore interface {
+	NewInternalIterator(*index.Options) index.Iterator
+}
+
 func PerasSegmentCatalogKey(segment PerasSegment) ([]byte, error) {
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
@@ -39,6 +46,60 @@ func PerasSegmentCatalogKey(segment PerasSegment) ([]byte, error) {
 		return nil, ErrInvalidPerasSegment
 	}
 	return fsmeta.EncodePerasSegmentCatalogKey(parts.MountKeyID, parts.Bucket, segment.Root)
+}
+
+func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord, error) {
+	if store == nil {
+		return nil, ErrReplayStoreRequired
+	}
+	it := store.NewInternalIterator(&index.Options{IsAsc: true})
+	if it == nil {
+		return nil, ErrReplayStoreRequired
+	}
+	var records []SegmentCatalogRecord
+	it.Rewind()
+	for it.Valid() {
+		item := it.Item()
+		if item == nil || item.Entry() == nil {
+			it.Next()
+			continue
+		}
+		entry := item.Entry()
+		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+		if !ok || cf != entrykv.CFDefault {
+			it.Next()
+			continue
+		}
+		parts, ok := fsmeta.InspectKey(userKey)
+		if !ok || parts.Kind != fsmeta.KeyKindPeras {
+			it.Next()
+			continue
+		}
+		record, err := DecodePerasSegmentCatalogRecord(entry.Value)
+		if err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		if record.Root != parts.PerasRoot {
+			_ = it.Close()
+			return nil, ErrInvalidPerasSegment
+		}
+		records = append(records, record)
+		it.Next()
+	}
+	if err := it.Close(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(records, func(a, b SegmentCatalogRecord) int {
+		if a.InstallVersion < b.InstallVersion {
+			return -1
+		}
+		if a.InstallVersion > b.InstallVersion {
+			return 1
+		}
+		return bytes.Compare(a.Root[:], b.Root[:])
+	})
+	return records, nil
 }
 
 func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64) ([]byte, error) {

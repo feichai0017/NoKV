@@ -130,6 +130,23 @@ func TestBuildMVCCSegmentInstallEntriesRequiresFSMetaKeys(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+func TestLoadPerasSegmentCatalogsScansInstalledSegments(t *testing.T) {
+	db := openPerasReplayDB(t)
+	segment := fsmetaSegmentForTest(t)
+	entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
+	require.NoError(t, err)
+	require.NoError(t, db.ApplyInternalEntries(entries))
+	releaseMVCCReplayEntries(entries)
+
+	records, err := LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, segment.Root, records[0].Root)
+	require.Equal(t, uint64(99), records[0].InstallVersion)
+	require.Equal(t, segment.Stats().OperationCount, records[0].OperationCount)
+	require.Len(t, records[0].Completions, len(segment.Completions))
+}
+
 func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
 	storeErr := errors.New("apply failed")
 	failing := &failingInternalEntryApplier{err: storeErr}
