@@ -2621,11 +2621,10 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
-	// Expiration is base-LSM maintenance, not a user durability barrier. It
-	// intentionally ignores active Peras overlays: live overlay sessions remain
-	// visible through the merged read path, and stale overlay sessions are
-	// cleaned when their segment is installed/materialized.
-	if err := e.withTxnRetryNoPerasFlush(ctx, func(startVersion, commitVersion uint64) error {
+	// Expiration is base-LSM maintenance, but it still writes fsmeta session
+	// keys. Drain the active Peras authority before mutating so storage-side
+	// authority fences stay fail-closed for callers that bypass this executor.
+	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   fsmeta.InodeID
@@ -2703,7 +2702,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		}
 		expired = uint64(len(expiredSessions))
 		return nil
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
