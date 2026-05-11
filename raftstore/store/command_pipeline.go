@@ -72,6 +72,13 @@ func newCommandPipeline(applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.Raft
 	return cp
 }
 
+func (cp *commandPipeline) close() {
+	if cp == nil || cp.window == nil {
+		return
+	}
+	cp.window.close()
+}
+
 func normalizeCommandApplyParallelism(parallelism int) int {
 	if parallelism == 1 {
 		return 1
@@ -189,12 +196,6 @@ func (cp *commandPipeline) applyEntriesAsync(entries []myraft.Entry, emit applyE
 		return nil
 	}
 	cp.assignPlanOrders(plans)
-	if cp.parallel <= 1 {
-		go func() {
-			done(cp.applyPlansSerial(plans, emit))
-		}()
-		return nil
-	}
 	return cp.window.submit(plans, emit, done)
 }
 
@@ -211,6 +212,11 @@ type commandApplyWindow struct {
 	mu            sync.Mutex
 	cp            *commandPipeline
 	parallel      int
+	ready         chan *commandApplyTask
+	stop          chan struct{}
+	workerWG      sync.WaitGroup
+	closed        bool
+	drainCh       chan struct{}
 	queue         []*commandApplyTask
 	active        int
 	activeBarrier bool
@@ -235,23 +241,30 @@ type commandApplyActiveDependency struct {
 }
 
 type commandApplyGroup struct {
-	wg   sync.WaitGroup
-	mu   sync.Mutex
-	err  error
-	done func(error)
+	mu        sync.Mutex
+	remaining int
+	err       error
+	done      func(error)
 }
 
 func newCommandApplyWindow(cp *commandPipeline, parallel int) *commandApplyWindow {
 	if parallel < 1 {
 		parallel = 1
 	}
-	return &commandApplyWindow{
+	w := &commandApplyWindow{
 		cp:           cp,
 		parallel:     parallel,
+		ready:        make(chan *commandApplyTask, parallel),
+		stop:         make(chan struct{}),
 		activeDeps:   make(map[commandApplyDependencyKey]commandApplyActiveDependency),
 		completed:    make(map[uint64]*commandApplyTask),
 		nextComplete: 1,
 	}
+	w.workerWG.Add(parallel)
+	for range parallel {
+		go w.runWorker()
+	}
+	return w
 }
 
 func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmitter, done func(error)) error {
@@ -271,9 +284,13 @@ func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmi
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.fatalErr != nil {
+	if w.closed || w.fatalErr != nil {
+		err := w.fatalErr
+		if err == nil {
+			err = errCommandPipelineUnavailable
+		}
 		for _, task := range tasks {
-			w.finishTaskExternalLocked(task, w.fatalErr)
+			w.finishTaskExternalLocked(task, err)
 		}
 		return nil
 	}
@@ -283,7 +300,7 @@ func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmi
 }
 
 func (w *commandApplyWindow) scheduleLocked() {
-	for w.fatalErr == nil && !w.activeBarrier && w.active < w.parallel {
+	for !w.closed && w.fatalErr == nil && !w.activeBarrier && w.active < w.parallel {
 		idx := w.nextSchedulableLocked()
 		if idx < 0 {
 			return
@@ -298,7 +315,7 @@ func (w *commandApplyWindow) scheduleLocked() {
 		} else {
 			commandApplyWindowAddDependencies(w.activeDeps, task.plan)
 		}
-		go w.runTask(task)
+		w.ready <- task
 	}
 }
 
@@ -323,15 +340,64 @@ func (w *commandApplyWindow) nextSchedulableLocked() int {
 	return -1
 }
 
-func (w *commandApplyWindow) runTask(task *commandApplyTask) {
-	resp, err := w.cp.applyPlan(task.plan)
-	w.finishTask(task, resp, err)
+func (w *commandApplyWindow) runWorker() {
+	defer w.workerWG.Done()
+	for {
+		select {
+		case task := <-w.ready:
+			if task == nil {
+				continue
+			}
+			resp, err := w.cp.applyPlan(task.plan)
+			w.finishTask(task, resp, err)
+		case <-w.stop:
+			return
+		}
+	}
+}
+
+func (w *commandApplyWindow) close() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		w.workerWG.Wait()
+		return
+	}
+	w.closed = true
+	if w.fatalErr == nil {
+		w.fatalErr = errCommandPipelineUnavailable
+	}
+	for _, task := range w.completed {
+		w.finishTaskExternalLocked(task, w.fatalErr)
+	}
+	clear(w.completed)
+	for _, task := range w.queue {
+		w.finishTaskExternalLocked(task, w.fatalErr)
+	}
+	clear(w.queue)
+	w.queue = w.queue[:0]
+	if w.active == 0 {
+		close(w.stop)
+		w.mu.Unlock()
+		w.workerWG.Wait()
+		return
+	}
+	drainCh := make(chan struct{})
+	w.drainCh = drainCh
+	w.mu.Unlock()
+	<-drainCh
+	close(w.stop)
+	w.workerWG.Wait()
 }
 
 func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.RaftCmdResponse, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.active--
+	defer w.notifyDrainedLocked()
 	if task.plan.barrier {
 		w.activeBarrier = false
 	} else {
@@ -352,6 +418,14 @@ func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.
 	w.completed[task.plan.order] = task
 	w.flushCompletedLocked()
 	w.scheduleLocked()
+}
+
+func (w *commandApplyWindow) notifyDrainedLocked() {
+	if w == nil || !w.closed || w.active != 0 || w.drainCh == nil {
+		return
+	}
+	close(w.drainCh)
+	w.drainCh = nil
 }
 
 func (w *commandApplyWindow) failAllLocked(err error) {
@@ -401,29 +475,28 @@ func (g *commandApplyGroup) complete(err error) {
 	if g == nil {
 		return
 	}
+	var done func(error)
+	var doneErr error
 	g.mu.Lock()
 	if err != nil && g.err == nil {
 		g.err = err
 	}
+	if g.remaining > 0 {
+		g.remaining--
+	}
+	if g.remaining == 0 && g.done != nil {
+		done = g.done
+		doneErr = g.err
+		g.done = nil
+	}
 	g.mu.Unlock()
-	g.wg.Done()
+	if done != nil {
+		done(doneErr)
+	}
 }
 
 func newCommandApplyGroup(count int, done func(error)) *commandApplyGroup {
-	g := &commandApplyGroup{done: done}
-	g.wg.Add(count)
-	go func() {
-		g.wg.Wait()
-		g.mu.Lock()
-		err := g.err
-		done := g.done
-		g.done = nil
-		g.mu.Unlock()
-		if done != nil {
-			done(err)
-		}
-	}()
-	return g
+	return &commandApplyGroup{remaining: count, done: done}
 }
 
 func commandApplyWindowConflicts(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) bool {

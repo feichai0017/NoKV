@@ -224,6 +224,40 @@ func TestCommandPipelineApplyWindowSchedulesAcrossBatches(t *testing.T) {
 	require.NoError(t, <-done2)
 }
 
+func TestCommandPipelineAsyncSerialParallelismOnePreservesOrder(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		id := req.GetHeader().GetRequestId()
+		started <- id
+		if id == 1 {
+			<-releaseFirst
+		}
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 1)
+
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("a"))),
+	}, nil, func(err error) { done1 <- err }))
+	require.Equal(t, uint64(1), <-started)
+
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("b"))),
+	}, nil, func(err error) { done2 <- err }))
+	select {
+	case id := <-started:
+		t.Fatalf("serial async command %d started before first completed", id)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	require.Equal(t, uint64(2), <-started)
+	require.NoError(t, <-done1)
+	require.NoError(t, <-done2)
+}
+
 func TestCommandPipelineApplyWindowSerializesConflictsAcrossBatches(t *testing.T) {
 	started := make(chan uint64, 2)
 	releaseFirst := make(chan struct{})
