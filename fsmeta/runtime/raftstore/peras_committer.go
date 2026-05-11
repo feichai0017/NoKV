@@ -302,6 +302,40 @@ func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.Authori
 	return c.flushLocked(ctx, scope)
 }
 
+func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope compile.AuthorityScope, epochID uint64) error {
+	if c == nil || epochID == 0 || c.installer == nil {
+		return errPerasCommitterInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	records, err := c.collectWitnessSegments(ctx, epochID)
+	if err != nil {
+		return c.recordErrorf("probe peras segment witnesses: %w", err)
+	}
+	for _, record := range records {
+		if c.segmentInstalled(record.SegmentRoot) {
+			continue
+		}
+		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
+			return c.recordErrorf("verify peras segment witness: %w", err)
+		}
+		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
+		if err != nil {
+			return c.recordErrorf("decode peras witness segment: %w", err)
+		}
+		stats := segment.Stats()
+		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
+			return c.recordError(fsperas.ErrInvalidWitnessRecord)
+		}
+		if err := c.installer.InstallPerasSegment(ctx, scope, segment, record.SegmentPayload, record.SegmentPayloadDigest); err != nil {
+			return c.recordErrorf("recover peras segment install: %w", err)
+		}
+		c.installSegment(fsperas.ReplayPlan{}, segment)
+	}
+	return nil
+}
+
 func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
 	jobs, err := c.freezeFlushJobs(scope)
 	if err != nil {
@@ -488,6 +522,69 @@ func (c *RemotePerasCommitter) appendSegmentWitnesses(ctx context.Context, scope
 	return errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
 }
 
+func (c *RemotePerasCommitter) collectWitnessSegments(ctx context.Context, epochID uint64) ([]fsperas.SegmentWitnessRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type result struct {
+		id       string
+		snapshot fsperas.WitnessSnapshot
+		err      error
+	}
+	resultCh := make(chan result, len(c.witnesses))
+	for _, witness := range c.witnesses {
+		go func() {
+			snapshot, err := witness.Probe(ctx, epochID)
+			resultCh <- result{id: witness.ID(), snapshot: snapshot, err: err}
+		}()
+	}
+	type key struct {
+		root   [32]byte
+		digest [32]byte
+	}
+	records := make(map[key]fsperas.SegmentWitnessRecord)
+	failures := make([]error, 0, len(c.witnesses))
+	successes := 0
+	for range c.witnesses {
+		res := <-resultCh
+		if res.err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
+			continue
+		}
+		successes++
+		for _, record := range res.snapshot.Segments {
+			if record.EpochID != epochID {
+				continue
+			}
+			k := key{root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
+			current, ok := records[k]
+			if !ok || len(record.SegmentPayload) > len(current.SegmentPayload) {
+				records[k] = record
+			}
+		}
+	}
+	if successes == 0 {
+		if len(failures) == 0 {
+			return nil, fsperas.ErrSegmentWitnessQuorumUnavailable
+		}
+		return nil, errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
+	}
+	out := make([]fsperas.SegmentWitnessRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, record)
+	}
+	slices.SortFunc(out, func(a, b fsperas.SegmentWitnessRecord) int {
+		if a.TimestampUnixNano < b.TimestampUnixNano {
+			return -1
+		}
+		if a.TimestampUnixNano > b.TimestampUnixNano {
+			return 1
+		}
+		return bytes.Compare(a.SegmentRoot[:], b.SegmentRoot[:])
+	})
+	return out, nil
+}
+
 func (c *RemotePerasCommitter) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment) {
 	stats := segment.Stats()
 	c.overlayMu.Lock()
@@ -519,6 +616,17 @@ func (c *RemotePerasCommitter) installSegment(plan fsperas.ReplayPlan, segment f
 	c.lastSegmentStats = stats
 	c.lastSegmentRoot = segment.Root
 	c.statsMu.Unlock()
+}
+
+func (c *RemotePerasCommitter) segmentInstalled(root [32]byte) bool {
+	c.overlayMu.RLock()
+	defer c.overlayMu.RUnlock()
+	for _, segment := range c.segments {
+		if segment.Root == root {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *RemotePerasCommitter) flushBackground() {
