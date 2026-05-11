@@ -18,8 +18,9 @@ type ReplayOperation struct {
 }
 
 type ReplayPlan struct {
-	EpochID uint64
-	Waves   [][]ReplayOperation
+	EpochID  uint64
+	Versions ReplayVersionRange
+	Waves    [][]ReplayOperation
 }
 
 func BuildReplayPlan(seal CapsuleSeal) (ReplayPlan, error) {
@@ -56,7 +57,15 @@ func BuildReplayPlan(seal CapsuleSeal) (ReplayPlan, error) {
 		waves[level] = append(waves[level], op)
 		levels[cert.Prepare.OpID] = level
 	}
-	return ReplayPlan{EpochID: seal.EpochID, Waves: waves}, nil
+	return ReplayPlan{EpochID: seal.EpochID, Versions: seal.Versions, Waves: waves}, nil
+}
+
+func ReplayPlanOperationCount(plan ReplayPlan) uint64 {
+	var count uint64
+	for _, wave := range plan.Waves {
+		count += uint64(len(wave))
+	}
+	return count
 }
 
 func validateSealedCertificate(epochID uint64, cert SealedCertificate) error {
