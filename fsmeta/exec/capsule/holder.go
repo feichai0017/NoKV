@@ -18,8 +18,8 @@ var (
 
 type WitnessReplica interface {
 	ID() string
-	AppendPrepare(context.Context, PrepareRecord) error
-	AppendCommitCertificate(context.Context, CommitCertificateRecord) error
+	AppendPrepare(context.Context, compile.AuthorityScope, PrepareRecord) error
+	AppendCommitCertificate(context.Context, compile.AuthorityScope, CommitCertificateRecord) error
 }
 
 type LocalWitnessReplica struct {
@@ -41,7 +41,7 @@ func (r *LocalWitnessReplica) ID() string {
 	return r.id
 }
 
-func (r *LocalWitnessReplica) AppendPrepare(ctx context.Context, record PrepareRecord) error {
+func (r *LocalWitnessReplica) AppendPrepare(ctx context.Context, _ compile.AuthorityScope, record PrepareRecord) error {
 	if r == nil || r.log == nil {
 		return ErrWitnessLogRequired
 	}
@@ -49,7 +49,7 @@ func (r *LocalWitnessReplica) AppendPrepare(ctx context.Context, record PrepareR
 	return err
 }
 
-func (r *LocalWitnessReplica) AppendCommitCertificate(ctx context.Context, record CommitCertificateRecord) error {
+func (r *LocalWitnessReplica) AppendCommitCertificate(ctx context.Context, _ compile.AuthorityScope, record CommitCertificateRecord) error {
 	if r == nil || r.log == nil {
 		return ErrWitnessLogRequired
 	}
@@ -134,7 +134,7 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 		TimestampUnixNano:    h.now().UnixNano(),
 		HolderID:             h.holderID,
 	}
-	prepareAcks := h.broadcastPrepare(ctx, prepare)
+	prepareAcks := h.broadcastPrepare(ctx, delta.Authority, prepare)
 	if len(prepareAcks) < h.quorum {
 		h.detector.Remove(id)
 		return CommitCertificateRecord{}, ErrWitnessQuorumUnavailable
@@ -152,7 +152,7 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 		TimestampUnixNano: h.now().UnixNano(),
 		HolderID:          h.holderID,
 	}
-	commitAcks := h.broadcastCommit(ctx, commit)
+	commitAcks := h.broadcastCommit(ctx, delta.Authority, commit)
 	if len(commitAcks) < h.quorum {
 		if len(commitAcks) == 0 {
 			h.detector.Remove(id)
@@ -201,13 +201,13 @@ func (h *Holder) Pending() int {
 	return h.detector.Len()
 }
 
-func (h *Holder) broadcastPrepare(ctx context.Context, record PrepareRecord) []string {
+func (h *Holder) broadcastPrepare(ctx context.Context, scope compile.AuthorityScope, record PrepareRecord) []string {
 	acks := make([]string, 0, len(h.witnesses))
 	for _, witness := range h.witnesses {
 		if err := ctxErr(ctx); err != nil {
 			break
 		}
-		if err := witness.AppendPrepare(ctx, record); err != nil {
+		if err := witness.AppendPrepare(ctx, scope, record); err != nil {
 			continue
 		}
 		acks = append(acks, witness.ID())
@@ -215,13 +215,13 @@ func (h *Holder) broadcastPrepare(ctx context.Context, record PrepareRecord) []s
 	return acks
 }
 
-func (h *Holder) broadcastCommit(ctx context.Context, record CommitCertificateRecord) []string {
+func (h *Holder) broadcastCommit(ctx context.Context, scope compile.AuthorityScope, record CommitCertificateRecord) []string {
 	acks := make([]string, 0, len(h.witnesses))
 	for _, witness := range h.witnesses {
 		if err := ctxErr(ctx); err != nil {
 			break
 		}
-		if err := witness.AppendCommitCertificate(ctx, record); err != nil {
+		if err := witness.AppendCommitCertificate(ctx, scope, record); err != nil {
 			continue
 		}
 		acks = append(acks, witness.ID())

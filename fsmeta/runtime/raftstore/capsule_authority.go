@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -25,13 +25,13 @@ type capsuleAuthorityClient interface {
 // coordinator service boundary.
 type CapsuleAuthorityManager struct {
 	coord    capsuleAuthorityClient
-	table    *fscapsule.ActiveAuthorities
+	table    *capsuleauth.ActiveAuthorities
 	holderID string
 	ttl      time.Duration
 	now      func() time.Time
 }
 
-func NewCapsuleAuthorityManager(coord capsuleAuthorityClient, table *fscapsule.ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*CapsuleAuthorityManager, error) {
+func NewCapsuleAuthorityManager(coord capsuleAuthorityClient, table *capsuleauth.ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*CapsuleAuthorityManager, error) {
 	holderID = strings.TrimSpace(holderID)
 	if coord == nil {
 		return nil, errCapsuleAuthorityClientRequired
@@ -72,13 +72,13 @@ func (m *CapsuleAuthorityManager) AcquireCapsuleAuthority(ctx context.Context, s
 	return owned, err
 }
 
-func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (fscapsule.AuthorityGrant, bool, error) {
+func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (capsuleauth.AuthorityGrant, bool, error) {
 	if m == nil {
-		return fscapsule.AuthorityGrant{}, false, errCapsuleAuthorityClientRequired
+		return capsuleauth.AuthorityGrant{}, false, errCapsuleAuthorityClientRequired
 	}
 	now := m.now()
 	if grant, ok, err := m.table.Find(scope, now); err != nil {
-		return fscapsule.AuthorityGrant{}, false, err
+		return capsuleauth.AuthorityGrant{}, false, err
 	} else if ok && grant.HolderID == m.holderID {
 		return grant, true, nil
 	}
@@ -86,7 +86,7 @@ func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.Aut
 	cmd := rootproto.CapsuleAuthorityCommand{
 		Kind:            rootproto.CapsuleAuthorityActAcquire,
 		HolderID:        m.holderID,
-		Scope:           fscapsule.AuthorityScopeFromDelta(scope),
+		Scope:           capsuleauth.AuthorityScopeFromDelta(scope),
 		NowUnixNano:     now.UnixNano(),
 		ExpiresUnixNano: now.Add(m.ttl).UnixNano(),
 	}
@@ -94,29 +94,29 @@ func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.Aut
 		Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
-		return fscapsule.AuthorityGrant{}, false, err
+		return capsuleauth.AuthorityGrant{}, false, err
 	}
 	if err := m.installResponse(resp); err != nil {
-		return fscapsule.AuthorityGrant{}, false, err
+		return capsuleauth.AuthorityGrant{}, false, err
 	}
 	switch resp.GetStatus() {
 	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED:
 		grant := metawire.RootCapsuleAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
-			return fscapsule.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
+			return capsuleauth.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
 		}
 		return grant, true, nil
 	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD:
 		grant, _, err := m.table.Find(scope, now)
 		return grant, false, err
 	case metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED:
-		return fscapsule.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
+		return capsuleauth.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
 	default:
-		return fscapsule.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
+		return capsuleauth.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
 	}
 }
 
-func (m *CapsuleAuthorityManager) Retire(ctx context.Context, grant fscapsule.AuthorityGrant) error {
+func (m *CapsuleAuthorityManager) Retire(ctx context.Context, grant capsuleauth.AuthorityGrant) error {
 	if m == nil {
 		return errCapsuleAuthorityClientRequired
 	}
@@ -178,8 +178,8 @@ func (m *CapsuleAuthorityManager) installResponse(resp *coordpb.ApplyCapsuleAuth
 	return m.table.Replace(grants)
 }
 
-func parseCapsuleAuthorityGrants(in []*metapb.RootCapsuleAuthorityGrant) ([]fscapsule.AuthorityGrant, error) {
-	out := make([]fscapsule.AuthorityGrant, 0, len(in))
+func parseCapsuleAuthorityGrants(in []*metapb.RootCapsuleAuthorityGrant) ([]capsuleauth.AuthorityGrant, error) {
+	out := make([]capsuleauth.AuthorityGrant, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
 	for _, pbGrant := range in {
 		grant := metawire.RootCapsuleAuthorityGrantFromProto(pbGrant)
@@ -195,7 +195,7 @@ func parseCapsuleAuthorityGrants(in []*metapb.RootCapsuleAuthorityGrant) ([]fsca
 	return out, nil
 }
 
-func appendCapsuleGrantIfMissing(grants []fscapsule.AuthorityGrant, grant fscapsule.AuthorityGrant) []fscapsule.AuthorityGrant {
+func appendCapsuleGrantIfMissing(grants []capsuleauth.AuthorityGrant, grant capsuleauth.AuthorityGrant) []capsuleauth.AuthorityGrant {
 	for _, current := range grants {
 		if current.GrantID == grant.GrantID {
 			return grants

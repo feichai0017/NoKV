@@ -8,7 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
+	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -39,14 +39,14 @@ type monitor struct {
 	cache    *mountCache
 	quotas   *quotaCache
 	subtrees fsmetaexec.SubtreeHandoffPublisher
-	capsules *fscapsule.ActiveAuthorities
+	capsules *capsuleauth.ActiveAuthorities
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, capsules *fscapsule.ActiveAuthorities, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, capsules *capsuleauth.ActiveAuthorities, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (m *monitor) bootstrap(ctx context.Context) error {
 		return err
 	}
 	if m.capsules != nil {
-		grants := make([]fscapsule.AuthorityGrant, 0, len(capsules.GetGrants()))
+		grants := make([]capsuleauth.AuthorityGrant, 0, len(capsules.GetGrants()))
 		for _, grant := range capsules.GetGrants() {
 			parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
 			if parsed.Valid() {

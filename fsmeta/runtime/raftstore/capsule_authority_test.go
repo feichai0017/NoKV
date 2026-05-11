@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -39,7 +39,7 @@ func TestCapsuleAuthorityManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 			ActiveGrants: []*metapb.RootCapsuleAuthorityGrant{metawire.RootCapsuleAuthorityGrantToProto(grant)},
 		},
 	}
-	table := fscapsule.NewActiveAuthorities()
+	table := capsuleauth.NewActiveAuthorities()
 	manager, err := NewCapsuleAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -51,15 +51,15 @@ func TestCapsuleAuthorityManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	require.Equal(t, rootproto.CapsuleAuthorityActAcquire, client.last.Kind)
 	require.Equal(t, "holder-a", client.last.HolderID)
 	require.Equal(t, now.Add(time.Minute).UnixNano(), client.last.ExpiresUnixNano)
-	require.Equal(t, []fscapsule.AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []capsuleauth.AuthorityGrant{grant}, table.Snapshot())
 }
 
 func TestCapsuleAuthorityManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimeCapsuleScope(1)
 	grant := testRuntimeCapsuleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
-	table := fscapsule.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]fscapsule.AuthorityGrant{grant}))
+	table := capsuleauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]capsuleauth.AuthorityGrant{grant}))
 	client := &fakeCapsuleAuthorityClient{}
 	manager, err := NewCapsuleAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ func TestCapsuleAuthorityManagerAcquireHeldUpdatesMirror(t *testing.T) {
 			ActiveGrants: []*metapb.RootCapsuleAuthorityGrant{metawire.RootCapsuleAuthorityGrantToProto(held)},
 		},
 	}
-	table := fscapsule.NewActiveAuthorities()
+	table := capsuleauth.NewActiveAuthorities()
 	manager, err := NewCapsuleAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -89,7 +89,7 @@ func TestCapsuleAuthorityManagerAcquireHeldUpdatesMirror(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, owned)
 	require.Equal(t, held, got)
-	require.Equal(t, []fscapsule.AuthorityGrant{held}, table.Snapshot())
+	require.Equal(t, []capsuleauth.AuthorityGrant{held}, table.Snapshot())
 }
 
 func TestCapsuleAuthorityManagerRetireAuthority(t *testing.T) {
@@ -101,8 +101,8 @@ func TestCapsuleAuthorityManagerRetireAuthority(t *testing.T) {
 			Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_RETIRED,
 		},
 	}
-	table := fscapsule.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]fscapsule.AuthorityGrant{grant}))
+	table := capsuleauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]capsuleauth.AuthorityGrant{grant}))
 	manager, err := NewCapsuleAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -113,18 +113,18 @@ func TestCapsuleAuthorityManagerRetireAuthority(t *testing.T) {
 }
 
 func TestCapsuleAuthorityManagerRejectsInvalidConfigAndResponses(t *testing.T) {
-	_, err := NewCapsuleAuthorityManager(nil, fscapsule.NewActiveAuthorities(), "holder-a", time.Minute, nil)
+	_, err := NewCapsuleAuthorityManager(nil, capsuleauth.NewActiveAuthorities(), "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, errCapsuleAuthorityClientRequired)
 	_, err = NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, nil, "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, errCapsuleAuthorityTableRequired)
-	_, err = NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, fscapsule.NewActiveAuthorities(), "", time.Minute, nil)
+	_, err = NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, capsuleauth.NewActiveAuthorities(), "", time.Minute, nil)
 	require.ErrorIs(t, err, errCapsuleAuthorityHolderRequired)
-	_, err = NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, fscapsule.NewActiveAuthorities(), "holder-a", -time.Second, nil)
+	_, err = NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, capsuleauth.NewActiveAuthorities(), "holder-a", -time.Second, nil)
 	require.ErrorIs(t, err, errCapsuleAuthorityTTLInvalid)
 
 	manager, err := NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{
 		resp: &coordpb.ApplyCapsuleAuthorityResponse{Status: metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_GRANTED},
-	}, fscapsule.NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return time.Unix(10, 0) })
+	}, capsuleauth.NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return time.Unix(10, 0) })
 	require.NoError(t, err)
 	_, _, err = manager.Acquire(context.Background(), testRuntimeCapsuleScope(1))
 	require.ErrorIs(t, err, errCapsuleAuthorityInvalidResponse)
@@ -134,7 +134,7 @@ func TestCapsuleAuthorityManagerRetireRejectsForeignGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimeCapsuleScope(1)
 	grant := testRuntimeCapsuleGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
-	manager, err := NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, fscapsule.NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, capsuleauth.NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	err = manager.Retire(context.Background(), grant)
@@ -146,8 +146,8 @@ func BenchmarkCapsuleAuthorityManagerAcquireLocalHeld(b *testing.B) {
 	now := time.Unix(10, 0)
 	scope := testRuntimeCapsuleScope(1)
 	grant := testRuntimeCapsuleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
-	table := fscapsule.NewActiveAuthorities()
-	if err := table.Replace([]fscapsule.AuthorityGrant{grant}); err != nil {
+	table := capsuleauth.NewActiveAuthorities()
+	if err := table.Replace([]capsuleauth.AuthorityGrant{grant}); err != nil {
 		b.Fatal(err)
 	}
 	manager, err := NewCapsuleAuthorityManager(&fakeCapsuleAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
@@ -174,12 +174,12 @@ func testRuntimeCapsuleScope(bucket fsmeta.AffinityBucket) compile.AuthorityScop
 	}
 }
 
-func testRuntimeCapsuleGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) fscapsule.AuthorityGrant {
-	return fscapsule.AuthorityGrant{
+func testRuntimeCapsuleGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) capsuleauth.AuthorityGrant {
+	return capsuleauth.AuthorityGrant{
 		GrantID:         id,
 		EpochID:         1,
 		HolderID:        holder,
-		Scope:           fscapsule.AuthorityScopeFromDelta(scope),
+		Scope:           capsuleauth.AuthorityScopeFromDelta(scope),
 		ExpiresUnixNano: expires.UnixNano(),
 	}
 }

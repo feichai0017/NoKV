@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
@@ -118,6 +119,14 @@ type CapsuleAuthorityAdmitter interface {
 	AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
 
+// CapsuleShadowSubmitter is an experimental measurement hook for the Capsule
+// holder+witness path. The executor still commits through the ordinary
+// Percolator/Raft runner; submitter failures are counted but do not affect the
+// current fsmeta result until seal/apply/recovery are complete.
+type CapsuleShadowSubmitter interface {
+	SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error)
+}
+
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -143,6 +152,7 @@ type Executor struct {
 	subtrees                SubtreeHandoffPublisher
 	authorities             SubtreeAuthorityResolver
 	capsuleAuthority        CapsuleAuthorityAdmitter
+	capsuleShadowSubmitter  CapsuleShadowSubmitter
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -153,6 +163,8 @@ type Executor struct {
 	txnRetryExhaustedTotal  atomic.Uint64
 	createTotal             atomic.Uint64
 	capsuleAdmission        capsuleAdmissionCounters
+	capsuleShadow           capsuleShadowCounters
+	capsuleShadowSeq        atomic.Uint64
 	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
 }
 
@@ -171,6 +183,16 @@ type capsuleAdmissionCounters struct {
 	ownedTotal            atomic.Uint64
 	heldTotal             atomic.Uint64
 	errorTotal            atomic.Uint64
+}
+
+type capsuleShadowCounters struct {
+	submitTotal            atomic.Uint64
+	successTotal           atomic.Uint64
+	errorTotal             atomic.Uint64
+	skipIneligibleTotal    atomic.Uint64
+	skipNoAuthorityTotal   atomic.Uint64
+	skipNonConcreteTotal   atomic.Uint64
+	latencyTotalNanosecond atomic.Uint64
 }
 
 type atomicFastPathCounters struct {
@@ -284,6 +306,16 @@ func WithCapsuleAuthorityAdmitter(admitter CapsuleAuthorityAdmitter) Option {
 	}
 }
 
+// WithCapsuleShadowSubmitter runs eligible, concrete fsmeta mutations through
+// the Capsule holder+witness path before the normal Raft commit. This is only a
+// shadow measurement hook: success never replaces the existing transaction
+// commit, and errors are exposed through Stats rather than returned.
+func WithCapsuleShadowSubmitter(submitter CapsuleShadowSubmitter) Option {
+	return func(e *Executor) {
+		e.capsuleShadowSubmitter = submitter
+	}
+}
+
 // New constructs an fsmeta executor.
 func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	if runner == nil {
@@ -312,6 +344,7 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
 			"capsule_admission":          capsuleAdmissionStats(nil, false),
+			"capsule_shadow":             capsuleShadowStats(nil, false),
 			"atomic_fastpath":            atomicFastPathStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -324,6 +357,7 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
 		"capsule_admission":          capsuleAdmissionStats(&e.capsuleAdmission, e.capsuleAuthority != nil),
+		"capsule_shadow":             capsuleShadowStats(&e.capsuleShadow, e.capsuleShadowSubmitter != nil),
 		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -367,6 +401,39 @@ func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map
 		"owned_total":    counters.ownedTotal.Load(),
 		"held_total":     counters.heldTotal.Load(),
 		"error_total":    counters.errorTotal.Load(),
+	}
+}
+
+func capsuleShadowStats(counters *capsuleShadowCounters, enabled bool) map[string]any {
+	if counters == nil {
+		return map[string]any{
+			"enabled":                    enabled,
+			"submit_total":               uint64(0),
+			"success_total":              uint64(0),
+			"error_total":                uint64(0),
+			"skip_ineligible_total":      uint64(0),
+			"skip_no_authority_total":    uint64(0),
+			"skip_non_concrete_total":    uint64(0),
+			"latency_total_nanosecond":   uint64(0),
+			"latency_average_nanosecond": uint64(0),
+		}
+	}
+	submits := counters.submitTotal.Load()
+	latency := counters.latencyTotalNanosecond.Load()
+	average := uint64(0)
+	if submits > 0 {
+		average = latency / submits
+	}
+	return map[string]any{
+		"enabled":                    enabled,
+		"submit_total":               submits,
+		"success_total":              counters.successTotal.Load(),
+		"error_total":                counters.errorTotal.Load(),
+		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
+		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
+		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
+		"latency_total_nanosecond":   latency,
+		"latency_average_nanosecond": average,
 	}
 }
 
@@ -498,6 +565,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
+	e.submitCapsuleShadow(ctx, delta)
 	plan := delta.Plan
 	inode := req.Attrs.InodeRecord(inodeID)
 	dentry := fsmeta.DentryRecord{
@@ -695,6 +763,59 @@ func (e *Executor) admitCapsuleAuthority(ctx context.Context, delta compile.Sema
 	}
 	e.capsuleAdmission.ownedTotal.Add(1)
 	return nil
+}
+
+func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.SemanticDelta) {
+	if e == nil || e.capsuleShadowSubmitter == nil {
+		return
+	}
+	if e.capsuleAuthority == nil {
+		e.capsuleShadow.skipNoAuthorityTotal.Add(1)
+		return
+	}
+	if delta.Eligibility != compile.EligibilityFastPath {
+		e.capsuleShadow.skipIneligibleTotal.Add(1)
+		return
+	}
+	if !capsuleDeltaHasConcreteWrites(delta) {
+		e.capsuleShadow.skipNonConcreteTotal.Add(1)
+		return
+	}
+	id := e.nextCapsuleShadowOperationID(delta.Kind)
+	e.capsuleShadow.submitTotal.Add(1)
+	start := time.Now()
+	if _, err := e.capsuleShadowSubmitter.SubmitCapsule(ctx, id, delta); err != nil {
+		e.capsuleShadow.errorTotal.Add(1)
+	} else {
+		e.capsuleShadow.successTotal.Add(1)
+	}
+	e.capsuleShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
+}
+
+func (e *Executor) nextCapsuleShadowOperationID(kind fsmeta.OperationKind) fscapsule.OperationID {
+	seq := uint64(1)
+	if e != nil {
+		seq = e.capsuleShadowSeq.Add(1)
+	}
+	return fscapsule.OperationID{ClientID: "fsmeta-exec/" + string(kind), Seq: seq}
+}
+
+func capsuleDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
+	if len(delta.WriteEffects) == 0 {
+		return false
+	}
+	for _, effect := range delta.WriteEffects {
+		switch effect.Kind {
+		case compile.EffectPut:
+			if effect.Value == nil {
+				return false
+			}
+		case compile.EffectDelete:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Executor) capsuleQuotaMode() compile.QuotaMode {
