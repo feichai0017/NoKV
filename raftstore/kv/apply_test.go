@@ -212,6 +212,78 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 	require.Equal(t, []byte("attrs"), value)
 }
 
+func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("inode=7")},
+				{Key: inodeKey, Value: []byte("attrs")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	install := func(version uint64) *kvrpcpb.PerasInstallSegmentResponse {
+		t.Helper()
+		resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+					RoutingKey:           dentryKey,
+					SegmentRoot:          segment.Root[:],
+					SegmentPayloadDigest: digest[:],
+					SegmentPayload:       payload,
+					InstallVersion:       version,
+				}},
+			}},
+		})
+		require.NoError(t, err)
+		require.Len(t, resp.GetResponses(), 1)
+		out := resp.GetResponses()[0].GetPerasInstallSegment()
+		require.NotNil(t, out)
+		require.Nil(t, out.GetError())
+		require.Equal(t, segment.Stats().OperationCount, out.GetOperationCount())
+		require.Equal(t, segment.Stats().EntryCount, out.GetEntryCount())
+		require.NotZero(t, out.GetAppliedEntries())
+		return out
+	}
+
+	install(99)
+	install(150)
+
+	records, err := fsperas.LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, segment.Root, records[0].Root)
+	require.Equal(t, uint64(99), records[0].InstallVersion)
+
+	reader := percolator.NewReader(db)
+	value, _, err := reader.GetValue(dentryKey, 200)
+	require.NoError(t, err)
+	require.Equal(t, []byte("inode=7"), value)
+	value, _, err = reader.GetValue(inodeKey, 200)
+	require.NoError(t, err)
+	require.Equal(t, []byte("attrs"), value)
+}
+
 func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

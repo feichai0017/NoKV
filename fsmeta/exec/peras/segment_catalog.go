@@ -102,6 +102,43 @@ func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord
 	return records, nil
 }
 
+func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (SegmentCatalogRecord, bool, error) {
+	if store == nil {
+		return SegmentCatalogRecord{}, false, ErrReplayStoreRequired
+	}
+	catalogKey, err := PerasSegmentCatalogKey(segment)
+	if err != nil {
+		return SegmentCatalogRecord{}, false, err
+	}
+	it := store.NewInternalIterator(&index.Options{IsAsc: true})
+	if it == nil {
+		return SegmentCatalogRecord{}, false, ErrReplayStoreRequired
+	}
+	defer func() { _ = it.Close() }()
+
+	it.Seek(entrykv.InternalKey(entrykv.CFDefault, catalogKey, entrykv.MaxVersion))
+	if !it.Valid() {
+		return SegmentCatalogRecord{}, false, nil
+	}
+	item := it.Item()
+	if item == nil || item.Entry() == nil {
+		return SegmentCatalogRecord{}, false, nil
+	}
+	entry := item.Entry()
+	cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+	if !ok || cf != entrykv.CFDefault || !bytes.Equal(userKey, catalogKey) {
+		return SegmentCatalogRecord{}, false, nil
+	}
+	record, err := DecodePerasSegmentCatalogRecord(entry.Value)
+	if err != nil {
+		return SegmentCatalogRecord{}, false, err
+	}
+	if record.Root != segment.Root {
+		return SegmentCatalogRecord{}, false, ErrInvalidPerasSegment
+	}
+	return record, true, nil
+}
+
 func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64) ([]byte, error) {
 	if installVersion == 0 {
 		return nil, ErrReplayVersionRequired

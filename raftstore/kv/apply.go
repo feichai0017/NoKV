@@ -356,6 +356,17 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	if keyErr != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
 	}
+	if record, ok, err := fsperas.LoadPerasSegmentCatalog(db, segment); err != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+	} else if ok {
+		stats := segment.Stats()
+		return &kvrpcpb.PerasInstallSegmentResponse{
+			SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+			OperationCount: stats.OperationCount,
+			EntryCount:     stats.EntryCount,
+			AppliedEntries: record.EntryCount,
+		}, nil
+	}
 	entries, err := fsperas.BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
