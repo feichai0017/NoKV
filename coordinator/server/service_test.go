@@ -453,7 +453,7 @@ func (f *fakeStorage) CanSubmitRootWrites() bool {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f == nil || f.leader || f.leaderID == 0
+	return f.leader || f.leaderID == 0
 }
 
 func (f *fakeStorage) LeaderID() uint64 {
