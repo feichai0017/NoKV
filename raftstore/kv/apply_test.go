@@ -145,7 +145,7 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
 }
 
-func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
+func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
@@ -202,13 +202,23 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 	require.Nil(t, installResp.GetError())
 	require.Equal(t, uint64(2), installResp.GetOperationCount())
 	require.Equal(t, uint64(2), installResp.GetEntryCount())
+	require.Equal(t, uint64(1), installResp.GetAppliedEntries())
 
-	reader := percolator.NewReader(db)
-	value, _, err := reader.GetValue(dentryKey, 100)
+	records, err := fsperas.LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, segment.Root, records[0].Root)
+	require.Equal(t, digest, records[0].SegmentPayloadDigest)
+	require.Equal(t, uint64(len(payload)), records[0].SegmentPayloadSize)
+	installed, err := fsperas.VerifyPerasSegmentPayload(records[0].SegmentPayload, segment.Root, digest)
+	require.NoError(t, err)
+	value, deleted, ok := installed.Get(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
 	require.Equal(t, []byte("new"), value)
-	value, _, err = reader.GetValue(inodeKey, 100)
-	require.NoError(t, err)
+	value, deleted, ok = installed.Get(inodeKey)
+	require.True(t, ok)
+	require.False(t, deleted)
 	require.Equal(t, []byte("attrs"), value)
 }
 
@@ -274,13 +284,16 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 	require.Len(t, records, 1)
 	require.Equal(t, segment.Root, records[0].Root)
 	require.Equal(t, uint64(99), records[0].InstallVersion)
-
-	reader := percolator.NewReader(db)
-	value, _, err := reader.GetValue(dentryKey, 200)
+	require.Equal(t, digest, records[0].SegmentPayloadDigest)
+	installed, err := fsperas.VerifyPerasSegmentPayload(records[0].SegmentPayload, segment.Root, digest)
 	require.NoError(t, err)
+	value, deleted, ok := installed.Get(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
 	require.Equal(t, []byte("inode=7"), value)
-	value, _, err = reader.GetValue(inodeKey, 200)
-	require.NoError(t, err)
+	value, deleted, ok = installed.Get(inodeKey)
+	require.True(t, ok)
+	require.False(t, deleted)
 	require.Equal(t, []byte("attrs"), value)
 }
 
