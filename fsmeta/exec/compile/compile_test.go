@@ -72,7 +72,7 @@ func TestCreateRespectsQuotaMode(t *testing.T) {
 	require.Contains(t, escrow.RuntimeGuards, GuardQuotaCredit)
 }
 
-func TestRenameSameParentFastCrossParentSlow(t *testing.T) {
+func TestRenameSameParentVisibleCrossParentSlow(t *testing.T) {
 	sameParent, err := Rename(fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 8,

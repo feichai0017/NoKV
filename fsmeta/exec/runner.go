@@ -702,7 +702,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	quotaOK := true
 	if e.perasCommitter != nil && e.perasAuthority != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
 		var err error
-		quotaOK, err = e.perasQuotaAllowsFast(ctx, quotaChanges)
+		quotaOK, err = e.perasQuotaAllowsVisibleCommit(ctx, quotaChanges)
 		if err != nil {
 			return fsmeta.CreateResult{}, err
 		}
@@ -1244,7 +1244,7 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile
 	if req.SetSize {
 		sizeDelta = inodeSizeChange(inode.Size, req.Size)
 		if sizeDelta != 0 {
-			quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+			quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
 				Mount:      req.Mount,
 				MountKeyID: mount.MountKeyID,
 				Scope:      req.Parent,
@@ -1306,7 +1306,7 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 		if inode, ok, err := e.readInode(ctx, move.identity, record.Inode, version); err != nil {
 			return false, err
 		} else if ok {
-			quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{
+			quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{
 				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.fromParent, Bytes: -inodeSizeDelta(inode.Size), Inodes: -1},
 				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.toParent, Bytes: inodeSizeDelta(inode.Size), Inodes: 1},
 			})
@@ -1364,7 +1364,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.Semant
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
 	}
-	quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
 		Mount:      req.Mount,
 		MountKeyID: mount.MountKeyID,
 		Scope:      req.ToParent,
@@ -1421,7 +1421,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	if !ok || inode.LinkCount <= 1 {
 		return false, nil
 	}
-	quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
 		Mount:      req.Mount,
 		MountKeyID: mount.MountKeyID,
 		Scope:      req.Parent,
@@ -1646,7 +1646,7 @@ func (e *Executor) perasQuotaMode() compile.QuotaMode {
 	return compile.QuotaModeNone
 }
 
-func (e *Executor) perasQuotaAllowsFast(ctx context.Context, changes []QuotaChange) (bool, error) {
+func (e *Executor) perasQuotaAllowsVisibleCommit(ctx context.Context, changes []QuotaChange) (bool, error) {
 	if e == nil || e.quotas == nil || len(changes) == 0 {
 		return true, nil
 	}
