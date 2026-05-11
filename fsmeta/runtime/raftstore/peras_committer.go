@@ -22,6 +22,7 @@ const (
 	defaultPerasSegmentWitnessRetries      = 3
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
 	defaultPerasSegmentBatchSize           = 256
+	defaultPerasSegmentMaxReplayMutations  = 20
 	defaultPerasSegmentFlushEvery          = 100 * time.Millisecond
 	defaultPerasBackgroundFlushTimeout     = 2 * time.Second
 	defaultPerasBackgroundErrorBackoff     = time.Second
@@ -439,9 +440,17 @@ func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthoritySc
 	}
 	jobs := make([]runtimePerasFlushJob, 0, len(plans))
 	for _, frozen := range plans {
-		parts, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
+		bucketPlans, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan: %w", err)
+		}
+		parts := make([]fsperas.ReplayPlan, 0, len(bucketPlans))
+		for _, bucketPlan := range bucketPlans {
+			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, defaultPerasSegmentMaxReplayMutations)
+			if err != nil {
+				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
+			}
+			parts = append(parts, sized...)
 		}
 		for _, plan := range parts {
 			segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
