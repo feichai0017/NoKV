@@ -104,6 +104,19 @@ func (f *RootAuthorityFeed) bootstrap(ctx context.Context) error {
 	return f.table.Replace(grants)
 }
 
+// Refresh synchronously installs the latest root authority snapshot. Foreground
+// paths use this as a cache-miss repair before rejecting an otherwise valid
+// holder request due to watch or polling lag.
+func (f *RootAuthorityFeed) Refresh(ctx context.Context) error {
+	if f == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return f.bootstrap(ctx)
+}
+
 func (f *RootAuthorityFeed) watch(ctx context.Context, after *rootstorage.TailToken) error {
 	var token rootstorage.TailToken
 	if after != nil {
