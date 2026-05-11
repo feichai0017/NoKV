@@ -424,7 +424,7 @@ func TestCommandRuntimeHelpers(t *testing.T) {
 func BenchmarkCommandPipelineApplyEntries(b *testing.B) {
 	entries := make([]myraft.Entry, 32)
 	for i := range entries {
-		key := []byte(fmt.Sprintf("bench-key-%02d", i))
+		key := fmt.Appendf(nil, "bench-key-%02d", i)
 		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
 	}
 	for _, tc := range []struct {
@@ -453,7 +453,7 @@ func BenchmarkCommandPipelineApplyEntries(b *testing.B) {
 func BenchmarkCommandPipelineApplyWindowBatches(b *testing.B) {
 	entries := make([]myraft.Entry, 32)
 	for i := range entries {
-		key := []byte(fmt.Sprintf("window-bench-key-%02d", i))
+		key := fmt.Appendf(nil, "window-bench-key-%02d", i)
 		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
 	}
 	b.Run("serial_batches", func(b *testing.B) {
@@ -497,7 +497,7 @@ func BenchmarkCommandPipelineApplyWindowBatches(b *testing.B) {
 func BenchmarkCommandPipelineBatchApplier(b *testing.B) {
 	entries := make([]myraft.Entry, 32)
 	for i := range entries {
-		key := []byte(fmt.Sprintf("batch-applier-key-%02d", i))
+		key := fmt.Appendf(nil, "batch-applier-key-%02d", i)
 		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
 	}
 	b.Run("single_applier", func(b *testing.B) {

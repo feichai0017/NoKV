@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -442,10 +443,8 @@ func (w *commandApplyWindow) addTaskLocked(task *commandApplyTask) {
 		if pred == nil || pred == task || pred.done || pred.externalDone {
 			return
 		}
-		for _, existing := range preds {
-			if existing == pred {
-				return
-			}
+		if slices.Contains(preds, pred) {
+			return
 		}
 		preds = append(preds, pred)
 	}
