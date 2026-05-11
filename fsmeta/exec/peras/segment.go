@@ -266,7 +266,8 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 		}
 	}
 
-	latest := make(map[string]SegmentKV)
+	totalMutations := replayPlanMutationCount(plan)
+	latest := make(map[string]SegmentKV, totalMutations)
 	completions := make([]SegmentCompletion, 0, len(plan.Operations))
 	var mutationCount uint64
 	for opOffset, op := range plan.Operations {
@@ -322,6 +323,14 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 	segment.assignRuns(entries)
 	segment.Root = segmentRoot(segment)
 	return segment, nil
+}
+
+func replayPlanMutationCount(plan ReplayPlan) int {
+	count := 0
+	for _, op := range plan.Operations {
+		count += len(op.Mutations)
+	}
+	return count
 }
 
 func (s PerasSegment) Get(key []byte) (value []byte, deleted bool, ok bool) {
