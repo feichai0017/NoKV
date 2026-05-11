@@ -1,4 +1,4 @@
-package capsule
+package capsuleauth
 
 import (
 	"errors"

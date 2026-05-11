@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
@@ -130,6 +131,28 @@ func requireCapsuleStatBool(t *testing.T, stats map[string]any, key string, want
 	require.Equal(t, want, got)
 }
 
+func requireCapsuleShadowStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+	t.Helper()
+	raw, ok := stats["capsule_shadow"]
+	require.True(t, ok, "missing capsule_shadow stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_shadow has type %T", raw)
+	got, ok := capsuleStats[key].(uint64)
+	require.Truef(t, ok, "capsule_shadow[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
+func requireCapsuleShadowStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+	t.Helper()
+	raw, ok := stats["capsule_shadow"]
+	require.True(t, ok, "missing capsule_shadow stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_shadow has type %T", raw)
+	got, ok := capsuleStats[key].(bool)
+	require.Truef(t, ok, "capsule_shadow[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
 func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
 	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
@@ -163,6 +186,15 @@ type fakeCapsuleAdmitter struct {
 	calls  int
 	scopes []compile.AuthorityScope
 }
+
+type fakeCapsuleSubmitter struct {
+	err    error
+	calls  int
+	ids    []fscapsule.OperationID
+	deltas []compile.SemanticDelta
+}
+
+type noopCapsuleSubmitter struct{}
 
 type ownedCapsuleAdmitter struct{}
 
@@ -277,6 +309,32 @@ func (a *fakeCapsuleAdmitter) AcquireCapsuleAuthority(_ context.Context, scope c
 		return false, a.err
 	}
 	return a.owned, nil
+}
+
+func (s *fakeCapsuleSubmitter) SubmitCapsule(_ context.Context, id fscapsule.OperationID, delta compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error) {
+	s.calls++
+	s.ids = append(s.ids, id)
+	s.deltas = append(s.deltas, delta)
+	if s.err != nil {
+		return fscapsule.CommitCertificateRecord{}, s.err
+	}
+	return fscapsule.CommitCertificateRecord{
+		EpochID:  1,
+		OpID:     id,
+		HolderID: "holder-a",
+		QuorumAckSet: []string{
+			"store-a",
+			"store-b",
+		},
+	}, nil
+}
+
+func (noopCapsuleSubmitter) SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error) {
+	return fscapsule.CommitCertificateRecord{
+		EpochID:      1,
+		HolderID:     "holder-a",
+		QuorumAckSet: []string{"store-a", "store-b"},
+	}, nil
 }
 
 func (ownedCapsuleAdmitter) AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
@@ -617,6 +675,93 @@ func TestExecutorCreateAdmitsCapsuleAuthority(t *testing.T) {
 	requireCapsuleStatUint(t, stats, "owned_total", 1)
 	requireCapsuleStatUint(t, stats, "held_total", 0)
 	requireCapsuleStatUint(t, stats, "slow_total", 0)
+}
+
+func TestExecutorCreateSubmitsCapsuleShadowAndKeepsRaftCommit(t *testing.T) {
+	runner := newFakeRunner()
+	admitter := &fakeCapsuleAdmitter{owned: true}
+	submitter := &fakeCapsuleSubmitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(admitter),
+		WithCapsuleShadowSubmitter(submitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, submitter.calls)
+	require.Len(t, submitter.ids, 1)
+	require.Equal(t, "fsmeta-exec/create", submitter.ids[0].ClientID)
+	require.Equal(t, uint64(1), submitter.ids[0].Seq)
+	require.Len(t, submitter.deltas, 1)
+	require.Equal(t, compile.EligibilityFastPath, submitter.deltas[0].Eligibility)
+	require.Len(t, runner.mutations, 1, "shadow submit must not replace the current Raft commit")
+
+	stats := executor.Stats()
+	requireCapsuleShadowStatBool(t, stats, "enabled", true)
+	requireCapsuleShadowStatUint(t, stats, "submit_total", 1)
+	requireCapsuleShadowStatUint(t, stats, "success_total", 1)
+	requireCapsuleShadowStatUint(t, stats, "error_total", 0)
+	requireCapsuleShadowStatUint(t, stats, "skip_no_authority_total", 0)
+}
+
+func TestExecutorCreateCapsuleShadowErrorStillUsesRaftCommit(t *testing.T) {
+	runner := newFakeRunner()
+	submitter := &fakeCapsuleSubmitter{err: errors.New("shadow submit failed")}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
+		WithCapsuleShadowSubmitter(submitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requireCapsuleShadowStatUint(t, stats, "submit_total", 1)
+	requireCapsuleShadowStatUint(t, stats, "success_total", 0)
+	requireCapsuleShadowStatUint(t, stats, "error_total", 1)
+}
+
+func TestExecutorCreateCapsuleShadowRequiresAuthorityAdmission(t *testing.T) {
+	runner := newFakeRunner()
+	submitter := &fakeCapsuleSubmitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleShadowSubmitter(submitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Zero(t, submitter.calls)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requireCapsuleShadowStatUint(t, stats, "submit_total", 0)
+	requireCapsuleShadowStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
 func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
@@ -2613,6 +2758,32 @@ func BenchmarkExecutorAdmitCapsuleAuthorityOwned(b *testing.B) {
 		if err := executor.admitCapsuleAuthority(ctx, delta); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkExecutorCapsuleShadowSubmitCreate(b *testing.B) {
+	executor, err := New(
+		newFakeRunner(),
+		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
+		WithCapsuleShadowSubmitter(noopCapsuleSubmitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	delta, err := compile.Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMountIdentity, 22)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		executor.submitCapsuleShadow(ctx, delta)
 	}
 }
 

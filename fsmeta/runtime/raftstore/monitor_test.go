@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
+	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -116,13 +116,13 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 func TestMonitorRefreshesCapsuleAuthorities(t *testing.T) {
 	grant := testMonitorCapsuleGrant("capsule-1", 1)
 	list := &fakeMountList{capsules: []*rootproto.CapsuleAuthorityGrant{&grant}}
-	table := fscapsule.NewActiveAuthorities()
+	table := capsuleauth.NewActiveAuthorities()
 
 	mon := &monitor{coord: list, router: &fakeRetireRouter{}, capsules: table}
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, 1, list.capsuleCalls)
-	require.Equal(t, []fscapsule.AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []capsuleauth.AuthorityGrant{grant}, table.Snapshot())
 
 	retired := rootevent.CapsuleAuthorityRetired(grant)
 	mon.applyRootEvent(context.Background(), retired)
@@ -130,7 +130,7 @@ func TestMonitorRefreshesCapsuleAuthorities(t *testing.T) {
 
 	next := testMonitorCapsuleGrant("capsule-2", 2)
 	mon.applyRootEvent(context.Background(), rootevent.CapsuleAuthorityGranted(next))
-	require.Equal(t, []fscapsule.AuthorityGrant{next}, table.Snapshot())
+	require.Equal(t, []capsuleauth.AuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {

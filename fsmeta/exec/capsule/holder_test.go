@@ -177,7 +177,7 @@ func (r *fakeWitnessReplica) ID() string {
 	return r.id
 }
 
-func (r *fakeWitnessReplica) AppendPrepare(_ context.Context, record PrepareRecord) error {
+func (r *fakeWitnessReplica) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record PrepareRecord) error {
 	if r.prepareErr != nil {
 		return r.prepareErr
 	}
@@ -185,7 +185,7 @@ func (r *fakeWitnessReplica) AppendPrepare(_ context.Context, record PrepareReco
 	return nil
 }
 
-func (r *fakeWitnessReplica) AppendCommitCertificate(_ context.Context, record CommitCertificateRecord) error {
+func (r *fakeWitnessReplica) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record CommitCertificateRecord) error {
 	if r.commitErr != nil {
 		return r.commitErr
 	}
@@ -209,11 +209,11 @@ func (r ackWitnessReplica) ID() string {
 	return r.id
 }
 
-func (ackWitnessReplica) AppendPrepare(context.Context, PrepareRecord) error {
+func (ackWitnessReplica) AppendPrepare(context.Context, compile.AuthorityScope, PrepareRecord) error {
 	return nil
 }
 
-func (ackWitnessReplica) AppendCommitCertificate(context.Context, CommitCertificateRecord) error {
+func (ackWitnessReplica) AppendCommitCertificate(context.Context, compile.AuthorityScope, CommitCertificateRecord) error {
 	return nil
 }
 

@@ -12,8 +12,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -84,7 +84,7 @@ type Runtime struct {
 	MountResolver      fsmetaexec.MountResolver
 	QuotaResolver      fsmetaexec.QuotaResolver
 	SessionCleaner     interface{ Stats() map[string]any }
-	CapsuleAuthorities *fscapsule.ActiveAuthorities
+	CapsuleAuthorities *capsuleauth.ActiveAuthorities
 	CapsuleAuthority   *CapsuleAuthorityManager
 
 	close func() error
@@ -172,7 +172,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
-	capsules := fscapsule.NewActiveAuthorities()
+	capsules := capsuleauth.NewActiveAuthorities()
 	var capsuleAuthority *CapsuleAuthorityManager
 	if holderID := strings.TrimSpace(opts.CapsuleHolderID); holderID != "" {
 		capsuleAuthorityTTL := opts.CapsuleAuthorityTTL

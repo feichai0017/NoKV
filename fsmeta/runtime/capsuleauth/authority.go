@@ -1,5 +1,5 @@
-// Package capsule contains the execution-side pieces of the Capsule protocol.
-package capsule
+// Package capsuleauth adapts root-issued Capsule authority grants to fsmeta runtime scopes.
+package capsuleauth
 
 import (
 	"errors"
