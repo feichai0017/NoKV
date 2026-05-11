@@ -975,8 +975,8 @@ func TestExecutorCreatePerasVisibleCommitFallsBackWhenWatched(t *testing.T) {
 
 func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
-	fastErr := errors.New("peras commit failed")
-	committer := &fakePerasCommitter{err: fastErr}
+	commitErr := errors.New("peras commit failed")
+	committer := &fakePerasCommitter{err: commitErr}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
@@ -991,7 +991,7 @@ func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 		Name:   "file",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
-	require.ErrorIs(t, err, fastErr)
+	require.ErrorIs(t, err, commitErr)
 	require.Equal(t, 1, committer.calls)
 	require.Empty(t, runner.mutations, "ambiguous Peras evidence must not fall back into a second commit path")
 

@@ -306,14 +306,15 @@ func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.A
 	if err != nil {
 		return err
 	}
+	if len(jobs) > 0 && c.installer == nil {
+		return c.recordError(errPerasCommitterInvalid)
+	}
 	for _, job := range jobs {
 		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, job.holder, job.segment, job.payload, job.digest); err != nil {
 			return c.recordErrorf("append peras segment witness: %w", err)
 		}
-		if c.installer != nil {
-			if err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest); err != nil {
-				return c.recordErrorf("install peras segment: %w", err)
-			}
+		if err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest); err != nil {
+			return c.recordErrorf("install peras segment: %w", err)
 		}
 		if err := job.holder.MarkReplayPlanApplied(job.plan); err != nil {
 			return c.recordErrorf("mark peras plan applied: %w", err)
