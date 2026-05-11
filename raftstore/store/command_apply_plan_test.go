@@ -109,28 +109,28 @@ func TestCommandApplyDependenciesTrackTxnPrimaryOperations(t *testing.T) {
 
 func testUserRead(key string) commandApplyDependency {
 	return commandApplyDependency{
-		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, key: key},
+		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, hash: commandApplyDependencyHash([]byte(key))},
 		mode: commandApplyDependencyRead,
 	}
 }
 
 func testUserWrite(key string) commandApplyDependency {
 	return commandApplyDependency{
-		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, key: key},
+		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, hash: commandApplyDependencyHash([]byte(key))},
 		mode: commandApplyDependencyWrite,
 	}
 }
 
 func testTxnIntent(key string, version uint64) commandApplyDependency {
 	return commandApplyDependency{
-		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnIntent, key: key, version: version},
+		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnIntent, hash: commandApplyDependencyHash([]byte(key)), version: version},
 		mode: commandApplyDependencyWrite,
 	}
 }
 
 func testTxnPrimary(key string, version uint64) commandApplyDependency {
 	return commandApplyDependency{
-		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnPrimary, key: key, version: version},
+		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnPrimary, hash: commandApplyDependencyHash([]byte(key)), version: version},
 		mode: commandApplyDependencyWrite,
 	}
 }

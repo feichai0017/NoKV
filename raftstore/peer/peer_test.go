@@ -294,7 +294,8 @@ func TestPeerAsyncApplyKeepsContiguousAppliedWatermark(t *testing.T) {
 		RaftConfig: cfg,
 		Transport:  noopPayloadTransport{},
 		Apply:      func([]myraft.Entry) error { return nil },
-		ApplyAsync: func(entries []myraft.Entry, done func(error)) error {
+		ApplyRunner: testApplyRunner(func(task ApplyTask, done func(ApplyResult)) error {
+			entries := task.Entries
 			require.Len(t, entries, 1)
 			entry := entries[0]
 			started <- entry.Index
@@ -302,10 +303,10 @@ func TestPeerAsyncApplyKeepsContiguousAppliedWatermark(t *testing.T) {
 				if string(entry.Data) == "first" {
 					<-releaseFirst
 				}
-				done(nil)
+				done(ApplyResult{Entries: entries})
 			}()
 			return nil
-		},
+		}),
 		Storage: storage,
 		GroupID: 1,
 	})
@@ -331,6 +332,12 @@ func TestPeerAsyncApplyKeepsContiguousAppliedWatermark(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return p.AppliedIndex() >= secondIndex
 	}, time.Second, time.Millisecond)
+}
+
+type testApplyRunner func(ApplyTask, func(ApplyResult)) error
+
+func (f testApplyRunner) SubmitApply(task ApplyTask, done func(ApplyResult)) error {
+	return f(task, done)
 }
 
 func TestReadIndexHelpersDeliverAndCancel(t *testing.T) {

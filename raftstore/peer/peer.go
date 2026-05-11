@@ -26,10 +26,26 @@ import (
 // state machine (LSM, MVCC, etc).
 type ApplyFunc func(entries []myraft.Entry) error
 
-// ApplyAsyncFunc enqueues committed raft log entries for asynchronous apply.
-// The callback must be invoked exactly once after the entries are externally
-// visible or after apply has failed fatally.
-type ApplyAsyncFunc func(entries []myraft.Entry, done func(error)) error
+// ApplyTask is the committed-entry unit handed from the raft peer into the
+// apply runner. The peer owns raft ordering, watermarks, and compaction; the
+// runner owns state-machine scheduling and apply execution.
+type ApplyTask struct {
+	Entries []myraft.Entry
+}
+
+// ApplyResult reports one ApplyTask after the runner made it externally
+// visible or hit a fatal apply error.
+type ApplyResult struct {
+	Entries []myraft.Entry
+	Err     error
+}
+
+// ApplyRunner decouples committed-entry ingestion from apply completion. It is
+// the production path for async apply: peers submit committed tasks and handle
+// results uniformly when the runner finishes them.
+type ApplyRunner interface {
+	SubmitApply(task ApplyTask, done func(ApplyResult)) error
+}
 
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
 type AdminApplyFunc func(cmd *raftcmdpb.AdminCommand) error
@@ -51,7 +67,7 @@ type Peer struct {
 	storage                   raftlog.PeerStorage
 	transport                 transport.Transport
 	apply                     ApplyFunc
-	applyAsync                ApplyAsyncFunc
+	applyRunner               ApplyRunner
 	adminApply                AdminApplyFunc
 	raftLog                   *raftLogTracker
 	snapshotQueue             *snapshotResendQueue
@@ -129,7 +145,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		storage:                   storage,
 		transport:                 cfg.Transport,
 		apply:                     cfg.Apply,
-		applyAsync:                cfg.ApplyAsync,
+		applyRunner:               cfg.ApplyRunner,
 		adminApply:                cfg.AdminApply,
 		confChangeHook:            cfg.ConfChange,
 		snapshotExport:            cfg.SnapshotExport,
@@ -538,17 +554,8 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 			}
 			entries := append([]myraft.Entry(nil), toApply...)
 			toApply = toApply[:0]
-			if p.applyAsync != nil {
-				if err := p.applyAsync(entries, func(err error) {
-					if err != nil {
-						p.recordApplyError(err)
-						return
-					}
-					p.finishApply(entries)
-					if compacted := p.AppliedIndex(); compacted > 0 {
-						_ = p.maybeCompact(compacted)
-					}
-				}); err != nil {
+			if p.applyRunner != nil {
+				if err := p.applyRunner.SubmitApply(ApplyTask{Entries: entries}, p.handleApplyResult); err != nil {
 					return err
 				}
 				if wait {
@@ -635,6 +642,20 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 	}
 	return nil
+}
+
+func (p *Peer) handleApplyResult(result ApplyResult) {
+	if p == nil {
+		return
+	}
+	if result.Err != nil {
+		p.recordApplyError(result.Err)
+		return
+	}
+	p.finishApply(result.Entries)
+	if compacted := p.AppliedIndex(); compacted > 0 {
+		_ = p.maybeCompact(compacted)
+	}
 }
 
 func (p *Peer) ensureEmptySnapshotPayloadTarget() error {

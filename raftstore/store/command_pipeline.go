@@ -8,19 +8,27 @@ import (
 
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/peer"
 )
 
 type commandRuntime struct {
-	apply   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	pipe    *commandPipeline
 	timeout time.Duration
 }
+
+const commandApplyMaxBatchTasks = 64
 
 type commandProposal struct {
 	ch chan proposalResult
 }
 
 type proposalResult struct {
+	resp *raftcmdpb.RaftCmdResponse
+	err  error
+}
+
+type commandProposalCompletion struct {
+	key  commandProposalKey
 	resp *raftcmdpb.RaftCmdResponse
 	err  error
 }
@@ -47,26 +55,36 @@ func (k commandProposalKey) valid() bool {
 }
 
 type commandPipeline struct {
-	mu        sync.Mutex
-	seq       uint64
-	orderSeq  uint64
-	proposals map[commandProposalKey]*commandProposal
-	applier   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
-	parallel  int
-	window    *commandApplyWindow
+	mu           sync.Mutex
+	seq          uint64
+	orderSeq     uint64
+	proposals    map[commandProposalKey]*commandProposal
+	applier      func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
+	batchApplier func([]*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error)
+	parallel     int
+	window       *commandApplyWindow
 }
 
 type applyEventEmitter func(myraft.Entry, *raftcmdpb.RaftCmdRequest, *raftcmdpb.RaftCmdResponse)
 
 func newCommandPipeline(applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error), parallelism ...int) *commandPipeline {
+	return newCommandPipelineWithBatch(applier, nil, parallelism...)
+}
+
+func newCommandPipelineWithBatch(
+	applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error),
+	batchApplier func([]*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error),
+	parallelism ...int,
+) *commandPipeline {
 	parallel := 0
 	if len(parallelism) > 0 {
 		parallel = parallelism[0]
 	}
 	cp := &commandPipeline{
-		proposals: make(map[commandProposalKey]*commandProposal),
-		applier:   applier,
-		parallel:  normalizeCommandApplyParallelism(parallel),
+		proposals:    make(map[commandProposalKey]*commandProposal),
+		applier:      applier,
+		batchApplier: batchApplier,
+		parallel:     normalizeCommandApplyParallelism(parallel),
 	}
 	cp.window = newCommandApplyWindow(cp, cp.parallel)
 	return cp
@@ -152,6 +170,40 @@ func (cp *commandPipeline) completeProposal(key commandProposalKey, resp *raftcm
 	close(prop.ch)
 }
 
+func (cp *commandPipeline) completeProposalBatch(completions []commandProposalCompletion) {
+	if cp == nil || len(completions) == 0 {
+		return
+	}
+	type completedProposal struct {
+		prop *commandProposal
+		resp *raftcmdpb.RaftCmdResponse
+		err  error
+	}
+	var propBuf [commandApplyMaxBatchTasks]completedProposal
+	props := propBuf[:0]
+	cp.mu.Lock()
+	for _, completion := range completions {
+		if !completion.key.valid() {
+			continue
+		}
+		prop := cp.proposals[completion.key]
+		delete(cp.proposals, completion.key)
+		if prop == nil {
+			continue
+		}
+		props = append(props, completedProposal{
+			prop: prop,
+			resp: completion.resp,
+			err:  completion.err,
+		})
+	}
+	cp.mu.Unlock()
+	for _, item := range props {
+		item.prop.ch <- proposalResult{resp: item.resp, err: item.err}
+		close(item.prop.ch)
+	}
+}
+
 func (cp *commandPipeline) applyEntries(entries []myraft.Entry, emitters ...applyEventEmitter) error {
 	if cp == nil {
 		return fmt.Errorf("commandPipeline: pipeline is nil")
@@ -168,7 +220,7 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, emitters ...appl
 		return nil
 	}
 	cp.assignPlanOrders(plans)
-	if cp.parallel <= 1 || len(plans) == 1 {
+	if cp.parallel <= 1 {
 		return cp.applyPlansSerial(plans, emit)
 	}
 	done := make(chan error, 1)
@@ -209,21 +261,25 @@ func (cp *commandPipeline) applyPlansSerial(plans []commandApplyPlan, emit apply
 }
 
 type commandApplyWindow struct {
-	mu            sync.Mutex
-	cp            *commandPipeline
-	parallel      int
-	ready         chan *commandApplyTask
-	stop          chan struct{}
-	workerWG      sync.WaitGroup
-	closed        bool
-	drainCh       chan struct{}
-	queue         []*commandApplyTask
-	active        int
-	activeBarrier bool
-	activeDeps    map[commandApplyDependencyKey]commandApplyActiveDependency
-	completed     map[uint64]*commandApplyTask
-	nextComplete  uint64
-	fatalErr      error
+	mu           sync.Mutex
+	cp           *commandPipeline
+	parallel     int
+	ready        chan commandApplyTaskBatch
+	stop         chan struct{}
+	workerWG     sync.WaitGroup
+	closed       bool
+	drainCh      chan struct{}
+	readyQueue   []*commandApplyTask
+	readyHead    int
+	active       int
+	pending      map[*commandApplyTask]struct{}
+	lastWriter   map[commandApplyDependencyKey]*commandApplyTask
+	readers      map[commandApplyDependencyKey][]*commandApplyTask
+	tails        map[*commandApplyTask]struct{}
+	barrierTail  *commandApplyTask
+	completed    map[uint64]*commandApplyTask
+	nextComplete uint64
+	fatalErr     error
 }
 
 type commandApplyTask struct {
@@ -232,12 +288,33 @@ type commandApplyTask struct {
 	group        *commandApplyGroup
 	resp         *raftcmdpb.RaftCmdResponse
 	err          error
+	pendingDeps  int
+	successors   []*commandApplyTask
+	running      bool
+	done         bool
 	externalDone bool
 }
 
-type commandApplyActiveDependency struct {
-	readers int
-	writers int
+type commandApplyTaskBatch struct {
+	first *commandApplyTask
+	rest  []*commandApplyTask
+}
+
+func (b commandApplyTaskBatch) len() int {
+	if b.first == nil {
+		return 0
+	}
+	return 1 + len(b.rest)
+}
+
+func (b commandApplyTaskBatch) forEach(fn func(*commandApplyTask)) {
+	if b.first == nil || fn == nil {
+		return
+	}
+	fn(b.first)
+	for _, task := range b.rest {
+		fn(task)
+	}
 }
 
 type commandApplyGroup struct {
@@ -254,9 +331,12 @@ func newCommandApplyWindow(cp *commandPipeline, parallel int) *commandApplyWindo
 	w := &commandApplyWindow{
 		cp:           cp,
 		parallel:     parallel,
-		ready:        make(chan *commandApplyTask, parallel),
+		ready:        make(chan commandApplyTaskBatch, parallel),
 		stop:         make(chan struct{}),
-		activeDeps:   make(map[commandApplyDependencyKey]commandApplyActiveDependency),
+		pending:      make(map[*commandApplyTask]struct{}),
+		lastWriter:   make(map[commandApplyDependencyKey]*commandApplyTask),
+		readers:      make(map[commandApplyDependencyKey][]*commandApplyTask),
+		tails:        make(map[*commandApplyTask]struct{}),
 		completed:    make(map[uint64]*commandApplyTask),
 		nextComplete: 1,
 	}
@@ -278,7 +358,11 @@ func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmi
 		done = func(error) {}
 	}
 	group := newCommandApplyGroup(len(plans), done)
-	tasks := make([]*commandApplyTask, 0, len(plans))
+	var taskBuf [commandApplyMaxBatchTasks]*commandApplyTask
+	tasks := taskBuf[:0]
+	if len(plans) > cap(taskBuf) {
+		tasks = make([]*commandApplyTask, 0, len(plans))
+	}
 	for _, plan := range plans {
 		tasks = append(tasks, &commandApplyTask{plan: plan, emit: emit, group: group})
 	}
@@ -294,62 +378,170 @@ func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmi
 		}
 		return nil
 	}
-	w.queue = append(w.queue, tasks...)
+	for _, task := range tasks {
+		w.addTaskLocked(task)
+	}
 	w.scheduleLocked()
 	return nil
 }
 
 func (w *commandApplyWindow) scheduleLocked() {
-	for !w.closed && w.fatalErr == nil && !w.activeBarrier && w.active < w.parallel {
-		idx := w.nextSchedulableLocked()
-		if idx < 0 {
+	for !w.closed && w.fatalErr == nil && w.active < w.parallel {
+		task := w.popReadyLocked()
+		if task == nil {
 			return
 		}
-		task := w.queue[idx]
-		copy(w.queue[idx:], w.queue[idx+1:])
-		w.queue[len(w.queue)-1] = nil
-		w.queue = w.queue[:len(w.queue)-1]
-		w.active++
-		if task.plan.barrier {
-			w.activeBarrier = true
-		} else {
-			commandApplyWindowAddDependencies(w.activeDeps, task.plan)
+		if task.plan.barrier && w.active > 0 {
+			w.pushReadyFrontLocked(task)
+			return
 		}
-		w.ready <- task
+		batch := w.buildReadyBatchLocked(task)
+		batch.forEach(func(task *commandApplyTask) {
+			task.running = true
+		})
+		w.active++
+		w.ready <- batch
 	}
 }
 
-func (w *commandApplyWindow) nextSchedulableLocked() int {
-	if len(w.queue) == 0 {
-		return -1
+func (w *commandApplyWindow) buildReadyBatchLocked(first *commandApplyTask) commandApplyTaskBatch {
+	if first == nil {
+		return commandApplyTaskBatch{}
 	}
-	if w.queue[0].plan.barrier {
-		if w.active == 0 {
-			return 0
-		}
-		return -1
+	if first.plan.barrier || w.cp == nil || w.cp.batchApplier == nil {
+		return commandApplyTaskBatch{first: first}
 	}
-	for i, task := range w.queue {
-		if task.plan.barrier {
-			return -1
+	class, ok := commandApplyBatchClass(first.plan)
+	if !ok {
+		return commandApplyTaskBatch{first: first}
+	}
+	batch := commandApplyTaskBatch{first: first}
+	for batch.len() < commandApplyMaxBatchTasks {
+		next := w.popReadyLocked()
+		if next == nil {
+			return batch
 		}
-		if !commandApplyWindowConflicts(w.activeDeps, task.plan) {
-			return i
+		nextClass, nextOK := commandApplyBatchClass(next.plan)
+		if next.plan.barrier || !nextOK || nextClass != class {
+			w.pushReadyFrontLocked(next)
+			return batch
+		}
+		batch.rest = append(batch.rest, next)
+	}
+	return batch
+}
+
+func (w *commandApplyWindow) addTaskLocked(task *commandApplyTask) {
+	if task == nil {
+		return
+	}
+	w.pending[task] = struct{}{}
+	var predBuf [8]*commandApplyTask
+	preds := predBuf[:0]
+	addPred := func(pred *commandApplyTask) {
+		if pred == nil || pred == task || pred.done || pred.externalDone {
+			return
+		}
+		for _, existing := range preds {
+			if existing == pred {
+				return
+			}
+		}
+		preds = append(preds, pred)
+	}
+
+	if task.plan.barrier {
+		for pred := range w.tails {
+			addPred(pred)
+		}
+		clear(w.lastWriter)
+		clear(w.readers)
+		clear(w.tails)
+		w.barrierTail = task
+	} else {
+		addPred(w.barrierTail)
+		for _, dep := range task.plan.deps {
+			if dep.mode == commandApplyDependencyWrite {
+				addPred(w.lastWriter[dep.key])
+				for _, reader := range w.readers[dep.key] {
+					addPred(reader)
+				}
+				w.lastWriter[dep.key] = task
+				delete(w.readers, dep.key)
+				continue
+			}
+			addPred(w.lastWriter[dep.key])
+			w.readers[dep.key] = append(w.readers[dep.key], task)
 		}
 	}
-	return -1
+
+	for _, pred := range preds {
+		task.pendingDeps++
+		pred.successors = append(pred.successors, task)
+		delete(w.tails, pred)
+	}
+	w.tails[task] = struct{}{}
+	if task.pendingDeps == 0 {
+		w.pushReadyLocked(task)
+	}
+}
+
+func (w *commandApplyWindow) pushReadyLocked(task *commandApplyTask) {
+	if task == nil {
+		return
+	}
+	w.readyQueue = append(w.readyQueue, task)
+}
+
+func (w *commandApplyWindow) pushReadyFrontLocked(task *commandApplyTask) {
+	if task == nil {
+		return
+	}
+	if w.readyHead > 0 {
+		w.readyHead--
+		w.readyQueue[w.readyHead] = task
+		return
+	}
+	w.readyQueue = append([]*commandApplyTask{task}, w.readyQueue...)
+}
+
+func (w *commandApplyWindow) popReadyLocked() *commandApplyTask {
+	for w.readyHead < len(w.readyQueue) {
+		task := w.readyQueue[w.readyHead]
+		w.readyQueue[w.readyHead] = nil
+		w.readyHead++
+		if w.readyHead > 64 && w.readyHead*2 >= len(w.readyQueue) {
+			copy(w.readyQueue, w.readyQueue[w.readyHead:])
+			n := len(w.readyQueue) - w.readyHead
+			clear(w.readyQueue[n:])
+			w.readyQueue = w.readyQueue[:n]
+			w.readyHead = 0
+		}
+		if task != nil && !task.done && !task.externalDone {
+			return task
+		}
+	}
+	clear(w.readyQueue)
+	w.readyQueue = w.readyQueue[:0]
+	w.readyHead = 0
+	return nil
 }
 
 func (w *commandApplyWindow) runWorker() {
 	defer w.workerWG.Done()
 	for {
 		select {
-		case task := <-w.ready:
-			if task == nil {
+		case batch := <-w.ready:
+			if batch.len() == 0 {
 				continue
 			}
-			resp, err := w.cp.applyPlan(task.plan)
-			w.finishTask(task, resp, err)
+			if batch.len() == 1 {
+				resp, err := w.cp.applyPlan(batch.first.plan)
+				w.finishTask(batch.first, resp, err)
+				continue
+			}
+			resps, err := w.cp.applyPlanBatch(batch)
+			w.finishTasks(batch, resps, err)
 		case <-w.stop:
 			return
 		}
@@ -370,15 +562,16 @@ func (w *commandApplyWindow) close() {
 	if w.fatalErr == nil {
 		w.fatalErr = errCommandPipelineUnavailable
 	}
-	for _, task := range w.completed {
+	for task := range w.pending {
+		if task.running {
+			continue
+		}
 		w.finishTaskExternalLocked(task, w.fatalErr)
 	}
 	clear(w.completed)
-	for _, task := range w.queue {
-		w.finishTaskExternalLocked(task, w.fatalErr)
-	}
-	clear(w.queue)
-	w.queue = w.queue[:0]
+	clear(w.readyQueue)
+	w.readyQueue = w.readyQueue[:0]
+	w.readyHead = 0
 	if w.active == 0 {
 		close(w.stop)
 		w.mu.Unlock()
@@ -397,15 +590,13 @@ func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.active--
+	task.running = false
 	defer w.notifyDrainedLocked()
-	if task.plan.barrier {
-		w.activeBarrier = false
-	} else {
-		commandApplyWindowRemoveDependencies(w.activeDeps, task.plan)
-	}
 	task.resp = resp
 	task.err = err
 	if w.fatalErr != nil {
+		task.done = true
+		w.cleanupFinishedTaskLocked(task)
 		w.finishTaskExternalLocked(task, w.fatalErr)
 		return
 	}
@@ -415,9 +606,104 @@ func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.
 		w.failAllLocked(fatalErr)
 		return
 	}
-	w.completed[task.plan.order] = task
+	w.finishSuccessfulTaskLocked(task)
 	w.flushCompletedLocked()
 	w.scheduleLocked()
+}
+
+func (w *commandApplyWindow) finishTasks(batch commandApplyTaskBatch, resps []*raftcmdpb.RaftCmdResponse, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.active--
+	defer w.notifyDrainedLocked()
+	batchLen := batch.len()
+	if len(resps) != batchLen && err == nil {
+		err = fmt.Errorf("commandPipeline: batch apply returned %d responses for %d tasks", len(resps), batchLen)
+	}
+	i := 0
+	batch.forEach(func(task *commandApplyTask) {
+		task.running = false
+		if i < len(resps) {
+			task.resp = resps[i]
+		}
+		task.err = err
+		i++
+	})
+	if w.fatalErr != nil {
+		batch.forEach(func(task *commandApplyTask) {
+			task.done = true
+			w.cleanupFinishedTaskLocked(task)
+			w.finishTaskExternalLocked(task, w.fatalErr)
+		})
+		return
+	}
+	if err != nil {
+		fatalErr := fmt.Errorf("commandPipeline: fatal apply window failed: %w", err)
+		batch.forEach(func(task *commandApplyTask) {
+			w.finishTaskExternalLocked(task, fatalErr)
+		})
+		w.failAllLocked(fatalErr)
+		return
+	}
+	batch.forEach(func(task *commandApplyTask) {
+		w.finishSuccessfulTaskLocked(task)
+	})
+	w.flushCompletedLocked()
+	w.scheduleLocked()
+}
+
+func (w *commandApplyWindow) finishSuccessfulTaskLocked(task *commandApplyTask) {
+	if task == nil {
+		return
+	}
+	task.done = true
+	w.cleanupFinishedTaskLocked(task)
+	for _, successor := range task.successors {
+		if successor == nil || successor.externalDone || successor.done {
+			continue
+		}
+		if successor.pendingDeps > 0 {
+			successor.pendingDeps--
+		}
+		if successor.pendingDeps == 0 {
+			w.pushReadyLocked(successor)
+		}
+	}
+	task.successors = nil
+	w.completed[task.plan.order] = task
+}
+
+func (w *commandApplyWindow) cleanupFinishedTaskLocked(task *commandApplyTask) {
+	if task == nil {
+		return
+	}
+	delete(w.tails, task)
+	if w.barrierTail == task {
+		w.barrierTail = nil
+	}
+	for _, dep := range task.plan.deps {
+		if dep.mode == commandApplyDependencyWrite {
+			if w.lastWriter[dep.key] == task {
+				delete(w.lastWriter, dep.key)
+			}
+			continue
+		}
+		readers := w.readers[dep.key]
+		for i, reader := range readers {
+			if reader != task {
+				continue
+			}
+			copy(readers[i:], readers[i+1:])
+			readers[len(readers)-1] = nil
+			readers = readers[:len(readers)-1]
+			break
+		}
+		if len(readers) == 0 {
+			delete(w.readers, dep.key)
+		} else {
+			w.readers[dep.key] = readers
+		}
+	}
 }
 
 func (w *commandApplyWindow) notifyDrainedLocked() {
@@ -432,34 +718,80 @@ func (w *commandApplyWindow) failAllLocked(err error) {
 	if w.fatalErr == nil {
 		w.fatalErr = err
 	}
-	for _, task := range w.completed {
+	for task := range w.pending {
+		if task.running {
+			continue
+		}
 		w.finishTaskExternalLocked(task, err)
 	}
 	clear(w.completed)
-	for _, task := range w.queue {
-		w.finishTaskExternalLocked(task, err)
-	}
-	clear(w.queue)
-	w.queue = w.queue[:0]
+	clear(w.readyQueue)
+	w.readyQueue = w.readyQueue[:0]
+	w.readyHead = 0
 }
 
 func (w *commandApplyWindow) flushCompletedLocked() {
+	task := w.completed[w.nextComplete]
+	if task == nil {
+		return
+	}
+	delete(w.completed, w.nextComplete)
+	w.nextComplete++
+	next := w.completed[w.nextComplete]
+	if next == nil {
+		w.finishTaskExternalSingleLocked(task, nil)
+		return
+	}
+	var buf [commandApplyMaxBatchTasks]*commandApplyTask
+	tasks := buf[:0]
+	tasks = append(tasks, task)
 	for {
-		task := w.completed[w.nextComplete]
+		task = w.completed[w.nextComplete]
 		if task == nil {
+			w.finishTaskExternalBatchLocked(tasks, nil)
 			return
 		}
 		delete(w.completed, w.nextComplete)
 		w.nextComplete++
-		w.finishTaskExternalLocked(task, nil)
+		tasks = append(tasks, task)
+		if len(tasks) == cap(buf) {
+			w.finishTaskExternalBatchLocked(tasks, nil)
+			tasks = buf[:0]
+		}
 	}
 }
 
 func (w *commandApplyWindow) finishTaskExternalLocked(task *commandApplyTask, err error) {
+	w.finishTaskExternalSingleLocked(task, err)
+}
+
+func (w *commandApplyWindow) finishTaskExternalBatchLocked(tasks []*commandApplyTask, err error) {
+	if len(tasks) == 0 {
+		return
+	}
+	if len(tasks) == 1 {
+		w.finishTaskExternalSingleLocked(tasks[0], err)
+		return
+	}
+	var completionBuf [commandApplyMaxBatchTasks]commandProposalCompletion
+	var completedBuf [commandApplyMaxBatchTasks]*commandApplyTask
+	completions := completionBuf[:0]
+	completedTasks := completedBuf[:0]
+	for _, task := range tasks {
+		w.collectTaskExternalCompletionLocked(task, err, &completions, &completedTasks)
+	}
+	w.cp.completeProposalBatch(completions)
+	for _, task := range completedTasks {
+		task.group.complete(err)
+	}
+}
+
+func (w *commandApplyWindow) finishTaskExternalSingleLocked(task *commandApplyTask, err error) {
 	if task == nil || task.externalDone {
 		return
 	}
 	task.externalDone = true
+	delete(w.pending, task)
 	if err == nil {
 		if task.emit != nil {
 			task.emit(task.plan.entry, task.plan.req, task.resp)
@@ -469,6 +801,34 @@ func (w *commandApplyWindow) finishTaskExternalLocked(task *commandApplyTask, er
 		w.cp.completeProposal(task.plan.proposalKey, nil, err)
 	}
 	task.group.complete(err)
+}
+
+func (w *commandApplyWindow) collectTaskExternalCompletionLocked(
+	task *commandApplyTask,
+	err error,
+	completions *[]commandProposalCompletion,
+	completedTasks *[]*commandApplyTask,
+) {
+	if task == nil || task.externalDone {
+		return
+	}
+	task.externalDone = true
+	delete(w.pending, task)
+	if err == nil {
+		if task.emit != nil {
+			task.emit(task.plan.entry, task.plan.req, task.resp)
+		}
+		*completions = append(*completions, commandProposalCompletion{
+			key:  task.plan.proposalKey,
+			resp: task.resp,
+		})
+	} else {
+		*completions = append(*completions, commandProposalCompletion{
+			key: task.plan.proposalKey,
+			err: err,
+		})
+	}
+	*completedTasks = append(*completedTasks, task)
 }
 
 func (g *commandApplyGroup) complete(err error) {
@@ -499,58 +859,6 @@ func newCommandApplyGroup(count int, done func(error)) *commandApplyGroup {
 	return &commandApplyGroup{remaining: count, done: done}
 }
 
-func commandApplyWindowConflicts(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) bool {
-	for _, dep := range plan.deps {
-		state, ok := active[dep.key]
-		if !ok {
-			continue
-		}
-		if dep.mode == commandApplyDependencyWrite {
-			if state.readers > 0 || state.writers > 0 {
-				return true
-			}
-			continue
-		}
-		if state.writers > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func commandApplyWindowAddDependencies(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) {
-	for _, dep := range plan.deps {
-		state := active[dep.key]
-		if dep.mode == commandApplyDependencyWrite {
-			state.writers++
-		} else {
-			state.readers++
-		}
-		active[dep.key] = state
-	}
-}
-
-func commandApplyWindowRemoveDependencies(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) {
-	for _, dep := range plan.deps {
-		state, ok := active[dep.key]
-		if !ok {
-			continue
-		}
-		if dep.mode == commandApplyDependencyWrite {
-			if state.writers > 0 {
-				state.writers--
-			}
-		} else if state.readers > 0 {
-			state.readers--
-		}
-		if state.readers == 0 && state.writers == 0 {
-			delete(active, dep.key)
-			continue
-		}
-		active[dep.key] = state
-	}
-}
-
 func (cp *commandPipeline) applyOne(plan commandApplyPlan, emit applyEventEmitter) error {
 	resp, applyErr := cp.applyPlan(plan)
 	if applyErr != nil {
@@ -576,6 +884,42 @@ func (cp *commandPipeline) applyPlan(plan commandApplyPlan) (*raftcmdpb.RaftCmdR
 	return cp.applier(plan.req)
 }
 
+func (cp *commandPipeline) applyPlanBatch(batch commandApplyTaskBatch) ([]*raftcmdpb.RaftCmdResponse, error) {
+	batchLen := batch.len()
+	if batchLen == 0 {
+		return nil, nil
+	}
+	if batchLen == 1 || cp.batchApplier == nil {
+		return nil, fmt.Errorf("commandPipeline: batch apply called without a batch")
+	}
+	var reqBuf [commandApplyMaxBatchTasks]*raftcmdpb.RaftCmdRequest
+	reqs := reqBuf[:0]
+	batch.forEach(func(task *commandApplyTask) {
+		reqs = append(reqs, task.plan.req)
+	})
+	return cp.batchApplier(reqs)
+}
+
+func commandApplyBatchClass(plan commandApplyPlan) (raftcmdpb.CmdType, bool) {
+	if plan.barrier || plan.req == nil || len(plan.req.GetRequests()) != 1 {
+		return 0, false
+	}
+	req := plan.req.GetRequests()[0]
+	if req == nil {
+		return 0, false
+	}
+	switch req.GetCmdType() {
+	case raftcmdpb.CmdType_CMD_PREWRITE,
+		raftcmdpb.CmdType_CMD_COMMIT,
+		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
+		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
+		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+		return req.GetCmdType(), true
+	default:
+		return 0, false
+	}
+}
+
 func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
 		return errNilStore
@@ -586,12 +930,16 @@ func (s *Store) applyEntries(entries []myraft.Entry) error {
 	return s.cmds.pipe.applyEntries(entries, s.emitApplyEvents)
 }
 
-func (s *Store) applyEntriesAsync(entries []myraft.Entry, done func(error)) error {
+func (s *Store) SubmitApply(task peer.ApplyTask, done func(peer.ApplyResult)) error {
 	if s == nil {
 		return errNilStore
 	}
 	if s.cmds == nil || s.cmds.pipe == nil {
 		return errCommandApplyWithoutHandler
 	}
-	return s.cmds.pipe.applyEntriesAsync(entries, s.emitApplyEvents, done)
+	return s.cmds.pipe.applyEntriesAsync(task.Entries, s.emitApplyEvents, func(err error) {
+		if done != nil {
+			done(peer.ApplyResult{Entries: task.Entries, Err: err})
+		}
+	})
 }

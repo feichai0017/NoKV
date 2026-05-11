@@ -71,6 +71,9 @@ func NewNode(cfg Config) (*Node, error) {
 	if storeCfg.CommandApplier == nil {
 		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil)
 	}
+	if storeCfg.CommandBatchApplier == nil {
+		storeCfg.CommandBatchApplier = kv.NewBatchApplier(cfg.Storage.MVCC, nil)
+	}
 	rt := storeCfg.Router
 	if rt == nil {
 		rt = router.New()

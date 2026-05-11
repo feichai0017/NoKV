@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 
+	xxhash "github.com/cespare/xxhash/v2"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
@@ -24,17 +25,17 @@ const (
 	commandApplyDependencyWrite
 )
 
-type commandApplyDependencyClass string
+type commandApplyDependencyClass uint8
 
 const (
-	commandApplyDependencyUserKey    commandApplyDependencyClass = "user-key"
-	commandApplyDependencyTxnPrimary commandApplyDependencyClass = "txn-primary"
-	commandApplyDependencyTxnIntent  commandApplyDependencyClass = "txn-intent"
+	commandApplyDependencyUserKey commandApplyDependencyClass = iota + 1
+	commandApplyDependencyTxnPrimary
+	commandApplyDependencyTxnIntent
 )
 
 type commandApplyDependencyKey struct {
 	class   commandApplyDependencyClass
-	key     string
+	hash    uint64
 	version uint64
 }
 
@@ -187,12 +188,18 @@ func appendCommandApplyDependency(dst []commandApplyDependency, class commandApp
 	if len(key) == 0 {
 		return dst
 	}
+	// A hash collision only creates a false dependency and therefore reduces
+	// parallelism; it cannot allow conflicting commands to run together.
 	return append(dst, commandApplyDependency{
 		key: commandApplyDependencyKey{
 			class:   class,
-			key:     string(key),
+			hash:    commandApplyDependencyHash(key),
 			version: version,
 		},
 		mode: mode,
 	})
+}
+
+func commandApplyDependencyHash(key []byte) uint64 {
+	return xxhash.Sum64(key)
 }

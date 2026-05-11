@@ -111,8 +111,7 @@ func NewStore(cfg Config) *Store {
 			},
 		},
 		cmds: &commandRuntime{
-			apply:   cfg.CommandApplier,
-			pipe:    newCommandPipeline(cfg.CommandApplier, cfg.CommandApplyParallelism),
+			pipe:    newCommandPipelineWithBatch(cfg.CommandApplier, cfg.CommandBatchApplier, cfg.CommandApplyParallelism),
 			timeout: commandTimeout,
 		},
 		exec:        newExecutionRuntime(),

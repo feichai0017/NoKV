@@ -256,7 +256,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "read command must be read-only"})
 		return nil, errReadCommandNotReadOnly
 	}
-	if s == nil || s.cmds == nil || s.cmds.apply == nil {
+	if s == nil || s.cmds == nil || s.cmds.pipe == nil || s.cmds.pipe.applier == nil {
 		s.recordAdmission(Admission{Class: AdmissionClassRead, Reason: AdmissionReasonInvalid, RegionID: req.Header.GetRegionId(), Detail: "command apply without handler"})
 		return nil, errCommandApplyWithoutHandler
 	}
@@ -308,7 +308,7 @@ func (s *Store) ReadCommand(ctx context.Context, req *raftcmdpb.RaftCmdRequest) 
 	if err := peer.WaitApplied(ctx, index); err != nil {
 		return nil, err
 	}
-	out, err := s.cmds.apply(req)
+	out, err := s.cmds.pipe.applier(req)
 	if err != nil {
 		return nil, err
 	}

@@ -167,6 +167,37 @@ func TestCommandPipelineAppliesDisjointCommandsInParallel(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestCommandPipelineBatchesReadyMVCCCommands(t *testing.T) {
+	var singleCalls atomic.Int32
+	var batchCalls atomic.Int32
+	var batchSizes []int
+	cp := newCommandPipelineWithBatch(
+		func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+			singleCalls.Add(1)
+			return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+		},
+		func(reqs []*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+			batchCalls.Add(1)
+			batchSizes = append(batchSizes, len(reqs))
+			resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
+			for i, req := range reqs {
+				resps[i] = &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}
+			}
+			return resps, nil
+		},
+		4,
+	)
+
+	require.NoError(t, cp.applyEntries([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("batch-a"))),
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("batch-b"))),
+		mustCommandEntryWithRequests(t, 1, 101, 3, testPrewriteRequest([]byte("batch-c"))),
+	}))
+	require.Zero(t, singleCalls.Load())
+	require.Equal(t, int32(1), batchCalls.Load())
+	require.Equal(t, []int{3}, batchSizes)
+}
+
 func TestCommandPipelineSerializesConflictingCommands(t *testing.T) {
 	started := make(chan uint64, 2)
 	releaseFirst := make(chan struct{})
@@ -401,6 +432,7 @@ func BenchmarkCommandPipelineApplyEntries(b *testing.B) {
 		parallelism int
 	}{
 		{name: "serial", parallelism: 1},
+		{name: "parallel_4", parallelism: 4},
 		{name: "parallel_8", parallelism: 8},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
@@ -457,6 +489,49 @@ func BenchmarkCommandPipelineApplyWindowBatches(b *testing.B) {
 				if err := <-done; err != nil {
 					b.Fatal(err)
 				}
+			}
+		}
+	})
+}
+
+func BenchmarkCommandPipelineBatchApplier(b *testing.B) {
+	entries := make([]myraft.Entry, 32)
+	for i := range entries {
+		key := []byte(fmt.Sprintf("batch-applier-key-%02d", i))
+		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
+	}
+	b.Run("single_applier", func(b *testing.B) {
+		cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+			time.Sleep(50 * time.Microsecond)
+			return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+		}, 8)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := cp.applyEntries(entries); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("batch_applier", func(b *testing.B) {
+		cp := newCommandPipelineWithBatch(
+			func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+				time.Sleep(50 * time.Microsecond)
+				return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+			},
+			func(reqs []*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+				time.Sleep(50 * time.Microsecond)
+				resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
+				for i, req := range reqs {
+					resps[i] = &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}
+				}
+				return resps, nil
+			},
+			8,
+		)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := cp.applyEntries(entries); err != nil {
+				b.Fatal(err)
 			}
 		}
 	})
