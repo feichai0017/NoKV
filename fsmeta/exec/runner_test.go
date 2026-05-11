@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +95,28 @@ func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.Opera
 	require.Equal(t, want, opStats[key])
 }
 
+func requireCapsuleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+	t.Helper()
+	raw, ok := stats["capsule_admission"]
+	require.True(t, ok, "missing capsule_admission stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_admission has type %T", raw)
+	got, ok := capsuleStats[key].(uint64)
+	require.Truef(t, ok, "capsule_admission[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
+func requireCapsuleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+	t.Helper()
+	raw, ok := stats["capsule_admission"]
+	require.True(t, ok, "missing capsule_admission stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_admission has type %T", raw)
+	got, ok := capsuleStats[key].(bool)
+	require.Truef(t, ok, "capsule_admission[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
 func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
 	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
@@ -120,6 +143,15 @@ type fakeAuthorityResolver struct {
 	err   error
 	calls int
 }
+
+type fakeCapsuleAdmitter struct {
+	owned  bool
+	err    error
+	calls  int
+	scopes []compile.AuthorityScope
+}
+
+type ownedCapsuleAdmitter struct{}
 
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
@@ -217,6 +249,25 @@ func (r *fakeAuthorityResolver) SameAuthority(context.Context, fsmeta.MountID, f
 		return false, r.err
 	}
 	return r.same, nil
+}
+
+func (a *fakeCapsuleAdmitter) AcquireCapsuleAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
+	a.calls++
+	a.scopes = append(a.scopes, compile.AuthorityScope{
+		Mount:      scope.Mount,
+		MountKeyID: scope.MountKeyID,
+		Buckets:    append([]fsmeta.AffinityBucket(nil), scope.Buckets...),
+		Parents:    append([]fsmeta.InodeID(nil), scope.Parents...),
+		Inodes:     append([]fsmeta.InodeID(nil), scope.Inodes...),
+	})
+	if a.err != nil {
+		return false, a.err
+	}
+	return a.owned, nil
+}
+
+func (ownedCapsuleAdmitter) AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
+	return true, nil
 }
 
 func newFakeRunner() *fakeRunner {
@@ -518,6 +569,96 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.Len(t, runner.mutations[0], 2)
 	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorCreateAdmitsCapsuleAuthority(t *testing.T) {
+	runner := newFakeRunner()
+	admitter := &fakeCapsuleAdmitter{owned: true}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(admitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, admitter.calls)
+	require.Len(t, admitter.scopes, 1)
+	require.Equal(t, fsmeta.MountID("vol"), admitter.scopes[0].Mount)
+	require.Equal(t, fsmeta.MountKeyID(1), admitter.scopes[0].MountKeyID)
+	require.Equal(t, []fsmeta.InodeID{fsmeta.RootInode}, admitter.scopes[0].Parents)
+	require.Equal(t, []fsmeta.InodeID{22}, admitter.scopes[0].Inodes)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requireCapsuleStatBool(t, stats, "enabled", true)
+	requireCapsuleStatUint(t, stats, "eligible_total", 1)
+	requireCapsuleStatUint(t, stats, "acquire_total", 1)
+	requireCapsuleStatUint(t, stats, "owned_total", 1)
+	requireCapsuleStatUint(t, stats, "held_total", 0)
+	requireCapsuleStatUint(t, stats, "slow_total", 0)
+}
+
+func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
+	runner := newFakeRunner()
+	admitter := &fakeCapsuleAdmitter{owned: false}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(admitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.ErrorIs(t, err, errCapsuleAuthorityNotHeld)
+	require.Equal(t, 1, admitter.calls)
+	require.Empty(t, runner.mutations)
+
+	stats := executor.Stats()
+	requireCapsuleStatUint(t, stats, "eligible_total", 1)
+	requireCapsuleStatUint(t, stats, "acquire_total", 1)
+	requireCapsuleStatUint(t, stats, "owned_total", 0)
+	requireCapsuleStatUint(t, stats, "held_total", 1)
+}
+
+func TestExecutorCreateWithSharedQuotaSkipsCapsuleAuthorityAdmission(t *testing.T) {
+	runner := newFakeRunner()
+	admitter := &fakeCapsuleAdmitter{owned: true}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithQuotaResolver(&fakeQuotaResolver{}),
+		WithCapsuleAuthorityAdmitter(admitter),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
+	require.NoError(t, err)
+	require.Zero(t, admitter.calls)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requireCapsuleStatUint(t, stats, "eligible_total", 0)
+	requireCapsuleStatUint(t, stats, "acquire_total", 0)
+	requireCapsuleStatUint(t, stats, "owned_total", 0)
+	requireCapsuleStatUint(t, stats, "slow_total", 1)
 }
 
 func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
@@ -2434,6 +2575,31 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	require.Len(t, out, 1, "create must invalidate the cached empty page set")
 	require.Greater(t, len(runner.scanVersions), scansBefore,
 		"epoch bump must force a runner scan on the next ReadDirPlus")
+}
+
+func BenchmarkExecutorAdmitCapsuleAuthorityOwned(b *testing.B) {
+	executor, err := New(newFakeRunner(), WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	delta := compile.SemanticDelta{
+		Eligibility: compile.EligibilityFastPath,
+		Authority: compile.AuthorityScope{
+			Mount:      "vol",
+			MountKeyID: 1,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(fsmeta.RootInode)},
+			Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+			Inodes:     []fsmeta.InodeID{22},
+		},
+	}
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := executor.admitCapsuleAuthority(ctx, delta); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 type corruptDirPageCache struct{}

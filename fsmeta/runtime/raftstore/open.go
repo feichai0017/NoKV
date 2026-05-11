@@ -194,6 +194,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
 	}
+	if capsuleAuthority != nil {
+		execOpts = append(execOpts, fsmetaexec.WithCapsuleAuthorityAdmitter(capsuleAuthority))
+	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
 	}
