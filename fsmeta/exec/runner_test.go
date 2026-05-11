@@ -237,6 +237,25 @@ type fakeInodeAllocator struct {
 	calls int
 }
 
+func testInodeForParentBucket(t *testing.T, parent fsmeta.InodeID, exclude ...fsmeta.InodeID) fsmeta.InodeID {
+	t.Helper()
+	target := fsmeta.BucketForInodeID(parent)
+	excluded := make(map[fsmeta.InodeID]struct{}, len(exclude))
+	for _, id := range exclude {
+		excluded[id] = struct{}{}
+	}
+	for id := fsmeta.InodeID(2); id < 1_000_000; id++ {
+		if _, ok := excluded[id]; ok {
+			continue
+		}
+		if fsmeta.BucketForInodeID(id) == target {
+			return id
+		}
+	}
+	t.Fatalf("no inode found for parent bucket %d", target)
+	return 0
+}
+
 func (a *fakeInodeAllocator) AllocateCreateInode(context.Context, fsmeta.MountIdentity, fsmeta.InodeID, string) (fsmeta.InodeID, error) {
 	a.calls++
 	if a.err != nil {
@@ -751,9 +770,10 @@ func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
 func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakePerasCommitter{}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
 		WithPerasCommitter(committer),
 	)
@@ -767,8 +787,8 @@ func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
-	require.Equal(t, fsmeta.InodeID(22), result.Dentry.Inode)
+	require.Equal(t, inode, result.Inode.Inode)
+	require.Equal(t, inode, result.Dentry.Inode)
 	require.Equal(t, 1, committer.calls)
 	require.Len(t, committer.ids, 1)
 	require.Equal(t, "fsmeta-exec/create", committer.ids[0].ClientID)
@@ -789,9 +809,10 @@ func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 21)
 	committer := &fakePerasCommitter{}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
 		WithPerasCommitter(committer),
 	)
@@ -816,9 +837,10 @@ func TestExecutorCreatePerasVisibleCommitFallsBackWhenWatched(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakePerasCommitter{}
 	fence := &fakePerasWatchFence{watched: true}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
 		WithPerasCommitter(committer),
 		WithPerasWatchFence(fence),
@@ -832,7 +854,7 @@ func TestExecutorCreatePerasVisibleCommitFallsBackWhenWatched(t *testing.T) {
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
+	require.Equal(t, inode, result.Inode.Inode)
 	require.Equal(t, 1, fence.calls)
 	require.Len(t, fence.effects, 1)
 	require.Zero(t, committer.calls)
@@ -847,9 +869,10 @@ func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
 	commitErr := errors.New("peras commit failed")
 	committer := &fakePerasCommitter{err: commitErr}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
 		WithPerasCommitter(committer),
 	)
@@ -933,9 +956,10 @@ func TestExecutorCreatePerasVisibleCommitAllowsQuotaResolverWithoutFence(t *test
 	runner := newFakeRunner()
 	quota := &fakeQuotaResolver{allowPerasVisible: true}
 	committer := &fakePerasCommitter{}
+	inode := testInodeForParentBucket(t, 7)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithQuotaResolver(quota),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
 		WithPerasCommitter(committer),
@@ -1003,9 +1027,10 @@ func TestExecutorOpenWriteSessionPerasVisibleCommitBypassesRaftCommit(t *testing
 func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
 		WithPerasCommitter(committer),
 	)
@@ -1032,9 +1057,11 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.
 func TestExecutorCreatePerasBufferedVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
+	firstInode := testInodeForParentBucket(t, fsmeta.RootInode)
+	secondInode := testInodeForParentBucket(t, fsmeta.RootInode, firstInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{firstInode, secondInode}}),
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
 		WithPerasCommitter(committer),
 	)
@@ -1068,9 +1095,11 @@ func TestExecutorCreatePerasBufferedVisibleCommitRejectsOverlayDuplicate(t *test
 func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
+	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
+	childInode := testInodeForParentBucket(t, dirInode, dirInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode}}),
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
 		WithPerasCommitter(committer),
 	)
@@ -1087,13 +1116,13 @@ func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testi
 
 	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
 		Mount:  "vol",
-		Parent: 22,
+		Parent: dirInode,
 		Name:   "part-000",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, fsmeta.InodeID(23), created.Inode.Inode)
+	require.Equal(t, childInode, created.Inode.Inode)
 	require.Equal(t, getsAfterDir, runner.getCalls, "empty-directory admission should avoid per-child predicate reads")
 	require.Empty(t, runner.mutations)
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
@@ -1474,9 +1503,10 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 func TestExecutorUpdateInodePerasBufferedVisibleCommitReadsCreateOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
+	inode := testInodeForParentBucket(t, 7)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
 		WithPerasCommitter(committer),
 	)
@@ -2099,8 +2129,9 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 
 func TestExecutorLinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	seedDentry(t, runner, "vol", 7, "file", 22)
-	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	inode := testInodeForParentBucket(t, 8)
+	seedDentry(t, runner, "vol", 7, "file", inode)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
 	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
@@ -2121,11 +2152,11 @@ func TestExecutorLinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	require.Empty(t, runner.mutations)
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "alias"})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.InodeID(22), record.Inode)
-	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
+	require.Equal(t, inode, record.Inode)
+	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, uint32(2), inode.LinkCount)
+	require.Equal(t, uint32(2), stored.LinkCount)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
@@ -2642,8 +2673,9 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 
 func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	seedDentry(t, runner, "vol", 7, "file", 22)
-	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
+	inode := testInodeForParentBucket(t, 7)
+	seedDentry(t, runner, "vol", 7, "file", inode)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
 	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
@@ -2658,10 +2690,10 @@ func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	require.Empty(t, runner.mutations)
 	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "file"})
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
+	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, uint32(1), inode.LinkCount)
+	require.Equal(t, uint32(1), stored.LinkCount)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
