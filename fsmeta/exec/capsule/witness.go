@@ -33,7 +33,7 @@ type PrepareRecord struct {
 	DeltaDigest          [32]byte
 	PredicateDigest      [32]byte
 	AuthorityProofDigest [32]byte
-	ConflictDAGFrontier  []OperationID
+	DependencyFrontier   []OperationID
 	TimestampUnixNano    int64
 	HolderID             string
 	HolderSignature      [64]byte
@@ -159,7 +159,7 @@ func EncodePrepareRecord(record PrepareRecord) ([]byte, error) {
 	out.Write(record.DeltaDigest[:])
 	out.Write(record.PredicateDigest[:])
 	out.Write(record.AuthorityProofDigest[:])
-	writeOperationIDs(&out, record.ConflictDAGFrontier)
+	writeOperationIDs(&out, record.DependencyFrontier)
 	writeInt64(&out, record.TimestampUnixNano)
 	writeString(&out, record.HolderID)
 	out.Write(record.HolderSignature[:])
@@ -229,7 +229,7 @@ func validatePrepareRecord(record PrepareRecord) error {
 	if err != nil || digest != record.DeltaDigest {
 		return ErrInvalidWitnessRecord
 	}
-	for _, id := range record.ConflictDAGFrontier {
+	for _, id := range record.DependencyFrontier {
 		if !id.Valid() {
 			return ErrInvalidWitnessRecord
 		}
@@ -249,7 +249,7 @@ func validateCommitCertificateRecord(record CommitCertificateRecord) error {
 
 func prepareRecordEncodedSize(record PrepareRecord) int {
 	size := len(witnessRecordMagic) + 1 + 8 + operationIDEncodedSize(record.OpID) + 4 + len(record.DeltaPayload) + 32 + 32 + 32 + 4 + 8 + stringEncodedSize(record.HolderID) + 64
-	for _, id := range record.ConflictDAGFrontier {
+	for _, id := range record.DependencyFrontier {
 		size += operationIDEncodedSize(id)
 	}
 	return size
@@ -383,7 +383,7 @@ func (r *witnessReader) readPrepare() (PrepareRecord, error) {
 	if err := r.readFixed(record.AuthorityProofDigest[:]); err != nil {
 		return PrepareRecord{}, err
 	}
-	if record.ConflictDAGFrontier, err = r.readOperationIDs(); err != nil {
+	if record.DependencyFrontier, err = r.readOperationIDs(); err != nil {
 		return PrepareRecord{}, err
 	}
 	var ts uint64
@@ -558,7 +558,7 @@ func (r witnessReader) done() bool {
 
 func clonePrepareRecord(record PrepareRecord) PrepareRecord {
 	record.DeltaPayload = cloneBytes(record.DeltaPayload)
-	record.ConflictDAGFrontier = slices.Clone(record.ConflictDAGFrontier)
+	record.DependencyFrontier = slices.Clone(record.DependencyFrontier)
 	return record
 }
 

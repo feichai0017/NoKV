@@ -21,15 +21,15 @@ func TestBuildCapsuleSealKeepsOnlyCommittedCertificates(t *testing.T) {
 	require.Equal(t, uint64(1), seal.EpochID)
 	require.Len(t, seal.Certificates, 1)
 	require.Equal(t, firstPrepare.OpID, seal.Certificates[0].Prepare.OpID)
-	require.NotZero(t, seal.DAGFrontierMerkle)
+	require.NotZero(t, seal.CertificateMerkleRoot)
 }
 
-func TestBuildCapsuleSealOrdersByConflictDAG(t *testing.T) {
+func TestBuildCapsuleSealOrdersByDependencyFrontier(t *testing.T) {
 	firstPrepare := testSealPrepare()
 	firstPrepare.OpID = OperationID{ClientID: "client-b", Seq: 2}
 	secondPrepare := testSealPrepare()
 	secondPrepare.OpID = OperationID{ClientID: "client-a", Seq: 1}
-	secondPrepare.ConflictDAGFrontier = []OperationID{firstPrepare.OpID}
+	secondPrepare.DependencyFrontier = []OperationID{firstPrepare.OpID}
 
 	seal, err := BuildCapsuleSeal(1, WitnessSnapshot{
 		Prepares: []PrepareRecord{secondPrepare, firstPrepare},
@@ -63,7 +63,7 @@ func TestBuildCapsuleSealRejectsMissingOrMismatchedPrepare(t *testing.T) {
 
 func TestBuildCapsuleSealRejectsMissingPredecessorAndCycles(t *testing.T) {
 	firstPrepare := testSealPrepare()
-	firstPrepare.ConflictDAGFrontier = []OperationID{{ClientID: "missing", Seq: 1}}
+	firstPrepare.DependencyFrontier = []OperationID{{ClientID: "missing", Seq: 1}}
 	_, err := BuildCapsuleSeal(1, WitnessSnapshot{
 		Prepares: []PrepareRecord{firstPrepare},
 		Commits:  []CommitCertificateRecord{testCommitForPrepare(t, firstPrepare)},
@@ -74,8 +74,8 @@ func TestBuildCapsuleSealRejectsMissingPredecessorAndCycles(t *testing.T) {
 	left.OpID = OperationID{ClientID: "left", Seq: 1}
 	right := testSealPrepare()
 	right.OpID = OperationID{ClientID: "right", Seq: 1}
-	left.ConflictDAGFrontier = []OperationID{right.OpID}
-	right.ConflictDAGFrontier = []OperationID{left.OpID}
+	left.DependencyFrontier = []OperationID{right.OpID}
+	right.DependencyFrontier = []OperationID{left.OpID}
 	_, err = BuildCapsuleSeal(1, WitnessSnapshot{
 		Prepares: []PrepareRecord{left, right},
 		Commits: []CommitCertificateRecord{
@@ -96,14 +96,14 @@ func TestCapsuleSealMerkleStableAndSensitive(t *testing.T) {
 	require.NoError(t, err)
 	right, err := BuildCapsuleSeal(1, snapshot)
 	require.NoError(t, err)
-	require.Equal(t, left.DAGFrontierMerkle, right.DAGFrontierMerkle)
+	require.Equal(t, left.CertificateMerkleRoot, right.CertificateMerkleRoot)
 
 	changedPayload := append(cloneBytes(snapshot.Prepares[0].DeltaPayload), 0xff)
 	setPrepareDeltaPayload(&snapshot.Prepares[0], changedPayload)
 	snapshot.Commits[0] = testCommitForPrepare(t, snapshot.Prepares[0])
 	changed, err := BuildCapsuleSeal(1, snapshot)
 	require.NoError(t, err)
-	require.NotEqual(t, left.DAGFrontierMerkle, changed.DAGFrontierMerkle)
+	require.NotEqual(t, left.CertificateMerkleRoot, changed.CertificateMerkleRoot)
 }
 
 func TestBuildCapsuleSealWithVersionsCarriesReplayRange(t *testing.T) {
@@ -119,7 +119,7 @@ func TestBuildCapsuleSealWithVersionsCarriesReplayRange(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, ReplayVersionRange{First: 100, Count: 1}, versioned.Versions)
-	require.NotEqual(t, unversioned.DAGFrontierMerkle, versioned.DAGFrontierMerkle)
+	require.NotEqual(t, unversioned.CertificateMerkleRoot, versioned.CertificateMerkleRoot)
 }
 
 func BenchmarkBuildCapsuleSeal64(b *testing.B) {
@@ -164,7 +164,7 @@ func sealSnapshotForBench(b *testing.B, n int) WitnessSnapshot {
 		prepare := testSealPrepare()
 		prepare.OpID = OperationID{ClientID: "bench", Seq: uint64(i + 1)}
 		if i > 0 {
-			prepare.ConflictDAGFrontier = []OperationID{{ClientID: "bench", Seq: uint64(i)}}
+			prepare.DependencyFrontier = []OperationID{{ClientID: "bench", Seq: uint64(i)}}
 		}
 		commit, err := commitForPrepare(prepare)
 		if err != nil {
@@ -178,6 +178,6 @@ func sealSnapshotForBench(b *testing.B, n int) WitnessSnapshot {
 
 func testSealPrepare() PrepareRecord {
 	record := testPrepareRecord()
-	record.ConflictDAGFrontier = nil
+	record.DependencyFrontier = nil
 	return record
 }

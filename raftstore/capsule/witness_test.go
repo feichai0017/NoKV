@@ -344,13 +344,13 @@ func testPrepareRecord() fscapsule.PrepareRecord {
 		panic(err)
 	}
 	record := fscapsule.PrepareRecord{
-		EpochID:             1,
-		OpID:                fscapsule.OperationID{ClientID: "client-a", Seq: 1},
-		DeltaPayload:        payload,
-		DeltaDigest:         digest,
-		ConflictDAGFrontier: []fscapsule.OperationID{},
-		TimestampUnixNano:   100,
-		HolderID:            "holder-a",
+		EpochID:            1,
+		OpID:               fscapsule.OperationID{ClientID: "client-a", Seq: 1},
+		DeltaPayload:       payload,
+		DeltaDigest:        digest,
+		DependencyFrontier: []fscapsule.OperationID{},
+		TimestampUnixNano:  100,
+		HolderID:           "holder-a",
 	}
 	record.PredicateDigest[0] = 2
 	record.AuthorityProofDigest[0] = 3

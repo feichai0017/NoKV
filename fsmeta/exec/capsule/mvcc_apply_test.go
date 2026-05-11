@@ -21,7 +21,7 @@ func TestMVCCReplayStoreMaterializesReaderVisibleValues(t *testing.T) {
 
 	stats, err := ApplyReplayPlan(store, plan)
 	require.NoError(t, err)
-	require.Equal(t, ApplyStats{Waves: 2, Operations: 3, Mutations: 6}, stats)
+	require.Equal(t, ApplyStats{Operations: 3, Mutations: 6}, stats)
 
 	reader := percolator.NewReader(db)
 	value, _, err := reader.GetValue([]byte("dentry/a"), 200)
@@ -43,13 +43,13 @@ func TestMVCCReplayStoreMaterializesDelete(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ApplyReplayPlan(deleteStore, ReplayPlan{
 		EpochID: 2,
-		Waves: [][]ReplayOperation{{{
+		Operations: []ReplayOperation{{
 			OpID: opID("delete", 1),
 			Mutations: []ReplayMutation{{
 				Key:    []byte("dentry/a"),
 				Delete: true,
 			}},
-		}}},
+		}},
 	})
 	require.NoError(t, err)
 
@@ -107,13 +107,13 @@ func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
 	failing.err = nil
 	_, err = ApplyReplayPlan(store, ReplayPlan{
 		EpochID: 2,
-		Waves: [][]ReplayOperation{{{
+		Operations: []ReplayOperation{{
 			OpID: opID("client-z", 1),
 			Mutations: []ReplayMutation{{
 				Key:   []byte("z"),
 				Value: []byte("value"),
 			}},
-		}}},
+		}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), failing.lastVersion())
@@ -200,7 +200,7 @@ func versionedReplayPlanForTest(t *testing.T, firstVersion uint64) ReplayPlan {
 	first.OpID = opID("client-a", 1)
 	second := testSealPrepare()
 	second.OpID = opID("client-b", 1)
-	second.ConflictDAGFrontier = []OperationID{first.OpID}
+	second.DependencyFrontier = []OperationID{first.OpID}
 	third := testSealPrepare()
 	third.OpID = opID("client-c", 1)
 

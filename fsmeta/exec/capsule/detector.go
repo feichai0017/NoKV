@@ -27,7 +27,7 @@ func (id OperationID) Valid() bool {
 }
 
 // ConflictDetector tracks holder-issued, not-yet-sealed operations and returns
-// the exact conflict-DAG predecessors for a new semantic delta.
+// the exact committed predecessors needed to preserve semantic order.
 type ConflictDetector struct {
 	mu      sync.Mutex
 	pending map[OperationID]trackedOperation

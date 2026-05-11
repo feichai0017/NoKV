@@ -275,13 +275,11 @@ func (c *BufferedCommitter) addOverlay(id OperationID, delta compile.SemanticDel
 func (c *BufferedCommitter) removeOverlayForPlan(plan ReplayPlan) {
 	c.overlayMu.Lock()
 	defer c.overlayMu.Unlock()
-	for _, wave := range plan.Waves {
-		for _, op := range wave {
-			for _, mutation := range op.Mutations {
-				entry, ok := c.overlay[string(mutation.Key)]
-				if ok && entry.opID == op.OpID {
-					delete(c.overlay, string(mutation.Key))
-				}
+	for _, op := range plan.Operations {
+		for _, mutation := range op.Mutations {
+			entry, ok := c.overlay[string(mutation.Key)]
+			if ok && entry.opID == op.OpID {
+				delete(c.overlay, string(mutation.Key))
 			}
 		}
 	}

@@ -77,12 +77,12 @@ func PrepareRecordToProto(record fscapsule.PrepareRecord) *kvrpcpb.CapsulePrepar
 		DeltaDigest:          append([]byte(nil), record.DeltaDigest[:]...),
 		PredicateDigest:      append([]byte(nil), record.PredicateDigest[:]...),
 		AuthorityProofDigest: append([]byte(nil), record.AuthorityProofDigest[:]...),
-		ConflictDagFrontier:  make([]*kvrpcpb.CapsuleOperationID, 0, len(record.ConflictDAGFrontier)),
+		ConflictDagFrontier:  make([]*kvrpcpb.CapsuleOperationID, 0, len(record.DependencyFrontier)),
 		TimestampUnixNano:    record.TimestampUnixNano,
 		HolderId:             record.HolderID,
 		HolderSignature:      append([]byte(nil), record.HolderSignature[:]...),
 	}
-	for _, id := range record.ConflictDAGFrontier {
+	for _, id := range record.DependencyFrontier {
 		out.ConflictDagFrontier = append(out.ConflictDagFrontier, OperationIDToProto(id))
 	}
 	return out
@@ -116,13 +116,13 @@ func PrepareRecordFromProto(in *kvrpcpb.CapsulePrepareRecord) (fscapsule.Prepare
 		return fscapsule.PrepareRecord{}, err
 	}
 	if len(in.GetConflictDagFrontier()) > 0 {
-		out.ConflictDAGFrontier = make([]fscapsule.OperationID, 0, len(in.GetConflictDagFrontier()))
+		out.DependencyFrontier = make([]fscapsule.OperationID, 0, len(in.GetConflictDagFrontier()))
 		for _, predecessor := range in.GetConflictDagFrontier() {
 			id, err := OperationIDFromProto(predecessor)
 			if err != nil {
 				return fscapsule.PrepareRecord{}, err
 			}
-			out.ConflictDAGFrontier = append(out.ConflictDAGFrontier, id)
+			out.DependencyFrontier = append(out.DependencyFrontier, id)
 		}
 	}
 	return out, nil
