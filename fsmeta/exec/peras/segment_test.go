@@ -258,6 +258,36 @@ func BenchmarkSegmentScanView(b *testing.B) {
 	}
 }
 
+func BenchmarkSegmentEntriesClone(b *testing.B) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out := segment.Entries()
+		if len(out) == 0 {
+			b.Fatal("empty entries")
+		}
+	}
+}
+
+func BenchmarkSegmentEntriesView(b *testing.B) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out := segment.EntriesView()
+		if len(out) == 0 {
+			b.Fatal("empty entries")
+		}
+	}
+}
+
 func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 	tb.Helper()
 	mount := fsmeta.MountIdentity{MountID: "workspace", MountKeyID: 42}

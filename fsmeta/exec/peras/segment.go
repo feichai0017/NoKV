@@ -396,6 +396,12 @@ func (s PerasSegment) Entries() []SegmentKV {
 	return cloneSegmentKVs(s.entries)
 }
 
+// EntriesView returns the segment-owned sorted entries. Callers must not mutate
+// the returned slice or any nested byte slice.
+func (s PerasSegment) EntriesView() []SegmentKV {
+	return s.entries
+}
+
 func (s PerasSegment) FirstKey() ([]byte, error) {
 	if err := validatePerasSegmentPayload(s); err != nil {
 		return nil, err
