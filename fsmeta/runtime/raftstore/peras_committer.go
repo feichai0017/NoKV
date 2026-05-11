@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
@@ -30,6 +31,8 @@ const (
 	defaultPerasSegmentFlushEvery             = 25 * time.Millisecond
 	defaultPerasBackgroundFlushTimeout        = 2 * time.Second
 	defaultPerasBackgroundErrorBackoff        = time.Second
+	defaultPerasInstallTimestampRetries       = 6
+	defaultPerasInstallTimestampBackoff       = 2 * time.Millisecond
 )
 
 type perasGrantProvider interface {
@@ -1160,7 +1163,7 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 	if err != nil {
 		return err
 	}
-	installVersion, err := i.runner.ReserveTimestamp(ctx, 1)
+	installVersion, err := i.reserveInstallVersion(ctx)
 	if err != nil {
 		return err
 	}
@@ -1182,6 +1185,31 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 		return runnerKeyError("peras install segment", keyErr)
 	}
 	return validatePerasSegmentInstallResponse(segment, resp)
+}
+
+func (i *runnerPerasSegmentInstaller) reserveInstallVersion(ctx context.Context) (uint64, error) {
+	var last error
+	for attempt := 0; attempt <= defaultPerasInstallTimestampRetries; attempt++ {
+		version, err := i.runner.ReserveTimestamp(ctx, 1)
+		if err == nil {
+			return version, nil
+		}
+		if !nokverrors.Retryable(err) {
+			return 0, err
+		}
+		last = err
+		if attempt == defaultPerasInstallTimestampRetries {
+			break
+		}
+		timer := time.NewTimer(defaultPerasInstallTimestampBackoff << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return 0, last
 }
 
 func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) error {
