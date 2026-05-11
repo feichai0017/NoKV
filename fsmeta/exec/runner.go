@@ -30,7 +30,7 @@ const (
 	// make progress immediately. Live locks are bounded separately by the lock
 	// TTL so fsmeta does not leak ordinary Percolator lock waits to callers.
 	maxTxnContentionRetries  = 32
-	maxReadContentionRetries = 3
+	maxReadContentionRetries = 32
 
 	txnContentionRetryBaseBackoff = time.Millisecond
 	txnContentionRetryMaxBackoff  = 100 * time.Millisecond
