@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
@@ -77,6 +78,35 @@ func (a *ActiveAuthorities) Snapshot() []AuthorityGrant {
 		return 0
 	})
 	return out
+}
+
+func (a *ActiveAuthorities) ApplyRootEvent(event rootevent.Event) error {
+	if a == nil || event.CapsuleGrant == nil {
+		return nil
+	}
+	switch event.Kind {
+	case rootevent.KindCapsuleAuthorityGranted:
+		next := a.Snapshot()
+		for i, grant := range next {
+			if grant.GrantID == event.CapsuleGrant.GrantID {
+				next[i] = cloneGrant(*event.CapsuleGrant)
+				return a.Replace(next)
+			}
+		}
+		next = append(next, cloneGrant(*event.CapsuleGrant))
+		return a.Replace(next)
+	case rootevent.KindCapsuleAuthorityRetired:
+		next := a.Snapshot()
+		for i := 0; i < len(next); i++ {
+			if next[i].GrantID == event.CapsuleGrant.GrantID {
+				next = append(next[:i], next[i+1:]...)
+				i--
+			}
+		}
+		return a.Replace(next)
+	default:
+		return nil
+	}
 }
 
 func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (AuthorityGrant, bool, error) {

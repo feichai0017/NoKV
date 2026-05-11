@@ -103,6 +103,10 @@ func (f *fakeCoordinatorClient) ListQuotaFences(context.Context, *coordpb.ListQu
 	return &coordpb.ListQuotaFencesResponse{}, nil
 }
 
+func (f *fakeCoordinatorClient) ListCapsuleAuthorityGrants(context.Context, *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+	return &coordpb.ListCapsuleAuthorityGrantsResponse{}, nil
+}
+
 func (f *fakeCoordinatorClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
 	return nil, nil
 }

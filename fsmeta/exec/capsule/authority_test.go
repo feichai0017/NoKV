@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,6 +198,45 @@ func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
 	require.True(t, errors.Is(err, ErrAmbiguousAuthority))
 }
 
+func TestActiveAuthoritiesAppliesRootEvents(t *testing.T) {
+	table := NewActiveAuthorities()
+	grant := testGrant("g1", "holder-a", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+
+	require.NoError(t, table.ApplyRootEvent(rootevent.CapsuleAuthorityGranted(grant)))
+	require.Equal(t, grant.GrantID, table.Snapshot()[0].GrantID)
+
+	replacement := grant
+	replacement.HolderID = "holder-b"
+	replacement.EpochID = 2
+	require.NoError(t, table.ApplyRootEvent(rootevent.CapsuleAuthorityGranted(replacement)))
+	require.Equal(t, replacement.HolderID, table.Snapshot()[0].HolderID)
+
+	require.NoError(t, table.ApplyRootEvent(rootevent.CapsuleAuthorityRetired(replacement)))
+	require.Empty(t, table.Snapshot())
+}
+
+func TestActiveAuthoritiesRejectsConflictingRootEvent(t *testing.T) {
+	table := NewActiveAuthorities()
+	left := testGrant("g1", "holder-a", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+	right := testGrant("g2", "holder-b", compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{1},
+	})
+
+	require.NoError(t, table.ApplyRootEvent(rootevent.CapsuleAuthorityGranted(left)))
+	require.ErrorIs(t, table.ApplyRootEvent(rootevent.CapsuleAuthorityGranted(right)), ErrConflictingGrant)
+	require.Equal(t, left.GrantID, table.Snapshot()[0].GrantID)
+}
+
 func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
 	scope := AuthorityScopeFromDelta(compile.AuthorityScope{
 		Mount:      testMount.MountID,
@@ -211,6 +251,26 @@ func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
 	require.Equal(t, []uint16{1, 2}, scope.Buckets)
 	require.Equal(t, []uint64{10}, scope.Parents)
 	require.Equal(t, []uint64{20}, scope.Inodes)
+}
+
+func BenchmarkActiveAuthoritiesApplyRootEvent(b *testing.B) {
+	b.ReportAllocs()
+	table := NewActiveAuthorities()
+	grants := make([]AuthorityGrant, 0, 16)
+	for bucket := range 16 {
+		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.AffinityBucket(bucket)},
+		}))
+	}
+	require.NoError(b, table.Replace(grants))
+	event := rootevent.CapsuleAuthorityRetired(grants[11])
+
+	for b.Loop() {
+		require.NoError(b, table.ApplyRootEvent(rootevent.CapsuleAuthorityGranted(grants[11])))
+		require.NoError(b, table.ApplyRootEvent(event))
+	}
 }
 
 func BenchmarkActiveAuthoritiesFind(b *testing.B) {

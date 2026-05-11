@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
@@ -67,12 +68,13 @@ type Options struct {
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
 // every client and goroutine it creates; Close releases all of them.
 type Runtime struct {
-	Executor          *fsmetaexec.Executor
-	Watcher           fsmeta.Watcher
-	SnapshotPublisher fsmeta.SnapshotPublisher
-	MountResolver     fsmetaexec.MountResolver
-	QuotaResolver     fsmetaexec.QuotaResolver
-	SessionCleaner    interface{ Stats() map[string]any }
+	Executor           *fsmetaexec.Executor
+	Watcher            fsmeta.Watcher
+	SnapshotPublisher  fsmeta.SnapshotPublisher
+	MountResolver      fsmetaexec.MountResolver
+	QuotaResolver      fsmetaexec.QuotaResolver
+	SessionCleaner     interface{ Stats() map[string]any }
+	CapsuleAuthorities *fscapsule.ActiveAuthorities
 
 	close func() error
 	once  sync.Once
@@ -156,6 +158,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
+	capsules := fscapsule.NewActiveAuthorities()
 	pub := rootPublisher{coord: coord}
 	execOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
@@ -220,7 +223,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 
 	var mon *monitor
 	if opts.MonitorInterval >= 0 {
-		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, opts.MonitorInterval)
+		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, capsules, opts.MonitorInterval)
 	}
 	var sessions *sessionCleaner
 	if opts.SessionCleanupInterval >= 0 {
@@ -228,12 +231,13 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		Executor:          exec,
-		Watcher:           watcher{Router: router, source: source, mounts: mounts},
-		SnapshotPublisher: pub,
-		MountResolver:     mounts,
-		QuotaResolver:     quotas,
-		SessionCleaner:    sessions,
+		Executor:           exec,
+		Watcher:            watcher{Router: router, source: source, mounts: mounts},
+		SnapshotPublisher:  pub,
+		MountResolver:      mounts,
+		QuotaResolver:      quotas,
+		SessionCleaner:     sessions,
+		CapsuleAuthorities: capsules,
 	}
 	rt.close = func() error {
 		var first error

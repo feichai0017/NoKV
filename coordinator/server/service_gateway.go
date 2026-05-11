@@ -180,6 +180,26 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
 }
 
+func (s *Service) ListCapsuleAuthorityGrants(ctx context.Context, _ *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, statusContext(err)
+	}
+	if s == nil || s.storage == nil {
+		return &coordpb.ListCapsuleAuthorityGrantsResponse{}, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return nil, statusInternalf("load rooted snapshot: %v", err)
+	}
+	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(snapshot.ActiveCapsuleGrants))
+	for _, grant := range snapshot.ActiveCapsuleGrants {
+		if pbGrant := metawire.RootCapsuleAuthorityGrantToProto(grant); pbGrant != nil {
+			out = append(out, pbGrant)
+		}
+	}
+	return &coordpb.ListCapsuleAuthorityGrantsResponse{Grants: out}, nil
+}
+
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
 	if stream == nil {
 		return statusInvalidArgument("watch root events stream is nil")

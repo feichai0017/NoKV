@@ -470,6 +470,27 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestValidateListCapsuleAuthorityGrantsResponse(t *testing.T) {
+	grant := rootproto.CapsuleAuthorityGrant{
+		GrantID:         "capsule-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
+	require.NoError(t, validateListCapsuleAuthorityGrantsResponse(&coordpb.ListCapsuleAuthorityGrantsResponse{
+		Grants: []*metapb.RootCapsuleAuthorityGrant{metawire.RootCapsuleAuthorityGrantToProto(grant)},
+	}))
+
+	require.Error(t, validateListCapsuleAuthorityGrantsResponse(nil))
+	require.Error(t, validateListCapsuleAuthorityGrantsResponse(&coordpb.ListCapsuleAuthorityGrantsResponse{
+		Grants: []*metapb.RootCapsuleAuthorityGrant{
+			metawire.RootCapsuleAuthorityGrantToProto(grant),
+			metawire.RootCapsuleAuthorityGrantToProto(grant),
+		},
+	}))
+}
+
 func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {
 	err := grantNotHeldErrorForTest()
 	require.True(t, IsGrantNotHeld(err))
