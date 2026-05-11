@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +49,8 @@ func TestPrepareDigestStableAndSensitive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, left, right)
 
-	record.DeltaDigest[0] ^= 0xff
+	nextPayload := append(cloneBytes(record.DeltaPayload), 0xff)
+	setPrepareDeltaPayload(&record, nextPayload)
 	changed, err := PrepareDigest(record)
 	require.NoError(t, err)
 	require.NotEqual(t, left, changed)
@@ -55,6 +58,10 @@ func TestPrepareDigestStableAndSensitive(t *testing.T) {
 
 func TestWitnessCodecRejectsInvalidRecords(t *testing.T) {
 	_, err := EncodePrepareRecord(PrepareRecord{EpochID: 1})
+	require.ErrorIs(t, err, ErrInvalidWitnessRecord)
+	prepare := testPrepareRecord()
+	prepare.DeltaDigest[0] ^= 0xff
+	_, err = EncodePrepareRecord(prepare)
 	require.ErrorIs(t, err, ErrInvalidWitnessRecord)
 	_, err = EncodeCommitCertificateRecord(CommitCertificateRecord{
 		EpochID:  1,
@@ -137,11 +144,62 @@ func testPrepareRecord() PrepareRecord {
 		TimestampUnixNano: 100,
 		HolderID:          "holder-a",
 	}
-	record.DeltaDigest[0] = 1
+	setPrepareDeltaPayload(&record, testSemanticDeltaPayload())
 	record.PredicateDigest[0] = 2
 	record.AuthorityProofDigest[0] = 3
 	record.HolderSignature[0] = 4
 	return record
+}
+
+func setPrepareDeltaPayload(record *PrepareRecord, payload []byte) {
+	record.DeltaPayload = cloneBytes(payload)
+	digest, err := SemanticDeltaPayloadDigest(record.DeltaPayload)
+	if err != nil {
+		panic(err)
+	}
+	record.DeltaDigest = digest
+}
+
+func testSemanticDeltaPayload() []byte {
+	payload, err := EncodeSemanticDeltaPayload(testSemanticDelta())
+	if err != nil {
+		panic(err)
+	}
+	return payload
+}
+
+func testSemanticDelta() compile.SemanticDelta {
+	return compile.SemanticDelta{
+		Kind: fsmeta.OperationCreate,
+		Plan: fsmeta.OperationPlan{
+			Kind:       fsmeta.OperationCreate,
+			Mount:      "vol",
+			PrimaryKey: []byte("dentry/a"),
+			ReadKeys: [][]byte{
+				[]byte("dentry/a"),
+			},
+			MutateKeys: [][]byte{
+				[]byte("dentry/a"),
+				[]byte("inode/7"),
+			},
+		},
+		Authority: compile.AuthorityScope{
+			Mount:      "vol",
+			MountKeyID: 1,
+			Buckets:    []fsmeta.AffinityBucket{3},
+			Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+			Inodes:     []fsmeta.InodeID{7},
+		},
+		ReadPredicates: []compile.Predicate{
+			{Kind: compile.PredicateNotExists, Key: []byte("dentry/a")},
+		},
+		WriteEffects: []compile.WriteEffect{
+			{Kind: compile.EffectPut, Key: []byte("dentry/a"), Value: []byte("inode=7")},
+			{Kind: compile.EffectPut, Key: []byte("inode/7"), Value: []byte("attrs")},
+		},
+		RuntimeGuards: []compile.RuntimeGuard{compile.GuardQuotaCredit},
+		Eligibility:   compile.EligibilityFastPath,
+	}
 }
 
 func testCommitCertificateRecord(prepareDigest [32]byte) CommitCertificateRecord {

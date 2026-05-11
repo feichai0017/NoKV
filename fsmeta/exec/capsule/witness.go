@@ -29,6 +29,7 @@ var witnessRecordMagic = [4]byte{'N', 'C', 'W', 1}
 type PrepareRecord struct {
 	EpochID              uint64
 	OpID                 OperationID
+	DeltaPayload         []byte
 	DeltaDigest          [32]byte
 	PredicateDigest      [32]byte
 	AuthorityProofDigest [32]byte
@@ -154,6 +155,7 @@ func EncodePrepareRecord(record PrepareRecord) ([]byte, error) {
 	writeWitnessHeader(&out, WitnessRecordPrepare)
 	writeUint64(&out, record.EpochID)
 	writeOperationID(&out, record.OpID)
+	writeBytes(&out, record.DeltaPayload)
 	out.Write(record.DeltaDigest[:])
 	out.Write(record.PredicateDigest[:])
 	out.Write(record.AuthorityProofDigest[:])
@@ -223,6 +225,10 @@ func validatePrepareRecord(record PrepareRecord) error {
 	if record.EpochID == 0 || !record.OpID.Valid() || record.HolderID == "" {
 		return ErrInvalidWitnessRecord
 	}
+	digest, err := SemanticDeltaPayloadDigest(record.DeltaPayload)
+	if err != nil || digest != record.DeltaDigest {
+		return ErrInvalidWitnessRecord
+	}
 	for _, id := range record.ConflictDAGFrontier {
 		if !id.Valid() {
 			return ErrInvalidWitnessRecord
@@ -242,7 +248,7 @@ func validateCommitCertificateRecord(record CommitCertificateRecord) error {
 }
 
 func prepareRecordEncodedSize(record PrepareRecord) int {
-	size := len(witnessRecordMagic) + 1 + 8 + operationIDEncodedSize(record.OpID) + 32 + 32 + 32 + 4 + 8 + stringEncodedSize(record.HolderID) + 64
+	size := len(witnessRecordMagic) + 1 + 8 + operationIDEncodedSize(record.OpID) + 4 + len(record.DeltaPayload) + 32 + 32 + 32 + 4 + 8 + stringEncodedSize(record.HolderID) + 64
 	for _, id := range record.ConflictDAGFrontier {
 		size += operationIDEncodedSize(id)
 	}
@@ -268,6 +274,23 @@ func stringEncodedSize(value string) int {
 func writeWitnessHeader(out io.Writer, kind WitnessRecordKind) {
 	_, _ = out.Write(witnessRecordMagic[:])
 	_, _ = out.Write([]byte{byte(kind)})
+}
+
+func writeFixed(out io.Writer, value []byte) {
+	_, _ = out.Write(value)
+}
+
+func writeBytes(out io.Writer, value []byte) {
+	writeUint32(out, uint32(len(value)))
+	_, _ = out.Write(value)
+}
+
+func writeBool(out io.Writer, value bool) {
+	if value {
+		_, _ = out.Write([]byte{1})
+		return
+	}
+	_, _ = out.Write([]byte{0})
 }
 
 func writeOperationIDs(out io.Writer, ids []OperationID) {
@@ -328,6 +351,17 @@ func (r *witnessReader) readHeader() (WitnessRecordKind, error) {
 	return kind, nil
 }
 
+func (r *witnessReader) readMagic(magic [4]byte) error {
+	if len(r.buf)-r.off < len(magic) {
+		return ErrInvalidWitnessRecord
+	}
+	if !bytes.Equal(r.buf[r.off:r.off+len(magic)], magic[:]) {
+		return ErrInvalidWitnessRecord
+	}
+	r.off += len(magic)
+	return nil
+}
+
 func (r *witnessReader) readPrepare() (PrepareRecord, error) {
 	var record PrepareRecord
 	var err error
@@ -335,6 +369,9 @@ func (r *witnessReader) readPrepare() (PrepareRecord, error) {
 		return PrepareRecord{}, err
 	}
 	if record.OpID, err = r.readOperationID(); err != nil {
+		return PrepareRecord{}, err
+	}
+	if record.DeltaPayload, err = r.readBytes(); err != nil {
 		return PrepareRecord{}, err
 	}
 	if err := r.readFixed(record.DeltaDigest[:]); err != nil {
@@ -459,6 +496,35 @@ func (r *witnessReader) readString() (string, error) {
 	return value, nil
 }
 
+func (r *witnessReader) readBytes() ([]byte, error) {
+	length, err := r.readUint32()
+	if err != nil {
+		return nil, err
+	}
+	if length > uint32(len(r.buf)-r.off) {
+		return nil, ErrInvalidWitnessRecord
+	}
+	value := cloneBytes(r.buf[r.off : r.off+int(length)])
+	r.off += int(length)
+	return value, nil
+}
+
+func (r *witnessReader) readBool() (bool, error) {
+	if len(r.buf)-r.off < 1 {
+		return false, ErrInvalidWitnessRecord
+	}
+	value := r.buf[r.off]
+	r.off++
+	switch value {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, ErrInvalidWitnessRecord
+	}
+}
+
 func (r *witnessReader) readUint64() (uint64, error) {
 	if len(r.buf)-r.off < 8 {
 		return 0, ErrInvalidWitnessRecord
@@ -491,6 +557,7 @@ func (r witnessReader) done() bool {
 }
 
 func clonePrepareRecord(record PrepareRecord) PrepareRecord {
+	record.DeltaPayload = cloneBytes(record.DeltaPayload)
 	record.ConflictDAGFrontier = slices.Clone(record.ConflictDAGFrontier)
 	return record
 }

@@ -98,7 +98,8 @@ func TestCapsuleSealMerkleStableAndSensitive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, left.DAGFrontierMerkle, right.DAGFrontierMerkle)
 
-	snapshot.Prepares[0].DeltaDigest[0] ^= 0xff
+	changedPayload := append(cloneBytes(snapshot.Prepares[0].DeltaPayload), 0xff)
+	setPrepareDeltaPayload(&snapshot.Prepares[0], changedPayload)
 	snapshot.Commits[0] = testCommitForPrepare(t, snapshot.Prepares[0])
 	changed, err := BuildCapsuleSeal(1, snapshot)
 	require.NoError(t, err)

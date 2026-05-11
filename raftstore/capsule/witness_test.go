@@ -102,8 +102,11 @@ func TestWitnessNodeDuplicatePrepareIsIdempotentButConflictingRecordFails(t *tes
 	require.NoError(t, node.AppendPrepare(context.Background(), scope, prepare))
 
 	conflicting := prepare
-	conflicting.DeltaDigest[0] ^= 0xff
-	err := node.AppendPrepare(context.Background(), scope, conflicting)
+	conflicting.DeltaPayload = append(append([]byte(nil), conflicting.DeltaPayload...), 0xff)
+	digest, err := fscapsule.SemanticDeltaPayloadDigest(conflicting.DeltaPayload)
+	require.NoError(t, err)
+	conflicting.DeltaDigest = digest
+	err = node.AppendPrepare(context.Background(), scope, conflicting)
 	require.ErrorIs(t, err, ErrWitnessDuplicateRecord)
 }
 
@@ -332,18 +335,49 @@ func testAuthorityScope() compile.AuthorityScope {
 }
 
 func testPrepareRecord() fscapsule.PrepareRecord {
+	payload, err := fscapsule.EncodeSemanticDeltaPayload(testSemanticDelta())
+	if err != nil {
+		panic(err)
+	}
+	digest, err := fscapsule.SemanticDeltaPayloadDigest(payload)
+	if err != nil {
+		panic(err)
+	}
 	record := fscapsule.PrepareRecord{
 		EpochID:             1,
 		OpID:                fscapsule.OperationID{ClientID: "client-a", Seq: 1},
+		DeltaPayload:        payload,
+		DeltaDigest:         digest,
 		ConflictDAGFrontier: []fscapsule.OperationID{},
 		TimestampUnixNano:   100,
 		HolderID:            "holder-a",
 	}
-	record.DeltaDigest[0] = 1
 	record.PredicateDigest[0] = 2
 	record.AuthorityProofDigest[0] = 3
 	record.HolderSignature[0] = 4
 	return record
+}
+
+func testSemanticDelta() compile.SemanticDelta {
+	return compile.SemanticDelta{
+		Kind: fsmeta.OperationCreate,
+		Plan: fsmeta.OperationPlan{
+			Kind:       fsmeta.OperationCreate,
+			Mount:      "vol",
+			PrimaryKey: []byte("dentry/a"),
+			ReadKeys:   [][]byte{[]byte("dentry/a")},
+			MutateKeys: [][]byte{[]byte("dentry/a"), []byte("inode/29")},
+		},
+		Authority: testAuthorityScope(),
+		ReadPredicates: []compile.Predicate{
+			{Kind: compile.PredicateNotExists, Key: []byte("dentry/a")},
+		},
+		WriteEffects: []compile.WriteEffect{
+			{Kind: compile.EffectPut, Key: []byte("dentry/a"), Value: []byte("inode=29")},
+			{Kind: compile.EffectPut, Key: []byte("inode/29"), Value: []byte("attrs")},
+		},
+		Eligibility: compile.EligibilityFastPath,
+	}
 }
 
 func testCommitRecord(tb testing.TB, prepare fscapsule.PrepareRecord) fscapsule.CommitCertificateRecord {
