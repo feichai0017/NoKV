@@ -653,9 +653,6 @@ func (p *Peer) handleApplyResult(result ApplyResult) {
 		return
 	}
 	p.finishApply(result.Entries)
-	if compacted := p.AppliedIndex(); compacted > 0 {
-		_ = p.maybeCompact(compacted)
-	}
 }
 
 func (p *Peer) ensureEmptySnapshotPayloadTarget() error {

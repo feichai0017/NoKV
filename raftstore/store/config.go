@@ -39,7 +39,7 @@ type Config struct {
 	// CommandApplyParallelism controls how many non-conflicting committed raft
 	// commands may be applied concurrently across the store apply window. Values
 	// <= 0 use GOMAXPROCS, which is the production default. Value 1 forces
-	// serial apply. Any non-serial setting requires CommandApplier to be safe
-	// for concurrent calls.
+	// serial apply. Any non-serial setting requires CommandApplier and
+	// CommandBatchApplier to be safe for concurrent calls.
 	CommandApplyParallelism int
 }

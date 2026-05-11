@@ -301,6 +301,11 @@ type commandApplyTaskBatch struct {
 	rest  []*commandApplyTask
 }
 
+type commandApplyGroupCompletion struct {
+	group *commandApplyGroup
+	err   error
+}
+
 func (b commandApplyTaskBatch) len() int {
 	if b.first == nil {
 		return 0
@@ -367,22 +372,25 @@ func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmi
 	for _, plan := range plans {
 		tasks = append(tasks, &commandApplyTask{plan: plan, emit: emit, group: group})
 	}
+	var groupCompletions []commandApplyGroupCompletion
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed || w.fatalErr != nil {
 		err := w.fatalErr
 		if err == nil {
 			err = errCommandPipelineUnavailable
 		}
 		for _, task := range tasks {
-			w.finishTaskExternalLocked(task, err)
+			w.finishTaskExternalLocked(task, err, &groupCompletions)
 		}
+		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		return nil
 	}
 	for _, task := range tasks {
 		w.addTaskLocked(task)
 	}
 	w.scheduleLocked()
+	w.mu.Unlock()
 	return nil
 }
 
@@ -551,6 +559,7 @@ func (w *commandApplyWindow) close() {
 	if w == nil {
 		return
 	}
+	var groupCompletions []commandApplyGroupCompletion
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -565,7 +574,7 @@ func (w *commandApplyWindow) close() {
 		if task.running {
 			continue
 		}
-		w.finishTaskExternalLocked(task, w.fatalErr)
+		w.finishTaskExternalLocked(task, w.fatalErr, &groupCompletions)
 	}
 	clear(w.completed)
 	clear(w.readyQueue)
@@ -574,47 +583,56 @@ func (w *commandApplyWindow) close() {
 	if w.active == 0 {
 		close(w.stop)
 		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		w.workerWG.Wait()
 		return
 	}
 	drainCh := make(chan struct{})
 	w.drainCh = drainCh
 	w.mu.Unlock()
+	completeCommandApplyGroups(groupCompletions)
 	<-drainCh
 	close(w.stop)
 	w.workerWG.Wait()
 }
 
 func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.RaftCmdResponse, err error) {
+	var groupCompletions []commandApplyGroupCompletion
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.active--
 	task.running = false
-	defer w.notifyDrainedLocked()
 	task.resp = resp
 	task.err = err
 	if w.fatalErr != nil {
 		task.done = true
 		w.cleanupFinishedTaskLocked(task)
-		w.finishTaskExternalLocked(task, w.fatalErr)
+		w.finishTaskExternalLocked(task, w.fatalErr, &groupCompletions)
+		w.notifyDrainedLocked()
+		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		return
 	}
 	if err != nil {
 		fatalErr := fmt.Errorf("commandPipeline: fatal apply window failed at request %d: %w", task.plan.proposalKey.requestID, err)
-		w.finishTaskExternalLocked(task, fatalErr)
-		w.failAllLocked(fatalErr)
+		w.finishTaskExternalLocked(task, fatalErr, &groupCompletions)
+		w.failAllLocked(fatalErr, &groupCompletions)
+		w.notifyDrainedLocked()
+		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		return
 	}
 	w.finishSuccessfulTaskLocked(task)
-	w.flushCompletedLocked()
+	w.flushCompletedLocked(&groupCompletions)
 	w.scheduleLocked()
+	w.notifyDrainedLocked()
+	w.mu.Unlock()
+	completeCommandApplyGroups(groupCompletions)
 }
 
 func (w *commandApplyWindow) finishTasks(batch commandApplyTaskBatch, resps []*raftcmdpb.RaftCmdResponse, err error) {
+	var groupCompletions []commandApplyGroupCompletion
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.active--
-	defer w.notifyDrainedLocked()
 	batchLen := batch.len()
 	if len(resps) != batchLen && err == nil {
 		err = fmt.Errorf("commandPipeline: batch apply returned %d responses for %d tasks", len(resps), batchLen)
@@ -632,23 +650,32 @@ func (w *commandApplyWindow) finishTasks(batch commandApplyTaskBatch, resps []*r
 		batch.forEach(func(task *commandApplyTask) {
 			task.done = true
 			w.cleanupFinishedTaskLocked(task)
-			w.finishTaskExternalLocked(task, w.fatalErr)
+			w.finishTaskExternalLocked(task, w.fatalErr, &groupCompletions)
 		})
+		w.notifyDrainedLocked()
+		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		return
 	}
 	if err != nil {
 		fatalErr := fmt.Errorf("commandPipeline: fatal apply window failed: %w", err)
 		batch.forEach(func(task *commandApplyTask) {
-			w.finishTaskExternalLocked(task, fatalErr)
+			w.finishTaskExternalLocked(task, fatalErr, &groupCompletions)
 		})
-		w.failAllLocked(fatalErr)
+		w.failAllLocked(fatalErr, &groupCompletions)
+		w.notifyDrainedLocked()
+		w.mu.Unlock()
+		completeCommandApplyGroups(groupCompletions)
 		return
 	}
 	batch.forEach(func(task *commandApplyTask) {
 		w.finishSuccessfulTaskLocked(task)
 	})
-	w.flushCompletedLocked()
+	w.flushCompletedLocked(&groupCompletions)
 	w.scheduleLocked()
+	w.notifyDrainedLocked()
+	w.mu.Unlock()
+	completeCommandApplyGroups(groupCompletions)
 }
 
 func (w *commandApplyWindow) finishSuccessfulTaskLocked(task *commandApplyTask) {
@@ -713,7 +740,7 @@ func (w *commandApplyWindow) notifyDrainedLocked() {
 	w.drainCh = nil
 }
 
-func (w *commandApplyWindow) failAllLocked(err error) {
+func (w *commandApplyWindow) failAllLocked(err error, groupCompletions *[]commandApplyGroupCompletion) {
 	if w.fatalErr == nil {
 		w.fatalErr = err
 	}
@@ -721,7 +748,7 @@ func (w *commandApplyWindow) failAllLocked(err error) {
 		if task.running {
 			continue
 		}
-		w.finishTaskExternalLocked(task, err)
+		w.finishTaskExternalLocked(task, err, groupCompletions)
 	}
 	clear(w.completed)
 	clear(w.readyQueue)
@@ -729,7 +756,7 @@ func (w *commandApplyWindow) failAllLocked(err error) {
 	w.readyHead = 0
 }
 
-func (w *commandApplyWindow) flushCompletedLocked() {
+func (w *commandApplyWindow) flushCompletedLocked(groupCompletions *[]commandApplyGroupCompletion) {
 	task := w.completed[w.nextComplete]
 	if task == nil {
 		return
@@ -738,7 +765,7 @@ func (w *commandApplyWindow) flushCompletedLocked() {
 	w.nextComplete++
 	next := w.completed[w.nextComplete]
 	if next == nil {
-		w.finishTaskExternalSingleLocked(task, nil)
+		w.finishTaskExternalSingleLocked(task, nil, groupCompletions)
 		return
 	}
 	var buf [commandApplyMaxBatchTasks]*commandApplyTask
@@ -747,29 +774,37 @@ func (w *commandApplyWindow) flushCompletedLocked() {
 	for {
 		task = w.completed[w.nextComplete]
 		if task == nil {
-			w.finishTaskExternalBatchLocked(tasks, nil)
+			w.finishTaskExternalBatchLocked(tasks, nil, groupCompletions)
 			return
 		}
 		delete(w.completed, w.nextComplete)
 		w.nextComplete++
 		tasks = append(tasks, task)
 		if len(tasks) == cap(buf) {
-			w.finishTaskExternalBatchLocked(tasks, nil)
+			w.finishTaskExternalBatchLocked(tasks, nil, groupCompletions)
 			tasks = buf[:0]
 		}
 	}
 }
 
-func (w *commandApplyWindow) finishTaskExternalLocked(task *commandApplyTask, err error) {
-	w.finishTaskExternalSingleLocked(task, err)
+func (w *commandApplyWindow) finishTaskExternalLocked(
+	task *commandApplyTask,
+	err error,
+	groupCompletions *[]commandApplyGroupCompletion,
+) {
+	w.finishTaskExternalSingleLocked(task, err, groupCompletions)
 }
 
-func (w *commandApplyWindow) finishTaskExternalBatchLocked(tasks []*commandApplyTask, err error) {
+func (w *commandApplyWindow) finishTaskExternalBatchLocked(
+	tasks []*commandApplyTask,
+	err error,
+	groupCompletions *[]commandApplyGroupCompletion,
+) {
 	if len(tasks) == 0 {
 		return
 	}
 	if len(tasks) == 1 {
-		w.finishTaskExternalSingleLocked(tasks[0], err)
+		w.finishTaskExternalSingleLocked(tasks[0], err, groupCompletions)
 		return
 	}
 	var completionBuf [commandApplyMaxBatchTasks]commandProposalCompletion
@@ -781,11 +816,15 @@ func (w *commandApplyWindow) finishTaskExternalBatchLocked(tasks []*commandApply
 	}
 	w.cp.completeProposalBatch(completions)
 	for _, task := range completedTasks {
-		task.group.complete(err)
+		appendCommandApplyGroupCompletion(groupCompletions, task.group, err)
 	}
 }
 
-func (w *commandApplyWindow) finishTaskExternalSingleLocked(task *commandApplyTask, err error) {
+func (w *commandApplyWindow) finishTaskExternalSingleLocked(
+	task *commandApplyTask,
+	err error,
+	groupCompletions *[]commandApplyGroupCompletion,
+) {
 	if task == nil || task.externalDone {
 		return
 	}
@@ -799,7 +838,7 @@ func (w *commandApplyWindow) finishTaskExternalSingleLocked(task *commandApplyTa
 	} else {
 		w.cp.completeProposal(task.plan.proposalKey, nil, err)
 	}
-	task.group.complete(err)
+	appendCommandApplyGroupCompletion(groupCompletions, task.group, err)
 }
 
 func (w *commandApplyWindow) collectTaskExternalCompletionLocked(
@@ -851,6 +890,23 @@ func (g *commandApplyGroup) complete(err error) {
 	g.mu.Unlock()
 	if done != nil {
 		done(doneErr)
+	}
+}
+
+func appendCommandApplyGroupCompletion(
+	completions *[]commandApplyGroupCompletion,
+	group *commandApplyGroup,
+	err error,
+) {
+	if completions == nil || group == nil {
+		return
+	}
+	*completions = append(*completions, commandApplyGroupCompletion{group: group, err: err})
+}
+
+func completeCommandApplyGroups(completions []commandApplyGroupCompletion) {
+	for _, completion := range completions {
+		completion.group.complete(completion.err)
 	}
 }
 
