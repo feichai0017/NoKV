@@ -106,6 +106,19 @@ func requireCapsuleStatUint(t *testing.T, stats map[string]any, key string, want
 	require.Equal(t, want, got)
 }
 
+func requireCapsuleSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
+	t.Helper()
+	raw, ok := stats["capsule_admission"]
+	require.True(t, ok, "missing capsule_admission stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_admission has type %T", raw)
+	rawReasons, ok := capsuleStats["slow_by_reason"]
+	require.True(t, ok, "missing capsule slow reason stats")
+	reasons, ok := rawReasons.(map[string]uint64)
+	require.Truef(t, ok, "capsule slow_by_reason has type %T", rawReasons)
+	require.Equal(t, want, reasons[string(reason)])
+}
+
 func requireCapsuleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
 	raw, ok := stats["capsule_admission"]
@@ -659,6 +672,7 @@ func TestExecutorCreateWithSharedQuotaSkipsCapsuleAuthorityAdmission(t *testing.
 	requireCapsuleStatUint(t, stats, "acquire_total", 0)
 	requireCapsuleStatUint(t, stats, "owned_total", 0)
 	requireCapsuleStatUint(t, stats, "slow_total", 1)
+	requireCapsuleSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
 }
 
 func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {

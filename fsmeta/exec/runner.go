@@ -157,12 +157,20 @@ type Executor struct {
 }
 
 type capsuleAdmissionCounters struct {
-	eligibleTotal atomic.Uint64
-	slowTotal     atomic.Uint64
-	acquireTotal  atomic.Uint64
-	ownedTotal    atomic.Uint64
-	heldTotal     atomic.Uint64
-	errorTotal    atomic.Uint64
+	eligibleTotal         atomic.Uint64
+	slowTotal             atomic.Uint64
+	slowReadOnlyTotal     atomic.Uint64
+	slowRangeReadTotal    atomic.Uint64
+	slowDurabilityTotal   atomic.Uint64
+	slowCrossParentTotal  atomic.Uint64
+	slowSharedQuotaTotal  atomic.Uint64
+	slowDynamicWriteTotal atomic.Uint64
+	slowMaintenanceTotal  atomic.Uint64
+	slowUnknownTotal      atomic.Uint64
+	acquireTotal          atomic.Uint64
+	ownedTotal            atomic.Uint64
+	heldTotal             atomic.Uint64
+	errorTotal            atomic.Uint64
 }
 
 type atomicFastPathCounters struct {
@@ -343,6 +351,7 @@ func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map
 			"enabled":        enabled,
 			"eligible_total": uint64(0),
 			"slow_total":     uint64(0),
+			"slow_by_reason": capsuleAdmissionSlowReasonStats(nil),
 			"acquire_total":  uint64(0),
 			"owned_total":    uint64(0),
 			"held_total":     uint64(0),
@@ -353,10 +362,58 @@ func capsuleAdmissionStats(counters *capsuleAdmissionCounters, enabled bool) map
 		"enabled":        enabled,
 		"eligible_total": counters.eligibleTotal.Load(),
 		"slow_total":     counters.slowTotal.Load(),
+		"slow_by_reason": capsuleAdmissionSlowReasonStats(counters),
 		"acquire_total":  counters.acquireTotal.Load(),
 		"owned_total":    counters.ownedTotal.Load(),
 		"held_total":     counters.heldTotal.Load(),
 		"error_total":    counters.errorTotal.Load(),
+	}
+}
+
+func capsuleAdmissionSlowReasonStats(counters *capsuleAdmissionCounters) map[string]uint64 {
+	if counters == nil {
+		return map[string]uint64{
+			string(compile.SlowReasonReadOnly):          0,
+			string(compile.SlowReasonRangeRead):         0,
+			string(compile.SlowReasonDurabilityBarrier): 0,
+			string(compile.SlowReasonCrossParent):       0,
+			string(compile.SlowReasonSharedQuota):       0,
+			string(compile.SlowReasonDynamicWriteSet):   0,
+			string(compile.SlowReasonMaintenanceScan):   0,
+			"unknown": 0,
+		}
+	}
+	return map[string]uint64{
+		string(compile.SlowReasonReadOnly):          counters.slowReadOnlyTotal.Load(),
+		string(compile.SlowReasonRangeRead):         counters.slowRangeReadTotal.Load(),
+		string(compile.SlowReasonDurabilityBarrier): counters.slowDurabilityTotal.Load(),
+		string(compile.SlowReasonCrossParent):       counters.slowCrossParentTotal.Load(),
+		string(compile.SlowReasonSharedQuota):       counters.slowSharedQuotaTotal.Load(),
+		string(compile.SlowReasonDynamicWriteSet):   counters.slowDynamicWriteTotal.Load(),
+		string(compile.SlowReasonMaintenanceScan):   counters.slowMaintenanceTotal.Load(),
+		"unknown": counters.slowUnknownTotal.Load(),
+	}
+}
+
+func (s *capsuleAdmissionCounters) recordSlow(reason compile.SlowReason) {
+	s.slowTotal.Add(1)
+	switch reason {
+	case compile.SlowReasonReadOnly:
+		s.slowReadOnlyTotal.Add(1)
+	case compile.SlowReasonRangeRead:
+		s.slowRangeReadTotal.Add(1)
+	case compile.SlowReasonDurabilityBarrier:
+		s.slowDurabilityTotal.Add(1)
+	case compile.SlowReasonCrossParent:
+		s.slowCrossParentTotal.Add(1)
+	case compile.SlowReasonSharedQuota:
+		s.slowSharedQuotaTotal.Add(1)
+	case compile.SlowReasonDynamicWriteSet:
+		s.slowDynamicWriteTotal.Add(1)
+	case compile.SlowReasonMaintenanceScan:
+		s.slowMaintenanceTotal.Add(1)
+	default:
+		s.slowUnknownTotal.Add(1)
 	}
 }
 
@@ -622,7 +679,7 @@ func (e *Executor) admitCapsuleAuthority(ctx context.Context, delta compile.Sema
 		return nil
 	}
 	if delta.Eligibility != compile.EligibilityFastPath {
-		e.capsuleAdmission.slowTotal.Add(1)
+		e.capsuleAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
 	e.capsuleAdmission.eligibleTotal.Add(1)
