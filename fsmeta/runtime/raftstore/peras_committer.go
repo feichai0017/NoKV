@@ -21,8 +21,8 @@ import (
 const (
 	defaultPerasSegmentWitnessRetries      = 3
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
-	defaultPerasSegmentBatchSize           = 256
-	defaultPerasSegmentMaxReplayMutations  = 20
+	defaultPerasSegmentBatchSize           = 1024
+	defaultPerasSegmentMaxReplayMutations  = 4096
 	defaultPerasSegmentFlushEvery          = 25 * time.Millisecond
 	defaultPerasBackgroundFlushTimeout     = 2 * time.Second
 	defaultPerasBackgroundErrorBackoff     = time.Second

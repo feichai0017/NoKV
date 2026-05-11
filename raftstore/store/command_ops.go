@@ -535,7 +535,7 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	entries := segment.Entries()
+	entries := segment.EntriesView()
 	if len(entries) == 0 {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
