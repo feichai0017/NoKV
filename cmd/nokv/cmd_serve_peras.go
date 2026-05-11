@@ -34,9 +34,10 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth
 	authorities := perasauth.NewActiveAuthorities()
 	feed := perasauth.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
 	witness, err := rsperas.NewWitnessNode(rsperas.WitnessNodeConfig{
-		NodeID:      fmt.Sprintf("store-%d", storeID),
-		Log:         log,
-		Authorities: authorities,
+		NodeID:           fmt.Sprintf("store-%d", storeID),
+		Log:              log,
+		Authorities:      authorities,
+		AuthorityRefresh: feed.Refresh,
 	})
 	if err != nil {
 		if feed != nil {

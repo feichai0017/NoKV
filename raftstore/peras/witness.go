@@ -18,16 +18,18 @@ var (
 )
 
 type WitnessNodeConfig struct {
-	NodeID      string
-	Log         *fsperas.WALWitnessLog
-	Authorities *perasauth.ActiveAuthorities
-	Now         func() time.Time
+	NodeID           string
+	Log              *fsperas.WALWitnessLog
+	Authorities      *perasauth.ActiveAuthorities
+	AuthorityRefresh func(context.Context) error
+	Now              func() time.Time
 }
 
 type WitnessNode struct {
 	nodeID      string
 	log         *fsperas.WALWitnessLog
 	authorities *perasauth.ActiveAuthorities
+	refresh     func(context.Context) error
 	now         func() time.Time
 
 	mu       sync.Mutex
@@ -52,6 +54,7 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		nodeID:      cfg.NodeID,
 		log:         cfg.Log,
 		authorities: cfg.Authorities,
+		refresh:     cfg.AuthorityRefresh,
 		now:         now,
 		segments:    make(map[witnessSegmentKey]struct{}),
 	}, nil
@@ -68,7 +71,7 @@ func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.Authority
 	if n == nil || n.log == nil || n.authorities == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
-	if err := n.validateAuthority(scope, record.EpochID, record.HolderID); err != nil {
+	if err := n.validateAuthority(ctx, scope, record.EpochID, record.HolderID); err != nil {
 		return err
 	}
 	key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
@@ -98,7 +101,24 @@ func (n *WitnessNode) Probe(ctx context.Context, epochID uint64) (fsperas.Witnes
 	return n.log.Probe(ctx, epochID)
 }
 
-func (n *WitnessNode) validateAuthority(scope compile.AuthorityScope, epochID uint64, holderID string) error {
+func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.AuthorityScope, epochID uint64, holderID string) error {
+	err := n.checkAuthority(scope, epochID, holderID)
+	if err == nil || n.refresh == nil || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if !errors.Is(err, ErrWitnessAuthorityMissing) && !errors.Is(err, ErrWitnessAuthorityMismatch) {
+		return err
+	}
+	if refreshErr := n.refresh(ctx); refreshErr != nil {
+		return refreshErr
+	}
+	return n.checkAuthority(scope, epochID, holderID)
+}
+
+func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, epochID uint64, holderID string) error {
 	grant, ok, err := n.authorities.Find(scope, n.now())
 	if err != nil {
 		return err

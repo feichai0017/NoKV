@@ -39,6 +39,55 @@ func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
 }
 
+func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, manager.Close()) }()
+	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityFsync)
+	require.NoError(t, err)
+	authorities := perasauth.NewActiveAuthorities()
+	refreshed := false
+	node, err := NewWitnessNode(WitnessNodeConfig{
+		NodeID:      "store-1",
+		Log:         log,
+		Authorities: authorities,
+		AuthorityRefresh: func(context.Context) error {
+			refreshed = true
+			return authorities.Replace([]perasauth.AuthorityGrant{testAuthorityGrant()})
+		},
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord()))
+	require.True(t, refreshed)
+}
+
+func TestWitnessNodeRefreshFailureIsFatal(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, manager.Close()) }()
+	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityFsync)
+	require.NoError(t, err)
+	authorities := perasauth.NewActiveAuthorities()
+	refreshErr := errors.New("refresh failed")
+	node, err := NewWitnessNode(WitnessNodeConfig{
+		NodeID:      "store-1",
+		Log:         log,
+		Authorities: authorities,
+		AuthorityRefresh: func(context.Context) error {
+			return refreshErr
+		},
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, err)
+
+	err = node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
+	require.ErrorIs(t, err, refreshErr)
+}
+
 func TestWitnessNodeRejectsWrongHolderAndEpoch(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
 	defer cleanup()
