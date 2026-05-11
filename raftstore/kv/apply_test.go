@@ -222,6 +222,68 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.Equal(t, []byte("attrs"), value)
 }
 
+func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("inode=7")},
+				{Key: inodeKey, Value: []byte("attrs")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				RoutingKey:           dentryKey,
+				SegmentRoot:          segment.Root[:],
+				SegmentPayloadDigest: digest[:],
+				SegmentPayload:       payload,
+				InstallVersion:       99,
+				MaterializeMvcc:      true,
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
+	require.Nil(t, installResp.GetError())
+	require.Equal(t, uint64(3), installResp.GetAppliedEntries())
+
+	reader := percolator.NewReader(db)
+	value, _, err := reader.GetValue(dentryKey, 100)
+	require.NoError(t, err)
+	require.Equal(t, []byte("inode=7"), value)
+	value, _, err = reader.GetValue(inodeKey, 100)
+	require.NoError(t, err)
+	require.Equal(t, []byte("attrs"), value)
+
+	records, err := fsperas.LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, segment.Root, records[0].Root)
+}
+
 func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

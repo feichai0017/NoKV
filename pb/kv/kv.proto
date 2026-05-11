@@ -228,6 +228,7 @@ message PerasInstallSegmentRequest {
   bytes segment_payload_digest = 3;
   bytes segment_payload = 4;
   uint64 install_version = 5;
+  bool materialize_mvcc = 6;
 }
 
 message PerasInstallSegmentResponse {

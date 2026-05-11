@@ -23,9 +23,13 @@ const (
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
 	defaultPerasSegmentBatchSize           = 1024
 	defaultPerasSegmentMaxReplayMutations  = 4096
-	defaultPerasSegmentFlushEvery          = 25 * time.Millisecond
-	defaultPerasBackgroundFlushTimeout     = 2 * time.Second
-	defaultPerasBackgroundErrorBackoff     = time.Second
+	// A materialized drain expands each replay mutation into MVCC records.
+	// Keep the request below the local write-batch entry cap while preserving
+	// large catalog-only segments on the common path.
+	defaultPerasMaterializeMaxReplayMutations = 20
+	defaultPerasSegmentFlushEvery             = 25 * time.Millisecond
+	defaultPerasBackgroundFlushTimeout        = 2 * time.Second
+	defaultPerasBackgroundErrorBackoff        = time.Second
 )
 
 type perasGrantProvider interface {
@@ -34,7 +38,7 @@ type perasGrantProvider interface {
 }
 
 type perasSegmentInstaller interface {
-	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte) error
+	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) error
 }
 
 type perasSegmentInstallClient interface {
@@ -119,12 +123,13 @@ type runtimePerasOverlayEntry struct {
 }
 
 type runtimePerasFlushJob struct {
-	holder  *fsperas.Holder
-	scope   compile.AuthorityScope
-	plan    fsperas.ReplayPlan
-	segment fsperas.PerasSegment
-	payload []byte
-	digest  [32]byte
+	holder      *fsperas.Holder
+	scope       compile.AuthorityScope
+	plan        fsperas.ReplayPlan
+	segment     fsperas.PerasSegment
+	payload     []byte
+	digest      [32]byte
+	materialize bool
 }
 
 type runtimePerasFrozenPlan struct {
@@ -347,7 +352,7 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	c.commitMu.Lock()
 	defer c.commitMu.Unlock()
 
-	jobs, err := c.freezeFlushJobsLocked(nil)
+	jobs, err := c.freezeFlushJobsLocked(nil, true)
 	if err != nil {
 		return err
 	}
@@ -398,7 +403,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
 			return c.recordError(fsperas.ErrInvalidWitnessRecord)
 		}
-		if err := c.installer.InstallPerasSegment(ctx, scope, segment, record.SegmentPayload, record.SegmentPayloadDigest); err != nil {
+		if err := c.installer.InstallPerasSegment(ctx, scope, segment, record.SegmentPayload, record.SegmentPayloadDigest, false); err != nil {
 			return c.recordErrorf("recover peras segment install: %w", err)
 		}
 		c.installSegment(fsperas.ReplayPlan{}, segment)
@@ -408,7 +413,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 
 func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
 	c.commitMu.Lock()
-	jobs, err := c.freezeFlushJobsLocked(scope)
+	jobs, err := c.freezeFlushJobsLocked(scope, false)
 	c.commitMu.Unlock()
 	if err != nil {
 		return err
@@ -424,7 +429,7 @@ func (c *RemotePerasCommitter) installFlushJobs(ctx context.Context, jobs []runt
 		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, job.holder, job.segment, job.payload, job.digest); err != nil {
 			return c.recordErrorf("append peras segment witness: %w", err)
 		}
-		if err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest); err != nil {
+		if err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest, job.materialize); err != nil {
 			return c.recordErrorf("install peras segment: %w", err)
 		}
 		if err := job.holder.MarkReplayPlanApplied(job.plan); err != nil {
@@ -443,7 +448,7 @@ func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retir
 	return nil
 }
 
-func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthorityScope) ([]runtimePerasFlushJob, error) {
+func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthorityScope, materialize bool) ([]runtimePerasFlushJob, error) {
 	plans, err := c.freezeReplayPlansLocked(target)
 	if err != nil {
 		return nil, err
@@ -456,7 +461,7 @@ func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthoritySc
 		}
 		parts := make([]fsperas.ReplayPlan, 0, len(bucketPlans))
 		for _, bucketPlan := range bucketPlans {
-			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, c.maxReplay)
+			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, c.replayMutationBudget(materialize))
 			if err != nil {
 				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 			}
@@ -476,16 +481,27 @@ func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthoritySc
 				return nil, c.recordErrorf("digest peras segment: %w", err)
 			}
 			jobs = append(jobs, runtimePerasFlushJob{
-				holder:  frozen.holder,
-				scope:   frozen.scope,
-				plan:    plan,
-				segment: segment,
-				payload: payload,
-				digest:  digest,
+				holder:      frozen.holder,
+				scope:       frozen.scope,
+				plan:        plan,
+				segment:     segment,
+				payload:     payload,
+				digest:      digest,
+				materialize: materialize,
 			})
 		}
 	}
 	return jobs, nil
+}
+
+func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
+	if !materialize {
+		return c.maxReplay
+	}
+	if c.maxReplay > 0 && c.maxReplay < defaultPerasMaterializeMaxReplayMutations {
+		return c.maxReplay
+	}
+	return defaultPerasMaterializeMaxReplayMutations
 }
 
 func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope) ([]runtimePerasFrozenPlan, error) {
@@ -1132,7 +1148,7 @@ func newRunnerPerasSegmentInstaller(runner *Runner) *runnerPerasSegmentInstaller
 	return &runnerPerasSegmentInstaller{runner: runner}
 }
 
-func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
+func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) error {
 	if i == nil || i.runner == nil || i.runner.kv == nil {
 		return errPerasCommitterInvalid
 	}
@@ -1154,6 +1170,7 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 		SegmentPayloadDigest: append([]byte(nil), digest[:]...),
 		SegmentPayload:       append([]byte(nil), payload...),
 		InstallVersion:       installVersion,
+		MaterializeMvcc:      materialize,
 	})
 	if err != nil {
 		return err
