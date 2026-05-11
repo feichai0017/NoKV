@@ -86,6 +86,34 @@ func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRemotePerasCommitterFlushSplitsFSMetaBuckets(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
+	rightA, rightB := testRuntimeBucketKeys(t, mount, 2)
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, leftA, leftB))
+	require.NoError(t, commitRuntimePeras(ctx, committer, 2, rightA, rightB))
+	require.NoError(t, committer.Flush(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(2), stats["flush_total"])
+	require.Equal(t, uint64(2), stats["segment_total"])
+	require.Equal(t, uint64(2), stats["segment_operations_total"])
+	require.Equal(t, 2, installer.calls)
+}
+
 func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -419,4 +447,25 @@ func testRuntimePerasDelta(dentryKey, inodeKey []byte) compile.SemanticDelta {
 func appendUvarintKey(prefix string, v uint64) []byte {
 	out := append([]byte(prefix), 0)
 	return binary.AppendUvarint(out, v)
+}
+
+func testRuntimeBucketKeys(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) ([]byte, []byte) {
+	t.Helper()
+	var first, second []byte
+	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
+		if fsmeta.BucketForInodeID(inode) != bucket {
+			continue
+		}
+		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		require.NoError(t, err)
+		if first == nil {
+			first = key
+			continue
+		}
+		second = key
+		break
+	}
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	return first, second
 }
