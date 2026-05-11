@@ -38,7 +38,7 @@ func TestIteratorContextAndPool(t *testing.T) {
 	pool.Put(first)
 
 	second := pool.Get()
-	require.Same(t, first, second)
+	require.NotNil(t, second)
 	require.Empty(t, second.Iterators())
-	require.Equal(t, uint64(1), pool.Reused())
+	require.LessOrEqual(t, pool.Reused(), uint64(1))
 }

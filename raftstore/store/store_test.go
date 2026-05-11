@@ -107,7 +107,7 @@ func TestStoreRegionApplyDoesNotBlockOnSchedulerPublish(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	defer rs.StopPeer(peer.ID())
-	require.Less(t, elapsed, sink.publishDelay/2, "region apply path should not block on slow coordinator publish")
+	require.Less(t, elapsed, sink.delay()/2, "region apply path should not block on slow coordinator publish")
 	require.Eventually(t, func() bool {
 		snapshot := sink.RegionSnapshot()
 		return len(snapshot) == 1 && snapshot[0].Descriptor.RegionID == 88
@@ -556,6 +556,7 @@ type testSchedulerSink struct {
 
 type slowSchedulerSink struct {
 	testSchedulerSink
+	mu           sync.Mutex
 	publishDelay time.Duration
 }
 
@@ -706,9 +707,9 @@ func (s *degradedSchedulerSink) Status() storecontrol.Status {
 }
 
 func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, regionID uint64) {
-	if s.publishDelay > 0 {
+	if delay := s.delay(); delay > 0 {
 		select {
-		case <-time.After(s.publishDelay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return
 		}
@@ -717,14 +718,26 @@ func (s *slowSchedulerSink) ReportRegionHeartbeat(ctx context.Context, regionID 
 }
 
 func (s *slowSchedulerSink) PublishRootEvent(ctx context.Context, event rootevent.Event) error {
-	if s.publishDelay > 0 {
+	if delay := s.delay(); delay > 0 {
 		select {
-		case <-time.After(s.publishDelay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 	return s.testSchedulerSink.PublishRootEvent(ctx, event)
+}
+
+func (s *slowSchedulerSink) delay() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.publishDelay
+}
+
+func (s *slowSchedulerSink) setPublishDelay(delay time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishDelay = delay
 }
 
 func rootEventRegionID(event rootevent.Event) uint64 {
