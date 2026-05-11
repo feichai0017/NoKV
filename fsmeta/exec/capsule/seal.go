@@ -14,10 +14,10 @@ type SealedCertificate struct {
 }
 
 type CapsuleSeal struct {
-	EpochID           uint64
-	Versions          ReplayVersionRange
-	Certificates      []SealedCertificate
-	DAGFrontierMerkle [32]byte
+	EpochID               uint64
+	Versions              ReplayVersionRange
+	Certificates          []SealedCertificate
+	CertificateMerkleRoot [32]byte
 }
 
 func BuildCapsuleSeal(epochID uint64, snapshot WitnessSnapshot) (CapsuleSeal, error) {
@@ -80,7 +80,7 @@ func buildCapsuleSeal(epochID uint64, versions ReplayVersionRange, snapshot Witn
 	if len(commits) == 0 {
 		return CapsuleSeal{}, ErrInvalidCapsuleSeal
 	}
-	ordered, err := topologicalSealOrder(prepares, commits)
+	ordered, err := orderedSealCertificates(prepares, commits)
 	if err != nil {
 		return CapsuleSeal{}, err
 	}
@@ -89,7 +89,7 @@ func buildCapsuleSeal(epochID uint64, versions ReplayVersionRange, snapshot Witn
 		Versions:     versions,
 		Certificates: ordered,
 	}
-	seal.DAGFrontierMerkle, err = sealMerkleRoot(epochID, versions, ordered)
+	seal.CertificateMerkleRoot, err = sealMerkleRoot(epochID, versions, ordered)
 	if err != nil {
 		return CapsuleSeal{}, err
 	}
@@ -148,7 +148,7 @@ func filterWitnessSnapshotByIDs(snapshot WitnessSnapshot, ids []OperationID) Wit
 	return out
 }
 
-func topologicalSealOrder(prepares map[OperationID]PrepareRecord, commits map[OperationID]CommitCertificateRecord) ([]SealedCertificate, error) {
+func orderedSealCertificates(prepares map[OperationID]PrepareRecord, commits map[OperationID]CommitCertificateRecord) ([]SealedCertificate, error) {
 	remaining := make(map[OperationID]struct{}, len(commits))
 	for id := range commits {
 		remaining[id] = struct{}{}
@@ -159,7 +159,7 @@ func topologicalSealOrder(prepares map[OperationID]PrepareRecord, commits map[Op
 		for id := range remaining {
 			prepare := prepares[id]
 			blocked := false
-			for _, predecessor := range prepare.ConflictDAGFrontier {
+			for _, predecessor := range prepare.DependencyFrontier {
 				if _, committed := commits[predecessor]; !committed {
 					return nil, ErrInvalidCapsuleSeal
 				}

@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,9 +29,10 @@ func TestHolderSubmitRunsTwoPhaseWitnessCommit(t *testing.T) {
 	require.Equal(t, 1, holder.Pending())
 	for _, replicaID := range commit.QuorumAckSet {
 		replica := fakeWitnessByID(t, replicas, replicaID)
-		require.Len(t, replica.prepares, 1)
-		require.Len(t, replica.commits, 1)
-		require.Equal(t, replica.prepares[0].OpID, replica.commits[0].OpID)
+		snapshot := replica.snapshot()
+		require.Len(t, snapshot.Prepares, 1)
+		require.Len(t, snapshot.Commits, 1)
+		require.Equal(t, snapshot.Prepares[0].OpID, snapshot.Commits[0].OpID)
 	}
 }
 
@@ -48,7 +50,7 @@ func TestHolderSubmitRequiresPrepareQuorumBeforeCommit(t *testing.T) {
 	require.ErrorIs(t, err, ErrWitnessQuorumUnavailable)
 	require.Zero(t, holder.Pending())
 	for _, replica := range replicas {
-		require.Empty(t, replica.commits)
+		require.Empty(t, replica.snapshot().Commits)
 	}
 }
 
@@ -94,7 +96,7 @@ func TestHolderSubmitReturnsAfterPrepareAndCommitQuorum(t *testing.T) {
 	require.Equal(t, []string{"store-1", "store-2"}, commit.QuorumAckSet)
 }
 
-func TestHolderSubmitConflictDAGFrontier(t *testing.T) {
+func TestHolderSubmitDependencyFrontier(t *testing.T) {
 	replicas := []*fakeWitnessReplica{
 		newFakeWitnessReplica("store-1"),
 		newFakeWitnessReplica("store-2"),
@@ -109,8 +111,9 @@ func TestHolderSubmitConflictDAGFrontier(t *testing.T) {
 	_, err = holder.Submit(context.Background(), second, deltaWithWrites("a"))
 	require.NoError(t, err)
 
-	require.Len(t, replicas[0].prepares, 2)
-	require.Equal(t, []OperationID{first}, replicas[0].prepares[1].ConflictDAGFrontier)
+	snapshot := replicas[0].snapshot()
+	require.Len(t, snapshot.Prepares, 2)
+	require.Equal(t, []OperationID{first}, snapshot.Prepares[1].DependencyFrontier)
 	holder.MarkSealed(first)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -195,6 +198,7 @@ func BenchmarkHolderBuildSeal64(b *testing.B) {
 }
 
 type fakeWitnessReplica struct {
+	mu           sync.Mutex
 	id           string
 	prepareErr   error
 	commitErr    error
@@ -223,6 +227,8 @@ func (r *fakeWitnessReplica) AppendPrepare(ctx context.Context, _ compile.Author
 	if r.prepareErr != nil {
 		return r.prepareErr
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.prepares = append(r.prepares, clonePrepareRecord(record))
 	return nil
 }
@@ -234,6 +240,8 @@ func (r *fakeWitnessReplica) AppendCommitCertificate(ctx context.Context, _ comp
 	if r.commitErr != nil {
 		return r.commitErr
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.commits = append(r.commits, cloneCommitCertificateRecord(record))
 	return nil
 }
@@ -264,6 +272,8 @@ func waitFakeWitnessDelay(ctx context.Context, delay time.Duration) error {
 }
 
 func (r *fakeWitnessReplica) snapshot() WitnessSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	prepares := make([]PrepareRecord, 0, len(r.prepares))
 	for _, prepare := range r.prepares {
 		prepares = append(prepares, clonePrepareRecord(prepare))

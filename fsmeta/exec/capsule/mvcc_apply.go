@@ -57,14 +57,14 @@ func NewMVCCReplayStoreForPlan(db InternalEntryApplier, plan ReplayPlan) (*MVCCR
 	}, nil
 }
 
-func (s *MVCCReplayStore) ApplyCapsuleReplayWave(wave []ReplayOperation) error {
+func (s *MVCCReplayStore) ApplyCapsuleReplay(ops []ReplayOperation) error {
 	if s == nil || s.db == nil {
 		return ErrReplayStoreRequired
 	}
 	nextVersion := s.nextVersion
 	remaining := s.remaining
-	entries := make([]*entrykv.Entry, 0, len(wave)*3)
-	for _, op := range wave {
+	entries := make([]*entrykv.Entry, 0, len(ops)*3)
+	for _, op := range ops {
 		if s.bounded {
 			if remaining == 0 {
 				releaseMVCCReplayEntries(entries)

@@ -70,13 +70,13 @@ func wireTestPrepareRecord(t *testing.T, scope compile.AuthorityScope) fscapsule
 	digest, err := fscapsule.SemanticDeltaPayloadDigest(payload)
 	require.NoError(t, err)
 	record := fscapsule.PrepareRecord{
-		EpochID:             7,
-		OpID:                fscapsule.OperationID{ClientID: "client-a", Seq: 42},
-		DeltaPayload:        payload,
-		DeltaDigest:         digest,
-		ConflictDAGFrontier: []fscapsule.OperationID{{ClientID: "client-a", Seq: 41}},
-		TimestampUnixNano:   1234,
-		HolderID:            "holder-a",
+		EpochID:            7,
+		OpID:               fscapsule.OperationID{ClientID: "client-a", Seq: 42},
+		DeltaPayload:       payload,
+		DeltaDigest:        digest,
+		DependencyFrontier: []fscapsule.OperationID{{ClientID: "client-a", Seq: 41}},
+		TimestampUnixNano:  1234,
+		HolderID:           "holder-a",
 	}
 	for i := range record.PredicateDigest {
 		record.PredicateDigest[i] = byte(i)

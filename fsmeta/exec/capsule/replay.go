@@ -18,17 +18,16 @@ type ReplayOperation struct {
 }
 
 type ReplayPlan struct {
-	EpochID  uint64
-	Versions ReplayVersionRange
-	Waves    [][]ReplayOperation
+	EpochID    uint64
+	Versions   ReplayVersionRange
+	Operations []ReplayOperation
 }
 
 func BuildReplayPlan(seal CapsuleSeal) (ReplayPlan, error) {
 	if seal.EpochID == 0 || len(seal.Certificates) == 0 {
 		return ReplayPlan{}, ErrInvalidCapsuleSeal
 	}
-	levels := make(map[OperationID]int, len(seal.Certificates))
-	waves := make([][]ReplayOperation, 0)
+	ops := make([]ReplayOperation, 0, len(seal.Certificates))
 	for _, cert := range seal.Certificates {
 		if err := validateSealedCertificate(seal.EpochID, cert); err != nil {
 			return ReplayPlan{}, err
@@ -41,31 +40,13 @@ func BuildReplayPlan(seal CapsuleSeal) (ReplayPlan, error) {
 		if err != nil {
 			return ReplayPlan{}, err
 		}
-		level := 0
-		for _, predecessor := range cert.Prepare.ConflictDAGFrontier {
-			predecessorLevel, ok := levels[predecessor]
-			if !ok {
-				return ReplayPlan{}, ErrInvalidCapsuleSeal
-			}
-			if predecessorLevel+1 > level {
-				level = predecessorLevel + 1
-			}
-		}
-		for len(waves) <= level {
-			waves = append(waves, nil)
-		}
-		waves[level] = append(waves[level], op)
-		levels[cert.Prepare.OpID] = level
+		ops = append(ops, op)
 	}
-	return ReplayPlan{EpochID: seal.EpochID, Versions: seal.Versions, Waves: waves}, nil
+	return ReplayPlan{EpochID: seal.EpochID, Versions: seal.Versions, Operations: ops}, nil
 }
 
 func ReplayPlanOperationCount(plan ReplayPlan) uint64 {
-	var count uint64
-	for _, wave := range plan.Waves {
-		count += uint64(len(wave))
-	}
-	return count
+	return uint64(len(plan.Operations))
 }
 
 func validateSealedCertificate(epochID uint64, cert SealedCertificate) error {

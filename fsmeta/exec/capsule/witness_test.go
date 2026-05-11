@@ -137,7 +137,7 @@ func testPrepareRecord() PrepareRecord {
 			ClientID: "client-a",
 			Seq:      7,
 		},
-		ConflictDAGFrontier: []OperationID{
+		DependencyFrontier: []OperationID{
 			{ClientID: "client-a", Seq: 5},
 			{ClientID: "client-b", Seq: 3},
 		},

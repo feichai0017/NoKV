@@ -136,7 +136,7 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 		DeltaDigest:          deltaDigest,
 		PredicateDigest:      predicateDigest,
 		AuthorityProofDigest: authorityDigest,
-		ConflictDAGFrontier:  predecessors,
+		DependencyFrontier:   predecessors,
 		TimestampUnixNano:    h.now().UnixNano(),
 		HolderID:             h.holderID,
 	}

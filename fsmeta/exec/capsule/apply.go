@@ -5,15 +5,13 @@ import "errors"
 var ErrReplayStoreRequired = errors.New("fsmeta capsule: replay store required")
 
 // ReplayStore is the narrow apply boundary for a sealed Capsule replay plan.
-// Waves are delivered sequentially; the implementation may atomically apply or
-// internally parallelize operations within one wave because the conflict DAG
-// already proves that wave members are independent.
+// Capsule replay is intentionally linear here: raftstore owns committed-entry
+// dependency scheduling and async apply.
 type ReplayStore interface {
-	ApplyCapsuleReplayWave([]ReplayOperation) error
+	ApplyCapsuleReplay([]ReplayOperation) error
 }
 
 type ApplyStats struct {
-	Waves      uint64
 	Operations uint64
 	Mutations  uint64
 }
@@ -26,61 +24,53 @@ func ApplyReplayPlan(store ReplayStore, plan ReplayPlan) (ApplyStats, error) {
 		return ApplyStats{}, err
 	}
 	var stats ApplyStats
-	for _, wave := range plan.Waves {
-		cloned := cloneReplayWave(wave)
-		if err := store.ApplyCapsuleReplayWave(cloned); err != nil {
-			return stats, err
-		}
-		stats.Waves++
-		stats.Operations += uint64(len(wave))
-		for _, op := range wave {
-			stats.Mutations += uint64(len(op.Mutations))
-		}
+	cloned := cloneReplayOperations(plan.Operations)
+	if err := store.ApplyCapsuleReplay(cloned); err != nil {
+		return ApplyStats{}, err
+	}
+	stats.Operations = uint64(len(plan.Operations))
+	for _, op := range plan.Operations {
+		stats.Mutations += uint64(len(op.Mutations))
 	}
 	return stats, nil
 }
 
 func validateReplayPlanForApply(plan ReplayPlan) error {
-	if plan.EpochID == 0 || len(plan.Waves) == 0 {
+	if plan.EpochID == 0 || len(plan.Operations) == 0 {
 		return ErrInvalidCapsuleSeal
 	}
 	seen := make(map[OperationID]struct{})
-	for _, wave := range plan.Waves {
-		if len(wave) == 0 {
+	for _, op := range plan.Operations {
+		if !op.OpID.Valid() || len(op.Mutations) == 0 {
 			return ErrInvalidCapsuleSeal
 		}
-		for _, op := range wave {
-			if !op.OpID.Valid() || len(op.Mutations) == 0 {
+		if _, ok := seen[op.OpID]; ok {
+			return ErrInvalidCapsuleSeal
+		}
+		seen[op.OpID] = struct{}{}
+		for _, mutation := range op.Mutations {
+			if len(mutation.Key) == 0 {
 				return ErrInvalidCapsuleSeal
 			}
-			if _, ok := seen[op.OpID]; ok {
+			switch {
+			case mutation.Delete:
+				if mutation.Value != nil {
+					return ErrInvalidCapsuleSeal
+				}
+			case mutation.Value == nil:
 				return ErrInvalidCapsuleSeal
-			}
-			seen[op.OpID] = struct{}{}
-			for _, mutation := range op.Mutations {
-				if len(mutation.Key) == 0 {
-					return ErrInvalidCapsuleSeal
-				}
-				switch {
-				case mutation.Delete:
-					if mutation.Value != nil {
-						return ErrInvalidCapsuleSeal
-					}
-				case mutation.Value == nil:
-					return ErrInvalidCapsuleSeal
-				}
 			}
 		}
 	}
 	return nil
 }
 
-func cloneReplayWave(wave []ReplayOperation) []ReplayOperation {
-	if len(wave) == 0 {
+func cloneReplayOperations(ops []ReplayOperation) []ReplayOperation {
+	if len(ops) == 0 {
 		return nil
 	}
-	out := make([]ReplayOperation, 0, len(wave))
-	for _, op := range wave {
+	out := make([]ReplayOperation, 0, len(ops))
+	for _, op := range ops {
 		out = append(out, cloneReplayOperation(op))
 	}
 	return out
