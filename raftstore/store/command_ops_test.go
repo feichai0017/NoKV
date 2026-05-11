@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	local "github.com/feichai0017/NoKV/local"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
@@ -1194,6 +1196,16 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
 		},
 		{
+			name: "peras install routing key out of range",
+			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+					RoutingKey: []byte("a"),
+				}},
+			}}},
+			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
+		},
+		{
 			name: "unknown command",
 			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 				CmdType: raftcmdpb.CmdType(255),
@@ -1209,6 +1221,48 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 			require.NotNil(t, tc.kind(err))
 		})
 	}
+}
+
+func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T) {
+	meta := localmeta.RegionMeta{
+		ID:       12,
+		StartKey: []byte("b"),
+		EndKey:   []byte("m"),
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{
+				ClientID: "client",
+				Seq:      1,
+			},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: []byte("c"), Value: []byte("in-region")},
+				{Key: []byte("z"), Value: []byte("out-of-region")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			RoutingKey:           []byte("c"),
+			SegmentRoot:          append([]byte(nil), segment.Root[:]...),
+			SegmentPayloadDigest: append([]byte(nil), digest[:]...),
+			SegmentPayload:       payload,
+			InstallVersion:       10,
+		}},
+	}}}
+
+	regionErr, reason := validateRequestKeys(meta, req)
+	require.Equal(t, AdmissionReasonKeyNotInRegion, reason)
+	require.NotNil(t, regionErr)
+	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
 }
 
 func TestCommandServiceErrorHelpers(t *testing.T) {

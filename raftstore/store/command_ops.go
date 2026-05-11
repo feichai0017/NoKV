@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -504,15 +505,55 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 				}
 			}
 		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			key := r.GetPerasInstallSegment().GetRoutingKey()
-			if len(key) == 0 || !keyInRange(meta, key) {
-				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+			if err, reason := validatePerasSegmentRequestKeys(meta, r.GetPerasInstallSegment()); err != nil {
+				return err, reason
 			}
 		default:
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
 	}
 	return nil, AdmissionReasonUnknown
+}
+
+func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.PerasInstallSegmentRequest) (*errorpb.RegionError, AdmissionReason) {
+	if req == nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	key := req.GetRoutingKey()
+	if len(key) == 0 || !keyInRange(meta, key) {
+		return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+	}
+	root, ok := bytes32(req.GetSegmentRoot())
+	if !ok {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	digest, ok := bytes32(req.GetSegmentPayloadDigest())
+	if !ok {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	entries := segment.Entries()
+	if len(entries) == 0 {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	for _, entry := range entries {
+		if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
+			return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
+		}
+	}
+	return nil, AdmissionReasonUnknown
+}
+
+func bytes32(in []byte) ([32]byte, bool) {
+	var out [32]byte
+	if len(in) != len(out) {
+		return out, false
+	}
+	copy(out[:], in)
+	return out, true
 }
 
 func keyInRange(meta localmeta.RegionMeta, key []byte) bool {
