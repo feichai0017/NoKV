@@ -60,6 +60,23 @@ func TestSplitReplayPlanByFSMetaBucketLeavesNonFSMetaTestPlansWhole(t *testing.T
 	require.Equal(t, replayPlanOpIDs(plan), replayPlanOpIDs(out[0]))
 }
 
+func TestSplitReplayPlanByMutationBudget(t *testing.T) {
+	plan := ReplayPlan{
+		EpochID: 1,
+		Operations: []ReplayOperation{
+			{OpID: opID("client", 1), Kind: fsmeta.OperationCreate, Mutations: []ReplayMutation{{Key: []byte("a"), Value: []byte("1")}, {Key: []byte("b"), Value: []byte("1")}}},
+			{OpID: opID("client", 2), Kind: fsmeta.OperationCreate, Mutations: []ReplayMutation{{Key: []byte("c"), Value: []byte("1")}, {Key: []byte("d"), Value: []byte("1")}}},
+			{OpID: opID("client", 3), Kind: fsmeta.OperationUpdateInode, Mutations: []ReplayMutation{{Key: []byte("e"), Value: []byte("1")}}},
+		},
+	}
+
+	out, err := SplitReplayPlanByMutationBudget(plan, 3)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	require.Equal(t, []OperationID{opID("client", 1)}, replayPlanOpIDs(out[0]))
+	require.Equal(t, []OperationID{opID("client", 2), opID("client", 3)}, replayPlanOpIDs(out[1]))
+}
+
 func replayPlanOpIDs(plan ReplayPlan) []OperationID {
 	out := make([]OperationID, 0, len(plan.Operations))
 	for _, op := range plan.Operations {
