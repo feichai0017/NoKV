@@ -634,15 +634,15 @@ func perasFenceErrorForKey(cfg applyConfig, key []byte) *kvrpcpb.KeyError {
 	}
 	grant, ok, err := cfg.perasAuthorities.FencesKey(key, now())
 	if err != nil {
-		return &kvrpcpb.KeyError{Abort: "peras authority fence: " + err.Error()}
+		return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + err.Error()}
 	}
 	if !ok {
 		return nil
 	}
 	if grant.GrantID == "" {
-		return &kvrpcpb.KeyError{Abort: "peras authority fence"}
+		return &kvrpcpb.KeyError{Retryable: "peras authority fence"}
 	}
-	return &kvrpcpb.KeyError{Abort: "peras authority fence: " + grant.GrantID}
+	return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + grant.GrantID}
 }
 
 func perasFenceResponseForCommand(r *raftcmdpb.Request, keyErr *kvrpcpb.KeyError) *raftcmdpb.Response {

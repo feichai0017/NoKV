@@ -163,6 +163,48 @@ func (m *PerasAuthorityManager) Retire(ctx context.Context, grant perasauth.Auth
 	return nil
 }
 
+func (m *PerasAuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if m == nil {
+		return errPerasAuthorityClientRequired
+	}
+	grants := m.ownedGrantsForScopes(scopes...)
+	for _, grant := range grants {
+		if err := m.Retire(ctx, grant); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *PerasAuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []perasauth.AuthorityGrant {
+	if m == nil || m.table == nil || strings.TrimSpace(m.holderID) == "" {
+		return nil
+	}
+	now := m.now()
+	snapshot := m.table.Snapshot()
+	out := make([]perasauth.AuthorityGrant, 0, len(snapshot))
+	for _, grant := range snapshot {
+		if grant.HolderID != m.holderID || !grant.ActiveAt(now.UnixNano()) {
+			continue
+		}
+		if len(scopes) == 0 {
+			out = append(out, grant)
+			continue
+		}
+		for _, scope := range scopes {
+			if perasAuthorityScopeEmpty(scope) || perasauth.GrantCoversDelta(grant, scope, now) {
+				out = append(out, grant)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func perasAuthorityScopeEmpty(scope compile.AuthorityScope) bool {
+	return scope.Mount == "" || scope.MountKeyID == 0
+}
+
 func (m *PerasAuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
 	if m == nil || m.table == nil {
 		return errPerasAuthorityTableRequired

@@ -222,9 +222,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	}()
 
 	var perasWitness kv.PerasWitness
+	var perasAuthorities *perasauth.ActiveAuthorities
 	var perasAuthorityFeed *perasauth.RootAuthorityFeed
 	if *perasWitnessEnabled {
-		perasWitness, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+		perasWitness, perasAuthorities, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
 		if err != nil {
 			return err
 		}
@@ -316,8 +317,9 @@ func runServeCmd(w io.Writer, args []string) error {
 			},
 			Mount: fsmeta.MountKeyResolver,
 		},
-		TransportAddr: *listenAddr,
-		PerasWitness:  perasWitness,
+		TransportAddr:    *listenAddr,
+		PerasWitness:     perasWitness,
+		PerasAuthorities: perasAuthorities,
 	})
 	if err != nil {
 		return err

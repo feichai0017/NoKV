@@ -112,6 +112,44 @@ func TestPerasAuthorityManagerRetireAuthority(t *testing.T) {
 	require.Empty(t, table.Snapshot())
 }
 
+func TestPerasAuthorityManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
+	now := time.Unix(10, 0)
+	scopeA := testRuntimePerasScope(1)
+	scopeB := testRuntimePerasScope(2)
+	grantA := testRuntimePerasGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
+	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
+	client := &fakePerasAuthorityClient{
+		resp: &coordpb.ApplyPerasAuthorityResponse{
+			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED,
+			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grantB)},
+		},
+	}
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{grantA, grantB}))
+	manager, err := NewPerasAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+
+	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scopeA))
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, grantA.GrantID, client.last.GrantID)
+	require.Equal(t, []perasauth.AuthorityGrant{grantB}, table.Snapshot())
+}
+
+func TestPerasAuthorityManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
+	now := time.Unix(10, 0)
+	scope := testRuntimePerasScope(1)
+	grant := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
+	client := &fakePerasAuthorityClient{}
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{grant}))
+	manager, err := NewPerasAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+
+	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scope))
+	require.Zero(t, client.calls)
+	require.Equal(t, []perasauth.AuthorityGrant{grant}, table.Snapshot())
+}
+
 func TestPerasAuthorityManagerRejectsInvalidConfigAndResponses(t *testing.T) {
 	_, err := NewPerasAuthorityManager(nil, perasauth.NewActiveAuthorities(), "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, errPerasAuthorityClientRequired)

@@ -19,17 +19,17 @@ type controlWALOpener interface {
 	OpenControlWAL(uint64) (*wal.Manager, error)
 }
 
-func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *perasauth.RootAuthorityFeed, error) {
+func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *perasauth.ActiveAuthorities, *perasauth.RootAuthorityFeed, error) {
 	if storeID == 0 || coord == nil || db == nil {
-		return nil, nil, fmt.Errorf("serve: peras witness requires store id, coordinator, and db")
+		return nil, nil, nil, fmt.Errorf("serve: peras witness requires store id, coordinator, and db")
 	}
 	manager, err := db.OpenControlWAL(perasWitnessControlGroupID(storeID))
 	if err != nil {
-		return nil, nil, fmt.Errorf("serve: open peras witness WAL: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: open peras witness WAL: %w", err)
 	}
 	log, err := fsperas.NewWALWitnessLog(manager, durability)
 	if err != nil {
-		return nil, nil, fmt.Errorf("serve: open peras witness log: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: open peras witness log: %w", err)
 	}
 	authorities := perasauth.NewActiveAuthorities()
 	feed := perasauth.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
@@ -42,9 +42,9 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth
 		if feed != nil {
 			_ = feed.Close()
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return witness, feed, nil
+	return witness, authorities, feed, nil
 }
 
 func perasWitnessControlGroupID(storeID uint64) uint64 {

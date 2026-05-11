@@ -229,7 +229,7 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	require.Len(t, resp.GetResponses(), 1)
 	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
 	require.NotNil(t, atomicResp)
-	require.Contains(t, atomicResp.GetError().GetAbort(), "peras authority fence")
+	require.Contains(t, atomicResp.GetError().GetRetryable(), "peras authority fence")
 
 	reader := percolator.NewReader(db)
 	_, _, err = reader.GetValue(key, 12)
@@ -272,7 +272,7 @@ func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resps, 3)
 	require.Nil(t, resps[0].GetResponses()[0].GetTryAtomicMutate().GetError())
-	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetAbort(), "peras authority fence")
+	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetRetryable(), "peras authority fence")
 	require.Nil(t, resps[2].GetResponses()[0].GetTryAtomicMutate().GetError())
 
 	reader := percolator.NewReader(db)
