@@ -1,6 +1,7 @@
 package raftstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -872,6 +873,22 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 	}
 	if keyErr := resp.GetError(); keyErr != nil {
 		return runnerKeyError("peras install segment", keyErr)
+	}
+	return validatePerasSegmentInstallResponse(segment, resp)
+}
+
+func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) error {
+	if resp == nil {
+		return errPerasCommitterInvalid
+	}
+	if !bytes.Equal(resp.GetSegmentRoot(), segment.Root[:]) {
+		return errPerasCommitterInvalid
+	}
+	stats := segment.Stats()
+	if resp.GetOperationCount() != stats.OperationCount ||
+		resp.GetEntryCount() != stats.EntryCount ||
+		(stats.EntryCount > 0 && resp.GetAppliedEntries() == 0) {
+		return errPerasCommitterInvalid
 	}
 	return nil
 }
