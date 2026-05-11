@@ -356,18 +356,27 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	if keyErr != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
 	}
-	if _, ok, err := fsperas.LoadPerasSegmentCatalog(db, segment); err != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
-	} else if ok {
-		stats := segment.Stats()
-		return &kvrpcpb.PerasInstallSegmentResponse{
-			SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-			OperationCount: stats.OperationCount,
-			EntryCount:     stats.EntryCount,
-			AppliedEntries: 1,
-		}, nil
+	materialize := req.GetMaterializeMvcc()
+	if !materialize {
+		if _, ok, err := fsperas.LoadPerasSegmentCatalog(db, segment); err != nil {
+			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+		} else if ok {
+			stats := segment.Stats()
+			return &kvrpcpb.PerasInstallSegmentResponse{
+				SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+				OperationCount: stats.OperationCount,
+				EntryCount:     stats.EntryCount,
+				AppliedEntries: 1,
+			}, nil
+		}
 	}
-	entries, err := fsperas.BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest)
+	var entries []*kv.Entry
+	var err error
+	if materialize {
+		entries, err = fsperas.BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
+	} else {
+		entries, err = fsperas.BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest)
+	}
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 	}
