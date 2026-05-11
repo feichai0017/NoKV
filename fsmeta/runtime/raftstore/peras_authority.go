@@ -118,11 +118,10 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 
 func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	rootScope := perasauth.AuthorityScopeFromDelta(scope)
-	// v1 acquires one broad mount authority per holder. This avoids grant churn
-	// and same-holder bucket conflicts while the segment apply path is still
-	// experimental. Finer parent/bucket grants can be restored once the active
-	// fence and grant handoff policy are production-ready.
-	rootScope.Buckets = nil
+	// Segment install is bucket-local. The grant is therefore bucket-wide, not
+	// mount-wide: parent/inode filters would make same-bucket closure segments
+	// churn grants, while a mount-wide grant makes every slow-path barrier drain
+	// unrelated metadata bursts.
 	rootScope.Parents = nil
 	rootScope.Inodes = nil
 	return rootScope

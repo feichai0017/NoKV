@@ -826,6 +826,16 @@ func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.Semant
 		e.perasAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
+	if perasDeltaHasConcreteWrites(delta) {
+		singleBucket, err := fsperas.DeltaWritesSingleFSMetaBucket(delta)
+		if err != nil {
+			e.perasAdmission.errorTotal.Add(1)
+			return err
+		}
+		if !singleBucket {
+			return nil
+		}
+	}
 	e.perasAdmission.eligibleTotal.Add(1)
 	e.perasAdmission.acquireTotal.Add(1)
 	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)

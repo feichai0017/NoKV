@@ -725,9 +725,10 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
 	runner := newFakeRunner()
 	admitter := &fakePerasAdmitter{owned: true}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
@@ -745,7 +746,7 @@ func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
 	require.Equal(t, fsmeta.MountID("vol"), admitter.scopes[0].Mount)
 	require.Equal(t, fsmeta.MountKeyID(1), admitter.scopes[0].MountKeyID)
 	require.Equal(t, []fsmeta.InodeID{fsmeta.RootInode}, admitter.scopes[0].Parents)
-	require.Equal(t, []fsmeta.InodeID{22}, admitter.scopes[0].Inodes)
+	require.Equal(t, []fsmeta.InodeID{inode}, admitter.scopes[0].Inodes)
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
@@ -1211,9 +1212,10 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesReadDirPlusOverlay(t *tes
 func TestExecutorCreateStopsWhenPerasAuthorityHeldElsewhere(t *testing.T) {
 	runner := newFakeRunner()
 	admitter := &fakePerasAdmitter{owned: false}
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithPerasAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
