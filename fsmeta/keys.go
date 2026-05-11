@@ -51,6 +51,15 @@ const (
 	KeyKindUsage   KeyKind = 'u'
 )
 
+type KeyParts struct {
+	MountKeyID MountKeyID
+	Bucket     AffinityBucket
+	Kind       KeyKind
+	Parent     InodeID
+	Inode      InodeID
+	UsageScope InodeID
+}
+
 func (k KeyKind) String() string {
 	switch k {
 	case KeyKindMount:
@@ -244,6 +253,57 @@ func BucketOfKey(key []byte) (AffinityBucket, bool) {
 		return 0, false
 	}
 	return AffinityBucket(binary.BigEndian.Uint16(key[pos : pos+encodedBucketBytes])), true
+}
+
+func InspectKey(key []byte) (KeyParts, bool) {
+	mount, bucketPos, err := decodeMountPrefix(key)
+	if err != nil || len(key)-bucketPos < encodedBucketBytes+1 {
+		return KeyParts{}, false
+	}
+	kindPos := bucketPos + encodedBucketBytes
+	kind := KeyKind(key[kindPos])
+	parts := KeyParts{
+		MountKeyID: mount,
+		Bucket:     AffinityBucket(binary.BigEndian.Uint16(key[bucketPos:kindPos])),
+		Kind:       kind,
+	}
+	body := key[kindPos+1:]
+	switch kind {
+	case KeyKindMount:
+		return parts, len(body) == 0
+	case KeyKindDentry:
+		if len(body) <= 8 {
+			return KeyParts{}, false
+		}
+		parts.Parent = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindInode:
+		if len(body) != 8 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindChunk:
+		if len(body) != 16 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindSession:
+		if len(body) < 9 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindUsage:
+		if len(body) != 8 {
+			return KeyParts{}, false
+		}
+		parts.UsageScope = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	default:
+		return KeyParts{}, false
+	}
 }
 
 // MountKeyResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped

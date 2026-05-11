@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -202,6 +205,85 @@ func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
 	value, _, err = reader.GetValue([]byte("inode/1"), 100)
 	require.NoError(t, err)
 	require.Equal(t, []byte("attrs"), value)
+}
+
+func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
+	require.NoError(t, err)
+
+	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	resp, err := applier(&raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(10, 11, key, []byte("value"))},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
+	require.NotNil(t, atomicResp)
+	require.Contains(t, atomicResp.GetError().GetAbort(), "peras authority fence")
+
+	reader := percolator.NewReader(db)
+	_, _, err = reader.GetValue(key, 12)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	fencedKey, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
+	require.NoError(t, err)
+
+	applier := NewBatchApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	resps, err := applier([]*raftcmdpb.RaftCmdRequest{
+		{
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(20, 21, []byte("plain-a"), []byte("va"))},
+			}},
+		},
+		{
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(22, 23, fencedKey, []byte("vf"))},
+			}},
+		},
+		{
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(24, 25, []byte("plain-b"), []byte("vb"))},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, resps, 3)
+	require.Nil(t, resps[0].GetResponses()[0].GetTryAtomicMutate().GetError())
+	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetAbort(), "peras authority fence")
+	require.Nil(t, resps[2].GetResponses()[0].GetTryAtomicMutate().GetError())
+
+	reader := percolator.NewReader(db)
+	value, _, err := reader.GetValue([]byte("plain-a"), 30)
+	require.NoError(t, err)
+	require.Equal(t, []byte("va"), value)
+	value, _, err = reader.GetValue([]byte("plain-b"), 30)
+	require.NoError(t, err)
+	require.Equal(t, []byte("vb"), value)
+	_, _, err = reader.GetValue(fencedKey, 30)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
 func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {
@@ -469,6 +551,19 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 	}
 	t.Fatalf("could not find different-shard keys for shardCount=%d", shardCount)
 	return nil, nil
+}
+
+func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *perasauth.ActiveAuthorities {
+	t.Helper()
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{{
+		GrantID:         "grant-apply-test",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.PerasAuthorityScope{MountID: string(mount.MountID), MountKeyID: uint64(mount.MountKeyID)},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}}))
+	return table
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {

@@ -104,6 +104,48 @@ func TestMountPrefixAndRangeCoverOnlyOneMount(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestInspectKeyExtractsAuthorityParts(t *testing.T) {
+	dentry, err := EncodeDentryKey(testMount, 7, "file")
+	require.NoError(t, err)
+	parts, ok := InspectKey(dentry)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, BucketForInodeID(7), parts.Bucket)
+	require.Equal(t, KeyKindDentry, parts.Kind)
+	require.Equal(t, InodeID(7), parts.Parent)
+
+	inode, err := EncodeInodeKey(testMount, 42)
+	require.NoError(t, err)
+	parts, ok = InspectKey(inode)
+	require.True(t, ok)
+	require.Equal(t, KeyKindInode, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	chunk, err := EncodeChunkKey(testMount, 42, 3)
+	require.NoError(t, err)
+	parts, ok = InspectKey(chunk)
+	require.True(t, ok)
+	require.Equal(t, KeyKindChunk, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	session, err := EncodeSessionKey(testMount, 42, "writer")
+	require.NoError(t, err)
+	parts, ok = InspectKey(session)
+	require.True(t, ok)
+	require.Equal(t, KeyKindSession, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	usage, err := EncodeUsageKey(testMount, 9)
+	require.NoError(t, err)
+	parts, ok = InspectKey(usage)
+	require.True(t, ok)
+	require.Equal(t, KeyKindUsage, parts.Kind)
+	require.Equal(t, InodeID(9), parts.UsageScope)
+
+	_, ok = InspectKey([]byte("bad"))
+	require.False(t, ok)
+}
+
 func TestDentryPrefixGroupsDirectoryEntries(t *testing.T) {
 	prefix, err := EncodeDentryPrefix(testMount, 9)
 	require.NoError(t, err)

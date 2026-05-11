@@ -198,6 +198,98 @@ func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
 	require.True(t, errors.Is(err, ErrAmbiguousAuthority))
 }
 
+func TestActiveAuthoritiesFencesMountWideFsmetaKeys(t *testing.T) {
+	table := NewActiveAuthorities()
+	require.NoError(t, table.Replace([]AuthorityGrant{
+		testGrant("g1", "holder-a", compile.AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+		}),
+	}))
+
+	keys := make([][]byte, 0, 5)
+	dentry, err := fsmeta.EncodeDentryKey(testMount, 10, "name")
+	require.NoError(t, err)
+	keys = append(keys, dentry)
+	inode, err := fsmeta.EncodeInodeKey(testMount, 20)
+	require.NoError(t, err)
+	keys = append(keys, inode)
+	session, err := fsmeta.EncodeSessionKey(testMount, 20, "writer")
+	require.NoError(t, err)
+	keys = append(keys, session)
+	usage, err := fsmeta.EncodeUsageKey(testMount, 30)
+	require.NoError(t, err)
+	keys = append(keys, usage)
+	mount, err := fsmeta.EncodeMountKey(testMount)
+	require.NoError(t, err)
+	keys = append(keys, mount)
+
+	for _, key := range keys {
+		found, ok, err := table.FencesKey(key, testNow)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, "holder-a", found.HolderID)
+	}
+}
+
+func TestActiveAuthoritiesFencesSpecificParentAndBucket(t *testing.T) {
+	table := NewActiveAuthorities()
+	parent := fsmeta.InodeID(10)
+	require.NoError(t, table.Replace([]AuthorityGrant{
+		testGrant("g1", "holder-a", compile.AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(parent)},
+			Parents:    []fsmeta.InodeID{parent},
+		}),
+	}))
+
+	matching, err := fsmeta.EncodeDentryKey(testMount, parent, "name")
+	require.NoError(t, err)
+	_, ok, err := table.FencesKey(matching, testNow)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	otherParent, err := fsmeta.EncodeDentryKey(testMount, parent+1, "name")
+	require.NoError(t, err)
+	_, ok, err = table.FencesKey(otherParent, testNow)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	otherMount, err := fsmeta.EncodeDentryKey(fsmeta.MountIdentity{MountID: "other", MountKeyID: 9}, parent, "name")
+	require.NoError(t, err)
+	_, ok, err = table.FencesKey(otherMount, testNow)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	_, ok, err = table.FencesKey([]byte("not-fsmeta"), testNow)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestActiveAuthoritiesFencesUsageOnlyWhenScopeMatches(t *testing.T) {
+	table := NewActiveAuthorities()
+	require.NoError(t, table.Replace([]AuthorityGrant{
+		testGrant("g1", "holder-a", compile.AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Inodes:     []fsmeta.InodeID{20},
+		}),
+	}))
+
+	matching, err := fsmeta.EncodeUsageKey(testMount, 20)
+	require.NoError(t, err)
+	_, ok, err := table.FencesKey(matching, testNow)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	other, err := fsmeta.EncodeUsageKey(testMount, 21)
+	require.NoError(t, err)
+	_, ok, err = table.FencesKey(other, testNow)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestActiveAuthoritiesAppliesRootEvents(t *testing.T) {
 	table := NewActiveAuthorities()
 	grant := testGrant("g1", "holder-a", compile.AuthorityScope{
