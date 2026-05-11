@@ -41,7 +41,7 @@ const (
 	SlowReasonReadOnly          SlowReason = "read_only"
 	SlowReasonRangeRead         SlowReason = "range_read"
 	SlowReasonDurabilityBarrier SlowReason = "durability_barrier"
-	SlowReasonCrossParent       SlowReason = "cross_parent"
+	SlowReasonCrossBucket       SlowReason = "cross_bucket"
 	SlowReasonSharedQuota       SlowReason = "shared_quota"
 	SlowReasonDynamicWriteSet   SlowReason = "dynamic_write_set"
 	SlowReasonMaintenanceScan   SlowReason = "maintenance_scan"
@@ -55,7 +55,6 @@ const (
 	GuardSingleLinkInode     RuntimeGuard = "single_link_inode"
 	GuardSameAuthority       RuntimeGuard = "same_authority"
 	GuardNonDirectoryInode   RuntimeGuard = "non_directory_inode"
-	GuardNotLastReference    RuntimeGuard = "not_last_reference"
 	GuardLiveSession         RuntimeGuard = "live_session"
 	GuardExpiredSessionOwner RuntimeGuard = "expired_session_owner"
 	GuardQuotaCredit         RuntimeGuard = "quota_credit"
@@ -234,9 +233,9 @@ func Rename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta
 			{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
 		},
 	)
-	if req.FromParent != req.ToParent {
+	if len(delta.Authority.Buckets) > 1 {
 		delta.Eligibility = EligibilitySlowPath
-		delta.SlowReason = SlowReasonCrossParent
+		delta.SlowReason = SlowReasonCrossBucket
 	}
 	return delta, nil
 }
@@ -294,7 +293,7 @@ func Unlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option
 			{Kind: EffectDerivedPut},
 		},
 	)
-	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNotLastReference)
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode)
 	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
 }
 

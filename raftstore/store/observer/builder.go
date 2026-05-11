@@ -2,6 +2,7 @@ package observer
 
 import (
 	"github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -76,6 +77,26 @@ func EventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *
 				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
 				AtomicMutate:  true,
 			})
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			install := request.GetPerasInstallSegment()
+			if install == nil || install.GetInstallVersion() == 0 || response == nil || response.GetPerasInstallSegment() == nil {
+				continue
+			}
+			if response.GetPerasInstallSegment().GetError() != nil {
+				continue
+			}
+			keys := perasSegmentKeys(install)
+			if len(keys) == 0 {
+				continue
+			}
+			out = append(out, Event{
+				RegionID:      regionID,
+				Term:          entry.Term,
+				Index:         entry.Index,
+				Source:        SourceCommit,
+				CommitVersion: install.GetInstallVersion(),
+				Keys:          keys,
+			})
 		}
 	}
 	return out
@@ -106,6 +127,32 @@ func cloneMutationKeys(mutations []*kvrpcpb.Mutation) [][]byte {
 			continue
 		}
 		out = append(out, kv.SafeCopy(nil, mut.GetKey()))
+	}
+	return out
+}
+
+func perasSegmentKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {
+	if req == nil {
+		return nil
+	}
+	var root [32]byte
+	if len(req.GetSegmentRoot()) != len(root) {
+		return nil
+	}
+	copy(root[:], req.GetSegmentRoot())
+	var digest [32]byte
+	if len(req.GetSegmentPayloadDigest()) != len(digest) {
+		return nil
+	}
+	copy(digest[:], req.GetSegmentPayloadDigest())
+	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	if err != nil {
+		return nil
+	}
+	entries := segment.Entries()
+	out := make([][]byte, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, kv.SafeCopy(nil, entry.Key))
 	}
 	return out
 }

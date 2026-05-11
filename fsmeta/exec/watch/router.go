@@ -118,23 +118,6 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	}
 }
 
-// HasSubscriberForKey reports whether a live subscription would observe key.
-// It is used by Peras admission to keep visible-only overlay commits out of
-// watched prefixes until seal-time watch publication is fully durable.
-func (r *Router) HasSubscriberForKey(key []byte) bool {
-	if r == nil || len(key) == 0 {
-		return false
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, sub := range r.subs {
-		if bytes.HasPrefix(key, sub.prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // OnApply publishes one storage-apply event after the runtime adapter has
 // converted it into fsmeta's neutral ApplyEvent shape.
 func (r *Router) OnApply(evt fsmeta.ApplyEvent) {

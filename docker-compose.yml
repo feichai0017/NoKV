@@ -221,6 +221,7 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
       - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
       - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
@@ -250,6 +251,7 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
       - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
       - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
@@ -279,6 +281,7 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
       - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
       - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
@@ -341,7 +344,8 @@ services:
       - "--peras-segment-witness-retries=${NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES:-50}"
       - "--peras-segment-witness-retry-backoff=${NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRY_BACKOFF:-20ms}"
       - "--peras-segment-batch-size=${NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE:-256}"
-      - "--peras-segment-flush-every=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY:-100ms}"
+      - "--peras-segment-max-replay-mutations=${NOKV_FSMETA_PERAS_SEGMENT_MAX_REPLAY_MUTATIONS:-256}"
+      - "--peras-segment-flush-every=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY:-25ms}"
       - "--peras-background-flush-timeout=${NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT:-2s}"
       - "--peras-background-error-backoff=${NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF:-1s}"
     volumes:

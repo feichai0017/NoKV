@@ -23,7 +23,7 @@ const (
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
 	defaultPerasSegmentBatchSize           = 256
 	defaultPerasSegmentMaxReplayMutations  = 20
-	defaultPerasSegmentFlushEvery          = 100 * time.Millisecond
+	defaultPerasSegmentFlushEvery          = 25 * time.Millisecond
 	defaultPerasBackgroundFlushTimeout     = 2 * time.Second
 	defaultPerasBackgroundErrorBackoff     = time.Second
 )
@@ -49,6 +49,7 @@ type RemotePerasCommitterConfig struct {
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
 	SegmentBatchSize           int
+	SegmentMaxReplayMutations  int
 	SegmentFlushEvery          time.Duration
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
@@ -66,6 +67,7 @@ type RemotePerasCommitter struct {
 	retries    int
 	backoff    time.Duration
 	batchSize  int
+	maxReplay  int
 	flushEvery time.Duration
 	bgTimeout  time.Duration
 	bgBackoff  time.Duration
@@ -174,6 +176,13 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	if batchSize < 0 {
 		return nil, errPerasCommitterInvalid
 	}
+	maxReplay := cfg.SegmentMaxReplayMutations
+	if maxReplay == 0 {
+		maxReplay = defaultPerasSegmentMaxReplayMutations
+	}
+	if maxReplay < 0 {
+		return nil, errPerasCommitterInvalid
+	}
 	flushEvery := cfg.SegmentFlushEvery
 	if flushEvery == 0 {
 		flushEvery = defaultPerasSegmentFlushEvery
@@ -207,6 +216,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		retries:    retries,
 		backoff:    backoff,
 		batchSize:  batchSize,
+		maxReplay:  maxReplay,
 		flushEvery: flushEvery,
 		bgTimeout:  bgTimeout,
 		bgBackoff:  bgBackoff,
@@ -370,7 +380,9 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 }
 
 func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
-	jobs, err := c.freezeFlushJobs(scope)
+	c.commitMu.Lock()
+	jobs, err := c.freezeFlushJobsLocked(scope)
+	c.commitMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -404,12 +416,6 @@ func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retir
 	return nil
 }
 
-func (c *RemotePerasCommitter) freezeFlushJobs(target *compile.AuthorityScope) ([]runtimePerasFlushJob, error) {
-	c.commitMu.Lock()
-	defer c.commitMu.Unlock()
-	return c.freezeFlushJobsLocked(target)
-}
-
 func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthorityScope) ([]runtimePerasFlushJob, error) {
 	plans, err := c.freezeReplayPlansLocked(target)
 	if err != nil {
@@ -423,7 +429,7 @@ func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthoritySc
 		}
 		parts := make([]fsperas.ReplayPlan, 0, len(bucketPlans))
 		for _, bucketPlan := range bucketPlans {
-			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, defaultPerasSegmentMaxReplayMutations)
+			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, c.maxReplay)
 			if err != nil {
 				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 			}
