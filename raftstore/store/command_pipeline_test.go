@@ -3,20 +3,27 @@ package store
 import (
 	"context"
 	"errors"
-	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 )
 
-func mustCommandEntry(t *testing.T, regionID, peerID, requestID uint64) myraft.Entry {
+func mustCommandEntry(t testing.TB, regionID, peerID, requestID uint64) myraft.Entry {
+	t.Helper()
+	return mustCommandEntryWithRequests(t, regionID, peerID, requestID)
+}
+
+func mustCommandEntryWithRequests(t testing.TB, regionID, peerID, requestID uint64, requests ...*raftcmdpb.Request) myraft.Entry {
 	t.Helper()
 	payload, err := command.Encode(&raftcmdpb.RaftCmdRequest{
-		Header: &raftcmdpb.CmdHeader{RegionId: regionID, PeerId: peerID, RequestId: requestID},
+		Header:   &raftcmdpb.CmdHeader{RegionId: regionID, PeerId: peerID, RequestId: requestID},
+		Requests: requests,
 	})
 	require.NoError(t, err)
 	return myraft.Entry{Type: myraft.EntryNormal, Data: payload}
@@ -135,6 +142,61 @@ func TestCommandPipelineRejectsUnframedPayload(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported unframed raft payload")
 }
 
+func TestCommandPipelineAppliesDisjointCommandsInParallel(t *testing.T) {
+	started := make(chan uint64, 2)
+	release := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		started <- req.GetHeader().GetRequestId()
+		<-release
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 2)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cp.applyEntries([]myraft.Entry{
+			mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("a"))),
+			mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("b"))),
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		return len(started) == 2
+	}, time.Second, time.Millisecond)
+	close(release)
+	require.NoError(t, <-done)
+}
+
+func TestCommandPipelineSerializesConflictingCommands(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		id := req.GetHeader().GetRequestId()
+		started <- id
+		if id == 1 {
+			<-releaseFirst
+		}
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 2)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cp.applyEntries([]myraft.Entry{
+			mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("same-key"))),
+			mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("same-key"))),
+		})
+	}()
+
+	require.Equal(t, uint64(1), <-started)
+	select {
+	case id := <-started:
+		t.Fatalf("conflicting command %d started before first command completed", id)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+	require.Equal(t, uint64(2), <-started)
+	require.NoError(t, <-done)
+}
+
 func TestCommandRuntimeHelpers(t *testing.T) {
 	var nilStore *Store
 	require.NotNil(t, nilStore.runtimeContext())
@@ -154,4 +216,32 @@ func TestCommandRuntimeHelpers(t *testing.T) {
 	empty := NewStore(Config{})
 	t.Cleanup(func() { empty.Close() })
 	require.NoError(t, empty.applyEntries([]myraft.Entry{}))
+}
+
+func BenchmarkCommandPipelineApplyEntries(b *testing.B) {
+	entries := make([]myraft.Entry, 32)
+	for i := range entries {
+		key := []byte(fmt.Sprintf("bench-key-%02d", i))
+		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
+	}
+	for _, tc := range []struct {
+		name        string
+		parallelism int
+	}{
+		{name: "serial", parallelism: 1},
+		{name: "parallel_8", parallelism: 8},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+				time.Sleep(50 * time.Microsecond)
+				return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+			}, tc.parallelism)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := cp.applyEntries(entries); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
