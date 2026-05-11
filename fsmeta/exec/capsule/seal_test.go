@@ -106,6 +106,22 @@ func TestCapsuleSealMerkleStableAndSensitive(t *testing.T) {
 	require.NotEqual(t, left.DAGFrontierMerkle, changed.DAGFrontierMerkle)
 }
 
+func TestBuildCapsuleSealWithVersionsCarriesReplayRange(t *testing.T) {
+	prepare := testSealPrepare()
+	snapshot := WitnessSnapshot{
+		Prepares: []PrepareRecord{prepare},
+		Commits:  []CommitCertificateRecord{testCommitForPrepare(t, prepare)},
+	}
+
+	unversioned, err := BuildCapsuleSeal(1, snapshot)
+	require.NoError(t, err)
+	versioned, err := BuildCapsuleSealWithVersions(1, 100, snapshot)
+	require.NoError(t, err)
+
+	require.Equal(t, ReplayVersionRange{First: 100, Count: 1}, versioned.Versions)
+	require.NotEqual(t, unversioned.DAGFrontierMerkle, versioned.DAGFrontierMerkle)
+}
+
 func BenchmarkBuildCapsuleSeal64(b *testing.B) {
 	snapshot := sealSnapshotForBench(b, 64)
 

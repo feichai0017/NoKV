@@ -21,6 +21,8 @@ type InternalEntryApplier interface {
 type MVCCReplayStore struct {
 	db          InternalEntryApplier
 	nextVersion uint64
+	remaining   uint64
+	bounded     bool
 }
 
 // NewMVCCReplayStore binds one replay plan to an explicit MVCC version range.
@@ -35,13 +37,41 @@ func NewMVCCReplayStore(db InternalEntryApplier, firstVersion uint64) (*MVCCRepl
 	return &MVCCReplayStore{db: db, nextVersion: firstVersion}, nil
 }
 
+// NewMVCCReplayStoreForPlan binds storage to the version range carried by a
+// sealed replay plan.
+func NewMVCCReplayStoreForPlan(db InternalEntryApplier, plan ReplayPlan) (*MVCCReplayStore, error) {
+	if db == nil {
+		return nil, ErrReplayStoreRequired
+	}
+	if err := validateReplayPlanForApply(plan); err != nil {
+		return nil, err
+	}
+	if err := plan.Versions.ValidateForOperationCount(ReplayPlanOperationCount(plan)); err != nil {
+		return nil, err
+	}
+	return &MVCCReplayStore{
+		db:          db,
+		nextVersion: plan.Versions.First,
+		remaining:   plan.Versions.Count,
+		bounded:     true,
+	}, nil
+}
+
 func (s *MVCCReplayStore) ApplyCapsuleReplayWave(wave []ReplayOperation) error {
 	if s == nil || s.db == nil {
 		return ErrReplayStoreRequired
 	}
 	nextVersion := s.nextVersion
+	remaining := s.remaining
 	entries := make([]*entrykv.Entry, 0, len(wave)*3)
 	for _, op := range wave {
+		if s.bounded {
+			if remaining == 0 {
+				releaseMVCCReplayEntries(entries)
+				return ErrReplayVersionRequired
+			}
+			remaining--
+		}
 		if nextVersion == 0 || nextVersion == entrykv.MaxVersion {
 			releaseMVCCReplayEntries(entries)
 			return ErrReplayVersionRequired
@@ -60,6 +90,9 @@ func (s *MVCCReplayStore) ApplyCapsuleReplayWave(wave []ReplayOperation) error {
 	}
 	releaseMVCCReplayEntries(entries)
 	s.nextVersion = nextVersion
+	if s.bounded {
+		s.remaining = remaining
+	}
 	return nil
 }
 

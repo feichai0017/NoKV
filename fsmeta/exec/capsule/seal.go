@@ -15,11 +15,28 @@ type SealedCertificate struct {
 
 type CapsuleSeal struct {
 	EpochID           uint64
+	Versions          ReplayVersionRange
 	Certificates      []SealedCertificate
 	DAGFrontierMerkle [32]byte
 }
 
 func BuildCapsuleSeal(epochID uint64, snapshot WitnessSnapshot) (CapsuleSeal, error) {
+	return buildCapsuleSeal(epochID, ReplayVersionRange{}, snapshot)
+}
+
+func BuildCapsuleSealWithVersions(epochID, firstVersion uint64, snapshot WitnessSnapshot) (CapsuleSeal, error) {
+	committed := committedCertificateCount(epochID, snapshot)
+	if committed == 0 {
+		return CapsuleSeal{}, ErrInvalidCapsuleSeal
+	}
+	versions := ReplayVersionRange{First: firstVersion, Count: committed}
+	if err := versions.Validate(); err != nil {
+		return CapsuleSeal{}, err
+	}
+	return buildCapsuleSeal(epochID, versions, snapshot)
+}
+
+func buildCapsuleSeal(epochID uint64, versions ReplayVersionRange, snapshot WitnessSnapshot) (CapsuleSeal, error) {
 	if epochID == 0 {
 		return CapsuleSeal{}, ErrInvalidCapsuleSeal
 	}
@@ -69,13 +86,39 @@ func BuildCapsuleSeal(epochID uint64, snapshot WitnessSnapshot) (CapsuleSeal, er
 	}
 	seal := CapsuleSeal{
 		EpochID:      epochID,
+		Versions:     versions,
 		Certificates: ordered,
 	}
-	seal.DAGFrontierMerkle, err = sealMerkleRoot(ordered)
+	seal.DAGFrontierMerkle, err = sealMerkleRoot(epochID, versions, ordered)
 	if err != nil {
 		return CapsuleSeal{}, err
 	}
 	return seal, nil
+}
+
+func committedCertificateCount(epochID uint64, snapshot WitnessSnapshot) uint64 {
+	prepares := make(map[OperationID]struct{}, len(snapshot.Prepares))
+	for _, prepare := range snapshot.Prepares {
+		if prepare.EpochID == epochID && prepare.OpID.Valid() {
+			prepares[prepare.OpID] = struct{}{}
+		}
+	}
+	var count uint64
+	seen := make(map[OperationID]struct{}, len(snapshot.Commits))
+	for _, commit := range snapshot.Commits {
+		if commit.EpochID != epochID || !commit.OpID.Valid() {
+			continue
+		}
+		if _, ok := seen[commit.OpID]; ok {
+			continue
+		}
+		if _, ok := prepares[commit.OpID]; !ok {
+			continue
+		}
+		seen[commit.OpID] = struct{}{}
+		count++
+	}
+	return count
 }
 
 func topologicalSealOrder(prepares map[OperationID]PrepareRecord, commits map[OperationID]CommitCertificateRecord) ([]SealedCertificate, error) {
@@ -117,11 +160,12 @@ func topologicalSealOrder(prepares map[OperationID]PrepareRecord, commits map[Op
 	return out, nil
 }
 
-func sealMerkleRoot(certs []SealedCertificate) ([32]byte, error) {
+func sealMerkleRoot(epochID uint64, versions ReplayVersionRange, certs []SealedCertificate) ([32]byte, error) {
 	if len(certs) == 0 {
 		return [32]byte{}, ErrInvalidCapsuleSeal
 	}
-	level := make([][32]byte, 0, len(certs))
+	level := make([][32]byte, 0, len(certs)+1)
+	level = append(level, sealMetadataDigest(epochID, versions))
 	for _, cert := range certs {
 		digest, err := sealedCertificateDigest(cert)
 		if err != nil {
@@ -145,6 +189,14 @@ func sealMerkleRoot(certs []SealedCertificate) ([32]byte, error) {
 		level = next
 	}
 	return level[0], nil
+}
+
+func sealMetadataDigest(epochID uint64, versions ReplayVersionRange) [32]byte {
+	h := sha256.New()
+	writeUint64(h, epochID)
+	writeUint64(h, versions.First)
+	writeUint64(h, versions.Count)
+	return digestFromHash(h.Sum(nil))
 }
 
 func sealedCertificateDigest(cert SealedCertificate) ([32]byte, error) {

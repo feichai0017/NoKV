@@ -15,10 +15,11 @@ import (
 
 func TestMVCCReplayStoreMaterializesReaderVisibleValues(t *testing.T) {
 	db := openCapsuleReplayDB(t)
-	store, err := NewMVCCReplayStore(db, 100)
+	plan := versionedReplayPlanForTest(t, 100)
+	store, err := NewMVCCReplayStoreForPlan(db, plan)
 	require.NoError(t, err)
 
-	stats, err := ApplyReplayPlan(store, replayPlanForTest(t))
+	stats, err := ApplyReplayPlan(store, plan)
 	require.NoError(t, err)
 	require.Equal(t, ApplyStats{Waves: 2, Operations: 3, Mutations: 6}, stats)
 
@@ -96,10 +97,11 @@ func TestBuildMVCCReplayEntriesKeepsLargeValuesInDefaultCF(t *testing.T) {
 func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
 	storeErr := errors.New("apply failed")
 	failing := &failingInternalEntryApplier{err: storeErr}
-	store, err := NewMVCCReplayStore(failing, 100)
+	plan := versionedReplayPlanForTest(t, 100)
+	store, err := NewMVCCReplayStoreForPlan(failing, plan)
 	require.NoError(t, err)
 
-	_, err = ApplyReplayPlan(store, replayPlanForTest(t))
+	_, err = ApplyReplayPlan(store, plan)
 	require.ErrorIs(t, err, storeErr)
 
 	failing.err = nil
@@ -117,8 +119,16 @@ func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
 	require.Equal(t, uint64(100), failing.lastVersion())
 }
 
+func TestNewMVCCReplayStoreForPlanRequiresExactVersionRange(t *testing.T) {
+	plan := versionedReplayPlanForTest(t, 100)
+	plan.Versions.Count--
+
+	_, err := NewMVCCReplayStoreForPlan(noopInternalEntryApplier{}, plan)
+	require.ErrorIs(t, err, ErrReplayVersionRequired)
+}
+
 func BenchmarkMVCCReplayStoreApply64(b *testing.B) {
-	seal, err := BuildCapsuleSeal(1, sealSnapshotForBench(b, 64))
+	seal, err := BuildCapsuleSealWithVersions(1, 1, sealSnapshotForBench(b, 64))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -129,8 +139,8 @@ func BenchmarkMVCCReplayStoreApply64(b *testing.B) {
 	db := noopInternalEntryApplier{}
 
 	b.ReportAllocs()
-	for i := 0; b.Loop(); i++ {
-		store, err := NewMVCCReplayStore(db, uint64(i*128+1))
+	for b.Loop() {
+		store, err := NewMVCCReplayStoreForPlan(db, plan)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -182,4 +192,28 @@ func openCapsuleReplayDB(t *testing.T) *local.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func versionedReplayPlanForTest(t *testing.T, firstVersion uint64) ReplayPlan {
+	t.Helper()
+	first := testSealPrepare()
+	first.OpID = opID("client-a", 1)
+	second := testSealPrepare()
+	second.OpID = opID("client-b", 1)
+	second.ConflictDAGFrontier = []OperationID{first.OpID}
+	third := testSealPrepare()
+	third.OpID = opID("client-c", 1)
+
+	seal, err := BuildCapsuleSealWithVersions(1, firstVersion, WitnessSnapshot{
+		Prepares: []PrepareRecord{second, third, first},
+		Commits: []CommitCertificateRecord{
+			testCommitForPrepare(t, second),
+			testCommitForPrepare(t, third),
+			testCommitForPrepare(t, first),
+		},
+	})
+	require.NoError(t, err)
+	plan, err := BuildReplayPlan(seal)
+	require.NoError(t, err)
+	return plan
 }
