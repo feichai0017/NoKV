@@ -1001,6 +1001,12 @@ func capsuleDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
 }
 
 func (e *Executor) capsuleQuotaMode() compile.QuotaMode {
+	if e != nil && e.capsuleCommitter != nil {
+		// The experimental Capsule fast path models quota as authority-scoped
+		// escrow. The runtime still falls back for operations whose concrete
+		// write-set cannot be replayed from the compiled delta.
+		return compile.QuotaModeEscrow
+	}
 	if e != nil && e.quotas != nil {
 		return compile.QuotaModeShared
 	}

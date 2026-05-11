@@ -23,9 +23,11 @@ func TestHolderSubmitRunsTwoPhaseWitnessCommit(t *testing.T) {
 
 	require.Equal(t, uint64(1), commit.EpochID)
 	require.Equal(t, opID("client-a", 1), commit.OpID)
-	require.Equal(t, []string{"store-1", "store-2", "store-3"}, commit.QuorumAckSet)
+	require.Len(t, commit.QuorumAckSet, 2)
+	require.Subset(t, []string{"store-1", "store-2", "store-3"}, commit.QuorumAckSet)
 	require.Equal(t, 1, holder.Pending())
-	for _, replica := range replicas {
+	for _, replicaID := range commit.QuorumAckSet {
+		replica := fakeWitnessByID(t, replicas, replicaID)
 		require.Len(t, replica.prepares, 1)
 		require.Len(t, replica.commits, 1)
 		require.Equal(t, replica.prepares[0].OpID, replica.commits[0].OpID)
@@ -58,12 +60,38 @@ func TestHolderSubmitDetectsAmbiguousCommit(t *testing.T) {
 	}
 	replicas[1].commitErr = errors.New("commit failed")
 	replicas[2].commitErr = errors.New("commit failed")
-	holder := newTestHolder(t, replicas)
+	holder, err := NewHolder(HolderConfig{
+		EpochID:   1,
+		HolderID:  "holder-a",
+		Witnesses: []WitnessReplica{replicas[0], replicas[1], replicas[2]},
+		Quorum:    3,
+		Now: func() time.Time {
+			return time.Unix(10, 0)
+		},
+	})
+	require.NoError(t, err)
 
 	commit, err := holder.Submit(context.Background(), opID("client-a", 1), deltaWithWrites("a"))
 	require.ErrorIs(t, err, ErrWitnessCommitAmbiguous)
 	require.Equal(t, opID("client-a", 1), commit.OpID)
 	require.Equal(t, 1, holder.Pending(), "partial commit evidence must keep the op fenced until recovery or seal")
+}
+
+func TestHolderSubmitReturnsAfterPrepareAndCommitQuorum(t *testing.T) {
+	replicas := []*fakeWitnessReplica{
+		newFakeWitnessReplica("store-1"),
+		newFakeWitnessReplica("store-2"),
+		newFakeWitnessReplica("store-3"),
+	}
+	replicas[2].prepareDelay = time.Second
+	replicas[2].commitDelay = time.Second
+	holder := newTestHolder(t, replicas)
+
+	start := time.Now()
+	commit, err := holder.Submit(context.Background(), opID("client-a", 1), deltaWithWrites("a"))
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Equal(t, []string{"store-1", "store-2"}, commit.QuorumAckSet)
 }
 
 func TestHolderSubmitConflictDAGFrontier(t *testing.T) {
@@ -93,11 +121,20 @@ func TestHolderBuildSealAndMarkApplied(t *testing.T) {
 		newFakeWitnessReplica("store-2"),
 		newFakeWitnessReplica("store-3"),
 	}
-	holder := newTestHolder(t, replicas)
+	holder, err := NewHolder(HolderConfig{
+		EpochID:   1,
+		HolderID:  "holder-a",
+		Witnesses: []WitnessReplica{replicas[0], replicas[1], replicas[2]},
+		Quorum:    3,
+		Now: func() time.Time {
+			return time.Unix(10, 0)
+		},
+	})
+	require.NoError(t, err)
 
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
-	_, err := holder.Submit(context.Background(), first, deltaWithWrites("a"))
+	_, err = holder.Submit(context.Background(), first, deltaWithWrites("a"))
 	require.NoError(t, err)
 	_, err = holder.Submit(context.Background(), second, deltaWithWrites("a"))
 	require.NoError(t, err)
@@ -158,11 +195,13 @@ func BenchmarkHolderBuildSeal64(b *testing.B) {
 }
 
 type fakeWitnessReplica struct {
-	id         string
-	prepareErr error
-	commitErr  error
-	prepares   []PrepareRecord
-	commits    []CommitCertificateRecord
+	id           string
+	prepareErr   error
+	commitErr    error
+	prepareDelay time.Duration
+	commitDelay  time.Duration
+	prepares     []PrepareRecord
+	commits      []CommitCertificateRecord
 }
 
 type ackWitnessReplica struct {
@@ -177,7 +216,10 @@ func (r *fakeWitnessReplica) ID() string {
 	return r.id
 }
 
-func (r *fakeWitnessReplica) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record PrepareRecord) error {
+func (r *fakeWitnessReplica) AppendPrepare(ctx context.Context, _ compile.AuthorityScope, record PrepareRecord) error {
+	if err := waitFakeWitnessDelay(ctx, r.prepareDelay); err != nil {
+		return err
+	}
 	if r.prepareErr != nil {
 		return r.prepareErr
 	}
@@ -185,12 +227,40 @@ func (r *fakeWitnessReplica) AppendPrepare(_ context.Context, _ compile.Authorit
 	return nil
 }
 
-func (r *fakeWitnessReplica) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record CommitCertificateRecord) error {
+func (r *fakeWitnessReplica) AppendCommitCertificate(ctx context.Context, _ compile.AuthorityScope, record CommitCertificateRecord) error {
+	if err := waitFakeWitnessDelay(ctx, r.commitDelay); err != nil {
+		return err
+	}
 	if r.commitErr != nil {
 		return r.commitErr
 	}
 	r.commits = append(r.commits, cloneCommitCertificateRecord(record))
 	return nil
+}
+
+func fakeWitnessByID(t *testing.T, replicas []*fakeWitnessReplica, id string) *fakeWitnessReplica {
+	t.Helper()
+	for _, replica := range replicas {
+		if replica.id == id {
+			return replica
+		}
+	}
+	t.Fatalf("missing replica %q", id)
+	return nil
+}
+
+func waitFakeWitnessDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *fakeWitnessReplica) snapshot() WitnessSnapshot {

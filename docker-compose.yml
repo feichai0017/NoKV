@@ -221,6 +221,8 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--capsule-witness=${NOKV_CAPSULE_WITNESS:-false}"
+      - "--capsule-witness-durability=${NOKV_CAPSULE_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
       - store1-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -248,6 +250,8 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--capsule-witness=${NOKV_CAPSULE_WITNESS:-false}"
+      - "--capsule-witness-durability=${NOKV_CAPSULE_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
       - store2-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -275,6 +279,8 @@ services:
       - "nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
+      - "--capsule-witness=${NOKV_CAPSULE_WITNESS:-false}"
+      - "--capsule-witness-durability=${NOKV_CAPSULE_WITNESS_DURABILITY:-fsync-batched}"
     volumes:
       - store3-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -327,6 +333,13 @@ services:
       - "--dirpage-cache-dir=/var/lib/nokv/dirpage-cache"
       - "--affinity-buckets=16"
       - "--metrics-addr=0.0.0.0:9400"
+      - "--capsule-holder-id=${NOKV_FSMETA_CAPSULE_HOLDER_ID:-}"
+      - "--capsule-authority-ttl=${NOKV_FSMETA_CAPSULE_AUTHORITY_TTL:-30s}"
+      - "--capsule-fast-path=${NOKV_FSMETA_CAPSULE_FAST_PATH:-false}"
+      - "--capsule-witness-stores=${NOKV_FSMETA_CAPSULE_WITNESS_STORES:-}"
+      - "--capsule-witness-quorum=${NOKV_FSMETA_CAPSULE_WITNESS_QUORUM:-0}"
+      - "--capsule-submit-retries=${NOKV_FSMETA_CAPSULE_SUBMIT_RETRIES:-50}"
+      - "--capsule-submit-retry-backoff=${NOKV_FSMETA_CAPSULE_SUBMIT_RETRY_BACKOFF:-20ms}"
     volumes:
       - fsmeta-negative-cache:/var/lib/nokv/negative-cache
       - fsmeta-dirpage-cache:/var/lib/nokv/dirpage-cache

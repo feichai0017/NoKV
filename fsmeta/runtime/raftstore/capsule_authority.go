@@ -86,7 +86,7 @@ func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.Aut
 	cmd := rootproto.CapsuleAuthorityCommand{
 		Kind:            rootproto.CapsuleAuthorityActAcquire,
 		HolderID:        m.holderID,
-		Scope:           capsuleauth.AuthorityScopeFromDelta(scope),
+		Scope:           capsuleAuthorityAcquireScope(scope),
 		NowUnixNano:     now.UnixNano(),
 		ExpiresUnixNano: now.Add(m.ttl).UnixNano(),
 	}
@@ -114,6 +114,18 @@ func (m *CapsuleAuthorityManager) Acquire(ctx context.Context, scope compile.Aut
 	default:
 		return capsuleauth.AuthorityGrant{}, false, errCapsuleAuthorityInvalidResponse
 	}
+}
+
+func capsuleAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.CapsuleAuthorityScope {
+	rootScope := capsuleauth.AuthorityScopeFromDelta(scope)
+	// v1 acquires one broad mount authority per holder. This avoids grant churn
+	// and same-holder bucket conflicts while the seal/apply path is still
+	// experimental. Finer parent/bucket grants can be restored once the active
+	// fence and grant handoff policy are production-ready.
+	rootScope.Buckets = nil
+	rootScope.Parents = nil
+	rootScope.Inodes = nil
+	return rootScope
 }
 
 func (m *CapsuleAuthorityManager) Retire(ctx context.Context, grant capsuleauth.AuthorityGrant) error {

@@ -19,6 +19,7 @@ func TestBufferedCommitterReturnsBeforeSealAndServesOverlay(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	holder.quorum = 3
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
 		Snapshot: source,
@@ -50,6 +51,7 @@ func TestBufferedCommitterFlushAppliesAndClearsOverlay(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	holder.quorum = 3
 	versions := &fakeVersionAllocator{next: 100}
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
