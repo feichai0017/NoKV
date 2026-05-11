@@ -97,7 +97,11 @@ func NewNode(cfg Config) (*Node, error) {
 	storeCfg.PeerBuilder = builder
 
 	st := store.NewStore(storeCfg)
-	kvService := kv.NewService(st)
+	kvOpts := []kv.ServiceOption(nil)
+	if cfg.CapsuleWitness != nil {
+		kvOpts = append(kvOpts, kv.WithCapsuleWitness(cfg.CapsuleWitness))
+	}
+	kvService := kv.NewService(st, kvOpts...)
 	adminService := admin.NewServiceWithSnapshot(st, cfg.Storage.Snapshot)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		kvrpcpb.RegisterStoreKVServer(reg, kvService)

@@ -358,6 +358,65 @@ message ApplyWatchResponse {
   uint64 dropped_events = 2;
 }
 
+message CapsuleAuthorityScope {
+  string mount = 1;
+  uint64 mount_key_id = 2;
+  repeated uint32 buckets = 3;
+  repeated uint64 parents = 4;
+  repeated uint64 inodes = 5;
+}
+
+message CapsuleOperationID {
+  string client_id = 1;
+  uint64 seq = 2;
+}
+
+message CapsulePrepareRecord {
+  uint64 epoch_id = 1;
+  CapsuleOperationID op_id = 2;
+  bytes delta_payload = 3;
+  bytes delta_digest = 4;
+  bytes predicate_digest = 5;
+  bytes authority_proof_digest = 6;
+  repeated CapsuleOperationID conflict_dag_frontier = 7;
+  int64 timestamp_unix_nano = 8;
+  string holder_id = 9;
+  bytes holder_signature = 10;
+}
+
+message CapsuleCommitCertificateRecord {
+  uint64 epoch_id = 1;
+  CapsuleOperationID op_id = 2;
+  bytes prepare_digest = 3;
+  repeated string quorum_ack_set = 4;
+  int64 timestamp_unix_nano = 5;
+  string holder_id = 6;
+  bytes holder_signature = 7;
+}
+
+message CapsuleWitnessPrepareRequest {
+  CapsuleAuthorityScope scope = 1;
+  CapsulePrepareRecord record = 2;
+}
+
+message CapsuleWitnessPrepareResponse {}
+
+message CapsuleWitnessCommitRequest {
+  CapsuleAuthorityScope scope = 1;
+  CapsuleCommitCertificateRecord record = 2;
+}
+
+message CapsuleWitnessCommitResponse {}
+
+message CapsuleWitnessProbeRequest {
+  uint64 epoch_id = 1;
+}
+
+message CapsuleWitnessProbeResponse {
+  repeated CapsulePrepareRecord prepares = 1;
+  repeated CapsuleCommitCertificateRecord commits = 2;
+}
+
 service StoreKV {
   rpc Get(KvGetRequest) returns (KvGetResponse);
   rpc BatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
@@ -370,6 +429,9 @@ service StoreKV {
   rpc TxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
   rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
+  rpc CapsuleWitnessPrepare(CapsuleWitnessPrepareRequest) returns (CapsuleWitnessPrepareResponse);
+  rpc CapsuleWitnessCommit(CapsuleWitnessCommitRequest) returns (CapsuleWitnessCommitResponse);
+  rpc CapsuleWitnessProbe(CapsuleWitnessProbeRequest) returns (CapsuleWitnessProbeResponse);
 }
 
 message KeyError {

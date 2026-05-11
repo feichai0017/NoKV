@@ -3378,6 +3378,614 @@ func (x *ApplyWatchResponse) GetDroppedEvents() uint64 {
 	return 0
 }
 
+type CapsuleAuthorityScope struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	MountKeyId    uint64                 `protobuf:"varint,2,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
+	Buckets       []uint32               `protobuf:"varint,3,rep,packed,name=buckets,proto3" json:"buckets,omitempty"`
+	Parents       []uint64               `protobuf:"varint,4,rep,packed,name=parents,proto3" json:"parents,omitempty"`
+	Inodes        []uint64               `protobuf:"varint,5,rep,packed,name=inodes,proto3" json:"inodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleAuthorityScope) Reset() {
+	*x = CapsuleAuthorityScope{}
+	mi := &file_kv_kv_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleAuthorityScope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleAuthorityScope) ProtoMessage() {}
+
+func (x *CapsuleAuthorityScope) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleAuthorityScope.ProtoReflect.Descriptor instead.
+func (*CapsuleAuthorityScope) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *CapsuleAuthorityScope) GetMount() string {
+	if x != nil {
+		return x.Mount
+	}
+	return ""
+}
+
+func (x *CapsuleAuthorityScope) GetMountKeyId() uint64 {
+	if x != nil {
+		return x.MountKeyId
+	}
+	return 0
+}
+
+func (x *CapsuleAuthorityScope) GetBuckets() []uint32 {
+	if x != nil {
+		return x.Buckets
+	}
+	return nil
+}
+
+func (x *CapsuleAuthorityScope) GetParents() []uint64 {
+	if x != nil {
+		return x.Parents
+	}
+	return nil
+}
+
+func (x *CapsuleAuthorityScope) GetInodes() []uint64 {
+	if x != nil {
+		return x.Inodes
+	}
+	return nil
+}
+
+type CapsuleOperationID struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Seq           uint64                 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleOperationID) Reset() {
+	*x = CapsuleOperationID{}
+	mi := &file_kv_kv_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleOperationID) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleOperationID) ProtoMessage() {}
+
+func (x *CapsuleOperationID) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleOperationID.ProtoReflect.Descriptor instead.
+func (*CapsuleOperationID) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *CapsuleOperationID) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *CapsuleOperationID) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+type CapsulePrepareRecord struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	EpochId              uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	OpId                 *CapsuleOperationID    `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	DeltaPayload         []byte                 `protobuf:"bytes,3,opt,name=delta_payload,json=deltaPayload,proto3" json:"delta_payload,omitempty"`
+	DeltaDigest          []byte                 `protobuf:"bytes,4,opt,name=delta_digest,json=deltaDigest,proto3" json:"delta_digest,omitempty"`
+	PredicateDigest      []byte                 `protobuf:"bytes,5,opt,name=predicate_digest,json=predicateDigest,proto3" json:"predicate_digest,omitempty"`
+	AuthorityProofDigest []byte                 `protobuf:"bytes,6,opt,name=authority_proof_digest,json=authorityProofDigest,proto3" json:"authority_proof_digest,omitempty"`
+	ConflictDagFrontier  []*CapsuleOperationID  `protobuf:"bytes,7,rep,name=conflict_dag_frontier,json=conflictDagFrontier,proto3" json:"conflict_dag_frontier,omitempty"`
+	TimestampUnixNano    int64                  `protobuf:"varint,8,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
+	HolderId             string                 `protobuf:"bytes,9,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	HolderSignature      []byte                 `protobuf:"bytes,10,opt,name=holder_signature,json=holderSignature,proto3" json:"holder_signature,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *CapsulePrepareRecord) Reset() {
+	*x = CapsulePrepareRecord{}
+	mi := &file_kv_kv_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsulePrepareRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsulePrepareRecord) ProtoMessage() {}
+
+func (x *CapsulePrepareRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsulePrepareRecord.ProtoReflect.Descriptor instead.
+func (*CapsulePrepareRecord) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *CapsulePrepareRecord) GetEpochId() uint64 {
+	if x != nil {
+		return x.EpochId
+	}
+	return 0
+}
+
+func (x *CapsulePrepareRecord) GetOpId() *CapsuleOperationID {
+	if x != nil {
+		return x.OpId
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetDeltaPayload() []byte {
+	if x != nil {
+		return x.DeltaPayload
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetDeltaDigest() []byte {
+	if x != nil {
+		return x.DeltaDigest
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetPredicateDigest() []byte {
+	if x != nil {
+		return x.PredicateDigest
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetAuthorityProofDigest() []byte {
+	if x != nil {
+		return x.AuthorityProofDigest
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetConflictDagFrontier() []*CapsuleOperationID {
+	if x != nil {
+		return x.ConflictDagFrontier
+	}
+	return nil
+}
+
+func (x *CapsulePrepareRecord) GetTimestampUnixNano() int64 {
+	if x != nil {
+		return x.TimestampUnixNano
+	}
+	return 0
+}
+
+func (x *CapsulePrepareRecord) GetHolderId() string {
+	if x != nil {
+		return x.HolderId
+	}
+	return ""
+}
+
+func (x *CapsulePrepareRecord) GetHolderSignature() []byte {
+	if x != nil {
+		return x.HolderSignature
+	}
+	return nil
+}
+
+type CapsuleCommitCertificateRecord struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	EpochId           uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	OpId              *CapsuleOperationID    `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	PrepareDigest     []byte                 `protobuf:"bytes,3,opt,name=prepare_digest,json=prepareDigest,proto3" json:"prepare_digest,omitempty"`
+	QuorumAckSet      []string               `protobuf:"bytes,4,rep,name=quorum_ack_set,json=quorumAckSet,proto3" json:"quorum_ack_set,omitempty"`
+	TimestampUnixNano int64                  `protobuf:"varint,5,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
+	HolderId          string                 `protobuf:"bytes,6,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	HolderSignature   []byte                 `protobuf:"bytes,7,opt,name=holder_signature,json=holderSignature,proto3" json:"holder_signature,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CapsuleCommitCertificateRecord) Reset() {
+	*x = CapsuleCommitCertificateRecord{}
+	mi := &file_kv_kv_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleCommitCertificateRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleCommitCertificateRecord) ProtoMessage() {}
+
+func (x *CapsuleCommitCertificateRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleCommitCertificateRecord.ProtoReflect.Descriptor instead.
+func (*CapsuleCommitCertificateRecord) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *CapsuleCommitCertificateRecord) GetEpochId() uint64 {
+	if x != nil {
+		return x.EpochId
+	}
+	return 0
+}
+
+func (x *CapsuleCommitCertificateRecord) GetOpId() *CapsuleOperationID {
+	if x != nil {
+		return x.OpId
+	}
+	return nil
+}
+
+func (x *CapsuleCommitCertificateRecord) GetPrepareDigest() []byte {
+	if x != nil {
+		return x.PrepareDigest
+	}
+	return nil
+}
+
+func (x *CapsuleCommitCertificateRecord) GetQuorumAckSet() []string {
+	if x != nil {
+		return x.QuorumAckSet
+	}
+	return nil
+}
+
+func (x *CapsuleCommitCertificateRecord) GetTimestampUnixNano() int64 {
+	if x != nil {
+		return x.TimestampUnixNano
+	}
+	return 0
+}
+
+func (x *CapsuleCommitCertificateRecord) GetHolderId() string {
+	if x != nil {
+		return x.HolderId
+	}
+	return ""
+}
+
+func (x *CapsuleCommitCertificateRecord) GetHolderSignature() []byte {
+	if x != nil {
+		return x.HolderSignature
+	}
+	return nil
+}
+
+type CapsuleWitnessPrepareRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         *CapsuleAuthorityScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Record        *CapsulePrepareRecord  `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessPrepareRequest) Reset() {
+	*x = CapsuleWitnessPrepareRequest{}
+	mi := &file_kv_kv_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessPrepareRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessPrepareRequest) ProtoMessage() {}
+
+func (x *CapsuleWitnessPrepareRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessPrepareRequest.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessPrepareRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *CapsuleWitnessPrepareRequest) GetScope() *CapsuleAuthorityScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *CapsuleWitnessPrepareRequest) GetRecord() *CapsulePrepareRecord {
+	if x != nil {
+		return x.Record
+	}
+	return nil
+}
+
+type CapsuleWitnessPrepareResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessPrepareResponse) Reset() {
+	*x = CapsuleWitnessPrepareResponse{}
+	mi := &file_kv_kv_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessPrepareResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessPrepareResponse) ProtoMessage() {}
+
+func (x *CapsuleWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessPrepareResponse.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessPrepareResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{56}
+}
+
+type CapsuleWitnessCommitRequest struct {
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	Scope         *CapsuleAuthorityScope          `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Record        *CapsuleCommitCertificateRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessCommitRequest) Reset() {
+	*x = CapsuleWitnessCommitRequest{}
+	mi := &file_kv_kv_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessCommitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessCommitRequest) ProtoMessage() {}
+
+func (x *CapsuleWitnessCommitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessCommitRequest.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessCommitRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *CapsuleWitnessCommitRequest) GetScope() *CapsuleAuthorityScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *CapsuleWitnessCommitRequest) GetRecord() *CapsuleCommitCertificateRecord {
+	if x != nil {
+		return x.Record
+	}
+	return nil
+}
+
+type CapsuleWitnessCommitResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessCommitResponse) Reset() {
+	*x = CapsuleWitnessCommitResponse{}
+	mi := &file_kv_kv_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessCommitResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessCommitResponse) ProtoMessage() {}
+
+func (x *CapsuleWitnessCommitResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessCommitResponse.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessCommitResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{58}
+}
+
+type CapsuleWitnessProbeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EpochId       uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessProbeRequest) Reset() {
+	*x = CapsuleWitnessProbeRequest{}
+	mi := &file_kv_kv_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessProbeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessProbeRequest) ProtoMessage() {}
+
+func (x *CapsuleWitnessProbeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessProbeRequest.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessProbeRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *CapsuleWitnessProbeRequest) GetEpochId() uint64 {
+	if x != nil {
+		return x.EpochId
+	}
+	return 0
+}
+
+type CapsuleWitnessProbeResponse struct {
+	state         protoimpl.MessageState            `protogen:"open.v1"`
+	Prepares      []*CapsulePrepareRecord           `protobuf:"bytes,1,rep,name=prepares,proto3" json:"prepares,omitempty"`
+	Commits       []*CapsuleCommitCertificateRecord `protobuf:"bytes,2,rep,name=commits,proto3" json:"commits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapsuleWitnessProbeResponse) Reset() {
+	*x = CapsuleWitnessProbeResponse{}
+	mi := &file_kv_kv_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapsuleWitnessProbeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapsuleWitnessProbeResponse) ProtoMessage() {}
+
+func (x *CapsuleWitnessProbeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapsuleWitnessProbeResponse.ProtoReflect.Descriptor instead.
+func (*CapsuleWitnessProbeResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *CapsuleWitnessProbeResponse) GetPrepares() []*CapsulePrepareRecord {
+	if x != nil {
+		return x.Prepares
+	}
+	return nil
+}
+
+func (x *CapsuleWitnessProbeResponse) GetCommits() []*CapsuleCommitCertificateRecord {
+	if x != nil {
+		return x.Commits
+	}
+	return nil
+}
+
 type KeyError struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Locked          *Locked                `protobuf:"bytes,1,opt,name=locked,proto3" json:"locked,omitempty"`
@@ -3392,7 +4000,7 @@ type KeyError struct {
 
 func (x *KeyError) Reset() {
 	*x = KeyError{}
-	mi := &file_kv_kv_proto_msgTypes[51]
+	mi := &file_kv_kv_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3404,7 +4012,7 @@ func (x *KeyError) String() string {
 func (*KeyError) ProtoMessage() {}
 
 func (x *KeyError) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[51]
+	mi := &file_kv_kv_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3417,7 +4025,7 @@ func (x *KeyError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyError.ProtoReflect.Descriptor instead.
 func (*KeyError) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{51}
+	return file_kv_kv_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *KeyError) GetLocked() *Locked {
@@ -3476,7 +4084,7 @@ type Locked struct {
 
 func (x *Locked) Reset() {
 	*x = Locked{}
-	mi := &file_kv_kv_proto_msgTypes[52]
+	mi := &file_kv_kv_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3488,7 +4096,7 @@ func (x *Locked) String() string {
 func (*Locked) ProtoMessage() {}
 
 func (x *Locked) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[52]
+	mi := &file_kv_kv_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3501,7 +4109,7 @@ func (x *Locked) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Locked.ProtoReflect.Descriptor instead.
 func (*Locked) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{52}
+	return file_kv_kv_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *Locked) GetPrimaryLock() []byte {
@@ -3559,7 +4167,7 @@ type WriteConflict struct {
 
 func (x *WriteConflict) Reset() {
 	*x = WriteConflict{}
-	mi := &file_kv_kv_proto_msgTypes[53]
+	mi := &file_kv_kv_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3571,7 +4179,7 @@ func (x *WriteConflict) String() string {
 func (*WriteConflict) ProtoMessage() {}
 
 func (x *WriteConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[53]
+	mi := &file_kv_kv_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3584,7 +4192,7 @@ func (x *WriteConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteConflict.ProtoReflect.Descriptor instead.
 func (*WriteConflict) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{53}
+	return file_kv_kv_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *WriteConflict) GetKey() []byte {
@@ -3631,7 +4239,7 @@ type KeyAlreadyExists struct {
 
 func (x *KeyAlreadyExists) Reset() {
 	*x = KeyAlreadyExists{}
-	mi := &file_kv_kv_proto_msgTypes[54]
+	mi := &file_kv_kv_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3643,7 +4251,7 @@ func (x *KeyAlreadyExists) String() string {
 func (*KeyAlreadyExists) ProtoMessage() {}
 
 func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[54]
+	mi := &file_kv_kv_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3656,7 +4264,7 @@ func (x *KeyAlreadyExists) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyAlreadyExists.ProtoReflect.Descriptor instead.
 func (*KeyAlreadyExists) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{54}
+	return file_kv_kv_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *KeyAlreadyExists) GetKey() []byte {
@@ -3677,7 +4285,7 @@ type CommitTsExpired struct {
 
 func (x *CommitTsExpired) Reset() {
 	*x = CommitTsExpired{}
-	mi := &file_kv_kv_proto_msgTypes[55]
+	mi := &file_kv_kv_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3689,7 +4297,7 @@ func (x *CommitTsExpired) String() string {
 func (*CommitTsExpired) ProtoMessage() {}
 
 func (x *CommitTsExpired) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[55]
+	mi := &file_kv_kv_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3702,7 +4310,7 @@ func (x *CommitTsExpired) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitTsExpired.ProtoReflect.Descriptor instead.
 func (*CommitTsExpired) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{55}
+	return file_kv_kv_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *CommitTsExpired) GetKey() []byte {
@@ -3944,7 +4552,50 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x04keys\x18\x06 \x03(\fR\x04keys\"n\n" +
 	"\x12ApplyWatchResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.nokv.kv.v1.ApplyWatchEventR\x05event\x12%\n" +
-	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents\"\xba\x02\n" +
+	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents\"\x9b\x01\n" +
+	"\x15CapsuleAuthorityScope\x12\x14\n" +
+	"\x05mount\x18\x01 \x01(\tR\x05mount\x12 \n" +
+	"\fmount_key_id\x18\x02 \x01(\x04R\n" +
+	"mountKeyId\x12\x18\n" +
+	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
+	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"C\n" +
+	"\x12CapsuleOperationID\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\x04R\x03seq\"\xdb\x03\n" +
+	"\x14CapsulePrepareRecord\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x123\n" +
+	"\x05op_id\x18\x02 \x01(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x04opId\x12#\n" +
+	"\rdelta_payload\x18\x03 \x01(\fR\fdeltaPayload\x12!\n" +
+	"\fdelta_digest\x18\x04 \x01(\fR\vdeltaDigest\x12)\n" +
+	"\x10predicate_digest\x18\x05 \x01(\fR\x0fpredicateDigest\x124\n" +
+	"\x16authority_proof_digest\x18\x06 \x01(\fR\x14authorityProofDigest\x12R\n" +
+	"\x15conflict_dag_frontier\x18\a \x03(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x13conflictDagFrontier\x12.\n" +
+	"\x13timestamp_unix_nano\x18\b \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
+	"\tholder_id\x18\t \x01(\tR\bholderId\x12)\n" +
+	"\x10holder_signature\x18\n" +
+	" \x01(\fR\x0fholderSignature\"\xb5\x02\n" +
+	"\x1eCapsuleCommitCertificateRecord\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x123\n" +
+	"\x05op_id\x18\x02 \x01(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x04opId\x12%\n" +
+	"\x0eprepare_digest\x18\x03 \x01(\fR\rprepareDigest\x12$\n" +
+	"\x0equorum_ack_set\x18\x04 \x03(\tR\fquorumAckSet\x12.\n" +
+	"\x13timestamp_unix_nano\x18\x05 \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
+	"\tholder_id\x18\x06 \x01(\tR\bholderId\x12)\n" +
+	"\x10holder_signature\x18\a \x01(\fR\x0fholderSignature\"\x91\x01\n" +
+	"\x1cCapsuleWitnessPrepareRequest\x127\n" +
+	"\x05scope\x18\x01 \x01(\v2!.nokv.kv.v1.CapsuleAuthorityScopeR\x05scope\x128\n" +
+	"\x06record\x18\x02 \x01(\v2 .nokv.kv.v1.CapsulePrepareRecordR\x06record\"\x1f\n" +
+	"\x1dCapsuleWitnessPrepareResponse\"\x9a\x01\n" +
+	"\x1bCapsuleWitnessCommitRequest\x127\n" +
+	"\x05scope\x18\x01 \x01(\v2!.nokv.kv.v1.CapsuleAuthorityScopeR\x05scope\x12B\n" +
+	"\x06record\x18\x02 \x01(\v2*.nokv.kv.v1.CapsuleCommitCertificateRecordR\x06record\"\x1e\n" +
+	"\x1cCapsuleWitnessCommitResponse\"7\n" +
+	"\x1aCapsuleWitnessProbeRequest\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"\xa1\x01\n" +
+	"\x1bCapsuleWitnessProbeResponse\x12<\n" +
+	"\bprepares\x18\x01 \x03(\v2 .nokv.kv.v1.CapsulePrepareRecordR\bprepares\x12D\n" +
+	"\acommits\x18\x02 \x03(\v2*.nokv.kv.v1.CapsuleCommitCertificateRecordR\acommits\"\xba\x02\n" +
 	"\bKeyError\x12*\n" +
 	"\x06locked\x18\x01 \x01(\v2\x12.nokv.kv.v1.LockedR\x06locked\x12@\n" +
 	"\x0ewrite_conflict\x18\x02 \x01(\v2\x19.nokv.kv.v1.WriteConflictR\rwriteConflict\x12C\n" +
@@ -3995,7 +4646,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xf0\x06\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xb1\t\n" +
 	"\aStoreKV\x12:\n" +
 	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
 	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
@@ -4008,7 +4659,10 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\fTxnHeartBeat\x12!.nokv.kv.v1.KvTxnHeartBeatRequest\x1a\".nokv.kv.v1.KvTxnHeartBeatResponse\x12^\n" +
 	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12M\n" +
 	"\n" +
-	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01B+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
+	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12l\n" +
+	"\x15CapsuleWitnessPrepare\x12(.nokv.kv.v1.CapsuleWitnessPrepareRequest\x1a).nokv.kv.v1.CapsuleWitnessPrepareResponse\x12i\n" +
+	"\x14CapsuleWitnessCommit\x12'.nokv.kv.v1.CapsuleWitnessCommitRequest\x1a(.nokv.kv.v1.CapsuleWitnessCommitResponse\x12f\n" +
+	"\x13CapsuleWitnessProbe\x12&.nokv.kv.v1.CapsuleWitnessProbeRequest\x1a'.nokv.kv.v1.CapsuleWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
 	file_kv_kv_proto_rawDescOnce sync.Once
@@ -4023,7 +4677,7 @@ func file_kv_kv_proto_rawDescGZIP() []byte {
 }
 
 var file_kv_kv_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_kv_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_kv_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
 var file_kv_kv_proto_goTypes = []any{
 	(ReadConsistency)(0),                     // 0: nokv.kv.v1.ReadConsistency
 	(ReadPreference)(0),                      // 1: nokv.kv.v1.ReadPreference
@@ -4084,117 +4738,142 @@ var file_kv_kv_proto_goTypes = []any{
 	(*ApplyWatchRequest)(nil),                // 56: nokv.kv.v1.ApplyWatchRequest
 	(*ApplyWatchEvent)(nil),                  // 57: nokv.kv.v1.ApplyWatchEvent
 	(*ApplyWatchResponse)(nil),               // 58: nokv.kv.v1.ApplyWatchResponse
-	(*KeyError)(nil),                         // 59: nokv.kv.v1.KeyError
-	(*Locked)(nil),                           // 60: nokv.kv.v1.Locked
-	(*WriteConflict)(nil),                    // 61: nokv.kv.v1.WriteConflict
-	(*KeyAlreadyExists)(nil),                 // 62: nokv.kv.v1.KeyAlreadyExists
-	(*CommitTsExpired)(nil),                  // 63: nokv.kv.v1.CommitTsExpired
-	(*meta.RegionEpoch)(nil),                 // 64: nokv.meta.v1.RegionEpoch
-	(*meta.RegionPeer)(nil),                  // 65: nokv.meta.v1.RegionPeer
-	(*error1.RegionError)(nil),               // 66: nokv.error.v1.RegionError
+	(*CapsuleAuthorityScope)(nil),            // 59: nokv.kv.v1.CapsuleAuthorityScope
+	(*CapsuleOperationID)(nil),               // 60: nokv.kv.v1.CapsuleOperationID
+	(*CapsulePrepareRecord)(nil),             // 61: nokv.kv.v1.CapsulePrepareRecord
+	(*CapsuleCommitCertificateRecord)(nil),   // 62: nokv.kv.v1.CapsuleCommitCertificateRecord
+	(*CapsuleWitnessPrepareRequest)(nil),     // 63: nokv.kv.v1.CapsuleWitnessPrepareRequest
+	(*CapsuleWitnessPrepareResponse)(nil),    // 64: nokv.kv.v1.CapsuleWitnessPrepareResponse
+	(*CapsuleWitnessCommitRequest)(nil),      // 65: nokv.kv.v1.CapsuleWitnessCommitRequest
+	(*CapsuleWitnessCommitResponse)(nil),     // 66: nokv.kv.v1.CapsuleWitnessCommitResponse
+	(*CapsuleWitnessProbeRequest)(nil),       // 67: nokv.kv.v1.CapsuleWitnessProbeRequest
+	(*CapsuleWitnessProbeResponse)(nil),      // 68: nokv.kv.v1.CapsuleWitnessProbeResponse
+	(*KeyError)(nil),                         // 69: nokv.kv.v1.KeyError
+	(*Locked)(nil),                           // 70: nokv.kv.v1.Locked
+	(*WriteConflict)(nil),                    // 71: nokv.kv.v1.WriteConflict
+	(*KeyAlreadyExists)(nil),                 // 72: nokv.kv.v1.KeyAlreadyExists
+	(*CommitTsExpired)(nil),                  // 73: nokv.kv.v1.CommitTsExpired
+	(*meta.RegionEpoch)(nil),                 // 74: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),                  // 75: nokv.meta.v1.RegionPeer
+	(*error1.RegionError)(nil),               // 76: nokv.error.v1.RegionError
 }
 var file_kv_kv_proto_depIdxs = []int32{
 	8,  // 0: nokv.kv.v1.KVList.kv:type_name -> nokv.kv.v1.KV
-	59, // 1: nokv.kv.v1.GetResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 1: nokv.kv.v1.GetResponse.error:type_name -> nokv.kv.v1.KeyError
 	10, // 2: nokv.kv.v1.BatchGetRequest.requests:type_name -> nokv.kv.v1.GetRequest
 	11, // 3: nokv.kv.v1.BatchGetResponse.responses:type_name -> nokv.kv.v1.GetResponse
 	8,  // 4: nokv.kv.v1.ScanResponse.kvs:type_name -> nokv.kv.v1.KV
-	59, // 5: nokv.kv.v1.ScanResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 5: nokv.kv.v1.ScanResponse.error:type_name -> nokv.kv.v1.KeyError
 	6,  // 6: nokv.kv.v1.Mutation.op:type_name -> nokv.kv.v1.Mutation.Op
 	16, // 7: nokv.kv.v1.PrewriteRequest.mutations:type_name -> nokv.kv.v1.Mutation
-	59, // 8: nokv.kv.v1.PrewriteResponse.errors:type_name -> nokv.kv.v1.KeyError
-	59, // 9: nokv.kv.v1.CommitResponse.error:type_name -> nokv.kv.v1.KeyError
-	59, // 10: nokv.kv.v1.BatchRollbackResponse.error:type_name -> nokv.kv.v1.KeyError
-	59, // 11: nokv.kv.v1.ResolveLockResponse.error:type_name -> nokv.kv.v1.KeyError
-	59, // 12: nokv.kv.v1.CheckTxnStatusResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 8: nokv.kv.v1.PrewriteResponse.errors:type_name -> nokv.kv.v1.KeyError
+	69, // 9: nokv.kv.v1.CommitResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 10: nokv.kv.v1.BatchRollbackResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 11: nokv.kv.v1.ResolveLockResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 12: nokv.kv.v1.CheckTxnStatusResponse.error:type_name -> nokv.kv.v1.KeyError
 	2,  // 13: nokv.kv.v1.CheckTxnStatusResponse.action:type_name -> nokv.kv.v1.CheckTxnStatusAction
-	59, // 14: nokv.kv.v1.TxnHeartBeatResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 14: nokv.kv.v1.TxnHeartBeatResponse.error:type_name -> nokv.kv.v1.KeyError
 	3,  // 15: nokv.kv.v1.TxnHeartBeatResponse.action:type_name -> nokv.kv.v1.TxnHeartBeatAction
 	7,  // 16: nokv.kv.v1.InternalEntryTombstone.column_family:type_name -> nokv.kv.v1.InternalEntryTombstone.ColumnFamily
 	29, // 17: nokv.kv.v1.MVCCMaintenanceRequest.tombstones:type_name -> nokv.kv.v1.InternalEntryTombstone
-	59, // 18: nokv.kv.v1.MVCCMaintenanceResponse.error:type_name -> nokv.kv.v1.KeyError
+	69, // 18: nokv.kv.v1.MVCCMaintenanceResponse.error:type_name -> nokv.kv.v1.KeyError
 	4,  // 19: nokv.kv.v1.AtomicPredicate.kind:type_name -> nokv.kv.v1.AtomicPredicateKind
 	32, // 20: nokv.kv.v1.TryAtomicMutateRequest.predicates:type_name -> nokv.kv.v1.AtomicPredicate
 	16, // 21: nokv.kv.v1.TryAtomicMutateRequest.mutations:type_name -> nokv.kv.v1.Mutation
-	59, // 22: nokv.kv.v1.TryAtomicMutateResponse.error:type_name -> nokv.kv.v1.KeyError
-	64, // 23: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
-	65, // 24: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
+	69, // 22: nokv.kv.v1.TryAtomicMutateResponse.error:type_name -> nokv.kv.v1.KeyError
+	74, // 23: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	75, // 24: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
 	0,  // 25: nokv.kv.v1.Context.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
 	1,  // 26: nokv.kv.v1.Context.read_preference:type_name -> nokv.kv.v1.ReadPreference
 	35, // 27: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context
 	10, // 28: nokv.kv.v1.KvGetRequest.request:type_name -> nokv.kv.v1.GetRequest
 	11, // 29: nokv.kv.v1.KvGetResponse.response:type_name -> nokv.kv.v1.GetResponse
-	66, // 30: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 30: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 31: nokv.kv.v1.KvBatchGetRequest.context:type_name -> nokv.kv.v1.Context
 	12, // 32: nokv.kv.v1.KvBatchGetRequest.request:type_name -> nokv.kv.v1.BatchGetRequest
 	13, // 33: nokv.kv.v1.KvBatchGetResponse.response:type_name -> nokv.kv.v1.BatchGetResponse
-	66, // 34: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 34: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 35: nokv.kv.v1.KvScanRequest.context:type_name -> nokv.kv.v1.Context
 	14, // 36: nokv.kv.v1.KvScanRequest.request:type_name -> nokv.kv.v1.ScanRequest
 	15, // 37: nokv.kv.v1.KvScanResponse.response:type_name -> nokv.kv.v1.ScanResponse
-	66, // 38: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 38: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 39: nokv.kv.v1.KvPrewriteRequest.context:type_name -> nokv.kv.v1.Context
 	17, // 40: nokv.kv.v1.KvPrewriteRequest.request:type_name -> nokv.kv.v1.PrewriteRequest
 	18, // 41: nokv.kv.v1.KvPrewriteResponse.response:type_name -> nokv.kv.v1.PrewriteResponse
-	66, // 42: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 42: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 43: nokv.kv.v1.KvCommitRequest.context:type_name -> nokv.kv.v1.Context
 	19, // 44: nokv.kv.v1.KvCommitRequest.request:type_name -> nokv.kv.v1.CommitRequest
 	20, // 45: nokv.kv.v1.KvCommitResponse.response:type_name -> nokv.kv.v1.CommitResponse
-	66, // 46: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 46: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 47: nokv.kv.v1.KvBatchRollbackRequest.context:type_name -> nokv.kv.v1.Context
 	21, // 48: nokv.kv.v1.KvBatchRollbackRequest.request:type_name -> nokv.kv.v1.BatchRollbackRequest
 	22, // 49: nokv.kv.v1.KvBatchRollbackResponse.response:type_name -> nokv.kv.v1.BatchRollbackResponse
-	66, // 50: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 50: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 51: nokv.kv.v1.KvResolveLockRequest.context:type_name -> nokv.kv.v1.Context
 	23, // 52: nokv.kv.v1.KvResolveLockRequest.request:type_name -> nokv.kv.v1.ResolveLockRequest
 	24, // 53: nokv.kv.v1.KvResolveLockResponse.response:type_name -> nokv.kv.v1.ResolveLockResponse
-	66, // 54: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 54: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 55: nokv.kv.v1.KvCheckTxnStatusRequest.context:type_name -> nokv.kv.v1.Context
 	25, // 56: nokv.kv.v1.KvCheckTxnStatusRequest.request:type_name -> nokv.kv.v1.CheckTxnStatusRequest
 	26, // 57: nokv.kv.v1.KvCheckTxnStatusResponse.response:type_name -> nokv.kv.v1.CheckTxnStatusResponse
-	66, // 58: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 58: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 59: nokv.kv.v1.KvTxnHeartBeatRequest.context:type_name -> nokv.kv.v1.Context
 	27, // 60: nokv.kv.v1.KvTxnHeartBeatRequest.request:type_name -> nokv.kv.v1.TxnHeartBeatRequest
 	28, // 61: nokv.kv.v1.KvTxnHeartBeatResponse.response:type_name -> nokv.kv.v1.TxnHeartBeatResponse
-	66, // 62: nokv.kv.v1.KvTxnHeartBeatResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 62: nokv.kv.v1.KvTxnHeartBeatResponse.region_error:type_name -> nokv.error.v1.RegionError
 	35, // 63: nokv.kv.v1.KvTryAtomicMutateRequest.context:type_name -> nokv.kv.v1.Context
 	33, // 64: nokv.kv.v1.KvTryAtomicMutateRequest.request:type_name -> nokv.kv.v1.TryAtomicMutateRequest
 	34, // 65: nokv.kv.v1.KvTryAtomicMutateResponse.response:type_name -> nokv.kv.v1.TryAtomicMutateResponse
-	66, // 66: nokv.kv.v1.KvTryAtomicMutateResponse.region_error:type_name -> nokv.error.v1.RegionError
+	76, // 66: nokv.kv.v1.KvTryAtomicMutateResponse.region_error:type_name -> nokv.error.v1.RegionError
 	5,  // 67: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
 	57, // 68: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
-	60, // 69: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
-	61, // 70: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
-	62, // 71: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
-	63, // 72: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
-	6,  // 73: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
-	36, // 74: nokv.kv.v1.StoreKV.Get:input_type -> nokv.kv.v1.KvGetRequest
-	38, // 75: nokv.kv.v1.StoreKV.BatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
-	40, // 76: nokv.kv.v1.StoreKV.Scan:input_type -> nokv.kv.v1.KvScanRequest
-	42, // 77: nokv.kv.v1.StoreKV.Prewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
-	44, // 78: nokv.kv.v1.StoreKV.Commit:input_type -> nokv.kv.v1.KvCommitRequest
-	46, // 79: nokv.kv.v1.StoreKV.BatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
-	48, // 80: nokv.kv.v1.StoreKV.ResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
-	50, // 81: nokv.kv.v1.StoreKV.CheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
-	52, // 82: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
-	54, // 83: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
-	56, // 84: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	37, // 85: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
-	39, // 86: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
-	41, // 87: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
-	43, // 88: nokv.kv.v1.StoreKV.Prewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
-	45, // 89: nokv.kv.v1.StoreKV.Commit:output_type -> nokv.kv.v1.KvCommitResponse
-	47, // 90: nokv.kv.v1.StoreKV.BatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
-	49, // 91: nokv.kv.v1.StoreKV.ResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
-	51, // 92: nokv.kv.v1.StoreKV.CheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
-	53, // 93: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
-	55, // 94: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
-	58, // 95: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
-	85, // [85:96] is the sub-list for method output_type
-	74, // [74:85] is the sub-list for method input_type
-	74, // [74:74] is the sub-list for extension type_name
-	74, // [74:74] is the sub-list for extension extendee
-	0,  // [0:74] is the sub-list for field type_name
+	60, // 69: nokv.kv.v1.CapsulePrepareRecord.op_id:type_name -> nokv.kv.v1.CapsuleOperationID
+	60, // 70: nokv.kv.v1.CapsulePrepareRecord.conflict_dag_frontier:type_name -> nokv.kv.v1.CapsuleOperationID
+	60, // 71: nokv.kv.v1.CapsuleCommitCertificateRecord.op_id:type_name -> nokv.kv.v1.CapsuleOperationID
+	59, // 72: nokv.kv.v1.CapsuleWitnessPrepareRequest.scope:type_name -> nokv.kv.v1.CapsuleAuthorityScope
+	61, // 73: nokv.kv.v1.CapsuleWitnessPrepareRequest.record:type_name -> nokv.kv.v1.CapsulePrepareRecord
+	59, // 74: nokv.kv.v1.CapsuleWitnessCommitRequest.scope:type_name -> nokv.kv.v1.CapsuleAuthorityScope
+	62, // 75: nokv.kv.v1.CapsuleWitnessCommitRequest.record:type_name -> nokv.kv.v1.CapsuleCommitCertificateRecord
+	61, // 76: nokv.kv.v1.CapsuleWitnessProbeResponse.prepares:type_name -> nokv.kv.v1.CapsulePrepareRecord
+	62, // 77: nokv.kv.v1.CapsuleWitnessProbeResponse.commits:type_name -> nokv.kv.v1.CapsuleCommitCertificateRecord
+	70, // 78: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
+	71, // 79: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
+	72, // 80: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
+	73, // 81: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
+	6,  // 82: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
+	36, // 83: nokv.kv.v1.StoreKV.Get:input_type -> nokv.kv.v1.KvGetRequest
+	38, // 84: nokv.kv.v1.StoreKV.BatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
+	40, // 85: nokv.kv.v1.StoreKV.Scan:input_type -> nokv.kv.v1.KvScanRequest
+	42, // 86: nokv.kv.v1.StoreKV.Prewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
+	44, // 87: nokv.kv.v1.StoreKV.Commit:input_type -> nokv.kv.v1.KvCommitRequest
+	46, // 88: nokv.kv.v1.StoreKV.BatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
+	48, // 89: nokv.kv.v1.StoreKV.ResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
+	50, // 90: nokv.kv.v1.StoreKV.CheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
+	52, // 91: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
+	54, // 92: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
+	56, // 93: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
+	63, // 94: nokv.kv.v1.StoreKV.CapsuleWitnessPrepare:input_type -> nokv.kv.v1.CapsuleWitnessPrepareRequest
+	65, // 95: nokv.kv.v1.StoreKV.CapsuleWitnessCommit:input_type -> nokv.kv.v1.CapsuleWitnessCommitRequest
+	67, // 96: nokv.kv.v1.StoreKV.CapsuleWitnessProbe:input_type -> nokv.kv.v1.CapsuleWitnessProbeRequest
+	37, // 97: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
+	39, // 98: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
+	41, // 99: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
+	43, // 100: nokv.kv.v1.StoreKV.Prewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
+	45, // 101: nokv.kv.v1.StoreKV.Commit:output_type -> nokv.kv.v1.KvCommitResponse
+	47, // 102: nokv.kv.v1.StoreKV.BatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
+	49, // 103: nokv.kv.v1.StoreKV.ResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
+	51, // 104: nokv.kv.v1.StoreKV.CheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
+	53, // 105: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
+	55, // 106: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
+	58, // 107: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
+	64, // 108: nokv.kv.v1.StoreKV.CapsuleWitnessPrepare:output_type -> nokv.kv.v1.CapsuleWitnessPrepareResponse
+	66, // 109: nokv.kv.v1.StoreKV.CapsuleWitnessCommit:output_type -> nokv.kv.v1.CapsuleWitnessCommitResponse
+	68, // 110: nokv.kv.v1.StoreKV.CapsuleWitnessProbe:output_type -> nokv.kv.v1.CapsuleWitnessProbeResponse
+	97, // [97:111] is the sub-list for method output_type
+	83, // [83:97] is the sub-list for method input_type
+	83, // [83:83] is the sub-list for extension type_name
+	83, // [83:83] is the sub-list for extension extendee
+	0,  // [0:83] is the sub-list for field type_name
 }
 
 func init() { file_kv_kv_proto_init() }
@@ -4208,7 +4887,7 @@ func file_kv_kv_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kv_kv_proto_rawDesc), len(file_kv_kv_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   56,
+			NumMessages:   66,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

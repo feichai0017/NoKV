@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -12,16 +14,36 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/store"
 )
 
+type CapsuleWitness interface {
+	AppendPrepare(context.Context, compile.AuthorityScope, fscapsule.PrepareRecord) error
+	AppendCommitCertificate(context.Context, compile.AuthorityScope, fscapsule.CommitCertificateRecord) error
+	Probe(context.Context, uint64) (fscapsule.WitnessSnapshot, error)
+}
+
+type ServiceOption func(*Service)
+
+func WithCapsuleWitness(witness CapsuleWitness) ServiceOption {
+	return func(s *Service) {
+		s.capsuleWitness = witness
+	}
+}
+
 // Service exposes StoreKV gRPC handlers backed by a raftstore Store.
 type Service struct {
 	kvrpcpb.UnimplementedStoreKVServer
-	store        *store.Store
-	writeBatcher *writeCommandBatcher
+	store          *store.Store
+	writeBatcher   *writeCommandBatcher
+	capsuleWitness CapsuleWitness
 }
 
 // NewService constructs a StoreKV service bound to the provided store.
-func NewService(st *store.Store) *Service {
+func NewService(st *store.Store, opts ...ServiceOption) *Service {
 	s := &Service{store: st}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
 	s.writeBatcher = newWriteCommandBatcher(s.propose, defaultWriteCommandBatchMaxSize, defaultWriteCommandBatchMaxWait)
 	return s
 }
