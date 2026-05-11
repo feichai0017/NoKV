@@ -16,6 +16,7 @@ var (
 	errPerasAuthorityHolderRequired  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: peras authority holder id required")
 	errPerasAuthorityTTLInvalid      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: peras authority ttl must be non-negative")
 	errPerasCommitterInvalid         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: peras committer config is invalid")
+	errPerasCommitterClosed          = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/runtime/raftstore: peras committer is closed")
 	errMountCacheNotConfigured       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: mount cache is not configured")
 	errRootPublisherNotConfigured    = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: root publisher is not configured")
 	errStoreListerRequired           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: store lister is required")
