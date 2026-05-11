@@ -22,6 +22,7 @@ var (
 type WitnessReplica interface {
 	ID() string
 	AppendSegment(context.Context, compile.AuthorityScope, SegmentWitnessRecord) error
+	Probe(context.Context, uint64) (WitnessSnapshot, error)
 }
 
 type LocalWitnessReplica struct {
@@ -49,6 +50,13 @@ func (r *LocalWitnessReplica) AppendSegment(ctx context.Context, _ compile.Autho
 	}
 	_, err := r.log.AppendSegment(ctx, record)
 	return err
+}
+
+func (r *LocalWitnessReplica) Probe(ctx context.Context, epochID uint64) (WitnessSnapshot, error) {
+	if r == nil || r.log == nil {
+		return WitnessSnapshot{}, ErrWitnessLogRequired
+	}
+	return r.log.Probe(ctx, epochID)
 }
 
 type WitnessRecordKind uint8
@@ -192,6 +200,10 @@ func EncodeSegmentWitnessRecord(record SegmentWitnessRecord) ([]byte, error) {
 	writeInt64(&out, record.TimestampUnixNano)
 	writeString(&out, record.HolderID)
 	return out.Bytes(), nil
+}
+
+func VerifySegmentWitnessRecord(record SegmentWitnessRecord) error {
+	return validateSegmentWitnessRecord(record)
 }
 
 func DecodeWitnessFrame(payload []byte) (WitnessFrame, error) {

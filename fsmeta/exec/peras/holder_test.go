@@ -150,10 +150,15 @@ func (r *fakeWitnessReplica) ID() string {
 	return r.id
 }
 
-func (r *fakeWitnessReplica) AppendSegment(context.Context, compile.AuthorityScope, SegmentWitnessRecord) error {
+func (r *fakeWitnessReplica) AppendSegment(_ context.Context, _ compile.AuthorityScope, record SegmentWitnessRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.segments = append(r.segments, record)
 	return nil
+}
+
+func (r *fakeWitnessReplica) Probe(context.Context, uint64) (WitnessSnapshot, error) {
+	return r.snapshot(), nil
 }
 
 func (r *fakeWitnessReplica) snapshot() WitnessSnapshot {
