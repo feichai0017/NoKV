@@ -9,21 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotPreservesCapsuleAuthorities(t *testing.T) {
-	grant := testRootviewCapsuleGrant("capsule-1", 1)
+func TestSnapshotPreservesPerasAuthorities(t *testing.T) {
+	grant := testRootviewPerasGrant("peras-1", 1)
 	rooted := rootstate.Snapshot{
 		State: rootstate.State{
-			LastCommitted:         rootstate.Cursor{Term: 1, Index: 3},
-			ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{grant},
-			CapsuleAuthorityEpoch: grant.EpochID,
+			LastCommitted:       rootstate.Cursor{Term: 1, Index: 3},
+			ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
+			PerasAuthorityEpoch: grant.EpochID,
 		},
 	}
 
 	snapshot := SnapshotFromRoot(rooted)
-	found, ok := snapshot.ActiveCapsuleGrantByID(grant.GrantID)
+	found, ok := snapshot.ActivePerasGrantByID(grant.GrantID)
 	require.True(t, ok)
 	require.Equal(t, grant, found)
-	covered, ok := snapshot.ActiveCapsuleGrantFor(rootproto.CapsuleAuthorityScope{
+	covered, ok := snapshot.ActivePerasGrantFor(rootproto.PerasAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{1},
@@ -32,52 +32,52 @@ func TestSnapshotPreservesCapsuleAuthorities(t *testing.T) {
 	require.Equal(t, grant.GrantID, covered.GrantID)
 
 	clone := CloneSnapshot(snapshot)
-	clone.ActiveCapsuleGrants[0].Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, snapshot.ActiveCapsuleGrants[0].Scope.Buckets)
+	clone.ActivePerasGrants[0].Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, snapshot.ActivePerasGrants[0].Scope.Buckets)
 
 	roundTrip := snapshot.RootSnapshot()
-	require.Equal(t, []rootproto.CapsuleAuthorityGrant{grant}, roundTrip.State.ActiveCapsuleGrants)
-	require.Equal(t, grant.EpochID, roundTrip.State.CapsuleAuthorityEpoch)
+	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, roundTrip.State.ActivePerasGrants)
+	require.Equal(t, grant.EpochID, roundTrip.State.PerasAuthorityEpoch)
 }
 
-func TestPreserveNewerAuthorityStateKeepsNewerCapsuleEpoch(t *testing.T) {
-	older := Snapshot{CapsuleAuthorityEpoch: 1}
-	newerGrant := testRootviewCapsuleGrant("capsule-2", 2)
+func TestPreserveNewerAuthorityStateKeepsNewerPerasEpoch(t *testing.T) {
+	older := Snapshot{PerasAuthorityEpoch: 1}
+	newerGrant := testRootviewPerasGrant("peras-2", 2)
 	newerGrant.EpochID = 2
 	current := Snapshot{
-		ActiveCapsuleGrants:   []rootproto.CapsuleAuthorityGrant{newerGrant},
-		CapsuleAuthorityEpoch: newerGrant.EpochID,
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{newerGrant},
+		PerasAuthorityEpoch: newerGrant.EpochID,
 	}
 
 	merged := PreserveNewerAuthorityState(older, current)
-	require.Equal(t, current.ActiveCapsuleGrants, merged.ActiveCapsuleGrants)
-	require.Equal(t, current.CapsuleAuthorityEpoch, merged.CapsuleAuthorityEpoch)
+	require.Equal(t, current.ActivePerasGrants, merged.ActivePerasGrants)
+	require.Equal(t, current.PerasAuthorityEpoch, merged.PerasAuthorityEpoch)
 }
 
-func BenchmarkSnapshotActiveCapsuleGrantFor(b *testing.B) {
+func BenchmarkSnapshotActivePerasGrantFor(b *testing.B) {
 	b.ReportAllocs()
-	grants := make([]rootproto.CapsuleAuthorityGrant, 0, 16)
+	grants := make([]rootproto.PerasAuthorityGrant, 0, 16)
 	for bucket := range 16 {
-		grants = append(grants, testRootviewCapsuleGrant("capsule-"+string(rune('a'+bucket)), uint16(bucket)))
+		grants = append(grants, testRootviewPerasGrant("peras-"+string(rune('a'+bucket)), uint16(bucket)))
 	}
-	snapshot := Snapshot{ActiveCapsuleGrants: grants}
-	scope := rootproto.CapsuleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{11}}
+	snapshot := Snapshot{ActivePerasGrants: grants}
+	scope := rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{11}}
 	now := time.Now().UnixNano()
 
 	for b.Loop() {
-		grant, ok := snapshot.ActiveCapsuleGrantFor(scope, now)
+		grant, ok := snapshot.ActivePerasGrantFor(scope, now)
 		if !ok || grant.GrantID == "" {
-			b.Fatal("missing capsule grant")
+			b.Fatal("missing peras grant")
 		}
 	}
 }
 
-func testRootviewCapsuleGrant(grantID string, bucket uint16) rootproto.CapsuleAuthorityGrant {
-	return rootproto.CapsuleAuthorityGrant{
+func testRootviewPerasGrant(grantID string, bucket uint16) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:  grantID,
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{bucket},

@@ -34,17 +34,17 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch          uint64
-	MembershipEpoch       uint64
-	LastCommitted         Cursor
-	IDFence               uint64
-	TSOFence              uint64
-	ActiveGrants          []rootproto.AuthorityGrant
-	RetiredGrants         []rootproto.GrantRetirement
-	GrantInheritances     []rootproto.GrantInheritance
-	RetiredEraFloor       uint64
-	ActiveCapsuleGrants   []rootproto.CapsuleAuthorityGrant
-	CapsuleAuthorityEpoch uint64
+	ClusterEpoch        uint64
+	MembershipEpoch     uint64
+	LastCommitted       Cursor
+	IDFence             uint64
+	TSOFence            uint64
+	ActiveGrants        []rootproto.AuthorityGrant
+	RetiredGrants       []rootproto.GrantRetirement
+	GrantInheritances   []rootproto.GrantInheritance
+	RetiredEraFloor     uint64
+	ActivePerasGrants   []rootproto.PerasAuthorityGrant
+	PerasAuthorityEpoch uint64
 }
 
 func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -237,7 +237,7 @@ func CloneState(state State) State {
 	state.ActiveGrants = cloneAuthorityGrants(state.ActiveGrants)
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
-	state.ActiveCapsuleGrants = cloneCapsuleAuthorityGrants(state.ActiveCapsuleGrants)
+	state.ActivePerasGrants = clonePerasAuthorityGrants(state.ActivePerasGrants)
 	return state
 }
 
@@ -464,10 +464,10 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyGrantRetirementToState(state, cursor, event)
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(state, cursor, event)
-	case rootevent.KindCapsuleAuthorityGranted:
-		applyCapsuleAuthorityGrantedToState(state, event)
-	case rootevent.KindCapsuleAuthorityRetired:
-		applyCapsuleAuthorityRetiredToState(state, event)
+	case rootevent.KindPerasAuthorityGranted:
+		applyPerasAuthorityGrantedToState(state, event)
+	case rootevent.KindPerasAuthorityRetired:
+		applyPerasAuthorityRetiredToState(state, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,

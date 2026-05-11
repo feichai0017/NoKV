@@ -31,27 +31,27 @@ import (
 )
 
 type fakeStorage struct {
-	mu                 sync.Mutex
-	eventCalls         int
-	saveCalls          int
-	loadCalls          int
-	campaignCalls      int
-	sealCalls          int
-	reattachCalls      int
-	eventErr           error
-	saveErr            error
-	loadErr            error
-	campaignErr        error
-	sealErr            error
-	applyCapsuleErr    error
-	lastID             uint64
-	lastTS             uint64
-	leader             bool
-	leaderID           uint64
-	lastEvent          rootevent.Event
-	lastCapsuleCommand rootproto.CapsuleAuthorityCommand
-	applyCapsuleCalls  int
-	snapshot           rootview.Snapshot
+	mu               sync.Mutex
+	eventCalls       int
+	saveCalls        int
+	loadCalls        int
+	campaignCalls    int
+	sealCalls        int
+	reattachCalls    int
+	eventErr         error
+	saveErr          error
+	loadErr          error
+	campaignErr      error
+	sealErr          error
+	applyPerasErr    error
+	lastID           uint64
+	lastTS           uint64
+	leader           bool
+	leaderID         uint64
+	lastEvent        rootevent.Event
+	lastPerasCommand rootproto.PerasAuthorityCommand
+	applyPerasCalls  int
+	snapshot         rootview.Snapshot
 }
 
 func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
@@ -194,17 +194,17 @@ func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootpr
 	return grants
 }
 
-func upsertTestCapsuleGrant(grants []rootproto.CapsuleAuthorityGrant, grant rootproto.CapsuleAuthorityGrant) []rootproto.CapsuleAuthorityGrant {
+func upsertTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grant rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
 	for i := range grants {
 		if grants[i].GrantID == grant.GrantID {
-			grants[i] = rootproto.CloneCapsuleAuthorityGrant(grant)
+			grants[i] = rootproto.ClonePerasAuthorityGrant(grant)
 			return grants
 		}
 	}
-	return append(grants, rootproto.CloneCapsuleAuthorityGrant(grant))
+	return append(grants, rootproto.ClonePerasAuthorityGrant(grant))
 }
 
-func removeTestCapsuleGrant(grants []rootproto.CapsuleAuthorityGrant, grantID string) []rootproto.CapsuleAuthorityGrant {
+func removeTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grantID string) []rootproto.PerasAuthorityGrant {
 	for i := 0; i < len(grants); i++ {
 		if grants[i].GrantID == grantID {
 			grants = append(grants[:i], grants[i+1:]...)
@@ -428,66 +428,66 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	}
 }
 
-func (f *fakeStorage) ApplyCapsuleAuthority(_ context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (f *fakeStorage) ApplyPerasAuthority(_ context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.applyCapsuleCalls++
-	f.lastCapsuleCommand = cmd
-	if f.applyCapsuleErr != nil {
-		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, f.applyCapsuleErr
+	f.applyPerasCalls++
+	f.lastPerasCommand = cmd
+	if f.applyPerasErr != nil {
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, f.applyPerasErr
 	}
 	switch cmd.Kind {
-	case rootproto.CapsuleAuthorityActAcquire:
+	case rootproto.PerasAuthorityActAcquire:
 		holderID := strings.TrimSpace(cmd.HolderID)
 		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 		}
-		if active, ok := f.capsuleState().ActiveCapsuleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+		if active, ok := f.perasState().ActivePerasGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
 			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return f.capsuleState(), active, nil
+				return f.perasState(), active, nil
 			}
-			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		epoch := f.snapshot.CapsuleAuthorityEpoch + 1
+		epoch := f.snapshot.PerasAuthorityEpoch + 1
 		grantID := strings.TrimSpace(cmd.GrantID)
 		if grantID == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
 		}
-		grant := rootproto.CapsuleAuthorityGrant{
+		grant := rootproto.PerasAuthorityGrant{
 			GrantID:           grantID,
 			EpochID:           epoch,
 			HolderID:          holderID,
-			Scope:             rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+			Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
 			ExpiresUnixNano:   cmd.ExpiresUnixNano,
 			PredecessorDigest: cmd.PredecessorDigest,
 			QuotaCreditBytes:  cmd.QuotaCreditBytes,
 			QuotaCreditInodes: cmd.QuotaCreditInodes,
 		}
-		f.snapshot.ActiveCapsuleGrants = upsertTestCapsuleGrant(f.snapshot.ActiveCapsuleGrants, grant)
-		if grant.EpochID > f.snapshot.CapsuleAuthorityEpoch {
-			f.snapshot.CapsuleAuthorityEpoch = grant.EpochID
+		f.snapshot.ActivePerasGrants = upsertTestPerasGrant(f.snapshot.ActivePerasGrants, grant)
+		if grant.EpochID > f.snapshot.PerasAuthorityEpoch {
+			f.snapshot.PerasAuthorityEpoch = grant.EpochID
 		}
 		f.advanceRootToken()
-		return f.capsuleState(), grant, nil
-	case rootproto.CapsuleAuthorityActRetire:
+		return f.perasState(), grant, nil
+	case rootproto.PerasAuthorityActRetire:
 		grantID := strings.TrimSpace(cmd.GrantID)
 		holderID := strings.TrimSpace(cmd.HolderID)
-		active, ok := f.snapshot.ActiveCapsuleGrantByID(grantID)
+		active, ok := f.snapshot.ActivePerasGrantByID(grantID)
 		if !ok {
-			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, nil
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
 		}
 		if active.HolderID != holderID {
-			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		f.snapshot.ActiveCapsuleGrants = removeTestCapsuleGrant(f.snapshot.ActiveCapsuleGrants, grantID)
+		f.snapshot.ActivePerasGrants = removeTestPerasGrant(f.snapshot.ActivePerasGrants, grantID)
 		f.advanceRootToken()
-		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, nil
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
 	default:
-		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
 }
 
-func (f *fakeStorage) capsuleState() rootstate.State {
+func (f *fakeStorage) perasState() rootstate.State {
 	return rootstate.CloneState(f.snapshot.RootSnapshot().State)
 }
 

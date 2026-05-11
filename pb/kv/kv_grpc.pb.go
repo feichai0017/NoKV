@@ -21,20 +21,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StoreKV_Get_FullMethodName                   = "/nokv.kv.v1.StoreKV/Get"
-	StoreKV_BatchGet_FullMethodName              = "/nokv.kv.v1.StoreKV/BatchGet"
-	StoreKV_Scan_FullMethodName                  = "/nokv.kv.v1.StoreKV/Scan"
-	StoreKV_Prewrite_FullMethodName              = "/nokv.kv.v1.StoreKV/Prewrite"
-	StoreKV_Commit_FullMethodName                = "/nokv.kv.v1.StoreKV/Commit"
-	StoreKV_BatchRollback_FullMethodName         = "/nokv.kv.v1.StoreKV/BatchRollback"
-	StoreKV_ResolveLock_FullMethodName           = "/nokv.kv.v1.StoreKV/ResolveLock"
-	StoreKV_CheckTxnStatus_FullMethodName        = "/nokv.kv.v1.StoreKV/CheckTxnStatus"
-	StoreKV_TxnHeartBeat_FullMethodName          = "/nokv.kv.v1.StoreKV/TxnHeartBeat"
-	StoreKV_TryAtomicMutate_FullMethodName       = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
-	StoreKV_WatchApply_FullMethodName            = "/nokv.kv.v1.StoreKV/WatchApply"
-	StoreKV_CapsuleWitnessPrepare_FullMethodName = "/nokv.kv.v1.StoreKV/CapsuleWitnessPrepare"
-	StoreKV_CapsuleWitnessCommit_FullMethodName  = "/nokv.kv.v1.StoreKV/CapsuleWitnessCommit"
-	StoreKV_CapsuleWitnessProbe_FullMethodName   = "/nokv.kv.v1.StoreKV/CapsuleWitnessProbe"
+	StoreKV_Get_FullMethodName                 = "/nokv.kv.v1.StoreKV/Get"
+	StoreKV_BatchGet_FullMethodName            = "/nokv.kv.v1.StoreKV/BatchGet"
+	StoreKV_Scan_FullMethodName                = "/nokv.kv.v1.StoreKV/Scan"
+	StoreKV_Prewrite_FullMethodName            = "/nokv.kv.v1.StoreKV/Prewrite"
+	StoreKV_Commit_FullMethodName              = "/nokv.kv.v1.StoreKV/Commit"
+	StoreKV_BatchRollback_FullMethodName       = "/nokv.kv.v1.StoreKV/BatchRollback"
+	StoreKV_ResolveLock_FullMethodName         = "/nokv.kv.v1.StoreKV/ResolveLock"
+	StoreKV_CheckTxnStatus_FullMethodName      = "/nokv.kv.v1.StoreKV/CheckTxnStatus"
+	StoreKV_TxnHeartBeat_FullMethodName        = "/nokv.kv.v1.StoreKV/TxnHeartBeat"
+	StoreKV_TryAtomicMutate_FullMethodName     = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
+	StoreKV_WatchApply_FullMethodName          = "/nokv.kv.v1.StoreKV/WatchApply"
+	StoreKV_PerasWitnessPrepare_FullMethodName = "/nokv.kv.v1.StoreKV/PerasWitnessPrepare"
+	StoreKV_PerasWitnessCommit_FullMethodName  = "/nokv.kv.v1.StoreKV/PerasWitnessCommit"
+	StoreKV_PerasWitnessProbe_FullMethodName   = "/nokv.kv.v1.StoreKV/PerasWitnessProbe"
 )
 
 // StoreKVClient is the client API for StoreKV service.
@@ -52,9 +52,9 @@ type StoreKVClient interface {
 	TxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
 	TryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
 	WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
-	CapsuleWitnessPrepare(ctx context.Context, in *CapsuleWitnessPrepareRequest, opts ...grpc.CallOption) (*CapsuleWitnessPrepareResponse, error)
-	CapsuleWitnessCommit(ctx context.Context, in *CapsuleWitnessCommitRequest, opts ...grpc.CallOption) (*CapsuleWitnessCommitResponse, error)
-	CapsuleWitnessProbe(ctx context.Context, in *CapsuleWitnessProbeRequest, opts ...grpc.CallOption) (*CapsuleWitnessProbeResponse, error)
+	PerasWitnessPrepare(ctx context.Context, in *PerasWitnessPrepareRequest, opts ...grpc.CallOption) (*PerasWitnessPrepareResponse, error)
+	PerasWitnessCommit(ctx context.Context, in *PerasWitnessCommitRequest, opts ...grpc.CallOption) (*PerasWitnessCommitResponse, error)
+	PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error)
 }
 
 type storeKVClient struct {
@@ -184,30 +184,30 @@ func (c *storeKVClient) WatchApply(ctx context.Context, in *ApplyWatchRequest, o
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
 
-func (c *storeKVClient) CapsuleWitnessPrepare(ctx context.Context, in *CapsuleWitnessPrepareRequest, opts ...grpc.CallOption) (*CapsuleWitnessPrepareResponse, error) {
+func (c *storeKVClient) PerasWitnessPrepare(ctx context.Context, in *PerasWitnessPrepareRequest, opts ...grpc.CallOption) (*PerasWitnessPrepareResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CapsuleWitnessPrepareResponse)
-	err := c.cc.Invoke(ctx, StoreKV_CapsuleWitnessPrepare_FullMethodName, in, out, cOpts...)
+	out := new(PerasWitnessPrepareResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessPrepare_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *storeKVClient) CapsuleWitnessCommit(ctx context.Context, in *CapsuleWitnessCommitRequest, opts ...grpc.CallOption) (*CapsuleWitnessCommitResponse, error) {
+func (c *storeKVClient) PerasWitnessCommit(ctx context.Context, in *PerasWitnessCommitRequest, opts ...grpc.CallOption) (*PerasWitnessCommitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CapsuleWitnessCommitResponse)
-	err := c.cc.Invoke(ctx, StoreKV_CapsuleWitnessCommit_FullMethodName, in, out, cOpts...)
+	out := new(PerasWitnessCommitResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessCommit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *storeKVClient) CapsuleWitnessProbe(ctx context.Context, in *CapsuleWitnessProbeRequest, opts ...grpc.CallOption) (*CapsuleWitnessProbeResponse, error) {
+func (c *storeKVClient) PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CapsuleWitnessProbeResponse)
-	err := c.cc.Invoke(ctx, StoreKV_CapsuleWitnessProbe_FullMethodName, in, out, cOpts...)
+	out := new(PerasWitnessProbeResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessProbe_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,9 +229,9 @@ type StoreKVServer interface {
 	TxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
 	TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
 	WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
-	CapsuleWitnessPrepare(context.Context, *CapsuleWitnessPrepareRequest) (*CapsuleWitnessPrepareResponse, error)
-	CapsuleWitnessCommit(context.Context, *CapsuleWitnessCommitRequest) (*CapsuleWitnessCommitResponse, error)
-	CapsuleWitnessProbe(context.Context, *CapsuleWitnessProbeRequest) (*CapsuleWitnessProbeResponse, error)
+	PerasWitnessPrepare(context.Context, *PerasWitnessPrepareRequest) (*PerasWitnessPrepareResponse, error)
+	PerasWitnessCommit(context.Context, *PerasWitnessCommitRequest) (*PerasWitnessCommitResponse, error)
+	PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error)
 }
 
 // UnimplementedStoreKVServer should be embedded to have
@@ -274,14 +274,14 @@ func (UnimplementedStoreKVServer) TryAtomicMutate(context.Context, *KvTryAtomicM
 func (UnimplementedStoreKVServer) WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchApply not implemented")
 }
-func (UnimplementedStoreKVServer) CapsuleWitnessPrepare(context.Context, *CapsuleWitnessPrepareRequest) (*CapsuleWitnessPrepareResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CapsuleWitnessPrepare not implemented")
+func (UnimplementedStoreKVServer) PerasWitnessPrepare(context.Context, *PerasWitnessPrepareRequest) (*PerasWitnessPrepareResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessPrepare not implemented")
 }
-func (UnimplementedStoreKVServer) CapsuleWitnessCommit(context.Context, *CapsuleWitnessCommitRequest) (*CapsuleWitnessCommitResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CapsuleWitnessCommit not implemented")
+func (UnimplementedStoreKVServer) PerasWitnessCommit(context.Context, *PerasWitnessCommitRequest) (*PerasWitnessCommitResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessCommit not implemented")
 }
-func (UnimplementedStoreKVServer) CapsuleWitnessProbe(context.Context, *CapsuleWitnessProbeRequest) (*CapsuleWitnessProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CapsuleWitnessProbe not implemented")
+func (UnimplementedStoreKVServer) PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessProbe not implemented")
 }
 func (UnimplementedStoreKVServer) testEmbeddedByValue() {}
 
@@ -494,56 +494,56 @@ func _StoreKV_WatchApply_Handler(srv interface{}, stream grpc.ServerStream) erro
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
 
-func _StoreKV_CapsuleWitnessPrepare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CapsuleWitnessPrepareRequest)
+func _StoreKV_PerasWitnessPrepare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessPrepareRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StoreKVServer).CapsuleWitnessPrepare(ctx, in)
+		return srv.(StoreKVServer).PerasWitnessPrepare(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StoreKV_CapsuleWitnessPrepare_FullMethodName,
+		FullMethod: StoreKV_PerasWitnessPrepare_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StoreKVServer).CapsuleWitnessPrepare(ctx, req.(*CapsuleWitnessPrepareRequest))
+		return srv.(StoreKVServer).PerasWitnessPrepare(ctx, req.(*PerasWitnessPrepareRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _StoreKV_CapsuleWitnessCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CapsuleWitnessCommitRequest)
+func _StoreKV_PerasWitnessCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessCommitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StoreKVServer).CapsuleWitnessCommit(ctx, in)
+		return srv.(StoreKVServer).PerasWitnessCommit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StoreKV_CapsuleWitnessCommit_FullMethodName,
+		FullMethod: StoreKV_PerasWitnessCommit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StoreKVServer).CapsuleWitnessCommit(ctx, req.(*CapsuleWitnessCommitRequest))
+		return srv.(StoreKVServer).PerasWitnessCommit(ctx, req.(*PerasWitnessCommitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _StoreKV_CapsuleWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CapsuleWitnessProbeRequest)
+func _StoreKV_PerasWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessProbeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StoreKVServer).CapsuleWitnessProbe(ctx, in)
+		return srv.(StoreKVServer).PerasWitnessProbe(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StoreKV_CapsuleWitnessProbe_FullMethodName,
+		FullMethod: StoreKV_PerasWitnessProbe_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StoreKVServer).CapsuleWitnessProbe(ctx, req.(*CapsuleWitnessProbeRequest))
+		return srv.(StoreKVServer).PerasWitnessProbe(ctx, req.(*PerasWitnessProbeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -596,16 +596,16 @@ var StoreKV_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StoreKV_TryAtomicMutate_Handler,
 		},
 		{
-			MethodName: "CapsuleWitnessPrepare",
-			Handler:    _StoreKV_CapsuleWitnessPrepare_Handler,
+			MethodName: "PerasWitnessPrepare",
+			Handler:    _StoreKV_PerasWitnessPrepare_Handler,
 		},
 		{
-			MethodName: "CapsuleWitnessCommit",
-			Handler:    _StoreKV_CapsuleWitnessCommit_Handler,
+			MethodName: "PerasWitnessCommit",
+			Handler:    _StoreKV_PerasWitnessCommit_Handler,
 		},
 		{
-			MethodName: "CapsuleWitnessProbe",
-			Handler:    _StoreKV_CapsuleWitnessProbe_Handler,
+			MethodName: "PerasWitnessProbe",
+			Handler:    _StoreKV_PerasWitnessProbe_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

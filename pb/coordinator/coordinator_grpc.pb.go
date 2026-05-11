@@ -21,25 +21,25 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Coordinator_StoreHeartbeat_FullMethodName             = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
-	Coordinator_GetStore_FullMethodName                   = "/nokv.coordinator.v1.Coordinator/GetStore"
-	Coordinator_ListStores_FullMethodName                 = "/nokv.coordinator.v1.Coordinator/ListStores"
-	Coordinator_GetMount_FullMethodName                   = "/nokv.coordinator.v1.Coordinator/GetMount"
-	Coordinator_ListMounts_FullMethodName                 = "/nokv.coordinator.v1.Coordinator/ListMounts"
-	Coordinator_ListSubtreeAuthorities_FullMethodName     = "/nokv.coordinator.v1.Coordinator/ListSubtreeAuthorities"
-	Coordinator_GetQuotaFence_FullMethodName              = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
-	Coordinator_ListQuotaFences_FullMethodName            = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
-	Coordinator_ListCapsuleAuthorityGrants_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListCapsuleAuthorityGrants"
-	Coordinator_ApplyCapsuleAuthority_FullMethodName      = "/nokv.coordinator.v1.Coordinator/ApplyCapsuleAuthority"
-	Coordinator_WatchRootEvents_FullMethodName            = "/nokv.coordinator.v1.Coordinator/WatchRootEvents"
-	Coordinator_RegionLiveness_FullMethodName             = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
-	Coordinator_PublishRootEvent_FullMethodName           = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
-	Coordinator_ListTransitions_FullMethodName            = "/nokv.coordinator.v1.Coordinator/ListTransitions"
-	Coordinator_AssessRootEvent_FullMethodName            = "/nokv.coordinator.v1.Coordinator/AssessRootEvent"
-	Coordinator_RemoveRegion_FullMethodName               = "/nokv.coordinator.v1.Coordinator/RemoveRegion"
-	Coordinator_GetRegionByKey_FullMethodName             = "/nokv.coordinator.v1.Coordinator/GetRegionByKey"
-	Coordinator_AllocID_FullMethodName                    = "/nokv.coordinator.v1.Coordinator/AllocID"
-	Coordinator_Tso_FullMethodName                        = "/nokv.coordinator.v1.Coordinator/Tso"
+	Coordinator_StoreHeartbeat_FullMethodName           = "/nokv.coordinator.v1.Coordinator/StoreHeartbeat"
+	Coordinator_GetStore_FullMethodName                 = "/nokv.coordinator.v1.Coordinator/GetStore"
+	Coordinator_ListStores_FullMethodName               = "/nokv.coordinator.v1.Coordinator/ListStores"
+	Coordinator_GetMount_FullMethodName                 = "/nokv.coordinator.v1.Coordinator/GetMount"
+	Coordinator_ListMounts_FullMethodName               = "/nokv.coordinator.v1.Coordinator/ListMounts"
+	Coordinator_ListSubtreeAuthorities_FullMethodName   = "/nokv.coordinator.v1.Coordinator/ListSubtreeAuthorities"
+	Coordinator_GetQuotaFence_FullMethodName            = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
+	Coordinator_ListQuotaFences_FullMethodName          = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
+	Coordinator_ListPerasAuthorityGrants_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListPerasAuthorityGrants"
+	Coordinator_ApplyPerasAuthority_FullMethodName      = "/nokv.coordinator.v1.Coordinator/ApplyPerasAuthority"
+	Coordinator_WatchRootEvents_FullMethodName          = "/nokv.coordinator.v1.Coordinator/WatchRootEvents"
+	Coordinator_RegionLiveness_FullMethodName           = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
+	Coordinator_PublishRootEvent_FullMethodName         = "/nokv.coordinator.v1.Coordinator/PublishRootEvent"
+	Coordinator_ListTransitions_FullMethodName          = "/nokv.coordinator.v1.Coordinator/ListTransitions"
+	Coordinator_AssessRootEvent_FullMethodName          = "/nokv.coordinator.v1.Coordinator/AssessRootEvent"
+	Coordinator_RemoveRegion_FullMethodName             = "/nokv.coordinator.v1.Coordinator/RemoveRegion"
+	Coordinator_GetRegionByKey_FullMethodName           = "/nokv.coordinator.v1.Coordinator/GetRegionByKey"
+	Coordinator_AllocID_FullMethodName                  = "/nokv.coordinator.v1.Coordinator/AllocID"
+	Coordinator_Tso_FullMethodName                      = "/nokv.coordinator.v1.Coordinator/Tso"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -54,8 +54,8 @@ type CoordinatorClient interface {
 	ListSubtreeAuthorities(ctx context.Context, in *ListSubtreeAuthoritiesRequest, opts ...grpc.CallOption) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
-	ListCapsuleAuthorityGrants(ctx context.Context, in *ListCapsuleAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListCapsuleAuthorityGrantsResponse, error)
-	ApplyCapsuleAuthority(ctx context.Context, in *ApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*ApplyCapsuleAuthorityResponse, error)
+	ListPerasAuthorityGrants(ctx context.Context, in *ListPerasAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListPerasAuthorityGrantsResponse, error)
+	ApplyPerasAuthority(ctx context.Context, in *ApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, in *WatchRootEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRootEventsResponse], error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
 	PublishRootEvent(ctx context.Context, in *PublishRootEventRequest, opts ...grpc.CallOption) (*PublishRootEventResponse, error)
@@ -155,20 +155,20 @@ func (c *coordinatorClient) ListQuotaFences(ctx context.Context, in *ListQuotaFe
 	return out, nil
 }
 
-func (c *coordinatorClient) ListCapsuleAuthorityGrants(ctx context.Context, in *ListCapsuleAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListCapsuleAuthorityGrantsResponse, error) {
+func (c *coordinatorClient) ListPerasAuthorityGrants(ctx context.Context, in *ListPerasAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListPerasAuthorityGrantsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListCapsuleAuthorityGrantsResponse)
-	err := c.cc.Invoke(ctx, Coordinator_ListCapsuleAuthorityGrants_FullMethodName, in, out, cOpts...)
+	out := new(ListPerasAuthorityGrantsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListPerasAuthorityGrants_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *coordinatorClient) ApplyCapsuleAuthority(ctx context.Context, in *ApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*ApplyCapsuleAuthorityResponse, error) {
+func (c *coordinatorClient) ApplyPerasAuthority(ctx context.Context, in *ApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*ApplyPerasAuthorityResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ApplyCapsuleAuthorityResponse)
-	err := c.cc.Invoke(ctx, Coordinator_ApplyCapsuleAuthority_FullMethodName, in, out, cOpts...)
+	out := new(ApplyPerasAuthorityResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ApplyPerasAuthority_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -286,8 +286,8 @@ type CoordinatorServer interface {
 	ListSubtreeAuthorities(context.Context, *ListSubtreeAuthoritiesRequest) (*ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
-	ListCapsuleAuthorityGrants(context.Context, *ListCapsuleAuthorityGrantsRequest) (*ListCapsuleAuthorityGrantsResponse, error)
-	ApplyCapsuleAuthority(context.Context, *ApplyCapsuleAuthorityRequest) (*ApplyCapsuleAuthorityResponse, error)
+	ListPerasAuthorityGrants(context.Context, *ListPerasAuthorityGrantsRequest) (*ListPerasAuthorityGrantsResponse, error)
+	ApplyPerasAuthority(context.Context, *ApplyPerasAuthorityRequest) (*ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
 	PublishRootEvent(context.Context, *PublishRootEventRequest) (*PublishRootEventResponse, error)
@@ -330,11 +330,11 @@ func (UnimplementedCoordinatorServer) GetQuotaFence(context.Context, *GetQuotaFe
 func (UnimplementedCoordinatorServer) ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListQuotaFences not implemented")
 }
-func (UnimplementedCoordinatorServer) ListCapsuleAuthorityGrants(context.Context, *ListCapsuleAuthorityGrantsRequest) (*ListCapsuleAuthorityGrantsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListCapsuleAuthorityGrants not implemented")
+func (UnimplementedCoordinatorServer) ListPerasAuthorityGrants(context.Context, *ListPerasAuthorityGrantsRequest) (*ListPerasAuthorityGrantsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPerasAuthorityGrants not implemented")
 }
-func (UnimplementedCoordinatorServer) ApplyCapsuleAuthority(context.Context, *ApplyCapsuleAuthorityRequest) (*ApplyCapsuleAuthorityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyCapsuleAuthority not implemented")
+func (UnimplementedCoordinatorServer) ApplyPerasAuthority(context.Context, *ApplyPerasAuthorityRequest) (*ApplyPerasAuthorityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyPerasAuthority not implemented")
 }
 func (UnimplementedCoordinatorServer) WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchRootEvents not implemented")
@@ -527,38 +527,38 @@ func _Coordinator_ListQuotaFences_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Coordinator_ListCapsuleAuthorityGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListCapsuleAuthorityGrantsRequest)
+func _Coordinator_ListPerasAuthorityGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPerasAuthorityGrantsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CoordinatorServer).ListCapsuleAuthorityGrants(ctx, in)
+		return srv.(CoordinatorServer).ListPerasAuthorityGrants(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Coordinator_ListCapsuleAuthorityGrants_FullMethodName,
+		FullMethod: Coordinator_ListPerasAuthorityGrants_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServer).ListCapsuleAuthorityGrants(ctx, req.(*ListCapsuleAuthorityGrantsRequest))
+		return srv.(CoordinatorServer).ListPerasAuthorityGrants(ctx, req.(*ListPerasAuthorityGrantsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Coordinator_ApplyCapsuleAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ApplyCapsuleAuthorityRequest)
+func _Coordinator_ApplyPerasAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyPerasAuthorityRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CoordinatorServer).ApplyCapsuleAuthority(ctx, in)
+		return srv.(CoordinatorServer).ApplyPerasAuthority(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Coordinator_ApplyCapsuleAuthority_FullMethodName,
+		FullMethod: Coordinator_ApplyPerasAuthority_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServer).ApplyCapsuleAuthority(ctx, req.(*ApplyCapsuleAuthorityRequest))
+		return srv.(CoordinatorServer).ApplyPerasAuthority(ctx, req.(*ApplyPerasAuthorityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -758,12 +758,12 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Coordinator_ListQuotaFences_Handler,
 		},
 		{
-			MethodName: "ListCapsuleAuthorityGrants",
-			Handler:    _Coordinator_ListCapsuleAuthorityGrants_Handler,
+			MethodName: "ListPerasAuthorityGrants",
+			Handler:    _Coordinator_ListPerasAuthorityGrants_Handler,
 		},
 		{
-			MethodName: "ApplyCapsuleAuthority",
-			Handler:    _Coordinator_ApplyCapsuleAuthority_Handler,
+			MethodName: "ApplyPerasAuthority",
+			Handler:    _Coordinator_ApplyPerasAuthority_Handler,
 		},
 		{
 			MethodName: "RegionLiveness",

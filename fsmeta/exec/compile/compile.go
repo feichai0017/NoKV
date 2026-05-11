@@ -1,7 +1,7 @@
-// Package compile turns fsmeta request plans into Capsule semantic deltas.
+// Package compile turns fsmeta request plans into Peras semantic deltas.
 //
 // The compiler is deliberately conservative. It describes the static key
-// footprint and the guards a future Capsule holder must prove before it may
+// footprint and the guards a future Peras holder must prove before it may
 // bypass the ordinary Percolator/Raft path. It does not execute reads, does not
 // allocate timestamps, and does not weaken the current fsmeta executor.
 package compile
@@ -12,7 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
-// Eligibility describes whether a request can enter the Capsule write path
+// Eligibility describes whether a request can enter the Peras write path
 // after the listed runtime guards have been checked by the holder.
 type Eligibility uint8
 
@@ -47,7 +47,7 @@ const (
 	SlowReasonMaintenanceScan   SlowReason = "maintenance_scan"
 )
 
-// RuntimeGuard is a condition the future Capsule holder must verify against
+// RuntimeGuard is a condition the future Peras holder must verify against
 // its merged holder view before it can issue a certificate.
 type RuntimeGuard string
 
@@ -79,7 +79,7 @@ type Predicate struct {
 	Key  []byte
 }
 
-// EffectKind is the mutation class a Capsule certificate would eventually
+// EffectKind is the mutation class a Peras certificate would eventually
 // replay.
 type EffectKind uint8
 
@@ -108,7 +108,7 @@ type AuthorityScope struct {
 	Inodes     []fsmeta.InodeID
 }
 
-// SemanticDelta is the Capsule-facing contract produced from one fsmeta
+// SemanticDelta is the Peras-facing contract produced from one fsmeta
 // request. The existing executor still uses fsmeta.OperationPlan directly.
 type SemanticDelta struct {
 	Kind              fsmeta.OperationKind

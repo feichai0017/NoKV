@@ -3378,7 +3378,7 @@ func (x *ApplyWatchResponse) GetDroppedEvents() uint64 {
 	return 0
 }
 
-type CapsuleAuthorityScope struct {
+type PerasAuthorityScope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
 	MountKeyId    uint64                 `protobuf:"varint,2,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
@@ -3389,20 +3389,20 @@ type CapsuleAuthorityScope struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleAuthorityScope) Reset() {
-	*x = CapsuleAuthorityScope{}
+func (x *PerasAuthorityScope) Reset() {
+	*x = PerasAuthorityScope{}
 	mi := &file_kv_kv_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleAuthorityScope) String() string {
+func (x *PerasAuthorityScope) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleAuthorityScope) ProtoMessage() {}
+func (*PerasAuthorityScope) ProtoMessage() {}
 
-func (x *CapsuleAuthorityScope) ProtoReflect() protoreflect.Message {
+func (x *PerasAuthorityScope) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3414,47 +3414,47 @@ func (x *CapsuleAuthorityScope) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleAuthorityScope.ProtoReflect.Descriptor instead.
-func (*CapsuleAuthorityScope) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasAuthorityScope.ProtoReflect.Descriptor instead.
+func (*PerasAuthorityScope) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{51}
 }
 
-func (x *CapsuleAuthorityScope) GetMount() string {
+func (x *PerasAuthorityScope) GetMount() string {
 	if x != nil {
 		return x.Mount
 	}
 	return ""
 }
 
-func (x *CapsuleAuthorityScope) GetMountKeyId() uint64 {
+func (x *PerasAuthorityScope) GetMountKeyId() uint64 {
 	if x != nil {
 		return x.MountKeyId
 	}
 	return 0
 }
 
-func (x *CapsuleAuthorityScope) GetBuckets() []uint32 {
+func (x *PerasAuthorityScope) GetBuckets() []uint32 {
 	if x != nil {
 		return x.Buckets
 	}
 	return nil
 }
 
-func (x *CapsuleAuthorityScope) GetParents() []uint64 {
+func (x *PerasAuthorityScope) GetParents() []uint64 {
 	if x != nil {
 		return x.Parents
 	}
 	return nil
 }
 
-func (x *CapsuleAuthorityScope) GetInodes() []uint64 {
+func (x *PerasAuthorityScope) GetInodes() []uint64 {
 	if x != nil {
 		return x.Inodes
 	}
 	return nil
 }
 
-type CapsuleOperationID struct {
+type PerasOperationID struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
 	Seq           uint64                 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
@@ -3462,20 +3462,20 @@ type CapsuleOperationID struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleOperationID) Reset() {
-	*x = CapsuleOperationID{}
+func (x *PerasOperationID) Reset() {
+	*x = PerasOperationID{}
 	mi := &file_kv_kv_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleOperationID) String() string {
+func (x *PerasOperationID) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleOperationID) ProtoMessage() {}
+func (*PerasOperationID) ProtoMessage() {}
 
-func (x *CapsuleOperationID) ProtoReflect() protoreflect.Message {
+func (x *PerasOperationID) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3487,34 +3487,34 @@ func (x *CapsuleOperationID) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleOperationID.ProtoReflect.Descriptor instead.
-func (*CapsuleOperationID) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasOperationID.ProtoReflect.Descriptor instead.
+func (*PerasOperationID) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{52}
 }
 
-func (x *CapsuleOperationID) GetClientId() string {
+func (x *PerasOperationID) GetClientId() string {
 	if x != nil {
 		return x.ClientId
 	}
 	return ""
 }
 
-func (x *CapsuleOperationID) GetSeq() uint64 {
+func (x *PerasOperationID) GetSeq() uint64 {
 	if x != nil {
 		return x.Seq
 	}
 	return 0
 }
 
-type CapsulePrepareRecord struct {
+type PerasPrepareRecord struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	EpochId              uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	OpId                 *CapsuleOperationID    `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	OpId                 *PerasOperationID      `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
 	DeltaPayload         []byte                 `protobuf:"bytes,3,opt,name=delta_payload,json=deltaPayload,proto3" json:"delta_payload,omitempty"`
 	DeltaDigest          []byte                 `protobuf:"bytes,4,opt,name=delta_digest,json=deltaDigest,proto3" json:"delta_digest,omitempty"`
 	PredicateDigest      []byte                 `protobuf:"bytes,5,opt,name=predicate_digest,json=predicateDigest,proto3" json:"predicate_digest,omitempty"`
 	AuthorityProofDigest []byte                 `protobuf:"bytes,6,opt,name=authority_proof_digest,json=authorityProofDigest,proto3" json:"authority_proof_digest,omitempty"`
-	ConflictDagFrontier  []*CapsuleOperationID  `protobuf:"bytes,7,rep,name=conflict_dag_frontier,json=conflictDagFrontier,proto3" json:"conflict_dag_frontier,omitempty"`
+	DependencyFrontier   []*PerasOperationID    `protobuf:"bytes,7,rep,name=dependency_frontier,json=dependencyFrontier,proto3" json:"dependency_frontier,omitempty"`
 	TimestampUnixNano    int64                  `protobuf:"varint,8,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
 	HolderId             string                 `protobuf:"bytes,9,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
 	HolderSignature      []byte                 `protobuf:"bytes,10,opt,name=holder_signature,json=holderSignature,proto3" json:"holder_signature,omitempty"`
@@ -3522,20 +3522,20 @@ type CapsulePrepareRecord struct {
 	sizeCache            protoimpl.SizeCache
 }
 
-func (x *CapsulePrepareRecord) Reset() {
-	*x = CapsulePrepareRecord{}
+func (x *PerasPrepareRecord) Reset() {
+	*x = PerasPrepareRecord{}
 	mi := &file_kv_kv_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsulePrepareRecord) String() string {
+func (x *PerasPrepareRecord) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsulePrepareRecord) ProtoMessage() {}
+func (*PerasPrepareRecord) ProtoMessage() {}
 
-func (x *CapsulePrepareRecord) ProtoReflect() protoreflect.Message {
+func (x *PerasPrepareRecord) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3547,85 +3547,85 @@ func (x *CapsulePrepareRecord) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsulePrepareRecord.ProtoReflect.Descriptor instead.
-func (*CapsulePrepareRecord) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasPrepareRecord.ProtoReflect.Descriptor instead.
+func (*PerasPrepareRecord) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{53}
 }
 
-func (x *CapsulePrepareRecord) GetEpochId() uint64 {
+func (x *PerasPrepareRecord) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *CapsulePrepareRecord) GetOpId() *CapsuleOperationID {
+func (x *PerasPrepareRecord) GetOpId() *PerasOperationID {
 	if x != nil {
 		return x.OpId
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetDeltaPayload() []byte {
+func (x *PerasPrepareRecord) GetDeltaPayload() []byte {
 	if x != nil {
 		return x.DeltaPayload
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetDeltaDigest() []byte {
+func (x *PerasPrepareRecord) GetDeltaDigest() []byte {
 	if x != nil {
 		return x.DeltaDigest
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetPredicateDigest() []byte {
+func (x *PerasPrepareRecord) GetPredicateDigest() []byte {
 	if x != nil {
 		return x.PredicateDigest
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetAuthorityProofDigest() []byte {
+func (x *PerasPrepareRecord) GetAuthorityProofDigest() []byte {
 	if x != nil {
 		return x.AuthorityProofDigest
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetConflictDagFrontier() []*CapsuleOperationID {
+func (x *PerasPrepareRecord) GetDependencyFrontier() []*PerasOperationID {
 	if x != nil {
-		return x.ConflictDagFrontier
+		return x.DependencyFrontier
 	}
 	return nil
 }
 
-func (x *CapsulePrepareRecord) GetTimestampUnixNano() int64 {
+func (x *PerasPrepareRecord) GetTimestampUnixNano() int64 {
 	if x != nil {
 		return x.TimestampUnixNano
 	}
 	return 0
 }
 
-func (x *CapsulePrepareRecord) GetHolderId() string {
+func (x *PerasPrepareRecord) GetHolderId() string {
 	if x != nil {
 		return x.HolderId
 	}
 	return ""
 }
 
-func (x *CapsulePrepareRecord) GetHolderSignature() []byte {
+func (x *PerasPrepareRecord) GetHolderSignature() []byte {
 	if x != nil {
 		return x.HolderSignature
 	}
 	return nil
 }
 
-type CapsuleCommitCertificateRecord struct {
+type PerasCommitCertificateRecord struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	EpochId           uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	OpId              *CapsuleOperationID    `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	OpId              *PerasOperationID      `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
 	PrepareDigest     []byte                 `protobuf:"bytes,3,opt,name=prepare_digest,json=prepareDigest,proto3" json:"prepare_digest,omitempty"`
 	QuorumAckSet      []string               `protobuf:"bytes,4,rep,name=quorum_ack_set,json=quorumAckSet,proto3" json:"quorum_ack_set,omitempty"`
 	TimestampUnixNano int64                  `protobuf:"varint,5,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
@@ -3635,20 +3635,20 @@ type CapsuleCommitCertificateRecord struct {
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *CapsuleCommitCertificateRecord) Reset() {
-	*x = CapsuleCommitCertificateRecord{}
+func (x *PerasCommitCertificateRecord) Reset() {
+	*x = PerasCommitCertificateRecord{}
 	mi := &file_kv_kv_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleCommitCertificateRecord) String() string {
+func (x *PerasCommitCertificateRecord) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleCommitCertificateRecord) ProtoMessage() {}
+func (*PerasCommitCertificateRecord) ProtoMessage() {}
 
-func (x *CapsuleCommitCertificateRecord) ProtoReflect() protoreflect.Message {
+func (x *PerasCommitCertificateRecord) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3660,82 +3660,82 @@ func (x *CapsuleCommitCertificateRecord) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleCommitCertificateRecord.ProtoReflect.Descriptor instead.
-func (*CapsuleCommitCertificateRecord) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasCommitCertificateRecord.ProtoReflect.Descriptor instead.
+func (*PerasCommitCertificateRecord) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{54}
 }
 
-func (x *CapsuleCommitCertificateRecord) GetEpochId() uint64 {
+func (x *PerasCommitCertificateRecord) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *CapsuleCommitCertificateRecord) GetOpId() *CapsuleOperationID {
+func (x *PerasCommitCertificateRecord) GetOpId() *PerasOperationID {
 	if x != nil {
 		return x.OpId
 	}
 	return nil
 }
 
-func (x *CapsuleCommitCertificateRecord) GetPrepareDigest() []byte {
+func (x *PerasCommitCertificateRecord) GetPrepareDigest() []byte {
 	if x != nil {
 		return x.PrepareDigest
 	}
 	return nil
 }
 
-func (x *CapsuleCommitCertificateRecord) GetQuorumAckSet() []string {
+func (x *PerasCommitCertificateRecord) GetQuorumAckSet() []string {
 	if x != nil {
 		return x.QuorumAckSet
 	}
 	return nil
 }
 
-func (x *CapsuleCommitCertificateRecord) GetTimestampUnixNano() int64 {
+func (x *PerasCommitCertificateRecord) GetTimestampUnixNano() int64 {
 	if x != nil {
 		return x.TimestampUnixNano
 	}
 	return 0
 }
 
-func (x *CapsuleCommitCertificateRecord) GetHolderId() string {
+func (x *PerasCommitCertificateRecord) GetHolderId() string {
 	if x != nil {
 		return x.HolderId
 	}
 	return ""
 }
 
-func (x *CapsuleCommitCertificateRecord) GetHolderSignature() []byte {
+func (x *PerasCommitCertificateRecord) GetHolderSignature() []byte {
 	if x != nil {
 		return x.HolderSignature
 	}
 	return nil
 }
 
-type CapsuleWitnessPrepareRequest struct {
+type PerasWitnessPrepareRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Scope         *CapsuleAuthorityScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	Record        *CapsulePrepareRecord  `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+	Scope         *PerasAuthorityScope   `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Record        *PerasPrepareRecord    `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessPrepareRequest) Reset() {
-	*x = CapsuleWitnessPrepareRequest{}
+func (x *PerasWitnessPrepareRequest) Reset() {
+	*x = PerasWitnessPrepareRequest{}
 	mi := &file_kv_kv_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessPrepareRequest) String() string {
+func (x *PerasWitnessPrepareRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessPrepareRequest) ProtoMessage() {}
+func (*PerasWitnessPrepareRequest) ProtoMessage() {}
 
-func (x *CapsuleWitnessPrepareRequest) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessPrepareRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3747,45 +3747,45 @@ func (x *CapsuleWitnessPrepareRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessPrepareRequest.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessPrepareRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessPrepareRequest.ProtoReflect.Descriptor instead.
+func (*PerasWitnessPrepareRequest) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{55}
 }
 
-func (x *CapsuleWitnessPrepareRequest) GetScope() *CapsuleAuthorityScope {
+func (x *PerasWitnessPrepareRequest) GetScope() *PerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *CapsuleWitnessPrepareRequest) GetRecord() *CapsulePrepareRecord {
+func (x *PerasWitnessPrepareRequest) GetRecord() *PerasPrepareRecord {
 	if x != nil {
 		return x.Record
 	}
 	return nil
 }
 
-type CapsuleWitnessPrepareResponse struct {
+type PerasWitnessPrepareResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessPrepareResponse) Reset() {
-	*x = CapsuleWitnessPrepareResponse{}
+func (x *PerasWitnessPrepareResponse) Reset() {
+	*x = PerasWitnessPrepareResponse{}
 	mi := &file_kv_kv_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessPrepareResponse) String() string {
+func (x *PerasWitnessPrepareResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessPrepareResponse) ProtoMessage() {}
+func (*PerasWitnessPrepareResponse) ProtoMessage() {}
 
-func (x *CapsuleWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3797,33 +3797,33 @@ func (x *CapsuleWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessPrepareResponse.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessPrepareResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessPrepareResponse.ProtoReflect.Descriptor instead.
+func (*PerasWitnessPrepareResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{56}
 }
 
-type CapsuleWitnessCommitRequest struct {
-	state         protoimpl.MessageState          `protogen:"open.v1"`
-	Scope         *CapsuleAuthorityScope          `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	Record        *CapsuleCommitCertificateRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+type PerasWitnessCommitRequest struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	Scope         *PerasAuthorityScope          `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Record        *PerasCommitCertificateRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessCommitRequest) Reset() {
-	*x = CapsuleWitnessCommitRequest{}
+func (x *PerasWitnessCommitRequest) Reset() {
+	*x = PerasWitnessCommitRequest{}
 	mi := &file_kv_kv_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessCommitRequest) String() string {
+func (x *PerasWitnessCommitRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessCommitRequest) ProtoMessage() {}
+func (*PerasWitnessCommitRequest) ProtoMessage() {}
 
-func (x *CapsuleWitnessCommitRequest) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessCommitRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3835,45 +3835,45 @@ func (x *CapsuleWitnessCommitRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessCommitRequest.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessCommitRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessCommitRequest.ProtoReflect.Descriptor instead.
+func (*PerasWitnessCommitRequest) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *CapsuleWitnessCommitRequest) GetScope() *CapsuleAuthorityScope {
+func (x *PerasWitnessCommitRequest) GetScope() *PerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *CapsuleWitnessCommitRequest) GetRecord() *CapsuleCommitCertificateRecord {
+func (x *PerasWitnessCommitRequest) GetRecord() *PerasCommitCertificateRecord {
 	if x != nil {
 		return x.Record
 	}
 	return nil
 }
 
-type CapsuleWitnessCommitResponse struct {
+type PerasWitnessCommitResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessCommitResponse) Reset() {
-	*x = CapsuleWitnessCommitResponse{}
+func (x *PerasWitnessCommitResponse) Reset() {
+	*x = PerasWitnessCommitResponse{}
 	mi := &file_kv_kv_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessCommitResponse) String() string {
+func (x *PerasWitnessCommitResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessCommitResponse) ProtoMessage() {}
+func (*PerasWitnessCommitResponse) ProtoMessage() {}
 
-func (x *CapsuleWitnessCommitResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessCommitResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3885,32 +3885,32 @@ func (x *CapsuleWitnessCommitResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessCommitResponse.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessCommitResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessCommitResponse.ProtoReflect.Descriptor instead.
+func (*PerasWitnessCommitResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{58}
 }
 
-type CapsuleWitnessProbeRequest struct {
+type PerasWitnessProbeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EpochId       uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessProbeRequest) Reset() {
-	*x = CapsuleWitnessProbeRequest{}
+func (x *PerasWitnessProbeRequest) Reset() {
+	*x = PerasWitnessProbeRequest{}
 	mi := &file_kv_kv_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessProbeRequest) String() string {
+func (x *PerasWitnessProbeRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessProbeRequest) ProtoMessage() {}
+func (*PerasWitnessProbeRequest) ProtoMessage() {}
 
-func (x *CapsuleWitnessProbeRequest) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessProbeRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3922,40 +3922,40 @@ func (x *CapsuleWitnessProbeRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessProbeRequest.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessProbeRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessProbeRequest.ProtoReflect.Descriptor instead.
+func (*PerasWitnessProbeRequest) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{59}
 }
 
-func (x *CapsuleWitnessProbeRequest) GetEpochId() uint64 {
+func (x *PerasWitnessProbeRequest) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-type CapsuleWitnessProbeResponse struct {
-	state         protoimpl.MessageState            `protogen:"open.v1"`
-	Prepares      []*CapsulePrepareRecord           `protobuf:"bytes,1,rep,name=prepares,proto3" json:"prepares,omitempty"`
-	Commits       []*CapsuleCommitCertificateRecord `protobuf:"bytes,2,rep,name=commits,proto3" json:"commits,omitempty"`
+type PerasWitnessProbeResponse struct {
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	Prepares      []*PerasPrepareRecord           `protobuf:"bytes,1,rep,name=prepares,proto3" json:"prepares,omitempty"`
+	Commits       []*PerasCommitCertificateRecord `protobuf:"bytes,2,rep,name=commits,proto3" json:"commits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CapsuleWitnessProbeResponse) Reset() {
-	*x = CapsuleWitnessProbeResponse{}
+func (x *PerasWitnessProbeResponse) Reset() {
+	*x = PerasWitnessProbeResponse{}
 	mi := &file_kv_kv_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CapsuleWitnessProbeResponse) String() string {
+func (x *PerasWitnessProbeResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CapsuleWitnessProbeResponse) ProtoMessage() {}
+func (*PerasWitnessProbeResponse) ProtoMessage() {}
 
-func (x *CapsuleWitnessProbeResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessProbeResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3967,19 +3967,19 @@ func (x *CapsuleWitnessProbeResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CapsuleWitnessProbeResponse.ProtoReflect.Descriptor instead.
-func (*CapsuleWitnessProbeResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessProbeResponse.ProtoReflect.Descriptor instead.
+func (*PerasWitnessProbeResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{60}
 }
 
-func (x *CapsuleWitnessProbeResponse) GetPrepares() []*CapsulePrepareRecord {
+func (x *PerasWitnessProbeResponse) GetPrepares() []*PerasPrepareRecord {
 	if x != nil {
 		return x.Prepares
 	}
 	return nil
 }
 
-func (x *CapsuleWitnessProbeResponse) GetCommits() []*CapsuleCommitCertificateRecord {
+func (x *PerasWitnessProbeResponse) GetCommits() []*PerasCommitCertificateRecord {
 	if x != nil {
 		return x.Commits
 	}
@@ -4552,50 +4552,50 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x04keys\x18\x06 \x03(\fR\x04keys\"n\n" +
 	"\x12ApplyWatchResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.nokv.kv.v1.ApplyWatchEventR\x05event\x12%\n" +
-	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents\"\x9b\x01\n" +
-	"\x15CapsuleAuthorityScope\x12\x14\n" +
+	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents\"\x99\x01\n" +
+	"\x13PerasAuthorityScope\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12 \n" +
 	"\fmount_key_id\x18\x02 \x01(\x04R\n" +
 	"mountKeyId\x12\x18\n" +
 	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
 	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
-	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"C\n" +
-	"\x12CapsuleOperationID\x12\x1b\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"A\n" +
+	"\x10PerasOperationID\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x04R\x03seq\"\xdb\x03\n" +
-	"\x14CapsulePrepareRecord\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x123\n" +
-	"\x05op_id\x18\x02 \x01(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x04opId\x12#\n" +
+	"\x03seq\x18\x02 \x01(\x04R\x03seq\"\xd2\x03\n" +
+	"\x12PerasPrepareRecord\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x121\n" +
+	"\x05op_id\x18\x02 \x01(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x04opId\x12#\n" +
 	"\rdelta_payload\x18\x03 \x01(\fR\fdeltaPayload\x12!\n" +
 	"\fdelta_digest\x18\x04 \x01(\fR\vdeltaDigest\x12)\n" +
 	"\x10predicate_digest\x18\x05 \x01(\fR\x0fpredicateDigest\x124\n" +
-	"\x16authority_proof_digest\x18\x06 \x01(\fR\x14authorityProofDigest\x12R\n" +
-	"\x15conflict_dag_frontier\x18\a \x03(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x13conflictDagFrontier\x12.\n" +
+	"\x16authority_proof_digest\x18\x06 \x01(\fR\x14authorityProofDigest\x12M\n" +
+	"\x13dependency_frontier\x18\a \x03(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x12dependencyFrontier\x12.\n" +
 	"\x13timestamp_unix_nano\x18\b \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
 	"\tholder_id\x18\t \x01(\tR\bholderId\x12)\n" +
 	"\x10holder_signature\x18\n" +
-	" \x01(\fR\x0fholderSignature\"\xb5\x02\n" +
-	"\x1eCapsuleCommitCertificateRecord\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x123\n" +
-	"\x05op_id\x18\x02 \x01(\v2\x1e.nokv.kv.v1.CapsuleOperationIDR\x04opId\x12%\n" +
+	" \x01(\fR\x0fholderSignature\"\xb1\x02\n" +
+	"\x1cPerasCommitCertificateRecord\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x121\n" +
+	"\x05op_id\x18\x02 \x01(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x04opId\x12%\n" +
 	"\x0eprepare_digest\x18\x03 \x01(\fR\rprepareDigest\x12$\n" +
 	"\x0equorum_ack_set\x18\x04 \x03(\tR\fquorumAckSet\x12.\n" +
 	"\x13timestamp_unix_nano\x18\x05 \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
 	"\tholder_id\x18\x06 \x01(\tR\bholderId\x12)\n" +
-	"\x10holder_signature\x18\a \x01(\fR\x0fholderSignature\"\x91\x01\n" +
-	"\x1cCapsuleWitnessPrepareRequest\x127\n" +
-	"\x05scope\x18\x01 \x01(\v2!.nokv.kv.v1.CapsuleAuthorityScopeR\x05scope\x128\n" +
-	"\x06record\x18\x02 \x01(\v2 .nokv.kv.v1.CapsulePrepareRecordR\x06record\"\x1f\n" +
-	"\x1dCapsuleWitnessPrepareResponse\"\x9a\x01\n" +
-	"\x1bCapsuleWitnessCommitRequest\x127\n" +
-	"\x05scope\x18\x01 \x01(\v2!.nokv.kv.v1.CapsuleAuthorityScopeR\x05scope\x12B\n" +
-	"\x06record\x18\x02 \x01(\v2*.nokv.kv.v1.CapsuleCommitCertificateRecordR\x06record\"\x1e\n" +
-	"\x1cCapsuleWitnessCommitResponse\"7\n" +
-	"\x1aCapsuleWitnessProbeRequest\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"\xa1\x01\n" +
-	"\x1bCapsuleWitnessProbeResponse\x12<\n" +
-	"\bprepares\x18\x01 \x03(\v2 .nokv.kv.v1.CapsulePrepareRecordR\bprepares\x12D\n" +
-	"\acommits\x18\x02 \x03(\v2*.nokv.kv.v1.CapsuleCommitCertificateRecordR\acommits\"\xba\x02\n" +
+	"\x10holder_signature\x18\a \x01(\fR\x0fholderSignature\"\x8b\x01\n" +
+	"\x1aPerasWitnessPrepareRequest\x125\n" +
+	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x126\n" +
+	"\x06record\x18\x02 \x01(\v2\x1e.nokv.kv.v1.PerasPrepareRecordR\x06record\"\x1d\n" +
+	"\x1bPerasWitnessPrepareResponse\"\x94\x01\n" +
+	"\x19PerasWitnessCommitRequest\x125\n" +
+	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12@\n" +
+	"\x06record\x18\x02 \x01(\v2(.nokv.kv.v1.PerasCommitCertificateRecordR\x06record\"\x1c\n" +
+	"\x1aPerasWitnessCommitResponse\"5\n" +
+	"\x18PerasWitnessProbeRequest\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"\x9b\x01\n" +
+	"\x19PerasWitnessProbeResponse\x12:\n" +
+	"\bprepares\x18\x01 \x03(\v2\x1e.nokv.kv.v1.PerasPrepareRecordR\bprepares\x12B\n" +
+	"\acommits\x18\x02 \x03(\v2(.nokv.kv.v1.PerasCommitCertificateRecordR\acommits\"\xba\x02\n" +
 	"\bKeyError\x12*\n" +
 	"\x06locked\x18\x01 \x01(\v2\x12.nokv.kv.v1.LockedR\x06locked\x12@\n" +
 	"\x0ewrite_conflict\x18\x02 \x01(\v2\x19.nokv.kv.v1.WriteConflictR\rwriteConflict\x12C\n" +
@@ -4646,7 +4646,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xb1\t\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x9f\t\n" +
 	"\aStoreKV\x12:\n" +
 	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
 	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
@@ -4659,10 +4659,10 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\fTxnHeartBeat\x12!.nokv.kv.v1.KvTxnHeartBeatRequest\x1a\".nokv.kv.v1.KvTxnHeartBeatResponse\x12^\n" +
 	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12M\n" +
 	"\n" +
-	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12l\n" +
-	"\x15CapsuleWitnessPrepare\x12(.nokv.kv.v1.CapsuleWitnessPrepareRequest\x1a).nokv.kv.v1.CapsuleWitnessPrepareResponse\x12i\n" +
-	"\x14CapsuleWitnessCommit\x12'.nokv.kv.v1.CapsuleWitnessCommitRequest\x1a(.nokv.kv.v1.CapsuleWitnessCommitResponse\x12f\n" +
-	"\x13CapsuleWitnessProbe\x12&.nokv.kv.v1.CapsuleWitnessProbeRequest\x1a'.nokv.kv.v1.CapsuleWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
+	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12f\n" +
+	"\x13PerasWitnessPrepare\x12&.nokv.kv.v1.PerasWitnessPrepareRequest\x1a'.nokv.kv.v1.PerasWitnessPrepareResponse\x12c\n" +
+	"\x12PerasWitnessCommit\x12%.nokv.kv.v1.PerasWitnessCommitRequest\x1a&.nokv.kv.v1.PerasWitnessCommitResponse\x12`\n" +
+	"\x11PerasWitnessProbe\x12$.nokv.kv.v1.PerasWitnessProbeRequest\x1a%.nokv.kv.v1.PerasWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
 	file_kv_kv_proto_rawDescOnce sync.Once
@@ -4738,16 +4738,16 @@ var file_kv_kv_proto_goTypes = []any{
 	(*ApplyWatchRequest)(nil),                // 56: nokv.kv.v1.ApplyWatchRequest
 	(*ApplyWatchEvent)(nil),                  // 57: nokv.kv.v1.ApplyWatchEvent
 	(*ApplyWatchResponse)(nil),               // 58: nokv.kv.v1.ApplyWatchResponse
-	(*CapsuleAuthorityScope)(nil),            // 59: nokv.kv.v1.CapsuleAuthorityScope
-	(*CapsuleOperationID)(nil),               // 60: nokv.kv.v1.CapsuleOperationID
-	(*CapsulePrepareRecord)(nil),             // 61: nokv.kv.v1.CapsulePrepareRecord
-	(*CapsuleCommitCertificateRecord)(nil),   // 62: nokv.kv.v1.CapsuleCommitCertificateRecord
-	(*CapsuleWitnessPrepareRequest)(nil),     // 63: nokv.kv.v1.CapsuleWitnessPrepareRequest
-	(*CapsuleWitnessPrepareResponse)(nil),    // 64: nokv.kv.v1.CapsuleWitnessPrepareResponse
-	(*CapsuleWitnessCommitRequest)(nil),      // 65: nokv.kv.v1.CapsuleWitnessCommitRequest
-	(*CapsuleWitnessCommitResponse)(nil),     // 66: nokv.kv.v1.CapsuleWitnessCommitResponse
-	(*CapsuleWitnessProbeRequest)(nil),       // 67: nokv.kv.v1.CapsuleWitnessProbeRequest
-	(*CapsuleWitnessProbeResponse)(nil),      // 68: nokv.kv.v1.CapsuleWitnessProbeResponse
+	(*PerasAuthorityScope)(nil),              // 59: nokv.kv.v1.PerasAuthorityScope
+	(*PerasOperationID)(nil),                 // 60: nokv.kv.v1.PerasOperationID
+	(*PerasPrepareRecord)(nil),               // 61: nokv.kv.v1.PerasPrepareRecord
+	(*PerasCommitCertificateRecord)(nil),     // 62: nokv.kv.v1.PerasCommitCertificateRecord
+	(*PerasWitnessPrepareRequest)(nil),       // 63: nokv.kv.v1.PerasWitnessPrepareRequest
+	(*PerasWitnessPrepareResponse)(nil),      // 64: nokv.kv.v1.PerasWitnessPrepareResponse
+	(*PerasWitnessCommitRequest)(nil),        // 65: nokv.kv.v1.PerasWitnessCommitRequest
+	(*PerasWitnessCommitResponse)(nil),       // 66: nokv.kv.v1.PerasWitnessCommitResponse
+	(*PerasWitnessProbeRequest)(nil),         // 67: nokv.kv.v1.PerasWitnessProbeRequest
+	(*PerasWitnessProbeResponse)(nil),        // 68: nokv.kv.v1.PerasWitnessProbeResponse
 	(*KeyError)(nil),                         // 69: nokv.kv.v1.KeyError
 	(*Locked)(nil),                           // 70: nokv.kv.v1.Locked
 	(*WriteConflict)(nil),                    // 71: nokv.kv.v1.WriteConflict
@@ -4827,15 +4827,15 @@ var file_kv_kv_proto_depIdxs = []int32{
 	76, // 66: nokv.kv.v1.KvTryAtomicMutateResponse.region_error:type_name -> nokv.error.v1.RegionError
 	5,  // 67: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
 	57, // 68: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
-	60, // 69: nokv.kv.v1.CapsulePrepareRecord.op_id:type_name -> nokv.kv.v1.CapsuleOperationID
-	60, // 70: nokv.kv.v1.CapsulePrepareRecord.conflict_dag_frontier:type_name -> nokv.kv.v1.CapsuleOperationID
-	60, // 71: nokv.kv.v1.CapsuleCommitCertificateRecord.op_id:type_name -> nokv.kv.v1.CapsuleOperationID
-	59, // 72: nokv.kv.v1.CapsuleWitnessPrepareRequest.scope:type_name -> nokv.kv.v1.CapsuleAuthorityScope
-	61, // 73: nokv.kv.v1.CapsuleWitnessPrepareRequest.record:type_name -> nokv.kv.v1.CapsulePrepareRecord
-	59, // 74: nokv.kv.v1.CapsuleWitnessCommitRequest.scope:type_name -> nokv.kv.v1.CapsuleAuthorityScope
-	62, // 75: nokv.kv.v1.CapsuleWitnessCommitRequest.record:type_name -> nokv.kv.v1.CapsuleCommitCertificateRecord
-	61, // 76: nokv.kv.v1.CapsuleWitnessProbeResponse.prepares:type_name -> nokv.kv.v1.CapsulePrepareRecord
-	62, // 77: nokv.kv.v1.CapsuleWitnessProbeResponse.commits:type_name -> nokv.kv.v1.CapsuleCommitCertificateRecord
+	60, // 69: nokv.kv.v1.PerasPrepareRecord.op_id:type_name -> nokv.kv.v1.PerasOperationID
+	60, // 70: nokv.kv.v1.PerasPrepareRecord.dependency_frontier:type_name -> nokv.kv.v1.PerasOperationID
+	60, // 71: nokv.kv.v1.PerasCommitCertificateRecord.op_id:type_name -> nokv.kv.v1.PerasOperationID
+	59, // 72: nokv.kv.v1.PerasWitnessPrepareRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
+	61, // 73: nokv.kv.v1.PerasWitnessPrepareRequest.record:type_name -> nokv.kv.v1.PerasPrepareRecord
+	59, // 74: nokv.kv.v1.PerasWitnessCommitRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
+	62, // 75: nokv.kv.v1.PerasWitnessCommitRequest.record:type_name -> nokv.kv.v1.PerasCommitCertificateRecord
+	61, // 76: nokv.kv.v1.PerasWitnessProbeResponse.prepares:type_name -> nokv.kv.v1.PerasPrepareRecord
+	62, // 77: nokv.kv.v1.PerasWitnessProbeResponse.commits:type_name -> nokv.kv.v1.PerasCommitCertificateRecord
 	70, // 78: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
 	71, // 79: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
 	72, // 80: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
@@ -4852,9 +4852,9 @@ var file_kv_kv_proto_depIdxs = []int32{
 	52, // 91: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
 	54, // 92: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
 	56, // 93: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	63, // 94: nokv.kv.v1.StoreKV.CapsuleWitnessPrepare:input_type -> nokv.kv.v1.CapsuleWitnessPrepareRequest
-	65, // 95: nokv.kv.v1.StoreKV.CapsuleWitnessCommit:input_type -> nokv.kv.v1.CapsuleWitnessCommitRequest
-	67, // 96: nokv.kv.v1.StoreKV.CapsuleWitnessProbe:input_type -> nokv.kv.v1.CapsuleWitnessProbeRequest
+	63, // 94: nokv.kv.v1.StoreKV.PerasWitnessPrepare:input_type -> nokv.kv.v1.PerasWitnessPrepareRequest
+	65, // 95: nokv.kv.v1.StoreKV.PerasWitnessCommit:input_type -> nokv.kv.v1.PerasWitnessCommitRequest
+	67, // 96: nokv.kv.v1.StoreKV.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
 	37, // 97: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
 	39, // 98: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
 	41, // 99: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
@@ -4866,9 +4866,9 @@ var file_kv_kv_proto_depIdxs = []int32{
 	53, // 105: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
 	55, // 106: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
 	58, // 107: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
-	64, // 108: nokv.kv.v1.StoreKV.CapsuleWitnessPrepare:output_type -> nokv.kv.v1.CapsuleWitnessPrepareResponse
-	66, // 109: nokv.kv.v1.StoreKV.CapsuleWitnessCommit:output_type -> nokv.kv.v1.CapsuleWitnessCommitResponse
-	68, // 110: nokv.kv.v1.StoreKV.CapsuleWitnessProbe:output_type -> nokv.kv.v1.CapsuleWitnessProbeResponse
+	64, // 108: nokv.kv.v1.StoreKV.PerasWitnessPrepare:output_type -> nokv.kv.v1.PerasWitnessPrepareResponse
+	66, // 109: nokv.kv.v1.StoreKV.PerasWitnessCommit:output_type -> nokv.kv.v1.PerasWitnessCommitResponse
+	68, // 110: nokv.kv.v1.StoreKV.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
 	97, // [97:111] is the sub-list for method output_type
 	83, // [83:97] is the sub-list for method input_type
 	83, // [83:83] is the sub-list for extension type_name

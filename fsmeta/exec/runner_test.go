@@ -15,8 +15,8 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
@@ -98,82 +98,82 @@ func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.Opera
 	require.Equal(t, want, opStats[key])
 }
 
-func requireCapsuleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requirePerasStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["capsule_admission"]
-	require.True(t, ok, "missing capsule_admission stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_admission has type %T", raw)
-	got, ok := capsuleStats[key].(uint64)
-	require.Truef(t, ok, "capsule_admission[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_admission"]
+	require.True(t, ok, "missing peras_admission stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_admission has type %T", raw)
+	got, ok := perasStats[key].(uint64)
+	require.Truef(t, ok, "peras_admission[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requireCapsuleSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
+func requirePerasSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
 	t.Helper()
-	raw, ok := stats["capsule_admission"]
-	require.True(t, ok, "missing capsule_admission stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_admission has type %T", raw)
-	rawReasons, ok := capsuleStats["slow_by_reason"]
-	require.True(t, ok, "missing capsule slow reason stats")
+	raw, ok := stats["peras_admission"]
+	require.True(t, ok, "missing peras_admission stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_admission has type %T", raw)
+	rawReasons, ok := perasStats["slow_by_reason"]
+	require.True(t, ok, "missing peras slow reason stats")
 	reasons, ok := rawReasons.(map[string]uint64)
-	require.Truef(t, ok, "capsule slow_by_reason has type %T", rawReasons)
+	require.Truef(t, ok, "peras slow_by_reason has type %T", rawReasons)
 	require.Equal(t, want, reasons[string(reason)])
 }
 
-func requireCapsuleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requirePerasStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["capsule_admission"]
-	require.True(t, ok, "missing capsule_admission stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_admission has type %T", raw)
-	got, ok := capsuleStats[key].(bool)
-	require.Truef(t, ok, "capsule_admission[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_admission"]
+	require.True(t, ok, "missing peras_admission stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_admission has type %T", raw)
+	got, ok := perasStats[key].(bool)
+	require.Truef(t, ok, "peras_admission[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requireCapsuleShadowStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requirePerasShadowStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["capsule_shadow"]
-	require.True(t, ok, "missing capsule_shadow stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_shadow has type %T", raw)
-	got, ok := capsuleStats[key].(uint64)
-	require.Truef(t, ok, "capsule_shadow[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_shadow"]
+	require.True(t, ok, "missing peras_shadow stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_shadow has type %T", raw)
+	got, ok := perasStats[key].(uint64)
+	require.Truef(t, ok, "peras_shadow[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requireCapsuleShadowStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requirePerasShadowStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["capsule_shadow"]
-	require.True(t, ok, "missing capsule_shadow stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_shadow has type %T", raw)
-	got, ok := capsuleStats[key].(bool)
-	require.Truef(t, ok, "capsule_shadow[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_shadow"]
+	require.True(t, ok, "missing peras_shadow stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_shadow has type %T", raw)
+	got, ok := perasStats[key].(bool)
+	require.Truef(t, ok, "peras_shadow[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requireCapsuleFastStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requirePerasFastStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["capsule_fastpath"]
-	require.True(t, ok, "missing capsule_fastpath stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_fastpath has type %T", raw)
-	got, ok := capsuleStats[key].(uint64)
-	require.Truef(t, ok, "capsule_fastpath[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_fastpath"]
+	require.True(t, ok, "missing peras_fastpath stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_fastpath has type %T", raw)
+	got, ok := perasStats[key].(uint64)
+	require.Truef(t, ok, "peras_fastpath[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requireCapsuleFastStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requirePerasFastStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["capsule_fastpath"]
-	require.True(t, ok, "missing capsule_fastpath stats")
-	capsuleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "capsule_fastpath has type %T", raw)
-	got, ok := capsuleStats[key].(bool)
-	require.Truef(t, ok, "capsule_fastpath[%s] has type %T", key, capsuleStats[key])
+	raw, ok := stats["peras_fastpath"]
+	require.True(t, ok, "missing peras_fastpath stats")
+	perasStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "peras_fastpath has type %T", raw)
+	got, ok := perasStats[key].(bool)
+	require.Truef(t, ok, "peras_fastpath[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
@@ -204,32 +204,32 @@ type fakeAuthorityResolver struct {
 	calls int
 }
 
-type fakeCapsuleAdmitter struct {
+type fakePerasAdmitter struct {
 	owned  bool
 	err    error
 	calls  int
 	scopes []compile.AuthorityScope
 }
 
-type fakeCapsuleSubmitter struct {
+type fakePerasSubmitter struct {
 	err    error
 	calls  int
-	ids    []fscapsule.OperationID
+	ids    []fsperas.OperationID
 	deltas []compile.SemanticDelta
 }
 
-type fakeCapsuleCommitter struct {
+type fakePerasCommitter struct {
 	err    error
 	calls  int
-	ids    []fscapsule.OperationID
+	ids    []fsperas.OperationID
 	deltas []compile.SemanticDelta
 }
 
-type noopCapsuleSubmitter struct{}
+type noopPerasSubmitter struct{}
 
-type noopCapsuleCommitter struct{}
+type noopPerasCommitter struct{}
 
-type ownedCapsuleAdmitter struct{}
+type ownedPerasAdmitter struct{}
 
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
@@ -329,7 +329,7 @@ func (r *fakeAuthorityResolver) SameAuthority(context.Context, fsmeta.MountID, f
 	return r.same, nil
 }
 
-func (a *fakeCapsuleAdmitter) AcquireCapsuleAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
+func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
 	a.calls++
 	a.scopes = append(a.scopes, compile.AuthorityScope{
 		Mount:      scope.Mount,
@@ -344,14 +344,14 @@ func (a *fakeCapsuleAdmitter) AcquireCapsuleAuthority(_ context.Context, scope c
 	return a.owned, nil
 }
 
-func (s *fakeCapsuleSubmitter) SubmitCapsule(_ context.Context, id fscapsule.OperationID, delta compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error) {
+func (s *fakePerasSubmitter) SubmitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.CommitCertificateRecord, error) {
 	s.calls++
 	s.ids = append(s.ids, id)
 	s.deltas = append(s.deltas, delta)
 	if s.err != nil {
-		return fscapsule.CommitCertificateRecord{}, s.err
+		return fsperas.CommitCertificateRecord{}, s.err
 	}
-	return fscapsule.CommitCertificateRecord{
+	return fsperas.CommitCertificateRecord{
 		EpochID:  1,
 		OpID:     id,
 		HolderID: "holder-a",
@@ -362,22 +362,22 @@ func (s *fakeCapsuleSubmitter) SubmitCapsule(_ context.Context, id fscapsule.Ope
 	}, nil
 }
 
-func (c *fakeCapsuleCommitter) CommitCapsule(_ context.Context, id fscapsule.OperationID, delta compile.SemanticDelta) (fscapsule.CapsuleSeal, error) {
+func (c *fakePerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.PerasSeal, error) {
 	c.calls++
 	c.ids = append(c.ids, id)
 	c.deltas = append(c.deltas, delta)
 	if c.err != nil {
-		return fscapsule.CapsuleSeal{}, c.err
+		return fsperas.PerasSeal{}, c.err
 	}
-	return fscapsule.CapsuleSeal{
+	return fsperas.PerasSeal{
 		EpochID: 1,
-		Certificates: []fscapsule.SealedCertificate{
+		Certificates: []fsperas.SealedCertificate{
 			{
-				Prepare: fscapsule.PrepareRecord{
+				Prepare: fsperas.PrepareRecord{
 					EpochID: 1,
 					OpID:    id,
 				},
-				Commit: fscapsule.CommitCertificateRecord{
+				Commit: fsperas.CommitCertificateRecord{
 					EpochID: 1,
 					OpID:    id,
 				},
@@ -386,27 +386,27 @@ func (c *fakeCapsuleCommitter) CommitCapsule(_ context.Context, id fscapsule.Ope
 	}, nil
 }
 
-func (noopCapsuleSubmitter) SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error) {
-	return fscapsule.CommitCertificateRecord{
+func (noopPerasSubmitter) SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.CommitCertificateRecord, error) {
+	return fsperas.CommitCertificateRecord{
 		EpochID:      1,
 		HolderID:     "holder-a",
 		QuorumAckSet: []string{"store-a", "store-b"},
 	}, nil
 }
 
-func (noopCapsuleCommitter) CommitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CapsuleSeal, error) {
-	return fscapsule.CapsuleSeal{
+func (noopPerasCommitter) CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.PerasSeal, error) {
+	return fsperas.PerasSeal{
 		EpochID: 1,
-		Certificates: []fscapsule.SealedCertificate{
+		Certificates: []fsperas.SealedCertificate{
 			{
-				Prepare: fscapsule.PrepareRecord{EpochID: 1},
-				Commit:  fscapsule.CommitCertificateRecord{EpochID: 1},
+				Prepare: fsperas.PrepareRecord{EpochID: 1},
+				Commit:  fsperas.CommitCertificateRecord{EpochID: 1},
 			},
 		},
 	}, nil
 }
 
-func (ownedCapsuleAdmitter) AcquireCapsuleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
+func (ownedPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
 	return true, nil
 }
 
@@ -711,13 +711,13 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 }
 
-func TestExecutorCreateAdmitsCapsuleAuthority(t *testing.T) {
+func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakeCapsuleAdmitter{owned: true}
+	admitter := &fakePerasAdmitter{owned: true}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(admitter),
+		WithPerasAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -738,23 +738,23 @@ func TestExecutorCreateAdmitsCapsuleAuthority(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requireCapsuleStatBool(t, stats, "enabled", true)
-	requireCapsuleStatUint(t, stats, "eligible_total", 1)
-	requireCapsuleStatUint(t, stats, "acquire_total", 1)
-	requireCapsuleStatUint(t, stats, "owned_total", 1)
-	requireCapsuleStatUint(t, stats, "held_total", 0)
-	requireCapsuleStatUint(t, stats, "slow_total", 0)
+	requirePerasStatBool(t, stats, "enabled", true)
+	requirePerasStatUint(t, stats, "eligible_total", 1)
+	requirePerasStatUint(t, stats, "acquire_total", 1)
+	requirePerasStatUint(t, stats, "owned_total", 1)
+	requirePerasStatUint(t, stats, "held_total", 0)
+	requirePerasStatUint(t, stats, "slow_total", 0)
 }
 
-func TestExecutorCreateSubmitsCapsuleShadowAndKeepsRaftCommit(t *testing.T) {
+func TestExecutorCreateSubmitsPerasShadowAndKeepsRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakeCapsuleAdmitter{owned: true}
-	submitter := &fakeCapsuleSubmitter{}
+	admitter := &fakePerasAdmitter{owned: true}
+	submitter := &fakePerasSubmitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(admitter),
-		WithCapsuleShadowSubmitter(submitter),
+		WithPerasAuthorityAdmitter(admitter),
+		WithPerasShadowSubmitter(submitter),
 	)
 	require.NoError(t, err)
 
@@ -775,21 +775,21 @@ func TestExecutorCreateSubmitsCapsuleShadowAndKeepsRaftCommit(t *testing.T) {
 	require.Len(t, runner.mutations, 1, "shadow submit must not replace the current Raft commit")
 
 	stats := executor.Stats()
-	requireCapsuleShadowStatBool(t, stats, "enabled", true)
-	requireCapsuleShadowStatUint(t, stats, "submit_total", 1)
-	requireCapsuleShadowStatUint(t, stats, "success_total", 1)
-	requireCapsuleShadowStatUint(t, stats, "error_total", 0)
-	requireCapsuleShadowStatUint(t, stats, "skip_no_authority_total", 0)
+	requirePerasShadowStatBool(t, stats, "enabled", true)
+	requirePerasShadowStatUint(t, stats, "submit_total", 1)
+	requirePerasShadowStatUint(t, stats, "success_total", 1)
+	requirePerasShadowStatUint(t, stats, "error_total", 0)
+	requirePerasShadowStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
-func TestExecutorCreateCapsuleShadowErrorStillUsesRaftCommit(t *testing.T) {
+func TestExecutorCreatePerasShadowErrorStillUsesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
-	submitter := &fakeCapsuleSubmitter{err: errors.New("shadow submit failed")}
+	submitter := &fakePerasSubmitter{err: errors.New("shadow submit failed")}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
-		WithCapsuleShadowSubmitter(submitter),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasShadowSubmitter(submitter),
 	)
 	require.NoError(t, err)
 
@@ -803,18 +803,18 @@ func TestExecutorCreateCapsuleShadowErrorStillUsesRaftCommit(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requireCapsuleShadowStatUint(t, stats, "submit_total", 1)
-	requireCapsuleShadowStatUint(t, stats, "success_total", 0)
-	requireCapsuleShadowStatUint(t, stats, "error_total", 1)
+	requirePerasShadowStatUint(t, stats, "submit_total", 1)
+	requirePerasShadowStatUint(t, stats, "success_total", 0)
+	requirePerasShadowStatUint(t, stats, "error_total", 1)
 }
 
-func TestExecutorCreateCapsuleShadowRequiresAuthorityAdmission(t *testing.T) {
+func TestExecutorCreatePerasShadowRequiresAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
-	submitter := &fakeCapsuleSubmitter{}
+	submitter := &fakePerasSubmitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleShadowSubmitter(submitter),
+		WithPerasShadowSubmitter(submitter),
 	)
 	require.NoError(t, err)
 
@@ -829,20 +829,20 @@ func TestExecutorCreateCapsuleShadowRequiresAuthorityAdmission(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requireCapsuleShadowStatUint(t, stats, "submit_total", 0)
-	requireCapsuleShadowStatUint(t, stats, "skip_no_authority_total", 1)
+	requirePerasShadowStatUint(t, stats, "submit_total", 0)
+	requirePerasShadowStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
-func TestExecutorCreateCapsuleFastPathBypassesRaftCommit(t *testing.T) {
+func TestExecutorCreatePerasFastPathBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
-	committer := &fakeCapsuleCommitter{}
-	submitter := &fakeCapsuleSubmitter{}
+	committer := &fakePerasCommitter{}
+	submitter := &fakePerasSubmitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
-		WithCapsuleCommitter(committer),
-		WithCapsuleShadowSubmitter(submitter),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+		WithPerasShadowSubmitter(submitter),
 	)
 	require.NoError(t, err)
 
@@ -866,22 +866,22 @@ func TestExecutorCreateCapsuleFastPathBypassesRaftCommit(t *testing.T) {
 	require.Empty(t, runner.mutations, "fast path success must bypass the current Raft commit")
 
 	stats := executor.Stats()
-	requireCapsuleFastStatBool(t, stats, "enabled", true)
-	requireCapsuleFastStatUint(t, stats, "attempt_total", 1)
-	requireCapsuleFastStatUint(t, stats, "success_total", 1)
-	requireCapsuleFastStatUint(t, stats, "error_total", 0)
-	requireCapsuleFastStatUint(t, stats, "skip_no_authority_total", 0)
+	requirePerasFastStatBool(t, stats, "enabled", true)
+	requirePerasFastStatUint(t, stats, "attempt_total", 1)
+	requirePerasFastStatUint(t, stats, "success_total", 1)
+	requirePerasFastStatUint(t, stats, "error_total", 0)
+	requirePerasFastStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
-func TestExecutorCreateCapsuleFastPathErrorDoesNotFallback(t *testing.T) {
+func TestExecutorCreatePerasFastPathErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
-	fastErr := errors.New("capsule commit failed")
-	committer := &fakeCapsuleCommitter{err: fastErr}
+	fastErr := errors.New("peras commit failed")
+	committer := &fakePerasCommitter{err: fastErr}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
-		WithCapsuleCommitter(committer),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -893,21 +893,21 @@ func TestExecutorCreateCapsuleFastPathErrorDoesNotFallback(t *testing.T) {
 	})
 	require.ErrorIs(t, err, fastErr)
 	require.Equal(t, 1, committer.calls)
-	require.Empty(t, runner.mutations, "ambiguous Capsule evidence must not fall back into a second commit path")
+	require.Empty(t, runner.mutations, "ambiguous Peras evidence must not fall back into a second commit path")
 
 	stats := executor.Stats()
-	requireCapsuleFastStatUint(t, stats, "attempt_total", 1)
-	requireCapsuleFastStatUint(t, stats, "success_total", 0)
-	requireCapsuleFastStatUint(t, stats, "error_total", 1)
+	requirePerasFastStatUint(t, stats, "attempt_total", 1)
+	requirePerasFastStatUint(t, stats, "success_total", 0)
+	requirePerasFastStatUint(t, stats, "error_total", 1)
 }
 
-func TestExecutorCreateCapsuleFastPathRequiresAuthorityAdmission(t *testing.T) {
+func TestExecutorCreatePerasFastPathRequiresAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
-	committer := &fakeCapsuleCommitter{}
+	committer := &fakePerasCommitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleCommitter(committer),
+		WithPerasCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -922,18 +922,18 @@ func TestExecutorCreateCapsuleFastPathRequiresAuthorityAdmission(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requireCapsuleFastStatUint(t, stats, "attempt_total", 0)
-	requireCapsuleFastStatUint(t, stats, "skip_no_authority_total", 1)
+	requirePerasFastStatUint(t, stats, "attempt_total", 0)
+	requirePerasFastStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
-func TestExecutorCreateCapsuleBufferedFastPathServesLookupOverlay(t *testing.T) {
+func TestExecutorCreatePerasBufferedFastPathServesLookupOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedCapsuleCommitter(t, runner)
+	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
-		WithCapsuleCommitter(committer),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -955,14 +955,14 @@ func TestExecutorCreateCapsuleBufferedFastPathServesLookupOverlay(t *testing.T) 
 	require.Equal(t, created.Dentry, lookedUp)
 }
 
-func TestExecutorCreateCapsuleBufferedFastPathServesReadDirPlusOverlay(t *testing.T) {
+func TestExecutorCreatePerasBufferedFastPathServesReadDirPlusOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedCapsuleCommitter(t, runner)
+	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
-		WithCapsuleCommitter(committer),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -986,13 +986,13 @@ func TestExecutorCreateCapsuleBufferedFastPathServesReadDirPlusOverlay(t *testin
 	}}, pairs)
 }
 
-func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
+func TestExecutorCreateStopsWhenPerasAuthorityHeldElsewhere(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakeCapsuleAdmitter{owned: false}
+	admitter := &fakePerasAdmitter{owned: false}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithCapsuleAuthorityAdmitter(admitter),
+		WithPerasAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -1002,25 +1002,25 @@ func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
 		Name:   "file",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
-	require.ErrorIs(t, err, errCapsuleAuthorityNotHeld)
+	require.ErrorIs(t, err, errPerasAuthorityNotHeld)
 	require.Equal(t, 1, admitter.calls)
 	require.Empty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requireCapsuleStatUint(t, stats, "eligible_total", 1)
-	requireCapsuleStatUint(t, stats, "acquire_total", 1)
-	requireCapsuleStatUint(t, stats, "owned_total", 0)
-	requireCapsuleStatUint(t, stats, "held_total", 1)
+	requirePerasStatUint(t, stats, "eligible_total", 1)
+	requirePerasStatUint(t, stats, "acquire_total", 1)
+	requirePerasStatUint(t, stats, "owned_total", 0)
+	requirePerasStatUint(t, stats, "held_total", 1)
 }
 
-func TestExecutorCreateWithSharedQuotaSkipsCapsuleAuthorityAdmission(t *testing.T) {
+func TestExecutorCreateWithSharedQuotaSkipsPerasAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakeCapsuleAdmitter{owned: true}
+	admitter := &fakePerasAdmitter{owned: true}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
 		WithQuotaResolver(&fakeQuotaResolver{}),
-		WithCapsuleAuthorityAdmitter(admitter),
+		WithPerasAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -1035,11 +1035,11 @@ func TestExecutorCreateWithSharedQuotaSkipsCapsuleAuthorityAdmission(t *testing.
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requireCapsuleStatUint(t, stats, "eligible_total", 0)
-	requireCapsuleStatUint(t, stats, "acquire_total", 0)
-	requireCapsuleStatUint(t, stats, "owned_total", 0)
-	requireCapsuleStatUint(t, stats, "slow_total", 1)
-	requireCapsuleSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
+	requirePerasStatUint(t, stats, "eligible_total", 0)
+	requirePerasStatUint(t, stats, "acquire_total", 0)
+	requirePerasStatUint(t, stats, "owned_total", 0)
+	requirePerasStatUint(t, stats, "slow_total", 1)
+	requirePerasSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
 }
 
 func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
@@ -2958,8 +2958,8 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 		"epoch bump must force a runner scan on the next ReadDirPlus")
 }
 
-func BenchmarkExecutorAdmitCapsuleAuthorityOwned(b *testing.B) {
-	executor, err := New(newFakeRunner(), WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}))
+func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {
+	executor, err := New(newFakeRunner(), WithPerasAuthorityAdmitter(ownedPerasAdmitter{}))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -2977,17 +2977,17 @@ func BenchmarkExecutorAdmitCapsuleAuthorityOwned(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := executor.admitCapsuleAuthority(ctx, delta); err != nil {
+		if err := executor.admitPerasAuthority(ctx, delta); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-func BenchmarkExecutorCapsuleShadowSubmitCreate(b *testing.B) {
+func BenchmarkExecutorPerasShadowSubmitCreate(b *testing.B) {
 	executor, err := New(
 		newFakeRunner(),
-		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
-		WithCapsuleShadowSubmitter(noopCapsuleSubmitter{}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasShadowSubmitter(noopPerasSubmitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -3005,7 +3005,7 @@ func BenchmarkExecutorCapsuleShadowSubmitCreate(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		executor.submitCapsuleShadow(ctx, delta)
+		executor.submitPerasShadow(ctx, delta)
 	}
 }
 
@@ -3017,12 +3017,12 @@ func BenchmarkExecutorCreateDefaultPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreateCapsuleFastPath(b *testing.B) {
+func BenchmarkExecutorCreatePerasFastPath(b *testing.B) {
 	executor, err := newTestExecutor(
 		newFakeRunner(),
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
-		WithCapsuleCommitter(noopCapsuleCommitter{}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -3030,26 +3030,26 @@ func BenchmarkExecutorCreateCapsuleFastPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreateCapsuleDirectFastPath(b *testing.B) {
+func BenchmarkExecutorCreatePerasDirectFastPath(b *testing.B) {
 	runner := newFakeRunner()
-	source := newBenchmarkCapsuleWitness("store-1")
-	holder, err := fscapsule.NewHolder(fscapsule.HolderConfig{
+	source := newBenchmarkPerasWitness("store-1")
+	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []fscapsule.WitnessReplica{
+		Witnesses: []fsperas.WitnessReplica{
 			source,
-			newBenchmarkCapsuleWitness("store-2"),
-			newBenchmarkCapsuleWitness("store-3"),
+			newBenchmarkPerasWitness("store-2"),
+			newBenchmarkPerasWitness("store-3"),
 		},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	committer, err := fscapsule.NewDirectCommitter(fscapsule.DirectCommitterConfig{
+	committer, err := fsperas.NewDirectCommitter(fsperas.DirectCommitterConfig{
 		Holder:   holder,
 		Snapshot: source,
 		Versions: runner,
-		ReplayDB: benchmarkCapsuleApplier{},
+		ReplayDB: benchmarkPerasApplier{},
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -3057,8 +3057,8 @@ func BenchmarkExecutorCreateCapsuleDirectFastPath(b *testing.B) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
-		WithCapsuleCommitter(committer),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -3066,24 +3066,24 @@ func BenchmarkExecutorCreateCapsuleDirectFastPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func newTestBufferedCapsuleCommitter(t *testing.T, versions fscapsule.VersionAllocator) *fscapsule.BufferedCommitter {
+func newTestBufferedPerasCommitter(t *testing.T, versions fsperas.VersionAllocator) *fsperas.BufferedCommitter {
 	t.Helper()
-	source := newBenchmarkCapsuleWitness("store-1")
-	holder, err := fscapsule.NewHolder(fscapsule.HolderConfig{
+	source := newBenchmarkPerasWitness("store-1")
+	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []fscapsule.WitnessReplica{
+		Witnesses: []fsperas.WitnessReplica{
 			source,
-			newBenchmarkCapsuleWitness("store-2"),
-			newBenchmarkCapsuleWitness("store-3"),
+			newBenchmarkPerasWitness("store-2"),
+			newBenchmarkPerasWitness("store-3"),
 		},
 	})
 	require.NoError(t, err)
-	committer, err := fscapsule.NewBufferedCommitter(fscapsule.BufferedCommitterConfig{
+	committer, err := fsperas.NewBufferedCommitter(fsperas.BufferedCommitterConfig{
 		Holder:    holder,
 		Snapshot:  source,
 		Versions:  versions,
-		ReplayDB:  benchmarkCapsuleApplier{},
+		ReplayDB:  benchmarkPerasApplier{},
 		BatchSize: 0,
 	})
 	require.NoError(t, err)
@@ -3108,40 +3108,40 @@ func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
 	}
 }
 
-type benchmarkCapsuleApplier struct{}
+type benchmarkPerasApplier struct{}
 
-func (benchmarkCapsuleApplier) ApplyInternalEntries([]*entrykv.Entry) error {
+func (benchmarkPerasApplier) ApplyInternalEntries([]*entrykv.Entry) error {
 	return nil
 }
 
-type benchmarkCapsuleWitness struct {
+type benchmarkPerasWitness struct {
 	id       string
-	prepares []fscapsule.PrepareRecord
-	commits  []fscapsule.CommitCertificateRecord
+	prepares []fsperas.PrepareRecord
+	commits  []fsperas.CommitCertificateRecord
 }
 
-func newBenchmarkCapsuleWitness(id string) *benchmarkCapsuleWitness {
-	return &benchmarkCapsuleWitness{id: id}
+func newBenchmarkPerasWitness(id string) *benchmarkPerasWitness {
+	return &benchmarkPerasWitness{id: id}
 }
 
-func (w *benchmarkCapsuleWitness) ID() string {
+func (w *benchmarkPerasWitness) ID() string {
 	return w.id
 }
 
-func (w *benchmarkCapsuleWitness) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record fscapsule.PrepareRecord) error {
+func (w *benchmarkPerasWitness) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record fsperas.PrepareRecord) error {
 	w.prepares = append(w.prepares, record)
 	return nil
 }
 
-func (w *benchmarkCapsuleWitness) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record fscapsule.CommitCertificateRecord) error {
+func (w *benchmarkPerasWitness) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record fsperas.CommitCertificateRecord) error {
 	w.commits = append(w.commits, record)
 	return nil
 }
 
-func (w *benchmarkCapsuleWitness) Probe(_ context.Context, epochID uint64) (fscapsule.WitnessSnapshot, error) {
-	snapshot := fscapsule.WitnessSnapshot{
-		Prepares: make([]fscapsule.PrepareRecord, 0, len(w.prepares)),
-		Commits:  make([]fscapsule.CommitCertificateRecord, 0, len(w.commits)),
+func (w *benchmarkPerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+	snapshot := fsperas.WitnessSnapshot{
+		Prepares: make([]fsperas.PrepareRecord, 0, len(w.prepares)),
+		Commits:  make([]fsperas.CommitCertificateRecord, 0, len(w.commits)),
 	}
 	for _, prepare := range w.prepares {
 		if prepare.EpochID == epochID {

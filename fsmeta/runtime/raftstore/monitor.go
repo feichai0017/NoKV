@@ -8,7 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
-	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
+	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -22,7 +22,7 @@ type lifecycleSource interface {
 	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
 	ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
-	ListCapsuleAuthorityGrants(context.Context, *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error)
+	ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
 	WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -39,14 +39,14 @@ type monitor struct {
 	cache    *mountCache
 	quotas   *quotaCache
 	subtrees fsmetaexec.SubtreeHandoffPublisher
-	capsules *capsuleauth.ActiveAuthorities
+	peras    *perasauth.ActiveAuthorities
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, capsules *capsuleauth.ActiveAuthorities, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, peras *perasauth.ActiveAuthorities, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -59,7 +59,7 @@ func startMonitor(ctx context.Context, coord lifecycleSource, router retireRoute
 		cache:    cache,
 		quotas:   quotas,
 		subtrees: subtrees,
-		capsules: capsules,
+		peras:    peras,
 		interval: interval,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -114,19 +114,19 @@ func (m *monitor) bootstrap(ctx context.Context) error {
 			m.quotas.markFenceUpdated(fence)
 		}
 	}
-	capsules, err := m.coord.ListCapsuleAuthorityGrants(ctx, &coordpb.ListCapsuleAuthorityGrantsRequest{})
+	peras, err := m.coord.ListPerasAuthorityGrants(ctx, &coordpb.ListPerasAuthorityGrantsRequest{})
 	if err != nil {
 		return err
 	}
-	if m.capsules != nil {
-		grants := make([]capsuleauth.AuthorityGrant, 0, len(capsules.GetGrants()))
-		for _, grant := range capsules.GetGrants() {
-			parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
+	if m.peras != nil {
+		grants := make([]perasauth.AuthorityGrant, 0, len(peras.GetGrants()))
+		for _, grant := range peras.GetGrants() {
+			parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
 			if parsed.Valid() {
 				grants = append(grants, parsed)
 			}
 		}
-		if err := m.capsules.Replace(grants); err != nil {
+		if err := m.peras.Replace(grants); err != nil {
 			return err
 		}
 	}
@@ -211,12 +211,12 @@ func (m *monitor) applyRootEvent(ctx context.Context, event rootevent.Event) {
 			return
 		}
 		m.completePendingSubtreeHandoff(ctx, event.SubtreeAuthority.Mount, event.SubtreeAuthority.RootInode, event.SubtreeAuthority.Frontier)
-	case rootevent.KindCapsuleAuthorityGranted, rootevent.KindCapsuleAuthorityRetired:
-		if m.capsules == nil {
+	case rootevent.KindPerasAuthorityGranted, rootevent.KindPerasAuthorityRetired:
+		if m.peras == nil {
 			return
 		}
-		if err := m.capsules.ApplyRootEvent(event); err != nil {
-			log.Printf("fsmeta monitor: apply capsule authority event kind=%d: %v", event.Kind, err)
+		if err := m.peras.ApplyRootEvent(event); err != nil {
+			log.Printf("fsmeta monitor: apply peras authority event kind=%d: %v", event.Kind, err)
 		}
 	}
 }

@@ -43,13 +43,13 @@ func main() {
 		lockTTL                = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
 		sessionCleanupInterval = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit    = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
-		capsuleHolderID        = flag.String("capsule-holder-id", "", "experimental Capsule holder id; empty disables authority acquisition")
-		capsuleFastPath        = flag.Bool("capsule-fast-path", false, "enable experimental Capsule fast commit path against raftstore witnesses")
-		capsuleAuthorityTTL    = flag.Duration("capsule-authority-ttl", 0, "Capsule authority grant TTL; zero uses runtime default")
-		capsuleWitnessStores   = flag.String("capsule-witness-stores", "", "comma-separated store IDs used as Capsule witnesses; empty uses all UP stores")
-		capsuleWitnessQuorum   = flag.Int("capsule-witness-quorum", 0, "Capsule witness quorum; zero uses majority")
-		capsuleSubmitRetries   = flag.Int("capsule-submit-retries", 3, "Capsule submit retries for transient witness authority lag")
-		capsuleRetryBackoff    = flag.Duration("capsule-submit-retry-backoff", 20*time.Millisecond, "Capsule submit retry backoff")
+		perasHolderID          = flag.String("peras-holder-id", "", "experimental Peras holder id; empty disables authority acquisition")
+		perasFastPath          = flag.Bool("peras-fast-path", false, "enable experimental Peras fast commit path against raftstore witnesses")
+		perasAuthorityTTL      = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
+		perasWitnessStores     = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
+		perasWitnessQuorum     = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
+		perasSubmitRetries     = flag.Int("peras-submit-retries", 3, "Peras submit retries for transient witness authority lag")
+		perasRetryBackoff      = flag.Duration("peras-submit-retry-backoff", 20*time.Millisecond, "Peras submit retry backoff")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
@@ -60,13 +60,13 @@ func main() {
 		fatalf("session-cleanup-limit exceeds maximum %d", fsmeta.MaxSessionExpireLimit)
 		return
 	}
-	if *capsuleAuthorityTTL < 0 || *capsuleRetryBackoff < 0 || *capsuleSubmitRetries < 0 || *capsuleWitnessQuorum < 0 {
-		fatalf("capsule options must be non-negative")
+	if *perasAuthorityTTL < 0 || *perasRetryBackoff < 0 || *perasSubmitRetries < 0 || *perasWitnessQuorum < 0 {
+		fatalf("peras options must be non-negative")
 		return
 	}
-	capsuleStoreIDs, err := parseUintList(*capsuleWitnessStores)
+	perasStoreIDs, err := parseUintList(*perasWitnessStores)
 	if err != nil {
-		fatalf("parse capsule-witness-stores: %v", err)
+		fatalf("parse peras-witness-stores: %v", err)
 		return
 	}
 
@@ -74,20 +74,20 @@ func main() {
 	defer cancel()
 
 	rt, err := openRuntime(ctx, fsmetaraftstore.Options{
-		CoordinatorAddr:           *coordAddr,
-		NegativeCacheDir:          *negCacheDir,
-		DirPageCacheDir:           *dirPageDir,
-		AffinityBuckets:           *affinityBuckets,
-		LockTTL:                   *lockTTL,
-		SessionCleanupInterval:    *sessionCleanupInterval,
-		SessionCleanupLimit:       uint32(*sessionCleanupLimit),
-		CapsuleHolderID:           *capsuleHolderID,
-		CapsuleAuthorityTTL:       *capsuleAuthorityTTL,
-		CapsuleFastPath:           *capsuleFastPath,
-		CapsuleWitnessStoreIDs:    capsuleStoreIDs,
-		CapsuleWitnessQuorum:      *capsuleWitnessQuorum,
-		CapsuleSubmitRetries:      *capsuleSubmitRetries,
-		CapsuleSubmitRetryBackoff: *capsuleRetryBackoff,
+		CoordinatorAddr:         *coordAddr,
+		NegativeCacheDir:        *negCacheDir,
+		DirPageCacheDir:         *dirPageDir,
+		AffinityBuckets:         *affinityBuckets,
+		LockTTL:                 *lockTTL,
+		SessionCleanupInterval:  *sessionCleanupInterval,
+		SessionCleanupLimit:     uint32(*sessionCleanupLimit),
+		PerasHolderID:           *perasHolderID,
+		PerasAuthorityTTL:       *perasAuthorityTTL,
+		PerasFastPath:           *perasFastPath,
+		PerasWitnessStoreIDs:    perasStoreIDs,
+		PerasWitnessQuorum:      *perasWitnessQuorum,
+		PerasSubmitRetries:      *perasSubmitRetries,
+		PerasSubmitRetryBackoff: *perasRetryBackoff,
 	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)

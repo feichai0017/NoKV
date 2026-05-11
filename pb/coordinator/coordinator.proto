@@ -171,20 +171,20 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
-message ListCapsuleAuthorityGrantsRequest {}
+message ListPerasAuthorityGrantsRequest {}
 
-message ListCapsuleAuthorityGrantsResponse {
-  repeated nokv.meta.v1.RootCapsuleAuthorityGrant grants = 1;
+message ListPerasAuthorityGrantsResponse {
+  repeated nokv.meta.v1.RootPerasAuthorityGrant grants = 1;
 }
 
-message ApplyCapsuleAuthorityRequest {
-  nokv.meta.v1.RootCapsuleAuthorityCommand command = 1;
+message ApplyPerasAuthorityRequest {
+  nokv.meta.v1.RootPerasAuthorityCommand command = 1;
 }
 
-message ApplyCapsuleAuthorityResponse {
-  nokv.meta.v1.RootCapsuleAuthorityGrant grant = 1;
-  nokv.meta.v1.RootCapsuleAuthorityApplyStatus status = 2;
-  repeated nokv.meta.v1.RootCapsuleAuthorityGrant active_grants = 3;
+message ApplyPerasAuthorityResponse {
+  nokv.meta.v1.RootPerasAuthorityGrant grant = 1;
+  nokv.meta.v1.RootPerasAuthorityApplyStatus status = 2;
+  repeated nokv.meta.v1.RootPerasAuthorityGrant active_grants = 3;
 }
 
 message WatchRootEventsRequest {
@@ -483,8 +483,8 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
-  rpc ListCapsuleAuthorityGrants(ListCapsuleAuthorityGrantsRequest) returns (ListCapsuleAuthorityGrantsResponse);
-  rpc ApplyCapsuleAuthority(ApplyCapsuleAuthorityRequest) returns (ApplyCapsuleAuthorityResponse);
+  rpc ListPerasAuthorityGrants(ListPerasAuthorityGrantsRequest) returns (ListPerasAuthorityGrantsResponse);
+  rpc ApplyPerasAuthority(ApplyPerasAuthorityRequest) returns (ApplyPerasAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);

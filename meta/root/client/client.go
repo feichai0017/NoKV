@@ -221,21 +221,21 @@ func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (ro
 	return protocolState, cert, nil
 }
 
-func (c *Client) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
-	if !validCapsuleAuthorityAct(cmd.Kind) {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+func (c *Client) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	if !validPerasAuthorityAct(cmd.Kind) {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyCapsuleAuthorityResponse, error) {
-		return rpc.ApplyCapsuleAuthority(ctx, &metapb.MetadataRootApplyCapsuleAuthorityRequest{
-			Command: metawire.RootCapsuleAuthorityCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+		return rpc.ApplyPerasAuthority(ctx, &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
 	state := metawire.RootStateFromProto(resp.GetState())
-	grant := metawire.RootCapsuleAuthorityGrantFromProto(resp.GetGrant())
-	if resp.GetStatus() == metapb.RootCapsuleAuthorityApplyStatus_ROOT_CAPSULE_AUTHORITY_APPLY_STATUS_HELD {
+	grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
+	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
 		return state, grant, rootstate.ErrPrimacy
 	}
 	return state, grant, nil
@@ -433,10 +433,10 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 	}
 }
 
-func validCapsuleAuthorityAct(kind rootproto.CapsuleAuthorityAct) bool {
+func validPerasAuthorityAct(kind rootproto.PerasAuthorityAct) bool {
 	switch kind {
-	case rootproto.CapsuleAuthorityActAcquire,
-		rootproto.CapsuleAuthorityActRetire:
+	case rootproto.PerasAuthorityActAcquire,
+		rootproto.PerasAuthorityActRetire:
 		return true
 	default:
 		return false

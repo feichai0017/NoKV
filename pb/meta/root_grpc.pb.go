@@ -21,15 +21,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MetadataRoot_Snapshot_FullMethodName              = "/nokv.meta.v1.MetadataRoot/Snapshot"
-	MetadataRoot_Append_FullMethodName                = "/nokv.meta.v1.MetadataRoot/Append"
-	MetadataRoot_FenceAllocator_FullMethodName        = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
-	MetadataRoot_Status_FullMethodName                = "/nokv.meta.v1.MetadataRoot/Status"
-	MetadataRoot_ApplyGrant_FullMethodName            = "/nokv.meta.v1.MetadataRoot/ApplyGrant"
-	MetadataRoot_ApplyCapsuleAuthority_FullMethodName = "/nokv.meta.v1.MetadataRoot/ApplyCapsuleAuthority"
-	MetadataRoot_ObserveCommitted_FullMethodName      = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
-	MetadataRoot_ObserveTail_FullMethodName           = "/nokv.meta.v1.MetadataRoot/ObserveTail"
-	MetadataRoot_WaitTail_FullMethodName              = "/nokv.meta.v1.MetadataRoot/WaitTail"
+	MetadataRoot_Snapshot_FullMethodName            = "/nokv.meta.v1.MetadataRoot/Snapshot"
+	MetadataRoot_Append_FullMethodName              = "/nokv.meta.v1.MetadataRoot/Append"
+	MetadataRoot_FenceAllocator_FullMethodName      = "/nokv.meta.v1.MetadataRoot/FenceAllocator"
+	MetadataRoot_Status_FullMethodName              = "/nokv.meta.v1.MetadataRoot/Status"
+	MetadataRoot_ApplyGrant_FullMethodName          = "/nokv.meta.v1.MetadataRoot/ApplyGrant"
+	MetadataRoot_ApplyPerasAuthority_FullMethodName = "/nokv.meta.v1.MetadataRoot/ApplyPerasAuthority"
+	MetadataRoot_ObserveCommitted_FullMethodName    = "/nokv.meta.v1.MetadataRoot/ObserveCommitted"
+	MetadataRoot_ObserveTail_FullMethodName         = "/nokv.meta.v1.MetadataRoot/ObserveTail"
+	MetadataRoot_WaitTail_FullMethodName            = "/nokv.meta.v1.MetadataRoot/WaitTail"
 )
 
 // MetadataRootClient is the client API for MetadataRoot service.
@@ -41,7 +41,7 @@ type MetadataRootClient interface {
 	FenceAllocator(ctx context.Context, in *MetadataRootFenceAllocatorRequest, opts ...grpc.CallOption) (*MetadataRootFenceAllocatorResponse, error)
 	Status(ctx context.Context, in *MetadataRootStatusRequest, opts ...grpc.CallOption) (*MetadataRootStatusResponse, error)
 	ApplyGrant(ctx context.Context, in *MetadataRootApplyGrantRequest, opts ...grpc.CallOption) (*MetadataRootApplyGrantResponse, error)
-	ApplyCapsuleAuthority(ctx context.Context, in *MetadataRootApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*MetadataRootApplyCapsuleAuthorityResponse, error)
+	ApplyPerasAuthority(ctx context.Context, in *MetadataRootApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*MetadataRootApplyPerasAuthorityResponse, error)
 	ObserveCommitted(ctx context.Context, in *MetadataRootObserveCommittedRequest, opts ...grpc.CallOption) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(ctx context.Context, in *MetadataRootObserveTailRequest, opts ...grpc.CallOption) (*MetadataRootObserveTailResponse, error)
 	WaitTail(ctx context.Context, in *MetadataRootWaitTailRequest, opts ...grpc.CallOption) (*MetadataRootWaitTailResponse, error)
@@ -105,10 +105,10 @@ func (c *metadataRootClient) ApplyGrant(ctx context.Context, in *MetadataRootApp
 	return out, nil
 }
 
-func (c *metadataRootClient) ApplyCapsuleAuthority(ctx context.Context, in *MetadataRootApplyCapsuleAuthorityRequest, opts ...grpc.CallOption) (*MetadataRootApplyCapsuleAuthorityResponse, error) {
+func (c *metadataRootClient) ApplyPerasAuthority(ctx context.Context, in *MetadataRootApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*MetadataRootApplyPerasAuthorityResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MetadataRootApplyCapsuleAuthorityResponse)
-	err := c.cc.Invoke(ctx, MetadataRoot_ApplyCapsuleAuthority_FullMethodName, in, out, cOpts...)
+	out := new(MetadataRootApplyPerasAuthorityResponse)
+	err := c.cc.Invoke(ctx, MetadataRoot_ApplyPerasAuthority_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ type MetadataRootServer interface {
 	FenceAllocator(context.Context, *MetadataRootFenceAllocatorRequest) (*MetadataRootFenceAllocatorResponse, error)
 	Status(context.Context, *MetadataRootStatusRequest) (*MetadataRootStatusResponse, error)
 	ApplyGrant(context.Context, *MetadataRootApplyGrantRequest) (*MetadataRootApplyGrantResponse, error)
-	ApplyCapsuleAuthority(context.Context, *MetadataRootApplyCapsuleAuthorityRequest) (*MetadataRootApplyCapsuleAuthorityResponse, error)
+	ApplyPerasAuthority(context.Context, *MetadataRootApplyPerasAuthorityRequest) (*MetadataRootApplyPerasAuthorityResponse, error)
 	ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error)
 	ObserveTail(context.Context, *MetadataRootObserveTailRequest) (*MetadataRootObserveTailResponse, error)
 	WaitTail(context.Context, *MetadataRootWaitTailRequest) (*MetadataRootWaitTailResponse, error)
@@ -182,8 +182,8 @@ func (UnimplementedMetadataRootServer) Status(context.Context, *MetadataRootStat
 func (UnimplementedMetadataRootServer) ApplyGrant(context.Context, *MetadataRootApplyGrantRequest) (*MetadataRootApplyGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyGrant not implemented")
 }
-func (UnimplementedMetadataRootServer) ApplyCapsuleAuthority(context.Context, *MetadataRootApplyCapsuleAuthorityRequest) (*MetadataRootApplyCapsuleAuthorityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ApplyCapsuleAuthority not implemented")
+func (UnimplementedMetadataRootServer) ApplyPerasAuthority(context.Context, *MetadataRootApplyPerasAuthorityRequest) (*MetadataRootApplyPerasAuthorityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyPerasAuthority not implemented")
 }
 func (UnimplementedMetadataRootServer) ObserveCommitted(context.Context, *MetadataRootObserveCommittedRequest) (*MetadataRootObserveCommittedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveCommitted not implemented")
@@ -304,20 +304,20 @@ func _MetadataRoot_ApplyGrant_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MetadataRoot_ApplyCapsuleAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MetadataRootApplyCapsuleAuthorityRequest)
+func _MetadataRoot_ApplyPerasAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRootApplyPerasAuthorityRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MetadataRootServer).ApplyCapsuleAuthority(ctx, in)
+		return srv.(MetadataRootServer).ApplyPerasAuthority(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MetadataRoot_ApplyCapsuleAuthority_FullMethodName,
+		FullMethod: MetadataRoot_ApplyPerasAuthority_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataRootServer).ApplyCapsuleAuthority(ctx, req.(*MetadataRootApplyCapsuleAuthorityRequest))
+		return srv.(MetadataRootServer).ApplyPerasAuthority(ctx, req.(*MetadataRootApplyPerasAuthorityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -404,8 +404,8 @@ var MetadataRoot_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataRoot_ApplyGrant_Handler,
 		},
 		{
-			MethodName: "ApplyCapsuleAuthority",
-			Handler:    _MetadataRoot_ApplyCapsuleAuthority_Handler,
+			MethodName: "ApplyPerasAuthority",
+			Handler:    _MetadataRoot_ApplyPerasAuthority_Handler,
 		},
 		{
 			MethodName: "ObserveCommitted",

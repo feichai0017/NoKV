@@ -44,24 +44,24 @@ func (s CatchUpState) String() string {
 // Snapshot is the reconstructed Coordinator bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	ClusterEpoch          uint64
-	RootToken             rootstorage.TailToken
-	CatchUpState          CatchUpState
-	Stores                map[uint64]rootstate.StoreMembership
-	SnapshotEpochs        map[string]rootstate.SnapshotEpoch
-	Mounts                map[string]rootstate.MountRecord
-	Subtrees              map[string]rootstate.SubtreeAuthority
-	Quotas                map[string]rootstate.QuotaFence
-	Descriptors           map[uint64]topology.Descriptor
-	PendingPeerChanges    map[uint64]rootstate.PendingPeerChange
-	PendingRangeChanges   map[uint64]rootstate.PendingRangeChange
-	Allocator             AllocatorState
-	ActiveGrants          []rootproto.AuthorityGrant
-	RetiredGrants         []rootproto.GrantRetirement
-	GrantInheritances     []rootproto.GrantInheritance
-	RetiredEraFloor       uint64
-	ActiveCapsuleGrants   []rootproto.CapsuleAuthorityGrant
-	CapsuleAuthorityEpoch uint64
+	ClusterEpoch        uint64
+	RootToken           rootstorage.TailToken
+	CatchUpState        CatchUpState
+	Stores              map[uint64]rootstate.StoreMembership
+	SnapshotEpochs      map[string]rootstate.SnapshotEpoch
+	Mounts              map[string]rootstate.MountRecord
+	Subtrees            map[string]rootstate.SubtreeAuthority
+	Quotas              map[string]rootstate.QuotaFence
+	Descriptors         map[uint64]topology.Descriptor
+	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
+	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
+	Allocator           AllocatorState
+	ActiveGrants        []rootproto.AuthorityGrant
+	RetiredGrants       []rootproto.GrantRetirement
+	GrantInheritances   []rootproto.GrantInheritance
+	RetiredEraFloor     uint64
+	ActivePerasGrants   []rootproto.PerasAuthorityGrant
+	PerasAuthorityEpoch uint64
 }
 
 func (s Snapshot) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -82,44 +82,44 @@ func (s Snapshot) ActiveGrantByID(grantID string) (rootproto.AuthorityGrant, boo
 	return rootproto.AuthorityGrant{}, false
 }
 
-func (s Snapshot) ActiveCapsuleGrantFor(scope rootproto.CapsuleAuthorityScope, nowUnixNano int64) (rootproto.CapsuleAuthorityGrant, bool) {
-	for _, grant := range s.ActiveCapsuleGrants {
+func (s Snapshot) ActivePerasGrantFor(scope rootproto.PerasAuthorityScope, nowUnixNano int64) (rootproto.PerasAuthorityGrant, bool) {
+	for _, grant := range s.ActivePerasGrants {
 		if grant.Covers(scope, nowUnixNano) {
-			return rootproto.CloneCapsuleAuthorityGrant(grant), true
+			return rootproto.ClonePerasAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.CapsuleAuthorityGrant{}, false
+	return rootproto.PerasAuthorityGrant{}, false
 }
 
-func (s Snapshot) ActiveCapsuleGrantByID(grantID string) (rootproto.CapsuleAuthorityGrant, bool) {
-	for _, grant := range s.ActiveCapsuleGrants {
+func (s Snapshot) ActivePerasGrantByID(grantID string) (rootproto.PerasAuthorityGrant, bool) {
+	for _, grant := range s.ActivePerasGrants {
 		if grant.GrantID == grantID {
-			return rootproto.CloneCapsuleAuthorityGrant(grant), true
+			return rootproto.ClonePerasAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.CapsuleAuthorityGrant{}, false
+	return rootproto.PerasAuthorityGrant{}, false
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	return Snapshot{
-		ClusterEpoch:          snapshot.ClusterEpoch,
-		RootToken:             snapshot.RootToken,
-		CatchUpState:          snapshot.CatchUpState,
-		Stores:                rootstate.CloneStoreMemberships(snapshot.Stores),
-		SnapshotEpochs:        rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
-		Mounts:                rootstate.CloneMounts(snapshot.Mounts),
-		Subtrees:              rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
-		Quotas:                rootstate.CloneQuotaFences(snapshot.Quotas),
-		Descriptors:           rootstate.CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges:    rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
-		PendingRangeChanges:   rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
-		Allocator:             snapshot.Allocator,
-		ActiveGrants:          cloneAuthorityGrants(snapshot.ActiveGrants),
-		RetiredGrants:         append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
-		GrantInheritances:     append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-		RetiredEraFloor:       snapshot.RetiredEraFloor,
-		ActiveCapsuleGrants:   cloneCapsuleAuthorityGrants(snapshot.ActiveCapsuleGrants),
-		CapsuleAuthorityEpoch: snapshot.CapsuleAuthorityEpoch,
+		ClusterEpoch:        snapshot.ClusterEpoch,
+		RootToken:           snapshot.RootToken,
+		CatchUpState:        snapshot.CatchUpState,
+		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
+		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
+		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
+		Quotas:              rootstate.CloneQuotaFences(snapshot.Quotas),
+		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+		Allocator:           snapshot.Allocator,
+		ActiveGrants:        cloneAuthorityGrants(snapshot.ActiveGrants),
+		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+		RetiredEraFloor:     snapshot.RetiredEraFloor,
+		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.ActivePerasGrants),
+		PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,
 	}
 }
 
@@ -145,9 +145,9 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	if current.RetiredEraFloor > out.RetiredEraFloor {
 		out.RetiredEraFloor = current.RetiredEraFloor
 	}
-	if current.CapsuleAuthorityEpoch > out.CapsuleAuthorityEpoch {
-		out.ActiveCapsuleGrants = cloneCapsuleAuthorityGrants(current.ActiveCapsuleGrants)
-		out.CapsuleAuthorityEpoch = current.CapsuleAuthorityEpoch
+	if current.PerasAuthorityEpoch > out.PerasAuthorityEpoch {
+		out.ActivePerasGrants = clonePerasAuthorityGrants(current.ActivePerasGrants)
+		out.PerasAuthorityEpoch = current.PerasAuthorityEpoch
 	}
 	return out
 }
@@ -250,28 +250,28 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		ActiveGrants:          cloneAuthorityGrants(snapshot.State.ActiveGrants),
-		RetiredGrants:         append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
-		GrantInheritances:     append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
-		RetiredEraFloor:       snapshot.State.RetiredEraFloor,
-		ActiveCapsuleGrants:   cloneCapsuleAuthorityGrants(snapshot.State.ActiveCapsuleGrants),
-		CapsuleAuthorityEpoch: snapshot.State.CapsuleAuthorityEpoch,
+		ActiveGrants:        cloneAuthorityGrants(snapshot.State.ActiveGrants),
+		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
+		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
+		RetiredEraFloor:     snapshot.State.RetiredEraFloor,
+		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.State.ActivePerasGrants),
+		PerasAuthorityEpoch: snapshot.State.PerasAuthorityEpoch,
 	}
 }
 
 func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 	return rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:          s.ClusterEpoch,
-			LastCommitted:         s.RootToken.Cursor,
-			IDFence:               s.Allocator.IDCurrent,
-			TSOFence:              s.Allocator.TSCurrent,
-			ActiveGrants:          cloneAuthorityGrants(s.ActiveGrants),
-			RetiredGrants:         append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
-			GrantInheritances:     append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
-			RetiredEraFloor:       s.RetiredEraFloor,
-			ActiveCapsuleGrants:   cloneCapsuleAuthorityGrants(s.ActiveCapsuleGrants),
-			CapsuleAuthorityEpoch: s.CapsuleAuthorityEpoch,
+			ClusterEpoch:        s.ClusterEpoch,
+			LastCommitted:       s.RootToken.Cursor,
+			IDFence:             s.Allocator.IDCurrent,
+			TSOFence:            s.Allocator.TSCurrent,
+			ActiveGrants:        cloneAuthorityGrants(s.ActiveGrants),
+			RetiredGrants:       append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
+			GrantInheritances:   append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
+			RetiredEraFloor:     s.RetiredEraFloor,
+			ActivePerasGrants:   clonePerasAuthorityGrants(s.ActivePerasGrants),
+			PerasAuthorityEpoch: s.PerasAuthorityEpoch,
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),
@@ -303,13 +303,13 @@ func cloneAuthorityGrant(grant rootproto.AuthorityGrant) rootproto.AuthorityGran
 	return grant
 }
 
-func cloneCapsuleAuthorityGrants(grants []rootproto.CapsuleAuthorityGrant) []rootproto.CapsuleAuthorityGrant {
+func clonePerasAuthorityGrants(grants []rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
 	if len(grants) == 0 {
 		return nil
 	}
-	out := make([]rootproto.CapsuleAuthorityGrant, len(grants))
+	out := make([]rootproto.PerasAuthorityGrant, len(grants))
 	for i, grant := range grants {
-		out[i] = rootproto.CloneCapsuleAuthorityGrant(grant)
+		out[i] = rootproto.ClonePerasAuthorityGrant(grant)
 	}
 	return out
 }

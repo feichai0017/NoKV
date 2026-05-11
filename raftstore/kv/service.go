@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -14,26 +14,26 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/store"
 )
 
-type CapsuleWitness interface {
-	AppendPrepare(context.Context, compile.AuthorityScope, fscapsule.PrepareRecord) error
-	AppendCommitCertificate(context.Context, compile.AuthorityScope, fscapsule.CommitCertificateRecord) error
-	Probe(context.Context, uint64) (fscapsule.WitnessSnapshot, error)
+type PerasWitness interface {
+	AppendPrepare(context.Context, compile.AuthorityScope, fsperas.PrepareRecord) error
+	AppendCommitCertificate(context.Context, compile.AuthorityScope, fsperas.CommitCertificateRecord) error
+	Probe(context.Context, uint64) (fsperas.WitnessSnapshot, error)
 }
 
 type ServiceOption func(*Service)
 
-func WithCapsuleWitness(witness CapsuleWitness) ServiceOption {
+func WithPerasWitness(witness PerasWitness) ServiceOption {
 	return func(s *Service) {
-		s.capsuleWitness = witness
+		s.perasWitness = witness
 	}
 }
 
 // Service exposes StoreKV gRPC handlers backed by a raftstore Store.
 type Service struct {
 	kvrpcpb.UnimplementedStoreKVServer
-	store          *store.Store
-	writeBatcher   *writeCommandBatcher
-	capsuleWitness CapsuleWitness
+	store        *store.Store
+	writeBatcher *writeCommandBatcher
+	perasWitness PerasWitness
 }
 
 // NewService constructs a StoreKV service bound to the provided store.

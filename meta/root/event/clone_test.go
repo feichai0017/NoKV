@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCloneEventDetachesCapsuleAuthorityGrant(t *testing.T) {
-	grant := rootproto.CapsuleAuthorityGrant{
-		GrantID:  "capsule-1",
+func TestCloneEventDetachesPerasAuthorityGrant(t *testing.T) {
+	grant := rootproto.PerasAuthorityGrant{
+		GrantID:  "peras-1",
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{1},
@@ -22,16 +22,16 @@ func TestCloneEventDetachesCapsuleAuthorityGrant(t *testing.T) {
 		},
 		ExpiresUnixNano: 1_000,
 	}
-	event := rootevent.CloneEvent(rootevent.CapsuleAuthorityGranted(grant))
-	event.CapsuleGrant.Scope.Buckets[0] = 9
-	event.CapsuleGrant.Scope.Parents[0] = 99
-	event.CapsuleGrant.Scope.Inodes[0] = 999
+	event := rootevent.CloneEvent(rootevent.PerasAuthorityGranted(grant))
+	event.PerasGrant.Scope.Buckets[0] = 9
+	event.PerasGrant.Scope.Parents[0] = 99
+	event.PerasGrant.Scope.Inodes[0] = 999
 
 	cloned := rootevent.CloneEvent(event)
-	event.CapsuleGrant.Scope.Buckets[0] = 8
-	event.CapsuleGrant.Scope.Parents[0] = 88
-	event.CapsuleGrant.Scope.Inodes[0] = 888
-	require.Equal(t, []uint16{9}, cloned.CapsuleGrant.Scope.Buckets)
-	require.Equal(t, []uint64{99}, cloned.CapsuleGrant.Scope.Parents)
-	require.Equal(t, []uint64{999}, cloned.CapsuleGrant.Scope.Inodes)
+	event.PerasGrant.Scope.Buckets[0] = 8
+	event.PerasGrant.Scope.Parents[0] = 88
+	event.PerasGrant.Scope.Inodes[0] = 888
+	require.Equal(t, []uint16{9}, cloned.PerasGrant.Scope.Buckets)
+	require.Equal(t, []uint64{99}, cloned.PerasGrant.Scope.Parents)
+	require.Equal(t, []uint64{999}, cloned.PerasGrant.Scope.Inodes)
 }

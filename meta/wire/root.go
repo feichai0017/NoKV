@@ -21,17 +21,17 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:          state.ClusterEpoch,
-		MembershipEpoch:       state.MembershipEpoch,
-		LastCommitted:         RootCursorToProto(state.LastCommitted),
-		IdFence:               state.IDFence,
-		TsoFence:              state.TSOFence,
-		ActiveGrants:          RootAuthorityGrantsToProto(state.ActiveGrants),
-		RetiredGrants:         RootGrantRetirementsToProto(state.RetiredGrants),
-		GrantInheritances:     RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:       state.RetiredEraFloor,
-		ActiveCapsuleGrants:   RootCapsuleAuthorityGrantsToProto(state.ActiveCapsuleGrants),
-		CapsuleAuthorityEpoch: state.CapsuleAuthorityEpoch,
+		ClusterEpoch:        state.ClusterEpoch,
+		MembershipEpoch:     state.MembershipEpoch,
+		LastCommitted:       RootCursorToProto(state.LastCommitted),
+		IdFence:             state.IDFence,
+		TsoFence:            state.TSOFence,
+		ActiveGrants:        RootAuthorityGrantsToProto(state.ActiveGrants),
+		RetiredGrants:       RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances:   RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloor:     state.RetiredEraFloor,
+		ActivePerasGrants:   RootPerasAuthorityGrantsToProto(state.ActivePerasGrants),
+		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
 	}
 }
 
@@ -40,17 +40,17 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:          pbState.ClusterEpoch,
-		MembershipEpoch:       pbState.MembershipEpoch,
-		LastCommitted:         RootCursorFromProto(pbState.LastCommitted),
-		IDFence:               pbState.IdFence,
-		TSOFence:              pbState.TsoFence,
-		ActiveGrants:          RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
-		RetiredGrants:         RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
-		GrantInheritances:     RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloor:       pbState.GetRetiredEraFloor(),
-		ActiveCapsuleGrants:   RootCapsuleAuthorityGrantsFromProto(pbState.GetActiveCapsuleGrants()),
-		CapsuleAuthorityEpoch: pbState.GetCapsuleAuthorityEpoch(),
+		ClusterEpoch:        pbState.ClusterEpoch,
+		MembershipEpoch:     pbState.MembershipEpoch,
+		LastCommitted:       RootCursorFromProto(pbState.LastCommitted),
+		IDFence:             pbState.IdFence,
+		TSOFence:            pbState.TsoFence,
+		ActiveGrants:        RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
+		RetiredGrants:       RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
+		GrantInheritances:   RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
+		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
+		ActivePerasGrants:   RootPerasAuthorityGrantsFromProto(pbState.GetActivePerasGrants()),
+		PerasAuthorityEpoch: pbState.GetPerasAuthorityEpoch(),
 	}
 }
 
@@ -217,38 +217,38 @@ func RootGrantInheritancesFromProto(inheritances []*metapb.RootGrantInheritance)
 	return out
 }
 
-func RootCapsuleAuthorityScopeToProto(scope rootproto.CapsuleAuthorityScope) *metapb.RootCapsuleAuthorityScope {
-	return &metapb.RootCapsuleAuthorityScope{
+func RootPerasAuthorityScopeToProto(scope rootproto.PerasAuthorityScope) *metapb.RootPerasAuthorityScope {
+	return &metapb.RootPerasAuthorityScope{
 		MountId:    scope.MountID,
 		MountKeyId: scope.MountKeyID,
-		Buckets:    rootCapsuleBucketsToProto(scope.Buckets),
+		Buckets:    rootPerasBucketsToProto(scope.Buckets),
 		Parents:    append([]uint64(nil), scope.Parents...),
 		Inodes:     append([]uint64(nil), scope.Inodes...),
 	}
 }
 
-func RootCapsuleAuthorityScopeFromProto(scope *metapb.RootCapsuleAuthorityScope) rootproto.CapsuleAuthorityScope {
+func RootPerasAuthorityScopeFromProto(scope *metapb.RootPerasAuthorityScope) rootproto.PerasAuthorityScope {
 	if scope == nil {
-		return rootproto.CapsuleAuthorityScope{}
+		return rootproto.PerasAuthorityScope{}
 	}
-	return rootproto.CapsuleAuthorityScope{
+	return rootproto.PerasAuthorityScope{
 		MountID:    scope.GetMountId(),
 		MountKeyID: scope.GetMountKeyId(),
-		Buckets:    rootCapsuleBucketsFromProto(scope.GetBuckets()),
+		Buckets:    rootPerasBucketsFromProto(scope.GetBuckets()),
 		Parents:    append([]uint64(nil), scope.GetParents()...),
 		Inodes:     append([]uint64(nil), scope.GetInodes()...),
 	}
 }
 
-func RootCapsuleAuthorityGrantToProto(grant rootproto.CapsuleAuthorityGrant) *metapb.RootCapsuleAuthorityGrant {
+func RootPerasAuthorityGrantToProto(grant rootproto.PerasAuthorityGrant) *metapb.RootPerasAuthorityGrant {
 	if !grant.Valid() {
 		return nil
 	}
-	return &metapb.RootCapsuleAuthorityGrant{
+	return &metapb.RootPerasAuthorityGrant{
 		GrantId:           grant.GrantID,
 		EpochId:           grant.EpochID,
 		HolderId:          grant.HolderID,
-		Scope:             RootCapsuleAuthorityScopeToProto(grant.Scope),
+		Scope:             RootPerasAuthorityScopeToProto(grant.Scope),
 		ExpiresUnixNano:   grant.ExpiresUnixNano,
 		PredecessorDigest: append([]byte(nil), grant.PredecessorDigest[:]...),
 		QuotaCreditBytes:  grant.QuotaCreditBytes,
@@ -256,17 +256,17 @@ func RootCapsuleAuthorityGrantToProto(grant rootproto.CapsuleAuthorityGrant) *me
 	}
 }
 
-func RootCapsuleAuthorityGrantFromProto(grant *metapb.RootCapsuleAuthorityGrant) rootproto.CapsuleAuthorityGrant {
+func RootPerasAuthorityGrantFromProto(grant *metapb.RootPerasAuthorityGrant) rootproto.PerasAuthorityGrant {
 	if grant == nil {
-		return rootproto.CapsuleAuthorityGrant{}
+		return rootproto.PerasAuthorityGrant{}
 	}
 	var predecessorDigest [32]byte
 	copy(predecessorDigest[:], grant.GetPredecessorDigest())
-	return rootproto.CapsuleAuthorityGrant{
+	return rootproto.PerasAuthorityGrant{
 		GrantID:           grant.GetGrantId(),
 		EpochID:           grant.GetEpochId(),
 		HolderID:          grant.GetHolderId(),
-		Scope:             RootCapsuleAuthorityScopeFromProto(grant.GetScope()),
+		Scope:             RootPerasAuthorityScopeFromProto(grant.GetScope()),
 		ExpiresUnixNano:   grant.GetExpiresUnixNano(),
 		PredecessorDigest: predecessorDigest,
 		QuotaCreditBytes:  grant.GetQuotaCreditBytes(),
@@ -274,38 +274,38 @@ func RootCapsuleAuthorityGrantFromProto(grant *metapb.RootCapsuleAuthorityGrant)
 	}
 }
 
-func RootCapsuleAuthorityGrantsToProto(grants []rootproto.CapsuleAuthorityGrant) []*metapb.RootCapsuleAuthorityGrant {
+func RootPerasAuthorityGrantsToProto(grants []rootproto.PerasAuthorityGrant) []*metapb.RootPerasAuthorityGrant {
 	if len(grants) == 0 {
 		return nil
 	}
-	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(grants))
+	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(grants))
 	for _, grant := range grants {
-		if pbGrant := RootCapsuleAuthorityGrantToProto(grant); pbGrant != nil {
+		if pbGrant := RootPerasAuthorityGrantToProto(grant); pbGrant != nil {
 			out = append(out, pbGrant)
 		}
 	}
 	return out
 }
 
-func RootCapsuleAuthorityGrantsFromProto(grants []*metapb.RootCapsuleAuthorityGrant) []rootproto.CapsuleAuthorityGrant {
+func RootPerasAuthorityGrantsFromProto(grants []*metapb.RootPerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
 	if len(grants) == 0 {
 		return nil
 	}
-	out := make([]rootproto.CapsuleAuthorityGrant, 0, len(grants))
+	out := make([]rootproto.PerasAuthorityGrant, 0, len(grants))
 	for _, grant := range grants {
-		if parsed := RootCapsuleAuthorityGrantFromProto(grant); parsed.Valid() {
+		if parsed := RootPerasAuthorityGrantFromProto(grant); parsed.Valid() {
 			out = append(out, parsed)
 		}
 	}
 	return out
 }
 
-func RootCapsuleAuthorityCommandToProto(cmd rootproto.CapsuleAuthorityCommand) *metapb.RootCapsuleAuthorityCommand {
-	return &metapb.RootCapsuleAuthorityCommand{
-		Kind:              RootCapsuleAuthorityActToProto(cmd.Kind),
+func RootPerasAuthorityCommandToProto(cmd rootproto.PerasAuthorityCommand) *metapb.RootPerasAuthorityCommand {
+	return &metapb.RootPerasAuthorityCommand{
+		Kind:              RootPerasAuthorityActToProto(cmd.Kind),
 		HolderId:          cmd.HolderID,
 		GrantId:           cmd.GrantID,
-		Scope:             RootCapsuleAuthorityScopeToProto(cmd.Scope),
+		Scope:             RootPerasAuthorityScopeToProto(cmd.Scope),
 		ExpiresUnixNano:   cmd.ExpiresUnixNano,
 		NowUnixNano:       cmd.NowUnixNano,
 		PredecessorDigest: append([]byte(nil), cmd.PredecessorDigest[:]...),
@@ -314,17 +314,17 @@ func RootCapsuleAuthorityCommandToProto(cmd rootproto.CapsuleAuthorityCommand) *
 	}
 }
 
-func RootCapsuleAuthorityCommandFromProto(cmd *metapb.RootCapsuleAuthorityCommand) rootproto.CapsuleAuthorityCommand {
+func RootPerasAuthorityCommandFromProto(cmd *metapb.RootPerasAuthorityCommand) rootproto.PerasAuthorityCommand {
 	if cmd == nil {
-		return rootproto.CapsuleAuthorityCommand{}
+		return rootproto.PerasAuthorityCommand{}
 	}
 	var predecessorDigest [32]byte
 	copy(predecessorDigest[:], cmd.GetPredecessorDigest())
-	return rootproto.CapsuleAuthorityCommand{
-		Kind:              RootCapsuleAuthorityActFromProto(cmd.GetKind()),
+	return rootproto.PerasAuthorityCommand{
+		Kind:              RootPerasAuthorityActFromProto(cmd.GetKind()),
 		HolderID:          cmd.GetHolderId(),
 		GrantID:           cmd.GetGrantId(),
-		Scope:             RootCapsuleAuthorityScopeFromProto(cmd.GetScope()),
+		Scope:             RootPerasAuthorityScopeFromProto(cmd.GetScope()),
 		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
 		NowUnixNano:       cmd.GetNowUnixNano(),
 		PredecessorDigest: predecessorDigest,
@@ -333,29 +333,29 @@ func RootCapsuleAuthorityCommandFromProto(cmd *metapb.RootCapsuleAuthorityComman
 	}
 }
 
-func RootCapsuleAuthorityActToProto(act rootproto.CapsuleAuthorityAct) metapb.RootCapsuleAuthorityAct {
+func RootPerasAuthorityActToProto(act rootproto.PerasAuthorityAct) metapb.RootPerasAuthorityAct {
 	switch act {
-	case rootproto.CapsuleAuthorityActAcquire:
-		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE
-	case rootproto.CapsuleAuthorityActRetire:
-		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_RETIRE
+	case rootproto.PerasAuthorityActAcquire:
+		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_ACQUIRE
+	case rootproto.PerasAuthorityActRetire:
+		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_RETIRE
 	default:
-		return metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_UNSPECIFIED
+		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED
 	}
 }
 
-func RootCapsuleAuthorityActFromProto(act metapb.RootCapsuleAuthorityAct) rootproto.CapsuleAuthorityAct {
+func RootPerasAuthorityActFromProto(act metapb.RootPerasAuthorityAct) rootproto.PerasAuthorityAct {
 	switch act {
-	case metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_ACQUIRE:
-		return rootproto.CapsuleAuthorityActAcquire
-	case metapb.RootCapsuleAuthorityAct_ROOT_CAPSULE_AUTHORITY_ACT_RETIRE:
-		return rootproto.CapsuleAuthorityActRetire
+	case metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_ACQUIRE:
+		return rootproto.PerasAuthorityActAcquire
+	case metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_RETIRE:
+		return rootproto.PerasAuthorityActRetire
 	default:
-		return rootproto.CapsuleAuthorityActUnknown
+		return rootproto.PerasAuthorityActUnknown
 	}
 }
 
-func rootCapsuleBucketsToProto(buckets []uint16) []uint32 {
+func rootPerasBucketsToProto(buckets []uint16) []uint32 {
 	if len(buckets) == 0 {
 		return nil
 	}
@@ -366,7 +366,7 @@ func rootCapsuleBucketsToProto(buckets []uint16) []uint32 {
 	return out
 }
 
-func rootCapsuleBucketsFromProto(buckets []uint32) []uint16 {
+func rootPerasBucketsFromProto(buckets []uint32) []uint16 {
 	if len(buckets) == 0 {
 		return nil
 	}
@@ -1306,8 +1306,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_GrantRetirement{GrantRetirement: RootGrantRetirementToProto(*event.GrantRetirement)}
 	case event.GrantInheritance != nil:
 		pbEvent.Payload = &metapb.RootEvent_GrantInheritance{GrantInheritance: RootGrantInheritanceToProto(*event.GrantInheritance)}
-	case event.CapsuleGrant != nil:
-		pbEvent.Payload = &metapb.RootEvent_CapsuleAuthorityGrant{CapsuleAuthorityGrant: RootCapsuleAuthorityGrantToProto(*event.CapsuleGrant)}
+	case event.PerasGrant != nil:
+		pbEvent.Payload = &metapb.RootEvent_PerasAuthorityGrant{PerasAuthorityGrant: RootPerasAuthorityGrantToProto(*event.PerasGrant)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.Mount != nil:
@@ -1371,9 +1371,9 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 		inheritance := RootGrantInheritanceFromProto(body)
 		event.GrantInheritance = &inheritance
 	}
-	if body := pbEvent.GetCapsuleAuthorityGrant(); body != nil {
-		grant := RootCapsuleAuthorityGrantFromProto(body)
-		event.CapsuleGrant = &grant
+	if body := pbEvent.GetPerasAuthorityGrant(); body != nil {
+		grant := RootPerasAuthorityGrantFromProto(body)
+		event.PerasGrant = &grant
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
@@ -1471,10 +1471,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_RETIRED
 	case rootevent.KindGrantInherited:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED
-	case rootevent.KindCapsuleAuthorityGranted:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED
-	case rootevent.KindCapsuleAuthorityRetired:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED
+	case rootevent.KindPerasAuthorityGranted:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED
+	case rootevent.KindPerasAuthorityRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED
 	case rootevent.KindSnapshotEpochPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
@@ -1544,10 +1544,10 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindGrantRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED:
 		return rootevent.KindGrantInherited
-	case metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED:
-		return rootevent.KindCapsuleAuthorityGranted
-	case metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED:
-		return rootevent.KindCapsuleAuthorityRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED:
+		return rootevent.KindPerasAuthorityGranted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED:
+		return rootevent.KindPerasAuthorityRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:

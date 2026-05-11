@@ -83,23 +83,23 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
 	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
 
-	capsuleGrant := rootproto.CapsuleAuthorityGrant{
-		GrantID:  "capsule-1",
+	perasGrant := rootproto.PerasAuthorityGrant{
+		GrantID:  "peras-1",
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{1},
 		},
 		ExpiresUnixNano: 1_000,
 	}
-	capsuleIssued := rootevent.CapsuleAuthorityGranted(capsuleGrant)
-	capsuleIssued.CapsuleGrant.Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, capsuleGrant.Scope.Buckets)
-	capsuleRetired := rootevent.CapsuleAuthorityRetired(capsuleGrant)
-	require.Equal(t, rootevent.KindCapsuleAuthorityRetired, capsuleRetired.Kind)
-	require.Equal(t, capsuleGrant.GrantID, capsuleRetired.CapsuleGrant.GrantID)
+	perasIssued := rootevent.PerasAuthorityGranted(perasGrant)
+	perasIssued.PerasGrant.Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, perasGrant.Scope.Buckets)
+	perasRetired := rootevent.PerasAuthorityRetired(perasGrant)
+	require.Equal(t, rootevent.KindPerasAuthorityRetired, perasRetired.Kind)
+	require.Equal(t, perasGrant.GrantID, perasRetired.PerasGrant.GrantID)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	capsuleauth "github.com/feichai0017/NoKV/fsmeta/runtime/capsuleauth"
+	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -20,11 +20,11 @@ type fakeMountList struct {
 	mountCalls   int
 	quotaCalls   int
 	subtreeCalls int
-	capsuleCalls int
+	perasCalls   int
 	mounts       []*coordpb.MountInfo
 	quotas       []*coordpb.QuotaFenceInfo
 	subtrees     []*coordpb.SubtreeAuthorityInfo
-	capsules     []*rootproto.CapsuleAuthorityGrant
+	peras        []*rootproto.PerasAuthorityGrant
 	err          error
 }
 
@@ -43,13 +43,13 @@ func (c *fakeMountList) ListSubtreeAuthorities(context.Context, *coordpb.ListSub
 	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: c.subtrees}, c.err
 }
 
-func (c *fakeMountList) ListCapsuleAuthorityGrants(context.Context, *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
-	c.capsuleCalls++
-	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(c.capsules))
-	for _, grant := range c.capsules {
-		out = append(out, metawire.RootCapsuleAuthorityGrantToProto(*grant))
+func (c *fakeMountList) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+	c.perasCalls++
+	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(c.peras))
+	for _, grant := range c.peras {
+		out = append(out, metawire.RootPerasAuthorityGrantToProto(*grant))
 	}
-	return &coordpb.ListCapsuleAuthorityGrantsResponse{Grants: out}, c.err
+	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, c.err
 }
 
 func (c *fakeMountList) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -105,7 +105,7 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 	require.Equal(t, 1, list.mountCalls)
 	require.Equal(t, 1, list.quotaCalls)
 	require.Equal(t, 1, list.subtreeCalls)
-	require.Equal(t, 1, list.capsuleCalls)
+	require.Equal(t, 1, list.perasCalls)
 	require.Equal(t, []fsmeta.MountID{"vol"}, router.retired)
 
 	entry, ok := cache.entries["vol"]
@@ -113,24 +113,24 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 	require.True(t, entry.record.Retired)
 }
 
-func TestMonitorRefreshesCapsuleAuthorities(t *testing.T) {
-	grant := testMonitorCapsuleGrant("capsule-1", 1)
-	list := &fakeMountList{capsules: []*rootproto.CapsuleAuthorityGrant{&grant}}
-	table := capsuleauth.NewActiveAuthorities()
+func TestMonitorRefreshesPerasAuthorities(t *testing.T) {
+	grant := testMonitorPerasGrant("peras-1", 1)
+	list := &fakeMountList{peras: []*rootproto.PerasAuthorityGrant{&grant}}
+	table := perasauth.NewActiveAuthorities()
 
-	mon := &monitor{coord: list, router: &fakeRetireRouter{}, capsules: table}
+	mon := &monitor{coord: list, router: &fakeRetireRouter{}, peras: table}
 	require.NoError(t, mon.bootstrap(context.Background()))
 
-	require.Equal(t, 1, list.capsuleCalls)
-	require.Equal(t, []capsuleauth.AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, 1, list.perasCalls)
+	require.Equal(t, []perasauth.AuthorityGrant{grant}, table.Snapshot())
 
-	retired := rootevent.CapsuleAuthorityRetired(grant)
+	retired := rootevent.PerasAuthorityRetired(grant)
 	mon.applyRootEvent(context.Background(), retired)
 	require.Empty(t, table.Snapshot())
 
-	next := testMonitorCapsuleGrant("capsule-2", 2)
-	mon.applyRootEvent(context.Background(), rootevent.CapsuleAuthorityGranted(next))
-	require.Equal(t, []capsuleauth.AuthorityGrant{next}, table.Snapshot())
+	next := testMonitorPerasGrant("peras-2", 2)
+	mon.applyRootEvent(context.Background(), rootevent.PerasAuthorityGranted(next))
+	require.Equal(t, []perasauth.AuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
@@ -151,12 +151,12 @@ func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: 1, frontier: 42}}, pub.completes)
 }
 
-func testMonitorCapsuleGrant(grantID string, bucket uint16) rootproto.CapsuleAuthorityGrant {
-	return rootproto.CapsuleAuthorityGrant{
+func testMonitorPerasGrant(grantID string, bucket uint16) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:  grantID,
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.CapsuleAuthorityScope{
+		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{bucket},

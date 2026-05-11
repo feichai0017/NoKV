@@ -25,7 +25,7 @@ type RootStorage interface {
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 	Refresh() error
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
@@ -48,7 +48,7 @@ type rootRuntimeBackend interface {
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 	Close() error
 }
 
@@ -70,7 +70,7 @@ type rootSubmitBackend interface {
 
 type rootCoordinatorProtocolBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 }
 
 type rootCloseBackend interface {
@@ -142,11 +142,11 @@ func (a rootBackendAdapter) ApplyGrant(ctx context.Context, cmd rootproto.GrantC
 	return a.protocol.ApplyGrant(ctx, cmd)
 }
 
-func (a rootBackendAdapter) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (a rootBackendAdapter) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	if a.protocol == nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, errGrantCommandUnsupported
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
 	}
-	return a.protocol.ApplyCapsuleAuthority(ctx, cmd)
+	return a.protocol.ApplyPerasAuthority(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -329,18 +329,18 @@ func (s *RootStore) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) 
 	return state, cert, err
 }
 
-func (s *RootStore) ApplyCapsuleAuthority(ctx context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+func (s *RootStore) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
 	if s == nil || s.root == nil {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, nil
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.State{}, rootproto.CapsuleAuthorityGrant{}, errGrantCommandUnsupported
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
 	}
-	var grant rootproto.CapsuleAuthorityGrant
+	var grant rootproto.PerasAuthorityGrant
 	var state rootstate.State
-	state, err := s.applyCapsuleAndReload(func() (rootstate.State, error) {
+	state, err := s.applyPerasAndReload(func() (rootstate.State, error) {
 		var applyErr error
-		state, grant, applyErr = s.root.ApplyCapsuleAuthority(ctx, cmd)
+		state, grant, applyErr = s.root.ApplyPerasAuthority(ctx, cmd)
 		return state, applyErr
 	})
 	return state, grant, err
@@ -424,7 +424,7 @@ func eunomiaStatePresent(state rootstate.EunomiaState) bool {
 		state.RetiredEraFloor != 0
 }
 
-func (s *RootStore) applyCapsuleAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
+func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
 	if s == nil {
 		return rootstate.State{}, nil
 	}
@@ -432,11 +432,11 @@ func (s *RootStore) applyCapsuleAndReload(run func() (rootstate.State, error)) (
 		return rootstate.State{}, nil
 	}
 	state, err := run()
-	if capsuleStatePresent(state) {
-		// The root apply response carries the active Capsule grant mirror even
+	if perasStatePresent(state) {
+		// The root apply response carries the active Peras grant mirror even
 		// when acquisition loses primacy. Merge it before returning so fsmeta
 		// callers see the current holder instead of repeatedly campaigning.
-		s.mergeCapsuleAuthorityState(state)
+		s.mergePerasAuthorityState(state)
 	}
 	if err != nil {
 		return state, err
@@ -444,14 +444,14 @@ func (s *RootStore) applyCapsuleAndReload(run func() (rootstate.State, error)) (
 	if err := s.reload(); err != nil {
 		return state, err
 	}
-	if capsuleStatePresent(state) {
-		s.mergeCapsuleAuthorityState(state)
+	if perasStatePresent(state) {
+		s.mergePerasAuthorityState(state)
 	}
 	return state, nil
 }
 
-func capsuleStatePresent(state rootstate.State) bool {
-	return len(state.ActiveCapsuleGrants) > 0 || state.CapsuleAuthorityEpoch != 0
+func perasStatePresent(state rootstate.State) bool {
+	return len(state.ActivePerasGrants) > 0 || state.PerasAuthorityEpoch != 0
 }
 
 // mergeEunomiaState overlays the committed authority grant lifecycle from an
@@ -477,21 +477,21 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	s.mu.Unlock()
 }
 
-// mergeCapsuleAuthorityState overlays the rooted fsmeta Capsule authority
+// mergePerasAuthorityState overlays the rooted fsmeta Peras authority
 // mirror from an authoritative Apply response onto the cached snapshot.
 // Region descriptors and allocator fences remain owned by root replay/reload.
-func (s *RootStore) mergeCapsuleAuthorityState(state rootstate.State) {
+func (s *RootStore) mergePerasAuthorityState(state rootstate.State) {
 	if s == nil {
 		return
 	}
 	incoming := Snapshot{
-		ActiveCapsuleGrants:   rootstate.CloneState(state).ActiveCapsuleGrants,
-		CapsuleAuthorityEpoch: state.CapsuleAuthorityEpoch,
+		ActivePerasGrants:   rootstate.CloneState(state).ActivePerasGrants,
+		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
 	}
 	s.mu.Lock()
 	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
-	s.snapshot.ActiveCapsuleGrants = cloneCapsuleAuthorityGrants(merged.ActiveCapsuleGrants)
-	s.snapshot.CapsuleAuthorityEpoch = merged.CapsuleAuthorityEpoch
+	s.snapshot.ActivePerasGrants = clonePerasAuthorityGrants(merged.ActivePerasGrants)
+	s.snapshot.PerasAuthorityEpoch = merged.PerasAuthorityEpoch
 	s.mu.Unlock()
 }
 
