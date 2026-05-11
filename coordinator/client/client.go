@@ -38,6 +38,7 @@ type Client interface {
 	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
+	ListCapsuleAuthorityGrants(ctx context.Context, req *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error)
 	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -306,6 +307,12 @@ func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuota
 	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListQuotaFencesResponse, error) {
 		return coord.ListQuotaFences(ctx, req)
 	}, validateListQuotaFencesResponse)
+}
+
+func (c *GRPCClient) ListCapsuleAuthorityGrants(ctx context.Context, req *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+		return coord.ListCapsuleAuthorityGrants(ctx, req)
+	}, validateListCapsuleAuthorityGrantsResponse)
 }
 
 func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -819,6 +826,24 @@ func validateListQuotaFencesResponse(resp *coordpb.ListQuotaFencesResponse) erro
 			return fmt.Errorf("%w: list_quota_fences duplicate subject=%s", errInvalidWitness, key)
 		}
 		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateListCapsuleAuthorityGrantsResponse(resp *coordpb.ListCapsuleAuthorityGrantsResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_capsule_authority_grants response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetGrants()))
+	for _, grant := range resp.GetGrants() {
+		parsed := metawire.RootCapsuleAuthorityGrantFromProto(grant)
+		if !parsed.Valid() {
+			return fmt.Errorf("%w: list_capsule_authority_grants contains invalid grant", errInvalidWitness)
+		}
+		if _, ok := seen[parsed.GrantID]; ok {
+			return fmt.Errorf("%w: list_capsule_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
+		}
+		seen[parsed.GrantID] = struct{}{}
 	}
 	return nil
 }

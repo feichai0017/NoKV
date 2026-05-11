@@ -171,6 +171,12 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
+message ListCapsuleAuthorityGrantsRequest {}
+
+message ListCapsuleAuthorityGrantsResponse {
+  repeated nokv.meta.v1.RootCapsuleAuthorityGrant grants = 1;
+}
+
 message WatchRootEventsRequest {
   nokv.meta.v1.RootTailToken after = 1;
 }
@@ -467,6 +473,7 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
+  rpc ListCapsuleAuthorityGrants(ListCapsuleAuthorityGrantsRequest) returns (ListCapsuleAuthorityGrantsResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);

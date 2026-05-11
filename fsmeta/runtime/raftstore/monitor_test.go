@@ -6,7 +6,12 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	fscapsule "github.com/feichai0017/NoKV/fsmeta/exec/capsule"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -15,9 +20,11 @@ type fakeMountList struct {
 	mountCalls   int
 	quotaCalls   int
 	subtreeCalls int
+	capsuleCalls int
 	mounts       []*coordpb.MountInfo
 	quotas       []*coordpb.QuotaFenceInfo
 	subtrees     []*coordpb.SubtreeAuthorityInfo
+	capsules     []*rootproto.CapsuleAuthorityGrant
 	err          error
 }
 
@@ -34,6 +41,15 @@ func (c *fakeMountList) ListQuotaFences(context.Context, *coordpb.ListQuotaFence
 func (c *fakeMountList) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
 	c.subtreeCalls++
 	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: c.subtrees}, c.err
+}
+
+func (c *fakeMountList) ListCapsuleAuthorityGrants(context.Context, *coordpb.ListCapsuleAuthorityGrantsRequest) (*coordpb.ListCapsuleAuthorityGrantsResponse, error) {
+	c.capsuleCalls++
+	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(c.capsules))
+	for _, grant := range c.capsules {
+		out = append(out, metawire.RootCapsuleAuthorityGrantToProto(*grant))
+	}
+	return &coordpb.ListCapsuleAuthorityGrantsResponse{Grants: out}, c.err
 }
 
 func (c *fakeMountList) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -89,11 +105,32 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 	require.Equal(t, 1, list.mountCalls)
 	require.Equal(t, 1, list.quotaCalls)
 	require.Equal(t, 1, list.subtreeCalls)
+	require.Equal(t, 1, list.capsuleCalls)
 	require.Equal(t, []fsmeta.MountID{"vol"}, router.retired)
 
 	entry, ok := cache.entries["vol"]
 	require.True(t, ok)
 	require.True(t, entry.record.Retired)
+}
+
+func TestMonitorRefreshesCapsuleAuthorities(t *testing.T) {
+	grant := testMonitorCapsuleGrant("capsule-1", 1)
+	list := &fakeMountList{capsules: []*rootproto.CapsuleAuthorityGrant{&grant}}
+	table := fscapsule.NewActiveAuthorities()
+
+	mon := &monitor{coord: list, router: &fakeRetireRouter{}, capsules: table}
+	require.NoError(t, mon.bootstrap(context.Background()))
+
+	require.Equal(t, 1, list.capsuleCalls)
+	require.Equal(t, []fscapsule.AuthorityGrant{grant}, table.Snapshot())
+
+	retired := rootevent.CapsuleAuthorityRetired(grant)
+	mon.applyRootEvent(context.Background(), retired)
+	require.Empty(t, table.Snapshot())
+
+	next := testMonitorCapsuleGrant("capsule-2", 2)
+	mon.applyRootEvent(context.Background(), rootevent.CapsuleAuthorityGranted(next))
+	require.Equal(t, []fscapsule.AuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
@@ -112,6 +149,20 @@ func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: 1, frontier: 42}}, pub.completes)
+}
+
+func testMonitorCapsuleGrant(grantID string, bucket uint16) rootproto.CapsuleAuthorityGrant {
+	return rootproto.CapsuleAuthorityGrant{
+		GrantID:  grantID,
+		EpochID:  1,
+		HolderID: "holder-a",
+		Scope: rootproto.CapsuleAuthorityScope{
+			MountID:    "vol",
+			MountKeyID: 7,
+			Buckets:    []uint16{bucket},
+		},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
 }
 
 func TestMonitorRefreshesQuotaFences(t *testing.T) {
