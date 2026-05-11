@@ -296,5 +296,11 @@ func (d *NetworkDriver) sendMessages(msgs []myraft.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	return d.transport.Send(msgs...)
+	d.mu.Lock()
+	transport := d.transport
+	d.mu.Unlock()
+	if transport == nil {
+		return errNetworkDriverClosed
+	}
+	return transport.Send(msgs...)
 }

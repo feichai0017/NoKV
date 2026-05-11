@@ -125,6 +125,9 @@ func (s *Store) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.cmds != nil && s.cmds.pipe != nil {
+		s.cmds.pipe.close()
+	}
 	if s.observers != nil {
 		s.observers.Close()
 	}
@@ -423,8 +426,7 @@ func (s *Store) wirePeerConfig(cfg peer.Config, allowSnapshotInstallRetry bool) 
 	if cfg.AdminApply == nil {
 		cfg.AdminApply = s.handleAdminCommand
 	}
-	cfg.Apply = func(entries []myraft.Entry) error {
-		return s.applyEntries(entries)
-	}
+	cfg.Apply = s.applyEntries
+	cfg.ApplyRunner = s
 	return cfg
 }

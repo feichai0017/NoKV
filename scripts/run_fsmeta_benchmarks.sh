@@ -242,6 +242,10 @@ print_bench_summary() {
 run_compose_benchmarks() {
 	local workloads="${NOKV_FSMETA_WORKLOADS:-multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
+	case "$output" in
+		/*) ;;
+		*) output="$ROOT/$output" ;;
+	esac
 	if [[ "${NOKV_FSMETA_COMPOSE:-1}" == "1" ]]; then
 		# The benchmark mount must exist before the fsmeta gateway starts.
 		# Otherwise the run depends on asynchronous root watch catch-up during

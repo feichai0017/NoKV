@@ -20,6 +20,7 @@ type Config struct {
 	Peers            []myraft.Peer
 	Transport        transport.Transport
 	Apply            ApplyFunc
+	ApplyRunner      ApplyRunner
 	AdminApply       AdminApplyFunc
 	ConfChange       ConfChangeHandler
 	SnapshotExport   SnapshotExportFunc
