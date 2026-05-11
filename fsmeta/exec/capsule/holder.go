@@ -172,6 +172,28 @@ func (h *Holder) MarkSealed(ids ...OperationID) {
 	}
 }
 
+func (h *Holder) BuildSeal(snapshot WitnessSnapshot) (CapsuleSeal, error) {
+	if h == nil {
+		return CapsuleSeal{}, ErrHolderConfigInvalid
+	}
+	return BuildCapsuleSeal(h.epochID, snapshot)
+}
+
+func (h *Holder) MarkSealApplied(seal CapsuleSeal) error {
+	if h == nil || h.detector == nil {
+		return ErrHolderConfigInvalid
+	}
+	if seal.EpochID != h.epochID || len(seal.Certificates) == 0 {
+		return ErrInvalidCapsuleSeal
+	}
+	ids := make([]OperationID, 0, len(seal.Certificates))
+	for _, cert := range seal.Certificates {
+		ids = append(ids, cert.Prepare.OpID)
+	}
+	h.MarkSealed(ids...)
+	return nil
+}
+
 func (h *Holder) Pending() int {
 	if h == nil || h.detector == nil {
 		return 0
