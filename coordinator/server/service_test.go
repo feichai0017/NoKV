@@ -30,23 +30,26 @@ import (
 )
 
 type fakeStorage struct {
-	eventCalls    int
-	saveCalls     int
-	loadCalls     int
-	campaignCalls int
-	sealCalls     int
-	reattachCalls int
-	eventErr      error
-	saveErr       error
-	loadErr       error
-	campaignErr   error
-	sealErr       error
-	lastID        uint64
-	lastTS        uint64
-	leader        bool
-	leaderID      uint64
-	lastEvent     rootevent.Event
-	snapshot      rootview.Snapshot
+	eventCalls         int
+	saveCalls          int
+	loadCalls          int
+	campaignCalls      int
+	sealCalls          int
+	reattachCalls      int
+	eventErr           error
+	saveErr            error
+	loadErr            error
+	campaignErr        error
+	sealErr            error
+	applyCapsuleErr    error
+	lastID             uint64
+	lastTS             uint64
+	leader             bool
+	leaderID           uint64
+	lastEvent          rootevent.Event
+	lastCapsuleCommand rootproto.CapsuleAuthorityCommand
+	applyCapsuleCalls  int
+	snapshot           rootview.Snapshot
 }
 
 func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
@@ -180,6 +183,26 @@ func upsertTestGrant(grants []rootproto.AuthorityGrant, grant rootproto.Authorit
 }
 
 func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootproto.AuthorityGrant {
+	for i := 0; i < len(grants); i++ {
+		if grants[i].GrantID == grantID {
+			grants = append(grants[:i], grants[i+1:]...)
+			i--
+		}
+	}
+	return grants
+}
+
+func upsertTestCapsuleGrant(grants []rootproto.CapsuleAuthorityGrant, grant rootproto.CapsuleAuthorityGrant) []rootproto.CapsuleAuthorityGrant {
+	for i := range grants {
+		if grants[i].GrantID == grant.GrantID {
+			grants[i] = rootproto.CloneCapsuleAuthorityGrant(grant)
+			return grants
+		}
+	}
+	return append(grants, rootproto.CloneCapsuleAuthorityGrant(grant))
+}
+
+func removeTestCapsuleGrant(grants []rootproto.CapsuleAuthorityGrant, grantID string) []rootproto.CapsuleAuthorityGrant {
 	for i := 0; i < len(grants); i++ {
 		if grants[i].GrantID == grantID {
 			grants = append(grants[:i], grants[i+1:]...)
@@ -377,6 +400,67 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	default:
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
+}
+
+func (f *fakeStorage) ApplyCapsuleAuthority(_ context.Context, cmd rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	f.applyCapsuleCalls++
+	f.lastCapsuleCommand = cmd
+	if f.applyCapsuleErr != nil {
+		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, f.applyCapsuleErr
+	}
+	switch cmd.Kind {
+	case rootproto.CapsuleAuthorityActAcquire:
+		holderID := strings.TrimSpace(cmd.HolderID)
+		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
+			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+		}
+		if active, ok := f.capsuleState().ActiveCapsuleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
+				return f.capsuleState(), active, nil
+			}
+			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		epoch := f.snapshot.CapsuleAuthorityEpoch + 1
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
+		}
+		grant := rootproto.CapsuleAuthorityGrant{
+			GrantID:           grantID,
+			EpochID:           epoch,
+			HolderID:          holderID,
+			Scope:             rootproto.CloneCapsuleAuthorityScope(cmd.Scope),
+			ExpiresUnixNano:   cmd.ExpiresUnixNano,
+			PredecessorDigest: cmd.PredecessorDigest,
+			QuotaCreditBytes:  cmd.QuotaCreditBytes,
+			QuotaCreditInodes: cmd.QuotaCreditInodes,
+		}
+		f.snapshot.ActiveCapsuleGrants = upsertTestCapsuleGrant(f.snapshot.ActiveCapsuleGrants, grant)
+		if grant.EpochID > f.snapshot.CapsuleAuthorityEpoch {
+			f.snapshot.CapsuleAuthorityEpoch = grant.EpochID
+		}
+		f.advanceRootToken()
+		return f.capsuleState(), grant, nil
+	case rootproto.CapsuleAuthorityActRetire:
+		grantID := strings.TrimSpace(cmd.GrantID)
+		holderID := strings.TrimSpace(cmd.HolderID)
+		active, ok := f.snapshot.ActiveCapsuleGrantByID(grantID)
+		if !ok {
+			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, nil
+		}
+		if active.HolderID != holderID {
+			return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		f.snapshot.ActiveCapsuleGrants = removeTestCapsuleGrant(f.snapshot.ActiveCapsuleGrants, grantID)
+		f.advanceRootToken()
+		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, nil
+	default:
+		return f.capsuleState(), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+}
+
+func (f *fakeStorage) capsuleState() rootstate.State {
+	return rootstate.CloneState(f.snapshot.RootSnapshot().State)
 }
 
 func (f *fakeStorage) advanceRootToken() {

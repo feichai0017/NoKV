@@ -270,6 +270,12 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 	}
 }
 
+func (s *coordinatorRootStorage) ApplyCapsuleAuthority(_ context.Context, _ rootproto.CapsuleAuthorityCommand) (rootstate.State, rootproto.CapsuleAuthorityGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.CapsuleAuthorityGrant{}, rootstate.ErrInvalidGrant
+}
+
 func (s *coordinatorRootStorage) Refresh() error            { return nil }
 func (s *coordinatorRootStorage) Close() error              { return nil }
 func (s *coordinatorRootStorage) CanSubmitRootWrites() bool { return true }

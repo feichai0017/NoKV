@@ -107,6 +107,10 @@ func (f *fakeCoordinatorClient) ListCapsuleAuthorityGrants(context.Context, *coo
 	return &coordpb.ListCapsuleAuthorityGrantsResponse{}, nil
 }
 
+func (f *fakeCoordinatorClient) ApplyCapsuleAuthority(context.Context, *coordpb.ApplyCapsuleAuthorityRequest) (*coordpb.ApplyCapsuleAuthorityResponse, error) {
+	return &coordpb.ApplyCapsuleAuthorityResponse{}, nil
+}
+
 func (f *fakeCoordinatorClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
 	return nil, nil
 }

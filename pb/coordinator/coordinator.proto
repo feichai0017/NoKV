@@ -177,6 +177,16 @@ message ListCapsuleAuthorityGrantsResponse {
   repeated nokv.meta.v1.RootCapsuleAuthorityGrant grants = 1;
 }
 
+message ApplyCapsuleAuthorityRequest {
+  nokv.meta.v1.RootCapsuleAuthorityCommand command = 1;
+}
+
+message ApplyCapsuleAuthorityResponse {
+  nokv.meta.v1.RootCapsuleAuthorityGrant grant = 1;
+  nokv.meta.v1.RootCapsuleAuthorityApplyStatus status = 2;
+  repeated nokv.meta.v1.RootCapsuleAuthorityGrant active_grants = 3;
+}
+
 message WatchRootEventsRequest {
   nokv.meta.v1.RootTailToken after = 1;
 }
@@ -474,6 +484,7 @@ service Coordinator {
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
   rpc ListCapsuleAuthorityGrants(ListCapsuleAuthorityGrantsRequest) returns (ListCapsuleAuthorityGrantsResponse);
+  rpc ApplyCapsuleAuthority(ApplyCapsuleAuthorityRequest) returns (ApplyCapsuleAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);
