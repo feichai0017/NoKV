@@ -313,35 +313,12 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	c.commitMu.Lock()
 	defer c.commitMu.Unlock()
 
-	if len(scopes) == 0 {
-		jobs, err := c.freezeFlushJobsLocked(nil)
-		if err != nil {
-			return err
-		}
-		if err := c.installFlushJobs(ctx, jobs); err != nil {
-			return err
-		}
-		return c.retireDrainedAuthority(ctx, retirer)
+	jobs, err := c.freezeFlushJobsLocked(nil)
+	if err != nil {
+		return err
 	}
-	for _, scope := range scopes {
-		if perasAuthorityScopeEmpty(scope) {
-			jobs, err := c.freezeFlushJobsLocked(nil)
-			if err != nil {
-				return err
-			}
-			if err := c.installFlushJobs(ctx, jobs); err != nil {
-				return err
-			}
-			return c.retireDrainedAuthority(ctx, retirer, scopes...)
-		}
-		target := scope
-		jobs, err := c.freezeFlushJobsLocked(&target)
-		if err != nil {
-			return err
-		}
-		if err := c.installFlushJobs(ctx, jobs); err != nil {
-			return err
-		}
+	if err := c.installFlushJobs(ctx, jobs); err != nil {
+		return err
 	}
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
 }
