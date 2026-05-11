@@ -302,7 +302,7 @@ func TestExecutionProtocolRetainsPendingRootEventsUntilPublishAck(t *testing.T) 
 		return len(localMeta.PendingRootEvents()) == 1
 	}, time.Second, 10*time.Millisecond)
 
-	sink.publishDelay = 0
+	sink.setPublishDelay(0)
 	rs.flushRegionUpdates()
 
 	require.Eventually(t, func() bool {

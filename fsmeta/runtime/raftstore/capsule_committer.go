@@ -170,7 +170,7 @@ func (c *RemoteCapsuleCommitter) holderForGrant(grant capsuleauth.AuthorityGrant
 func (c *RemoteCapsuleCommitter) submitWithRetry(ctx context.Context, holder *fscapsule.Holder, id fscapsule.OperationID, delta compile.SemanticDelta) error {
 	var last error
 	attempts := c.retries + 1
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		_, err := holder.Submit(ctx, id, delta)
 		if err == nil {
 			return nil

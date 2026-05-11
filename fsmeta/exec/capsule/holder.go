@@ -257,7 +257,6 @@ func (h *Holder) broadcastWitnesses(ctx context.Context, witnesses []WitnessRepl
 	}
 	resultCh := make(chan result, len(witnesses))
 	for _, witness := range witnesses {
-		witness := witness
 		go func() {
 			err := appendFn(broadcastCtx, witness)
 			resultCh <- result{id: witness.ID(), err: err}
