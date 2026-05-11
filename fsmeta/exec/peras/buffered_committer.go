@@ -25,14 +25,16 @@ type BufferedCommitterConfig struct {
 	BatchSize     int
 	FlushInterval time.Duration
 	ApplyHook     func(ReplayPlan, ApplyStats)
+	SegmentHook   func(PerasSegment, SegmentStats)
 }
 
 type BufferedCommitter struct {
-	holder   *Holder
-	snapshot WitnessSnapshotSource
-	versions VersionAllocator
-	replayDB InternalEntryApplier
-	hook     func(ReplayPlan, ApplyStats)
+	holder      *Holder
+	snapshot    WitnessSnapshotSource
+	versions    VersionAllocator
+	replayDB    InternalEntryApplier
+	hook        func(ReplayPlan, ApplyStats)
+	segmentHook func(PerasSegment, SegmentStats)
 
 	batchSize     int
 	flushInterval time.Duration
@@ -43,10 +45,17 @@ type BufferedCommitter struct {
 	overlayMu sync.RWMutex
 	overlay   map[string]overlayEntry
 
-	commitTotal atomic.Uint64
-	flushTotal  atomic.Uint64
-	applyTotal  atomic.Uint64
-	errorTotal  atomic.Uint64
+	commitTotal       atomic.Uint64
+	flushTotal        atomic.Uint64
+	applyTotal        atomic.Uint64
+	segmentTotal      atomic.Uint64
+	segmentOpsTotal   atomic.Uint64
+	segmentEntryTotal atomic.Uint64
+	errorTotal        atomic.Uint64
+
+	statsMu          sync.RWMutex
+	lastSegmentStats SegmentStats
+	lastSegmentRoot  [32]byte
 }
 
 type overlayEntry struct {
@@ -66,6 +75,7 @@ func NewBufferedCommitter(cfg BufferedCommitterConfig) (*BufferedCommitter, erro
 		versions:      cfg.Versions,
 		replayDB:      cfg.ReplayDB,
 		hook:          cfg.ApplyHook,
+		segmentHook:   cfg.SegmentHook,
 		batchSize:     cfg.BatchSize,
 		flushInterval: cfg.FlushInterval,
 		stop:          make(chan struct{}),
@@ -134,6 +144,10 @@ func (c *BufferedCommitter) Flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	segment, err := BuildPerasSegmentFromReplayPlan(plan)
+	if err != nil {
+		return err
+	}
 	store, err := NewMVCCReplayStoreForPlan(c.replayDB, plan)
 	if err != nil {
 		return err
@@ -145,10 +159,15 @@ func (c *BufferedCommitter) Flush(ctx context.Context) error {
 	if c.hook != nil {
 		c.hook(plan, stats)
 	}
+	segmentStats := segment.Stats()
 	if err := c.holder.MarkSealApplied(seal); err != nil {
 		return err
 	}
 	c.removeOverlayForPlan(plan)
+	c.recordSegment(segment, segmentStats)
+	if c.segmentHook != nil {
+		c.segmentHook(segment, segmentStats)
+	}
 	c.flushTotal.Add(1)
 	c.applyTotal.Add(stats.Operations)
 	return nil
@@ -198,25 +217,57 @@ func (c *BufferedCommitter) ScanPerasOverlay(start []byte, limit uint32) []Overl
 func (c *BufferedCommitter) Stats() map[string]any {
 	if c == nil {
 		return map[string]any{
-			"commit_total": uint64(0),
-			"flush_total":  uint64(0),
-			"apply_total":  uint64(0),
-			"error_total":  uint64(0),
-			"overlay_keys": 0,
-			"pending":      0,
+			"commit_total":                  uint64(0),
+			"flush_total":                   uint64(0),
+			"apply_total":                   uint64(0),
+			"segment_total":                 uint64(0),
+			"segment_operations_total":      uint64(0),
+			"segment_entries_total":         uint64(0),
+			"last_segment_operations":       uint64(0),
+			"last_segment_input_mutations":  uint64(0),
+			"last_segment_entries":          uint64(0),
+			"last_segment_coalesced":        uint64(0),
+			"last_segment_compression_x100": uint64(0),
+			"last_segment_root":             [32]byte{},
+			"error_total":                   uint64(0),
+			"overlay_keys":                  0,
+			"pending":                       0,
 		}
 	}
 	c.overlayMu.RLock()
 	overlayKeys := len(c.overlay)
 	c.overlayMu.RUnlock()
+	c.statsMu.RLock()
+	lastSegmentStats := c.lastSegmentStats
+	lastSegmentRoot := c.lastSegmentRoot
+	c.statsMu.RUnlock()
 	return map[string]any{
-		"commit_total": c.commitTotal.Load(),
-		"flush_total":  c.flushTotal.Load(),
-		"apply_total":  c.applyTotal.Load(),
-		"error_total":  c.errorTotal.Load(),
-		"overlay_keys": overlayKeys,
-		"pending":      c.holder.Pending(),
+		"commit_total":                  c.commitTotal.Load(),
+		"flush_total":                   c.flushTotal.Load(),
+		"apply_total":                   c.applyTotal.Load(),
+		"segment_total":                 c.segmentTotal.Load(),
+		"segment_operations_total":      c.segmentOpsTotal.Load(),
+		"segment_entries_total":         c.segmentEntryTotal.Load(),
+		"last_segment_operations":       lastSegmentStats.OperationCount,
+		"last_segment_input_mutations":  lastSegmentStats.InputMutationCount,
+		"last_segment_entries":          lastSegmentStats.EntryCount,
+		"last_segment_coalesced":        lastSegmentStats.CoalescedMutations,
+		"last_segment_compression_x100": uint64(lastSegmentStats.CompressionRatio * 100),
+		"last_segment_root":             lastSegmentRoot,
+		"error_total":                   c.errorTotal.Load(),
+		"overlay_keys":                  overlayKeys,
+		"pending":                       c.holder.Pending(),
 	}
+}
+
+func (c *BufferedCommitter) recordSegment(segment PerasSegment, stats SegmentStats) {
+	c.segmentTotal.Add(1)
+	c.segmentOpsTotal.Add(stats.OperationCount)
+	c.segmentEntryTotal.Add(stats.EntryCount)
+	c.statsMu.Lock()
+	c.lastSegmentStats = stats
+	c.lastSegmentRoot = segment.Root
+	c.statsMu.Unlock()
 }
 
 func (c *BufferedCommitter) Close() {
