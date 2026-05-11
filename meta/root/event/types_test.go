@@ -82,6 +82,24 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	inherited.GrantInheritance.SuccessorGrantID = "mutated"
 	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
 	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
+
+	capsuleGrant := rootproto.CapsuleAuthorityGrant{
+		GrantID:  "capsule-1",
+		EpochID:  1,
+		HolderID: "holder-a",
+		Scope: rootproto.CapsuleAuthorityScope{
+			MountID:    "vol",
+			MountKeyID: 7,
+			Buckets:    []uint16{1},
+		},
+		ExpiresUnixNano: 1_000,
+	}
+	capsuleIssued := rootevent.CapsuleAuthorityGranted(capsuleGrant)
+	capsuleIssued.CapsuleGrant.Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, capsuleGrant.Scope.Buckets)
+	capsuleRetired := rootevent.CapsuleAuthorityRetired(capsuleGrant)
+	require.Equal(t, rootevent.KindCapsuleAuthorityRetired, capsuleRetired.Kind)
+	require.Equal(t, capsuleGrant.GrantID, capsuleRetired.CapsuleGrant.GrantID)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {

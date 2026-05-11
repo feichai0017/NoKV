@@ -40,6 +40,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
   ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
   ROOT_EVENT_KIND_GRANT_INHERITED = 31;
+  ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED = 32;
+  ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED = 33;
 }
 
 message RootCursor {
@@ -57,6 +59,7 @@ message RootState {
   repeated RootGrantRetirement retired_grants = 8;
   repeated RootGrantInheritance grant_inheritances = 9;
   uint64 retired_era_floor = 10;
+  repeated RootCapsuleAuthorityGrant active_capsule_grants = 11;
 }
 
 message RootCheckpoint {
@@ -236,6 +239,25 @@ message RootGrantInheritance {
   RootCursor inherited_at = 3;
 }
 
+message RootCapsuleAuthorityScope {
+  string mount_id = 1;
+  uint64 mount_key_id = 2;
+  repeated uint32 buckets = 3;
+  repeated uint64 parents = 4;
+  repeated uint64 inodes = 5;
+}
+
+message RootCapsuleAuthorityGrant {
+  string grant_id = 1;
+  uint64 epoch_id = 2;
+  string holder_id = 3;
+  RootCapsuleAuthorityScope scope = 4;
+  int64 expires_unix_nano = 5;
+  bytes predecessor_digest = 6;
+  int64 quota_credit_bytes = 7;
+  int64 quota_credit_inodes = 8;
+}
+
 message RootGrantCertificate {
   RootAuthorityGrant grant = 1;
   string signer_key_id = 2;
@@ -359,6 +381,7 @@ message RootEvent {
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
     RootQuotaFence quota_fence = 15;
+    RootCapsuleAuthorityGrant capsule_authority_grant = 16;
   }
 }
 

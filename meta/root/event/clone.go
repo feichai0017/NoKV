@@ -28,6 +28,10 @@ func CloneEvent(in Event) Event {
 		cp := *in.GrantInheritance
 		out.GrantInheritance = &cp
 	}
+	if in.CapsuleGrant != nil {
+		cp := rootproto.CloneCapsuleAuthorityGrant(*in.CapsuleGrant)
+		out.CapsuleGrant = &cp
+	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch
 		out.SnapshotEpoch = &cp

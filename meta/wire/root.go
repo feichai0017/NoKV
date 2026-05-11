@@ -21,15 +21,16 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:      state.ClusterEpoch,
-		MembershipEpoch:   state.MembershipEpoch,
-		LastCommitted:     RootCursorToProto(state.LastCommitted),
-		IdFence:           state.IDFence,
-		TsoFence:          state.TSOFence,
-		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
-		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
-		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:   state.RetiredEraFloor,
+		ClusterEpoch:        state.ClusterEpoch,
+		MembershipEpoch:     state.MembershipEpoch,
+		LastCommitted:       RootCursorToProto(state.LastCommitted),
+		IdFence:             state.IDFence,
+		TsoFence:            state.TSOFence,
+		ActiveGrants:        RootAuthorityGrantsToProto(state.ActiveGrants),
+		RetiredGrants:       RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances:   RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloor:     state.RetiredEraFloor,
+		ActiveCapsuleGrants: RootCapsuleAuthorityGrantsToProto(state.ActiveCapsuleGrants),
 	}
 }
 
@@ -38,15 +39,16 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:      pbState.ClusterEpoch,
-		MembershipEpoch:   pbState.MembershipEpoch,
-		LastCommitted:     RootCursorFromProto(pbState.LastCommitted),
-		IDFence:           pbState.IdFence,
-		TSOFence:          pbState.TsoFence,
-		ActiveGrants:      RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
-		RetiredGrants:     RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
-		GrantInheritances: RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloor:   pbState.GetRetiredEraFloor(),
+		ClusterEpoch:        pbState.ClusterEpoch,
+		MembershipEpoch:     pbState.MembershipEpoch,
+		LastCommitted:       RootCursorFromProto(pbState.LastCommitted),
+		IDFence:             pbState.IdFence,
+		TSOFence:            pbState.TsoFence,
+		ActiveGrants:        RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
+		RetiredGrants:       RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
+		GrantInheritances:   RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
+		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
+		ActiveCapsuleGrants: RootCapsuleAuthorityGrantsFromProto(pbState.GetActiveCapsuleGrants()),
 	}
 }
 
@@ -209,6 +211,114 @@ func RootGrantInheritancesFromProto(inheritances []*metapb.RootGrantInheritance)
 		if parsed.PredecessorGrantID != "" && parsed.SuccessorGrantID != "" {
 			out = append(out, parsed)
 		}
+	}
+	return out
+}
+
+func RootCapsuleAuthorityScopeToProto(scope rootproto.CapsuleAuthorityScope) *metapb.RootCapsuleAuthorityScope {
+	return &metapb.RootCapsuleAuthorityScope{
+		MountId:    scope.MountID,
+		MountKeyId: scope.MountKeyID,
+		Buckets:    rootCapsuleBucketsToProto(scope.Buckets),
+		Parents:    append([]uint64(nil), scope.Parents...),
+		Inodes:     append([]uint64(nil), scope.Inodes...),
+	}
+}
+
+func RootCapsuleAuthorityScopeFromProto(scope *metapb.RootCapsuleAuthorityScope) rootproto.CapsuleAuthorityScope {
+	if scope == nil {
+		return rootproto.CapsuleAuthorityScope{}
+	}
+	return rootproto.CapsuleAuthorityScope{
+		MountID:    scope.GetMountId(),
+		MountKeyID: scope.GetMountKeyId(),
+		Buckets:    rootCapsuleBucketsFromProto(scope.GetBuckets()),
+		Parents:    append([]uint64(nil), scope.GetParents()...),
+		Inodes:     append([]uint64(nil), scope.GetInodes()...),
+	}
+}
+
+func RootCapsuleAuthorityGrantToProto(grant rootproto.CapsuleAuthorityGrant) *metapb.RootCapsuleAuthorityGrant {
+	if !grant.Valid() {
+		return nil
+	}
+	return &metapb.RootCapsuleAuthorityGrant{
+		GrantId:           grant.GrantID,
+		EpochId:           grant.EpochID,
+		HolderId:          grant.HolderID,
+		Scope:             RootCapsuleAuthorityScopeToProto(grant.Scope),
+		ExpiresUnixNano:   grant.ExpiresUnixNano,
+		PredecessorDigest: append([]byte(nil), grant.PredecessorDigest[:]...),
+		QuotaCreditBytes:  grant.QuotaCreditBytes,
+		QuotaCreditInodes: grant.QuotaCreditInodes,
+	}
+}
+
+func RootCapsuleAuthorityGrantFromProto(grant *metapb.RootCapsuleAuthorityGrant) rootproto.CapsuleAuthorityGrant {
+	if grant == nil {
+		return rootproto.CapsuleAuthorityGrant{}
+	}
+	var predecessorDigest [32]byte
+	copy(predecessorDigest[:], grant.GetPredecessorDigest())
+	return rootproto.CapsuleAuthorityGrant{
+		GrantID:           grant.GetGrantId(),
+		EpochID:           grant.GetEpochId(),
+		HolderID:          grant.GetHolderId(),
+		Scope:             RootCapsuleAuthorityScopeFromProto(grant.GetScope()),
+		ExpiresUnixNano:   grant.GetExpiresUnixNano(),
+		PredecessorDigest: predecessorDigest,
+		QuotaCreditBytes:  grant.GetQuotaCreditBytes(),
+		QuotaCreditInodes: grant.GetQuotaCreditInodes(),
+	}
+}
+
+func RootCapsuleAuthorityGrantsToProto(grants []rootproto.CapsuleAuthorityGrant) []*metapb.RootCapsuleAuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootCapsuleAuthorityGrant, 0, len(grants))
+	for _, grant := range grants {
+		if pbGrant := RootCapsuleAuthorityGrantToProto(grant); pbGrant != nil {
+			out = append(out, pbGrant)
+		}
+	}
+	return out
+}
+
+func RootCapsuleAuthorityGrantsFromProto(grants []*metapb.RootCapsuleAuthorityGrant) []rootproto.CapsuleAuthorityGrant {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]rootproto.CapsuleAuthorityGrant, 0, len(grants))
+	for _, grant := range grants {
+		if parsed := RootCapsuleAuthorityGrantFromProto(grant); parsed.Valid() {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func rootCapsuleBucketsToProto(buckets []uint16) []uint32 {
+	if len(buckets) == 0 {
+		return nil
+	}
+	out := make([]uint32, len(buckets))
+	for i, bucket := range buckets {
+		out[i] = uint32(bucket)
+	}
+	return out
+}
+
+func rootCapsuleBucketsFromProto(buckets []uint32) []uint16 {
+	if len(buckets) == 0 {
+		return nil
+	}
+	out := make([]uint16, 0, len(buckets))
+	for _, bucket := range buckets {
+		if bucket > uint32(^uint16(0)) {
+			continue
+		}
+		out = append(out, uint16(bucket))
 	}
 	return out
 }
@@ -1139,6 +1249,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_GrantRetirement{GrantRetirement: RootGrantRetirementToProto(*event.GrantRetirement)}
 	case event.GrantInheritance != nil:
 		pbEvent.Payload = &metapb.RootEvent_GrantInheritance{GrantInheritance: RootGrantInheritanceToProto(*event.GrantInheritance)}
+	case event.CapsuleGrant != nil:
+		pbEvent.Payload = &metapb.RootEvent_CapsuleAuthorityGrant{CapsuleAuthorityGrant: RootCapsuleAuthorityGrantToProto(*event.CapsuleGrant)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.Mount != nil:
@@ -1201,6 +1313,10 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if body := pbEvent.GetGrantInheritance(); body != nil {
 		inheritance := RootGrantInheritanceFromProto(body)
 		event.GrantInheritance = &inheritance
+	}
+	if body := pbEvent.GetCapsuleAuthorityGrant(); body != nil {
+		grant := RootCapsuleAuthorityGrantFromProto(body)
+		event.CapsuleGrant = &grant
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
@@ -1298,6 +1414,10 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_RETIRED
 	case rootevent.KindGrantInherited:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED
+	case rootevent.KindCapsuleAuthorityGranted:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED
+	case rootevent.KindCapsuleAuthorityRetired:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED
 	case rootevent.KindSnapshotEpochPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
@@ -1367,6 +1487,10 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindGrantRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED:
 		return rootevent.KindGrantInherited
+	case metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_GRANTED:
+		return rootevent.KindCapsuleAuthorityGranted
+	case metapb.RootEventKind_ROOT_EVENT_KIND_CAPSULE_AUTHORITY_RETIRED:
+		return rootevent.KindCapsuleAuthorityRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:
