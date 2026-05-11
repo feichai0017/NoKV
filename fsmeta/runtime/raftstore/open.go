@@ -3,6 +3,7 @@ package raftstore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,15 @@ type Options struct {
 	// choosing Create inode IDs. The local engine receives only generic key
 	// shape hints; this value belongs to fsmeta placement policy.
 	AffinityBuckets int
+
+	// CapsuleHolderID enables coordinator-mediated Capsule authority acquisition
+	// for this fsmeta runtime. Empty leaves Capsule execution disabled while the
+	// active authority mirror still follows root events for diagnostics.
+	CapsuleHolderID string
+
+	// CapsuleAuthorityTTL bounds one acquired Capsule authority grant. Zero uses
+	// the runtime default; negative is rejected.
+	CapsuleAuthorityTTL time.Duration
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -75,6 +85,7 @@ type Runtime struct {
 	QuotaResolver      fsmetaexec.QuotaResolver
 	SessionCleaner     interface{ Stats() map[string]any }
 	CapsuleAuthorities *fscapsule.ActiveAuthorities
+	CapsuleAuthority   *CapsuleAuthorityManager
 
 	close func() error
 	once  sync.Once
@@ -105,6 +116,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if opts.LockTTL < 0 {
 		return nil, errLockTTLInvalid
+	}
+	if opts.CapsuleAuthorityTTL < 0 {
+		return nil, errCapsuleAuthorityTTLInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -159,6 +173,19 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
 	capsules := fscapsule.NewActiveAuthorities()
+	var capsuleAuthority *CapsuleAuthorityManager
+	if holderID := strings.TrimSpace(opts.CapsuleHolderID); holderID != "" {
+		capsuleAuthorityTTL := opts.CapsuleAuthorityTTL
+		if capsuleAuthorityTTL == 0 {
+			capsuleAuthorityTTL = defaultCapsuleAuthorityTTL
+		}
+		capsuleAuthority, err = NewCapsuleAuthorityManager(coord, capsules, holderID, capsuleAuthorityTTL, nil)
+		if err != nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, fmt.Errorf("init capsule authority manager: %w", err)
+		}
+	}
 	pub := rootPublisher{coord: coord}
 	execOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
@@ -238,6 +265,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		QuotaResolver:      quotas,
 		SessionCleaner:     sessions,
 		CapsuleAuthorities: capsules,
+		CapsuleAuthority:   capsuleAuthority,
 	}
 	rt.close = func() error {
 		var first error

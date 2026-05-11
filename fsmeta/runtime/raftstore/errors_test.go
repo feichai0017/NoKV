@@ -12,6 +12,10 @@ func TestRuntimeErrorsExposeStableKinds(t *testing.T) {
 	invalid := []error{
 		errCoordinatorAddrRequired,
 		errSessionCleanupLimitExceeded,
+		errCapsuleAuthorityClientRequired,
+		errCapsuleAuthorityTableRequired,
+		errCapsuleAuthorityHolderRequired,
+		errCapsuleAuthorityTTLInvalid,
 		errMountCacheNotConfigured,
 		errRootPublisherNotConfigured,
 		errStoreListerRequired,
@@ -29,10 +33,13 @@ func TestRuntimeErrorsExposeStableKinds(t *testing.T) {
 		errNilTSOResponse,
 		errZeroTSOTimestamp,
 		errTSOCountMismatch(1, 2),
+		errCapsuleAuthorityInvalidResponse,
 	}
 	for _, err := range protocol {
 		require.Equal(t, nokverrors.KindProtocolViolation, nokverrors.KindOf(err))
 	}
+
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(errCapsuleAuthorityNotHeld))
 }
 
 func TestRunnerKeyErrorPreservesStableKind(t *testing.T) {
