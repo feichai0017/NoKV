@@ -16,9 +16,16 @@ func TestCommandApplyKeysClassifiesPointWrites(t *testing.T) {
 		testAtomicMutateRequest([]byte("c"), []byte("d")),
 	}}
 
-	keys, barrier := commandApplyKeys(req)
+	deps, barrier := commandApplyDependencies(req)
 	require.False(t, barrier)
-	require.ElementsMatch(t, []string{"a", "b", "c", "d"}, keys)
+	require.ElementsMatch(t, []commandApplyDependency{
+		testUserWrite("a"),
+		testTxnIntent("a", 0),
+		testUserWrite("b"),
+		testTxnIntent("b", 0),
+		testUserRead("c"),
+		testUserWrite("d"),
+	}, deps)
 }
 
 func TestCommandApplyKeysTreatsRangeReadsAsBarrier(t *testing.T) {
@@ -27,7 +34,7 @@ func TestCommandApplyKeysTreatsRangeReadsAsBarrier(t *testing.T) {
 		Cmd:     &raftcmdpb.Request_Scan{Scan: &kvrpcpb.ScanRequest{StartKey: []byte("a")}},
 	}}}
 
-	keys, barrier := commandApplyKeys(req)
+	keys, barrier := commandApplyDependencies(req)
 	require.True(t, barrier)
 	require.Nil(t, keys)
 }
@@ -38,7 +45,7 @@ func TestCommandApplyKeysTreatsUnknownResolveLockAsBarrier(t *testing.T) {
 		Cmd:     &raftcmdpb.Request_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockRequest{}},
 	}}}
 
-	keys, barrier := commandApplyKeys(req)
+	keys, barrier := commandApplyDependencies(req)
 	require.True(t, barrier)
 	require.Nil(t, keys)
 }
@@ -48,9 +55,68 @@ func TestCommandApplyKeysDoesNotSerializeOnPrimaryLockOnly(t *testing.T) {
 		testPrewriteRequestWithPrimary([]byte("primary"), []byte("secondary")),
 	}}
 
-	keys, barrier := commandApplyKeys(req)
+	deps, barrier := commandApplyDependencies(req)
 	require.False(t, barrier)
-	require.Equal(t, []string{"secondary"}, keys)
+	require.ElementsMatch(t, []commandApplyDependency{
+		testUserWrite("secondary"),
+		testTxnIntent("secondary", 0),
+	}, deps)
+}
+
+func TestCommandApplyDependenciesTrackTxnPrimaryOperations(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		{
+			CmdType: raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS,
+			Cmd: &raftcmdpb.Request_CheckTxnStatus{CheckTxnStatus: &kvrpcpb.CheckTxnStatusRequest{
+				PrimaryKey: []byte("primary"),
+				LockTs:     42,
+			}},
+		},
+		{
+			CmdType: raftcmdpb.CmdType_CMD_TXN_HEART_BEAT,
+			Cmd: &raftcmdpb.Request_TxnHeartBeat{TxnHeartBeat: &kvrpcpb.TxnHeartBeatRequest{
+				PrimaryKey:   []byte("primary"),
+				StartVersion: 42,
+			}},
+		},
+	}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.False(t, barrier)
+	require.ElementsMatch(t, []commandApplyDependency{
+		testUserWrite("primary"),
+		testTxnPrimary("primary", 42),
+		testUserWrite("primary"),
+		testTxnPrimary("primary", 42),
+	}, deps)
+}
+
+func testUserRead(key string) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, key: key},
+		mode: commandApplyDependencyRead,
+	}
+}
+
+func testUserWrite(key string) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, key: key},
+		mode: commandApplyDependencyWrite,
+	}
+}
+
+func testTxnIntent(key string, version uint64) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnIntent, key: key, version: version},
+		mode: commandApplyDependencyWrite,
+	}
+}
+
+func testTxnPrimary(key string, version uint64) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyTxnPrimary, key: key, version: version},
+		mode: commandApplyDependencyWrite,
+	}
 }
 
 func testPrewriteRequest(key []byte) *raftcmdpb.Request {
@@ -61,7 +127,8 @@ func testPrewriteRequestWithPrimary(primary, key []byte) *raftcmdpb.Request {
 	return &raftcmdpb.Request{
 		CmdType: raftcmdpb.CmdType_CMD_PREWRITE,
 		Cmd: &raftcmdpb.Request_Prewrite{Prewrite: &kvrpcpb.PrewriteRequest{
-			PrimaryLock: primary,
+			PrimaryLock:  primary,
+			StartVersion: 0,
 			Mutations: []*kvrpcpb.Mutation{{
 				Op:  kvrpcpb.Mutation_Put,
 				Key: key,

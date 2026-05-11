@@ -36,7 +36,7 @@ type Config struct {
 	CommandApplier     func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	CommandTimeout     time.Duration
 	// CommandApplyParallelism controls how many non-conflicting committed raft
-	// commands may be applied concurrently inside one Ready batch. Values <= 0
-	// use the runtime default; 1 preserves the legacy serial apply path.
+	// commands may be applied concurrently inside one Ready batch. Values <= 0 use
+	// GOMAXPROCS and are the default production path; 1 forces serial apply.
 	CommandApplyParallelism int
 }

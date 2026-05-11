@@ -12,8 +12,35 @@ type commandApplyPlan struct {
 	entry       myraft.Entry
 	req         *raftcmdpb.RaftCmdRequest
 	proposalKey commandProposalKey
-	keys        []string
+	deps        []commandApplyDependency
 	barrier     bool
+}
+
+type commandApplyDependencyMode uint8
+
+const (
+	commandApplyDependencyRead commandApplyDependencyMode = iota
+	commandApplyDependencyWrite
+)
+
+type commandApplyDependencyClass string
+
+const (
+	commandApplyDependencyUserKey         commandApplyDependencyClass = "user-key"
+	commandApplyDependencyTxnPrimary      commandApplyDependencyClass = "txn-primary"
+	commandApplyDependencyTxnIntent       commandApplyDependencyClass = "txn-intent"
+	commandApplyDependencyMVCCMaintenance commandApplyDependencyClass = "mvcc-maintenance"
+)
+
+type commandApplyDependencyKey struct {
+	class   commandApplyDependencyClass
+	key     string
+	version uint64
+}
+
+type commandApplyDependency struct {
+	key  commandApplyDependencyKey
+	mode commandApplyDependencyMode
 }
 
 func commandApplyPlans(entries []myraft.Entry) ([]commandApplyPlan, error) {
@@ -29,23 +56,23 @@ func commandApplyPlans(entries []myraft.Entry) ([]commandApplyPlan, error) {
 		if !isCmd {
 			return nil, fmt.Errorf("commandPipeline: unsupported unframed raft payload")
 		}
-		keys, barrier := commandApplyKeys(req)
+		deps, barrier := commandApplyDependencies(req)
 		plans = append(plans, commandApplyPlan{
 			entry:       entry,
 			req:         req,
 			proposalKey: proposalKeyFromHeader(req.GetHeader()),
-			keys:        keys,
+			deps:        deps,
 			barrier:     barrier,
 		})
 	}
 	return plans, nil
 }
 
-func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
+func commandApplyDependencies(req *raftcmdpb.RaftCmdRequest) ([]commandApplyDependency, bool) {
 	if req == nil || len(req.GetRequests()) == 0 {
 		return nil, true
 	}
-	keys := make([]string, 0, len(req.GetRequests()))
+	deps := make([]commandApplyDependency, 0, len(req.GetRequests()))
 	for _, r := range req.GetRequests() {
 		if r == nil {
 			return nil, true
@@ -58,7 +85,8 @@ func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
 			}
 			for _, mut := range prewrite.GetMutations() {
 				if mut != nil {
-					keys = appendCommandApplyKey(keys, mut.GetKey())
+					deps = appendCommandApplyUserWrite(deps, mut.GetKey())
+					deps = appendCommandApplyVersionedWrite(deps, commandApplyDependencyTxnIntent, mut.GetKey(), prewrite.GetStartVersion())
 				}
 			}
 		case raftcmdpb.CmdType_CMD_COMMIT:
@@ -66,31 +94,36 @@ func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
 			if commit == nil {
 				return nil, true
 			}
-			keys = appendCommandApplyKeys(keys, commit.GetKeys())
+			deps = appendCommandApplyUserWrites(deps, commit.GetKeys())
+			deps = appendCommandApplyVersionedWrites(deps, commandApplyDependencyTxnIntent, commit.GetKeys(), commit.GetStartVersion())
 		case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
 			rollback := r.GetBatchRollback()
 			if rollback == nil {
 				return nil, true
 			}
-			keys = appendCommandApplyKeys(keys, rollback.GetKeys())
+			deps = appendCommandApplyUserWrites(deps, rollback.GetKeys())
+			deps = appendCommandApplyVersionedWrites(deps, commandApplyDependencyTxnIntent, rollback.GetKeys(), rollback.GetStartVersion())
 		case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
 			resolve := r.GetResolveLock()
 			if resolve == nil {
 				return nil, true
 			}
-			keys = appendCommandApplyKeys(keys, resolve.GetKeys())
+			deps = appendCommandApplyUserWrites(deps, resolve.GetKeys())
+			deps = appendCommandApplyVersionedWrites(deps, commandApplyDependencyTxnIntent, resolve.GetKeys(), resolve.GetStartVersion())
 		case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 			check := r.GetCheckTxnStatus()
 			if check == nil || len(check.GetPrimaryKey()) == 0 {
 				return nil, true
 			}
-			keys = appendCommandApplyKey(keys, check.GetPrimaryKey())
+			deps = appendCommandApplyUserWrite(deps, check.GetPrimaryKey())
+			deps = appendCommandApplyVersionedWrite(deps, commandApplyDependencyTxnPrimary, check.GetPrimaryKey(), check.GetLockTs())
 		case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
 			heartbeat := r.GetTxnHeartBeat()
 			if heartbeat == nil || len(heartbeat.GetPrimaryKey()) == 0 {
 				return nil, true
 			}
-			keys = appendCommandApplyKey(keys, heartbeat.GetPrimaryKey())
+			deps = appendCommandApplyUserWrite(deps, heartbeat.GetPrimaryKey())
+			deps = appendCommandApplyVersionedWrite(deps, commandApplyDependencyTxnPrimary, heartbeat.GetPrimaryKey(), heartbeat.GetStartVersion())
 		case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
 			atomic := r.GetTryAtomicMutate()
 			if atomic == nil || len(atomic.GetMutations()) == 0 {
@@ -98,12 +131,12 @@ func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
 			}
 			for _, pred := range atomic.GetPredicates() {
 				if pred != nil {
-					keys = appendCommandApplyKey(keys, pred.GetKey())
+					deps = appendCommandApplyUserRead(deps, pred.GetKey())
 				}
 			}
 			for _, mut := range atomic.GetMutations() {
 				if mut != nil {
-					keys = appendCommandApplyKey(keys, mut.GetKey())
+					deps = appendCommandApplyUserWrite(deps, mut.GetKey())
 				}
 			}
 		case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
@@ -113,7 +146,7 @@ func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
 			}
 			for _, tombstone := range maintenance.GetTombstones() {
 				if tombstone != nil {
-					keys = appendCommandApplyKey(keys, tombstone.GetKey())
+					deps = appendCommandApplyVersionedWrite(deps, commandApplyDependencyMVCCMaintenance, tombstone.GetKey(), tombstone.GetVersion())
 				}
 			}
 		case raftcmdpb.CmdType_CMD_GET, raftcmdpb.CmdType_CMD_SCAN:
@@ -122,37 +155,70 @@ func commandApplyKeys(req *raftcmdpb.RaftCmdRequest) ([]string, bool) {
 			return nil, true
 		}
 	}
-	if len(keys) == 0 {
+	if len(deps) == 0 {
 		return nil, true
 	}
-	return keys, false
+	return deps, false
 }
 
-func appendCommandApplyKeys(dst []string, keys [][]byte) []string {
+func appendCommandApplyUserWrites(dst []commandApplyDependency, keys [][]byte) []commandApplyDependency {
 	for _, key := range keys {
-		dst = appendCommandApplyKey(dst, key)
+		dst = appendCommandApplyUserWrite(dst, key)
 	}
 	return dst
 }
 
-func appendCommandApplyKey(dst []string, key []byte) []string {
+func appendCommandApplyVersionedWrites(dst []commandApplyDependency, class commandApplyDependencyClass, keys [][]byte, version uint64) []commandApplyDependency {
+	for _, key := range keys {
+		dst = appendCommandApplyVersionedWrite(dst, class, key, version)
+	}
+	return dst
+}
+
+func appendCommandApplyUserRead(dst []commandApplyDependency, key []byte) []commandApplyDependency {
+	return appendCommandApplyDependency(dst, commandApplyDependencyUserKey, key, 0, commandApplyDependencyRead)
+}
+
+func appendCommandApplyUserWrite(dst []commandApplyDependency, key []byte) []commandApplyDependency {
+	return appendCommandApplyDependency(dst, commandApplyDependencyUserKey, key, 0, commandApplyDependencyWrite)
+}
+
+func appendCommandApplyVersionedWrite(dst []commandApplyDependency, class commandApplyDependencyClass, key []byte, version uint64) []commandApplyDependency {
+	return appendCommandApplyDependency(dst, class, key, version, commandApplyDependencyWrite)
+}
+
+func appendCommandApplyDependency(dst []commandApplyDependency, class commandApplyDependencyClass, key []byte, version uint64, mode commandApplyDependencyMode) []commandApplyDependency {
 	if len(key) == 0 {
 		return dst
 	}
-	return append(dst, string(key))
+	return append(dst, commandApplyDependency{
+		key: commandApplyDependencyKey{
+			class:   class,
+			key:     string(key),
+			version: version,
+		},
+		mode: mode,
+	})
 }
 
-func commandApplyPlanConflicts(waveKeys map[string]struct{}, plan commandApplyPlan) bool {
-	for _, key := range plan.keys {
-		if _, ok := waveKeys[key]; ok {
+func commandApplyPlanConflicts(waveDeps map[commandApplyDependencyKey]commandApplyDependencyMode, plan commandApplyPlan) bool {
+	for _, dep := range plan.deps {
+		existing, ok := waveDeps[dep.key]
+		if !ok {
+			continue
+		}
+		if existing == commandApplyDependencyWrite || dep.mode == commandApplyDependencyWrite {
 			return true
 		}
 	}
 	return false
 }
 
-func commandApplyPlanAddKeys(waveKeys map[string]struct{}, plan commandApplyPlan) {
-	for _, key := range plan.keys {
-		waveKeys[key] = struct{}{}
+func commandApplyPlanAddDependencies(waveDeps map[commandApplyDependencyKey]commandApplyDependencyMode, plan commandApplyPlan) {
+	for _, dep := range plan.deps {
+		if existing, ok := waveDeps[dep.key]; ok && existing == commandApplyDependencyWrite {
+			continue
+		}
+		waveDeps[dep.key] = dep.mode
 	}
 }

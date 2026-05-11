@@ -197,6 +197,37 @@ func TestCommandPipelineSerializesConflictingCommands(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestCommandPipelineFatalParallelApplyErrorCompletesWholeWave(t *testing.T) {
+	applyErr := errors.New("disk write failed")
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		if req.GetHeader().GetRequestId() == 2 {
+			return nil, applyErr
+		}
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 3)
+
+	props := make([]*commandProposal, 0, 3)
+	for i := 1; i <= 3; i++ {
+		prop, err := cp.registerProposal(testProposalKey(1, 101, uint64(i)))
+		require.NoError(t, err)
+		props = append(props, prop)
+	}
+
+	err := cp.applyEntries([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("a"))),
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("b"))),
+		mustCommandEntryWithRequests(t, 1, 101, 3, testPrewriteRequest([]byte("c"))),
+	})
+	require.ErrorIs(t, err, applyErr)
+	require.ErrorContains(t, err, "fatal parallel apply wave failed")
+
+	for _, prop := range props {
+		result := <-prop.ch
+		require.ErrorIs(t, result.err, applyErr)
+		require.Nil(t, result.resp)
+	}
+}
+
 func TestCommandRuntimeHelpers(t *testing.T) {
 	var nilStore *Store
 	require.NotNil(t, nilStore.runtimeContext())

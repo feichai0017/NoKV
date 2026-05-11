@@ -161,14 +161,14 @@ func (cp *commandPipeline) applyPlansSerial(plans []commandApplyPlan, emit apply
 
 func (cp *commandPipeline) applyPlansParallel(plans []commandApplyPlan, emit applyEventEmitter) error {
 	var wave []commandApplyPlan
-	waveKeys := make(map[string]struct{})
+	waveDeps := make(map[commandApplyDependencyKey]commandApplyDependencyMode)
 	flushWave := func() error {
 		if len(wave) == 0 {
 			return nil
 		}
 		err := cp.applyWave(wave, emit)
 		wave = nil
-		clear(waveKeys)
+		clear(waveDeps)
 		return err
 	}
 	for _, plan := range plans {
@@ -181,12 +181,12 @@ func (cp *commandPipeline) applyPlansParallel(plans []commandApplyPlan, emit app
 			}
 			continue
 		}
-		if commandApplyPlanConflicts(waveKeys, plan) {
+		if commandApplyPlanConflicts(waveDeps, plan) {
 			if err := flushWave(); err != nil {
 				return err
 			}
 		}
-		commandApplyPlanAddKeys(waveKeys, plan)
+		commandApplyPlanAddDependencies(waveDeps, plan)
 		wave = append(wave, plan)
 	}
 	return flushWave()
@@ -221,8 +221,11 @@ func (cp *commandPipeline) applyWave(wave []commandApplyPlan, emit applyEventEmi
 	for i, result := range results {
 		if result.err != nil {
 			key := wave[i].proposalKey
-			cp.completeProposal(key, nil, result.err)
-			return fmt.Errorf("commandPipeline: apply request %d failed: %w", key.requestID, result.err)
+			err := fmt.Errorf("commandPipeline: fatal parallel apply wave failed at request %d: %w", key.requestID, result.err)
+			for _, plan := range wave {
+				cp.completeProposal(plan.proposalKey, nil, err)
+			}
+			return err
 		}
 	}
 	// Storage writes may complete out of order inside a conflict-free wave, but
