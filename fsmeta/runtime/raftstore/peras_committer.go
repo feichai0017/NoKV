@@ -298,7 +298,7 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	}
 	c.holdersMu.Unlock()
 
-	if grant.EpochID > 1 && c.installer != nil {
+	if grantHasPredecessor(grant) && c.installer != nil {
 		recoveryScope := perasAuthorityScopeFromGrant(grant)
 		if authorityScopeEmpty(recoveryScope) {
 			recoveryScope = scope
@@ -731,6 +731,11 @@ func perasAuthorityScopeFromGrant(grant perasauth.AuthorityGrant) compile.Author
 		}
 	}
 	return scope
+}
+
+func grantHasPredecessor(grant perasauth.AuthorityGrant) bool {
+	var zero [32]byte
+	return grant.EpochID > 1 && grant.PredecessorDigest != zero
 }
 
 func rootInodesToFSMeta(in []uint64) []fsmeta.InodeID {

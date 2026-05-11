@@ -266,6 +266,7 @@ func TestRemotePerasCommitterRecoversPredecessorBeforeOpeningNewEpoch(t *testing
 	nextGrant := testRuntimeCommitterGrant()
 	nextGrant.GrantID = "grant-2"
 	nextGrant.EpochID = 2
+	nextGrant.PredecessorDigest = segment.Root
 	installer := &fakeRuntimePerasSegmentInstaller{}
 	recoverer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
 		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: nextGrant},
