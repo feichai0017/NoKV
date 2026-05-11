@@ -196,12 +196,6 @@ type fakePerasCommitter struct {
 	deltas []compile.SemanticDelta
 }
 
-type fakePerasWatchFence struct {
-	watched bool
-	calls   int
-	effects [][]compile.WriteEffect
-}
-
 type fakePerasAuthorityFlusher struct {
 	fakePerasCommitter
 	flushCalls  int
@@ -251,6 +245,25 @@ func testInodeForParentBucket(t *testing.T, parent fsmeta.InodeID, exclude ...fs
 		}
 	}
 	t.Fatalf("no inode found for parent bucket %d", target)
+	return 0
+}
+
+func testInodeForDifferentBucket(t *testing.T, parent fsmeta.InodeID, exclude ...fsmeta.InodeID) fsmeta.InodeID {
+	t.Helper()
+	target := fsmeta.BucketForInodeID(parent)
+	excluded := make(map[fsmeta.InodeID]struct{}, len(exclude))
+	for _, id := range exclude {
+		excluded[id] = struct{}{}
+	}
+	for id := fsmeta.InodeID(2); id < 1_000_000; id++ {
+		if _, ok := excluded[id]; ok {
+			continue
+		}
+		if fsmeta.BucketForInodeID(id) != target {
+			return id
+		}
+	}
+	t.Fatalf("no inode found outside parent bucket %d", target)
 	return 0
 }
 
@@ -371,12 +384,6 @@ func (c *fakePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Operati
 		return fsperas.VisibleAck{}, c.err
 	}
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
-}
-
-func (f *fakePerasWatchFence) HasPerasWatchedWrite(effects []compile.WriteEffect) bool {
-	f.calls++
-	f.effects = append(f.effects, append([]compile.WriteEffect(nil), effects...))
-	return f.watched
 }
 
 func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
@@ -822,38 +829,6 @@ func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 	stats := executor.Stats()
 	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
 	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
-}
-
-func TestExecutorCreatePerasVisibleCommitFallsBackWhenWatched(t *testing.T) {
-	runner := newFakeRunner()
-	committer := &fakePerasCommitter{}
-	fence := &fakePerasWatchFence{watched: true}
-	inode := testInodeForParentBucket(t, fsmeta.RootInode)
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
-		WithPerasWatchFence(fence),
-	)
-	require.NoError(t, err)
-
-	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "file",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	})
-	require.NoError(t, err)
-	require.Equal(t, inode, result.Inode.Inode)
-	require.Equal(t, 1, fence.calls)
-	require.Len(t, fence.effects, 1)
-	require.Zero(t, committer.calls)
-	require.Len(t, runner.mutations, 1)
-
-	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
-	requirePerasVisibleStatUint(t, stats, "skip_watched_total", 1)
 }
 
 func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
@@ -2693,6 +2668,51 @@ func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
+func TestExecutorUnlinkLastReferencePerasBufferedVisibleCommitDeletesInode(t *testing.T) {
+	runner := newFakeRunner()
+	inode := testInodeForParentBucket(t, 7)
+	seedDentry(t, runner, "vol", 7, "file", inode)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.NoError(t, err)
+
+	require.Empty(t, runner.mutations)
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	_, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestExecutorUnlinkDirectorySkipsPerasBufferedVisibleCommit(t *testing.T) {
+	runner := newFakeRunner()
+	inode := testInodeForParentBucket(t, 7)
+	seedDentryType(t, runner, "vol", 7, "dir", inode, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeDirectory, Mode: 0o755, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "dir"})
+	require.NoError(t, err)
+
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
+}
+
 func TestExecutorUnlinkMissingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
@@ -2850,8 +2870,12 @@ func TestExecutorRenamePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	requirePerasVisibleStatUint(t, stats, "success_total", 1)
 }
 
-func TestExecutorCrossParentRenameUsesDurablePath(t *testing.T) {
+func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T) {
 	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForParentBucket(t, fromParent, fromParent)
+	require.NotEqual(t, fromParent, toParent)
+	require.Equal(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
 	committer := newTestBufferedPerasCommitter(t, runner)
@@ -2865,19 +2889,54 @@ func TestExecutorCrossParentRenameUsesDurablePath(t *testing.T) {
 
 	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
 		Mount:      "vol",
-		FromParent: 7,
+		FromParent: fromParent,
 		FromName:   "old",
-		ToParent:   8,
+		ToParent:   toParent,
 		ToName:     "new",
 	})
 	require.NoError(t, err)
 
-	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fromParent, Name: "old"})
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: toParent, Name: "new"})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.DentryRecord{Parent: 8, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
-	require.Len(t, runner.mutations, 1, "cross-parent rename remains on the ordinary durable path until multi-bucket segment install is atomic")
+	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Empty(t, runner.mutations, "bucket-local cross-parent rename should stay inside Peras overlay")
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {
+	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForDifferentBucket(t, fromParent, fromParent)
+	require.NotEqual(t, fromParent, toParent)
+	require.NotEqual(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
+	seedDentry(t, runner, "vol", fromParent, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fromParent,
+		FromName:   "old",
+		ToParent:   toParent,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fromParent, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: toParent, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Len(t, runner.mutations, 1, "cross-bucket rename remains on the ordinary durable path until multi-bucket segment install is atomic")
 	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
 }
 

@@ -11,6 +11,30 @@ import (
 
 var testMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
 
+func testParentInSameBucket(t *testing.T, base fsmeta.InodeID) fsmeta.InodeID {
+	t.Helper()
+	want := fsmeta.BucketForInodeID(base)
+	for candidate := base + 1; candidate < base+4096; candidate++ {
+		if fsmeta.BucketForInodeID(candidate) == want {
+			return candidate
+		}
+	}
+	t.Fatalf("no same-bucket parent found for inode %d", base)
+	return 0
+}
+
+func testParentInDifferentBucket(t *testing.T, base fsmeta.InodeID) fsmeta.InodeID {
+	t.Helper()
+	want := fsmeta.BucketForInodeID(base)
+	for candidate := base + 1; candidate < base+4096; candidate++ {
+		if fsmeta.BucketForInodeID(candidate) != want {
+			return candidate
+		}
+	}
+	t.Fatalf("no different-bucket parent found for inode %d", base)
+	return 0
+}
+
 func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
 	req := fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -72,7 +96,7 @@ func TestCreateRespectsQuotaMode(t *testing.T) {
 	require.Contains(t, escrow.RuntimeGuards, GuardQuotaCredit)
 }
 
-func TestRenameSameParentVisibleCrossParentSlow(t *testing.T) {
+func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
 	sameParent, err := Rename(fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 8,
@@ -88,17 +112,33 @@ func TestRenameSameParentVisibleCrossParentSlow(t *testing.T) {
 		{Kind: EffectDerivedPut, Key: sameParent.Plan.MutateKeys[1]},
 	}, sameParent.WriteEffects)
 
-	crossParent, err := Rename(fsmeta.RenameRequest{
+	sameBucketParent := testParentInSameBucket(t, 8)
+	crossParentSameBucket, err := Rename(fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 8,
 		FromName:   "old",
-		ToParent:   9,
+		ToParent:   sameBucketParent,
 		ToName:     "new",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilitySlowPath, crossParent.Eligibility)
-	require.Equal(t, SlowReasonCrossParent, crossParent.SlowReason)
-	require.Equal(t, []fsmeta.InodeID{8, 9}, crossParent.Authority.Parents)
+	require.Equal(t, EligibilityVisibleCommit, crossParentSameBucket.Eligibility)
+	require.Equal(t, SlowReasonNone, crossParentSameBucket.SlowReason)
+	require.Equal(t, []fsmeta.InodeID{8, sameBucketParent}, crossParentSameBucket.Authority.Parents)
+	require.Len(t, crossParentSameBucket.Authority.Buckets, 1)
+
+	differentBucketParent := testParentInDifferentBucket(t, 8)
+	crossBucket, err := Rename(fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 8,
+		FromName:   "old",
+		ToParent:   differentBucketParent,
+		ToName:     "new",
+	}, testMount)
+	require.NoError(t, err)
+	require.Equal(t, EligibilitySlowPath, crossBucket.Eligibility)
+	require.Equal(t, SlowReasonCrossBucket, crossBucket.SlowReason)
+	require.Equal(t, []fsmeta.InodeID{8, differentBucketParent}, crossBucket.Authority.Parents)
+	require.Len(t, crossBucket.Authority.Buckets, 2)
 }
 
 func TestSlowPathBoundariesStayExplicit(t *testing.T) {
@@ -145,7 +185,7 @@ func TestLinkAndUnlinkCompileRuntimeConcreteVisibleCommitDeltas(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EligibilityVisibleCommit, delta.Eligibility)
 	require.Empty(t, delta.SlowReason)
-	require.Contains(t, delta.RuntimeGuards, GuardNotLastReference)
+	require.Contains(t, delta.RuntimeGuards, GuardNonDirectoryInode)
 	require.Equal(t, EffectDelete, delta.WriteEffects[0].Kind)
 	require.Equal(t, EffectDerivedPut, delta.WriteEffects[1].Kind)
 }

@@ -114,6 +114,33 @@ func TestRemotePerasCommitterFlushSplitsFSMetaBuckets(t *testing.T) {
 	require.Equal(t, 2, installer.calls)
 }
 
+func TestRemotePerasCommitterFlushHonorsReplayMutationBudget(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:                 provider,
+		Witnesses:                 testRuntimePerasWitnesses(t, 3),
+		Installer:                 installer,
+		SegmentBatchSize:          1024,
+		SegmentMaxReplayMutations: 4,
+		SegmentFlushEvery:         time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, commitRuntimePeras(ctx, committer, 2, []byte("dentry/b"), []byte("inode/b")))
+	require.NoError(t, commitRuntimePeras(ctx, committer, 3, []byte("dentry/c"), []byte("inode/c")))
+	require.NoError(t, committer.Flush(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(2), stats["flush_total"])
+	require.Equal(t, uint64(2), stats["segment_total"])
+	require.Equal(t, uint64(3), stats["segment_operations_total"])
+	require.Equal(t, 2, installer.calls)
+}
+
 func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -329,6 +356,87 @@ func TestRemotePerasCommitterBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), installer.calls.Load())
 	require.Equal(t, 2, committer.Stats()["pending"])
+}
+
+func TestRemotePerasCommitterFlushAllowsConcurrentCommitsDuringInstall(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &blockingRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- committer.Flush(ctx)
+	}()
+	require.Eventually(t, func() bool {
+		return installer.calls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- commitRuntimePeras(context.Background(), committer, 2, []byte("dentry/b"), []byte("inode/b"))
+	}()
+	select {
+	case err := <-commitDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("concurrent commit did not complete while background segment install was in progress")
+	}
+
+	cancel()
+	require.ErrorIs(t, <-flushDone, context.Canceled)
+	require.Equal(t, 2, committer.Stats()["pending"])
+}
+
+func TestRemotePerasCommitterDrainAuthorityBlocksConcurrentCommitsUntilInstallFinishes(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &blockingRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
+
+	drainDone := make(chan error, 1)
+	go func() {
+		drainDone <- committer.DrainAuthority(ctx, &fakeRuntimePerasRetirer{})
+	}()
+	require.Eventually(t, func() bool {
+		return installer.calls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- commitRuntimePeras(context.Background(), committer, 2, []byte("dentry/b"), []byte("inode/b"))
+	}()
+	select {
+	case err := <-commitDone:
+		t.Fatalf("concurrent commit completed while authority drain install was still in progress: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	cancel()
+	require.ErrorIs(t, <-drainDone, context.Canceled)
+	require.NoError(t, <-commitDone)
 }
 
 func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing.T) {

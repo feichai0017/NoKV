@@ -100,6 +100,11 @@ type Options struct {
 	// compressed into one segment before opportunistic background flush starts.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentBatchSize int
+	// PerasSegmentMaxReplayMutations bounds one segment install by replay
+	// mutation count. Keep this aligned with the store-side internal batch
+	// limit: a replay mutation expands to a small fixed number of MVCC entries.
+	// Zero uses the runtime default; negative is rejected.
+	PerasSegmentMaxReplayMutations int
 	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentFlushEvery time.Duration
@@ -159,7 +164,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, errPerasAuthorityTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, errPerasCommitterInvalid
 	}
@@ -268,6 +273,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
 			SegmentBatchSize:           opts.PerasSegmentBatchSize,
+			SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
 			SegmentFlushEvery:          opts.PerasSegmentFlushEvery,
 			BackgroundFlushTimeout:     opts.PerasBackgroundFlushTimeout,
 			BackgroundErrorBackoff:     opts.PerasBackgroundErrorBackoff,
@@ -279,7 +285,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			return nil, fmt.Errorf("init peras committer: %w", err)
 		}
 		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasCommitter))
-		execOpts = append(execOpts, fsmetaexec.WithPerasWatchFence(perasWatchFence{router: router}))
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))

@@ -62,6 +62,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCResolveBatchLocks := fs.Int("mvcc-gc-resolve-batch-locks", 0, "maximum expired locks resolved per replicated maintenance batch")
 	mvccGCResolveMaxLocks := fs.Uint64("mvcc-gc-resolve-max-locks", 0, "maximum MVCC locks scanned by one lock-resolution pass; zero means unlimited")
 	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
+	storageMaxBatchCount := fs.Int64("storage-max-batch-count", 0, "maximum internal entries accepted by one local storage batch; zero uses engine default")
+	storageMaxBatchSize := fs.Int64("storage-max-batch-size", 0, "maximum bytes accepted by one local storage batch; zero uses engine default")
 	perasWitnessEnabled := fs.Bool("peras-witness", false, "enable experimental fsmeta Peras witness RPCs backed by the local control WAL")
 	perasWitnessDurability := fs.String("peras-witness-durability", "fsync-batched", "peras witness WAL durability: fsync-batched|fsync|flushed|buffered")
 	var storeAddrFlags []string
@@ -126,6 +128,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 	if *mvccGCBatchEntries < 0 || *mvccGCResolveBatchLocks < 0 {
 		return fmt.Errorf("mvcc-gc batch limits must be non-negative")
+	}
+	if *storageMaxBatchCount < 0 || *storageMaxBatchSize < 0 {
+		return fmt.Errorf("storage batch limits must be non-negative")
 	}
 	perasDurability, err := parsePerasWitnessDurability(*perasWitnessDurability)
 	if err != nil {
@@ -206,6 +211,12 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = local.MemTableEngineART
+	if *storageMaxBatchCount > 0 {
+		opt.MaxBatchCount = *storageMaxBatchCount
+	}
+	if *storageMaxBatchSize > 0 {
+		opt.MaxBatchSize = *storageMaxBatchSize
+	}
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	opt.UserKeyShapeExtractor = fsmeta.UserKeyShape
 	opt.AllowedModes = []workdirmode.Mode{

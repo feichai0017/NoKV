@@ -150,13 +150,6 @@ type PerasQuotaAdmitter interface {
 	AllowPerasVisibleQuota(context.Context, []QuotaChange) (bool, error)
 }
 
-// PerasWatchFence reports whether a visible-only Peras write would intersect
-// live watch subscribers. Until Peras publishes durable watch events at segment
-// seal, watched prefixes must remain on the ordinary raft-backed path.
-type PerasWatchFence interface {
-	HasPerasWatchedWrite([]compile.WriteEffect) bool
-}
-
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -183,7 +176,6 @@ type Executor struct {
 	authorities             SubtreeAuthorityResolver
 	perasAuthority          PerasAuthorityAdmitter
 	perasCommitter          PerasCommitter
-	perasWatchFence         PerasWatchFence
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -205,7 +197,7 @@ type perasAdmissionCounters struct {
 	slowReadOnlyTotal     atomic.Uint64
 	slowRangeReadTotal    atomic.Uint64
 	slowDurabilityTotal   atomic.Uint64
-	slowCrossParentTotal  atomic.Uint64
+	slowCrossBucketTotal  atomic.Uint64
 	slowSharedQuotaTotal  atomic.Uint64
 	slowDynamicWriteTotal atomic.Uint64
 	slowMaintenanceTotal  atomic.Uint64
@@ -224,7 +216,6 @@ type perasVisibleCounters struct {
 	skipNoAuthorityTotal   atomic.Uint64
 	skipNonConcreteTotal   atomic.Uint64
 	skipPlacementTotal     atomic.Uint64
-	skipWatchedTotal       atomic.Uint64
 	skipPredicateTotal     atomic.Uint64
 	latencyTotalNanosecond atomic.Uint64
 }
@@ -347,16 +338,6 @@ func WithPerasCommitter(committer PerasCommitter) Option {
 	}
 }
 
-// WithPerasWatchFence forces visible-only Peras writes that overlap live watch
-// subscribers onto the ordinary durable path. This preserves WatchSubtree's
-// seal/apply ordering contract without making unrelated visible writes pay
-// the slow-path cost.
-func WithPerasWatchFence(fence PerasWatchFence) Option {
-	return func(e *Executor) {
-		e.perasWatchFence = fence
-	}
-}
-
 // New constructs an fsmeta executor.
 func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	if runner == nil {
@@ -459,7 +440,6 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 			"skip_no_authority_total":    uint64(0),
 			"skip_non_concrete_total":    uint64(0),
 			"skip_placement_total":       uint64(0),
-			"skip_watched_total":         uint64(0),
 			"skip_predicate_total":       uint64(0),
 			"latency_total_nanosecond":   uint64(0),
 			"latency_average_nanosecond": uint64(0),
@@ -480,7 +460,6 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
 		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
 		"skip_placement_total":       counters.skipPlacementTotal.Load(),
-		"skip_watched_total":         counters.skipWatchedTotal.Load(),
 		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
 		"latency_total_nanosecond":   latency,
 		"latency_average_nanosecond": average,
@@ -493,7 +472,7 @@ func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]
 			string(compile.SlowReasonReadOnly):          0,
 			string(compile.SlowReasonRangeRead):         0,
 			string(compile.SlowReasonDurabilityBarrier): 0,
-			string(compile.SlowReasonCrossParent):       0,
+			string(compile.SlowReasonCrossBucket):       0,
 			string(compile.SlowReasonSharedQuota):       0,
 			string(compile.SlowReasonDynamicWriteSet):   0,
 			string(compile.SlowReasonMaintenanceScan):   0,
@@ -504,7 +483,7 @@ func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]
 		string(compile.SlowReasonReadOnly):          counters.slowReadOnlyTotal.Load(),
 		string(compile.SlowReasonRangeRead):         counters.slowRangeReadTotal.Load(),
 		string(compile.SlowReasonDurabilityBarrier): counters.slowDurabilityTotal.Load(),
-		string(compile.SlowReasonCrossParent):       counters.slowCrossParentTotal.Load(),
+		string(compile.SlowReasonCrossBucket):       counters.slowCrossBucketTotal.Load(),
 		string(compile.SlowReasonSharedQuota):       counters.slowSharedQuotaTotal.Load(),
 		string(compile.SlowReasonDynamicWriteSet):   counters.slowDynamicWriteTotal.Load(),
 		string(compile.SlowReasonMaintenanceScan):   counters.slowMaintenanceTotal.Load(),
@@ -521,8 +500,8 @@ func (s *perasAdmissionCounters) recordSlow(reason compile.SlowReason) {
 		s.slowRangeReadTotal.Add(1)
 	case compile.SlowReasonDurabilityBarrier:
 		s.slowDurabilityTotal.Add(1)
-	case compile.SlowReasonCrossParent:
-		s.slowCrossParentTotal.Add(1)
+	case compile.SlowReasonCrossBucket:
+		s.slowCrossBucketTotal.Add(1)
 	case compile.SlowReasonSharedQuota:
 		s.slowSharedQuotaTotal.Add(1)
 	case compile.SlowReasonDynamicWriteSet:
@@ -874,10 +853,6 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 	}
 	if !singleBucket {
 		e.perasVisible.skipPlacementTotal.Add(1)
-		return false, nil
-	}
-	if e.perasWatchFence != nil && e.perasWatchFence.HasPerasWatchedWrite(delta.WriteEffects) {
-		e.perasVisible.skipWatchedTotal.Add(1)
 		return false, nil
 	}
 	id := e.nextPerasOperationID(delta.Kind)
@@ -1389,7 +1364,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	if err != nil {
 		return false, err
 	}
-	if !ok || inode.LinkCount <= 1 {
+	if !ok || inode.Type == fsmeta.InodeTypeDirectory {
 		return false, nil
 	}
 	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
@@ -1405,19 +1380,22 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	if !quotaOK {
 		return false, nil
 	}
-	inode.LinkCount--
 	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
 	if err != nil {
 		return false, err
 	}
-	inodeValue, err := fsmeta.EncodeInodeValue(inode)
-	if err != nil {
-		return false, err
+	effects := []compile.WriteEffect{perasDeleteEffect(plan.MutateKeys[0])}
+	if inode.LinkCount <= 1 {
+		effects = append(effects, perasDeleteEffect(inodeKey))
+	} else {
+		inode.LinkCount--
+		inodeValue, err := fsmeta.EncodeInodeValue(inode)
+		if err != nil {
+			return false, err
+		}
+		effects = append(effects, perasPutEffect(inodeKey, inodeValue))
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
-		perasDeleteEffect(plan.MutateKeys[0]),
-		perasPutEffect(inodeKey, inodeValue),
-	})
+	concrete := runtimeCheckedPerasDelta(delta, effects)
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
