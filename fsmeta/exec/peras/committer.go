@@ -10,6 +10,22 @@ type VersionAllocator interface {
 	ReserveTimestamp(context.Context, uint64) (uint64, error)
 }
 
+type AdmissionFunc func(context.Context, compile.SemanticDelta) (bool, error)
+
+func Admit(ctx context.Context, delta compile.SemanticDelta, fn AdmissionFunc) error {
+	if fn == nil {
+		return nil
+	}
+	ok, err := fn(ctx, delta)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrAdmissionRejected
+	}
+	return nil
+}
+
 type DirectCommitterConfig struct {
 	Holder    *Holder
 	Versions  VersionAllocator
@@ -36,9 +52,12 @@ func NewDirectCommitter(cfg DirectCommitterConfig) (*DirectCommitter, error) {
 	}, nil
 }
 
-func (c *DirectCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta) (VisibleAck, error) {
+func (c *DirectCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta, admission AdmissionFunc) (VisibleAck, error) {
 	if c == nil || c.holder == nil || c.versions == nil || c.replayDB == nil {
 		return VisibleAck{}, ErrHolderConfigInvalid
+	}
+	if err := Admit(ctx, delta, admission); err != nil {
+		return VisibleAck{}, err
 	}
 	ack, err := c.holder.Submit(ctx, id, delta)
 	if err != nil {

@@ -89,12 +89,15 @@ func NewBufferedCommitter(cfg BufferedCommitterConfig) (*BufferedCommitter, erro
 	return c, nil
 }
 
-func (c *BufferedCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta) (VisibleAck, error) {
+func (c *BufferedCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta, admission AdmissionFunc) (VisibleAck, error) {
 	if c == nil || c.holder == nil {
 		return VisibleAck{}, ErrHolderConfigInvalid
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := Admit(ctx, delta, admission); err != nil {
+		return VisibleAck{}, err
+	}
 	ack, err := c.holder.Submit(ctx, id, delta)
 	if err != nil {
 		c.errorTotal.Add(1)

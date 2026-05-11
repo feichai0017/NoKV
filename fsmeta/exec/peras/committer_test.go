@@ -22,7 +22,7 @@ func TestDirectCommitterSubmitsAndApplies(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ack, err := committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	ack, err := committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), ack.EpochID)
 	require.Equal(t, opID("client-a", 1), ack.OpID)
@@ -45,7 +45,7 @@ func TestDirectCommitterKeepsPendingOnApplyFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.ErrorIs(t, err, applyErr)
 	require.Equal(t, 1, holder.Pending(), "durable commit evidence must stay fenced until recovery or retry seal applies")
 }
@@ -59,7 +59,7 @@ func TestDirectCommitterDoesNotRequireWitnessSnapshot(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
 	require.Zero(t, holder.Pending())
 }
@@ -85,7 +85,7 @@ func BenchmarkDirectCommitterSingleOperation(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := committer.CommitPeras(ctx, OperationID{ClientID: "bench", Seq: uint64(i + 1)}, delta); err != nil {
+		if _, err := committer.CommitPeras(ctx, OperationID{ClientID: "bench", Seq: uint64(i + 1)}, delta, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -222,7 +222,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	return c, nil
 }
 
-func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.VisibleAck, error) {
+func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}
@@ -240,8 +240,14 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	c.commitMu.RLock()
-	defer c.commitMu.RUnlock()
+	c.commitMu.Lock()
+	defer c.commitMu.Unlock()
+	if err := fsperas.Admit(ctx, delta, admission); err != nil {
+		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isPerasAdmissionTerminalError(err) {
+			c.recordError(err)
+		}
+		return fsperas.VisibleAck{}, err
+	}
 	ack, err := holder.Submit(ctx, id, delta)
 	if err != nil {
 		c.recordError(err)
@@ -1009,6 +1015,13 @@ func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvr
 
 func (c *RemotePerasCommitter) recordErrorf(format string, args ...any) error {
 	return c.recordError(fmt.Errorf(format, args...))
+}
+
+func isPerasAdmissionTerminalError(err error) bool {
+	return errors.Is(err, fsmeta.ErrExists) ||
+		errors.Is(err, fsmeta.ErrNotFound) ||
+		errors.Is(err, fsmeta.ErrInvalidRequest) ||
+		errors.Is(err, fsmeta.ErrInvalidValue)
 }
 
 func (c *RemotePerasCommitter) recordError(err error) error {

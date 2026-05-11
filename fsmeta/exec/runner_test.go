@@ -337,7 +337,16 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 	return a.owned, nil
 }
 
-func (c *fakePerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.VisibleAck, error) {
+func (c *fakePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+	if admission != nil {
+		ok, err := admission(ctx, delta)
+		if err != nil {
+			return fsperas.VisibleAck{}, err
+		}
+		if !ok {
+			return fsperas.VisibleAck{}, fsperas.ErrAdmissionRejected
+		}
+	}
 	c.calls++
 	c.ids = append(c.ids, id)
 	c.deltas = append(c.deltas, delta)
@@ -365,11 +374,11 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (noopPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta) (fsperas.VisibleAck, error) {
+func (noopPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (flushFailingPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta) (fsperas.VisibleAck, error) {
+func (flushFailingPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
@@ -799,7 +808,7 @@ func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 	require.Empty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
 	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
 }
 
@@ -1018,6 +1027,42 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, created.Dentry, lookedUp)
+}
+
+func TestExecutorCreatePerasBufferedVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+	require.Empty(t, runner.mutations, "overlay predicate failure must not fall back into ordinary mutation")
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
+	requirePerasVisibleStatUint(t, stats, "error_total", 0)
 }
 
 func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
