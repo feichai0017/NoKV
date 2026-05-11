@@ -426,5 +426,8 @@ func (s *Store) wirePeerConfig(cfg peer.Config, allowSnapshotInstallRetry bool) 
 	cfg.Apply = func(entries []myraft.Entry) error {
 		return s.applyEntries(entries)
 	}
+	cfg.ApplyAsync = func(entries []myraft.Entry, done func(error)) error {
+		return s.applyEntriesAsync(entries, done)
+	}
 	return cfg
 }

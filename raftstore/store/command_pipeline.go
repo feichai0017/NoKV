@@ -49,9 +49,11 @@ func (k commandProposalKey) valid() bool {
 type commandPipeline struct {
 	mu        sync.Mutex
 	seq       uint64
+	orderSeq  uint64
 	proposals map[commandProposalKey]*commandProposal
 	applier   func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
 	parallel  int
+	window    *commandApplyWindow
 }
 
 type applyEventEmitter func(myraft.Entry, *raftcmdpb.RaftCmdRequest, *raftcmdpb.RaftCmdResponse)
@@ -61,11 +63,13 @@ func newCommandPipeline(applier func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.Raft
 	if len(parallelism) > 0 {
 		parallel = parallelism[0]
 	}
-	return &commandPipeline{
+	cp := &commandPipeline{
 		proposals: make(map[commandProposalKey]*commandProposal),
 		applier:   applier,
 		parallel:  normalizeCommandApplyParallelism(parallel),
 	}
+	cp.window = newCommandApplyWindow(cp, cp.parallel)
+	return cp
 }
 
 func normalizeCommandApplyParallelism(parallelism int) int {
@@ -89,6 +93,18 @@ func (cp *commandPipeline) nextProposalID() uint64 {
 	defer cp.mu.Unlock()
 	cp.seq++
 	return cp.seq
+}
+
+func (cp *commandPipeline) assignPlanOrders(plans []commandApplyPlan) {
+	if cp == nil || len(plans) == 0 {
+		return
+	}
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	for i := range plans {
+		cp.orderSeq++
+		plans[i].order = cp.orderSeq
+	}
 }
 
 func (cp *commandPipeline) registerProposal(key commandProposalKey) (*commandProposal, error) {
@@ -144,10 +160,42 @@ func (cp *commandPipeline) applyEntries(entries []myraft.Entry, emitters ...appl
 	if len(plans) == 0 {
 		return nil
 	}
+	cp.assignPlanOrders(plans)
 	if cp.parallel <= 1 || len(plans) == 1 {
 		return cp.applyPlansSerial(plans, emit)
 	}
-	return cp.applyPlansParallel(plans, emit)
+	done := make(chan error, 1)
+	if err := cp.window.submit(plans, emit, func(err error) {
+		done <- err
+	}); err != nil {
+		return err
+	}
+	return <-done
+}
+
+func (cp *commandPipeline) applyEntriesAsync(entries []myraft.Entry, emit applyEventEmitter, done func(error)) error {
+	if cp == nil {
+		return fmt.Errorf("commandPipeline: pipeline is nil")
+	}
+	if done == nil {
+		done = func(error) {}
+	}
+	plans, err := commandApplyPlans(entries)
+	if err != nil {
+		return err
+	}
+	if len(plans) == 0 {
+		done(nil)
+		return nil
+	}
+	cp.assignPlanOrders(plans)
+	if cp.parallel <= 1 {
+		go func() {
+			done(cp.applyPlansSerial(plans, emit))
+		}()
+		return nil
+	}
+	return cp.window.submit(plans, emit, done)
 }
 
 func (cp *commandPipeline) applyPlansSerial(plans []commandApplyPlan, emit applyEventEmitter) error {
@@ -159,92 +207,279 @@ func (cp *commandPipeline) applyPlansSerial(plans []commandApplyPlan, emit apply
 	return nil
 }
 
-func (cp *commandPipeline) applyPlansParallel(plans []commandApplyPlan, emit applyEventEmitter) error {
-	var wave []commandApplyPlan
-	waveDeps := make(map[commandApplyDependencyKey]commandApplyDependencyMode)
-	flushWave := func() error {
-		if len(wave) == 0 {
-			return nil
-		}
-		err := cp.applyWave(wave, emit)
-		wave = nil
-		clear(waveDeps)
-		return err
-	}
-	for _, plan := range plans {
-		if plan.barrier {
-			if err := flushWave(); err != nil {
-				return err
-			}
-			if err := cp.applyOne(plan, emit); err != nil {
-				return err
-			}
-			continue
-		}
-		if commandApplyPlanConflicts(waveDeps, plan) {
-			if err := flushWave(); err != nil {
-				return err
-			}
-		}
-		commandApplyPlanAddDependencies(waveDeps, plan)
-		wave = append(wave, plan)
-	}
-	return flushWave()
+type commandApplyWindow struct {
+	mu            sync.Mutex
+	cp            *commandPipeline
+	parallel      int
+	queue         []*commandApplyTask
+	active        int
+	activeBarrier bool
+	activeDeps    map[commandApplyDependencyKey]commandApplyActiveDependency
+	completed     map[uint64]*commandApplyTask
+	nextComplete  uint64
+	fatalErr      error
 }
 
-type commandApplyResult struct {
-	resp *raftcmdpb.RaftCmdResponse
+type commandApplyTask struct {
+	plan         commandApplyPlan
+	emit         applyEventEmitter
+	group        *commandApplyGroup
+	resp         *raftcmdpb.RaftCmdResponse
+	err          error
+	externalDone bool
+}
+
+type commandApplyActiveDependency struct {
+	readers int
+	writers int
+}
+
+type commandApplyGroup struct {
+	wg   sync.WaitGroup
+	mu   sync.Mutex
 	err  error
+	done func(error)
 }
 
-func (cp *commandPipeline) applyWave(wave []commandApplyPlan, emit applyEventEmitter) error {
-	if len(wave) == 1 {
-		return cp.applyOne(wave[0], emit)
+func newCommandApplyWindow(cp *commandPipeline, parallel int) *commandApplyWindow {
+	if parallel < 1 {
+		parallel = 1
 	}
-	if cp.applier == nil {
-		return fmt.Errorf("commandPipeline: apply without handler")
+	return &commandApplyWindow{
+		cp:           cp,
+		parallel:     parallel,
+		activeDeps:   make(map[commandApplyDependencyKey]commandApplyActiveDependency),
+		completed:    make(map[uint64]*commandApplyTask),
+		nextComplete: 1,
 	}
-	results := make([]commandApplyResult, len(wave))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, cp.parallel)
-	for i, plan := range wave {
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(i int, plan commandApplyPlan) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			resp, err := cp.applier(plan.req)
-			results[i] = commandApplyResult{resp: resp, err: err}
-		}(i, plan)
-	}
-	wg.Wait()
-	for i, result := range results {
-		if result.err != nil {
-			key := wave[i].proposalKey
-			err := fmt.Errorf("commandPipeline: fatal parallel apply wave failed at request %d: %w", key.requestID, result.err)
-			for _, plan := range wave {
-				cp.completeProposal(plan.proposalKey, nil, err)
-			}
-			return err
+}
+
+func (w *commandApplyWindow) submit(plans []commandApplyPlan, emit applyEventEmitter, done func(error)) error {
+	if len(plans) == 0 {
+		if done != nil {
+			done(nil)
 		}
+		return nil
 	}
-	// Storage writes may complete out of order inside a conflict-free wave, but
-	// observer delivery and client completion remain in raft-log order.
-	for i, result := range results {
-		plan := wave[i]
-		if emit != nil {
-			emit(plan.entry, plan.req, result.resp)
+	if done == nil {
+		done = func(error) {}
+	}
+	group := newCommandApplyGroup(len(plans), done)
+	tasks := make([]*commandApplyTask, 0, len(plans))
+	for _, plan := range plans {
+		tasks = append(tasks, &commandApplyTask{plan: plan, emit: emit, group: group})
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fatalErr != nil {
+		for _, task := range tasks {
+			w.finishTaskExternalLocked(task, w.fatalErr)
 		}
-		cp.completeProposal(plan.proposalKey, result.resp, nil)
+		return nil
 	}
+	w.queue = append(w.queue, tasks...)
+	w.scheduleLocked()
 	return nil
 }
 
-func (cp *commandPipeline) applyOne(plan commandApplyPlan, emit applyEventEmitter) error {
-	if cp.applier == nil {
-		return fmt.Errorf("commandPipeline: apply without handler")
+func (w *commandApplyWindow) scheduleLocked() {
+	for w.fatalErr == nil && !w.activeBarrier && w.active < w.parallel {
+		idx := w.nextSchedulableLocked()
+		if idx < 0 {
+			return
+		}
+		task := w.queue[idx]
+		copy(w.queue[idx:], w.queue[idx+1:])
+		w.queue[len(w.queue)-1] = nil
+		w.queue = w.queue[:len(w.queue)-1]
+		w.active++
+		if task.plan.barrier {
+			w.activeBarrier = true
+		} else {
+			commandApplyWindowAddDependencies(w.activeDeps, task.plan)
+		}
+		go w.runTask(task)
 	}
-	resp, applyErr := cp.applier(plan.req)
+}
+
+func (w *commandApplyWindow) nextSchedulableLocked() int {
+	if len(w.queue) == 0 {
+		return -1
+	}
+	if w.queue[0].plan.barrier {
+		if w.active == 0 {
+			return 0
+		}
+		return -1
+	}
+	for i, task := range w.queue {
+		if task.plan.barrier {
+			return -1
+		}
+		if !commandApplyWindowConflicts(w.activeDeps, task.plan) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (w *commandApplyWindow) runTask(task *commandApplyTask) {
+	resp, err := w.cp.applyPlan(task.plan)
+	w.finishTask(task, resp, err)
+}
+
+func (w *commandApplyWindow) finishTask(task *commandApplyTask, resp *raftcmdpb.RaftCmdResponse, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.active--
+	if task.plan.barrier {
+		w.activeBarrier = false
+	} else {
+		commandApplyWindowRemoveDependencies(w.activeDeps, task.plan)
+	}
+	task.resp = resp
+	task.err = err
+	if w.fatalErr != nil {
+		w.finishTaskExternalLocked(task, w.fatalErr)
+		return
+	}
+	if err != nil {
+		fatalErr := fmt.Errorf("commandPipeline: fatal apply window failed at request %d: %w", task.plan.proposalKey.requestID, err)
+		w.finishTaskExternalLocked(task, fatalErr)
+		w.failAllLocked(fatalErr)
+		return
+	}
+	w.completed[task.plan.order] = task
+	w.flushCompletedLocked()
+	w.scheduleLocked()
+}
+
+func (w *commandApplyWindow) failAllLocked(err error) {
+	if w.fatalErr == nil {
+		w.fatalErr = err
+	}
+	for _, task := range w.completed {
+		w.finishTaskExternalLocked(task, err)
+	}
+	clear(w.completed)
+	for _, task := range w.queue {
+		w.finishTaskExternalLocked(task, err)
+	}
+	clear(w.queue)
+	w.queue = w.queue[:0]
+}
+
+func (w *commandApplyWindow) flushCompletedLocked() {
+	for {
+		task := w.completed[w.nextComplete]
+		if task == nil {
+			return
+		}
+		delete(w.completed, w.nextComplete)
+		w.nextComplete++
+		w.finishTaskExternalLocked(task, nil)
+	}
+}
+
+func (w *commandApplyWindow) finishTaskExternalLocked(task *commandApplyTask, err error) {
+	if task == nil || task.externalDone {
+		return
+	}
+	task.externalDone = true
+	if err == nil {
+		if task.emit != nil {
+			task.emit(task.plan.entry, task.plan.req, task.resp)
+		}
+		w.cp.completeProposal(task.plan.proposalKey, task.resp, nil)
+	} else {
+		w.cp.completeProposal(task.plan.proposalKey, nil, err)
+	}
+	task.group.complete(err)
+}
+
+func (g *commandApplyGroup) complete(err error) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if err != nil && g.err == nil {
+		g.err = err
+	}
+	g.mu.Unlock()
+	g.wg.Done()
+}
+
+func newCommandApplyGroup(count int, done func(error)) *commandApplyGroup {
+	g := &commandApplyGroup{done: done}
+	g.wg.Add(count)
+	go func() {
+		g.wg.Wait()
+		g.mu.Lock()
+		err := g.err
+		done := g.done
+		g.done = nil
+		g.mu.Unlock()
+		if done != nil {
+			done(err)
+		}
+	}()
+	return g
+}
+
+func commandApplyWindowConflicts(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) bool {
+	for _, dep := range plan.deps {
+		state, ok := active[dep.key]
+		if !ok {
+			continue
+		}
+		if dep.mode == commandApplyDependencyWrite {
+			if state.readers > 0 || state.writers > 0 {
+				return true
+			}
+			continue
+		}
+		if state.writers > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func commandApplyWindowAddDependencies(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) {
+	for _, dep := range plan.deps {
+		state := active[dep.key]
+		if dep.mode == commandApplyDependencyWrite {
+			state.writers++
+		} else {
+			state.readers++
+		}
+		active[dep.key] = state
+	}
+}
+
+func commandApplyWindowRemoveDependencies(active map[commandApplyDependencyKey]commandApplyActiveDependency, plan commandApplyPlan) {
+	for _, dep := range plan.deps {
+		state, ok := active[dep.key]
+		if !ok {
+			continue
+		}
+		if dep.mode == commandApplyDependencyWrite {
+			if state.writers > 0 {
+				state.writers--
+			}
+		} else if state.readers > 0 {
+			state.readers--
+		}
+		if state.readers == 0 && state.writers == 0 {
+			delete(active, dep.key)
+			continue
+		}
+		active[dep.key] = state
+	}
+}
+
+func (cp *commandPipeline) applyOne(plan commandApplyPlan, emit applyEventEmitter) error {
+	resp, applyErr := cp.applyPlan(plan)
 	if applyErr != nil {
 		key := plan.proposalKey
 		cp.completeProposal(key, nil, applyErr)
@@ -261,6 +496,13 @@ func (cp *commandPipeline) applyOne(plan commandApplyPlan, emit applyEventEmitte
 	return nil
 }
 
+func (cp *commandPipeline) applyPlan(plan commandApplyPlan) (*raftcmdpb.RaftCmdResponse, error) {
+	if cp.applier == nil {
+		return nil, fmt.Errorf("commandPipeline: apply without handler")
+	}
+	return cp.applier(plan.req)
+}
+
 func (s *Store) applyEntries(entries []myraft.Entry) error {
 	if s == nil {
 		return errNilStore
@@ -269,4 +511,14 @@ func (s *Store) applyEntries(entries []myraft.Entry) error {
 		return errCommandApplyWithoutHandler
 	}
 	return s.cmds.pipe.applyEntries(entries, s.emitApplyEvents)
+}
+
+func (s *Store) applyEntriesAsync(entries []myraft.Entry, done func(error)) error {
+	if s == nil {
+		return errNilStore
+	}
+	if s.cmds == nil || s.cmds.pipe == nil {
+		return errCommandApplyWithoutHandler
+	}
+	return s.cmds.pipe.applyEntriesAsync(entries, s.emitApplyEvents, done)
 }

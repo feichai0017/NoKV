@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -272,6 +273,64 @@ func TestPeerApplyErrorDoesNotAdvanceAppliedWatermark(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	require.Error(t, p.WaitApplied(ctx, appliedBefore+1))
+}
+
+func TestPeerAsyncApplyKeepsContiguousAppliedWatermark(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirst) }) })
+
+	storage := newPayloadTestStorage()
+	cfg := myraft.Config{
+		ID:              11,
+		ElectionTick:    5,
+		HeartbeatTick:   1,
+		MaxSizePerMsg:   1 << 20,
+		MaxInflightMsgs: 256,
+		PreVote:         true,
+	}
+	p, err := NewPeer(&Config{
+		RaftConfig: cfg,
+		Transport:  noopPayloadTransport{},
+		Apply:      func([]myraft.Entry) error { return nil },
+		ApplyAsync: func(entries []myraft.Entry, done func(error)) error {
+			require.Len(t, entries, 1)
+			entry := entries[0]
+			started <- entry.Index
+			go func() {
+				if string(entry.Data) == "first" {
+					<-releaseFirst
+				}
+				done(nil)
+			}()
+			return nil
+		},
+		Storage: storage,
+		GroupID: 1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Close() })
+	require.NoError(t, p.Bootstrap([]myraft.Peer{{ID: 11}}))
+	require.NoError(t, p.Campaign())
+	require.NoError(t, p.Flush())
+	appliedBefore := p.AppliedIndex()
+
+	require.NoError(t, p.Propose([]byte("first")))
+	firstIndex := <-started
+	require.Greater(t, firstIndex, appliedBefore)
+	require.Equal(t, appliedBefore, p.AppliedIndex())
+
+	require.NoError(t, p.Propose([]byte("second")))
+	secondIndex := <-started
+	require.Greater(t, secondIndex, firstIndex)
+	time.Sleep(20 * time.Millisecond)
+	require.Equal(t, appliedBefore, p.AppliedIndex())
+
+	releaseOnce.Do(func() { close(releaseFirst) })
+	require.Eventually(t, func() bool {
+		return p.AppliedIndex() >= secondIndex
+	}, time.Second, time.Millisecond)
 }
 
 func TestReadIndexHelpersDeliverAndCancel(t *testing.T) {

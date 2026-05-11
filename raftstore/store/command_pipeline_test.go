@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestCommandPipelineApplyEntriesReturnsApplyError(t *testing.T) {
 	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		applied = append(applied, req.GetHeader().GetRequestId())
 		return nil, applyErr
-	})
+	}, 1)
 
 	prop1, err := cp.registerProposal(testProposalKey(1, 101, 11))
 	require.NoError(t, err)
@@ -197,10 +198,116 @@ func TestCommandPipelineSerializesConflictingCommands(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestCommandPipelineApplyWindowSchedulesAcrossBatches(t *testing.T) {
+	started := make(chan uint64, 2)
+	release := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		started <- req.GetHeader().GetRequestId()
+		<-release
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 2)
+
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("a"))),
+	}, nil, func(err error) { done1 <- err }))
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("b"))),
+	}, nil, func(err error) { done2 <- err }))
+
+	require.Eventually(t, func() bool {
+		return len(started) == 2
+	}, time.Second, time.Millisecond)
+	close(release)
+	require.NoError(t, <-done1)
+	require.NoError(t, <-done2)
+}
+
+func TestCommandPipelineApplyWindowSerializesConflictsAcrossBatches(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		id := req.GetHeader().GetRequestId()
+		started <- id
+		if id == 1 {
+			<-releaseFirst
+		}
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 2)
+
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("same-key"))),
+	}, nil, func(err error) { done1 <- err }))
+	require.Equal(t, uint64(1), <-started)
+
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("same-key"))),
+	}, nil, func(err error) { done2 <- err }))
+	select {
+	case id := <-started:
+		t.Fatalf("conflicting command %d started before first command completed", id)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+	require.Equal(t, uint64(2), <-started)
+	require.NoError(t, <-done1)
+	require.NoError(t, <-done2)
+}
+
+func TestCommandPipelineApplyWindowCompletesInSubmissionOrder(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		id := req.GetHeader().GetRequestId()
+		started <- id
+		if id == 1 {
+			<-releaseFirst
+		}
+		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+	}, 2)
+
+	prop1, err := cp.registerProposal(testProposalKey(1, 101, 1))
+	require.NoError(t, err)
+	prop2, err := cp.registerProposal(testProposalKey(1, 101, 2))
+	require.NoError(t, err)
+
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 1, testPrewriteRequest([]byte("a"))),
+	}, nil, func(err error) { done1 <- err }))
+	require.NoError(t, cp.applyEntriesAsync([]myraft.Entry{
+		mustCommandEntryWithRequests(t, 1, 101, 2, testPrewriteRequest([]byte("b"))),
+	}, nil, func(err error) { done2 <- err }))
+
+	require.Eventually(t, func() bool {
+		return len(started) == 2
+	}, time.Second, time.Millisecond)
+	select {
+	case <-prop2.ch:
+		t.Fatal("second proposal completed before the first order slot")
+	case <-done2:
+		t.Fatal("second apply callback completed before the first order slot")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+
+	result1 := <-prop1.ch
+	require.NoError(t, result1.err)
+	result2 := <-prop2.ch
+	require.NoError(t, result2.err)
+	require.NoError(t, <-done1)
+	require.NoError(t, <-done2)
+}
+
 func TestCommandPipelineFatalParallelApplyErrorCompletesWholeWave(t *testing.T) {
 	applyErr := errors.New("disk write failed")
+	var calls atomic.Int32
 	cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-		if req.GetHeader().GetRequestId() == 2 {
+		if calls.Add(1) == 1 {
 			return nil, applyErr
 		}
 		return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
@@ -219,7 +326,7 @@ func TestCommandPipelineFatalParallelApplyErrorCompletesWholeWave(t *testing.T) 
 		mustCommandEntryWithRequests(t, 1, 101, 3, testPrewriteRequest([]byte("c"))),
 	})
 	require.ErrorIs(t, err, applyErr)
-	require.ErrorContains(t, err, "fatal parallel apply wave failed")
+	require.ErrorContains(t, err, "fatal apply window failed")
 
 	for _, prop := range props {
 		result := <-prop.ch
@@ -275,4 +382,48 @@ func BenchmarkCommandPipelineApplyEntries(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkCommandPipelineApplyWindowBatches(b *testing.B) {
+	entries := make([]myraft.Entry, 32)
+	for i := range entries {
+		key := []byte(fmt.Sprintf("window-bench-key-%02d", i))
+		entries[i] = mustCommandEntryWithRequests(b, 1, 101, uint64(i+1), testPrewriteRequest(key))
+	}
+	b.Run("serial_batches", func(b *testing.B) {
+		cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+			time.Sleep(50 * time.Microsecond)
+			return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+		}, 1)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for _, entry := range entries {
+				if err := cp.applyEntries([]myraft.Entry{entry}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
+	b.Run("window_8_batches", func(b *testing.B) {
+		cp := newCommandPipeline(func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+			time.Sleep(50 * time.Microsecond)
+			return &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}, nil
+		}, 8)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			done := make(chan error, len(entries))
+			for _, entry := range entries {
+				if err := cp.applyEntriesAsync([]myraft.Entry{entry}, nil, func(err error) {
+					done <- err
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			for range entries {
+				if err := <-done; err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
 }

@@ -26,6 +26,11 @@ import (
 // state machine (LSM, MVCC, etc).
 type ApplyFunc func(entries []myraft.Entry) error
 
+// ApplyAsyncFunc enqueues committed raft log entries for asynchronous apply.
+// The callback must be invoked exactly once after the entries are externally
+// visible or after apply has failed fatally.
+type ApplyAsyncFunc func(entries []myraft.Entry, done func(error)) error
+
 // AdminApplyFunc consumes admin commands (split, merge, etc.).
 type AdminApplyFunc func(cmd *raftcmdpb.AdminCommand) error
 
@@ -46,6 +51,7 @@ type Peer struct {
 	storage                   raftlog.PeerStorage
 	transport                 transport.Transport
 	apply                     ApplyFunc
+	applyAsync                ApplyAsyncFunc
 	adminApply                AdminApplyFunc
 	raftLog                   *raftLogTracker
 	snapshotQueue             *snapshotResendQueue
@@ -66,6 +72,7 @@ type Peer struct {
 	fastLeaseRead             bool
 	lastLeaderContactUnixNano atomic.Int64
 	batcher                   *proposalBatcher
+	applyErr                  atomic.Value // stores error
 }
 
 const defaultMaxInFlightApply = 8192
@@ -122,6 +129,7 @@ func NewPeer(cfg *Config) (*Peer, error) {
 		storage:                   storage,
 		transport:                 cfg.Transport,
 		apply:                     cfg.Apply,
+		applyAsync:                cfg.ApplyAsync,
 		adminApply:                cfg.AdminApply,
 		confChangeHook:            cfg.ConfChange,
 		snapshotExport:            cfg.SnapshotExport,
@@ -376,8 +384,15 @@ func (p *Peer) Snapshot() (myraft.Snapshot, error) {
 }
 
 func (p *Peer) processReady() error {
+	if err := p.currentApplyError(); err != nil {
+		return err
+	}
 	p.readyMu.Lock()
 	for {
+		if err := p.currentApplyError(); err != nil {
+			p.readyMu.Unlock()
+			return err
+		}
 		p.mu.Lock()
 		hasReady := p.node.HasReady()
 		var rd myraft.Ready
@@ -517,9 +532,50 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 	if len(rd.CommittedEntries) > 0 {
 		p.beginApply(rd.CommittedEntries)
 		var toApply []myraft.Entry
+		flushApply := func(wait bool) error {
+			if len(toApply) == 0 {
+				return nil
+			}
+			entries := append([]myraft.Entry(nil), toApply...)
+			toApply = toApply[:0]
+			if p.applyAsync != nil {
+				if err := p.applyAsync(entries, func(err error) {
+					if err != nil {
+						p.recordApplyError(err)
+						return
+					}
+					p.finishApply(entries)
+					if compacted := p.AppliedIndex(); compacted > 0 {
+						_ = p.maybeCompact(compacted)
+					}
+				}); err != nil {
+					return err
+				}
+				if wait {
+					last := entries[len(entries)-1].Index
+					if err := p.WaitApplied(p.stopCtx, last); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			if p.apply != nil {
+				if err := p.apply(entries); err != nil {
+					return err
+				}
+			}
+			p.finishApply(entries)
+			return nil
+		}
+		finishSync := func(entry myraft.Entry) {
+			p.finishApply([]myraft.Entry{entry})
+		}
 		for _, entry := range rd.CommittedEntries {
 			switch entry.Type {
 			case myraft.EntryConfChange:
+				if err := flushApply(true); err != nil {
+					return err
+				}
 				var cc raftpb.ConfChange
 				if err := cc.Unmarshal(entry.Data); err != nil {
 					return err
@@ -531,7 +587,11 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				if err := p.handleConfChange(ccV2, entry); err != nil {
 					return err
 				}
+				finishSync(entry)
 			case myraft.EntryConfChangeV2:
+				if err := flushApply(true); err != nil {
+					return err
+				}
 				var cc raftpb.ConfChangeV2
 				if err := cc.Unmarshal(entry.Data); err != nil {
 					return err
@@ -542,11 +602,16 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 				if err := p.handleConfChange(cc, entry); err != nil {
 					return err
 				}
+				finishSync(entry)
 			default:
 				if len(entry.Data) == 0 {
+					finishSync(entry)
 					continue
 				}
 				if isAdminEntry(entry.Data) {
+					if err := flushApply(true); err != nil {
+						return err
+					}
 					cmd, err := decodeAdminCommand(entry.Data)
 					if err != nil {
 						return err
@@ -554,20 +619,19 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 					if err := p.applyAdminCommand(cmd); err != nil {
 						return err
 					}
+					finishSync(entry)
 					continue
 				}
 				toApply = append(toApply, entry)
 			}
 		}
-		if len(toApply) > 0 && p.apply != nil {
-			if err := p.apply(toApply); err != nil {
+		if err := flushApply(false); err != nil {
+			return err
+		}
+		if compacted := p.AppliedIndex(); compacted > 0 {
+			if err := p.maybeCompact(compacted); err != nil {
 				return err
 			}
-		}
-		p.finishApply(rd.CommittedEntries)
-		lastApplied := rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
-		if err := p.maybeCompact(lastApplied); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -668,10 +732,33 @@ func (p *Peer) applyAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 	return p.adminApply(cmd)
 }
 
+func (p *Peer) recordApplyError(err error) {
+	if p == nil || err == nil {
+		return
+	}
+	if p.applyErr.Load() == nil {
+		p.applyErr.Store(err)
+		if p.stopCancel != nil {
+			p.stopCancel()
+		}
+	}
+}
+
+func (p *Peer) currentApplyError() error {
+	if p == nil {
+		return nil
+	}
+	err, _ := p.applyErr.Load().(error)
+	return err
+}
+
 // WaitApplied blocks until the provided raft log index has been fully applied.
 func (p *Peer) WaitApplied(ctx context.Context, index uint64) error {
 	if p == nil || p.applyMark == nil || index == 0 {
 		return nil
+	}
+	if err := p.currentApplyError(); err != nil && p.AppliedIndex() < index {
+		return err
 	}
 	return p.applyMark.WaitForMark(ctx, index)
 }
@@ -701,6 +788,9 @@ func (p *Peer) Close() error {
 func (p *Peer) waitForApplyBacklog() error {
 	if p == nil || p.applyMark == nil {
 		return nil
+	}
+	if err := p.currentApplyError(); err != nil {
+		return err
 	}
 	limit := p.applyLimit
 	if limit == 0 {

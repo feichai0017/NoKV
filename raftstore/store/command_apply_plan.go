@@ -14,6 +14,7 @@ type commandApplyPlan struct {
 	proposalKey commandProposalKey
 	deps        []commandApplyDependency
 	barrier     bool
+	order       uint64
 }
 
 type commandApplyDependencyMode uint8
@@ -194,26 +195,4 @@ func appendCommandApplyDependency(dst []commandApplyDependency, class commandApp
 		},
 		mode: mode,
 	})
-}
-
-func commandApplyPlanConflicts(waveDeps map[commandApplyDependencyKey]commandApplyDependencyMode, plan commandApplyPlan) bool {
-	for _, dep := range plan.deps {
-		existing, ok := waveDeps[dep.key]
-		if !ok {
-			continue
-		}
-		if existing == commandApplyDependencyWrite || dep.mode == commandApplyDependencyWrite {
-			return true
-		}
-	}
-	return false
-}
-
-func commandApplyPlanAddDependencies(waveDeps map[commandApplyDependencyKey]commandApplyDependencyMode, plan commandApplyPlan) {
-	for _, dep := range plan.deps {
-		if existing, ok := waveDeps[dep.key]; ok && existing == commandApplyDependencyWrite {
-			continue
-		}
-		waveDeps[dep.key] = dep.mode
-	}
 }
