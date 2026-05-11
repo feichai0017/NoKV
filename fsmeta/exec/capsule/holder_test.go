@@ -87,6 +87,32 @@ func TestHolderSubmitConflictDAGFrontier(t *testing.T) {
 	require.Equal(t, 1, holder.Pending())
 }
 
+func TestHolderBuildSealAndMarkApplied(t *testing.T) {
+	replicas := []*fakeWitnessReplica{
+		newFakeWitnessReplica("store-1"),
+		newFakeWitnessReplica("store-2"),
+		newFakeWitnessReplica("store-3"),
+	}
+	holder := newTestHolder(t, replicas)
+
+	first := opID("client-a", 1)
+	second := opID("client-b", 1)
+	_, err := holder.Submit(context.Background(), first, deltaWithWrites("a"))
+	require.NoError(t, err)
+	_, err = holder.Submit(context.Background(), second, deltaWithWrites("a"))
+	require.NoError(t, err)
+	require.Equal(t, 2, holder.Pending())
+
+	seal, err := holder.BuildSeal(replicas[0].snapshot())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), seal.EpochID)
+	require.Equal(t, 2, len(seal.Certificates))
+	require.Equal(t, 2, holder.Pending(), "building a seal must not release the fence before raft apply")
+
+	require.NoError(t, holder.MarkSealApplied(seal))
+	require.Zero(t, holder.Pending())
+}
+
 func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	holder := newTestHolder(t, []*fakeWitnessReplica{
 		newFakeWitnessReplica("store-1"),
@@ -112,6 +138,22 @@ func BenchmarkHolderSubmitDisjoint(b *testing.B) {
 			b.Fatal(err)
 		}
 		holder.MarkSealed(id)
+	}
+}
+
+func BenchmarkHolderBuildSeal64(b *testing.B) {
+	holder := mustHolderForBench(b)
+	snapshot := sealSnapshotForBench(b, 64)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		seal, err := holder.BuildSeal(snapshot)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(seal.Certificates) != 64 {
+			b.Fatalf("unexpected cert count %d", len(seal.Certificates))
+		}
 	}
 }
 
@@ -149,6 +191,18 @@ func (r *fakeWitnessReplica) AppendCommitCertificate(_ context.Context, record C
 	}
 	r.commits = append(r.commits, cloneCommitCertificateRecord(record))
 	return nil
+}
+
+func (r *fakeWitnessReplica) snapshot() WitnessSnapshot {
+	prepares := make([]PrepareRecord, 0, len(r.prepares))
+	for _, prepare := range r.prepares {
+		prepares = append(prepares, clonePrepareRecord(prepare))
+	}
+	commits := make([]CommitCertificateRecord, 0, len(r.commits))
+	for _, commit := range r.commits {
+		commits = append(commits, cloneCommitCertificateRecord(commit))
+	}
+	return WitnessSnapshot{Prepares: prepares, Commits: commits}
 }
 
 func (r ackWitnessReplica) ID() string {
