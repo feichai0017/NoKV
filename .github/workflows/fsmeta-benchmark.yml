@@ -74,7 +74,7 @@ jobs:
 
       - name: Upload fsmeta benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fsmeta-median-${{ github.run_id }}
           path: |
@@ -119,7 +119,7 @@ jobs:
 
       - name: Upload fsmeta benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fsmeta-long-${{ github.run_id }}
           path: |
