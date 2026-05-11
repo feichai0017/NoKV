@@ -85,6 +85,31 @@ func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.ErrorIs(t, committer.Flush(ctx), errPerasCommitterInvalid)
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(0), stats["flush_total"])
+	require.Equal(t, uint64(0), stats["segment_total"])
+	require.Equal(t, 1, stats["pending"])
+	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+}
+
 func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
