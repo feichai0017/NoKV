@@ -77,6 +77,7 @@ type RemotePerasCommitter struct {
 	flushMu   sync.Mutex
 	bgRunning atomic.Bool
 	bgNext    atomic.Int64
+	closed    atomic.Bool
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
 	latches   *fsperas.AdmissionLatches
@@ -239,8 +240,14 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}
+	if c.closed.Load() {
+		return fsperas.VisibleAck{}, errPerasCommitterClosed
+	}
 	c.commitMu.RLock()
 	defer c.commitMu.RUnlock()
+	if c.closed.Load() {
+		return fsperas.VisibleAck{}, errPerasCommitterClosed
+	}
 	grant, owned, err := c.authority.Acquire(ctx, delta.Authority)
 	if err != nil {
 		c.recordError(err)
@@ -939,11 +946,23 @@ func (c *RemotePerasCommitter) Close() {
 	if c == nil || c.stop == nil {
 		return
 	}
+	c.closed.Store(true)
 	select {
 	case <-c.stop:
 	default:
 		close(c.stop)
 	}
+}
+
+func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	c.Close()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.Flush(ctx)
 }
 
 func (c *RemotePerasCommitter) flushLoop() {

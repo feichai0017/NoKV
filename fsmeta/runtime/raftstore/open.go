@@ -397,7 +397,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			}
 		}
 		if perasCommitter != nil {
-			perasCommitter.Close()
+			if err := perasCommitter.Shutdown(context.Background()); err != nil && first == nil {
+				first = err
+			}
 		}
 		if perasWitnesses != nil {
 			if err := perasWitnesses.Close(); err != nil && first == nil {
