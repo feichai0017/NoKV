@@ -50,6 +50,22 @@ func TestCommandApplyKeysTreatsUnknownResolveLockAsBarrier(t *testing.T) {
 	require.Nil(t, keys)
 }
 
+func TestCommandApplyDependenciesTreatsMVCCMaintenanceAsBarrier(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE,
+		Cmd: &raftcmdpb.Request_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceRequest{
+			Tombstones: []*kvrpcpb.InternalEntryTombstone{{
+				Key:     []byte("k"),
+				Version: 7,
+			}},
+		}},
+	}}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.True(t, barrier)
+	require.Nil(t, deps)
+}
+
 func TestCommandApplyKeysDoesNotSerializeOnPrimaryLockOnly(t *testing.T) {
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
 		testPrewriteRequestWithPrimary([]byte("primary"), []byte("secondary")),

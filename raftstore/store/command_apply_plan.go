@@ -26,10 +26,9 @@ const (
 type commandApplyDependencyClass string
 
 const (
-	commandApplyDependencyUserKey         commandApplyDependencyClass = "user-key"
-	commandApplyDependencyTxnPrimary      commandApplyDependencyClass = "txn-primary"
-	commandApplyDependencyTxnIntent       commandApplyDependencyClass = "txn-intent"
-	commandApplyDependencyMVCCMaintenance commandApplyDependencyClass = "mvcc-maintenance"
+	commandApplyDependencyUserKey    commandApplyDependencyClass = "user-key"
+	commandApplyDependencyTxnPrimary commandApplyDependencyClass = "txn-primary"
+	commandApplyDependencyTxnIntent  commandApplyDependencyClass = "txn-intent"
 )
 
 type commandApplyDependencyKey struct {
@@ -144,11 +143,7 @@ func commandApplyDependencies(req *raftcmdpb.RaftCmdRequest) ([]commandApplyDepe
 			if maintenance == nil || len(maintenance.GetTombstones()) == 0 {
 				return nil, true
 			}
-			for _, tombstone := range maintenance.GetTombstones() {
-				if tombstone != nil {
-					deps = appendCommandApplyVersionedWrite(deps, commandApplyDependencyMVCCMaintenance, tombstone.GetKey(), tombstone.GetVersion())
-				}
-			}
+			return nil, true
 		case raftcmdpb.CmdType_CMD_GET, raftcmdpb.CmdType_CMD_SCAN:
 			return nil, true
 		default:

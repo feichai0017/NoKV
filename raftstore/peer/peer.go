@@ -561,7 +561,6 @@ func (p *Peer) handleReady(rd myraft.Ready) error {
 		}
 		if len(toApply) > 0 && p.apply != nil {
 			if err := p.apply(toApply); err != nil {
-				p.finishApply(rd.CommittedEntries)
 				return err
 			}
 		}

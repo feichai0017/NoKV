@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -252,6 +253,25 @@ func TestPeerFailpointAfterReadyAdvanceBeforeSendRecoversOnLaterTicks(t *testing
 	index, err := p.LinearizableRead(ctx)
 	require.NoError(t, err)
 	require.NoError(t, p.WaitApplied(ctx, index))
+}
+
+func TestPeerApplyErrorDoesNotAdvanceAppliedWatermark(t *testing.T) {
+	applyErr := errors.New("apply failed")
+	p := newTestPeer(t, newPayloadTestStorage(), func(entries []myraft.Entry) error {
+		require.NotEmpty(t, entries)
+		return applyErr
+	})
+	require.NoError(t, p.Bootstrap([]myraft.Peer{{ID: 11}}))
+	require.NoError(t, p.Campaign())
+	require.NoError(t, p.Flush())
+	appliedBefore := p.AppliedIndex()
+
+	require.ErrorIs(t, p.Propose([]byte("bad-apply")), applyErr)
+	require.Equal(t, appliedBefore, p.AppliedIndex())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.Error(t, p.WaitApplied(ctx, appliedBefore+1))
 }
 
 func TestReadIndexHelpersDeliverAndCancel(t *testing.T) {
