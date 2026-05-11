@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
+	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -153,6 +155,28 @@ func requireCapsuleShadowStatBool(t *testing.T, stats map[string]any, key string
 	require.Equal(t, want, got)
 }
 
+func requireCapsuleFastStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+	t.Helper()
+	raw, ok := stats["capsule_fastpath"]
+	require.True(t, ok, "missing capsule_fastpath stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_fastpath has type %T", raw)
+	got, ok := capsuleStats[key].(uint64)
+	require.Truef(t, ok, "capsule_fastpath[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
+func requireCapsuleFastStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+	t.Helper()
+	raw, ok := stats["capsule_fastpath"]
+	require.True(t, ok, "missing capsule_fastpath stats")
+	capsuleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "capsule_fastpath has type %T", raw)
+	got, ok := capsuleStats[key].(bool)
+	require.Truef(t, ok, "capsule_fastpath[%s] has type %T", key, capsuleStats[key])
+	require.Equal(t, want, got)
+}
+
 func txnLockedError(mount fsmeta.MountID, parent fsmeta.InodeID, name string) error {
 	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
@@ -194,7 +218,16 @@ type fakeCapsuleSubmitter struct {
 	deltas []compile.SemanticDelta
 }
 
+type fakeCapsuleCommitter struct {
+	err    error
+	calls  int
+	ids    []fscapsule.OperationID
+	deltas []compile.SemanticDelta
+}
+
 type noopCapsuleSubmitter struct{}
+
+type noopCapsuleCommitter struct{}
 
 type ownedCapsuleAdmitter struct{}
 
@@ -329,11 +362,47 @@ func (s *fakeCapsuleSubmitter) SubmitCapsule(_ context.Context, id fscapsule.Ope
 	}, nil
 }
 
+func (c *fakeCapsuleCommitter) CommitCapsule(_ context.Context, id fscapsule.OperationID, delta compile.SemanticDelta) (fscapsule.CapsuleSeal, error) {
+	c.calls++
+	c.ids = append(c.ids, id)
+	c.deltas = append(c.deltas, delta)
+	if c.err != nil {
+		return fscapsule.CapsuleSeal{}, c.err
+	}
+	return fscapsule.CapsuleSeal{
+		EpochID: 1,
+		Certificates: []fscapsule.SealedCertificate{
+			{
+				Prepare: fscapsule.PrepareRecord{
+					EpochID: 1,
+					OpID:    id,
+				},
+				Commit: fscapsule.CommitCertificateRecord{
+					EpochID: 1,
+					OpID:    id,
+				},
+			},
+		},
+	}, nil
+}
+
 func (noopCapsuleSubmitter) SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error) {
 	return fscapsule.CommitCertificateRecord{
 		EpochID:      1,
 		HolderID:     "holder-a",
 		QuorumAckSet: []string{"store-a", "store-b"},
+	}, nil
+}
+
+func (noopCapsuleCommitter) CommitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CapsuleSeal, error) {
+	return fscapsule.CapsuleSeal{
+		EpochID: 1,
+		Certificates: []fscapsule.SealedCertificate{
+			{
+				Prepare: fscapsule.PrepareRecord{EpochID: 1},
+				Commit:  fscapsule.CommitCertificateRecord{EpochID: 1},
+			},
+		},
 	}, nil
 }
 
@@ -762,6 +831,99 @@ func TestExecutorCreateCapsuleShadowRequiresAuthorityAdmission(t *testing.T) {
 	stats := executor.Stats()
 	requireCapsuleShadowStatUint(t, stats, "submit_total", 0)
 	requireCapsuleShadowStatUint(t, stats, "skip_no_authority_total", 1)
+}
+
+func TestExecutorCreateCapsuleFastPathBypassesRaftCommit(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakeCapsuleCommitter{}
+	submitter := &fakeCapsuleSubmitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
+		WithCapsuleCommitter(committer),
+		WithCapsuleShadowSubmitter(submitter),
+	)
+	require.NoError(t, err)
+
+	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
+	require.Equal(t, fsmeta.InodeID(22), result.Dentry.Inode)
+	require.Equal(t, 1, committer.calls)
+	require.Len(t, committer.ids, 1)
+	require.Equal(t, "fsmeta-exec/create", committer.ids[0].ClientID)
+	require.Equal(t, uint64(1), committer.ids[0].Seq)
+	require.Len(t, committer.deltas, 1)
+	require.Equal(t, compile.EligibilityFastPath, committer.deltas[0].Eligibility)
+	require.Zero(t, submitter.calls, "fast path success must not also submit shadow evidence")
+	require.Empty(t, runner.mutations, "fast path success must bypass the current Raft commit")
+
+	stats := executor.Stats()
+	requireCapsuleFastStatBool(t, stats, "enabled", true)
+	requireCapsuleFastStatUint(t, stats, "attempt_total", 1)
+	requireCapsuleFastStatUint(t, stats, "success_total", 1)
+	requireCapsuleFastStatUint(t, stats, "error_total", 0)
+	requireCapsuleFastStatUint(t, stats, "skip_no_authority_total", 0)
+}
+
+func TestExecutorCreateCapsuleFastPathErrorDoesNotFallback(t *testing.T) {
+	runner := newFakeRunner()
+	fastErr := errors.New("capsule commit failed")
+	committer := &fakeCapsuleCommitter{err: fastErr}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(&fakeCapsuleAdmitter{owned: true}),
+		WithCapsuleCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.ErrorIs(t, err, fastErr)
+	require.Equal(t, 1, committer.calls)
+	require.Empty(t, runner.mutations, "ambiguous Capsule evidence must not fall back into a second commit path")
+
+	stats := executor.Stats()
+	requireCapsuleFastStatUint(t, stats, "attempt_total", 1)
+	requireCapsuleFastStatUint(t, stats, "success_total", 0)
+	requireCapsuleFastStatUint(t, stats, "error_total", 1)
+}
+
+func TestExecutorCreateCapsuleFastPathRequiresAuthorityAdmission(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakeCapsuleCommitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Zero(t, committer.calls)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requireCapsuleFastStatUint(t, stats, "attempt_total", 0)
+	requireCapsuleFastStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
 func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
@@ -2785,6 +2947,131 @@ func BenchmarkExecutorCapsuleShadowSubmitCreate(b *testing.B) {
 	for b.Loop() {
 		executor.submitCapsuleShadow(ctx, delta)
 	}
+}
+
+func BenchmarkExecutorCreateDefaultPath(b *testing.B) {
+	executor, err := newTestExecutor(newFakeRunner(), WithInodeAllocator(&fakeInodeAllocator{next: 22}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCreate(b, executor)
+}
+
+func BenchmarkExecutorCreateCapsuleFastPath(b *testing.B) {
+	executor, err := newTestExecutor(
+		newFakeRunner(),
+		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
+		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
+		WithCapsuleCommitter(noopCapsuleCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCreate(b, executor)
+}
+
+func BenchmarkExecutorCreateCapsuleDirectFastPath(b *testing.B) {
+	runner := newFakeRunner()
+	source := newBenchmarkCapsuleWitness("store-1")
+	holder, err := fscapsule.NewHolder(fscapsule.HolderConfig{
+		EpochID:  1,
+		HolderID: "holder-a",
+		Witnesses: []fscapsule.WitnessReplica{
+			source,
+			newBenchmarkCapsuleWitness("store-2"),
+			newBenchmarkCapsuleWitness("store-3"),
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	committer, err := fscapsule.NewDirectCommitter(fscapsule.DirectCommitterConfig{
+		Holder:   holder,
+		Snapshot: source,
+		Versions: runner,
+		ReplayDB: benchmarkCapsuleApplier{},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
+		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
+		WithCapsuleCommitter(committer),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCreate(b, executor)
+}
+
+func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
+	ctx := context.Background()
+	var seq uint64
+	b.ReportAllocs()
+	for b.Loop() {
+		name := "file-" + strconv.FormatUint(seq, 10)
+		seq++
+		if _, err := executor.Create(ctx, fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   name,
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+type benchmarkCapsuleApplier struct{}
+
+func (benchmarkCapsuleApplier) ApplyInternalEntries([]*entrykv.Entry) error {
+	return nil
+}
+
+type benchmarkCapsuleWitness struct {
+	id       string
+	prepares []fscapsule.PrepareRecord
+	commits  []fscapsule.CommitCertificateRecord
+}
+
+func newBenchmarkCapsuleWitness(id string) *benchmarkCapsuleWitness {
+	return &benchmarkCapsuleWitness{id: id}
+}
+
+func (w *benchmarkCapsuleWitness) ID() string {
+	return w.id
+}
+
+func (w *benchmarkCapsuleWitness) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record fscapsule.PrepareRecord) error {
+	w.prepares = append(w.prepares, record)
+	return nil
+}
+
+func (w *benchmarkCapsuleWitness) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record fscapsule.CommitCertificateRecord) error {
+	w.commits = append(w.commits, record)
+	return nil
+}
+
+func (w *benchmarkCapsuleWitness) Probe(_ context.Context, epochID uint64) (fscapsule.WitnessSnapshot, error) {
+	snapshot := fscapsule.WitnessSnapshot{
+		Prepares: make([]fscapsule.PrepareRecord, 0, len(w.prepares)),
+		Commits:  make([]fscapsule.CommitCertificateRecord, 0, len(w.commits)),
+	}
+	for _, prepare := range w.prepares {
+		if prepare.EpochID == epochID {
+			snapshot.Prepares = append(snapshot.Prepares, prepare)
+		}
+	}
+	for _, commit := range w.commits {
+		if commit.EpochID == epochID {
+			snapshot.Commits = append(snapshot.Commits, commit)
+		}
+	}
+	w.prepares = nil
+	w.commits = nil
+	return snapshot, nil
 }
 
 type corruptDirPageCache struct{}
