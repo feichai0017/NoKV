@@ -21,7 +21,7 @@ func TestBufferedCommitterReturnsVisibleAckAndServesOverlay(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, holder.Pending())
 
@@ -46,7 +46,7 @@ func TestBufferedCommitterFlushAppliesAndClearsOverlay(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
 	require.NoError(t, committer.Flush(context.Background()))
 
@@ -75,9 +75,9 @@ func TestBufferedCommitterFlushBuildsSegmentAndReportsStats(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 2), deltaWithValueWrites("dentry/a", "inode=8"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 2), deltaWithValueWrites("dentry/a", "inode=8"), nil)
 	require.NoError(t, err)
 	require.NoError(t, committer.Flush(context.Background()))
 
@@ -117,7 +117,7 @@ func TestBufferedCommitterDoesNotPublishSegmentOnApplyFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"))
+	_, err = committer.CommitPeras(context.Background(), opID("client-a", 1), deltaWithValueWrites("dentry/a", "inode=7"), nil)
 	require.NoError(t, err)
 	err = committer.Flush(context.Background())
 	require.ErrorIs(t, err, applyErr)
@@ -153,7 +153,7 @@ func BenchmarkBufferedCommitterHotPath(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		id := OperationID{ClientID: "bench", Seq: uint64(i + 1)}
-		if _, err := committer.CommitPeras(ctx, id, deltaWithValueWrites("dentry/a", "inode=7")); err != nil {
+		if _, err := committer.CommitPeras(ctx, id, deltaWithValueWrites("dentry/a", "inode=7"), nil); err != nil {
 			b.Fatal(err)
 		}
 		if i%64 == 63 {

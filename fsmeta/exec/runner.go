@@ -128,7 +128,7 @@ type PerasAuthorityRetirer interface {
 // operation, so errors are returned and never silently fall back after the
 // holder overlay may already include the operation.
 type PerasCommitter interface {
-	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error)
+	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
 }
 
 type PerasOverlayReader interface {
@@ -856,20 +856,20 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 		e.perasVisible.skipWatchedTotal.Add(1)
 		return false, nil
 	}
-	holds, err := e.perasPredicatesHold(ctx, delta)
-	if err != nil {
-		return false, err
-	}
-	if !holds {
-		e.perasVisible.skipPredicateTotal.Add(1)
-		return false, nil
-	}
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err = e.perasCommitter.CommitPeras(ctx, id, delta)
+	_, err := e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
 	e.perasVisible.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
+		if errors.Is(err, fsperas.ErrAdmissionRejected) {
+			e.perasVisible.skipPredicateTotal.Add(1)
+			return false, nil
+		}
+		if isPerasAdmissionTerminalError(err) {
+			e.perasVisible.skipPredicateTotal.Add(1)
+			return true, err
+		}
 		e.perasVisible.errorTotal.Add(1)
 		return true, err
 	}
@@ -903,21 +903,24 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 				present, known := index.KeyState(predicate.Key)
 				if known {
 					if !present {
-						return false, nil
+						return false, fsmeta.ErrNotFound
 					}
 					continue
 				}
 			}
 			ok, err := read(predicate.Key)
-			if err != nil || !ok {
-				return ok, err
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, fsmeta.ErrNotFound
 			}
 		case compile.PredicateNotExists:
 			if index != nil {
 				present, known := index.KeyState(predicate.Key)
 				if known {
 					if present {
-						return false, nil
+						return false, fsmeta.ErrExists
 					}
 					continue
 				}
@@ -926,8 +929,11 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 				}
 			}
 			ok, err := read(predicate.Key)
-			if err != nil || ok {
+			if err != nil {
 				return false, err
+			}
+			if ok {
+				return false, fsmeta.ErrExists
 			}
 		case compile.PredicateObservedValue:
 			// Concrete Peras operation builders read these keys before
@@ -984,6 +990,13 @@ func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compi
 		MountID:    delta.Authority.Mount,
 		MountKeyID: delta.Authority.MountKeyID,
 	}, delta.Authority.Parents[0])
+}
+
+func isPerasAdmissionTerminalError(err error) bool {
+	return errors.Is(err, fsmeta.ErrExists) ||
+		errors.Is(err, fsmeta.ErrNotFound) ||
+		errors.Is(err, fsmeta.ErrInvalidRequest) ||
+		errors.Is(err, fsmeta.ErrInvalidValue)
 }
 
 func concretePerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {

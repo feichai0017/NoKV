@@ -30,7 +30,7 @@ func TestRemotePerasCommitterCommitsAndServesOverlay(t *testing.T) {
 	defer committer.Close()
 
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
-	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.NoError(t, err)
 
 	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
@@ -217,9 +217,9 @@ func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *t
 	deltaB.Authority = scopeB
 
 	ctx := context.Background()
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, deltaA)
+	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, deltaA, nil)
 	require.NoError(t, err)
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, deltaB)
+	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, deltaB, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, committer.FlushAuthority(ctx, scopeA))
@@ -296,7 +296,7 @@ func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing
 
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
 	delta.WriteEffects = []compile.WriteEffect{{Kind: compile.EffectDelete}}
-	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.Error(t, err)
 	require.Equal(t, 0, committer.Stats()["pending"])
 }
@@ -349,7 +349,7 @@ func BenchmarkRemotePerasCommitterCreate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dentryKey := appendUvarintKey("dentry/", uint64(i))
 		inodeKey := appendUvarintKey("inode/", uint64(i))
-		_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, testRuntimePerasDelta(dentryKey, inodeKey))
+		_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -376,7 +376,7 @@ func BenchmarkRemotePerasCommitterCreateParallel(b *testing.B) {
 			current := seq.Add(1)
 			dentryKey := appendUvarintKey("dentry/", current)
 			inodeKey := appendUvarintKey("inode/", current)
-			_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: current}, testRuntimePerasDelta(dentryKey, inodeKey))
+			_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: current}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -385,7 +385,7 @@ func BenchmarkRemotePerasCommitterCreateParallel(b *testing.B) {
 }
 
 func commitRuntimePeras(ctx context.Context, committer *RemotePerasCommitter, seq uint64, dentryKey, inodeKey []byte) error {
-	_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: seq}, testRuntimePerasDelta(dentryKey, inodeKey))
+	_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: seq}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 	return err
 }
 
