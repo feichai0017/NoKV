@@ -11,7 +11,7 @@ import (
 
 var testMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
 
-func TestCreateCompilesFastPathDelta(t *testing.T) {
+func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
 	req := fsmeta.CreateRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
@@ -27,7 +27,7 @@ func TestCreateCompilesFastPathDelta(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, fsmeta.OperationCreate, delta.Kind)
-	require.Equal(t, EligibilityFastPath, delta.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, delta.Eligibility)
 	require.Equal(t, SlowReasonNone, delta.SlowReason)
 	require.Equal(t, []Predicate{
 		{Kind: PredicateNotExists, Key: dentryKey},
@@ -68,7 +68,7 @@ func TestCreateRespectsQuotaMode(t *testing.T) {
 
 	escrow, err := Create(req, testMount, 44, WithQuotaMode(QuotaModeEscrow))
 	require.NoError(t, err)
-	require.Equal(t, EligibilityFastPath, escrow.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, escrow.Eligibility)
 	require.Contains(t, escrow.RuntimeGuards, GuardQuotaCredit)
 }
 
@@ -81,7 +81,7 @@ func TestRenameSameParentFastCrossParentSlow(t *testing.T) {
 		ToName:     "new",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilityFastPath, sameParent.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, sameParent.Eligibility)
 	require.Equal(t, []fsmeta.InodeID{8}, sameParent.Authority.Parents)
 	require.Equal(t, []WriteEffect{
 		{Kind: EffectDelete, Key: sameParent.Plan.MutateKeys[0]},
@@ -96,8 +96,8 @@ func TestRenameSameParentFastCrossParentSlow(t *testing.T) {
 		ToName:     "new",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilitySlowPath, crossParent.Eligibility)
-	require.Equal(t, SlowReasonCrossParent, crossParent.SlowReason)
+	require.Equal(t, EligibilityVisibleCommit, crossParent.Eligibility)
+	require.Empty(t, crossParent.SlowReason)
 	require.Equal(t, []fsmeta.InodeID{8, 9}, crossParent.Authority.Parents)
 }
 
@@ -121,7 +121,7 @@ func TestSlowPathBoundariesStayExplicit(t *testing.T) {
 	require.Len(t, expire.ReadPredicates, fsmeta.DefaultAffinityBucketCount)
 }
 
-func TestLinkAndUnlinkStaySlowUntilWriteSetIsStatic(t *testing.T) {
+func TestLinkAndUnlinkCompileRuntimeConcreteVisibleCommitDeltas(t *testing.T) {
 	link, err := Link(fsmeta.LinkRequest{
 		Mount:      "vol",
 		FromParent: 4,
@@ -130,8 +130,8 @@ func TestLinkAndUnlinkStaySlowUntilWriteSetIsStatic(t *testing.T) {
 		ToName:     "dst",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilitySlowPath, link.Eligibility)
-	require.Equal(t, SlowReasonDynamicWriteSet, link.SlowReason)
+	require.Equal(t, EligibilityVisibleCommit, link.Eligibility)
+	require.Empty(t, link.SlowReason)
 	require.Contains(t, link.RuntimeGuards, GuardSameAuthority)
 	require.Len(t, link.WriteEffects, 2)
 	require.Equal(t, EffectDerivedPut, link.WriteEffects[0].Kind)
@@ -143,14 +143,14 @@ func TestLinkAndUnlinkStaySlowUntilWriteSetIsStatic(t *testing.T) {
 		Name:   "file",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilitySlowPath, delta.Eligibility)
-	require.Equal(t, SlowReasonDynamicWriteSet, delta.SlowReason)
+	require.Equal(t, EligibilityVisibleCommit, delta.Eligibility)
+	require.Empty(t, delta.SlowReason)
 	require.Contains(t, delta.RuntimeGuards, GuardNotLastReference)
 	require.Equal(t, EffectDelete, delta.WriteEffects[0].Kind)
 	require.Equal(t, EffectDerivedPut, delta.WriteEffects[1].Kind)
 }
 
-func TestSessionOperationsCompileFastPathDeltas(t *testing.T) {
+func TestSessionOperationsCompileVisibleCommitDeltas(t *testing.T) {
 	open, err := OpenWriteSession(fsmeta.OpenWriteSessionRequest{
 		Mount:   "vol",
 		Inode:   33,
@@ -158,7 +158,7 @@ func TestSessionOperationsCompileFastPathDeltas(t *testing.T) {
 		TTL:     time.Minute,
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilityFastPath, open.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, open.Eligibility)
 	require.Contains(t, open.RuntimeGuards, GuardExpiredSessionOwner)
 
 	heartbeat, err := HeartbeatWriteSession(fsmeta.HeartbeatWriteSessionRequest{
@@ -168,7 +168,7 @@ func TestSessionOperationsCompileFastPathDeltas(t *testing.T) {
 		TTL:     time.Minute,
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilityFastPath, heartbeat.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, heartbeat.Eligibility)
 	require.Contains(t, heartbeat.RuntimeGuards, GuardLiveSession)
 
 	closeDelta, err := CloseWriteSession(fsmeta.CloseWriteSessionRequest{
@@ -177,7 +177,7 @@ func TestSessionOperationsCompileFastPathDeltas(t *testing.T) {
 		Session: "writer-1",
 	}, testMount)
 	require.NoError(t, err)
-	require.Equal(t, EligibilityFastPath, closeDelta.Eligibility)
+	require.Equal(t, EligibilityVisibleCommit, closeDelta.Eligibility)
 	require.Contains(t, closeDelta.RuntimeGuards, GuardLiveSession)
 	require.Len(t, closeDelta.ReadPredicates, 2)
 	require.Len(t, closeDelta.WriteEffects, 2)

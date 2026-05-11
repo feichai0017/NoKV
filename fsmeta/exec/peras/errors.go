@@ -1,0 +1,5 @@
+package peras
+
+import "errors"
+
+var ErrInvalidPerasSegment = errors.New("fsmeta peras: invalid peras segment")

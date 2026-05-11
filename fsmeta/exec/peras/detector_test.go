@@ -126,7 +126,7 @@ func mustAdmit(detector *ConflictDetector, id OperationID, delta compile.Semanti
 }
 
 func deltaWithReads(keys ...string) compile.SemanticDelta {
-	delta := compile.SemanticDelta{Eligibility: compile.EligibilityFastPath}
+	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.ReadPredicates = append(delta.ReadPredicates, compile.Predicate{
 			Kind: compile.PredicateObservedValue,
@@ -138,7 +138,7 @@ func deltaWithReads(keys ...string) compile.SemanticDelta {
 
 func deltaWithPrefixRead(prefix string) compile.SemanticDelta {
 	return compile.SemanticDelta{
-		Eligibility: compile.EligibilityFastPath,
+		Eligibility: compile.EligibilityVisibleCommit,
 		ReadPredicates: []compile.Predicate{{
 			Kind: compile.PredicatePrefixScan,
 			Key:  []byte(prefix),
@@ -147,7 +147,7 @@ func deltaWithPrefixRead(prefix string) compile.SemanticDelta {
 }
 
 func deltaWithWrites(keys ...string) compile.SemanticDelta {
-	delta := compile.SemanticDelta{Eligibility: compile.EligibilityFastPath}
+	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.WriteEffects = append(delta.WriteEffects, compile.WriteEffect{
 			Kind: compile.EffectPut,

@@ -87,14 +87,14 @@ func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64
 
 func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.OperationKind, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["atomic_fastpath"]
-	require.True(t, ok, "missing atomic_fastpath stats")
+	raw, ok := stats["atomic_one_phase"]
+	require.True(t, ok, "missing atomic_one_phase stats")
 	byOp, ok := raw.(map[string]any)
-	require.Truef(t, ok, "atomic_fastpath has type %T", raw)
+	require.Truef(t, ok, "atomic_one_phase has type %T", raw)
 	rawOp, ok := byOp[string(kind)]
-	require.Truef(t, ok, "missing atomic_fastpath stats for %s", kind)
+	require.Truef(t, ok, "missing atomic_one_phase stats for %s", kind)
 	opStats, ok := rawOp.(map[string]uint64)
-	require.Truef(t, ok, "atomic_fastpath[%s] has type %T", kind, rawOp)
+	require.Truef(t, ok, "atomic_one_phase[%s] has type %T", kind, rawOp)
 	require.Equal(t, want, opStats[key])
 }
 
@@ -155,25 +155,25 @@ func requirePerasShadowStatBool(t *testing.T, stats map[string]any, key string, 
 	require.Equal(t, want, got)
 }
 
-func requirePerasFastStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requirePerasVisibleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["peras_fastpath"]
-	require.True(t, ok, "missing peras_fastpath stats")
+	raw, ok := stats["peras_visible_commit"]
+	require.True(t, ok, "missing peras_visible_commit stats")
 	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_fastpath has type %T", raw)
+	require.Truef(t, ok, "peras_visible_commit has type %T", raw)
 	got, ok := perasStats[key].(uint64)
-	require.Truef(t, ok, "peras_fastpath[%s] has type %T", key, perasStats[key])
+	require.Truef(t, ok, "peras_visible_commit[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
-func requirePerasFastStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requirePerasVisibleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["peras_fastpath"]
-	require.True(t, ok, "missing peras_fastpath stats")
+	raw, ok := stats["peras_visible_commit"]
+	require.True(t, ok, "missing peras_visible_commit stats")
 	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_fastpath has type %T", raw)
+	require.Truef(t, ok, "peras_visible_commit has type %T", raw)
 	got, ok := perasStats[key].(bool)
-	require.Truef(t, ok, "peras_fastpath[%s] has type %T", key, perasStats[key])
+	require.Truef(t, ok, "peras_visible_commit[%s] has type %T", key, perasStats[key])
 	require.Equal(t, want, got)
 }
 
@@ -225,9 +225,23 @@ type fakePerasCommitter struct {
 	deltas []compile.SemanticDelta
 }
 
+type fakePerasWatchFence struct {
+	watched bool
+	calls   int
+	effects [][]compile.WriteEffect
+}
+
+type fakePerasAuthorityFlusher struct {
+	fakePerasCommitter
+	flushCalls  int
+	flushScopes []compile.AuthorityScope
+}
+
 type noopPerasSubmitter struct{}
 
 type noopPerasCommitter struct{}
+
+type flushFailingPerasCommitter struct{}
 
 type ownedPerasAdmitter struct{}
 
@@ -240,9 +254,11 @@ type fakeSubtreePublisher struct {
 }
 
 type fakeQuotaResolver struct {
-	err      error
-	changes  [][]QuotaChange
-	mutation *kvrpcpb.Mutation
+	err               error
+	changes           [][]QuotaChange
+	mutation          *kvrpcpb.Mutation
+	allowPerasVisible bool
+	perasChecks       [][]QuotaChange
 }
 
 type fakeInodeAllocator struct {
@@ -285,6 +301,14 @@ func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ TxnRunner, changes
 		return []*kvrpcpb.Mutation{cloneMutation(q.mutation)}, nil
 	}
 	return nil, nil
+}
+
+func (q *fakeQuotaResolver) AllowPerasVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
+	q.perasChecks = append(q.perasChecks, append([]QuotaChange(nil), changes...))
+	if q.err != nil {
+		return false, q.err
+	}
+	return q.allowPerasVisible, nil
 }
 
 func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
@@ -344,66 +368,62 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 	return a.owned, nil
 }
 
-func (s *fakePerasSubmitter) SubmitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.CommitCertificateRecord, error) {
+func (s *fakePerasSubmitter) SubmitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.VisibleAck, error) {
 	s.calls++
 	s.ids = append(s.ids, id)
 	s.deltas = append(s.deltas, delta)
 	if s.err != nil {
-		return fsperas.CommitCertificateRecord{}, s.err
+		return fsperas.VisibleAck{}, s.err
 	}
-	return fsperas.CommitCertificateRecord{
+	return fsperas.VisibleAck{
 		EpochID:  1,
 		OpID:     id,
 		HolderID: "holder-a",
-		QuorumAckSet: []string{
-			"store-a",
-			"store-b",
-		},
 	}, nil
 }
 
-func (c *fakePerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.PerasSeal, error) {
+func (c *fakePerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, delta compile.SemanticDelta) (fsperas.VisibleAck, error) {
 	c.calls++
 	c.ids = append(c.ids, id)
 	c.deltas = append(c.deltas, delta)
 	if c.err != nil {
-		return fsperas.PerasSeal{}, c.err
+		return fsperas.VisibleAck{}, c.err
 	}
-	return fsperas.PerasSeal{
-		EpochID: 1,
-		Certificates: []fsperas.SealedCertificate{
-			{
-				Prepare: fsperas.PrepareRecord{
-					EpochID: 1,
-					OpID:    id,
-				},
-				Commit: fsperas.CommitCertificateRecord{
-					EpochID: 1,
-					OpID:    id,
-				},
-			},
-		},
-	}, nil
+	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (noopPerasSubmitter) SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.CommitCertificateRecord, error) {
-	return fsperas.CommitCertificateRecord{
-		EpochID:      1,
-		HolderID:     "holder-a",
-		QuorumAckSet: []string{"store-a", "store-b"},
-	}, nil
+func (f *fakePerasWatchFence) HasPerasWatchedWrite(effects []compile.WriteEffect) bool {
+	f.calls++
+	f.effects = append(f.effects, append([]compile.WriteEffect(nil), effects...))
+	return f.watched
 }
 
-func (noopPerasCommitter) CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.PerasSeal, error) {
-	return fsperas.PerasSeal{
-		EpochID: 1,
-		Certificates: []fsperas.SealedCertificate{
-			{
-				Prepare: fsperas.PrepareRecord{EpochID: 1},
-				Commit:  fsperas.CommitCertificateRecord{EpochID: 1},
-			},
-		},
-	}, nil
+func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
+	f.flushCalls++
+	f.flushScopes = append(f.flushScopes, compile.AuthorityScope{
+		Mount:      scope.Mount,
+		MountKeyID: scope.MountKeyID,
+		Buckets:    append([]fsmeta.AffinityBucket(nil), scope.Buckets...),
+		Parents:    append([]fsmeta.InodeID(nil), scope.Parents...),
+		Inodes:     append([]fsmeta.InodeID(nil), scope.Inodes...),
+	})
+	return nil
+}
+
+func (noopPerasSubmitter) SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error) {
+	return fsperas.VisibleAck{EpochID: 1, HolderID: "holder-a"}, nil
+}
+
+func (noopPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta) (fsperas.VisibleAck, error) {
+	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
+}
+
+func (flushFailingPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta) (fsperas.VisibleAck, error) {
+	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
+}
+
+func (flushFailingPerasCommitter) Flush(context.Context) error {
+	return errors.New("unexpected peras flush")
 }
 
 func (ownedPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
@@ -514,6 +534,28 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{token.ReadVersion}, runner.scanVersions)
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
+}
+
+func TestExecutorSnapshotSubtreeFlushesPerasAuthorityBeforeToken(t *testing.T) {
+	runner := newFakeRunner()
+	flusher := &fakePerasAuthorityFlusher{}
+	executor, err := newTestExecutor(runner,
+		WithPerasCommitter(flusher),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+	)
+	require.NoError(t, err)
+
+	token, err := executor.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), token.ReadVersion)
+	require.Equal(t, 1, flusher.flushCalls)
+	require.Len(t, flusher.flushScopes, 1)
+	require.Equal(t, fsmeta.MountID("vol"), flusher.flushScopes[0].Mount)
+	require.Equal(t, fsmeta.MountKeyID(1), flusher.flushScopes[0].MountKeyID)
+	require.Equal(t, []fsmeta.InodeID{7}, flusher.flushScopes[0].Parents)
 }
 
 func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
@@ -771,7 +813,7 @@ func TestExecutorCreateSubmitsPerasShadowAndKeepsRaftCommit(t *testing.T) {
 	require.Equal(t, "fsmeta-exec/create", submitter.ids[0].ClientID)
 	require.Equal(t, uint64(1), submitter.ids[0].Seq)
 	require.Len(t, submitter.deltas, 1)
-	require.Equal(t, compile.EligibilityFastPath, submitter.deltas[0].Eligibility)
+	require.Equal(t, compile.EligibilityVisibleCommit, submitter.deltas[0].Eligibility)
 	require.Len(t, runner.mutations, 1, "shadow submit must not replace the current Raft commit")
 
 	stats := executor.Stats()
@@ -833,7 +875,7 @@ func TestExecutorCreatePerasShadowRequiresAuthorityAdmission(t *testing.T) {
 	requirePerasShadowStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
-func TestExecutorCreatePerasFastPathBypassesRaftCommit(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakePerasCommitter{}
 	submitter := &fakePerasSubmitter{}
@@ -861,19 +903,77 @@ func TestExecutorCreatePerasFastPathBypassesRaftCommit(t *testing.T) {
 	require.Equal(t, "fsmeta-exec/create", committer.ids[0].ClientID)
 	require.Equal(t, uint64(1), committer.ids[0].Seq)
 	require.Len(t, committer.deltas, 1)
-	require.Equal(t, compile.EligibilityFastPath, committer.deltas[0].Eligibility)
-	require.Zero(t, submitter.calls, "fast path success must not also submit shadow evidence")
-	require.Empty(t, runner.mutations, "fast path success must bypass the current Raft commit")
+	require.Equal(t, compile.EligibilityVisibleCommit, committer.deltas[0].Eligibility)
+	require.Zero(t, submitter.calls, "visible commit success must not also submit shadow evidence")
+	require.Empty(t, runner.mutations, "visible commit success must bypass the current Raft commit")
 
 	stats := executor.Stats()
-	requirePerasFastStatBool(t, stats, "enabled", true)
-	requirePerasFastStatUint(t, stats, "attempt_total", 1)
-	requirePerasFastStatUint(t, stats, "success_total", 1)
-	requirePerasFastStatUint(t, stats, "error_total", 0)
-	requirePerasFastStatUint(t, stats, "skip_no_authority_total", 0)
+	requirePerasVisibleStatBool(t, stats, "enabled", true)
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+	requirePerasVisibleStatUint(t, stats, "error_total", 0)
+	requirePerasVisibleStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
-func TestExecutorCreatePerasFastPathErrorDoesNotFallback(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 21)
+	committer := &fakePerasCommitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+	require.Zero(t, committer.calls, "failed not-exists predicate must not enter Peras visible commit")
+	require.Empty(t, runner.mutations)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
+}
+
+func TestExecutorCreatePerasVisibleCommitFallsBackWhenWatched(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakePerasCommitter{}
+	fence := &fakePerasWatchFence{watched: true}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+		WithPerasWatchFence(fence),
+	)
+	require.NoError(t, err)
+
+	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
+	require.Equal(t, 1, fence.calls)
+	require.Len(t, fence.effects, 1)
+	require.Zero(t, committer.calls)
+	require.Len(t, runner.mutations, 1)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	requirePerasVisibleStatUint(t, stats, "skip_watched_total", 1)
+}
+
+func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
 	fastErr := errors.New("peras commit failed")
 	committer := &fakePerasCommitter{err: fastErr}
@@ -896,12 +996,12 @@ func TestExecutorCreatePerasFastPathErrorDoesNotFallback(t *testing.T) {
 	require.Empty(t, runner.mutations, "ambiguous Peras evidence must not fall back into a second commit path")
 
 	stats := executor.Stats()
-	requirePerasFastStatUint(t, stats, "attempt_total", 1)
-	requirePerasFastStatUint(t, stats, "success_total", 0)
-	requirePerasFastStatUint(t, stats, "error_total", 1)
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 0)
+	requirePerasVisibleStatUint(t, stats, "error_total", 1)
 }
 
-func TestExecutorCreatePerasFastPathRequiresAuthorityAdmission(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitRequiresAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakePerasCommitter{}
 	executor, err := newTestExecutor(
@@ -922,11 +1022,115 @@ func TestExecutorCreatePerasFastPathRequiresAuthorityAdmission(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requirePerasFastStatUint(t, stats, "attempt_total", 0)
-	requirePerasFastStatUint(t, stats, "skip_no_authority_total", 1)
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	requirePerasVisibleStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
-func TestExecutorCreatePerasBufferedFastPathServesLookupOverlay(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitSkipsSharedQuota(t *testing.T) {
+	runner := newFakeRunner()
+	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 7)
+	require.NoError(t, err)
+	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
+	committer := &fakePerasCommitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithQuotaResolver(quota),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
+	require.NoError(t, err)
+
+	require.Zero(t, committer.calls, "shared quota must remain on the slow path until quota credits exist")
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 3)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
+}
+
+func TestExecutorCreatePerasVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T) {
+	runner := newFakeRunner()
+	quota := &fakeQuotaResolver{allowPerasVisible: true}
+	committer := &fakePerasCommitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithQuotaResolver(quota),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, committer.calls)
+	require.Empty(t, quota.changes)
+	require.Empty(t, runner.mutations)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+}
+
+func TestExecutorOpenWriteSessionPerasVisibleCommitBypassesRaftCommit(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	committer := &fakePerasCommitter{}
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	record, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: 22, ExpiresUnixNs: 200}, record)
+	require.Equal(t, 1, committer.calls)
+	require.Len(t, committer.deltas, 1)
+	require.Len(t, committer.deltas[0].WriteEffects, 2)
+	for _, effect := range committer.deltas[0].WriteEffects {
+		require.Equal(t, compile.EffectPut, effect.Kind)
+		require.NotEmpty(t, effect.Key)
+		require.NotEmpty(t, effect.Value)
+		decoded, err := fsmeta.DecodeSessionValue(effect.Value)
+		require.NoError(t, err)
+		require.Equal(t, record, decoded)
+	}
+	require.Empty(t, runner.mutations, "session visible commit must bypass the current Raft commit")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+	requirePerasVisibleStatUint(t, stats, "skip_non_concrete_total", 0)
+}
+
+func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
@@ -955,7 +1159,100 @@ func TestExecutorCreatePerasBufferedFastPathServesLookupOverlay(t *testing.T) {
 	require.Equal(t, created.Dentry, lookedUp)
 }
 
-func TestExecutorCreatePerasBufferedFastPathServesReadDirPlusOverlay(t *testing.T) {
+func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22, 23}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "run",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeDirectory},
+	})
+	require.NoError(t, err)
+	getsAfterDir := runner.getCalls
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 22,
+		Name:   "part-000",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.InodeID(23), created.Inode.Inode)
+	require.Equal(t, getsAfterDir, runner.getCalls, "empty-directory admission should avoid per-child predicate reads")
+	require.Empty(t, runner.mutations)
+	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
+}
+
+func TestExecutorWriteSessionLifecyclePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(200), opened.ExpiresUnixNs)
+
+	heartbeat, err := executor.HeartbeatWriteSession(context.Background(), fsmeta.HeartbeatWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+		TTL:     200 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(300), heartbeat.ExpiresUnixNs)
+
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, 22, "writer-1")
+	require.NoError(t, err)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, 22)
+	require.NoError(t, err)
+	owner, ok, err := executor.readSessionByKey(context.Background(), ownerKey, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, heartbeat, owner)
+
+	err = executor.CloseWriteSession(context.Background(), fsmeta.CloseWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   22,
+		Session: "writer-1",
+	})
+	require.NoError(t, err)
+
+	_, deleted, ok := committer.GetPerasOverlay(sessionKey)
+	require.True(t, ok)
+	require.True(t, deleted)
+	_, deleted, ok = committer.GetPerasOverlay(ownerKey)
+	require.True(t, ok)
+	require.True(t, deleted)
+	require.Empty(t, runner.mutations, "buffered session lifecycle should stay entirely inside Peras overlay")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 3)
+	requirePerasVisibleStatUint(t, stats, "success_total", 3)
+}
+
+func TestExecutorCreatePerasBufferedVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	committer := newTestBufferedPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
@@ -1088,7 +1385,7 @@ func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
 	require.ErrorIs(t, err, errInodeAllocatorRequired)
 }
 
-func TestExecutorCreateUsesAtomicMutateFastPathWhenHandled(t *testing.T) {
+func TestExecutorCreateUsesAtomicMutateOnePhaseWhenHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
@@ -1266,6 +1563,53 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	require.Empty(t, runner.atomicCalls)
 	require.Len(t, base.mutations, 1)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "skip_total", 1)
+}
+
+func TestExecutorUpdateInodePerasBufferedVisibleCommitReadsCreateOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	})
+	require.NoError(t, err)
+
+	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:            "vol",
+		Parent:           7,
+		Inode:            created.Inode.Inode,
+		Name:             "file",
+		SetSize:          true,
+		Size:             8192,
+		SetMode:          true,
+		Mode:             0o600,
+		SetUpdatedUnixNs: true,
+		UpdatedUnixNs:    42,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, uint32(0o600), updated.Mode)
+	require.Equal(t, uint64(8192), updated.Size)
+	require.Equal(t, int64(42), updated.UpdatedUnixNs)
+	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, created.Inode.Inode, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, updated, stored)
+	require.Empty(t, runner.mutations, "create+update should stay inside Peras overlay")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
+	requirePerasVisibleStatUint(t, stats, "success_total", 2)
 }
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
@@ -1791,6 +2135,22 @@ func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T)
 	require.Contains(t, runner.data, string(liveOwnerKey))
 }
 
+func TestExecutorExpireWriteSessionsDoesNotFlushPerasOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	expired := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
+	seedSession(t, runner, "vol", expired)
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithPerasCommitter(flushFailingPerasCommitter{}),
+	)
+	require.NoError(t, err)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
+}
+
 func TestExecutorUnlinkReservesNegativeQuotaWhenInodeExists(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
@@ -1829,6 +2189,38 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint32(2), inode.LinkCount)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
+}
+
+func TestExecutorLinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Link(context.Background(), fsmeta.LinkRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "file",
+		ToParent:   8,
+		ToName:     "alias",
+	})
+	require.NoError(t, err)
+
+	require.Empty(t, runner.mutations)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "alias"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(2), inode.LinkCount)
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
 func TestExecutorLinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
@@ -2342,6 +2734,31 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	require.Equal(t, uint32(1), inode.LinkCount)
 }
 
+func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.NoError(t, err)
+
+	require.Empty(t, runner.mutations)
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "file"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(1), inode.LinkCount)
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
 func TestExecutorUnlinkMissingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
@@ -2467,7 +2884,70 @@ func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
 	require.Equal(t, fsmeta.InodeID(22), record.Inode)
 }
 
-func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
+func TestExecutorRenamePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   7,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: 7, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Empty(t, runner.mutations, "same-parent rename should stay inside Peras overlay")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+}
+
+func TestExecutorCrossParentRenamePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: 8, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Empty(t, runner.mutations, "same-authority cross-parent rename should stay inside Peras overlay")
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestExecutorAtomicOnePhaseBacksOffAfterRepeatedFallback(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
 	authority := &fakeAuthorityResolver{same: true}
@@ -2477,7 +2957,7 @@ func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
 	require.NoError(t, err)
 
-	total := atomicFastPathBackoffAfter + 3
+	total := atomicOnePhaseBackoffAfter + 3
 	for i := range total {
 		oldName := fmt.Sprintf("old-%d", i)
 		newName := fmt.Sprintf("new-%d", i)
@@ -2492,14 +2972,14 @@ func TestExecutorAtomicFastPathBacksOffAfterRepeatedFallback(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.Len(t, runner.atomicCalls, atomicFastPathBackoffAfter)
+	require.Len(t, runner.atomicCalls, atomicOnePhaseBackoffAfter)
 	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "fallback_total", atomicFastPathBackoffAfter)
+	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "fallback_total", atomicOnePhaseBackoffAfter)
 	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "skip_total", 3)
 	requireAtomicStatUint(t, stats, fsmeta.OperationRename, "backoff_skip_total", 3)
 }
 
-func TestExecutorAtomicFastPathBackoffIsAffinityScoped(t *testing.T) {
+func TestExecutorAtomicOnePhaseBackoffIsAffinityScoped(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
 	authority := &fakeAuthorityResolver{same: true}
@@ -2509,7 +2989,7 @@ func TestExecutorAtomicFastPathBackoffIsAffinityScoped(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
 	require.NoError(t, err)
 
-	for i := range atomicFastPathBackoffAfter {
+	for i := range atomicOnePhaseBackoffAfter {
 		oldName := fmt.Sprintf("old-%d", i)
 		newName := fmt.Sprintf("new-%d", i)
 		seedDentry(t, runner.fakeRunner, "vol", 7, oldName, fsmeta.InodeID(100+i))
@@ -2534,7 +3014,7 @@ func TestExecutorAtomicFastPathBackoffIsAffinityScoped(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, atomicFastPathBackoffAfter+1)
+	require.Len(t, runner.atomicCalls, atomicOnePhaseBackoffAfter+1)
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationRename, "skip_total", 0)
 }
 
@@ -2728,7 +3208,7 @@ func renameAffinity(t *testing.T, from, to fsmeta.InodeID) string {
 	require.NoError(t, err)
 	destination, err := fsmeta.EncodeDentryKey(testMountIdentity, to, "new")
 	require.NoError(t, err)
-	return atomicFastPathAffinity(source, []*kvrpcpb.Mutation{
+	return atomicOnePhaseAffinity(source, []*kvrpcpb.Mutation{
 		{Op: kvrpcpb.Mutation_Delete, Key: source},
 		{Op: kvrpcpb.Mutation_Put, Key: destination},
 	})
@@ -2964,7 +3444,7 @@ func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {
 		b.Fatal(err)
 	}
 	delta := compile.SemanticDelta{
-		Eligibility: compile.EligibilityFastPath,
+		Eligibility: compile.EligibilityVisibleCommit,
 		Authority: compile.AuthorityScope{
 			Mount:      "vol",
 			MountKeyID: 1,
@@ -3017,7 +3497,7 @@ func BenchmarkExecutorCreateDefaultPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreatePerasFastPath(b *testing.B) {
+func BenchmarkExecutorCreatePerasVisibleCommit(b *testing.B) {
 	executor, err := newTestExecutor(
 		newFakeRunner(),
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
@@ -3030,24 +3510,17 @@ func BenchmarkExecutorCreatePerasFastPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreatePerasDirectFastPath(b *testing.B) {
+func BenchmarkExecutorCreatePerasDirectVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
-	source := newBenchmarkPerasWitness("store-1")
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []fsperas.WitnessReplica{
-			source,
-			newBenchmarkPerasWitness("store-2"),
-			newBenchmarkPerasWitness("store-3"),
-		},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
 	committer, err := fsperas.NewDirectCommitter(fsperas.DirectCommitterConfig{
 		Holder:   holder,
-		Snapshot: source,
 		Versions: runner,
 		ReplayDB: benchmarkPerasApplier{},
 	})
@@ -3066,25 +3539,128 @@ func BenchmarkExecutorCreatePerasDirectFastPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
+func BenchmarkExecutorOpenWriteSessionDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorOpenWriteSession(b, runner, executor)
+}
+
+func BenchmarkExecutorOpenWriteSessionPerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorOpenWriteSession(b, runner, executor)
+}
+
+func BenchmarkExecutorUpdateInodeDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorUpdateInode(b, runner, executor)
+}
+
+func BenchmarkExecutorUpdateInodePerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorUpdateInode(b, runner, executor)
+}
+
+func BenchmarkExecutorRenameDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorRename(b, runner, executor)
+}
+
+func BenchmarkExecutorRenamePerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorRename(b, runner, executor)
+}
+
+func BenchmarkExecutorLinkDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorLink(b, runner, executor)
+}
+
+func BenchmarkExecutorLinkPerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorLink(b, runner, executor)
+}
+
+func BenchmarkExecutorUnlinkDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorUnlink(b, runner, executor)
+}
+
+func BenchmarkExecutorUnlinkPerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorUnlink(b, runner, executor)
+}
+
 func newTestBufferedPerasCommitter(t *testing.T, versions fsperas.VersionAllocator) *fsperas.BufferedCommitter {
 	t.Helper()
-	source := newBenchmarkPerasWitness("store-1")
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []fsperas.WitnessReplica{
-			source,
-			newBenchmarkPerasWitness("store-2"),
-			newBenchmarkPerasWitness("store-3"),
-		},
 	})
 	require.NoError(t, err)
 	committer, err := fsperas.NewBufferedCommitter(fsperas.BufferedCommitterConfig{
-		Holder:    holder,
-		Snapshot:  source,
-		Versions:  versions,
-		ReplayDB:  benchmarkPerasApplier{},
-		BatchSize: 0,
+		Holder:   holder,
+		Versions: versions,
+		ReplayDB: benchmarkPerasApplier{},
 	})
 	require.NoError(t, err)
 	return committer
@@ -3108,54 +3684,147 @@ func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
 	}
 }
 
+func benchmarkExecutorUpdateInode(b *testing.B, runner *fakeRunner, executor *Executor) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		inode := fsmeta.InodeID(i + 1000)
+		name := "file-" + strconv.Itoa(i)
+		benchmarkSeedDentry(b, runner, 7, name, inode)
+		benchmarkSeedInode(b, runner, inode)
+		if _, err := executor.UpdateInode(ctx, fsmeta.UpdateInodeRequest{
+			Mount:            "vol",
+			Parent:           7,
+			Inode:            inode,
+			Name:             name,
+			SetSize:          true,
+			Size:             uint64(i + 4096),
+			SetMode:          true,
+			Mode:             0o600,
+			SetUpdatedUnixNs: true,
+			UpdatedUnixNs:    int64(i + 1),
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkExecutorRename(b *testing.B, runner *fakeRunner, executor *Executor) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		inode := fsmeta.InodeID(i + 1000)
+		oldName := "old-" + strconv.Itoa(i)
+		newName := "new-" + strconv.Itoa(i)
+		benchmarkSeedDentry(b, runner, 7, oldName, inode)
+		if err := executor.Rename(ctx, fsmeta.RenameRequest{
+			Mount:      "vol",
+			FromParent: 7,
+			FromName:   oldName,
+			ToParent:   7,
+			ToName:     newName,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkExecutorOpenWriteSession(b *testing.B, runner *fakeRunner, executor *Executor) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		inode := fsmeta.InodeID(i + 1000)
+		benchmarkSeedInode(b, runner, inode)
+		if _, err := executor.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
+			Mount:   "vol",
+			Inode:   inode,
+			Session: fsmeta.SessionID("writer-" + strconv.Itoa(i)),
+			TTL:     100 * time.Nanosecond,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkExecutorLink(b *testing.B, runner *fakeRunner, executor *Executor) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		inode := fsmeta.InodeID(i + 1000)
+		fromName := "file-" + strconv.Itoa(i)
+		toName := "alias-" + strconv.Itoa(i)
+		benchmarkSeedDentry(b, runner, 7, fromName, inode)
+		benchmarkSeedInode(b, runner, inode)
+		if err := executor.Link(ctx, fsmeta.LinkRequest{
+			Mount:      "vol",
+			FromParent: 7,
+			FromName:   fromName,
+			ToParent:   8,
+			ToName:     toName,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkExecutorUnlink(b *testing.B, runner *fakeRunner, executor *Executor) {
+	ctx := context.Background()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		inode := fsmeta.InodeID(i + 1000)
+		name := "file-" + strconv.Itoa(i)
+		benchmarkSeedDentry(b, runner, 7, name, inode)
+		benchmarkSeedInodeRecord(b, runner, fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
+		if err := executor.Unlink(ctx, fsmeta.UnlinkRequest{
+			Mount:  "vol",
+			Parent: 7,
+			Name:   name,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkSeedDentry(b *testing.B, runner *fakeRunner, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {
+	b.Helper()
+	key, err := fsmeta.EncodeDentryKey(testMountIdentity, parent, name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	value, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: parent,
+		Name:   name,
+		Inode:  inode,
+		Type:   fsmeta.InodeTypeFile,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	runner.data[string(key)] = value
+}
+
+func benchmarkSeedInode(b *testing.B, runner *fakeRunner, inode fsmeta.InodeID) {
+	b.Helper()
+	benchmarkSeedInodeRecord(b, runner, fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+}
+
+func benchmarkSeedInodeRecord(b *testing.B, runner *fakeRunner, record fsmeta.InodeRecord) {
+	b.Helper()
+	key, err := fsmeta.EncodeInodeKey(testMountIdentity, record.Inode)
+	if err != nil {
+		b.Fatal(err)
+	}
+	value, err := fsmeta.EncodeInodeValue(record)
+	if err != nil {
+		b.Fatal(err)
+	}
+	runner.data[string(key)] = value
+}
+
 type benchmarkPerasApplier struct{}
 
 func (benchmarkPerasApplier) ApplyInternalEntries([]*entrykv.Entry) error {
 	return nil
-}
-
-type benchmarkPerasWitness struct {
-	id       string
-	prepares []fsperas.PrepareRecord
-	commits  []fsperas.CommitCertificateRecord
-}
-
-func newBenchmarkPerasWitness(id string) *benchmarkPerasWitness {
-	return &benchmarkPerasWitness{id: id}
-}
-
-func (w *benchmarkPerasWitness) ID() string {
-	return w.id
-}
-
-func (w *benchmarkPerasWitness) AppendPrepare(_ context.Context, _ compile.AuthorityScope, record fsperas.PrepareRecord) error {
-	w.prepares = append(w.prepares, record)
-	return nil
-}
-
-func (w *benchmarkPerasWitness) AppendCommitCertificate(_ context.Context, _ compile.AuthorityScope, record fsperas.CommitCertificateRecord) error {
-	w.commits = append(w.commits, record)
-	return nil
-}
-
-func (w *benchmarkPerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
-	snapshot := fsperas.WitnessSnapshot{
-		Prepares: make([]fsperas.PrepareRecord, 0, len(w.prepares)),
-		Commits:  make([]fsperas.CommitCertificateRecord, 0, len(w.commits)),
-	}
-	for _, prepare := range w.prepares {
-		if prepare.EpochID == epochID {
-			snapshot.Prepares = append(snapshot.Prepares, prepare)
-		}
-	}
-	for _, commit := range w.commits {
-		if commit.EpochID == epochID {
-			snapshot.Commits = append(snapshot.Commits, commit)
-		}
-	}
-	w.prepares = nil
-	w.commits = nil
-	return snapshot, nil
 }
 
 type corruptDirPageCache struct{}

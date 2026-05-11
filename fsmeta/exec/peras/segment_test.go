@@ -110,9 +110,49 @@ func TestBuildPerasSegmentRootIsStableAndSensitive(t *testing.T) {
 	require.NotEqual(t, left.Root, changed.Root)
 }
 
+func TestPerasSegmentPayloadRoundTrip(t *testing.T) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(t, 3))
+	require.NoError(t, err)
+
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	decoded, err := VerifyPerasSegmentPayload(payload, segment.Root, digest)
+	require.NoError(t, err)
+
+	require.Equal(t, segment.Root, decoded.Root)
+	require.Equal(t, segment.Stats(), decoded.Stats())
+	require.Equal(t, segment.Entries(), decoded.Entries())
+	require.Equal(t, segment.Completions, decoded.Completions)
+	value, deleted, ok := decoded.Get(segment.Dentries[0].Key)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, segment.Dentries[0].Value, value)
+}
+
+func TestPerasSegmentPayloadRejectsTampering(t *testing.T) {
+	segment, err := BuildPerasSegmentFromReplayPlan(workspaceCreateReplayPlan(t, 2))
+	require.NoError(t, err)
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	tampered := append([]byte(nil), payload...)
+	tampered[len(tampered)-1] ^= 0xff
+	_, err = VerifyPerasSegmentPayload(tampered, segment.Root, digest)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
+
+	wrongDigest := digest
+	wrongDigest[0] ^= 0xff
+	_, err = VerifyPerasSegmentPayload(payload, segment.Root, wrongDigest)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
+}
+
 func TestBuildPerasSegmentRejectsInvalidPlans(t *testing.T) {
 	_, err := BuildPerasSegmentFromReplayPlan(ReplayPlan{})
-	require.ErrorIs(t, err, ErrInvalidPerasSeal)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
 
 	_, err = BuildPerasSegmentFromReplayPlan(ReplayPlan{
 		EpochID:  1,
@@ -129,7 +169,7 @@ func TestBuildPerasSegmentRejectsInvalidPlans(t *testing.T) {
 			{OpID: OperationID{ClientID: "c", Seq: 1}, Kind: fsmeta.OperationCreate, Mutations: []ReplayMutation{{Key: []byte("k")}}},
 		},
 	})
-	require.ErrorIs(t, err, ErrInvalidPerasSeal)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
 }
 
 func BenchmarkBuildWorkspaceSegment1000(b *testing.B) {

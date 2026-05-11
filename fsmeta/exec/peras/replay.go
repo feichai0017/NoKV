@@ -23,56 +23,20 @@ type ReplayPlan struct {
 	Operations []ReplayOperation
 }
 
-func BuildReplayPlan(seal PerasSeal) (ReplayPlan, error) {
-	if seal.EpochID == 0 || len(seal.Certificates) == 0 {
-		return ReplayPlan{}, ErrInvalidPerasSeal
-	}
-	ops := make([]ReplayOperation, 0, len(seal.Certificates))
-	for _, cert := range seal.Certificates {
-		if err := validateSealedCertificate(seal.EpochID, cert); err != nil {
-			return ReplayPlan{}, err
-		}
-		delta, err := DecodeSemanticDeltaPayload(cert.Prepare.DeltaPayload)
-		if err != nil {
-			return ReplayPlan{}, err
-		}
-		op, err := replayOperationFromDelta(cert.Prepare.OpID, delta)
-		if err != nil {
-			return ReplayPlan{}, err
-		}
-		ops = append(ops, op)
-	}
-	return ReplayPlan{EpochID: seal.EpochID, Versions: seal.Versions, Operations: ops}, nil
-}
-
 func ReplayPlanOperationCount(plan ReplayPlan) uint64 {
 	return uint64(len(plan.Operations))
 }
 
-func validateSealedCertificate(epochID uint64, cert SealedCertificate) error {
-	if cert.Prepare.EpochID != epochID || cert.Commit.EpochID != epochID || cert.Prepare.OpID != cert.Commit.OpID {
-		return ErrInvalidPerasSeal
-	}
-	prepareDigest, err := PrepareDigest(cert.Prepare)
-	if err != nil {
-		return err
-	}
-	if prepareDigest != cert.Commit.PrepareDigest {
-		return ErrInvalidPerasSeal
-	}
-	return nil
-}
-
 func replayOperationFromDelta(id OperationID, delta compile.SemanticDelta) (ReplayOperation, error) {
-	if delta.Eligibility != compile.EligibilityFastPath || len(delta.WriteEffects) == 0 {
-		return ReplayOperation{}, ErrInvalidPerasSeal
+	if delta.Eligibility != compile.EligibilityVisibleCommit || len(delta.WriteEffects) == 0 {
+		return ReplayOperation{}, ErrInvalidPerasSegment
 	}
 	mutations := make([]ReplayMutation, 0, len(delta.WriteEffects))
 	for _, effect := range delta.WriteEffects {
 		switch effect.Kind {
 		case compile.EffectPut:
 			if effect.Value == nil {
-				return ReplayOperation{}, ErrInvalidPerasSeal
+				return ReplayOperation{}, ErrInvalidPerasSegment
 			}
 			mutations = append(mutations, ReplayMutation{
 				Key:   cloneBytes(effect.Key),
@@ -84,7 +48,7 @@ func replayOperationFromDelta(id OperationID, delta compile.SemanticDelta) (Repl
 				Delete: true,
 			})
 		default:
-			return ReplayOperation{}, ErrInvalidPerasSeal
+			return ReplayOperation{}, ErrInvalidPerasSegment
 		}
 	}
 	return ReplayOperation{

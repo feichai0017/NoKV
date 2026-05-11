@@ -8,7 +8,7 @@ import (
 	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
-func (s *Service) PerasWitnessPrepare(ctx context.Context, req *kvrpcpb.PerasWitnessPrepareRequest) (*kvrpcpb.PerasWitnessPrepareResponse, error) {
+func (s *Service) PerasWitnessSegment(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentRequest) (*kvrpcpb.PerasWitnessSegmentResponse, error) {
 	if s == nil || s.perasWitness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
@@ -16,32 +16,14 @@ func (s *Service) PerasWitnessPrepare(ctx context.Context, req *kvrpcpb.PerasWit
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
-	record, err := rsperas.PrepareRecordFromProto(req.GetRecord())
+	record, err := rsperas.SegmentWitnessRecordFromProto(req.GetRecord())
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
-	if err := s.perasWitness.AppendPrepare(ctx, scope, record); err != nil {
+	if err := s.perasWitness.AppendSegment(ctx, scope, record); err != nil {
 		return nil, rpcPerasWitnessStatus(err)
 	}
-	return &kvrpcpb.PerasWitnessPrepareResponse{}, nil
-}
-
-func (s *Service) PerasWitnessCommit(ctx context.Context, req *kvrpcpb.PerasWitnessCommitRequest) (*kvrpcpb.PerasWitnessCommitResponse, error) {
-	if s == nil || s.perasWitness == nil {
-		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
-	}
-	scope, err := rsperas.ScopeFromProto(req.GetScope())
-	if err != nil {
-		return nil, rpcInvalidArgument(err.Error())
-	}
-	record, err := rsperas.CommitCertificateRecordFromProto(req.GetRecord())
-	if err != nil {
-		return nil, rpcInvalidArgument(err.Error())
-	}
-	if err := s.perasWitness.AppendCommitCertificate(ctx, scope, record); err != nil {
-		return nil, rpcPerasWitnessStatus(err)
-	}
-	return &kvrpcpb.PerasWitnessCommitResponse{}, nil
+	return &kvrpcpb.PerasWitnessSegmentResponse{}, nil
 }
 
 func (s *Service) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {
@@ -62,10 +44,7 @@ func rpcPerasWitnessStatus(err error) error {
 	switch {
 	case errors.Is(err, rsperas.ErrWitnessNodeConfigInvalid),
 		errors.Is(err, rsperas.ErrWitnessAuthorityMissing),
-		errors.Is(err, rsperas.ErrWitnessAuthorityMismatch),
-		errors.Is(err, rsperas.ErrWitnessDuplicateRecord),
-		errors.Is(err, rsperas.ErrWitnessPrepareMissing),
-		errors.Is(err, rsperas.ErrWitnessPrepareMismatch):
+		errors.Is(err, rsperas.ErrWitnessAuthorityMismatch):
 		return rpcProtocolPrecondition(err.Error())
 	default:
 		return rpcStatus(err)

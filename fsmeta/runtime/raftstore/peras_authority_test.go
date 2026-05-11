@@ -71,7 +71,7 @@ func TestPerasAuthorityManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	require.Zero(t, client.calls)
 }
 
-func TestPerasAuthorityManagerAcquireHeldUpdatesMirror(t *testing.T) {
+func TestPerasAuthorityManagerAcquireHeldUpdatesActiveAuthorityView(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
 	held := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))

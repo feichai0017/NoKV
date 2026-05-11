@@ -14,7 +14,7 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 )
 
-const defaultPerasAuthorityTTL = 30 * time.Second
+const defaultPerasAuthorityTTL = 5 * time.Minute
 
 type perasAuthorityClient interface {
 	ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
@@ -119,7 +119,7 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	rootScope := perasauth.AuthorityScopeFromDelta(scope)
 	// v1 acquires one broad mount authority per holder. This avoids grant churn
-	// and same-holder bucket conflicts while the seal/apply path is still
+	// and same-holder bucket conflicts while the segment apply path is still
 	// experimental. Finer parent/bucket grants can be restored once the active
 	// fence and grant handoff policy are production-ready.
 	rootScope.Buckets = nil

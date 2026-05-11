@@ -88,20 +88,177 @@ type PerasSegment struct {
 	inputMutationCount uint64
 }
 
-// BuildPerasSegment turns a committed Peras seal into a compact, sorted segment
-// that can answer holder-local reads and later be installed as one raftstore
-// object.
-func BuildPerasSegment(seal PerasSeal) (PerasSegment, error) {
-	plan, err := BuildReplayPlan(seal)
+func EncodePerasSegment(segment PerasSegment) ([]byte, error) {
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.Grow(perasSegmentPayloadEncodedSize(segment))
+	writeFixed(&out, perasSegmentMagic[:])
+	writeUint64(&out, segment.EpochID)
+	writeUint64(&out, segment.Versions.First)
+	writeUint64(&out, segment.Versions.Count)
+	writeFixed(&out, segment.Root[:])
+	writeUint64(&out, segment.inputMutationCount)
+	writeUint64(&out, uint64(len(segment.entries)))
+	for _, entry := range segment.entries {
+		writeUint64(&out, uint64(entry.Class))
+		writeBytes(&out, entry.Key)
+		writeBool(&out, entry.Delete)
+		writeBytes(&out, entry.Value)
+	}
+	writeUint64(&out, uint64(len(segment.Completions)))
+	for _, completion := range segment.Completions {
+		writeOperationID(&out, completion.OpID)
+		writeString(&out, string(completion.Kind))
+		writeUint64(&out, completion.Version)
+		writeUint64(&out, uint64(completion.MutationCount))
+	}
+	return out.Bytes(), nil
+}
+
+func DecodePerasSegment(payload []byte) (PerasSegment, error) {
+	r := witnessReader{buf: payload}
+	if err := r.readMagic(perasSegmentMagic); err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	epochID, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	firstVersion, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	versionCount, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	var root [32]byte
+	if err := r.readFixed(root[:]); err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	inputMutationCount, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	entryCount, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	if entryCount > uint64(maxSegmentSliceLen()) {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	entries := make([]SegmentKV, 0, entryCount)
+	for range entryCount {
+		class, err := r.readUint64()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		key, err := r.readBytes()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		deleted, err := r.readBool()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		value, err := r.readBytes()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		entries = append(entries, SegmentKV{
+			Class:  SegmentRecordClass(class),
+			Key:    key,
+			Value:  value,
+			Delete: deleted,
+		})
+	}
+	completionCount, err := r.readUint64()
+	if err != nil {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	if completionCount > uint64(maxSegmentSliceLen()) {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	completions := make([]SegmentCompletion, 0, completionCount)
+	for range completionCount {
+		opID, err := r.readOperationID()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		kind, err := r.readString()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		version, err := r.readUint64()
+		if err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		mutationCount, err := r.readUint64()
+		if err != nil || mutationCount > uint64(^uint32(0)) {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		completions = append(completions, SegmentCompletion{
+			OpID:          opID,
+			Kind:          fsmeta.OperationKind(kind),
+			Version:       version,
+			MutationCount: uint32(mutationCount),
+		})
+	}
+	if !r.done() {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	segment := PerasSegment{
+		EpochID:            epochID,
+		Versions:           ReplayVersionRange{First: firstVersion, Count: versionCount},
+		Root:               root,
+		Completions:        completions,
+		entries:            entries,
+		completionIndex:    make(map[OperationID]int, len(completions)),
+		inputMutationCount: inputMutationCount,
+	}
+	for i, completion := range segment.Completions {
+		segment.completionIndex[completion.OpID] = i
+	}
+	segment.assignRuns(entries)
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return PerasSegment{}, err
+	}
+	return segment, nil
+}
+
+func PerasSegmentPayloadDigest(payload []byte) ([32]byte, error) {
+	if len(payload) == 0 {
+		return [32]byte{}, ErrInvalidPerasSegment
+	}
+	return sha256.Sum256(payload), nil
+}
+
+func VerifyPerasSegmentPayload(payload []byte, expectedRoot, expectedDigest [32]byte) (PerasSegment, error) {
+	if expectedRoot == ([32]byte{}) || expectedDigest == ([32]byte{}) {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	actualDigest, err := PerasSegmentPayloadDigest(payload)
 	if err != nil {
 		return PerasSegment{}, err
 	}
-	return BuildPerasSegmentFromReplayPlan(plan)
+	if actualDigest != expectedDigest {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	segment, err := DecodePerasSegment(payload)
+	if err != nil {
+		return PerasSegment{}, err
+	}
+	if segment.Root != expectedRoot {
+		return PerasSegment{}, ErrInvalidPerasSegment
+	}
+	return segment, nil
 }
 
 func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 {
-		return PerasSegment{}, ErrInvalidPerasSeal
+		return PerasSegment{}, ErrInvalidPerasSegment
 	}
 	if !plan.Versions.Empty() {
 		if err := plan.Versions.ValidateForOperationCount(uint64(len(plan.Operations))); err != nil {
@@ -114,7 +271,7 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 	var mutationCount uint64
 	for opOffset, op := range plan.Operations {
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
-			return PerasSegment{}, ErrInvalidPerasSeal
+			return PerasSegment{}, ErrInvalidPerasSegment
 		}
 		version := uint64(0)
 		if !plan.Versions.Empty() {
@@ -132,7 +289,7 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 		})
 		for _, mutation := range op.Mutations {
 			if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
-				return PerasSegment{}, ErrInvalidPerasSeal
+				return PerasSegment{}, ErrInvalidPerasSegment
 			}
 			kv := SegmentKV{
 				Class:  classifySegmentKey(mutation.Key),
@@ -248,6 +405,66 @@ func (s PerasSegment) Stats() SegmentStats {
 		stats.CompressionRatio = float64(s.inputMutationCount) / float64(entryCount)
 	}
 	return stats
+}
+
+func validatePerasSegmentPayload(segment PerasSegment) error {
+	if segment.EpochID == 0 || segment.Root == ([32]byte{}) || len(segment.entries) == 0 || len(segment.Completions) == 0 {
+		return ErrInvalidPerasSegment
+	}
+	if segment.Versions.Count != 0 && segment.Versions.Count != uint64(len(segment.Completions)) {
+		return ErrInvalidPerasSegment
+	}
+	if segment.inputMutationCount < uint64(len(segment.entries)) {
+		return ErrInvalidPerasSegment
+	}
+	for i, entry := range segment.entries {
+		if len(entry.Key) == 0 || (!entry.Delete && entry.Value == nil) {
+			return ErrInvalidPerasSegment
+		}
+		if uint64(len(entry.Key)) > uint64(^uint32(0)) || uint64(len(entry.Value)) > uint64(^uint32(0)) {
+			return ErrInvalidPerasSegment
+		}
+		if i > 0 && bytes.Compare(segment.entries[i-1].Key, entry.Key) >= 0 {
+			return ErrInvalidPerasSegment
+		}
+	}
+	seen := make(map[OperationID]struct{}, len(segment.Completions))
+	var completionMutationCount uint64
+	for _, completion := range segment.Completions {
+		if !completion.OpID.Valid() || completion.MutationCount == 0 {
+			return ErrInvalidPerasSegment
+		}
+		if _, ok := seen[completion.OpID]; ok {
+			return ErrInvalidPerasSegment
+		}
+		seen[completion.OpID] = struct{}{}
+		completionMutationCount += uint64(completion.MutationCount)
+		if uint64(len(completion.OpID.ClientID)) > uint64(^uint32(0)) || uint64(len(completion.Kind)) > uint64(^uint32(0)) {
+			return ErrInvalidPerasSegment
+		}
+	}
+	if completionMutationCount != segment.inputMutationCount {
+		return ErrInvalidPerasSegment
+	}
+	if segmentRoot(segment) != segment.Root {
+		return ErrInvalidPerasSegment
+	}
+	return nil
+}
+
+func perasSegmentPayloadEncodedSize(segment PerasSegment) int {
+	size := len(perasSegmentMagic) + 8 + 8 + 8 + 32 + 8 + 8 + 8
+	for _, entry := range segment.entries {
+		size += 8 + 4 + len(entry.Key) + 1 + 4 + len(entry.Value)
+	}
+	for _, completion := range segment.Completions {
+		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8
+	}
+	return size
+}
+
+func maxSegmentSliceLen() int {
+	return int(^uint(0) >> 1)
 }
 
 func (s *PerasSegment) assignRuns(entries []SegmentKV) {

@@ -7,6 +7,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 
@@ -138,6 +140,68 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NoError(t, err)
 	defer gotWrite.DecrRef()
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
+}
+
+func TestApplyPerasInstallSegmentMaterializesCoalescedSegment(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	plan := fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{
+			{
+				OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+				Kind: fsmeta.OperationCreate,
+				Mutations: []fsperas.ReplayMutation{
+					{Key: []byte("dentry/a"), Value: []byte("old")},
+				},
+			},
+			{
+				OpID: fsperas.OperationID{ClientID: "client", Seq: 2},
+				Kind: fsmeta.OperationUpdateInode,
+				Mutations: []fsperas.ReplayMutation{
+					{Key: []byte("dentry/a"), Value: []byte("new")},
+					{Key: []byte("inode/1"), Value: []byte("attrs")},
+				},
+			},
+		},
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				RoutingKey:           []byte("dentry/a"),
+				SegmentRoot:          segment.Root[:],
+				SegmentPayloadDigest: digest[:],
+				SegmentPayload:       payload,
+				InstallVersion:       99,
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
+	require.Nil(t, installResp.GetError())
+	require.Equal(t, uint64(2), installResp.GetOperationCount())
+	require.Equal(t, uint64(2), installResp.GetEntryCount())
+
+	reader := percolator.NewReader(db)
+	value, _, err := reader.GetValue([]byte("dentry/a"), 100)
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), value)
+	value, _, err = reader.GetValue([]byte("inode/1"), 100)
+	require.NoError(t, err)
+	require.Equal(t, []byte("attrs"), value)
 }
 
 func TestApplyTryAtomicMutateCommandMaterializesBothKeys(t *testing.T) {

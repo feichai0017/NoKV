@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
@@ -19,7 +20,6 @@ type OverlayKV struct {
 
 type BufferedCommitterConfig struct {
 	Holder        *Holder
-	Snapshot      WitnessSnapshotSource
 	Versions      VersionAllocator
 	ReplayDB      InternalEntryApplier
 	BatchSize     int
@@ -30,7 +30,6 @@ type BufferedCommitterConfig struct {
 
 type BufferedCommitter struct {
 	holder      *Holder
-	snapshot    WitnessSnapshotSource
 	versions    VersionAllocator
 	replayDB    InternalEntryApplier
 	hook        func(ReplayPlan, ApplyStats)
@@ -44,6 +43,8 @@ type BufferedCommitter struct {
 
 	overlayMu sync.RWMutex
 	overlay   map[string]overlayEntry
+	known     map[string]bool
+	emptyDirs map[string]struct{}
 
 	commitTotal       atomic.Uint64
 	flushTotal        atomic.Uint64
@@ -66,12 +67,11 @@ type overlayEntry struct {
 }
 
 func NewBufferedCommitter(cfg BufferedCommitterConfig) (*BufferedCommitter, error) {
-	if cfg.Holder == nil || cfg.Snapshot == nil || cfg.Versions == nil || cfg.ReplayDB == nil {
+	if cfg.Holder == nil || cfg.Versions == nil || cfg.ReplayDB == nil {
 		return nil, ErrHolderConfigInvalid
 	}
 	c := &BufferedCommitter{
 		holder:        cfg.Holder,
-		snapshot:      cfg.Snapshot,
 		versions:      cfg.Versions,
 		replayDB:      cfg.ReplayDB,
 		hook:          cfg.ApplyHook,
@@ -80,6 +80,8 @@ func NewBufferedCommitter(cfg BufferedCommitterConfig) (*BufferedCommitter, erro
 		flushInterval: cfg.FlushInterval,
 		stop:          make(chan struct{}),
 		overlay:       make(map[string]overlayEntry),
+		known:         make(map[string]bool),
+		emptyDirs:     make(map[string]struct{}),
 	}
 	if c.flushInterval > 0 {
 		go c.flushLoop()
@@ -87,19 +89,20 @@ func NewBufferedCommitter(cfg BufferedCommitterConfig) (*BufferedCommitter, erro
 	return c, nil
 }
 
-func (c *BufferedCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta) (PerasSeal, error) {
+func (c *BufferedCommitter) CommitPeras(ctx context.Context, id OperationID, delta compile.SemanticDelta) (VisibleAck, error) {
 	if c == nil || c.holder == nil {
-		return PerasSeal{}, ErrHolderConfigInvalid
+		return VisibleAck{}, ErrHolderConfigInvalid
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, err := c.holder.Submit(ctx, id, delta); err != nil {
+	ack, err := c.holder.Submit(ctx, id, delta)
+	if err != nil {
 		c.errorTotal.Add(1)
-		return PerasSeal{}, err
+		return VisibleAck{}, err
 	}
 	if err := c.addOverlay(id, delta); err != nil {
 		c.errorTotal.Add(1)
-		return PerasSeal{}, err
+		return VisibleAck{}, err
 	}
 	c.commitTotal.Add(1)
 	if c.batchSize > 0 && c.holder.Pending() >= c.batchSize {
@@ -109,11 +112,11 @@ func (c *BufferedCommitter) CommitPeras(ctx context.Context, id OperationID, del
 			}
 		}()
 	}
-	return PerasSeal{}, nil
+	return ack, nil
 }
 
 func (c *BufferedCommitter) Flush(ctx context.Context) error {
-	if c == nil || c.holder == nil || c.snapshot == nil || c.versions == nil || c.replayDB == nil {
+	if c == nil || c.holder == nil || c.versions == nil || c.replayDB == nil {
 		return ErrHolderConfigInvalid
 	}
 	c.flushMu.Lock()
@@ -129,20 +132,12 @@ func (c *BufferedCommitter) Flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := c.snapshot.Probe(ctx, c.holder.EpochID())
+	plan, _, err := c.holder.BuildPendingReplayPlan(firstVersion)
 	if err != nil {
 		return err
 	}
-	seal, err := c.holder.BuildPendingSealWithVersions(firstVersion, snapshot)
-	if err != nil {
-		return err
-	}
-	if len(seal.Certificates) != len(pending) {
-		return ErrInvalidPerasSeal
-	}
-	plan, err := BuildReplayPlan(seal)
-	if err != nil {
-		return err
+	if len(plan.Operations) != len(pending) {
+		return ErrInvalidPerasSegment
 	}
 	segment, err := BuildPerasSegmentFromReplayPlan(plan)
 	if err != nil {
@@ -160,7 +155,7 @@ func (c *BufferedCommitter) Flush(ctx context.Context) error {
 		c.hook(plan, stats)
 	}
 	segmentStats := segment.Stats()
-	if err := c.holder.MarkSealApplied(seal); err != nil {
+	if err := c.holder.MarkReplayPlanApplied(plan); err != nil {
 		return err
 	}
 	c.removeOverlayForPlan(plan)
@@ -184,6 +179,55 @@ func (c *BufferedCommitter) GetPerasOverlay(key []byte) (value []byte, deleted b
 		return nil, false, false
 	}
 	return cloneBytes(entry.value), entry.delete, true
+}
+
+func (c *BufferedCommitter) KeyState(key []byte) (present bool, known bool) {
+	if c == nil {
+		return false, false
+	}
+	c.overlayMu.RLock()
+	entry, ok := c.overlay[string(key)]
+	if ok {
+		c.overlayMu.RUnlock()
+		return !entry.delete, true
+	}
+	present, ok = c.known[string(key)]
+	c.overlayMu.RUnlock()
+	return present, ok
+}
+
+func (c *BufferedCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil {
+		return false
+	}
+	c.overlayMu.RLock()
+	_, ok := c.emptyDirs[DirectoryFactKey(mount, inode)]
+	c.overlayMu.RUnlock()
+	return ok
+}
+
+func (c *BufferedCommitter) RememberKey(key []byte, present bool) {
+	if c == nil || len(key) == 0 {
+		return
+	}
+	c.overlayMu.Lock()
+	if c.known == nil {
+		c.known = make(map[string]bool)
+	}
+	c.known[string(key)] = present
+	c.overlayMu.Unlock()
+}
+
+func (c *BufferedCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if c == nil {
+		return
+	}
+	c.overlayMu.Lock()
+	if c.emptyDirs == nil {
+		c.emptyDirs = make(map[string]struct{})
+	}
+	RememberEmptyDirectoryFact(c.emptyDirs, mount, inode)
+	c.overlayMu.Unlock()
 }
 
 func (c *BufferedCommitter) ScanPerasOverlay(start []byte, limit uint32) []OverlayKV {
@@ -231,11 +275,15 @@ func (c *BufferedCommitter) Stats() map[string]any {
 			"last_segment_root":             [32]byte{},
 			"error_total":                   uint64(0),
 			"overlay_keys":                  0,
+			"predicate_known_keys":          0,
+			"predicate_empty_dirs":          0,
 			"pending":                       0,
 		}
 	}
 	c.overlayMu.RLock()
 	overlayKeys := len(c.overlay)
+	knownKeys := len(c.known)
+	emptyDirs := len(c.emptyDirs)
 	c.overlayMu.RUnlock()
 	c.statsMu.RLock()
 	lastSegmentStats := c.lastSegmentStats
@@ -256,6 +304,8 @@ func (c *BufferedCommitter) Stats() map[string]any {
 		"last_segment_root":             lastSegmentRoot,
 		"error_total":                   c.errorTotal.Load(),
 		"overlay_keys":                  overlayKeys,
+		"predicate_known_keys":          knownKeys,
+		"predicate_empty_dirs":          emptyDirs,
 		"pending":                       c.holder.Pending(),
 	}
 }
@@ -301,7 +351,7 @@ func (c *BufferedCommitter) addOverlay(id OperationID, delta compile.SemanticDel
 	defer c.overlayMu.Unlock()
 	for _, effect := range delta.WriteEffects {
 		if len(effect.Key) == 0 {
-			return ErrInvalidPerasSeal
+			return ErrInvalidPerasSegment
 		}
 		entry := overlayEntry{
 			opID: id,
@@ -310,15 +360,24 @@ func (c *BufferedCommitter) addOverlay(id OperationID, delta compile.SemanticDel
 		switch effect.Kind {
 		case compile.EffectPut:
 			if effect.Value == nil {
-				return ErrInvalidPerasSeal
+				return ErrInvalidPerasSegment
 			}
 			entry.value = cloneBytes(effect.Value)
 		case compile.EffectDelete:
 			entry.delete = true
 		default:
-			return ErrInvalidPerasSeal
+			return ErrInvalidPerasSegment
 		}
 		c.overlay[string(effect.Key)] = entry
+	}
+	if c.known == nil {
+		c.known = make(map[string]bool)
+	}
+	if c.emptyDirs == nil {
+		c.emptyDirs = make(map[string]struct{})
+	}
+	if err := RememberDeltaFacts(c.known, c.emptyDirs, delta); err != nil {
+		return err
 	}
 	return nil
 }

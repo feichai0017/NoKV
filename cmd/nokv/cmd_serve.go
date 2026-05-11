@@ -222,14 +222,14 @@ func runServeCmd(w io.Writer, args []string) error {
 	}()
 
 	var perasWitness kv.PerasWitness
-	var perasMirror *perasauth.Mirror
+	var perasAuthorityFeed *perasauth.RootAuthorityFeed
 	if *perasWitnessEnabled {
-		perasWitness, perasMirror, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+		perasWitness, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
 		if err != nil {
 			return err
 		}
-		if perasMirror != nil {
-			defer func() { _ = perasMirror.Close() }()
+		if perasAuthorityFeed != nil {
+			defer func() { _ = perasAuthorityFeed.Close() }()
 		}
 	}
 

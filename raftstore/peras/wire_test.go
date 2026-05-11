@@ -21,73 +21,41 @@ func TestPerasWireRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, scope, decodedScope)
 
-	prepare := wireTestPrepareRecord(t, scope)
-	decodedPrepare, err := PrepareRecordFromProto(PrepareRecordToProto(prepare))
+	record := wireTestSegmentRecord()
+	decodedRecord, err := SegmentWitnessRecordFromProto(SegmentWitnessRecordToProto(record))
 	require.NoError(t, err)
-	require.Equal(t, prepare, decodedPrepare)
+	require.Equal(t, record, decodedRecord)
 
-	prepareDigest, err := fsperas.PrepareDigest(prepare)
-	require.NoError(t, err)
-	commit := fsperas.CommitCertificateRecord{
-		EpochID:           prepare.EpochID,
-		OpID:              prepare.OpID,
-		PrepareDigest:     prepareDigest,
-		QuorumAckSet:      []string{"n1", "n2"},
-		TimestampUnixNano: 5678,
-		HolderID:          prepare.HolderID,
-	}
-	for i := range commit.HolderSignature {
-		commit.HolderSignature[i] = byte(i)
-	}
-	decodedCommit, err := CommitCertificateRecordFromProto(CommitCertificateRecordToProto(commit))
-	require.NoError(t, err)
-	require.Equal(t, commit, decodedCommit)
-
-	snapshot := fsperas.WitnessSnapshot{
-		Prepares: []fsperas.PrepareRecord{prepare},
-		Commits:  []fsperas.CommitCertificateRecord{commit},
-	}
+	snapshot := fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{record}}
 	decoded, err := SnapshotFromProto(SnapshotToProto(snapshot))
 	require.NoError(t, err)
 	require.Equal(t, snapshot, decoded)
 }
 
 func TestPerasWireRejectsWrongFixedDigestLength(t *testing.T) {
-	prepare := PrepareRecordToProto(wireTestPrepareRecord(t, compile.AuthorityScope{Mount: "m1"}))
-	prepare.DeltaDigest = prepare.DeltaDigest[:31]
-	_, err := PrepareRecordFromProto(prepare)
-	require.ErrorContains(t, err, "delta_digest length")
+	record := SegmentWitnessRecordToProto(wireTestSegmentRecord())
+	record.SegmentRoot = record.SegmentRoot[:31]
+	_, err := SegmentWitnessRecordFromProto(record)
+	require.ErrorContains(t, err, "segment_root length")
 }
 
-func wireTestPrepareRecord(t *testing.T, scope compile.AuthorityScope) fsperas.PrepareRecord {
-	t.Helper()
-	payload, err := fsperas.EncodeSemanticDeltaPayload(compile.SemanticDelta{
-		Kind:        fsmeta.OperationCreate,
-		Authority:   scope,
-		Eligibility: compile.EligibilityFastPath,
-	})
-	require.NoError(t, err)
-	digest, err := fsperas.SemanticDeltaPayloadDigest(payload)
-	require.NoError(t, err)
-	record := fsperas.PrepareRecord{
-		EpochID:            7,
-		OpID:               fsperas.OperationID{ClientID: "client-a", Seq: 42},
-		DeltaPayload:       payload,
-		DeltaDigest:        digest,
-		DependencyFrontier: []fsperas.OperationID{{ClientID: "client-a", Seq: 41}},
-		TimestampUnixNano:  1234,
-		HolderID:           "holder-a",
+func wireTestSegmentRecord() fsperas.SegmentWitnessRecord {
+	var root [32]byte
+	root[0] = 9
+	payload := []byte("wire-segment-payload")
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		panic(err)
 	}
-	for i := range record.PredicateDigest {
-		record.PredicateDigest[i] = byte(i)
+	return fsperas.SegmentWitnessRecord{
+		EpochID:              7,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		SegmentPayloadSize:   uint64(len(payload)),
+		SegmentPayload:       payload,
+		OperationCount:       128,
+		EntryCount:           256,
+		TimestampUnixNano:    1234,
+		HolderID:             "holder-a",
 	}
-	for i := range record.AuthorityProofDigest {
-		record.AuthorityProofDigest[i] = byte(i + 1)
-	}
-	for i := range record.HolderSignature {
-		record.HolderSignature[i] = byte(i + 2)
-	}
-	_, err = fsperas.EncodePrepareRecord(record)
-	require.NoError(t, err)
-	return record
 }

@@ -34,22 +34,26 @@ func fatalf(format string, args ...any) {
 
 func main() {
 	var (
-		addr                   = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
-		coordAddr              = flag.String("coordinator-addr", "", "coordinator gRPC endpoint used for TSO, routing, and store discovery")
-		metricsAddr            = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
-		negCacheDir            = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
-		dirPageDir             = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
-		affinityBuckets        = flag.Int("affinity-buckets", fsmeta.DefaultAffinityBucketCount, "fsmeta placement bucket count used to choose Create inode IDs")
-		lockTTL                = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
-		sessionCleanupInterval = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
-		sessionCleanupLimit    = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
-		perasHolderID          = flag.String("peras-holder-id", "", "experimental Peras holder id; empty disables authority acquisition")
-		perasFastPath          = flag.Bool("peras-fast-path", false, "enable experimental Peras fast commit path against raftstore witnesses")
-		perasAuthorityTTL      = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
-		perasWitnessStores     = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
-		perasWitnessQuorum     = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
-		perasSubmitRetries     = flag.Int("peras-submit-retries", 3, "Peras submit retries for transient witness authority lag")
-		perasRetryBackoff      = flag.Duration("peras-submit-retry-backoff", 20*time.Millisecond, "Peras submit retry backoff")
+		addr                            = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
+		coordAddr                       = flag.String("coordinator-addr", "", "coordinator gRPC endpoint used for TSO, routing, and store discovery")
+		metricsAddr                     = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+		negCacheDir                     = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
+		dirPageDir                      = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
+		affinityBuckets                 = flag.Int("affinity-buckets", fsmeta.DefaultAffinityBucketCount, "fsmeta placement bucket count used to choose Create inode IDs")
+		lockTTL                         = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
+		sessionCleanupInterval          = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
+		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
+		perasHolderID                   = flag.String("peras-holder-id", "", "experimental Peras holder id; empty disables authority acquisition")
+		perasVisibleCommit              = flag.Bool("peras-visible-commit", false, "enable experimental Peras visible commit path against raftstore witnesses")
+		perasAuthorityTTL               = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
+		perasWitnessStores              = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
+		perasWitnessQuorum              = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
+		perasSegmentWitnessRetries      = flag.Int("peras-segment-witness-retries", 3, "Peras segment witness retries for transient authority lag")
+		perasSegmentWitnessRetryBackoff = flag.Duration("peras-segment-witness-retry-backoff", 20*time.Millisecond, "Peras segment witness retry backoff")
+		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras visible operations per segment before background flush; zero uses runtime default")
+		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
+		perasBackgroundFlushTimeout     = flag.Duration("peras-background-flush-timeout", 0, "timeout for opportunistic Peras background segment install; zero uses runtime default")
+		perasBackgroundErrorBackoff     = flag.Duration("peras-background-error-backoff", 0, "backoff after failed opportunistic Peras background segment install; zero uses runtime default")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
@@ -60,7 +64,9 @@ func main() {
 		fatalf("session-cleanup-limit exceeds maximum %d", fsmeta.MaxSessionExpireLimit)
 		return
 	}
-	if *perasAuthorityTTL < 0 || *perasRetryBackoff < 0 || *perasSubmitRetries < 0 || *perasWitnessQuorum < 0 {
+	if *perasAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *perasWitnessQuorum < 0 ||
+		*perasSegmentBatchSize < 0 || *perasSegmentFlushEvery < 0 ||
+		*perasBackgroundFlushTimeout < 0 || *perasBackgroundErrorBackoff < 0 {
 		fatalf("peras options must be non-negative")
 		return
 	}
@@ -74,20 +80,24 @@ func main() {
 	defer cancel()
 
 	rt, err := openRuntime(ctx, fsmetaraftstore.Options{
-		CoordinatorAddr:         *coordAddr,
-		NegativeCacheDir:        *negCacheDir,
-		DirPageCacheDir:         *dirPageDir,
-		AffinityBuckets:         *affinityBuckets,
-		LockTTL:                 *lockTTL,
-		SessionCleanupInterval:  *sessionCleanupInterval,
-		SessionCleanupLimit:     uint32(*sessionCleanupLimit),
-		PerasHolderID:           *perasHolderID,
-		PerasAuthorityTTL:       *perasAuthorityTTL,
-		PerasFastPath:           *perasFastPath,
-		PerasWitnessStoreIDs:    perasStoreIDs,
-		PerasWitnessQuorum:      *perasWitnessQuorum,
-		PerasSubmitRetries:      *perasSubmitRetries,
-		PerasSubmitRetryBackoff: *perasRetryBackoff,
+		CoordinatorAddr:                 *coordAddr,
+		NegativeCacheDir:                *negCacheDir,
+		DirPageCacheDir:                 *dirPageDir,
+		AffinityBuckets:                 *affinityBuckets,
+		LockTTL:                         *lockTTL,
+		SessionCleanupInterval:          *sessionCleanupInterval,
+		SessionCleanupLimit:             uint32(*sessionCleanupLimit),
+		PerasHolderID:                   *perasHolderID,
+		PerasAuthorityTTL:               *perasAuthorityTTL,
+		PerasVisibleCommit:              *perasVisibleCommit,
+		PerasWitnessStoreIDs:            perasStoreIDs,
+		PerasWitnessQuorum:              *perasWitnessQuorum,
+		PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
+		PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
+		PerasSegmentBatchSize:           *perasSegmentBatchSize,
+		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
+		PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
+		PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
 	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)
@@ -125,6 +135,9 @@ func main() {
 		}
 		if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
 			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
+		}
+		if rt.PerasCommitter != nil {
+			publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.PerasCommitter.Stats() }))
 		}
 		if rt.SessionCleaner != nil {
 			publishExpvarOnce("nokv_fsmeta_sessions", expvar.Func(func() any { return rt.SessionCleaner.Stats() }))

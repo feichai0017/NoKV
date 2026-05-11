@@ -334,12 +334,16 @@ services:
       - "--affinity-buckets=16"
       - "--metrics-addr=0.0.0.0:9400"
       - "--peras-holder-id=${NOKV_FSMETA_PERAS_HOLDER_ID:-}"
-      - "--peras-authority-ttl=${NOKV_FSMETA_PERAS_AUTHORITY_TTL:-30s}"
-      - "--peras-fast-path=${NOKV_FSMETA_PERAS_FAST_PATH:-false}"
+      - "--peras-authority-ttl=${NOKV_FSMETA_PERAS_AUTHORITY_TTL:-5m}"
+      - "--peras-visible-commit=${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}"
       - "--peras-witness-stores=${NOKV_FSMETA_PERAS_WITNESS_STORES:-}"
       - "--peras-witness-quorum=${NOKV_FSMETA_PERAS_WITNESS_QUORUM:-0}"
-      - "--peras-submit-retries=${NOKV_FSMETA_PERAS_SUBMIT_RETRIES:-50}"
-      - "--peras-submit-retry-backoff=${NOKV_FSMETA_PERAS_SUBMIT_RETRY_BACKOFF:-20ms}"
+      - "--peras-segment-witness-retries=${NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES:-50}"
+      - "--peras-segment-witness-retry-backoff=${NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRY_BACKOFF:-20ms}"
+      - "--peras-segment-batch-size=${NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE:-256}"
+      - "--peras-segment-flush-every=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY:-100ms}"
+      - "--peras-background-flush-timeout=${NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT:-2s}"
+      - "--peras-background-error-backoff=${NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF:-1s}"
     volumes:
       - fsmeta-negative-cache:/var/lib/nokv/negative-cache
       - fsmeta-dirpage-cache:/var/lib/nokv/dirpage-cache

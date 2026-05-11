@@ -23,6 +23,7 @@ var batchedWriteCommandTypes = []raftcmdpb.CmdType{
 	raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 	raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 	raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+	raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 }
 
 type writeCommandProposer func(context.Context, *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
@@ -317,6 +318,8 @@ func writeCommandName(cmdType raftcmdpb.CmdType) string {
 		return "resolve_lock"
 	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
 		return "atomic_mutate"
+	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		return "peras_install_segment"
 	default:
 		return "unknown"
 	}
