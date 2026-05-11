@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
+)
+
+const (
+	perasWitnessDiscoveryTimeout = 45 * time.Second
+	perasWitnessDiscoveryBackoff = 100 * time.Millisecond
 )
 
 type perasStoreLister interface {
@@ -25,30 +31,57 @@ func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dia
 	if lister == nil {
 		return nil, errStoreListerRequired
 	}
-	resp, err := lister.ListStores(ctx, &coordpb.ListStoresRequest{})
-	if err != nil {
-		return nil, err
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	ctx, cancel := context.WithTimeout(ctx, perasWitnessDiscoveryTimeout)
+	defer cancel()
+
 	allowed := make(map[uint64]struct{}, len(storeIDs))
 	for _, id := range storeIDs {
 		if id != 0 {
 			allowed[id] = struct{}{}
 		}
 	}
+	for {
+		out, complete, err := tryBuildRemotePerasWitnesses(ctx, lister, dialOpts, allowed)
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			return out, nil
+		}
+		if out != nil {
+			_ = out.Close()
+		}
+		timer := time.NewTimer(perasWitnessDiscoveryBackoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errPerasCommitterInvalid
+		case <-timer.C:
+		}
+	}
+}
+
+func tryBuildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*perasWitnessConnections, bool, error) {
+	resp, err := lister.ListStores(ctx, &coordpb.ListStoresRequest{})
+	if err != nil {
+		return nil, false, err
+	}
 	out := &perasWitnessConnections{}
+	seen := make(map[uint64]struct{}, len(allowed))
 	for _, store := range resp.GetStores() {
-		if store.GetState() != coordpb.StoreState_STORE_STATE_UP || store.GetClientAddr() == "" {
+		if !perasWitnessStoreSelected(store, allowed) {
 			continue
 		}
 		if len(allowed) > 0 {
-			if _, ok := allowed[store.GetStoreId()]; !ok {
-				continue
-			}
+			seen[store.GetStoreId()] = struct{}{}
 		}
 		conn, err := grpc.NewClient(store.GetClientAddr(), dialOpts...)
 		if err != nil {
 			_ = out.Close()
-			return nil, fmt.Errorf("dial peras witness store %d: %w", store.GetStoreId(), err)
+			return nil, false, fmt.Errorf("dial peras witness store %d: %w", store.GetStoreId(), err)
 		}
 		witness, err := raftclient.NewRemotePerasWitness(
 			fmt.Sprintf("store-%d", store.GetStoreId()),
@@ -57,14 +90,17 @@ func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dia
 		if err != nil {
 			_ = conn.Close()
 			_ = out.Close()
-			return nil, err
+			return nil, false, err
 		}
 		out.conns = append(out.conns, conn)
 		out.witnesses = append(out.witnesses, witness)
 	}
-	if len(out.witnesses) == 0 {
-		_ = out.Close()
-		return nil, errPerasCommitterInvalid
+	complete := len(out.witnesses) > 0
+	if len(allowed) > 0 {
+		complete = len(seen) == len(allowed)
+	}
+	if !complete {
+		return out, false, nil
 	}
 	slices.SortFunc(out.witnesses, func(left, right fsperas.WitnessReplica) int {
 		if left.ID() < right.ID() {
@@ -75,7 +111,18 @@ func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dia
 		}
 		return 0
 	})
-	return out, nil
+	return out, true, nil
+}
+
+func perasWitnessStoreSelected(store *coordpb.StoreInfo, allowed map[uint64]struct{}) bool {
+	if store == nil || store.GetState() != coordpb.StoreState_STORE_STATE_UP || store.GetClientAddr() == "" {
+		return false
+	}
+	if len(allowed) == 0 {
+		return true
+	}
+	_, ok := allowed[store.GetStoreId()]
+	return ok
 }
 
 func (c *perasWitnessConnections) Close() error {
