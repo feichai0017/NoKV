@@ -86,6 +86,10 @@ func TestConflictDetectorRejectsInvalidAndDuplicateIDs(t *testing.T) {
 	detector := NewConflictDetector()
 	_, err := detector.Admit(OperationID{}, deltaWithWrites("a"))
 	require.ErrorIs(t, err, ErrInvalidOperationID)
+	_, err = detector.Admit(OperationID{ClientID: "c1"}, deltaWithWrites("a"))
+	require.ErrorIs(t, err, ErrInvalidOperationID)
+	_, err = detector.Admit(OperationID{Seq: 1}, deltaWithWrites("a"))
+	require.ErrorIs(t, err, ErrInvalidOperationID)
 
 	id := opID("c1", 1)
 	require.NoError(t, mustAdmit(detector, id, deltaWithWrites("a")))

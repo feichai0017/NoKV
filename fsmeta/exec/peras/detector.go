@@ -24,7 +24,7 @@ type OperationID struct {
 }
 
 func (id OperationID) Valid() bool {
-	return id.ClientID != "" || id.Seq != 0
+	return id.ClientID != "" && id.Seq != 0
 }
 
 // ConflictDetector tracks holder-issued, not-yet-applied operations and returns
