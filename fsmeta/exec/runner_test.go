@@ -3374,6 +3374,42 @@ func BenchmarkExecutorCreatePerasDirectVisibleCommit(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
+func BenchmarkExecutorCheckpointStormDefaultPath100(b *testing.B) {
+	executor, err := newTestExecutor(newFakeRunner(), WithInodeAllocator(&fakeInodeAllocator{next: 22}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCheckpointStorm(b, executor, nil, 100)
+}
+
+func BenchmarkExecutorCheckpointStormPerasSegment100(b *testing.B) {
+	runner := newFakeRunner()
+	committer := newTestBufferedPerasCommitter(b, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCheckpointStorm(b, executor, committer, 100)
+}
+
+func BenchmarkExecutorCheckpointStormPerasVisible100(b *testing.B) {
+	executor, err := newTestExecutor(
+		newFakeRunner(),
+		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorCheckpointStorm(b, executor, nil, 100)
+}
+
 func BenchmarkExecutorOpenWriteSessionDefaultPath(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
@@ -3485,7 +3521,7 @@ func BenchmarkExecutorUnlinkPerasVisibleCommit(b *testing.B) {
 	benchmarkExecutorUnlink(b, runner, executor)
 }
 
-func newTestBufferedPerasCommitter(t *testing.T, versions fsperas.VersionAllocator) *fsperas.BufferedCommitter {
+func newTestBufferedPerasCommitter(t testing.TB, versions fsperas.VersionAllocator) *fsperas.BufferedCommitter {
 	t.Helper()
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
@@ -3516,6 +3552,47 @@ func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
 		}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func benchmarkExecutorCheckpointStorm(b *testing.B, executor *Executor, flusher interface{ Flush(context.Context) error }, files int) {
+	ctx := context.Background()
+	var batch uint64
+	var ops uint64
+	b.ReportAllocs()
+	for b.Loop() {
+		prefix := "ckpt-" + strconv.FormatUint(batch, 10) + "-"
+		batch++
+		dir, err := executor.Create(ctx, fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   prefix + "dir",
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeDirectory},
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for i := 0; i < files; i++ {
+			if _, err := executor.Create(ctx, fsmeta.CreateRequest{
+				Mount:  "vol",
+				Parent: dir.Inode.Inode,
+				Name:   prefix + strconv.Itoa(i),
+				Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if flusher != nil {
+			if err := flusher.Flush(ctx); err != nil {
+				b.Fatal(err)
+			}
+		}
+		ops += uint64(files + 1)
+	}
+	if ops > 0 {
+		elapsed := b.Elapsed()
+		b.ReportMetric(float64(elapsed.Nanoseconds())/float64(ops), "ns/metadata_op")
+		b.ReportMetric(float64(ops)/elapsed.Seconds(), "metadata_ops/s")
 	}
 }
 
