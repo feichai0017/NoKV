@@ -99,6 +99,21 @@ func (d *ConflictDetector) Len() int {
 	return len(d.pending)
 }
 
+func (d *ConflictDetector) IDs() []OperationID {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]OperationID, 0, len(d.order))
+	for _, id := range d.order {
+		if _, ok := d.pending[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func trackedFromDelta(id OperationID, delta compile.SemanticDelta) trackedOperation {
 	out := trackedOperation{
 		id:     id,

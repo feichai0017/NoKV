@@ -184,6 +184,17 @@ func (h *Holder) BuildSeal(snapshot WitnessSnapshot) (CapsuleSeal, error) {
 	return BuildCapsuleSeal(h.epochID, snapshot)
 }
 
+func (h *Holder) BuildPendingSealWithVersions(firstVersion uint64, snapshot WitnessSnapshot) (CapsuleSeal, error) {
+	if h == nil || h.detector == nil {
+		return CapsuleSeal{}, ErrHolderConfigInvalid
+	}
+	pending := h.detector.IDs()
+	if len(pending) == 0 {
+		return CapsuleSeal{}, ErrInvalidCapsuleSeal
+	}
+	return BuildCapsuleSealWithVersions(h.epochID, firstVersion, filterWitnessSnapshotByIDs(snapshot, pending))
+}
+
 func (h *Holder) MarkSealApplied(seal CapsuleSeal) error {
 	if h == nil || h.detector == nil {
 		return ErrHolderConfigInvalid
@@ -204,6 +215,20 @@ func (h *Holder) Pending() int {
 		return 0
 	}
 	return h.detector.Len()
+}
+
+func (h *Holder) PendingIDs() []OperationID {
+	if h == nil || h.detector == nil {
+		return nil
+	}
+	return h.detector.IDs()
+}
+
+func (h *Holder) EpochID() uint64 {
+	if h == nil {
+		return 0
+	}
+	return h.epochID
 }
 
 func (h *Holder) broadcastPrepare(ctx context.Context, scope compile.AuthorityScope, record PrepareRecord) []string {

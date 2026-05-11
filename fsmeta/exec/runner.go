@@ -127,6 +127,14 @@ type CapsuleShadowSubmitter interface {
 	SubmitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CommitCertificateRecord, error)
 }
 
+// CapsuleCommitter is the experimental, opt-in Capsule fast commit boundary.
+// Unlike CapsuleShadowSubmitter, success replaces the ordinary Percolator/Raft
+// commit for this fsmeta operation, so errors are returned and never silently
+// fall back after witness evidence may already exist.
+type CapsuleCommitter interface {
+	CommitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CapsuleSeal, error)
+}
+
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -153,6 +161,7 @@ type Executor struct {
 	authorities             SubtreeAuthorityResolver
 	capsuleAuthority        CapsuleAuthorityAdmitter
 	capsuleShadowSubmitter  CapsuleShadowSubmitter
+	capsuleCommitter        CapsuleCommitter
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -164,6 +173,7 @@ type Executor struct {
 	createTotal             atomic.Uint64
 	capsuleAdmission        capsuleAdmissionCounters
 	capsuleShadow           capsuleShadowCounters
+	capsuleFast             capsuleFastCounters
 	capsuleShadowSeq        atomic.Uint64
 	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
 }
@@ -187,6 +197,16 @@ type capsuleAdmissionCounters struct {
 
 type capsuleShadowCounters struct {
 	submitTotal            atomic.Uint64
+	successTotal           atomic.Uint64
+	errorTotal             atomic.Uint64
+	skipIneligibleTotal    atomic.Uint64
+	skipNoAuthorityTotal   atomic.Uint64
+	skipNonConcreteTotal   atomic.Uint64
+	latencyTotalNanosecond atomic.Uint64
+}
+
+type capsuleFastCounters struct {
+	attemptTotal           atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
 	skipIneligibleTotal    atomic.Uint64
@@ -316,6 +336,15 @@ func WithCapsuleShadowSubmitter(submitter CapsuleShadowSubmitter) Option {
 	}
 }
 
+// WithCapsuleCommitter enables the experimental Capsule fast commit path. This
+// option is intentionally separate from shadow submission so production callers
+// must opt in explicitly before Create can bypass the ordinary Raft write path.
+func WithCapsuleCommitter(committer CapsuleCommitter) Option {
+	return func(e *Executor) {
+		e.capsuleCommitter = committer
+	}
+}
+
 // New constructs an fsmeta executor.
 func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	if runner == nil {
@@ -345,6 +374,7 @@ func (e *Executor) Stats() map[string]any {
 			"create_total":               uint64(0),
 			"capsule_admission":          capsuleAdmissionStats(nil, false),
 			"capsule_shadow":             capsuleShadowStats(nil, false),
+			"capsule_fastpath":           capsuleFastStats(nil, false),
 			"atomic_fastpath":            atomicFastPathStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -358,6 +388,7 @@ func (e *Executor) Stats() map[string]any {
 		"create_total":               e.createTotal.Load(),
 		"capsule_admission":          capsuleAdmissionStats(&e.capsuleAdmission, e.capsuleAuthority != nil),
 		"capsule_shadow":             capsuleShadowStats(&e.capsuleShadow, e.capsuleShadowSubmitter != nil),
+		"capsule_fastpath":           capsuleFastStats(&e.capsuleFast, e.capsuleCommitter != nil),
 		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -427,6 +458,39 @@ func capsuleShadowStats(counters *capsuleShadowCounters, enabled bool) map[strin
 	return map[string]any{
 		"enabled":                    enabled,
 		"submit_total":               submits,
+		"success_total":              counters.successTotal.Load(),
+		"error_total":                counters.errorTotal.Load(),
+		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
+		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
+		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
+		"latency_total_nanosecond":   latency,
+		"latency_average_nanosecond": average,
+	}
+}
+
+func capsuleFastStats(counters *capsuleFastCounters, enabled bool) map[string]any {
+	if counters == nil {
+		return map[string]any{
+			"enabled":                    enabled,
+			"attempt_total":              uint64(0),
+			"success_total":              uint64(0),
+			"error_total":                uint64(0),
+			"skip_ineligible_total":      uint64(0),
+			"skip_no_authority_total":    uint64(0),
+			"skip_non_concrete_total":    uint64(0),
+			"latency_total_nanosecond":   uint64(0),
+			"latency_average_nanosecond": uint64(0),
+		}
+	}
+	attempts := counters.attemptTotal.Load()
+	latency := counters.latencyTotalNanosecond.Load()
+	average := uint64(0)
+	if attempts > 0 {
+		average = latency / attempts
+	}
+	return map[string]any{
+		"enabled":                    enabled,
+		"attempt_total":              attempts,
 		"success_total":              counters.successTotal.Load(),
 		"error_total":                counters.errorTotal.Load(),
 		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
@@ -565,7 +629,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err := e.admitCapsuleAuthority(ctx, delta); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	e.submitCapsuleShadow(ctx, delta)
 	plan := delta.Plan
 	inode := req.Attrs.InodeRecord(inodeID)
 	dentry := fsmeta.DentryRecord{
@@ -582,6 +645,16 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
+	e.createTotal.Add(1)
+	if committed, err := e.tryCapsuleFastCommit(ctx, delta); committed || err != nil {
+		if err != nil {
+			return fsmeta.CreateResult{}, err
+		}
+		e.invalidateNegative(plan.MutateKeys[0])
+		e.invalidateDirPages(req.Mount, req.Parent)
+		return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
+	}
+	e.submitCapsuleShadow(ctx, delta)
 	mutations := []*kvrpcpb.Mutation{
 		{
 			Op:                kvrpcpb.Mutation_Put,
@@ -597,7 +670,6 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		},
 	}
 	predicates := []*kvrpcpb.AtomicPredicate{atomicNotExists(plan.MutateKeys[0]), atomicNotExists(plan.MutateKeys[1])}
-	e.createTotal.Add(1)
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,
@@ -765,6 +837,35 @@ func (e *Executor) admitCapsuleAuthority(ctx context.Context, delta compile.Sema
 	return nil
 }
 
+func (e *Executor) tryCapsuleFastCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+	if e == nil || e.capsuleCommitter == nil {
+		return false, nil
+	}
+	if e.capsuleAuthority == nil {
+		e.capsuleFast.skipNoAuthorityTotal.Add(1)
+		return false, nil
+	}
+	if delta.Eligibility != compile.EligibilityFastPath {
+		e.capsuleFast.skipIneligibleTotal.Add(1)
+		return false, nil
+	}
+	if !capsuleDeltaHasConcreteWrites(delta) {
+		e.capsuleFast.skipNonConcreteTotal.Add(1)
+		return false, nil
+	}
+	id := e.nextCapsuleOperationID(delta.Kind)
+	e.capsuleFast.attemptTotal.Add(1)
+	start := time.Now()
+	_, err := e.capsuleCommitter.CommitCapsule(ctx, id, delta)
+	e.capsuleFast.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
+	if err != nil {
+		e.capsuleFast.errorTotal.Add(1)
+		return true, err
+	}
+	e.capsuleFast.successTotal.Add(1)
+	return true, nil
+}
+
 func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.SemanticDelta) {
 	if e == nil || e.capsuleShadowSubmitter == nil {
 		return
@@ -781,7 +882,7 @@ func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.Semant
 		e.capsuleShadow.skipNonConcreteTotal.Add(1)
 		return
 	}
-	id := e.nextCapsuleShadowOperationID(delta.Kind)
+	id := e.nextCapsuleOperationID(delta.Kind)
 	e.capsuleShadow.submitTotal.Add(1)
 	start := time.Now()
 	if _, err := e.capsuleShadowSubmitter.SubmitCapsule(ctx, id, delta); err != nil {
@@ -792,7 +893,7 @@ func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.Semant
 	e.capsuleShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 }
 
-func (e *Executor) nextCapsuleShadowOperationID(kind fsmeta.OperationKind) fscapsule.OperationID {
+func (e *Executor) nextCapsuleOperationID(kind fsmeta.OperationKind) fscapsule.OperationID {
 	seq := uint64(1)
 	if e != nil {
 		seq = e.capsuleShadowSeq.Add(1)

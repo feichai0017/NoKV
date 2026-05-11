@@ -121,6 +121,33 @@ func committedCertificateCount(epochID uint64, snapshot WitnessSnapshot) uint64 
 	return count
 }
 
+func filterWitnessSnapshotByIDs(snapshot WitnessSnapshot, ids []OperationID) WitnessSnapshot {
+	if len(ids) == 0 {
+		return WitnessSnapshot{}
+	}
+	want := make(map[OperationID]struct{}, len(ids))
+	for _, id := range ids {
+		if id.Valid() {
+			want[id] = struct{}{}
+		}
+	}
+	out := WitnessSnapshot{
+		Prepares: make([]PrepareRecord, 0, len(ids)),
+		Commits:  make([]CommitCertificateRecord, 0, len(ids)),
+	}
+	for _, prepare := range snapshot.Prepares {
+		if _, ok := want[prepare.OpID]; ok {
+			out.Prepares = append(out.Prepares, clonePrepareRecord(prepare))
+		}
+	}
+	for _, commit := range snapshot.Commits {
+		if _, ok := want[commit.OpID]; ok {
+			out.Commits = append(out.Commits, cloneCommitCertificateRecord(commit))
+		}
+	}
+	return out
+}
+
 func topologicalSealOrder(prepares map[OperationID]PrepareRecord, commits map[OperationID]CommitCertificateRecord) ([]SealedCertificate, error) {
 	remaining := make(map[OperationID]struct{}, len(commits))
 	for id := range commits {
