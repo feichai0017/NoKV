@@ -283,7 +283,7 @@ func openBenchWitnessReplicas(b *testing.B, n int) ([]fscapsule.WitnessReplica, 
 	table := testActiveAuthorities(b, now)
 	witnesses := make([]fscapsule.WitnessReplica, 0, n)
 	managers := make([]*wal.Manager, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		manager, err := wal.Open(wal.Config{Dir: b.TempDir()})
 		require.NoError(b, err)
 		managers = append(managers, manager)

@@ -61,11 +61,9 @@ func StartMirror(ctx context.Context, source MirrorSource, table *ActiveAuthorit
 func (m *Mirror) run(ctx context.Context) {
 	defer close(m.done)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		m.poll(ctx)
-	}()
+	})
 	defer wg.Wait()
 
 	var after rootstorage.TailToken

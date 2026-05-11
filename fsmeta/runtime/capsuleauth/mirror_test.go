@@ -18,8 +18,7 @@ import (
 func TestMirrorPollsGrantSnapshotsWhileWatchIsQuiet(t *testing.T) {
 	source := &pollingMirrorSource{}
 	table := NewActiveAuthorities()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	mirror := StartMirror(ctx, source, table, 5*time.Millisecond)
 	require.NotNil(t, mirror)
 	defer func() { require.NoError(t, mirror.Close()) }()

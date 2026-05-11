@@ -214,6 +214,54 @@ func TestApplyTryAtomicMutateBatchFusesLocalApply(t *testing.T) {
 	require.Equal(t, []int{2}, store.appliedEntryCounts)
 }
 
+func TestApplyBatchFusesTryAtomicMutateAcrossRaftRequests(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	opt.LSMShardCount = 1
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := &countingAtomicApplyStore{base: db}
+	resps, err := ApplyBatch(store, nil, []*raftcmdpb.RaftCmdRequest{
+		{
+			Header: &raftcmdpb.CmdHeader{RequestId: 10},
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(60, 61, []byte("batch-entry-a"), []byte("va"))},
+			}},
+		},
+		{
+			Header: &raftcmdpb.CmdHeader{RequestId: 11},
+			Requests: []*raftcmdpb.Request{{
+				CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+				Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(62, 63, []byte("batch-entry-b"), []byte("vb"))},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, resps, 2)
+	require.Equal(t, uint64(10), resps[0].GetHeader().GetRequestId())
+	require.Equal(t, uint64(11), resps[1].GetHeader().GetRequestId())
+	for _, resp := range resps {
+		atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
+		require.NotNil(t, atomicResp)
+		require.Nil(t, atomicResp.GetError())
+		require.False(t, atomicResp.GetFallbackToTwoPhaseCommit())
+		require.Equal(t, uint64(1), atomicResp.GetAppliedKeys())
+	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Equal(t, []int{2}, store.appliedEntryCounts)
+
+	reader := percolator.NewReader(db)
+	value, _, err := reader.GetValue([]byte("batch-entry-a"), 70)
+	require.NoError(t, err)
+	require.Equal(t, []byte("va"), value)
+	value, _, err = reader.GetValue([]byte("batch-entry-b"), 70)
+	require.NoError(t, err)
+	require.Equal(t, []byte("vb"), value)
+}
+
 func TestApplyPrewriteBatchFusesLocalApply(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

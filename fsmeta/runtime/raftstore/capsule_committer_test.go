@@ -78,7 +78,7 @@ func (p *fakeRuntimeCapsuleGrantProvider) Acquire(context.Context, compile.Autho
 func testRuntimeCapsuleWitnesses(tb testing.TB, n int) []fscapsule.WitnessReplica {
 	tb.Helper()
 	witnesses := make([]fscapsule.WitnessReplica, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		manager, err := wal.Open(wal.Config{Dir: tb.TempDir()})
 		require.NoError(tb, err)
 		tb.Cleanup(func() { _ = manager.Close() })
