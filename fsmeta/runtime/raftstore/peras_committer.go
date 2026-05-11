@@ -76,6 +76,7 @@ type RemotePerasCommitter struct {
 	bgNext    atomic.Int64
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
+	latches   *fsperas.AdmissionLatches
 
 	overlayMu        sync.RWMutex
 	overlay          map[string]runtimePerasOverlayEntry
@@ -210,6 +211,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		bgBackoff:  bgBackoff,
 		now:        now,
 		holders:    make(map[uint64]*fsperas.Holder),
+		latches:    fsperas.NewAdmissionLatches(),
 		overlay:    make(map[string]runtimePerasOverlayEntry),
 		sealed:     make(map[string]runtimePerasOverlayEntry),
 		known:      make(map[string]bool),
@@ -240,8 +242,10 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	c.commitMu.Lock()
-	defer c.commitMu.Unlock()
+	c.commitMu.RLock()
+	defer c.commitMu.RUnlock()
+	unlockAdmission := c.latches.Lock(delta)
+	defer unlockAdmission()
 	if err := fsperas.Admit(ctx, delta, admission); err != nil {
 		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isPerasAdmissionTerminalError(err) {
 			c.recordError(err)
