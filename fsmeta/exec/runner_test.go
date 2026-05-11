@@ -2482,7 +2482,11 @@ func TestExecutorReadDirExhaustsRetriesOnLiveLock(t *testing.T) {
 		Limit:  8,
 	})
 	require.Error(t, err)
-	require.Equal(t, []uint64{1, 2, 3, 4}, runner.scanVersions)
+	wantVersions := make([]uint64, maxReadContentionRetries+1)
+	for i := range wantVersions {
+		wantVersions[i] = uint64(i + 1)
+	}
+	require.Equal(t, wantVersions, runner.scanVersions)
 	requireStatUint(t, executor.Stats(), "read_retries_total", uint64(maxReadContentionRetries))
 	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 1)
 }
