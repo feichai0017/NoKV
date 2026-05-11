@@ -18,6 +18,7 @@ func TestDirectCommitterSubmitsSealsAndApplies(t *testing.T) {
 		newFakeWitnessReplica("store-3"),
 	}
 	holder := newTestHolder(t, replicas)
+	holder.quorum = 3
 	db := openCapsuleReplayDB(t)
 	versions := &fakeVersionAllocator{next: 100}
 	committer, err := NewDirectCommitter(DirectCommitterConfig{
@@ -48,6 +49,7 @@ func TestDirectCommitterKeepsPendingOnApplyFailure(t *testing.T) {
 		newFakeWitnessReplica("store-3"),
 	}
 	holder := newTestHolder(t, replicas)
+	holder.quorum = 3
 	applyErr := errors.New("apply failed")
 	committer, err := NewDirectCommitter(DirectCommitterConfig{
 		Holder:   holder,

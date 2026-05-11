@@ -15,6 +15,7 @@ var (
 	errCapsuleAuthorityTableRequired   = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: capsule authority table required")
 	errCapsuleAuthorityHolderRequired  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: capsule authority holder id required")
 	errCapsuleAuthorityTTLInvalid      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: capsule authority ttl must be non-negative")
+	errCapsuleCommitterInvalid         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: capsule committer config is invalid")
 	errMountCacheNotConfigured         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: mount cache is not configured")
 	errRootPublisherNotConfigured      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: root publisher is not configured")
 	errStoreListerRequired             = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: store lister is required")

@@ -73,6 +73,21 @@ type Options struct {
 	// CapsuleAuthorityTTL bounds one acquired Capsule authority grant. Zero uses
 	// the runtime default; negative is rejected.
 	CapsuleAuthorityTTL time.Duration
+
+	// CapsuleFastPath enables the experimental Capsule holder -> remote witness
+	// fast commit path. It requires CapsuleHolderID and store-side witnesses.
+	CapsuleFastPath bool
+	// CapsuleWitnessStoreIDs restricts the witness set to these store IDs. Empty
+	// uses every currently UP store reported by the coordinator.
+	CapsuleWitnessStoreIDs []uint64
+	// CapsuleWitnessQuorum overrides the default majority of the witness set.
+	CapsuleWitnessQuorum int
+	// CapsuleSubmitRetries retries a submit when witnesses have not yet caught
+	// up with the newly acquired active-authority grant. Zero uses the default.
+	CapsuleSubmitRetries int
+	// CapsuleSubmitRetryBackoff controls retry spacing for transient missing
+	// authority state on remote witnesses. Zero uses the default.
+	CapsuleSubmitRetryBackoff time.Duration
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -119,6 +134,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if opts.CapsuleAuthorityTTL < 0 {
 		return nil, errCapsuleAuthorityTTLInvalid
+	}
+	if opts.CapsuleFastPath && strings.TrimSpace(opts.CapsuleHolderID) == "" {
+		return nil, errCapsuleAuthorityHolderRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -197,6 +215,30 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if capsuleAuthority != nil {
 		execOpts = append(execOpts, fsmetaexec.WithCapsuleAuthorityAdmitter(capsuleAuthority))
 	}
+	var capsuleWitnesses *capsuleWitnessConnections
+	var capsuleCommitter *RemoteCapsuleCommitter
+	if opts.CapsuleFastPath {
+		capsuleWitnesses, err = buildRemoteCapsuleWitnesses(ctx, coord, dialOpts, opts.CapsuleWitnessStoreIDs)
+		if err != nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, fmt.Errorf("init capsule witnesses: %w", err)
+		}
+		capsuleCommitter, err = NewRemoteCapsuleCommitter(RemoteCapsuleCommitterConfig{
+			Authority:     capsuleAuthority,
+			Witnesses:     capsuleWitnesses.witnesses,
+			Quorum:        opts.CapsuleWitnessQuorum,
+			SubmitRetries: opts.CapsuleSubmitRetries,
+			RetryBackoff:  opts.CapsuleSubmitRetryBackoff,
+		})
+		if err != nil {
+			_ = capsuleWitnesses.Close()
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, fmt.Errorf("init capsule committer: %w", err)
+		}
+		execOpts = append(execOpts, fsmetaexec.WithCapsuleCommitter(capsuleCommitter))
+	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
 	}
@@ -211,6 +253,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			},
 		)
 		if err != nil {
+			if capsuleWitnesses != nil {
+				_ = capsuleWitnesses.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init negative cache: %w", err)
@@ -224,6 +269,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			Dir: opts.DirPageCacheDir,
 		})
 		if err != nil {
+			if capsuleWitnesses != nil {
+				_ = capsuleWitnesses.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init dirpage cache: %w", err)
@@ -235,6 +283,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
+		if capsuleWitnesses != nil {
+			_ = capsuleWitnesses.Close()
+		}
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init executor: %w", err)
@@ -245,6 +296,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if err != nil {
 		if dirPages != nil {
 			_ = dirPages.Close()
+		}
+		if capsuleWitnesses != nil {
+			_ = capsuleWitnesses.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -292,6 +346,14 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if dirPages != nil {
 			if err := dirPages.Close(); err != nil && first == nil {
+				first = err
+			}
+		}
+		if capsuleCommitter != nil {
+			capsuleCommitter.Close()
+		}
+		if capsuleWitnesses != nil {
+			if err := capsuleWitnesses.Close(); err != nil && first == nil {
 				first = err
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -232,30 +233,50 @@ func (h *Holder) EpochID() uint64 {
 }
 
 func (h *Holder) broadcastPrepare(ctx context.Context, scope compile.AuthorityScope, record PrepareRecord) []string {
-	acks := make([]string, 0, len(h.witnesses))
-	for _, witness := range h.witnesses {
-		if err := ctxErr(ctx); err != nil {
-			break
-		}
-		if err := witness.AppendPrepare(ctx, scope, record); err != nil {
-			continue
-		}
-		acks = append(acks, witness.ID())
-	}
-	return acks
+	return h.broadcastWitnesses(ctx, h.witnesses, func(ctx context.Context, witness WitnessReplica) error {
+		return witness.AppendPrepare(ctx, scope, record)
+	})
 }
 
 func (h *Holder) broadcastCommit(ctx context.Context, scope compile.AuthorityScope, record CommitCertificateRecord) []string {
-	acks := make([]string, 0, len(h.witnesses))
-	for _, witness := range h.witnesses {
-		if err := ctxErr(ctx); err != nil {
-			break
-		}
-		if err := witness.AppendCommitCertificate(ctx, scope, record); err != nil {
-			continue
-		}
-		acks = append(acks, witness.ID())
+	return h.broadcastWitnesses(ctx, h.witnesses, func(ctx context.Context, witness WitnessReplica) error {
+		return witness.AppendCommitCertificate(ctx, scope, record)
+	})
+}
+
+func (h *Holder) broadcastWitnesses(ctx context.Context, witnesses []WitnessReplica, appendFn func(context.Context, WitnessReplica) error) []string {
+	if err := ctxErr(ctx); err != nil {
+		return nil
 	}
+	broadcastCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type result struct {
+		id  string
+		err error
+	}
+	resultCh := make(chan result, len(witnesses))
+	for _, witness := range witnesses {
+		witness := witness
+		go func() {
+			err := appendFn(broadcastCtx, witness)
+			resultCh <- result{id: witness.ID(), err: err}
+		}()
+	}
+
+	acks := make([]string, 0, len(witnesses))
+	for range witnesses {
+		res := <-resultCh
+		if res.err == nil {
+			acks = append(acks, res.id)
+			if len(acks) >= h.quorum {
+				cancel()
+				slices.Sort(acks)
+				return acks
+			}
+		}
+	}
+	slices.Sort(acks)
 	return acks
 }
 
