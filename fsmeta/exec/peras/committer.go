@@ -12,6 +12,10 @@ type VersionAllocator interface {
 
 type AdmissionFunc func(context.Context, compile.SemanticDelta) (bool, error)
 
+type AuthorityRetirer interface {
+	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
+}
+
 func Admit(ctx context.Context, delta compile.SemanticDelta, fn AdmissionFunc) error {
 	if fn == nil {
 		return nil
