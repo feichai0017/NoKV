@@ -396,6 +396,13 @@ func (s PerasSegment) Entries() []SegmentKV {
 	return cloneSegmentKVs(s.entries)
 }
 
+func (s PerasSegment) FirstKey() ([]byte, error) {
+	if err := validatePerasSegmentPayload(s); err != nil {
+		return nil, err
+	}
+	return cloneBytes(s.entries[0].Key), nil
+}
+
 func (s PerasSegment) Stats() SegmentStats {
 	entryCount := uint64(len(s.entries))
 	stats := SegmentStats{

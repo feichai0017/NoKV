@@ -37,11 +37,10 @@ func PerasSegmentCatalogKey(segment PerasSegment) ([]byte, error) {
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
 	}
-	entries := segment.Entries()
-	if len(entries) == 0 {
+	if len(segment.entries) == 0 {
 		return nil, ErrInvalidPerasSegment
 	}
-	parts, ok := fsmeta.InspectKey(entries[0].Key)
+	parts, ok := fsmeta.InspectKey(segment.entries[0].Key)
 	if !ok {
 		return nil, ErrInvalidPerasSegment
 	}
