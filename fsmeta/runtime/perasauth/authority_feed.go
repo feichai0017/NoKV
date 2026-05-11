@@ -13,20 +13,21 @@ import (
 	"google.golang.org/grpc"
 )
 
-const defaultMirrorInterval = time.Second
+const defaultAuthorityFeedInterval = time.Second
 
-// MirrorSource is the narrow coordinator surface needed by storage witnesses
-// to follow rooted Peras authority grants.
-type MirrorSource interface {
+// RootAuthoritySource is the narrow coordinator surface needed by storage
+// witnesses to follow rooted Peras authority grants.
+type RootAuthoritySource interface {
 	ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
 	WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
-// Mirror keeps an ActiveAuthorities table current from meta/root events.
-// It owns one background stream and is intentionally limited to Peras grants;
-// fsmeta's broader lifecycle monitor handles mounts, quotas, and subtrees.
-type Mirror struct {
-	source   MirrorSource
+// RootAuthorityFeed keeps an ActiveAuthorities table current from meta/root
+// events. It owns one background stream and is intentionally limited to Peras
+// grants; fsmeta's broader lifecycle monitor handles mounts, quotas, and
+// subtrees.
+type RootAuthorityFeed struct {
+	source   RootAuthoritySource
 	table    *ActiveAuthorities
 	interval time.Duration
 	cancel   context.CancelFunc
@@ -35,7 +36,7 @@ type Mirror struct {
 	once     sync.Once
 }
 
-func StartMirror(ctx context.Context, source MirrorSource, table *ActiveAuthorities, interval time.Duration) *Mirror {
+func StartRootAuthorityFeed(ctx context.Context, source RootAuthoritySource, table *ActiveAuthorities, interval time.Duration) *RootAuthorityFeed {
 	if source == nil || table == nil {
 		return nil
 	}
@@ -44,9 +45,9 @@ func StartMirror(ctx context.Context, source MirrorSource, table *ActiveAuthorit
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	if interval <= 0 {
-		interval = defaultMirrorInterval
+		interval = defaultAuthorityFeedInterval
 	}
-	m := &Mirror{
+	f := &RootAuthorityFeed{
 		source:   source,
 		table:    table,
 		interval: interval,
@@ -54,42 +55,42 @@ func StartMirror(ctx context.Context, source MirrorSource, table *ActiveAuthorit
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
-	go m.run(runCtx)
-	return m
+	go f.run(runCtx)
+	return f
 }
 
-func (m *Mirror) run(ctx context.Context) {
-	defer close(m.done)
+func (f *RootAuthorityFeed) run(ctx context.Context) {
+	defer close(f.done)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		m.poll(ctx)
+		f.poll(ctx)
 	})
 	defer wg.Wait()
 
 	var after rootstorage.TailToken
 	for {
-		if err := m.watch(ctx, &after); err != nil && ctx.Err() == nil {
-			log.Printf("peras authority mirror watch: %v", err)
+		if err := f.watch(ctx, &after); err != nil && ctx.Err() == nil {
+			log.Printf("peras authority feed watch: %v", err)
 		}
-		if !m.wait(ctx, m.interval) {
+		if !f.wait(ctx, f.interval) {
 			return
 		}
 	}
 }
 
-func (m *Mirror) poll(ctx context.Context) {
+func (f *RootAuthorityFeed) poll(ctx context.Context) {
 	for {
-		if err := m.bootstrap(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("peras authority mirror bootstrap: %v", err)
+		if err := f.bootstrap(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("peras authority feed bootstrap: %v", err)
 		}
-		if !m.wait(ctx, m.interval) {
+		if !f.wait(ctx, f.interval) {
 			return
 		}
 	}
 }
 
-func (m *Mirror) bootstrap(ctx context.Context) error {
-	resp, err := m.source.ListPerasAuthorityGrants(ctx, &coordpb.ListPerasAuthorityGrantsRequest{})
+func (f *RootAuthorityFeed) bootstrap(ctx context.Context) error {
+	resp, err := f.source.ListPerasAuthorityGrants(ctx, &coordpb.ListPerasAuthorityGrantsRequest{})
 	if err != nil {
 		return err
 	}
@@ -100,15 +101,15 @@ func (m *Mirror) bootstrap(ctx context.Context) error {
 			grants = append(grants, grant)
 		}
 	}
-	return m.table.Replace(grants)
+	return f.table.Replace(grants)
 }
 
-func (m *Mirror) watch(ctx context.Context, after *rootstorage.TailToken) error {
+func (f *RootAuthorityFeed) watch(ctx context.Context, after *rootstorage.TailToken) error {
 	var token rootstorage.TailToken
 	if after != nil {
 		token = *after
 	}
-	stream, err := m.source.WatchRootEvents(ctx, &coordpb.WatchRootEventsRequest{
+	stream, err := f.source.WatchRootEvents(ctx, &coordpb.WatchRootEventsRequest{
 		After: metawire.RootTailTokenToProto(token),
 	})
 	if err != nil {
@@ -120,7 +121,7 @@ func (m *Mirror) watch(ctx context.Context, after *rootstorage.TailToken) error 
 			return err
 		}
 		if resp.GetBootstrapRequired() {
-			if err := m.bootstrap(ctx); err != nil {
+			if err := f.bootstrap(ctx); err != nil {
 				return err
 			}
 		}
@@ -129,43 +130,43 @@ func (m *Mirror) watch(ctx context.Context, after *rootstorage.TailToken) error 
 			*after = token
 		}
 		for _, record := range resp.GetEvents() {
-			m.applyRootEvent(metawire.RootEventFromProto(record.GetEvent()))
+			f.applyRootEvent(metawire.RootEventFromProto(record.GetEvent()))
 		}
 	}
 }
 
-func (m *Mirror) applyRootEvent(event rootevent.Event) {
+func (f *RootAuthorityFeed) applyRootEvent(event rootevent.Event) {
 	switch event.Kind {
 	case rootevent.KindPerasAuthorityGranted, rootevent.KindPerasAuthorityRetired:
-		if err := m.table.ApplyRootEvent(event); err != nil {
-			log.Printf("peras authority mirror apply event kind=%d: %v", event.Kind, err)
+		if err := f.table.ApplyRootEvent(event); err != nil {
+			log.Printf("peras authority feed apply event kind=%d: %v", event.Kind, err)
 		}
 	}
 }
 
-func (m *Mirror) wait(ctx context.Context, d time.Duration) bool {
+func (f *RootAuthorityFeed) wait(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-m.stop:
+	case <-f.stop:
 		return false
 	case <-timer.C:
 		return true
 	}
 }
 
-func (m *Mirror) Close() error {
-	if m == nil {
+func (f *RootAuthorityFeed) Close() error {
+	if f == nil {
 		return nil
 	}
-	m.once.Do(func() {
-		if m.cancel != nil {
-			m.cancel()
+	f.once.Do(func() {
+		if f.cancel != nil {
+			f.cancel()
 		}
-		close(m.stop)
+		close(f.stop)
 	})
-	<-m.done
+	<-f.done
 	return nil
 }

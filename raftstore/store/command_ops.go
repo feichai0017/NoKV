@@ -503,6 +503,11 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			key := r.GetPerasInstallSegment().GetRoutingKey()
+			if len(key) == 0 || !keyInRange(meta, key) {
+				return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+			}
 		default:
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}

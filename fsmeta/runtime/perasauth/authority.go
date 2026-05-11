@@ -116,10 +116,8 @@ func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (A
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	var found AuthorityGrant
-	rootScope := AuthorityScopeFromDelta(scope)
-	nowUnixNano := now.UnixNano()
 	for _, grant := range a.grants {
-		if !grant.Covers(rootScope, nowUnixNano) {
+		if !GrantCoversDelta(grant, scope, now) {
 			continue
 		}
 		if found.Valid() {
@@ -131,6 +129,52 @@ func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (A
 		return AuthorityGrant{}, false, nil
 	}
 	return cloneGrant(found), true, nil
+}
+
+func GrantCoversDelta(grant AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
+		return false
+	}
+	if scope.MountKeyID == 0 || grant.Scope.MountKeyID != uint64(scope.MountKeyID) {
+		return false
+	}
+	if !grantCoversBuckets(grant.Scope.Buckets, scope.Buckets, false) {
+		return false
+	}
+	if !grantCoversInodes(grant.Scope.Parents, scope.Parents, true) {
+		return false
+	}
+	return grantCoversInodes(grant.Scope.Inodes, scope.Inodes, true)
+}
+
+func grantCoversBuckets(grant []uint16, requested []fsmeta.AffinityBucket, emptyRequestCovered bool) bool {
+	if len(grant) == 0 {
+		return true
+	}
+	if len(requested) == 0 {
+		return emptyRequestCovered
+	}
+	for _, value := range requested {
+		if !slices.Contains(grant, uint16(value)) {
+			return false
+		}
+	}
+	return true
+}
+
+func grantCoversInodes(grant []uint64, requested []fsmeta.InodeID, emptyRequestCovered bool) bool {
+	if len(grant) == 0 {
+		return true
+	}
+	if len(requested) == 0 {
+		return emptyRequestCovered
+	}
+	for _, value := range requested {
+		if !slices.Contains(grant, uint64(value)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *ActiveAuthorities) HolderFor(scope compile.AuthorityScope, now time.Time) (string, bool, error) {

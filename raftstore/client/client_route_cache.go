@@ -176,7 +176,15 @@ func (c *Client) handleRegionError(regionID uint64, err *errorpb.RegionError) er
 				region.leader = leader.GetStoreId()
 			}
 		} else {
-			c.removeRegionLocked(regionID)
+			if region, ok := c.regions[regionID]; ok && region != nil {
+				if next := nextRegionPeerStoreID(region.desc, region.leader); next != 0 {
+					region.leader = next
+				} else {
+					c.removeRegionLocked(regionID)
+				}
+			} else {
+				c.removeRegionLocked(regionID)
+			}
 		}
 		c.mu.Unlock()
 		return nil
@@ -414,6 +422,30 @@ func defaultLeaderStoreID(desc topology.Descriptor) uint64 {
 	for _, peer := range desc.Peers {
 		if peer.StoreID != 0 {
 			return peer.StoreID
+		}
+	}
+	return 0
+}
+
+func nextRegionPeerStoreID(desc topology.Descriptor, current uint64) uint64 {
+	if desc.RegionID == 0 || len(desc.Peers) == 0 {
+		return 0
+	}
+	start := -1
+	for i, peer := range desc.Peers {
+		if peer.StoreID == current {
+			start = i
+			break
+		}
+	}
+	for offset := 1; offset <= len(desc.Peers); offset++ {
+		idx := offset - 1
+		if start >= 0 {
+			idx = (start + offset) % len(desc.Peers)
+		}
+		storeID := desc.Peers[idx].StoreID
+		if storeID != 0 && storeID != current {
+			return storeID
 		}
 	}
 	return 0

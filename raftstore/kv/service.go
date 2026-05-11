@@ -15,8 +15,7 @@ import (
 )
 
 type PerasWitness interface {
-	AppendPrepare(context.Context, compile.AuthorityScope, fsperas.PrepareRecord) error
-	AppendCommitCertificate(context.Context, compile.AuthorityScope, fsperas.CommitCertificateRecord) error
+	AppendSegment(context.Context, compile.AuthorityScope, fsperas.SegmentWitnessRecord) error
 	Probe(context.Context, uint64) (fsperas.WitnessSnapshot, error)
 }
 
@@ -407,6 +406,32 @@ func (s *Service) TryAtomicMutate(ctx context.Context, req *kvrpcpb.KvTryAtomicM
 		return nil, raftPayloadError("atomic mutate", "missing atomic mutate payload")
 	}
 	out.Response = first.GetTryAtomicMutate()
+	return out, nil
+}
+
+func (s *Service) PerasInstallSegment(ctx context.Context, req *kvrpcpb.KvPerasInstallSegmentRequest) (*kvrpcpb.KvPerasInstallSegmentResponse, error) {
+	header, err := buildHeader(req.GetContext())
+	if err != nil {
+		return nil, rpcInvalidArgument(err.Error())
+	}
+	if req.GetRequest() == nil {
+		return nil, rpcInvalidArgument("peras install segment request missing payload")
+	}
+	first, regionErr, err := s.submitWriteCommand(ctx, header, &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd:     &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: req.GetRequest()},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := &kvrpcpb.KvPerasInstallSegmentResponse{RegionError: regionErr}
+	if out.GetRegionError() != nil {
+		return out, nil
+	}
+	if first.GetPerasInstallSegment() == nil {
+		return nil, raftPayloadError("peras install segment", "missing install segment payload")
+	}
+	out.Response = first.GetPerasInstallSegment()
 	return out, nil
 }
 

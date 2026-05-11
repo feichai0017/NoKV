@@ -3,66 +3,90 @@ package peras
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
-	"slices"
+	"sync"
 
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
 var (
-	ErrInvalidWitnessRecord = errors.New("fsmeta peras: invalid witness record")
-	ErrWitnessLogRequired   = errors.New("fsmeta peras: witness log required")
+	ErrInvalidWitnessRecord            = errors.New("fsmeta peras: invalid witness record")
+	ErrWitnessLogRequired              = errors.New("fsmeta peras: witness log required")
+	ErrWitnessReplicaInvalid           = errors.New("fsmeta peras: invalid witness replica")
+	ErrSegmentWitnessQuorumUnavailable = errors.New("fsmeta peras: segment witness quorum unavailable")
 )
+
+type WitnessReplica interface {
+	ID() string
+	AppendSegment(context.Context, compile.AuthorityScope, SegmentWitnessRecord) error
+}
+
+type LocalWitnessReplica struct {
+	id  string
+	log *WALWitnessLog
+}
+
+func NewLocalWitnessReplica(id string, log *WALWitnessLog) (*LocalWitnessReplica, error) {
+	if id == "" || log == nil {
+		return nil, ErrWitnessReplicaInvalid
+	}
+	return &LocalWitnessReplica{id: id, log: log}, nil
+}
+
+func (r *LocalWitnessReplica) ID() string {
+	if r == nil {
+		return ""
+	}
+	return r.id
+}
+
+func (r *LocalWitnessReplica) AppendSegment(ctx context.Context, _ compile.AuthorityScope, record SegmentWitnessRecord) error {
+	if r == nil || r.log == nil {
+		return ErrWitnessLogRequired
+	}
+	_, err := r.log.AppendSegment(ctx, record)
+	return err
+}
 
 type WitnessRecordKind uint8
 
-const (
-	WitnessRecordPrepare WitnessRecordKind = iota + 1
-	WitnessRecordCommitCertificate
-)
+const WitnessRecordSegment WitnessRecordKind = 1
 
-var witnessRecordMagic = [4]byte{'N', 'C', 'W', 1}
+var witnessRecordMagic = [4]byte{'N', 'P', 'W', 1}
 
-type PrepareRecord struct {
+// SegmentWitnessRecord is the only durable Peras witness evidence. Individual
+// metadata operations enter the holder overlay; witnesses persist the sealed
+// authority-local segment, not individual operation records.
+type SegmentWitnessRecord struct {
 	EpochID              uint64
-	OpID                 OperationID
-	DeltaPayload         []byte
-	DeltaDigest          [32]byte
-	PredicateDigest      [32]byte
-	AuthorityProofDigest [32]byte
-	DependencyFrontier   []OperationID
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+	SegmentPayloadSize   uint64
+	SegmentPointer       string
+	SegmentPayload       []byte
+	OperationCount       uint64
+	EntryCount           uint64
 	TimestampUnixNano    int64
 	HolderID             string
-	HolderSignature      [64]byte
-}
-
-type CommitCertificateRecord struct {
-	EpochID           uint64
-	OpID              OperationID
-	PrepareDigest     [32]byte
-	QuorumAckSet      []string
-	TimestampUnixNano int64
-	HolderID          string
-	HolderSignature   [64]byte
 }
 
 type WitnessFrame struct {
 	Kind    WitnessRecordKind
-	Prepare PrepareRecord
-	Commit  CommitCertificateRecord
+	Segment SegmentWitnessRecord
 }
 
 type WitnessSnapshot struct {
-	Prepares []PrepareRecord
-	Commits  []CommitCertificateRecord
+	Segments []SegmentWitnessRecord
 }
 
 type WALWitnessLog struct {
 	wal        *wal.Manager
 	durability wal.DurabilityPolicy
+	mu         sync.RWMutex
+	segments   []SegmentWitnessRecord
 }
 
 func NewWALWitnessLog(manager *wal.Manager, durability wal.DurabilityPolicy) (*WALWitnessLog, error) {
@@ -72,33 +96,29 @@ func NewWALWitnessLog(manager *wal.Manager, durability wal.DurabilityPolicy) (*W
 	return &WALWitnessLog{wal: manager, durability: durability}, nil
 }
 
-func (l *WALWitnessLog) AppendPrepare(ctx context.Context, record PrepareRecord) (wal.EntryInfo, error) {
+func (l *WALWitnessLog) AppendSegment(ctx context.Context, record SegmentWitnessRecord) (wal.EntryInfo, error) {
 	if err := ctxErr(ctx); err != nil {
 		return wal.EntryInfo{}, err
 	}
-	payload, err := EncodePrepareRecord(record)
+	payload, err := EncodeSegmentWitnessRecord(record)
 	if err != nil {
 		return wal.EntryInfo{}, err
 	}
-	return l.appendPayload(payload)
-}
-
-func (l *WALWitnessLog) AppendCommitCertificate(ctx context.Context, record CommitCertificateRecord) (wal.EntryInfo, error) {
-	if err := ctxErr(ctx); err != nil {
-		return wal.EntryInfo{}, err
-	}
-	payload, err := EncodeCommitCertificateRecord(record)
+	info, err := l.appendPayload(payload)
 	if err != nil {
 		return wal.EntryInfo{}, err
 	}
-	return l.appendPayload(payload)
+	l.mu.Lock()
+	l.segments = append(l.segments, record)
+	l.mu.Unlock()
+	return info, nil
 }
 
 func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (WitnessSnapshot, error) {
 	if l == nil || l.wal == nil {
 		return WitnessSnapshot{}, ErrWitnessLogRequired
 	}
-	var out WitnessSnapshot
+	segments := make(map[[32]byte]SegmentWitnessRecord)
 	err := l.wal.ReplayFiltered(
 		func(info wal.EntryInfo) bool {
 			return info.Type == wal.RecordTypePerasWitness
@@ -111,22 +131,30 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (WitnessSnaps
 			if err != nil {
 				return err
 			}
-			switch frame.Kind {
-			case WitnessRecordPrepare:
-				if frame.Prepare.EpochID == epochID {
-					out.Prepares = append(out.Prepares, clonePrepareRecord(frame.Prepare))
-				}
-			case WitnessRecordCommitCertificate:
-				if frame.Commit.EpochID == epochID {
-					out.Commits = append(out.Commits, cloneCommitCertificateRecord(frame.Commit))
-				}
-			default:
+			if frame.Kind != WitnessRecordSegment {
 				return ErrInvalidWitnessRecord
+			}
+			if frame.Segment.EpochID == epochID {
+				segments[frame.Segment.SegmentRoot] = frame.Segment
 			}
 			return nil
 		},
 	)
-	return out, err
+	if err != nil {
+		return WitnessSnapshot{}, err
+	}
+	l.mu.RLock()
+	for _, segment := range l.segments {
+		if segment.EpochID == epochID {
+			segments[segment.SegmentRoot] = segment
+		}
+	}
+	l.mu.RUnlock()
+	out := WitnessSnapshot{Segments: make([]SegmentWitnessRecord, 0, len(segments))}
+	for _, segment := range segments {
+		out.Segments = append(out.Segments, segment)
+	}
+	return out, nil
 }
 
 func (l *WALWitnessLog) appendPayload(payload []byte) (wal.EntryInfo, error) {
@@ -146,40 +174,23 @@ func (l *WALWitnessLog) appendPayload(payload []byte) (wal.EntryInfo, error) {
 	return infos[0], nil
 }
 
-func EncodePrepareRecord(record PrepareRecord) ([]byte, error) {
-	if err := validatePrepareRecord(record); err != nil {
+func EncodeSegmentWitnessRecord(record SegmentWitnessRecord) ([]byte, error) {
+	if err := validateSegmentWitnessRecord(record); err != nil {
 		return nil, err
 	}
 	var out bytes.Buffer
-	out.Grow(prepareRecordEncodedSize(record))
-	writeWitnessHeader(&out, WitnessRecordPrepare)
+	out.Grow(segmentWitnessRecordEncodedSize(record))
+	writeWitnessHeader(&out, WitnessRecordSegment)
 	writeUint64(&out, record.EpochID)
-	writeOperationID(&out, record.OpID)
-	writeBytes(&out, record.DeltaPayload)
-	out.Write(record.DeltaDigest[:])
-	out.Write(record.PredicateDigest[:])
-	out.Write(record.AuthorityProofDigest[:])
-	writeOperationIDs(&out, record.DependencyFrontier)
+	out.Write(record.SegmentRoot[:])
+	out.Write(record.SegmentPayloadDigest[:])
+	writeUint64(&out, record.SegmentPayloadSize)
+	writeString(&out, record.SegmentPointer)
+	writeBytes(&out, record.SegmentPayload)
+	writeUint64(&out, record.OperationCount)
+	writeUint64(&out, record.EntryCount)
 	writeInt64(&out, record.TimestampUnixNano)
 	writeString(&out, record.HolderID)
-	out.Write(record.HolderSignature[:])
-	return out.Bytes(), nil
-}
-
-func EncodeCommitCertificateRecord(record CommitCertificateRecord) ([]byte, error) {
-	if err := validateCommitCertificateRecord(record); err != nil {
-		return nil, err
-	}
-	var out bytes.Buffer
-	out.Grow(commitCertificateRecordEncodedSize(record))
-	writeWitnessHeader(&out, WitnessRecordCommitCertificate)
-	writeUint64(&out, record.EpochID)
-	writeOperationID(&out, record.OpID)
-	out.Write(record.PrepareDigest[:])
-	writeStrings(&out, record.QuorumAckSet)
-	writeInt64(&out, record.TimestampUnixNano)
-	writeString(&out, record.HolderID)
-	out.Write(record.HolderSignature[:])
 	return out.Bytes(), nil
 }
 
@@ -189,82 +200,43 @@ func DecodeWitnessFrame(payload []byte) (WitnessFrame, error) {
 	if err != nil {
 		return WitnessFrame{}, err
 	}
-	switch kind {
-	case WitnessRecordPrepare:
-		record, err := r.readPrepare()
-		if err != nil {
-			return WitnessFrame{}, err
-		}
-		if !r.done() {
-			return WitnessFrame{}, ErrInvalidWitnessRecord
-		}
-		return WitnessFrame{Kind: kind, Prepare: record}, nil
-	case WitnessRecordCommitCertificate:
-		record, err := r.readCommitCertificate()
-		if err != nil {
-			return WitnessFrame{}, err
-		}
-		if !r.done() {
-			return WitnessFrame{}, ErrInvalidWitnessRecord
-		}
-		return WitnessFrame{Kind: kind, Commit: record}, nil
-	default:
+	if kind != WitnessRecordSegment {
 		return WitnessFrame{}, ErrInvalidWitnessRecord
 	}
-}
-
-func PrepareDigest(record PrepareRecord) ([32]byte, error) {
-	payload, err := EncodePrepareRecord(record)
+	record, err := r.readSegment()
 	if err != nil {
-		return [32]byte{}, err
+		return WitnessFrame{}, err
 	}
-	return sha256.Sum256(payload), nil
+	if !r.done() {
+		return WitnessFrame{}, ErrInvalidWitnessRecord
+	}
+	return WitnessFrame{Kind: kind, Segment: record}, nil
 }
 
-func validatePrepareRecord(record PrepareRecord) error {
-	if record.EpochID == 0 || !record.OpID.Valid() || record.HolderID == "" {
+func validateSegmentWitnessRecord(record SegmentWitnessRecord) error {
+	if record.EpochID == 0 || record.HolderID == "" || record.OperationCount == 0 || record.EntryCount == 0 || record.SegmentPayloadSize == 0 {
 		return ErrInvalidWitnessRecord
 	}
-	digest, err := SemanticDeltaPayloadDigest(record.DeltaPayload)
-	if err != nil || digest != record.DeltaDigest {
+	if record.SegmentRoot == ([32]byte{}) || record.SegmentPayloadDigest == ([32]byte{}) {
 		return ErrInvalidWitnessRecord
 	}
-	for _, id := range record.DependencyFrontier {
-		if !id.Valid() {
+	if len(record.SegmentPayload) == 0 && record.SegmentPointer == "" {
+		return ErrInvalidWitnessRecord
+	}
+	if len(record.SegmentPayload) > 0 {
+		if uint64(len(record.SegmentPayload)) != record.SegmentPayloadSize {
+			return ErrInvalidWitnessRecord
+		}
+		digest, err := PerasSegmentPayloadDigest(record.SegmentPayload)
+		if err != nil || digest != record.SegmentPayloadDigest {
 			return ErrInvalidWitnessRecord
 		}
 	}
 	return nil
 }
 
-func validateCommitCertificateRecord(record CommitCertificateRecord) error {
-	if record.EpochID == 0 || !record.OpID.Valid() || record.HolderID == "" || len(record.QuorumAckSet) == 0 {
-		return ErrInvalidWitnessRecord
-	}
-	if slices.Contains(record.QuorumAckSet, "") {
-		return ErrInvalidWitnessRecord
-	}
-	return nil
-}
-
-func prepareRecordEncodedSize(record PrepareRecord) int {
-	size := len(witnessRecordMagic) + 1 + 8 + operationIDEncodedSize(record.OpID) + 4 + len(record.DeltaPayload) + 32 + 32 + 32 + 4 + 8 + stringEncodedSize(record.HolderID) + 64
-	for _, id := range record.DependencyFrontier {
-		size += operationIDEncodedSize(id)
-	}
-	return size
-}
-
-func commitCertificateRecordEncodedSize(record CommitCertificateRecord) int {
-	size := len(witnessRecordMagic) + 1 + 8 + operationIDEncodedSize(record.OpID) + 32 + 4 + 8 + stringEncodedSize(record.HolderID) + 64
-	for _, peer := range record.QuorumAckSet {
-		size += stringEncodedSize(peer)
-	}
-	return size
-}
-
-func operationIDEncodedSize(id OperationID) int {
-	return stringEncodedSize(id.ClientID) + 8
+func segmentWitnessRecordEncodedSize(record SegmentWitnessRecord) int {
+	return len(witnessRecordMagic) + 1 + 8 + 32 + 32 + 8 + stringEncodedSize(record.SegmentPointer) + 4 + len(record.SegmentPayload) + 8 + 8 + 8 + stringEncodedSize(record.HolderID)
 }
 
 func stringEncodedSize(value string) int {
@@ -293,23 +265,9 @@ func writeBool(out io.Writer, value bool) {
 	_, _ = out.Write([]byte{0})
 }
 
-func writeOperationIDs(out io.Writer, ids []OperationID) {
-	writeUint32(out, uint32(len(ids)))
-	for _, id := range ids {
-		writeOperationID(out, id)
-	}
-}
-
 func writeOperationID(out io.Writer, id OperationID) {
 	writeString(out, id.ClientID)
 	writeUint64(out, id.Seq)
-}
-
-func writeStrings(out io.Writer, values []string) {
-	writeUint32(out, uint32(len(values)))
-	for _, value := range values {
-		writeString(out, value)
-	}
 }
 
 func writeString(out io.Writer, value string) {
@@ -362,93 +320,45 @@ func (r *witnessReader) readMagic(magic [4]byte) error {
 	return nil
 }
 
-func (r *witnessReader) readPrepare() (PrepareRecord, error) {
-	var record PrepareRecord
+func (r *witnessReader) readSegment() (SegmentWitnessRecord, error) {
+	var record SegmentWitnessRecord
 	var err error
 	if record.EpochID, err = r.readUint64(); err != nil {
-		return PrepareRecord{}, err
+		return SegmentWitnessRecord{}, err
 	}
-	if record.OpID, err = r.readOperationID(); err != nil {
-		return PrepareRecord{}, err
+	if err := r.readFixed(record.SegmentRoot[:]); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
-	if record.DeltaPayload, err = r.readBytes(); err != nil {
-		return PrepareRecord{}, err
+	if err := r.readFixed(record.SegmentPayloadDigest[:]); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
-	if err := r.readFixed(record.DeltaDigest[:]); err != nil {
-		return PrepareRecord{}, err
+	if record.SegmentPayloadSize, err = r.readUint64(); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
-	if err := r.readFixed(record.PredicateDigest[:]); err != nil {
-		return PrepareRecord{}, err
+	if record.SegmentPointer, err = r.readString(); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
-	if err := r.readFixed(record.AuthorityProofDigest[:]); err != nil {
-		return PrepareRecord{}, err
+	if record.SegmentPayload, err = r.readBytes(); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
-	if record.DependencyFrontier, err = r.readOperationIDs(); err != nil {
-		return PrepareRecord{}, err
+	if record.OperationCount, err = r.readUint64(); err != nil {
+		return SegmentWitnessRecord{}, err
+	}
+	if record.EntryCount, err = r.readUint64(); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
 	var ts uint64
 	if ts, err = r.readUint64(); err != nil {
-		return PrepareRecord{}, err
+		return SegmentWitnessRecord{}, err
 	}
 	record.TimestampUnixNano = int64(ts)
 	if record.HolderID, err = r.readString(); err != nil {
-		return PrepareRecord{}, err
+		return SegmentWitnessRecord{}, err
 	}
-	if err := r.readFixed(record.HolderSignature[:]); err != nil {
-		return PrepareRecord{}, err
-	}
-	if err := validatePrepareRecord(record); err != nil {
-		return PrepareRecord{}, err
+	if err := validateSegmentWitnessRecord(record); err != nil {
+		return SegmentWitnessRecord{}, err
 	}
 	return record, nil
-}
-
-func (r *witnessReader) readCommitCertificate() (CommitCertificateRecord, error) {
-	var record CommitCertificateRecord
-	var err error
-	if record.EpochID, err = r.readUint64(); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	if record.OpID, err = r.readOperationID(); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	if err := r.readFixed(record.PrepareDigest[:]); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	if record.QuorumAckSet, err = r.readStrings(); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	var ts uint64
-	if ts, err = r.readUint64(); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	record.TimestampUnixNano = int64(ts)
-	if record.HolderID, err = r.readString(); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	if err := r.readFixed(record.HolderSignature[:]); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	if err := validateCommitCertificateRecord(record); err != nil {
-		return CommitCertificateRecord{}, err
-	}
-	return record, nil
-}
-
-func (r *witnessReader) readOperationIDs() ([]OperationID, error) {
-	count, err := r.readUint32()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]OperationID, 0, count)
-	for range count {
-		id, err := r.readOperationID()
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, nil
 }
 
 func (r *witnessReader) readOperationID() (OperationID, error) {
@@ -465,22 +375,6 @@ func (r *witnessReader) readOperationID() (OperationID, error) {
 		return OperationID{}, ErrInvalidWitnessRecord
 	}
 	return id, nil
-}
-
-func (r *witnessReader) readStrings() ([]string, error) {
-	count, err := r.readUint32()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, count)
-	for range count {
-		value, err := r.readString()
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, value)
-	}
-	return out, nil
 }
 
 func (r *witnessReader) readString() (string, error) {
@@ -554,17 +448,6 @@ func (r *witnessReader) readFixed(out []byte) error {
 
 func (r witnessReader) done() bool {
 	return r.off == len(r.buf)
-}
-
-func clonePrepareRecord(record PrepareRecord) PrepareRecord {
-	record.DeltaPayload = cloneBytes(record.DeltaPayload)
-	record.DependencyFrontier = slices.Clone(record.DependencyFrontier)
-	return record
-}
-
-func cloneCommitCertificateRecord(record CommitCertificateRecord) CommitCertificateRecord {
-	record.QuorumAckSet = slices.Clone(record.QuorumAckSet)
-	return record
 }
 
 func ctxErr(ctx context.Context) error {

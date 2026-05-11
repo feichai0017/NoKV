@@ -74,27 +74,43 @@ type Options struct {
 
 	// PerasHolderID enables coordinator-mediated Peras authority acquisition
 	// for this fsmeta runtime. Empty leaves Peras execution disabled while the
-	// active authority mirror still follows root events for diagnostics.
+	// active authority view still follows root events for diagnostics.
 	PerasHolderID string
 
 	// PerasAuthorityTTL bounds one acquired Peras authority grant. Zero uses
 	// the runtime default; negative is rejected.
 	PerasAuthorityTTL time.Duration
 
-	// PerasFastPath enables the experimental Peras holder -> remote witness
-	// fast commit path. It requires PerasHolderID and store-side witnesses.
-	PerasFastPath bool
+	// PerasVisibleCommit enables the experimental Peras holder -> remote witness
+	// visible commit path. It requires PerasHolderID and store-side witnesses.
+	PerasVisibleCommit bool
 	// PerasWitnessStoreIDs restricts the witness set to these store IDs. Empty
 	// uses every currently UP store reported by the coordinator.
 	PerasWitnessStoreIDs []uint64
 	// PerasWitnessQuorum overrides the default majority of the witness set.
 	PerasWitnessQuorum int
-	// PerasSubmitRetries retries a submit when witnesses have not yet caught
-	// up with the newly acquired active-authority grant. Zero uses the default.
-	PerasSubmitRetries int
-	// PerasSubmitRetryBackoff controls retry spacing for transient missing
+	// PerasSegmentWitnessRetries retries segment witness append when remote
+	// witnesses have not yet caught up with the active-authority grant.
+	// Zero uses the default.
+	PerasSegmentWitnessRetries int
+	// PerasSegmentWitnessRetryBackoff controls retry spacing for transient missing
 	// authority state on remote witnesses. Zero uses the default.
-	PerasSubmitRetryBackoff time.Duration
+	PerasSegmentWitnessRetryBackoff time.Duration
+	// PerasSegmentBatchSize controls how many visible Peras operations are
+	// compressed into one segment before opportunistic background flush starts.
+	// Zero uses the runtime default; negative is rejected.
+	PerasSegmentBatchSize int
+	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
+	// Zero uses the runtime default; negative is rejected.
+	PerasSegmentFlushEvery time.Duration
+	// PerasBackgroundFlushTimeout bounds opportunistic background segment
+	// installs. Explicit Flush calls use the caller context and are not
+	// shortened by this timeout. Zero uses the runtime default.
+	PerasBackgroundFlushTimeout time.Duration
+	// PerasBackgroundErrorBackoff suppresses opportunistic background flushes
+	// after a failed install so visible commits do not create retry
+	// storms against an unhealthy raftstore. Zero uses the runtime default.
+	PerasBackgroundErrorBackoff time.Duration
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -106,6 +122,7 @@ type Runtime struct {
 	MountResolver     fsmetaexec.MountResolver
 	QuotaResolver     fsmetaexec.QuotaResolver
 	SessionCleaner    interface{ Stats() map[string]any }
+	PerasCommitter    interface{ Stats() map[string]any }
 	PerasAuthorities  *perasauth.ActiveAuthorities
 	PerasAuthority    *PerasAuthorityManager
 
@@ -142,7 +159,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, errPerasAuthorityTTLInvalid
 	}
-	if opts.PerasFastPath && strings.TrimSpace(opts.PerasHolderID) == "" {
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentFlushEvery < 0 ||
+		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
+		return nil, errPerasCommitterInvalid
+	}
+	if opts.PerasVisibleCommit && strings.TrimSpace(opts.PerasHolderID) == "" {
 		return nil, errPerasAuthorityHolderRequired
 	}
 	if ctx == nil {
@@ -219,6 +240,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 	}
 	pub := rootPublisher{coord: coord}
+	router := fsmetawatch.NewRouter()
 	execOpts := []fsmetaexec.Option{
 		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithMountResolver(mounts),
@@ -231,7 +253,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	var perasWitnesses *perasWitnessConnections
 	var perasCommitter *RemotePerasCommitter
-	if opts.PerasFastPath {
+	if opts.PerasVisibleCommit {
 		perasWitnesses, err = buildRemotePerasWitnesses(ctx, coord, dialOpts, opts.PerasWitnessStoreIDs)
 		if err != nil {
 			_ = kv.Close()
@@ -239,11 +261,16 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			return nil, fmt.Errorf("init peras witnesses: %w", err)
 		}
 		perasCommitter, err = NewRemotePerasCommitter(RemotePerasCommitterConfig{
-			Authority:     perasAuthority,
-			Witnesses:     perasWitnesses.witnesses,
-			Quorum:        opts.PerasWitnessQuorum,
-			SubmitRetries: opts.PerasSubmitRetries,
-			RetryBackoff:  opts.PerasSubmitRetryBackoff,
+			Authority:                  perasAuthority,
+			Witnesses:                  perasWitnesses.witnesses,
+			Installer:                  newRunnerPerasSegmentInstaller(runner),
+			Quorum:                     opts.PerasWitnessQuorum,
+			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
+			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
+			SegmentBatchSize:           opts.PerasSegmentBatchSize,
+			SegmentFlushEvery:          opts.PerasSegmentFlushEvery,
+			BackgroundFlushTimeout:     opts.PerasBackgroundFlushTimeout,
+			BackgroundErrorBackoff:     opts.PerasBackgroundErrorBackoff,
 		})
 		if err != nil {
 			_ = perasWitnesses.Close()
@@ -252,6 +279,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			return nil, fmt.Errorf("init peras committer: %w", err)
 		}
 		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasCommitter))
+		execOpts = append(execOpts, fsmetaexec.WithPerasWatchFence(perasWatchFence{router: router}))
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
@@ -305,7 +333,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("init executor: %w", err)
 	}
 
-	router := fsmetawatch.NewRouter()
 	source, err := StartRemoteSource(ctx, coord, router, dialOpts...)
 	if err != nil {
 		if dirPages != nil {
@@ -335,6 +362,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		MountResolver:     mounts,
 		QuotaResolver:     quotas,
 		SessionCleaner:    sessions,
+		PerasCommitter:    perasCommitter,
 		PerasAuthorities:  peras,
 		PerasAuthority:    perasAuthority,
 	}

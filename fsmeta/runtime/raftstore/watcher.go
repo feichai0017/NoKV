@@ -5,6 +5,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 )
 
@@ -56,4 +57,20 @@ func copyStats(dst, src map[string]any) {
 	for key := range src {
 		dst[key] = src[key]
 	}
+}
+
+type perasWatchFence struct {
+	router *fsmetawatch.Router
+}
+
+func (f perasWatchFence) HasPerasWatchedWrite(effects []compile.WriteEffect) bool {
+	if f.router == nil {
+		return false
+	}
+	for _, effect := range effects {
+		if f.router.HasSubscriberForKey(effect.Key) {
+			return true
+		}
+	}
+	return false
 }

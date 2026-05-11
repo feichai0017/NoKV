@@ -94,6 +94,20 @@ func TestBuildMVCCReplayEntriesKeepsLargeValuesInDefaultCF(t *testing.T) {
 	require.Equal(t, entrykv.CFWrite, entries[2].CF)
 }
 
+func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
+	segment, err := BuildPerasSegmentFromReplayPlan(replayPlanForTest(t))
+	require.NoError(t, err)
+
+	entries, err := BuildMVCCSegmentInstallEntries(segment, 99)
+	require.NoError(t, err)
+	defer releaseMVCCReplayEntries(entries)
+
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
+		require.Equal(t, uint64(99), entry.Version)
+	}
+}
+
 func TestMVCCReplayStoreKeepsVersionOnApplyFailure(t *testing.T) {
 	storeErr := errors.New("apply failed")
 	failing := &failingInternalEntryApplier{err: storeErr}
@@ -128,14 +142,8 @@ func TestNewMVCCReplayStoreForPlanRequiresExactVersionRange(t *testing.T) {
 }
 
 func BenchmarkMVCCReplayStoreApply64(b *testing.B) {
-	seal, err := BuildPerasSealWithVersions(1, 1, sealSnapshotForBench(b, 64))
-	if err != nil {
-		b.Fatal(err)
-	}
-	plan, err := BuildReplayPlan(seal)
-	if err != nil {
-		b.Fatal(err)
-	}
+	plan := replayPlanForCount(b, 64)
+	plan.Versions = ReplayVersionRange{First: 1, Count: 64}
 	db := noopInternalEntryApplier{}
 
 	b.ReportAllocs()
@@ -196,24 +204,13 @@ func openPerasReplayDB(t *testing.T) *local.DB {
 
 func versionedReplayPlanForTest(t *testing.T, firstVersion uint64) ReplayPlan {
 	t.Helper()
-	first := testSealPrepare()
-	first.OpID = opID("client-a", 1)
-	second := testSealPrepare()
-	second.OpID = opID("client-b", 1)
-	second.DependencyFrontier = []OperationID{first.OpID}
-	third := testSealPrepare()
-	third.OpID = opID("client-c", 1)
-
-	seal, err := BuildPerasSealWithVersions(1, firstVersion, WitnessSnapshot{
-		Prepares: []PrepareRecord{second, third, first},
-		Commits: []CommitCertificateRecord{
-			testCommitForPrepare(t, second),
-			testCommitForPrepare(t, third),
-			testCommitForPrepare(t, first),
+	return ReplayPlan{
+		EpochID:  1,
+		Versions: ReplayVersionRange{First: firstVersion, Count: 3},
+		Operations: []ReplayOperation{
+			replayOpForTest(opID("client-a", 1), "dentry/a", "inode=7", "inode/7", "attrs"),
+			replayOpForTest(opID("client-c", 1), "dentry/c", "inode=9", "inode/9", "attrs"),
+			replayOpForTest(opID("client-b", 1), "dentry/b", "inode=8", "inode/8", "attrs"),
 		},
-	})
-	require.NoError(t, err)
-	plan, err := BuildReplayPlan(seal)
-	require.NoError(t, err)
-	return plan
+	}
 }

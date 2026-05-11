@@ -8,6 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"github.com/feichai0017/NoKV/txn/latch"
@@ -115,6 +116,12 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 				return nil, err
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			result, err := applyPerasInstallSegment(db, r.GetPerasInstallSegment())
+			if err != nil {
+				return nil, err
+			}
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
 		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
@@ -320,6 +327,54 @@ func applyMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest
 	return &kvrpcpb.MVCCMaintenanceResponse{AppliedEntries: uint64(len(entries))}, nil
 }
 
+func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	segment, keyErr := decodePerasInstallSegmentRequest(req)
+	if keyErr != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
+	}
+	entries, err := fsperas.BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
+	if err != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+	}
+	defer releaseEntries(entries)
+	if len(entries) > 0 {
+		if err := db.ApplyInternalEntries(entries); err != nil {
+			return nil, err
+		}
+	}
+	stats := segment.Stats()
+	return &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+		OperationCount: stats.OperationCount,
+		EntryCount:     stats.EntryCount,
+		AppliedEntries: uint64(len(entries)),
+	}, nil
+}
+
+func decodePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) (fsperas.PerasSegment, *kvrpcpb.KeyError) {
+	if req == nil {
+		return fsperas.PerasSegment{}, perasInstallAbort("missing request")
+	}
+	if len(req.GetRoutingKey()) == 0 || len(req.GetSegmentPayload()) == 0 || req.GetInstallVersion() == 0 {
+		return fsperas.PerasSegment{}, perasInstallAbort("missing routing key, segment payload, or install version")
+	}
+	var root [32]byte
+	if len(req.GetSegmentRoot()) != len(root) {
+		return fsperas.PerasSegment{}, perasInstallAbort("invalid segment root")
+	}
+	copy(root[:], req.GetSegmentRoot())
+	var digest [32]byte
+	if len(req.GetSegmentPayloadDigest()) != len(digest) {
+		return fsperas.PerasSegment{}, perasInstallAbort("invalid segment payload digest")
+	}
+	copy(digest[:], req.GetSegmentPayloadDigest())
+	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	if err != nil {
+		return fsperas.PerasSegment{}, perasInstallAbort(err.Error())
+	}
+	return segment, nil
+}
+
 func buildMVCCMaintenanceEntries(req *kvrpcpb.MVCCMaintenanceRequest) ([]*kv.Entry, *kvrpcpb.KeyError) {
 	if req == nil || len(req.GetTombstones()) == 0 {
 		return nil, nil
@@ -368,6 +423,10 @@ func maintenanceColumnFamily(cf kvrpcpb.InternalEntryTombstone_ColumnFamily) (kv
 }
 
 func maintenanceAbort(msg string) *kvrpcpb.KeyError {
+	return &kvrpcpb.KeyError{Abort: msg}
+}
+
+func perasInstallAbort(msg string) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Abort: msg}
 }
 

@@ -54,126 +54,50 @@ func ScopeFromProto(in *kvrpcpb.PerasAuthorityScope) (compile.AuthorityScope, er
 	return out, nil
 }
 
-func OperationIDToProto(id fsperas.OperationID) *kvrpcpb.PerasOperationID {
-	return &kvrpcpb.PerasOperationID{ClientId: id.ClientID, Seq: id.Seq}
-}
-
-func OperationIDFromProto(in *kvrpcpb.PerasOperationID) (fsperas.OperationID, error) {
-	if in == nil {
-		return fsperas.OperationID{}, fmt.Errorf("peras wire: operation id missing")
-	}
-	id := fsperas.OperationID{ClientID: in.GetClientId(), Seq: in.GetSeq()}
-	if !id.Valid() {
-		return fsperas.OperationID{}, fmt.Errorf("peras wire: operation id invalid")
-	}
-	return id, nil
-}
-
-func PrepareRecordToProto(record fsperas.PrepareRecord) *kvrpcpb.PerasPrepareRecord {
-	out := &kvrpcpb.PerasPrepareRecord{
+func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.PerasSegmentWitnessRecord {
+	return &kvrpcpb.PerasSegmentWitnessRecord{
 		EpochId:              record.EpochID,
-		OpId:                 OperationIDToProto(record.OpID),
-		DeltaPayload:         append([]byte(nil), record.DeltaPayload...),
-		DeltaDigest:          append([]byte(nil), record.DeltaDigest[:]...),
-		PredicateDigest:      append([]byte(nil), record.PredicateDigest[:]...),
-		AuthorityProofDigest: append([]byte(nil), record.AuthorityProofDigest[:]...),
-		DependencyFrontier:   make([]*kvrpcpb.PerasOperationID, 0, len(record.DependencyFrontier)),
+		SegmentRoot:          append([]byte(nil), record.SegmentRoot[:]...),
+		SegmentPayloadDigest: append([]byte(nil), record.SegmentPayloadDigest[:]...),
+		SegmentPayloadSize:   record.SegmentPayloadSize,
+		SegmentPointer:       record.SegmentPointer,
+		SegmentPayload:       append([]byte(nil), record.SegmentPayload...),
+		OperationCount:       record.OperationCount,
+		EntryCount:           record.EntryCount,
 		TimestampUnixNano:    record.TimestampUnixNano,
 		HolderId:             record.HolderID,
-		HolderSignature:      append([]byte(nil), record.HolderSignature[:]...),
 	}
-	for _, id := range record.DependencyFrontier {
-		out.DependencyFrontier = append(out.DependencyFrontier, OperationIDToProto(id))
-	}
-	return out
 }
 
-func PrepareRecordFromProto(in *kvrpcpb.PerasPrepareRecord) (fsperas.PrepareRecord, error) {
+func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsperas.SegmentWitnessRecord, error) {
 	if in == nil {
-		return fsperas.PrepareRecord{}, fmt.Errorf("peras wire: prepare record missing")
+		return fsperas.SegmentWitnessRecord{}, fmt.Errorf("peras wire: segment witness record missing")
 	}
-	opID, err := OperationIDFromProto(in.GetOpId())
-	if err != nil {
-		return fsperas.PrepareRecord{}, err
+	out := fsperas.SegmentWitnessRecord{
+		EpochID:            in.GetEpochId(),
+		SegmentPayloadSize: in.GetSegmentPayloadSize(),
+		SegmentPointer:     in.GetSegmentPointer(),
+		SegmentPayload:     append([]byte(nil), in.GetSegmentPayload()...),
+		OperationCount:     in.GetOperationCount(),
+		EntryCount:         in.GetEntryCount(),
+		TimestampUnixNano:  in.GetTimestampUnixNano(),
+		HolderID:           in.GetHolderId(),
 	}
-	out := fsperas.PrepareRecord{
-		EpochID:           in.GetEpochId(),
-		OpID:              opID,
-		DeltaPayload:      append([]byte(nil), in.GetDeltaPayload()...),
-		TimestampUnixNano: in.GetTimestampUnixNano(),
-		HolderID:          in.GetHolderId(),
+	if err := copyFixed(out.SegmentRoot[:], in.GetSegmentRoot(), "segment_root"); err != nil {
+		return fsperas.SegmentWitnessRecord{}, err
 	}
-	if err := copyFixed(out.DeltaDigest[:], in.GetDeltaDigest(), "delta_digest"); err != nil {
-		return fsperas.PrepareRecord{}, err
-	}
-	if err := copyFixed(out.PredicateDigest[:], in.GetPredicateDigest(), "predicate_digest"); err != nil {
-		return fsperas.PrepareRecord{}, err
-	}
-	if err := copyFixed(out.AuthorityProofDigest[:], in.GetAuthorityProofDigest(), "authority_proof_digest"); err != nil {
-		return fsperas.PrepareRecord{}, err
-	}
-	if err := copyFixed(out.HolderSignature[:], in.GetHolderSignature(), "holder_signature"); err != nil {
-		return fsperas.PrepareRecord{}, err
-	}
-	if len(in.GetDependencyFrontier()) > 0 {
-		out.DependencyFrontier = make([]fsperas.OperationID, 0, len(in.GetDependencyFrontier()))
-		for _, predecessor := range in.GetDependencyFrontier() {
-			id, err := OperationIDFromProto(predecessor)
-			if err != nil {
-				return fsperas.PrepareRecord{}, err
-			}
-			out.DependencyFrontier = append(out.DependencyFrontier, id)
-		}
-	}
-	return out, nil
-}
-
-func CommitCertificateRecordToProto(record fsperas.CommitCertificateRecord) *kvrpcpb.PerasCommitCertificateRecord {
-	return &kvrpcpb.PerasCommitCertificateRecord{
-		EpochId:           record.EpochID,
-		OpId:              OperationIDToProto(record.OpID),
-		PrepareDigest:     append([]byte(nil), record.PrepareDigest[:]...),
-		QuorumAckSet:      append([]string(nil), record.QuorumAckSet...),
-		TimestampUnixNano: record.TimestampUnixNano,
-		HolderId:          record.HolderID,
-		HolderSignature:   append([]byte(nil), record.HolderSignature[:]...),
-	}
-}
-
-func CommitCertificateRecordFromProto(in *kvrpcpb.PerasCommitCertificateRecord) (fsperas.CommitCertificateRecord, error) {
-	if in == nil {
-		return fsperas.CommitCertificateRecord{}, fmt.Errorf("peras wire: commit certificate record missing")
-	}
-	opID, err := OperationIDFromProto(in.GetOpId())
-	if err != nil {
-		return fsperas.CommitCertificateRecord{}, err
-	}
-	out := fsperas.CommitCertificateRecord{
-		EpochID:           in.GetEpochId(),
-		OpID:              opID,
-		QuorumAckSet:      append([]string(nil), in.GetQuorumAckSet()...),
-		TimestampUnixNano: in.GetTimestampUnixNano(),
-		HolderID:          in.GetHolderId(),
-	}
-	if err := copyFixed(out.PrepareDigest[:], in.GetPrepareDigest(), "prepare_digest"); err != nil {
-		return fsperas.CommitCertificateRecord{}, err
-	}
-	if err := copyFixed(out.HolderSignature[:], in.GetHolderSignature(), "holder_signature"); err != nil {
-		return fsperas.CommitCertificateRecord{}, err
+	if err := copyFixed(out.SegmentPayloadDigest[:], in.GetSegmentPayloadDigest(), "segment_payload_digest"); err != nil {
+		return fsperas.SegmentWitnessRecord{}, err
 	}
 	return out, nil
 }
 
 func SnapshotToProto(snapshot fsperas.WitnessSnapshot) *kvrpcpb.PerasWitnessProbeResponse {
 	out := &kvrpcpb.PerasWitnessProbeResponse{
-		Prepares: make([]*kvrpcpb.PerasPrepareRecord, 0, len(snapshot.Prepares)),
-		Commits:  make([]*kvrpcpb.PerasCommitCertificateRecord, 0, len(snapshot.Commits)),
+		Segments: make([]*kvrpcpb.PerasSegmentWitnessRecord, 0, len(snapshot.Segments)),
 	}
-	for _, prepare := range snapshot.Prepares {
-		out.Prepares = append(out.Prepares, PrepareRecordToProto(prepare))
-	}
-	for _, commit := range snapshot.Commits {
-		out.Commits = append(out.Commits, CommitCertificateRecordToProto(commit))
+	for _, segment := range snapshot.Segments {
+		out.Segments = append(out.Segments, SegmentWitnessRecordToProto(segment))
 	}
 	return out
 }
@@ -183,22 +107,14 @@ func SnapshotFromProto(in *kvrpcpb.PerasWitnessProbeResponse) (fsperas.WitnessSn
 		return fsperas.WitnessSnapshot{}, fmt.Errorf("peras wire: witness snapshot missing")
 	}
 	out := fsperas.WitnessSnapshot{
-		Prepares: make([]fsperas.PrepareRecord, 0, len(in.GetPrepares())),
-		Commits:  make([]fsperas.CommitCertificateRecord, 0, len(in.GetCommits())),
+		Segments: make([]fsperas.SegmentWitnessRecord, 0, len(in.GetSegments())),
 	}
-	for _, prepare := range in.GetPrepares() {
-		record, err := PrepareRecordFromProto(prepare)
+	for _, segment := range in.GetSegments() {
+		record, err := SegmentWitnessRecordFromProto(segment)
 		if err != nil {
 			return fsperas.WitnessSnapshot{}, err
 		}
-		out.Prepares = append(out.Prepares, record)
-	}
-	for _, commit := range in.GetCommits() {
-		record, err := CommitCertificateRecordFromProto(commit)
-		if err != nil {
-			return fsperas.WitnessSnapshot{}, err
-		}
-		out.Commits = append(out.Commits, record)
+		out.Segments = append(out.Segments, record)
 	}
 	return out, nil
 }

@@ -37,28 +37,28 @@ func ApplyReplayPlan(store ReplayStore, plan ReplayPlan) (ApplyStats, error) {
 
 func validateReplayPlanForApply(plan ReplayPlan) error {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 {
-		return ErrInvalidPerasSeal
+		return ErrInvalidPerasSegment
 	}
 	seen := make(map[OperationID]struct{})
 	for _, op := range plan.Operations {
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
-			return ErrInvalidPerasSeal
+			return ErrInvalidPerasSegment
 		}
 		if _, ok := seen[op.OpID]; ok {
-			return ErrInvalidPerasSeal
+			return ErrInvalidPerasSegment
 		}
 		seen[op.OpID] = struct{}{}
 		for _, mutation := range op.Mutations {
 			if len(mutation.Key) == 0 {
-				return ErrInvalidPerasSeal
+				return ErrInvalidPerasSegment
 			}
 			switch {
 			case mutation.Delete:
 				if mutation.Value != nil {
-					return ErrInvalidPerasSeal
+					return ErrInvalidPerasSegment
 				}
 			case mutation.Value == nil:
-				return ErrInvalidPerasSeal
+				return ErrInvalidPerasSegment
 			}
 		}
 	}

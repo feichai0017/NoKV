@@ -149,6 +149,20 @@ func TestRouterStatsTracksPublishedAndSubscribers(t *testing.T) {
 	require.Equal(t, uint64(1), stats["delivered_total"])
 }
 
+func TestRouterReportsWhetherKeyHasLiveSubscriber(t *testing.T) {
+	router := NewRouter()
+	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix: []byte("dentry/prefix/"),
+	})
+	require.NoError(t, err)
+
+	require.True(t, router.HasSubscriberForKey([]byte("dentry/prefix/file")))
+	require.False(t, router.HasSubscriberForKey([]byte("dentry/other/file")))
+
+	sub.Close()
+	require.False(t, router.HasSubscriberForKey([]byte("dentry/prefix/file")))
+}
+
 func TestRouterReplaysEventsAfterResumeCursor(t *testing.T) {
 	router := NewRouter()
 	prefix := []byte("k/")

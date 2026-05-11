@@ -8,22 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBufferedCommitterReturnsBeforeSealAndServesOverlay(t *testing.T) {
-	source := newDrainingWitnessReplica("store-1")
+func TestBufferedCommitterReturnsVisibleAckAndServesOverlay(t *testing.T) {
 	holder, err := NewHolder(HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []WitnessReplica{
-			source,
-			newDrainingWitnessReplica("store-2"),
-			newDrainingWitnessReplica("store-3"),
-		},
 	})
 	require.NoError(t, err)
-	holder.quorum = 3
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
-		Snapshot: source,
 		Versions: &fakeVersionAllocator{next: 100},
 		ReplayDB: noopInternalEntryApplier{},
 	})
@@ -41,22 +33,14 @@ func TestBufferedCommitterReturnsBeforeSealAndServesOverlay(t *testing.T) {
 }
 
 func TestBufferedCommitterFlushAppliesAndClearsOverlay(t *testing.T) {
-	source := newDrainingWitnessReplica("store-1")
 	holder, err := NewHolder(HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []WitnessReplica{
-			source,
-			newDrainingWitnessReplica("store-2"),
-			newDrainingWitnessReplica("store-3"),
-		},
 	})
 	require.NoError(t, err)
-	holder.quorum = 3
 	versions := &fakeVersionAllocator{next: 100}
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
-		Snapshot: source,
 		Versions: versions,
 		ReplayDB: noopInternalEntryApplier{},
 	})
@@ -77,18 +61,11 @@ func TestBufferedCommitterFlushAppliesAndClearsOverlay(t *testing.T) {
 }
 
 func TestBufferedCommitterFlushBuildsSegmentAndReportsStats(t *testing.T) {
-	replicas := []*fakeWitnessReplica{
-		newFakeWitnessReplica("store-1"),
-		newFakeWitnessReplica("store-2"),
-		newFakeWitnessReplica("store-3"),
-	}
-	holder := newTestHolder(t, replicas)
-	holder.quorum = 3
+	holder := newTestHolder(t)
 	var hookedSegment PerasSegment
 	var hookedStats SegmentStats
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
-		Snapshot: fakeWitnessSnapshotSource{replica: replicas[0]},
 		Versions: &fakeVersionAllocator{next: 100},
 		ReplayDB: noopInternalEntryApplier{},
 		SegmentHook: func(segment PerasSegment, stats SegmentStats) {
@@ -127,18 +104,11 @@ func TestBufferedCommitterFlushBuildsSegmentAndReportsStats(t *testing.T) {
 }
 
 func TestBufferedCommitterDoesNotPublishSegmentOnApplyFailure(t *testing.T) {
-	replicas := []*fakeWitnessReplica{
-		newFakeWitnessReplica("store-1"),
-		newFakeWitnessReplica("store-2"),
-		newFakeWitnessReplica("store-3"),
-	}
-	holder := newTestHolder(t, replicas)
-	holder.quorum = 3
+	holder := newTestHolder(t)
 	applyErr := errors.New("apply failed")
 	hookCalls := 0
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
-		Snapshot: fakeWitnessSnapshotSource{replica: replicas[0]},
 		Versions: &fakeVersionAllocator{next: 100},
 		ReplayDB: &failingInternalEntryApplier{err: applyErr},
 		SegmentHook: func(PerasSegment, SegmentStats) {
@@ -163,23 +133,15 @@ func TestBufferedCommitterDoesNotPublishSegmentOnApplyFailure(t *testing.T) {
 }
 
 func BenchmarkBufferedCommitterHotPath(b *testing.B) {
-	source := newDrainingWitnessReplica("store-1")
 	holder, err := NewHolder(HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
-		Witnesses: []WitnessReplica{
-			source,
-			newDrainingWitnessReplica("store-2"),
-			newDrainingWitnessReplica("store-3"),
-		},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	holder.quorum = 3
 	committer, err := NewBufferedCommitter(BufferedCommitterConfig{
 		Holder:   holder,
-		Snapshot: source,
 		Versions: &fakeVersionAllocator{next: 1},
 		ReplayDB: noopInternalEntryApplier{},
 	})

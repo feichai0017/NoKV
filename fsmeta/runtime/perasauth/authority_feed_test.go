@@ -8,6 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -15,13 +16,13 @@ import (
 	"google.golang.org/grpc"
 )
 
-func TestMirrorPollsGrantSnapshotsWhileWatchIsQuiet(t *testing.T) {
-	source := &pollingMirrorSource{}
+func TestRootAuthorityFeedPollsGrantSnapshotsWhileWatchIsQuiet(t *testing.T) {
+	source := &pollingAuthoritySource{}
 	table := NewActiveAuthorities()
 	ctx := t.Context()
-	mirror := StartMirror(ctx, source, table, 5*time.Millisecond)
-	require.NotNil(t, mirror)
-	defer func() { require.NoError(t, mirror.Close()) }()
+	feed := StartRootAuthorityFeed(ctx, source, table, 5*time.Millisecond)
+	require.NotNil(t, feed)
+	defer func() { require.NoError(t, feed.Close()) }()
 
 	scope := compile.AuthorityScope{
 		Mount:      testMount.MountID,
@@ -36,18 +37,37 @@ func TestMirrorPollsGrantSnapshotsWhileWatchIsQuiet(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-type pollingMirrorSource struct {
+func TestRootAuthorityFeedAppliesGrantEvents(t *testing.T) {
+	source := &pollingAuthoritySource{}
+	table := NewActiveAuthorities()
+	feed := &RootAuthorityFeed{source: source, table: table}
+
+	scope := compile.AuthorityScope{
+		Mount:      testMount.MountID,
+		MountKeyID: testMount.MountKeyID,
+		Buckets:    []fsmeta.AffinityBucket{11},
+	}
+	grant := testGrant("g-event", "holder-event", scope)
+
+	feed.applyRootEvent(rootevent.PerasAuthorityGranted(grant))
+	grant, ok, err := table.Find(scope, testNow)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "holder-event", grant.HolderID)
+}
+
+type pollingAuthoritySource struct {
 	mu     sync.Mutex
 	grants []AuthorityGrant
 }
 
-func (s *pollingMirrorSource) replace(grants ...AuthorityGrant) {
+func (s *pollingAuthoritySource) replace(grants ...AuthorityGrant) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.grants = append([]AuthorityGrant(nil), grants...)
 }
 
-func (s *pollingMirrorSource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+func (s *pollingAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(s.grants))
@@ -57,7 +77,7 @@ func (s *pollingMirrorSource) ListPerasAuthorityGrants(context.Context, *coordpb
 	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
 }
 
-func (s *pollingMirrorSource) WatchRootEvents(ctx context.Context, _ *coordpb.WatchRootEventsRequest, _ ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+func (s *pollingAuthoritySource) WatchRootEvents(ctx context.Context, _ *coordpb.WatchRootEventsRequest, _ ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
 	return pollingWatchStream{ctx: ctx}, nil
 }
 

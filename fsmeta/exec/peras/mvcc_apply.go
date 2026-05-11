@@ -38,7 +38,7 @@ func NewMVCCReplayStore(db InternalEntryApplier, firstVersion uint64) (*MVCCRepl
 }
 
 // NewMVCCReplayStoreForPlan binds storage to the version range carried by a
-// sealed replay plan.
+// segment replay plan.
 func NewMVCCReplayStoreForPlan(db InternalEntryApplier, plan ReplayPlan) (*MVCCReplayStore, error) {
 	if db == nil {
 		return nil, ErrReplayStoreRequired
@@ -104,7 +104,7 @@ func BuildMVCCReplayEntries(op ReplayOperation, version uint64) ([]*entrykv.Entr
 		return nil, ErrReplayVersionRequired
 	}
 	if !op.OpID.Valid() || len(op.Mutations) == 0 {
-		return nil, ErrInvalidPerasSeal
+		return nil, ErrInvalidPerasSegment
 	}
 	entries := make([]*entrykv.Entry, 0, len(op.Mutations)*3)
 	for _, mutation := range op.Mutations {
@@ -118,13 +118,40 @@ func BuildMVCCReplayEntries(op ReplayOperation, version uint64) ([]*entrykv.Entr
 	return entries, nil
 }
 
+// BuildMVCCSegmentInstallEntries materializes one sealed segment as one
+// MVCC-visible install version. This is the raftstore Peras install boundary:
+// the segment keeps per-operation completion metadata, while the LSM receives
+// only the coalesced final key state.
+func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*entrykv.Entry, error) {
+	if version == 0 || version == entrykv.MaxVersion {
+		return nil, ErrReplayVersionRequired
+	}
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return nil, err
+	}
+	entries := make([]*entrykv.Entry, 0, len(segment.entries)*3)
+	for _, entry := range segment.entries {
+		mutationEntries, err := buildMutationMVCCReplayEntries(ReplayMutation{
+			Key:    entry.Key,
+			Value:  entry.Value,
+			Delete: entry.Delete,
+		}, version)
+		if err != nil {
+			releaseMVCCReplayEntries(entries)
+			return nil, err
+		}
+		entries = append(entries, mutationEntries...)
+	}
+	return entries, nil
+}
+
 func buildMutationMVCCReplayEntries(mutation ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
 	if len(mutation.Key) == 0 {
-		return nil, ErrInvalidPerasSeal
+		return nil, ErrInvalidPerasSegment
 	}
 	if mutation.Delete {
 		if mutation.Value != nil {
-			return nil, ErrInvalidPerasSeal
+			return nil, ErrInvalidPerasSegment
 		}
 		write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Delete, StartTs: version})
 		return []*entrykv.Entry{
@@ -133,7 +160,7 @@ func buildMutationMVCCReplayEntries(mutation ReplayMutation, version uint64) ([]
 		}, nil
 	}
 	if mutation.Value == nil {
-		return nil, ErrInvalidPerasSeal
+		return nil, ErrInvalidPerasSegment
 	}
 	write := txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: version}
 	if txnmvcc.CanInlineShortValue(kvrpcpb.Mutation_Put, mutation.Value) {

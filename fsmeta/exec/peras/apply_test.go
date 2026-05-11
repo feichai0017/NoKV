@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestApplyReplayPlanAppliesOperationsInSealOrder(t *testing.T) {
+func TestApplyReplayPlanAppliesOperationsInPlanOrder(t *testing.T) {
 	plan := replayPlanForTest(t)
 	store := &recordingReplayStore{}
 
@@ -40,7 +40,7 @@ func TestApplyReplayPlanRejectsInvalidPlanBeforeApply(t *testing.T) {
 	store := &recordingReplayStore{}
 
 	_, err := ApplyReplayPlan(store, plan)
-	require.ErrorIs(t, err, ErrInvalidPerasSeal)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
 	require.Empty(t, store.ops)
 }
 
@@ -54,7 +54,7 @@ func TestApplyReplayPlanRejectsDuplicateOperations(t *testing.T) {
 	plan.Operations[1].OpID = plan.Operations[0].OpID
 
 	_, err := ApplyReplayPlan(&recordingReplayStore{}, plan)
-	require.ErrorIs(t, err, ErrInvalidPerasSeal)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
 }
 
 func TestApplyReplayPlanClonesStoreInput(t *testing.T) {
@@ -69,14 +69,7 @@ func TestApplyReplayPlanClonesStoreInput(t *testing.T) {
 }
 
 func BenchmarkApplyReplayPlan64(b *testing.B) {
-	seal, err := BuildPerasSeal(1, sealSnapshotForBench(b, 64))
-	if err != nil {
-		b.Fatal(err)
-	}
-	plan, err := BuildReplayPlan(seal)
-	if err != nil {
-		b.Fatal(err)
-	}
+	plan := replayPlanForCount(b, 64)
 	store := noopReplayStore{}
 
 	b.ReportAllocs()
@@ -127,24 +120,31 @@ func (noopReplayStore) ApplyPerasReplay([]ReplayOperation) error {
 
 func replayPlanForTest(t *testing.T) ReplayPlan {
 	t.Helper()
-	first := testSealPrepare()
-	first.OpID = opID("client-a", 1)
-	second := testSealPrepare()
-	second.OpID = opID("client-b", 1)
-	second.DependencyFrontier = []OperationID{first.OpID}
-	third := testSealPrepare()
-	third.OpID = opID("client-c", 1)
-
-	seal, err := BuildPerasSeal(1, WitnessSnapshot{
-		Prepares: []PrepareRecord{second, third, first},
-		Commits: []CommitCertificateRecord{
-			testCommitForPrepare(t, second),
-			testCommitForPrepare(t, third),
-			testCommitForPrepare(t, first),
+	return ReplayPlan{
+		EpochID: 1,
+		Operations: []ReplayOperation{
+			replayOpForTest(opID("client-a", 1), "dentry/a", "inode=7", "inode/7", "attrs"),
+			replayOpForTest(opID("client-c", 1), "dentry/c", "inode=9", "inode/9", "attrs"),
+			replayOpForTest(opID("client-b", 1), "dentry/b", "inode=8", "inode/8", "attrs"),
 		},
-	})
-	require.NoError(t, err)
-	plan, err := BuildReplayPlan(seal)
-	require.NoError(t, err)
-	return plan
+	}
+}
+
+func replayPlanForCount(tb testing.TB, count int) ReplayPlan {
+	tb.Helper()
+	ops := make([]ReplayOperation, 0, count)
+	for i := 0; i < count; i++ {
+		ops = append(ops, replayOpForTest(OperationID{ClientID: "bench", Seq: uint64(i + 1)}, "dentry/a", "inode=7", "inode/7", "attrs"))
+	}
+	return ReplayPlan{EpochID: 1, Operations: ops}
+}
+
+func replayOpForTest(id OperationID, key1, value1, key2, value2 string) ReplayOperation {
+	return ReplayOperation{
+		OpID: id,
+		Mutations: []ReplayMutation{
+			{Key: []byte(key1), Value: []byte(value1)},
+			{Key: []byte(key2), Value: []byte(value2)},
+		},
+	}
 }

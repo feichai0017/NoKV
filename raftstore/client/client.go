@@ -137,7 +137,7 @@ func (c *Client) Close() error {
 	return first
 }
 
-// Stats exposes client-side fast-path admission counters. They are counted per
+// Stats exposes client-side visible-commit admission counters. They are counted per
 // route attempt so region churn and retry loops are visible in benchmark runs.
 func (c *Client) Stats() map[string]any {
 	if c == nil {

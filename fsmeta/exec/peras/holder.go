@@ -2,212 +2,167 @@ package peras
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
-	"slices"
-	"time"
+	"sync"
 
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
 var (
-	ErrHolderConfigInvalid      = errors.New("fsmeta peras: invalid holder config")
-	ErrIneligibleOperation      = errors.New("fsmeta peras: ineligible operation")
-	ErrWitnessQuorumUnavailable = errors.New("fsmeta peras: witness quorum unavailable")
-	ErrWitnessCommitAmbiguous   = errors.New("fsmeta peras: witness commit ambiguous")
+	ErrHolderConfigInvalid = errors.New("fsmeta peras: invalid holder config")
+	ErrIneligibleOperation = errors.New("fsmeta peras: ineligible operation")
 )
 
-type WitnessReplica interface {
-	ID() string
-	AppendPrepare(context.Context, compile.AuthorityScope, PrepareRecord) error
-	AppendCommitCertificate(context.Context, compile.AuthorityScope, CommitCertificateRecord) error
-}
-
-type LocalWitnessReplica struct {
-	id  string
-	log *WALWitnessLog
-}
-
-func NewLocalWitnessReplica(id string, log *WALWitnessLog) (*LocalWitnessReplica, error) {
-	if id == "" || log == nil {
-		return nil, ErrHolderConfigInvalid
-	}
-	return &LocalWitnessReplica{id: id, log: log}, nil
-}
-
-func (r *LocalWitnessReplica) ID() string {
-	if r == nil {
-		return ""
-	}
-	return r.id
-}
-
-func (r *LocalWitnessReplica) AppendPrepare(ctx context.Context, _ compile.AuthorityScope, record PrepareRecord) error {
-	if r == nil || r.log == nil {
-		return ErrWitnessLogRequired
-	}
-	_, err := r.log.AppendPrepare(ctx, record)
-	return err
-}
-
-func (r *LocalWitnessReplica) AppendCommitCertificate(ctx context.Context, _ compile.AuthorityScope, record CommitCertificateRecord) error {
-	if r == nil || r.log == nil {
-		return ErrWitnessLogRequired
-	}
-	_, err := r.log.AppendCommitCertificate(ctx, record)
-	return err
-}
-
 type HolderConfig struct {
-	EpochID   uint64
-	HolderID  string
-	Witnesses []WitnessReplica
-	Quorum    int
-	Now       func() time.Time
+	EpochID  uint64
+	HolderID string
 }
 
 type Holder struct {
-	epochID   uint64
-	holderID  string
-	witnesses []WitnessReplica
-	quorum    int
-	detector  *ConflictDetector
-	now       func() time.Time
+	epochID  uint64
+	holderID string
+	detector *ConflictDetector
+
+	mu      sync.Mutex
+	pending map[OperationID]holderPendingOperation
 }
 
 func NewHolder(cfg HolderConfig) (*Holder, error) {
-	if cfg.EpochID == 0 || cfg.HolderID == "" || len(cfg.Witnesses) == 0 {
+	if cfg.EpochID == 0 || cfg.HolderID == "" {
 		return nil, ErrHolderConfigInvalid
-	}
-	witnesses := make([]WitnessReplica, 0, len(cfg.Witnesses))
-	seen := make(map[string]struct{}, len(cfg.Witnesses))
-	for _, witness := range cfg.Witnesses {
-		if witness == nil || witness.ID() == "" {
-			return nil, ErrHolderConfigInvalid
-		}
-		if _, ok := seen[witness.ID()]; ok {
-			return nil, ErrHolderConfigInvalid
-		}
-		seen[witness.ID()] = struct{}{}
-		witnesses = append(witnesses, witness)
-	}
-	quorum := cfg.Quorum
-	if quorum == 0 {
-		quorum = len(witnesses)/2 + 1
-	}
-	if quorum <= 0 || quorum > len(witnesses) {
-		return nil, ErrHolderConfigInvalid
-	}
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
 	}
 	return &Holder{
-		epochID:   cfg.EpochID,
-		holderID:  cfg.HolderID,
-		witnesses: witnesses,
-		quorum:    quorum,
-		detector:  NewConflictDetector(),
-		now:       now,
+		epochID:  cfg.EpochID,
+		holderID: cfg.HolderID,
+		detector: NewConflictDetector(),
+		pending:  make(map[OperationID]holderPendingOperation),
 	}, nil
 }
 
-func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.SemanticDelta) (CommitCertificateRecord, error) {
-	if h == nil || h.detector == nil {
-		return CommitCertificateRecord{}, ErrHolderConfigInvalid
-	}
-	if delta.Eligibility != compile.EligibilityFastPath {
-		return CommitCertificateRecord{}, ErrIneligibleOperation
-	}
-	predecessors, err := h.detector.Admit(id, delta)
-	if err != nil {
-		return CommitCertificateRecord{}, err
-	}
-
-	deltaPayload, deltaDigest, predicateDigest, authorityDigest, err := digestSemanticDelta(delta)
-	if err != nil {
-		h.detector.Remove(id)
-		return CommitCertificateRecord{}, err
-	}
-	prepare := PrepareRecord{
-		EpochID:              h.epochID,
-		OpID:                 id,
-		DeltaPayload:         deltaPayload,
-		DeltaDigest:          deltaDigest,
-		PredicateDigest:      predicateDigest,
-		AuthorityProofDigest: authorityDigest,
-		DependencyFrontier:   predecessors,
-		TimestampUnixNano:    h.now().UnixNano(),
-		HolderID:             h.holderID,
-	}
-	prepareAcks := h.broadcastPrepare(ctx, delta.Authority, prepare)
-	if len(prepareAcks) < h.quorum {
-		h.detector.Remove(id)
-		return CommitCertificateRecord{}, ErrWitnessQuorumUnavailable
-	}
-	prepareDigest, err := PrepareDigest(prepare)
-	if err != nil {
-		h.detector.Remove(id)
-		return CommitCertificateRecord{}, err
-	}
-	commit := CommitCertificateRecord{
-		EpochID:           h.epochID,
-		OpID:              id,
-		PrepareDigest:     prepareDigest,
-		QuorumAckSet:      prepareAcks,
-		TimestampUnixNano: h.now().UnixNano(),
-		HolderID:          h.holderID,
-	}
-	commitAcks := h.broadcastCommit(ctx, delta.Authority, commit)
-	if len(commitAcks) < h.quorum {
-		if len(commitAcks) == 0 {
-			h.detector.Remove(id)
-			return CommitCertificateRecord{}, ErrWitnessQuorumUnavailable
-		}
-		return commit, ErrWitnessCommitAmbiguous
-	}
-	return commit, nil
+type VisibleAck struct {
+	EpochID  uint64
+	OpID     OperationID
+	HolderID string
 }
 
-func (h *Holder) MarkSealed(ids ...OperationID) {
+type holderPendingOperation struct {
+	scope compile.AuthorityScope
+	op    ReplayOperation
+}
+
+func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.SemanticDelta) (VisibleAck, error) {
+	if h == nil || h.detector == nil {
+		return VisibleAck{}, ErrHolderConfigInvalid
+	}
+	if err := ctxErr(ctx); err != nil {
+		return VisibleAck{}, err
+	}
+	if delta.Eligibility != compile.EligibilityVisibleCommit {
+		return VisibleAck{}, ErrIneligibleOperation
+	}
+	if _, err := h.detector.Admit(id, delta); err != nil {
+		return VisibleAck{}, err
+	}
+	op, err := replayOperationFromDelta(id, delta)
+	if err != nil {
+		h.detector.Remove(id)
+		return VisibleAck{}, err
+	}
+	h.mu.Lock()
+	h.pending[id] = holderPendingOperation{
+		scope: cloneAuthorityScope(delta.Authority),
+		op:    op,
+	}
+	h.mu.Unlock()
+	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
+}
+
+func (h *Holder) MarkAppliedIDs(ids ...OperationID) {
 	if h == nil || h.detector == nil {
 		return
 	}
 	for _, id := range ids {
 		h.detector.Remove(id)
 	}
-}
-
-func (h *Holder) BuildSeal(snapshot WitnessSnapshot) (PerasSeal, error) {
-	if h == nil {
-		return PerasSeal{}, ErrHolderConfigInvalid
+	h.mu.Lock()
+	for _, id := range ids {
+		delete(h.pending, id)
 	}
-	return BuildPerasSeal(h.epochID, snapshot)
+	h.mu.Unlock()
 }
 
-func (h *Holder) BuildPendingSealWithVersions(firstVersion uint64, snapshot WitnessSnapshot) (PerasSeal, error) {
+func (h *Holder) BuildPendingReplayPlan(firstVersion uint64) (ReplayPlan, compile.AuthorityScope, error) {
 	if h == nil || h.detector == nil {
-		return PerasSeal{}, ErrHolderConfigInvalid
+		return ReplayPlan{}, compile.AuthorityScope{}, ErrHolderConfigInvalid
 	}
-	pending := h.detector.IDs()
-	if len(pending) == 0 {
-		return PerasSeal{}, ErrInvalidPerasSeal
+	plan, scope, ok, err := h.buildPendingReplayPlan(firstVersion, nil)
+	if err != nil {
+		return ReplayPlan{}, compile.AuthorityScope{}, err
 	}
-	return BuildPerasSealWithVersions(h.epochID, firstVersion, filterWitnessSnapshotByIDs(snapshot, pending))
+	if !ok {
+		return ReplayPlan{}, compile.AuthorityScope{}, ErrInvalidPerasSegment
+	}
+	return plan, scope, nil
 }
 
-func (h *Holder) MarkSealApplied(seal PerasSeal) error {
+func (h *Holder) BuildPendingReplayPlanForScope(firstVersion uint64, target compile.AuthorityScope) (ReplayPlan, compile.AuthorityScope, bool, error) {
+	if h == nil || h.detector == nil {
+		return ReplayPlan{}, compile.AuthorityScope{}, false, ErrHolderConfigInvalid
+	}
+	return h.buildPendingReplayPlan(firstVersion, func(scope compile.AuthorityScope) bool {
+		return authorityScopesOverlap(scope, target)
+	})
+}
+
+func (h *Holder) buildPendingReplayPlan(firstVersion uint64, include func(compile.AuthorityScope) bool) (ReplayPlan, compile.AuthorityScope, bool, error) {
+	ids := h.detector.IDs()
+	if len(ids) == 0 {
+		return ReplayPlan{}, compile.AuthorityScope{}, false, nil
+	}
+	plan := ReplayPlan{
+		EpochID:    h.epochID,
+		Operations: make([]ReplayOperation, 0, len(ids)),
+	}
+	var scope compile.AuthorityScope
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, id := range ids {
+		pending, ok := h.pending[id]
+		if !ok {
+			return ReplayPlan{}, compile.AuthorityScope{}, false, ErrInvalidPerasSegment
+		}
+		if include != nil && !include(pending.scope) {
+			continue
+		}
+		if len(plan.Operations) == 0 {
+			scope = cloneAuthorityScope(pending.scope)
+		} else {
+			scope = unionAuthorityScopes(scope, pending.scope)
+		}
+		plan.Operations = append(plan.Operations, cloneReplayOperation(pending.op))
+	}
+	if len(plan.Operations) == 0 {
+		return ReplayPlan{}, compile.AuthorityScope{}, false, nil
+	}
+	if firstVersion != 0 {
+		plan.Versions = ReplayVersionRange{First: firstVersion, Count: uint64(len(plan.Operations))}
+	}
+	return plan, scope, true, nil
+}
+
+func (h *Holder) MarkReplayPlanApplied(plan ReplayPlan) error {
 	if h == nil || h.detector == nil {
 		return ErrHolderConfigInvalid
 	}
-	if seal.EpochID != h.epochID || len(seal.Certificates) == 0 {
-		return ErrInvalidPerasSeal
+	if plan.EpochID != h.epochID || len(plan.Operations) == 0 {
+		return ErrInvalidPerasSegment
 	}
-	ids := make([]OperationID, 0, len(seal.Certificates))
-	for _, cert := range seal.Certificates {
-		ids = append(ids, cert.Prepare.OpID)
+	ids := make([]OperationID, 0, len(plan.Operations))
+	for _, op := range plan.Operations {
+		ids = append(ids, op.OpID)
 	}
-	h.MarkSealed(ids...)
+	h.MarkAppliedIDs(ids...)
 	return nil
 }
 
@@ -232,97 +187,99 @@ func (h *Holder) EpochID() uint64 {
 	return h.epochID
 }
 
-func (h *Holder) broadcastPrepare(ctx context.Context, scope compile.AuthorityScope, record PrepareRecord) []string {
-	return h.broadcastWitnesses(ctx, h.witnesses, func(ctx context.Context, witness WitnessReplica) error {
-		return witness.AppendPrepare(ctx, scope, record)
-	})
+func (h *Holder) HolderID() string {
+	if h == nil {
+		return ""
+	}
+	return h.holderID
 }
 
-func (h *Holder) broadcastCommit(ctx context.Context, scope compile.AuthorityScope, record CommitCertificateRecord) []string {
-	return h.broadcastWitnesses(ctx, h.witnesses, func(ctx context.Context, witness WitnessReplica) error {
-		return witness.AppendCommitCertificate(ctx, scope, record)
-	})
+func cloneAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {
+	out := scope
+	out.Buckets = append([]fsmeta.AffinityBucket(nil), scope.Buckets...)
+	out.Parents = append([]fsmeta.InodeID(nil), scope.Parents...)
+	out.Inodes = append([]fsmeta.InodeID(nil), scope.Inodes...)
+	return out
 }
 
-func (h *Holder) broadcastWitnesses(ctx context.Context, witnesses []WitnessReplica, appendFn func(context.Context, WitnessReplica) error) []string {
-	if err := ctxErr(ctx); err != nil {
-		return nil
+func unionAuthorityScopes(left, right compile.AuthorityScope) compile.AuthorityScope {
+	if left.Mount == "" {
+		return cloneAuthorityScope(right)
 	}
-	broadcastCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	out := cloneAuthorityScope(left)
+	out.Buckets = unionBuckets(out.Buckets, right.Buckets)
+	out.Parents = unionInodes(out.Parents, right.Parents)
+	out.Inodes = unionInodes(out.Inodes, right.Inodes)
+	return out
+}
 
-	type result struct {
-		id  string
-		err error
+func authorityScopesOverlap(left, right compile.AuthorityScope) bool {
+	if left.Mount != right.Mount || left.MountKeyID != right.MountKeyID {
+		return false
 	}
-	resultCh := make(chan result, len(witnesses))
-	for _, witness := range witnesses {
-		go func() {
-			err := appendFn(broadcastCtx, witness)
-			resultCh <- result{id: witness.ID(), err: err}
-		}()
-	}
+	return bucketsOverlap(left.Buckets, right.Buckets) &&
+		inodesOverlap(left.Parents, right.Parents) &&
+		inodesOverlap(left.Inodes, right.Inodes)
+}
 
-	acks := make([]string, 0, len(witnesses))
-	for range witnesses {
-		res := <-resultCh
-		if res.err == nil {
-			acks = append(acks, res.id)
-			if len(acks) >= h.quorum {
-				cancel()
-				slices.Sort(acks)
-				return acks
+func bucketsOverlap(left, right []fsmeta.AffinityBucket) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return true
+	}
+	for _, l := range left {
+		for _, r := range right {
+			if l == r {
+				return true
 			}
 		}
 	}
-	slices.Sort(acks)
-	return acks
+	return false
 }
 
-func digestSemanticDelta(delta compile.SemanticDelta) ([]byte, [32]byte, [32]byte, [32]byte, error) {
-	payload, err := EncodeSemanticDeltaPayload(delta)
-	if err != nil {
-		return nil, [32]byte{}, [32]byte{}, [32]byte{}, err
+func inodesOverlap(left, right []fsmeta.InodeID) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return true
 	}
-	digest, err := SemanticDeltaPayloadDigest(payload)
-	if err != nil {
-		return nil, [32]byte{}, [32]byte{}, [32]byte{}, err
+	for _, l := range left {
+		for _, r := range right {
+			if l == r {
+				return true
+			}
+		}
 	}
-	return payload, digest, hashPredicates(delta.ReadPredicates), hashAuthority(delta.Authority), nil
+	return false
 }
 
-func hashPredicates(predicates []compile.Predicate) [32]byte {
-	h := sha256.New()
-	for _, predicate := range predicates {
-		writeUint64(h, uint64(predicate.Kind))
-		writeBytesHash(h, predicate.Key)
+func unionBuckets(left, right []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
+	out := append([]fsmeta.AffinityBucket(nil), left...)
+	for _, candidate := range right {
+		seen := false
+		for _, current := range out {
+			if current == candidate {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, candidate)
+		}
 	}
-	return digestFromHash(h.Sum(nil))
+	return out
 }
 
-func hashAuthority(scope compile.AuthorityScope) [32]byte {
-	h := sha256.New()
-	writeString(h, string(scope.Mount))
-	writeUint64(h, uint64(scope.MountKeyID))
-	for _, bucket := range scope.Buckets {
-		writeUint64(h, uint64(bucket))
+func unionInodes(left, right []fsmeta.InodeID) []fsmeta.InodeID {
+	out := append([]fsmeta.InodeID(nil), left...)
+	for _, candidate := range right {
+		seen := false
+		for _, current := range out {
+			if current == candidate {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, candidate)
+		}
 	}
-	for _, parent := range scope.Parents {
-		writeUint64(h, uint64(parent))
-	}
-	for _, inode := range scope.Inodes {
-		writeUint64(h, uint64(inode))
-	}
-	return digestFromHash(h.Sum(nil))
-}
-
-func writeBytesHash(h interface{ Write([]byte) (int, error) }, value []byte) {
-	writeUint64(h, uint64(len(value)))
-	_, _ = h.Write(value)
-}
-
-func digestFromHash(sum []byte) [32]byte {
-	var out [32]byte
-	copy(out[:], sum)
 	return out
 }

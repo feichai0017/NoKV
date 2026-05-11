@@ -17,14 +17,14 @@ import (
 type Eligibility uint8
 
 const (
-	EligibilityFastPath Eligibility = iota
+	EligibilityVisibleCommit Eligibility = iota
 	EligibilitySlowPath
 )
 
 func (e Eligibility) String() string {
 	switch e {
-	case EligibilityFastPath:
-		return "fast_path"
+	case EligibilityVisibleCommit:
+		return "visible_commit"
 	case EligibilitySlowPath:
 		return "slow_path"
 	default:
@@ -234,10 +234,6 @@ func Rename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta
 			{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
 		},
 	)
-	if req.FromParent != req.ToParent {
-		delta.Eligibility = EligibilitySlowPath
-		delta.SlowReason = SlowReasonCrossParent
-	}
 	return delta, nil
 }
 
@@ -279,12 +275,7 @@ func Link(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts ...Option) (S
 		},
 	)
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode, GuardSameAuthority)
-	delta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)
-	if delta.Eligibility == EligibilityFastPath {
-		delta.Eligibility = EligibilitySlowPath
-		delta.SlowReason = SlowReasonDynamicWriteSet
-	}
-	return delta, nil
+	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
 }
 
 func Unlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
@@ -300,12 +291,7 @@ func Unlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option
 		},
 	)
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNotLastReference)
-	delta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)
-	if delta.Eligibility == EligibilityFastPath {
-		delta.Eligibility = EligibilitySlowPath
-		delta.SlowReason = SlowReasonDynamicWriteSet
-	}
-	return delta, nil
+	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
 }
 
 func OpenWriteSession(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
@@ -395,7 +381,7 @@ func mutationDelta(plan fsmeta.OperationPlan, scope AuthorityScope, predicates [
 		Authority:      cloneScope(scope),
 		ReadPredicates: clonePredicates(predicates),
 		WriteEffects:   cloneEffects(effects),
-		Eligibility:    EligibilityFastPath,
+		Eligibility:    EligibilityVisibleCommit,
 	}
 }
 

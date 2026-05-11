@@ -2058,6 +2058,158 @@ func (x *TryAtomicMutateResponse) GetFallbackToTwoPhaseCommit() bool {
 	return false
 }
 
+type PerasInstallSegmentRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	RoutingKey           []byte                 `protobuf:"bytes,1,opt,name=routing_key,json=routingKey,proto3" json:"routing_key,omitempty"`
+	SegmentRoot          []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
+	SegmentPayloadDigest []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
+	SegmentPayload       []byte                 `protobuf:"bytes,4,opt,name=segment_payload,json=segmentPayload,proto3" json:"segment_payload,omitempty"`
+	InstallVersion       uint64                 `protobuf:"varint,5,opt,name=install_version,json=installVersion,proto3" json:"install_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *PerasInstallSegmentRequest) Reset() {
+	*x = PerasInstallSegmentRequest{}
+	mi := &file_kv_kv_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PerasInstallSegmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PerasInstallSegmentRequest) ProtoMessage() {}
+
+func (x *PerasInstallSegmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PerasInstallSegmentRequest.ProtoReflect.Descriptor instead.
+func (*PerasInstallSegmentRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *PerasInstallSegmentRequest) GetRoutingKey() []byte {
+	if x != nil {
+		return x.RoutingKey
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentRoot() []byte {
+	if x != nil {
+		return x.SegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentPayloadDigest() []byte {
+	if x != nil {
+		return x.SegmentPayloadDigest
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentPayload() []byte {
+	if x != nil {
+		return x.SegmentPayload
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetInstallVersion() uint64 {
+	if x != nil {
+		return x.InstallVersion
+	}
+	return 0
+}
+
+type PerasInstallSegmentResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Error          *KeyError              `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	SegmentRoot    []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
+	OperationCount uint64                 `protobuf:"varint,3,opt,name=operation_count,json=operationCount,proto3" json:"operation_count,omitempty"`
+	EntryCount     uint64                 `protobuf:"varint,4,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
+	AppliedEntries uint64                 `protobuf:"varint,5,opt,name=applied_entries,json=appliedEntries,proto3" json:"applied_entries,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PerasInstallSegmentResponse) Reset() {
+	*x = PerasInstallSegmentResponse{}
+	mi := &file_kv_kv_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PerasInstallSegmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PerasInstallSegmentResponse) ProtoMessage() {}
+
+func (x *PerasInstallSegmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PerasInstallSegmentResponse.ProtoReflect.Descriptor instead.
+func (*PerasInstallSegmentResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *PerasInstallSegmentResponse) GetError() *KeyError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentResponse) GetSegmentRoot() []byte {
+	if x != nil {
+		return x.SegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentResponse) GetOperationCount() uint64 {
+	if x != nil {
+		return x.OperationCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetEntryCount() uint64 {
+	if x != nil {
+		return x.EntryCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetAppliedEntries() uint64 {
+	if x != nil {
+		return x.AppliedEntries
+	}
+	return 0
+}
+
 type Context struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	RegionId          uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
@@ -2073,7 +2225,7 @@ type Context struct {
 
 func (x *Context) Reset() {
 	*x = Context{}
-	mi := &file_kv_kv_proto_msgTypes[27]
+	mi := &file_kv_kv_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2237,7 @@ func (x *Context) String() string {
 func (*Context) ProtoMessage() {}
 
 func (x *Context) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[27]
+	mi := &file_kv_kv_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2250,7 @@ func (x *Context) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Context.ProtoReflect.Descriptor instead.
 func (*Context) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{27}
+	return file_kv_kv_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *Context) GetRegionId() uint64 {
@@ -2160,7 +2312,7 @@ type KvGetRequest struct {
 
 func (x *KvGetRequest) Reset() {
 	*x = KvGetRequest{}
-	mi := &file_kv_kv_proto_msgTypes[28]
+	mi := &file_kv_kv_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2172,7 +2324,7 @@ func (x *KvGetRequest) String() string {
 func (*KvGetRequest) ProtoMessage() {}
 
 func (x *KvGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[28]
+	mi := &file_kv_kv_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2185,7 +2337,7 @@ func (x *KvGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvGetRequest.ProtoReflect.Descriptor instead.
 func (*KvGetRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{28}
+	return file_kv_kv_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *KvGetRequest) GetContext() *Context {
@@ -2212,7 +2364,7 @@ type KvGetResponse struct {
 
 func (x *KvGetResponse) Reset() {
 	*x = KvGetResponse{}
-	mi := &file_kv_kv_proto_msgTypes[29]
+	mi := &file_kv_kv_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2224,7 +2376,7 @@ func (x *KvGetResponse) String() string {
 func (*KvGetResponse) ProtoMessage() {}
 
 func (x *KvGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[29]
+	mi := &file_kv_kv_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2237,7 +2389,7 @@ func (x *KvGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvGetResponse.ProtoReflect.Descriptor instead.
 func (*KvGetResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{29}
+	return file_kv_kv_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *KvGetResponse) GetResponse() *GetResponse {
@@ -2264,7 +2416,7 @@ type KvBatchGetRequest struct {
 
 func (x *KvBatchGetRequest) Reset() {
 	*x = KvBatchGetRequest{}
-	mi := &file_kv_kv_proto_msgTypes[30]
+	mi := &file_kv_kv_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2276,7 +2428,7 @@ func (x *KvBatchGetRequest) String() string {
 func (*KvBatchGetRequest) ProtoMessage() {}
 
 func (x *KvBatchGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[30]
+	mi := &file_kv_kv_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2289,7 +2441,7 @@ func (x *KvBatchGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchGetRequest.ProtoReflect.Descriptor instead.
 func (*KvBatchGetRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{30}
+	return file_kv_kv_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *KvBatchGetRequest) GetContext() *Context {
@@ -2316,7 +2468,7 @@ type KvBatchGetResponse struct {
 
 func (x *KvBatchGetResponse) Reset() {
 	*x = KvBatchGetResponse{}
-	mi := &file_kv_kv_proto_msgTypes[31]
+	mi := &file_kv_kv_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2328,7 +2480,7 @@ func (x *KvBatchGetResponse) String() string {
 func (*KvBatchGetResponse) ProtoMessage() {}
 
 func (x *KvBatchGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[31]
+	mi := &file_kv_kv_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2341,7 +2493,7 @@ func (x *KvBatchGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchGetResponse.ProtoReflect.Descriptor instead.
 func (*KvBatchGetResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{31}
+	return file_kv_kv_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *KvBatchGetResponse) GetResponse() *BatchGetResponse {
@@ -2368,7 +2520,7 @@ type KvScanRequest struct {
 
 func (x *KvScanRequest) Reset() {
 	*x = KvScanRequest{}
-	mi := &file_kv_kv_proto_msgTypes[32]
+	mi := &file_kv_kv_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2380,7 +2532,7 @@ func (x *KvScanRequest) String() string {
 func (*KvScanRequest) ProtoMessage() {}
 
 func (x *KvScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[32]
+	mi := &file_kv_kv_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2393,7 +2545,7 @@ func (x *KvScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvScanRequest.ProtoReflect.Descriptor instead.
 func (*KvScanRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{32}
+	return file_kv_kv_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *KvScanRequest) GetContext() *Context {
@@ -2420,7 +2572,7 @@ type KvScanResponse struct {
 
 func (x *KvScanResponse) Reset() {
 	*x = KvScanResponse{}
-	mi := &file_kv_kv_proto_msgTypes[33]
+	mi := &file_kv_kv_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2432,7 +2584,7 @@ func (x *KvScanResponse) String() string {
 func (*KvScanResponse) ProtoMessage() {}
 
 func (x *KvScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[33]
+	mi := &file_kv_kv_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2445,7 +2597,7 @@ func (x *KvScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvScanResponse.ProtoReflect.Descriptor instead.
 func (*KvScanResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{33}
+	return file_kv_kv_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *KvScanResponse) GetResponse() *ScanResponse {
@@ -2472,7 +2624,7 @@ type KvPrewriteRequest struct {
 
 func (x *KvPrewriteRequest) Reset() {
 	*x = KvPrewriteRequest{}
-	mi := &file_kv_kv_proto_msgTypes[34]
+	mi := &file_kv_kv_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2484,7 +2636,7 @@ func (x *KvPrewriteRequest) String() string {
 func (*KvPrewriteRequest) ProtoMessage() {}
 
 func (x *KvPrewriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[34]
+	mi := &file_kv_kv_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2497,7 +2649,7 @@ func (x *KvPrewriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvPrewriteRequest.ProtoReflect.Descriptor instead.
 func (*KvPrewriteRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{34}
+	return file_kv_kv_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *KvPrewriteRequest) GetContext() *Context {
@@ -2524,7 +2676,7 @@ type KvPrewriteResponse struct {
 
 func (x *KvPrewriteResponse) Reset() {
 	*x = KvPrewriteResponse{}
-	mi := &file_kv_kv_proto_msgTypes[35]
+	mi := &file_kv_kv_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2536,7 +2688,7 @@ func (x *KvPrewriteResponse) String() string {
 func (*KvPrewriteResponse) ProtoMessage() {}
 
 func (x *KvPrewriteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[35]
+	mi := &file_kv_kv_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2549,7 +2701,7 @@ func (x *KvPrewriteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvPrewriteResponse.ProtoReflect.Descriptor instead.
 func (*KvPrewriteResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{35}
+	return file_kv_kv_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *KvPrewriteResponse) GetResponse() *PrewriteResponse {
@@ -2576,7 +2728,7 @@ type KvCommitRequest struct {
 
 func (x *KvCommitRequest) Reset() {
 	*x = KvCommitRequest{}
-	mi := &file_kv_kv_proto_msgTypes[36]
+	mi := &file_kv_kv_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2588,7 +2740,7 @@ func (x *KvCommitRequest) String() string {
 func (*KvCommitRequest) ProtoMessage() {}
 
 func (x *KvCommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[36]
+	mi := &file_kv_kv_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2601,7 +2753,7 @@ func (x *KvCommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCommitRequest.ProtoReflect.Descriptor instead.
 func (*KvCommitRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{36}
+	return file_kv_kv_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *KvCommitRequest) GetContext() *Context {
@@ -2628,7 +2780,7 @@ type KvCommitResponse struct {
 
 func (x *KvCommitResponse) Reset() {
 	*x = KvCommitResponse{}
-	mi := &file_kv_kv_proto_msgTypes[37]
+	mi := &file_kv_kv_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2640,7 +2792,7 @@ func (x *KvCommitResponse) String() string {
 func (*KvCommitResponse) ProtoMessage() {}
 
 func (x *KvCommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[37]
+	mi := &file_kv_kv_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2653,7 +2805,7 @@ func (x *KvCommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCommitResponse.ProtoReflect.Descriptor instead.
 func (*KvCommitResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{37}
+	return file_kv_kv_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *KvCommitResponse) GetResponse() *CommitResponse {
@@ -2680,7 +2832,7 @@ type KvBatchRollbackRequest struct {
 
 func (x *KvBatchRollbackRequest) Reset() {
 	*x = KvBatchRollbackRequest{}
-	mi := &file_kv_kv_proto_msgTypes[38]
+	mi := &file_kv_kv_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2692,7 +2844,7 @@ func (x *KvBatchRollbackRequest) String() string {
 func (*KvBatchRollbackRequest) ProtoMessage() {}
 
 func (x *KvBatchRollbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[38]
+	mi := &file_kv_kv_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2705,7 +2857,7 @@ func (x *KvBatchRollbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchRollbackRequest.ProtoReflect.Descriptor instead.
 func (*KvBatchRollbackRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{38}
+	return file_kv_kv_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *KvBatchRollbackRequest) GetContext() *Context {
@@ -2732,7 +2884,7 @@ type KvBatchRollbackResponse struct {
 
 func (x *KvBatchRollbackResponse) Reset() {
 	*x = KvBatchRollbackResponse{}
-	mi := &file_kv_kv_proto_msgTypes[39]
+	mi := &file_kv_kv_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2744,7 +2896,7 @@ func (x *KvBatchRollbackResponse) String() string {
 func (*KvBatchRollbackResponse) ProtoMessage() {}
 
 func (x *KvBatchRollbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[39]
+	mi := &file_kv_kv_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2757,7 +2909,7 @@ func (x *KvBatchRollbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvBatchRollbackResponse.ProtoReflect.Descriptor instead.
 func (*KvBatchRollbackResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{39}
+	return file_kv_kv_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *KvBatchRollbackResponse) GetResponse() *BatchRollbackResponse {
@@ -2784,7 +2936,7 @@ type KvResolveLockRequest struct {
 
 func (x *KvResolveLockRequest) Reset() {
 	*x = KvResolveLockRequest{}
-	mi := &file_kv_kv_proto_msgTypes[40]
+	mi := &file_kv_kv_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2796,7 +2948,7 @@ func (x *KvResolveLockRequest) String() string {
 func (*KvResolveLockRequest) ProtoMessage() {}
 
 func (x *KvResolveLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[40]
+	mi := &file_kv_kv_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2809,7 +2961,7 @@ func (x *KvResolveLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvResolveLockRequest.ProtoReflect.Descriptor instead.
 func (*KvResolveLockRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{40}
+	return file_kv_kv_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *KvResolveLockRequest) GetContext() *Context {
@@ -2836,7 +2988,7 @@ type KvResolveLockResponse struct {
 
 func (x *KvResolveLockResponse) Reset() {
 	*x = KvResolveLockResponse{}
-	mi := &file_kv_kv_proto_msgTypes[41]
+	mi := &file_kv_kv_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2848,7 +3000,7 @@ func (x *KvResolveLockResponse) String() string {
 func (*KvResolveLockResponse) ProtoMessage() {}
 
 func (x *KvResolveLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[41]
+	mi := &file_kv_kv_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2861,7 +3013,7 @@ func (x *KvResolveLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvResolveLockResponse.ProtoReflect.Descriptor instead.
 func (*KvResolveLockResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{41}
+	return file_kv_kv_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *KvResolveLockResponse) GetResponse() *ResolveLockResponse {
@@ -2888,7 +3040,7 @@ type KvCheckTxnStatusRequest struct {
 
 func (x *KvCheckTxnStatusRequest) Reset() {
 	*x = KvCheckTxnStatusRequest{}
-	mi := &file_kv_kv_proto_msgTypes[42]
+	mi := &file_kv_kv_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2900,7 +3052,7 @@ func (x *KvCheckTxnStatusRequest) String() string {
 func (*KvCheckTxnStatusRequest) ProtoMessage() {}
 
 func (x *KvCheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[42]
+	mi := &file_kv_kv_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2913,7 +3065,7 @@ func (x *KvCheckTxnStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCheckTxnStatusRequest.ProtoReflect.Descriptor instead.
 func (*KvCheckTxnStatusRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{42}
+	return file_kv_kv_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *KvCheckTxnStatusRequest) GetContext() *Context {
@@ -2940,7 +3092,7 @@ type KvCheckTxnStatusResponse struct {
 
 func (x *KvCheckTxnStatusResponse) Reset() {
 	*x = KvCheckTxnStatusResponse{}
-	mi := &file_kv_kv_proto_msgTypes[43]
+	mi := &file_kv_kv_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2952,7 +3104,7 @@ func (x *KvCheckTxnStatusResponse) String() string {
 func (*KvCheckTxnStatusResponse) ProtoMessage() {}
 
 func (x *KvCheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[43]
+	mi := &file_kv_kv_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2965,7 +3117,7 @@ func (x *KvCheckTxnStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvCheckTxnStatusResponse.ProtoReflect.Descriptor instead.
 func (*KvCheckTxnStatusResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{43}
+	return file_kv_kv_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *KvCheckTxnStatusResponse) GetResponse() *CheckTxnStatusResponse {
@@ -2992,7 +3144,7 @@ type KvTxnHeartBeatRequest struct {
 
 func (x *KvTxnHeartBeatRequest) Reset() {
 	*x = KvTxnHeartBeatRequest{}
-	mi := &file_kv_kv_proto_msgTypes[44]
+	mi := &file_kv_kv_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3004,7 +3156,7 @@ func (x *KvTxnHeartBeatRequest) String() string {
 func (*KvTxnHeartBeatRequest) ProtoMessage() {}
 
 func (x *KvTxnHeartBeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[44]
+	mi := &file_kv_kv_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3017,7 +3169,7 @@ func (x *KvTxnHeartBeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvTxnHeartBeatRequest.ProtoReflect.Descriptor instead.
 func (*KvTxnHeartBeatRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{44}
+	return file_kv_kv_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *KvTxnHeartBeatRequest) GetContext() *Context {
@@ -3044,7 +3196,7 @@ type KvTxnHeartBeatResponse struct {
 
 func (x *KvTxnHeartBeatResponse) Reset() {
 	*x = KvTxnHeartBeatResponse{}
-	mi := &file_kv_kv_proto_msgTypes[45]
+	mi := &file_kv_kv_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3056,7 +3208,7 @@ func (x *KvTxnHeartBeatResponse) String() string {
 func (*KvTxnHeartBeatResponse) ProtoMessage() {}
 
 func (x *KvTxnHeartBeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[45]
+	mi := &file_kv_kv_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3069,7 +3221,7 @@ func (x *KvTxnHeartBeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvTxnHeartBeatResponse.ProtoReflect.Descriptor instead.
 func (*KvTxnHeartBeatResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{45}
+	return file_kv_kv_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *KvTxnHeartBeatResponse) GetResponse() *TxnHeartBeatResponse {
@@ -3096,7 +3248,7 @@ type KvTryAtomicMutateRequest struct {
 
 func (x *KvTryAtomicMutateRequest) Reset() {
 	*x = KvTryAtomicMutateRequest{}
-	mi := &file_kv_kv_proto_msgTypes[46]
+	mi := &file_kv_kv_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3108,7 +3260,7 @@ func (x *KvTryAtomicMutateRequest) String() string {
 func (*KvTryAtomicMutateRequest) ProtoMessage() {}
 
 func (x *KvTryAtomicMutateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[46]
+	mi := &file_kv_kv_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3121,7 +3273,7 @@ func (x *KvTryAtomicMutateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvTryAtomicMutateRequest.ProtoReflect.Descriptor instead.
 func (*KvTryAtomicMutateRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{46}
+	return file_kv_kv_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *KvTryAtomicMutateRequest) GetContext() *Context {
@@ -3148,7 +3300,7 @@ type KvTryAtomicMutateResponse struct {
 
 func (x *KvTryAtomicMutateResponse) Reset() {
 	*x = KvTryAtomicMutateResponse{}
-	mi := &file_kv_kv_proto_msgTypes[47]
+	mi := &file_kv_kv_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3160,7 +3312,7 @@ func (x *KvTryAtomicMutateResponse) String() string {
 func (*KvTryAtomicMutateResponse) ProtoMessage() {}
 
 func (x *KvTryAtomicMutateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[47]
+	mi := &file_kv_kv_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3173,7 +3325,7 @@ func (x *KvTryAtomicMutateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KvTryAtomicMutateResponse.ProtoReflect.Descriptor instead.
 func (*KvTryAtomicMutateResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{47}
+	return file_kv_kv_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *KvTryAtomicMutateResponse) GetResponse() *TryAtomicMutateResponse {
@@ -3190,6 +3342,110 @@ func (x *KvTryAtomicMutateResponse) GetRegionError() *error1.RegionError {
 	return nil
 }
 
+type KvPerasInstallSegmentRequest struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	Context       *Context                    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	Request       *PerasInstallSegmentRequest `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KvPerasInstallSegmentRequest) Reset() {
+	*x = KvPerasInstallSegmentRequest{}
+	mi := &file_kv_kv_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KvPerasInstallSegmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KvPerasInstallSegmentRequest) ProtoMessage() {}
+
+func (x *KvPerasInstallSegmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KvPerasInstallSegmentRequest.ProtoReflect.Descriptor instead.
+func (*KvPerasInstallSegmentRequest) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *KvPerasInstallSegmentRequest) GetContext() *Context {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *KvPerasInstallSegmentRequest) GetRequest() *PerasInstallSegmentRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type KvPerasInstallSegmentResponse struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Response      *PerasInstallSegmentResponse `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
+	RegionError   *error1.RegionError          `protobuf:"bytes,2,opt,name=region_error,json=regionError,proto3" json:"region_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KvPerasInstallSegmentResponse) Reset() {
+	*x = KvPerasInstallSegmentResponse{}
+	mi := &file_kv_kv_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KvPerasInstallSegmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KvPerasInstallSegmentResponse) ProtoMessage() {}
+
+func (x *KvPerasInstallSegmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_kv_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KvPerasInstallSegmentResponse.ProtoReflect.Descriptor instead.
+func (*KvPerasInstallSegmentResponse) Descriptor() ([]byte, []int) {
+	return file_kv_kv_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *KvPerasInstallSegmentResponse) GetResponse() *PerasInstallSegmentResponse {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+func (x *KvPerasInstallSegmentResponse) GetRegionError() *error1.RegionError {
+	if x != nil {
+		return x.RegionError
+	}
+	return nil
+}
+
 type ApplyWatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	KeyPrefix     []byte                 `protobuf:"bytes,1,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
@@ -3200,7 +3456,7 @@ type ApplyWatchRequest struct {
 
 func (x *ApplyWatchRequest) Reset() {
 	*x = ApplyWatchRequest{}
-	mi := &file_kv_kv_proto_msgTypes[48]
+	mi := &file_kv_kv_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3212,7 +3468,7 @@ func (x *ApplyWatchRequest) String() string {
 func (*ApplyWatchRequest) ProtoMessage() {}
 
 func (x *ApplyWatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[48]
+	mi := &file_kv_kv_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3225,7 +3481,7 @@ func (x *ApplyWatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyWatchRequest.ProtoReflect.Descriptor instead.
 func (*ApplyWatchRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{48}
+	return file_kv_kv_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ApplyWatchRequest) GetKeyPrefix() []byte {
@@ -3256,7 +3512,7 @@ type ApplyWatchEvent struct {
 
 func (x *ApplyWatchEvent) Reset() {
 	*x = ApplyWatchEvent{}
-	mi := &file_kv_kv_proto_msgTypes[49]
+	mi := &file_kv_kv_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3268,7 +3524,7 @@ func (x *ApplyWatchEvent) String() string {
 func (*ApplyWatchEvent) ProtoMessage() {}
 
 func (x *ApplyWatchEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[49]
+	mi := &file_kv_kv_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3281,7 +3537,7 @@ func (x *ApplyWatchEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyWatchEvent.ProtoReflect.Descriptor instead.
 func (*ApplyWatchEvent) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{49}
+	return file_kv_kv_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ApplyWatchEvent) GetRegionId() uint64 {
@@ -3336,7 +3592,7 @@ type ApplyWatchResponse struct {
 
 func (x *ApplyWatchResponse) Reset() {
 	*x = ApplyWatchResponse{}
-	mi := &file_kv_kv_proto_msgTypes[50]
+	mi := &file_kv_kv_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3348,7 +3604,7 @@ func (x *ApplyWatchResponse) String() string {
 func (*ApplyWatchResponse) ProtoMessage() {}
 
 func (x *ApplyWatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[50]
+	mi := &file_kv_kv_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3361,7 +3617,7 @@ func (x *ApplyWatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyWatchResponse.ProtoReflect.Descriptor instead.
 func (*ApplyWatchResponse) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{50}
+	return file_kv_kv_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ApplyWatchResponse) GetEvent() *ApplyWatchEvent {
@@ -3391,7 +3647,7 @@ type PerasAuthorityScope struct {
 
 func (x *PerasAuthorityScope) Reset() {
 	*x = PerasAuthorityScope{}
-	mi := &file_kv_kv_proto_msgTypes[51]
+	mi := &file_kv_kv_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3403,7 +3659,7 @@ func (x *PerasAuthorityScope) String() string {
 func (*PerasAuthorityScope) ProtoMessage() {}
 
 func (x *PerasAuthorityScope) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[51]
+	mi := &file_kv_kv_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3416,7 +3672,7 @@ func (x *PerasAuthorityScope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerasAuthorityScope.ProtoReflect.Descriptor instead.
 func (*PerasAuthorityScope) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{51}
+	return file_kv_kv_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *PerasAuthorityScope) GetMount() string {
@@ -3454,338 +3710,36 @@ func (x *PerasAuthorityScope) GetInodes() []uint64 {
 	return nil
 }
 
-type PerasOperationID struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	Seq           uint64                 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PerasOperationID) Reset() {
-	*x = PerasOperationID{}
-	mi := &file_kv_kv_proto_msgTypes[52]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PerasOperationID) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PerasOperationID) ProtoMessage() {}
-
-func (x *PerasOperationID) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[52]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PerasOperationID.ProtoReflect.Descriptor instead.
-func (*PerasOperationID) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{52}
-}
-
-func (x *PerasOperationID) GetClientId() string {
-	if x != nil {
-		return x.ClientId
-	}
-	return ""
-}
-
-func (x *PerasOperationID) GetSeq() uint64 {
-	if x != nil {
-		return x.Seq
-	}
-	return 0
-}
-
-type PerasPrepareRecord struct {
+type PerasSegmentWitnessRecord struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	EpochId              uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	OpId                 *PerasOperationID      `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
-	DeltaPayload         []byte                 `protobuf:"bytes,3,opt,name=delta_payload,json=deltaPayload,proto3" json:"delta_payload,omitempty"`
-	DeltaDigest          []byte                 `protobuf:"bytes,4,opt,name=delta_digest,json=deltaDigest,proto3" json:"delta_digest,omitempty"`
-	PredicateDigest      []byte                 `protobuf:"bytes,5,opt,name=predicate_digest,json=predicateDigest,proto3" json:"predicate_digest,omitempty"`
-	AuthorityProofDigest []byte                 `protobuf:"bytes,6,opt,name=authority_proof_digest,json=authorityProofDigest,proto3" json:"authority_proof_digest,omitempty"`
-	DependencyFrontier   []*PerasOperationID    `protobuf:"bytes,7,rep,name=dependency_frontier,json=dependencyFrontier,proto3" json:"dependency_frontier,omitempty"`
-	TimestampUnixNano    int64                  `protobuf:"varint,8,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
-	HolderId             string                 `protobuf:"bytes,9,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	HolderSignature      []byte                 `protobuf:"bytes,10,opt,name=holder_signature,json=holderSignature,proto3" json:"holder_signature,omitempty"`
+	SegmentRoot          []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
+	OperationCount       uint64                 `protobuf:"varint,3,opt,name=operation_count,json=operationCount,proto3" json:"operation_count,omitempty"`
+	EntryCount           uint64                 `protobuf:"varint,4,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
+	TimestampUnixNano    int64                  `protobuf:"varint,5,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
+	HolderId             string                 `protobuf:"bytes,6,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
+	SegmentPayloadDigest []byte                 `protobuf:"bytes,7,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
+	SegmentPayloadSize   uint64                 `protobuf:"varint,8,opt,name=segment_payload_size,json=segmentPayloadSize,proto3" json:"segment_payload_size,omitempty"`
+	SegmentPointer       string                 `protobuf:"bytes,9,opt,name=segment_pointer,json=segmentPointer,proto3" json:"segment_pointer,omitempty"`
+	SegmentPayload       []byte                 `protobuf:"bytes,10,opt,name=segment_payload,json=segmentPayload,proto3" json:"segment_payload,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
 
-func (x *PerasPrepareRecord) Reset() {
-	*x = PerasPrepareRecord{}
-	mi := &file_kv_kv_proto_msgTypes[53]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PerasPrepareRecord) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PerasPrepareRecord) ProtoMessage() {}
-
-func (x *PerasPrepareRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[53]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PerasPrepareRecord.ProtoReflect.Descriptor instead.
-func (*PerasPrepareRecord) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{53}
-}
-
-func (x *PerasPrepareRecord) GetEpochId() uint64 {
-	if x != nil {
-		return x.EpochId
-	}
-	return 0
-}
-
-func (x *PerasPrepareRecord) GetOpId() *PerasOperationID {
-	if x != nil {
-		return x.OpId
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetDeltaPayload() []byte {
-	if x != nil {
-		return x.DeltaPayload
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetDeltaDigest() []byte {
-	if x != nil {
-		return x.DeltaDigest
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetPredicateDigest() []byte {
-	if x != nil {
-		return x.PredicateDigest
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetAuthorityProofDigest() []byte {
-	if x != nil {
-		return x.AuthorityProofDigest
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetDependencyFrontier() []*PerasOperationID {
-	if x != nil {
-		return x.DependencyFrontier
-	}
-	return nil
-}
-
-func (x *PerasPrepareRecord) GetTimestampUnixNano() int64 {
-	if x != nil {
-		return x.TimestampUnixNano
-	}
-	return 0
-}
-
-func (x *PerasPrepareRecord) GetHolderId() string {
-	if x != nil {
-		return x.HolderId
-	}
-	return ""
-}
-
-func (x *PerasPrepareRecord) GetHolderSignature() []byte {
-	if x != nil {
-		return x.HolderSignature
-	}
-	return nil
-}
-
-type PerasCommitCertificateRecord struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	EpochId           uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	OpId              *PerasOperationID      `protobuf:"bytes,2,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
-	PrepareDigest     []byte                 `protobuf:"bytes,3,opt,name=prepare_digest,json=prepareDigest,proto3" json:"prepare_digest,omitempty"`
-	QuorumAckSet      []string               `protobuf:"bytes,4,rep,name=quorum_ack_set,json=quorumAckSet,proto3" json:"quorum_ack_set,omitempty"`
-	TimestampUnixNano int64                  `protobuf:"varint,5,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
-	HolderId          string                 `protobuf:"bytes,6,opt,name=holder_id,json=holderId,proto3" json:"holder_id,omitempty"`
-	HolderSignature   []byte                 `protobuf:"bytes,7,opt,name=holder_signature,json=holderSignature,proto3" json:"holder_signature,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *PerasCommitCertificateRecord) Reset() {
-	*x = PerasCommitCertificateRecord{}
-	mi := &file_kv_kv_proto_msgTypes[54]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PerasCommitCertificateRecord) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PerasCommitCertificateRecord) ProtoMessage() {}
-
-func (x *PerasCommitCertificateRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[54]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PerasCommitCertificateRecord.ProtoReflect.Descriptor instead.
-func (*PerasCommitCertificateRecord) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{54}
-}
-
-func (x *PerasCommitCertificateRecord) GetEpochId() uint64 {
-	if x != nil {
-		return x.EpochId
-	}
-	return 0
-}
-
-func (x *PerasCommitCertificateRecord) GetOpId() *PerasOperationID {
-	if x != nil {
-		return x.OpId
-	}
-	return nil
-}
-
-func (x *PerasCommitCertificateRecord) GetPrepareDigest() []byte {
-	if x != nil {
-		return x.PrepareDigest
-	}
-	return nil
-}
-
-func (x *PerasCommitCertificateRecord) GetQuorumAckSet() []string {
-	if x != nil {
-		return x.QuorumAckSet
-	}
-	return nil
-}
-
-func (x *PerasCommitCertificateRecord) GetTimestampUnixNano() int64 {
-	if x != nil {
-		return x.TimestampUnixNano
-	}
-	return 0
-}
-
-func (x *PerasCommitCertificateRecord) GetHolderId() string {
-	if x != nil {
-		return x.HolderId
-	}
-	return ""
-}
-
-func (x *PerasCommitCertificateRecord) GetHolderSignature() []byte {
-	if x != nil {
-		return x.HolderSignature
-	}
-	return nil
-}
-
-type PerasWitnessPrepareRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Scope         *PerasAuthorityScope   `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	Record        *PerasPrepareRecord    `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PerasWitnessPrepareRequest) Reset() {
-	*x = PerasWitnessPrepareRequest{}
-	mi := &file_kv_kv_proto_msgTypes[55]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PerasWitnessPrepareRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PerasWitnessPrepareRequest) ProtoMessage() {}
-
-func (x *PerasWitnessPrepareRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kv_kv_proto_msgTypes[55]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PerasWitnessPrepareRequest.ProtoReflect.Descriptor instead.
-func (*PerasWitnessPrepareRequest) Descriptor() ([]byte, []int) {
-	return file_kv_kv_proto_rawDescGZIP(), []int{55}
-}
-
-func (x *PerasWitnessPrepareRequest) GetScope() *PerasAuthorityScope {
-	if x != nil {
-		return x.Scope
-	}
-	return nil
-}
-
-func (x *PerasWitnessPrepareRequest) GetRecord() *PerasPrepareRecord {
-	if x != nil {
-		return x.Record
-	}
-	return nil
-}
-
-type PerasWitnessPrepareResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PerasWitnessPrepareResponse) Reset() {
-	*x = PerasWitnessPrepareResponse{}
+func (x *PerasSegmentWitnessRecord) Reset() {
+	*x = PerasSegmentWitnessRecord{}
 	mi := &file_kv_kv_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasWitnessPrepareResponse) String() string {
+func (x *PerasSegmentWitnessRecord) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasWitnessPrepareResponse) ProtoMessage() {}
+func (*PerasSegmentWitnessRecord) ProtoMessage() {}
 
-func (x *PerasWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasSegmentWitnessRecord) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3797,33 +3751,103 @@ func (x *PerasWitnessPrepareResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasWitnessPrepareResponse.ProtoReflect.Descriptor instead.
-func (*PerasWitnessPrepareResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasSegmentWitnessRecord.ProtoReflect.Descriptor instead.
+func (*PerasSegmentWitnessRecord) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{56}
 }
 
-type PerasWitnessCommitRequest struct {
-	state         protoimpl.MessageState        `protogen:"open.v1"`
-	Scope         *PerasAuthorityScope          `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	Record        *PerasCommitCertificateRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+func (x *PerasSegmentWitnessRecord) GetEpochId() uint64 {
+	if x != nil {
+		return x.EpochId
+	}
+	return 0
+}
+
+func (x *PerasSegmentWitnessRecord) GetSegmentRoot() []byte {
+	if x != nil {
+		return x.SegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasSegmentWitnessRecord) GetOperationCount() uint64 {
+	if x != nil {
+		return x.OperationCount
+	}
+	return 0
+}
+
+func (x *PerasSegmentWitnessRecord) GetEntryCount() uint64 {
+	if x != nil {
+		return x.EntryCount
+	}
+	return 0
+}
+
+func (x *PerasSegmentWitnessRecord) GetTimestampUnixNano() int64 {
+	if x != nil {
+		return x.TimestampUnixNano
+	}
+	return 0
+}
+
+func (x *PerasSegmentWitnessRecord) GetHolderId() string {
+	if x != nil {
+		return x.HolderId
+	}
+	return ""
+}
+
+func (x *PerasSegmentWitnessRecord) GetSegmentPayloadDigest() []byte {
+	if x != nil {
+		return x.SegmentPayloadDigest
+	}
+	return nil
+}
+
+func (x *PerasSegmentWitnessRecord) GetSegmentPayloadSize() uint64 {
+	if x != nil {
+		return x.SegmentPayloadSize
+	}
+	return 0
+}
+
+func (x *PerasSegmentWitnessRecord) GetSegmentPointer() string {
+	if x != nil {
+		return x.SegmentPointer
+	}
+	return ""
+}
+
+func (x *PerasSegmentWitnessRecord) GetSegmentPayload() []byte {
+	if x != nil {
+		return x.SegmentPayload
+	}
+	return nil
+}
+
+type PerasWitnessSegmentRequest struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	Scope         *PerasAuthorityScope       `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Record        *PerasSegmentWitnessRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PerasWitnessCommitRequest) Reset() {
-	*x = PerasWitnessCommitRequest{}
+func (x *PerasWitnessSegmentRequest) Reset() {
+	*x = PerasWitnessSegmentRequest{}
 	mi := &file_kv_kv_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasWitnessCommitRequest) String() string {
+func (x *PerasWitnessSegmentRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasWitnessCommitRequest) ProtoMessage() {}
+func (*PerasWitnessSegmentRequest) ProtoMessage() {}
 
-func (x *PerasWitnessCommitRequest) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessSegmentRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3835,45 +3859,45 @@ func (x *PerasWitnessCommitRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasWitnessCommitRequest.ProtoReflect.Descriptor instead.
-func (*PerasWitnessCommitRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessSegmentRequest.ProtoReflect.Descriptor instead.
+func (*PerasWitnessSegmentRequest) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *PerasWitnessCommitRequest) GetScope() *PerasAuthorityScope {
+func (x *PerasWitnessSegmentRequest) GetScope() *PerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *PerasWitnessCommitRequest) GetRecord() *PerasCommitCertificateRecord {
+func (x *PerasWitnessSegmentRequest) GetRecord() *PerasSegmentWitnessRecord {
 	if x != nil {
 		return x.Record
 	}
 	return nil
 }
 
-type PerasWitnessCommitResponse struct {
+type PerasWitnessSegmentResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PerasWitnessCommitResponse) Reset() {
-	*x = PerasWitnessCommitResponse{}
+func (x *PerasWitnessSegmentResponse) Reset() {
+	*x = PerasWitnessSegmentResponse{}
 	mi := &file_kv_kv_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasWitnessCommitResponse) String() string {
+func (x *PerasWitnessSegmentResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasWitnessCommitResponse) ProtoMessage() {}
+func (*PerasWitnessSegmentResponse) ProtoMessage() {}
 
-func (x *PerasWitnessCommitResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessSegmentResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3885,8 +3909,8 @@ func (x *PerasWitnessCommitResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasWitnessCommitResponse.ProtoReflect.Descriptor instead.
-func (*PerasWitnessCommitResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessSegmentResponse.ProtoReflect.Descriptor instead.
+func (*PerasWitnessSegmentResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{58}
 }
 
@@ -3935,9 +3959,8 @@ func (x *PerasWitnessProbeRequest) GetEpochId() uint64 {
 }
 
 type PerasWitnessProbeResponse struct {
-	state         protoimpl.MessageState          `protogen:"open.v1"`
-	Prepares      []*PerasPrepareRecord           `protobuf:"bytes,1,rep,name=prepares,proto3" json:"prepares,omitempty"`
-	Commits       []*PerasCommitCertificateRecord `protobuf:"bytes,2,rep,name=commits,proto3" json:"commits,omitempty"`
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Segments      []*PerasSegmentWitnessRecord `protobuf:"bytes,1,rep,name=segments,proto3" json:"segments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3972,16 +3995,9 @@ func (*PerasWitnessProbeResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{60}
 }
 
-func (x *PerasWitnessProbeResponse) GetPrepares() []*PerasPrepareRecord {
+func (x *PerasWitnessProbeResponse) GetSegments() []*PerasSegmentWitnessRecord {
 	if x != nil {
-		return x.Prepares
-	}
-	return nil
-}
-
-func (x *PerasWitnessProbeResponse) GetCommits() []*PerasCommitCertificateRecord {
-	if x != nil {
-		return x.Commits
+		return x.Segments
 	}
 	return nil
 }
@@ -4470,7 +4486,21 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x17TryAtomicMutateResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fapplied_keys\x18\x02 \x01(\x04R\vappliedKeys\x12>\n" +
-	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\xfb\x02\n" +
+	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\xe8\x01\n" +
+	"\x1aPerasInstallSegmentRequest\x12\x1f\n" +
+	"\vrouting_key\x18\x01 \x01(\fR\n" +
+	"routingKey\x12!\n" +
+	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x124\n" +
+	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\x12'\n" +
+	"\x0fsegment_payload\x18\x04 \x01(\fR\x0esegmentPayload\x12'\n" +
+	"\x0finstall_version\x18\x05 \x01(\x04R\x0einstallVersion\"\xdf\x01\n" +
+	"\x1bPerasInstallSegmentResponse\x12*\n" +
+	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
+	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +
+	"\x0foperation_count\x18\x03 \x01(\x04R\x0eoperationCount\x12\x1f\n" +
+	"\ventry_count\x18\x04 \x01(\x04R\n" +
+	"entryCount\x12'\n" +
+	"\x0fapplied_entries\x18\x05 \x01(\x04R\x0eappliedEntries\"\xfb\x02\n" +
 	"\aContext\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12<\n" +
 	"\fregion_epoch\x18\x02 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\vregionEpoch\x12,\n" +
@@ -4538,6 +4568,12 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\arequest\x18\x02 \x01(\v2\".nokv.kv.v1.TryAtomicMutateRequestR\arequest\"\x9b\x01\n" +
 	"\x19KvTryAtomicMutateResponse\x12?\n" +
 	"\bresponse\x18\x01 \x01(\v2#.nokv.kv.v1.TryAtomicMutateResponseR\bresponse\x12=\n" +
+	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"\x8f\x01\n" +
+	"\x1cKvPerasInstallSegmentRequest\x12-\n" +
+	"\acontext\x18\x01 \x01(\v2\x13.nokv.kv.v1.ContextR\acontext\x12@\n" +
+	"\arequest\x18\x02 \x01(\v2&.nokv.kv.v1.PerasInstallSegmentRequestR\arequest\"\xa3\x01\n" +
+	"\x1dKvPerasInstallSegmentResponse\x12C\n" +
+	"\bresponse\x18\x01 \x01(\v2'.nokv.kv.v1.PerasInstallSegmentResponseR\bresponse\x12=\n" +
 	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"J\n" +
 	"\x11ApplyWatchRequest\x12\x1d\n" +
 	"\n" +
@@ -4559,43 +4595,28 @@ const file_kv_kv_proto_rawDesc = "" +
 	"mountKeyId\x12\x18\n" +
 	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
 	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
-	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"A\n" +
-	"\x10PerasOperationID\x12\x1b\n" +
-	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x04R\x03seq\"\xd2\x03\n" +
-	"\x12PerasPrepareRecord\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x121\n" +
-	"\x05op_id\x18\x02 \x01(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x04opId\x12#\n" +
-	"\rdelta_payload\x18\x03 \x01(\fR\fdeltaPayload\x12!\n" +
-	"\fdelta_digest\x18\x04 \x01(\fR\vdeltaDigest\x12)\n" +
-	"\x10predicate_digest\x18\x05 \x01(\fR\x0fpredicateDigest\x124\n" +
-	"\x16authority_proof_digest\x18\x06 \x01(\fR\x14authorityProofDigest\x12M\n" +
-	"\x13dependency_frontier\x18\a \x03(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x12dependencyFrontier\x12.\n" +
-	"\x13timestamp_unix_nano\x18\b \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
-	"\tholder_id\x18\t \x01(\tR\bholderId\x12)\n" +
-	"\x10holder_signature\x18\n" +
-	" \x01(\fR\x0fholderSignature\"\xb1\x02\n" +
-	"\x1cPerasCommitCertificateRecord\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x121\n" +
-	"\x05op_id\x18\x02 \x01(\v2\x1c.nokv.kv.v1.PerasOperationIDR\x04opId\x12%\n" +
-	"\x0eprepare_digest\x18\x03 \x01(\fR\rprepareDigest\x12$\n" +
-	"\x0equorum_ack_set\x18\x04 \x03(\tR\fquorumAckSet\x12.\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xaa\x03\n" +
+	"\x19PerasSegmentWitnessRecord\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
+	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +
+	"\x0foperation_count\x18\x03 \x01(\x04R\x0eoperationCount\x12\x1f\n" +
+	"\ventry_count\x18\x04 \x01(\x04R\n" +
+	"entryCount\x12.\n" +
 	"\x13timestamp_unix_nano\x18\x05 \x01(\x03R\x11timestampUnixNano\x12\x1b\n" +
-	"\tholder_id\x18\x06 \x01(\tR\bholderId\x12)\n" +
-	"\x10holder_signature\x18\a \x01(\fR\x0fholderSignature\"\x8b\x01\n" +
-	"\x1aPerasWitnessPrepareRequest\x125\n" +
-	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x126\n" +
-	"\x06record\x18\x02 \x01(\v2\x1e.nokv.kv.v1.PerasPrepareRecordR\x06record\"\x1d\n" +
-	"\x1bPerasWitnessPrepareResponse\"\x94\x01\n" +
-	"\x19PerasWitnessCommitRequest\x125\n" +
-	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12@\n" +
-	"\x06record\x18\x02 \x01(\v2(.nokv.kv.v1.PerasCommitCertificateRecordR\x06record\"\x1c\n" +
-	"\x1aPerasWitnessCommitResponse\"5\n" +
+	"\tholder_id\x18\x06 \x01(\tR\bholderId\x124\n" +
+	"\x16segment_payload_digest\x18\a \x01(\fR\x14segmentPayloadDigest\x120\n" +
+	"\x14segment_payload_size\x18\b \x01(\x04R\x12segmentPayloadSize\x12'\n" +
+	"\x0fsegment_pointer\x18\t \x01(\tR\x0esegmentPointer\x12'\n" +
+	"\x0fsegment_payload\x18\n" +
+	" \x01(\fR\x0esegmentPayload\"\x92\x01\n" +
+	"\x1aPerasWitnessSegmentRequest\x125\n" +
+	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12=\n" +
+	"\x06record\x18\x02 \x01(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\x06record\"\x1d\n" +
+	"\x1bPerasWitnessSegmentResponse\"5\n" +
 	"\x18PerasWitnessProbeRequest\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"\x9b\x01\n" +
-	"\x19PerasWitnessProbeResponse\x12:\n" +
-	"\bprepares\x18\x01 \x03(\v2\x1e.nokv.kv.v1.PerasPrepareRecordR\bprepares\x12B\n" +
-	"\acommits\x18\x02 \x03(\v2(.nokv.kv.v1.PerasCommitCertificateRecordR\acommits\"\xba\x02\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"^\n" +
+	"\x19PerasWitnessProbeResponse\x12A\n" +
+	"\bsegments\x18\x01 \x03(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\bsegments\"\xba\x02\n" +
 	"\bKeyError\x12*\n" +
 	"\x06locked\x18\x01 \x01(\v2\x12.nokv.kv.v1.LockedR\x06locked\x12@\n" +
 	"\x0ewrite_conflict\x18\x02 \x01(\v2\x19.nokv.kv.v1.WriteConflictR\rwriteConflict\x12C\n" +
@@ -4646,7 +4667,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\x9f\t\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xa6\t\n" +
 	"\aStoreKV\x12:\n" +
 	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
 	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
@@ -4657,11 +4678,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\vResolveLock\x12 .nokv.kv.v1.KvResolveLockRequest\x1a!.nokv.kv.v1.KvResolveLockResponse\x12[\n" +
 	"\x0eCheckTxnStatus\x12#.nokv.kv.v1.KvCheckTxnStatusRequest\x1a$.nokv.kv.v1.KvCheckTxnStatusResponse\x12U\n" +
 	"\fTxnHeartBeat\x12!.nokv.kv.v1.KvTxnHeartBeatRequest\x1a\".nokv.kv.v1.KvTxnHeartBeatResponse\x12^\n" +
-	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12M\n" +
+	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12j\n" +
+	"\x13PerasInstallSegment\x12(.nokv.kv.v1.KvPerasInstallSegmentRequest\x1a).nokv.kv.v1.KvPerasInstallSegmentResponse\x12M\n" +
 	"\n" +
 	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12f\n" +
-	"\x13PerasWitnessPrepare\x12&.nokv.kv.v1.PerasWitnessPrepareRequest\x1a'.nokv.kv.v1.PerasWitnessPrepareResponse\x12c\n" +
-	"\x12PerasWitnessCommit\x12%.nokv.kv.v1.PerasWitnessCommitRequest\x1a&.nokv.kv.v1.PerasWitnessCommitResponse\x12`\n" +
+	"\x13PerasWitnessSegment\x12&.nokv.kv.v1.PerasWitnessSegmentRequest\x1a'.nokv.kv.v1.PerasWitnessSegmentResponse\x12`\n" +
 	"\x11PerasWitnessProbe\x12$.nokv.kv.v1.PerasWitnessProbeRequest\x1a%.nokv.kv.v1.PerasWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
@@ -4714,38 +4735,38 @@ var file_kv_kv_proto_goTypes = []any{
 	(*AtomicPredicate)(nil),                  // 32: nokv.kv.v1.AtomicPredicate
 	(*TryAtomicMutateRequest)(nil),           // 33: nokv.kv.v1.TryAtomicMutateRequest
 	(*TryAtomicMutateResponse)(nil),          // 34: nokv.kv.v1.TryAtomicMutateResponse
-	(*Context)(nil),                          // 35: nokv.kv.v1.Context
-	(*KvGetRequest)(nil),                     // 36: nokv.kv.v1.KvGetRequest
-	(*KvGetResponse)(nil),                    // 37: nokv.kv.v1.KvGetResponse
-	(*KvBatchGetRequest)(nil),                // 38: nokv.kv.v1.KvBatchGetRequest
-	(*KvBatchGetResponse)(nil),               // 39: nokv.kv.v1.KvBatchGetResponse
-	(*KvScanRequest)(nil),                    // 40: nokv.kv.v1.KvScanRequest
-	(*KvScanResponse)(nil),                   // 41: nokv.kv.v1.KvScanResponse
-	(*KvPrewriteRequest)(nil),                // 42: nokv.kv.v1.KvPrewriteRequest
-	(*KvPrewriteResponse)(nil),               // 43: nokv.kv.v1.KvPrewriteResponse
-	(*KvCommitRequest)(nil),                  // 44: nokv.kv.v1.KvCommitRequest
-	(*KvCommitResponse)(nil),                 // 45: nokv.kv.v1.KvCommitResponse
-	(*KvBatchRollbackRequest)(nil),           // 46: nokv.kv.v1.KvBatchRollbackRequest
-	(*KvBatchRollbackResponse)(nil),          // 47: nokv.kv.v1.KvBatchRollbackResponse
-	(*KvResolveLockRequest)(nil),             // 48: nokv.kv.v1.KvResolveLockRequest
-	(*KvResolveLockResponse)(nil),            // 49: nokv.kv.v1.KvResolveLockResponse
-	(*KvCheckTxnStatusRequest)(nil),          // 50: nokv.kv.v1.KvCheckTxnStatusRequest
-	(*KvCheckTxnStatusResponse)(nil),         // 51: nokv.kv.v1.KvCheckTxnStatusResponse
-	(*KvTxnHeartBeatRequest)(nil),            // 52: nokv.kv.v1.KvTxnHeartBeatRequest
-	(*KvTxnHeartBeatResponse)(nil),           // 53: nokv.kv.v1.KvTxnHeartBeatResponse
-	(*KvTryAtomicMutateRequest)(nil),         // 54: nokv.kv.v1.KvTryAtomicMutateRequest
-	(*KvTryAtomicMutateResponse)(nil),        // 55: nokv.kv.v1.KvTryAtomicMutateResponse
-	(*ApplyWatchRequest)(nil),                // 56: nokv.kv.v1.ApplyWatchRequest
-	(*ApplyWatchEvent)(nil),                  // 57: nokv.kv.v1.ApplyWatchEvent
-	(*ApplyWatchResponse)(nil),               // 58: nokv.kv.v1.ApplyWatchResponse
-	(*PerasAuthorityScope)(nil),              // 59: nokv.kv.v1.PerasAuthorityScope
-	(*PerasOperationID)(nil),                 // 60: nokv.kv.v1.PerasOperationID
-	(*PerasPrepareRecord)(nil),               // 61: nokv.kv.v1.PerasPrepareRecord
-	(*PerasCommitCertificateRecord)(nil),     // 62: nokv.kv.v1.PerasCommitCertificateRecord
-	(*PerasWitnessPrepareRequest)(nil),       // 63: nokv.kv.v1.PerasWitnessPrepareRequest
-	(*PerasWitnessPrepareResponse)(nil),      // 64: nokv.kv.v1.PerasWitnessPrepareResponse
-	(*PerasWitnessCommitRequest)(nil),        // 65: nokv.kv.v1.PerasWitnessCommitRequest
-	(*PerasWitnessCommitResponse)(nil),       // 66: nokv.kv.v1.PerasWitnessCommitResponse
+	(*PerasInstallSegmentRequest)(nil),       // 35: nokv.kv.v1.PerasInstallSegmentRequest
+	(*PerasInstallSegmentResponse)(nil),      // 36: nokv.kv.v1.PerasInstallSegmentResponse
+	(*Context)(nil),                          // 37: nokv.kv.v1.Context
+	(*KvGetRequest)(nil),                     // 38: nokv.kv.v1.KvGetRequest
+	(*KvGetResponse)(nil),                    // 39: nokv.kv.v1.KvGetResponse
+	(*KvBatchGetRequest)(nil),                // 40: nokv.kv.v1.KvBatchGetRequest
+	(*KvBatchGetResponse)(nil),               // 41: nokv.kv.v1.KvBatchGetResponse
+	(*KvScanRequest)(nil),                    // 42: nokv.kv.v1.KvScanRequest
+	(*KvScanResponse)(nil),                   // 43: nokv.kv.v1.KvScanResponse
+	(*KvPrewriteRequest)(nil),                // 44: nokv.kv.v1.KvPrewriteRequest
+	(*KvPrewriteResponse)(nil),               // 45: nokv.kv.v1.KvPrewriteResponse
+	(*KvCommitRequest)(nil),                  // 46: nokv.kv.v1.KvCommitRequest
+	(*KvCommitResponse)(nil),                 // 47: nokv.kv.v1.KvCommitResponse
+	(*KvBatchRollbackRequest)(nil),           // 48: nokv.kv.v1.KvBatchRollbackRequest
+	(*KvBatchRollbackResponse)(nil),          // 49: nokv.kv.v1.KvBatchRollbackResponse
+	(*KvResolveLockRequest)(nil),             // 50: nokv.kv.v1.KvResolveLockRequest
+	(*KvResolveLockResponse)(nil),            // 51: nokv.kv.v1.KvResolveLockResponse
+	(*KvCheckTxnStatusRequest)(nil),          // 52: nokv.kv.v1.KvCheckTxnStatusRequest
+	(*KvCheckTxnStatusResponse)(nil),         // 53: nokv.kv.v1.KvCheckTxnStatusResponse
+	(*KvTxnHeartBeatRequest)(nil),            // 54: nokv.kv.v1.KvTxnHeartBeatRequest
+	(*KvTxnHeartBeatResponse)(nil),           // 55: nokv.kv.v1.KvTxnHeartBeatResponse
+	(*KvTryAtomicMutateRequest)(nil),         // 56: nokv.kv.v1.KvTryAtomicMutateRequest
+	(*KvTryAtomicMutateResponse)(nil),        // 57: nokv.kv.v1.KvTryAtomicMutateResponse
+	(*KvPerasInstallSegmentRequest)(nil),     // 58: nokv.kv.v1.KvPerasInstallSegmentRequest
+	(*KvPerasInstallSegmentResponse)(nil),    // 59: nokv.kv.v1.KvPerasInstallSegmentResponse
+	(*ApplyWatchRequest)(nil),                // 60: nokv.kv.v1.ApplyWatchRequest
+	(*ApplyWatchEvent)(nil),                  // 61: nokv.kv.v1.ApplyWatchEvent
+	(*ApplyWatchResponse)(nil),               // 62: nokv.kv.v1.ApplyWatchResponse
+	(*PerasAuthorityScope)(nil),              // 63: nokv.kv.v1.PerasAuthorityScope
+	(*PerasSegmentWitnessRecord)(nil),        // 64: nokv.kv.v1.PerasSegmentWitnessRecord
+	(*PerasWitnessSegmentRequest)(nil),       // 65: nokv.kv.v1.PerasWitnessSegmentRequest
+	(*PerasWitnessSegmentResponse)(nil),      // 66: nokv.kv.v1.PerasWitnessSegmentResponse
 	(*PerasWitnessProbeRequest)(nil),         // 67: nokv.kv.v1.PerasWitnessProbeRequest
 	(*PerasWitnessProbeResponse)(nil),        // 68: nokv.kv.v1.PerasWitnessProbeResponse
 	(*KeyError)(nil),                         // 69: nokv.kv.v1.KeyError
@@ -4781,99 +4802,98 @@ var file_kv_kv_proto_depIdxs = []int32{
 	32, // 20: nokv.kv.v1.TryAtomicMutateRequest.predicates:type_name -> nokv.kv.v1.AtomicPredicate
 	16, // 21: nokv.kv.v1.TryAtomicMutateRequest.mutations:type_name -> nokv.kv.v1.Mutation
 	69, // 22: nokv.kv.v1.TryAtomicMutateResponse.error:type_name -> nokv.kv.v1.KeyError
-	74, // 23: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
-	75, // 24: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
-	0,  // 25: nokv.kv.v1.Context.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
-	1,  // 26: nokv.kv.v1.Context.read_preference:type_name -> nokv.kv.v1.ReadPreference
-	35, // 27: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context
-	10, // 28: nokv.kv.v1.KvGetRequest.request:type_name -> nokv.kv.v1.GetRequest
-	11, // 29: nokv.kv.v1.KvGetResponse.response:type_name -> nokv.kv.v1.GetResponse
-	76, // 30: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 31: nokv.kv.v1.KvBatchGetRequest.context:type_name -> nokv.kv.v1.Context
-	12, // 32: nokv.kv.v1.KvBatchGetRequest.request:type_name -> nokv.kv.v1.BatchGetRequest
-	13, // 33: nokv.kv.v1.KvBatchGetResponse.response:type_name -> nokv.kv.v1.BatchGetResponse
-	76, // 34: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 35: nokv.kv.v1.KvScanRequest.context:type_name -> nokv.kv.v1.Context
-	14, // 36: nokv.kv.v1.KvScanRequest.request:type_name -> nokv.kv.v1.ScanRequest
-	15, // 37: nokv.kv.v1.KvScanResponse.response:type_name -> nokv.kv.v1.ScanResponse
-	76, // 38: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 39: nokv.kv.v1.KvPrewriteRequest.context:type_name -> nokv.kv.v1.Context
-	17, // 40: nokv.kv.v1.KvPrewriteRequest.request:type_name -> nokv.kv.v1.PrewriteRequest
-	18, // 41: nokv.kv.v1.KvPrewriteResponse.response:type_name -> nokv.kv.v1.PrewriteResponse
-	76, // 42: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 43: nokv.kv.v1.KvCommitRequest.context:type_name -> nokv.kv.v1.Context
-	19, // 44: nokv.kv.v1.KvCommitRequest.request:type_name -> nokv.kv.v1.CommitRequest
-	20, // 45: nokv.kv.v1.KvCommitResponse.response:type_name -> nokv.kv.v1.CommitResponse
-	76, // 46: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 47: nokv.kv.v1.KvBatchRollbackRequest.context:type_name -> nokv.kv.v1.Context
-	21, // 48: nokv.kv.v1.KvBatchRollbackRequest.request:type_name -> nokv.kv.v1.BatchRollbackRequest
-	22, // 49: nokv.kv.v1.KvBatchRollbackResponse.response:type_name -> nokv.kv.v1.BatchRollbackResponse
-	76, // 50: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 51: nokv.kv.v1.KvResolveLockRequest.context:type_name -> nokv.kv.v1.Context
-	23, // 52: nokv.kv.v1.KvResolveLockRequest.request:type_name -> nokv.kv.v1.ResolveLockRequest
-	24, // 53: nokv.kv.v1.KvResolveLockResponse.response:type_name -> nokv.kv.v1.ResolveLockResponse
-	76, // 54: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 55: nokv.kv.v1.KvCheckTxnStatusRequest.context:type_name -> nokv.kv.v1.Context
-	25, // 56: nokv.kv.v1.KvCheckTxnStatusRequest.request:type_name -> nokv.kv.v1.CheckTxnStatusRequest
-	26, // 57: nokv.kv.v1.KvCheckTxnStatusResponse.response:type_name -> nokv.kv.v1.CheckTxnStatusResponse
-	76, // 58: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 59: nokv.kv.v1.KvTxnHeartBeatRequest.context:type_name -> nokv.kv.v1.Context
-	27, // 60: nokv.kv.v1.KvTxnHeartBeatRequest.request:type_name -> nokv.kv.v1.TxnHeartBeatRequest
-	28, // 61: nokv.kv.v1.KvTxnHeartBeatResponse.response:type_name -> nokv.kv.v1.TxnHeartBeatResponse
-	76, // 62: nokv.kv.v1.KvTxnHeartBeatResponse.region_error:type_name -> nokv.error.v1.RegionError
-	35, // 63: nokv.kv.v1.KvTryAtomicMutateRequest.context:type_name -> nokv.kv.v1.Context
-	33, // 64: nokv.kv.v1.KvTryAtomicMutateRequest.request:type_name -> nokv.kv.v1.TryAtomicMutateRequest
-	34, // 65: nokv.kv.v1.KvTryAtomicMutateResponse.response:type_name -> nokv.kv.v1.TryAtomicMutateResponse
-	76, // 66: nokv.kv.v1.KvTryAtomicMutateResponse.region_error:type_name -> nokv.error.v1.RegionError
-	5,  // 67: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
-	57, // 68: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
-	60, // 69: nokv.kv.v1.PerasPrepareRecord.op_id:type_name -> nokv.kv.v1.PerasOperationID
-	60, // 70: nokv.kv.v1.PerasPrepareRecord.dependency_frontier:type_name -> nokv.kv.v1.PerasOperationID
-	60, // 71: nokv.kv.v1.PerasCommitCertificateRecord.op_id:type_name -> nokv.kv.v1.PerasOperationID
-	59, // 72: nokv.kv.v1.PerasWitnessPrepareRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
-	61, // 73: nokv.kv.v1.PerasWitnessPrepareRequest.record:type_name -> nokv.kv.v1.PerasPrepareRecord
-	59, // 74: nokv.kv.v1.PerasWitnessCommitRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
-	62, // 75: nokv.kv.v1.PerasWitnessCommitRequest.record:type_name -> nokv.kv.v1.PerasCommitCertificateRecord
-	61, // 76: nokv.kv.v1.PerasWitnessProbeResponse.prepares:type_name -> nokv.kv.v1.PerasPrepareRecord
-	62, // 77: nokv.kv.v1.PerasWitnessProbeResponse.commits:type_name -> nokv.kv.v1.PerasCommitCertificateRecord
-	70, // 78: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
-	71, // 79: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
-	72, // 80: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
-	73, // 81: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
-	6,  // 82: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
-	36, // 83: nokv.kv.v1.StoreKV.Get:input_type -> nokv.kv.v1.KvGetRequest
-	38, // 84: nokv.kv.v1.StoreKV.BatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
-	40, // 85: nokv.kv.v1.StoreKV.Scan:input_type -> nokv.kv.v1.KvScanRequest
-	42, // 86: nokv.kv.v1.StoreKV.Prewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
-	44, // 87: nokv.kv.v1.StoreKV.Commit:input_type -> nokv.kv.v1.KvCommitRequest
-	46, // 88: nokv.kv.v1.StoreKV.BatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
-	48, // 89: nokv.kv.v1.StoreKV.ResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
-	50, // 90: nokv.kv.v1.StoreKV.CheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
-	52, // 91: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
-	54, // 92: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
-	56, // 93: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	63, // 94: nokv.kv.v1.StoreKV.PerasWitnessPrepare:input_type -> nokv.kv.v1.PerasWitnessPrepareRequest
-	65, // 95: nokv.kv.v1.StoreKV.PerasWitnessCommit:input_type -> nokv.kv.v1.PerasWitnessCommitRequest
-	67, // 96: nokv.kv.v1.StoreKV.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
-	37, // 97: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
-	39, // 98: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
-	41, // 99: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
-	43, // 100: nokv.kv.v1.StoreKV.Prewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
-	45, // 101: nokv.kv.v1.StoreKV.Commit:output_type -> nokv.kv.v1.KvCommitResponse
-	47, // 102: nokv.kv.v1.StoreKV.BatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
-	49, // 103: nokv.kv.v1.StoreKV.ResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
-	51, // 104: nokv.kv.v1.StoreKV.CheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
-	53, // 105: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
-	55, // 106: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
-	58, // 107: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
-	64, // 108: nokv.kv.v1.StoreKV.PerasWitnessPrepare:output_type -> nokv.kv.v1.PerasWitnessPrepareResponse
-	66, // 109: nokv.kv.v1.StoreKV.PerasWitnessCommit:output_type -> nokv.kv.v1.PerasWitnessCommitResponse
-	68, // 110: nokv.kv.v1.StoreKV.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
-	97, // [97:111] is the sub-list for method output_type
-	83, // [83:97] is the sub-list for method input_type
-	83, // [83:83] is the sub-list for extension type_name
-	83, // [83:83] is the sub-list for extension extendee
-	0,  // [0:83] is the sub-list for field type_name
+	69, // 23: nokv.kv.v1.PerasInstallSegmentResponse.error:type_name -> nokv.kv.v1.KeyError
+	74, // 24: nokv.kv.v1.Context.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	75, // 25: nokv.kv.v1.Context.peer:type_name -> nokv.meta.v1.RegionPeer
+	0,  // 26: nokv.kv.v1.Context.read_consistency:type_name -> nokv.kv.v1.ReadConsistency
+	1,  // 27: nokv.kv.v1.Context.read_preference:type_name -> nokv.kv.v1.ReadPreference
+	37, // 28: nokv.kv.v1.KvGetRequest.context:type_name -> nokv.kv.v1.Context
+	10, // 29: nokv.kv.v1.KvGetRequest.request:type_name -> nokv.kv.v1.GetRequest
+	11, // 30: nokv.kv.v1.KvGetResponse.response:type_name -> nokv.kv.v1.GetResponse
+	76, // 31: nokv.kv.v1.KvGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 32: nokv.kv.v1.KvBatchGetRequest.context:type_name -> nokv.kv.v1.Context
+	12, // 33: nokv.kv.v1.KvBatchGetRequest.request:type_name -> nokv.kv.v1.BatchGetRequest
+	13, // 34: nokv.kv.v1.KvBatchGetResponse.response:type_name -> nokv.kv.v1.BatchGetResponse
+	76, // 35: nokv.kv.v1.KvBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 36: nokv.kv.v1.KvScanRequest.context:type_name -> nokv.kv.v1.Context
+	14, // 37: nokv.kv.v1.KvScanRequest.request:type_name -> nokv.kv.v1.ScanRequest
+	15, // 38: nokv.kv.v1.KvScanResponse.response:type_name -> nokv.kv.v1.ScanResponse
+	76, // 39: nokv.kv.v1.KvScanResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 40: nokv.kv.v1.KvPrewriteRequest.context:type_name -> nokv.kv.v1.Context
+	17, // 41: nokv.kv.v1.KvPrewriteRequest.request:type_name -> nokv.kv.v1.PrewriteRequest
+	18, // 42: nokv.kv.v1.KvPrewriteResponse.response:type_name -> nokv.kv.v1.PrewriteResponse
+	76, // 43: nokv.kv.v1.KvPrewriteResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 44: nokv.kv.v1.KvCommitRequest.context:type_name -> nokv.kv.v1.Context
+	19, // 45: nokv.kv.v1.KvCommitRequest.request:type_name -> nokv.kv.v1.CommitRequest
+	20, // 46: nokv.kv.v1.KvCommitResponse.response:type_name -> nokv.kv.v1.CommitResponse
+	76, // 47: nokv.kv.v1.KvCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 48: nokv.kv.v1.KvBatchRollbackRequest.context:type_name -> nokv.kv.v1.Context
+	21, // 49: nokv.kv.v1.KvBatchRollbackRequest.request:type_name -> nokv.kv.v1.BatchRollbackRequest
+	22, // 50: nokv.kv.v1.KvBatchRollbackResponse.response:type_name -> nokv.kv.v1.BatchRollbackResponse
+	76, // 51: nokv.kv.v1.KvBatchRollbackResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 52: nokv.kv.v1.KvResolveLockRequest.context:type_name -> nokv.kv.v1.Context
+	23, // 53: nokv.kv.v1.KvResolveLockRequest.request:type_name -> nokv.kv.v1.ResolveLockRequest
+	24, // 54: nokv.kv.v1.KvResolveLockResponse.response:type_name -> nokv.kv.v1.ResolveLockResponse
+	76, // 55: nokv.kv.v1.KvResolveLockResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 56: nokv.kv.v1.KvCheckTxnStatusRequest.context:type_name -> nokv.kv.v1.Context
+	25, // 57: nokv.kv.v1.KvCheckTxnStatusRequest.request:type_name -> nokv.kv.v1.CheckTxnStatusRequest
+	26, // 58: nokv.kv.v1.KvCheckTxnStatusResponse.response:type_name -> nokv.kv.v1.CheckTxnStatusResponse
+	76, // 59: nokv.kv.v1.KvCheckTxnStatusResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 60: nokv.kv.v1.KvTxnHeartBeatRequest.context:type_name -> nokv.kv.v1.Context
+	27, // 61: nokv.kv.v1.KvTxnHeartBeatRequest.request:type_name -> nokv.kv.v1.TxnHeartBeatRequest
+	28, // 62: nokv.kv.v1.KvTxnHeartBeatResponse.response:type_name -> nokv.kv.v1.TxnHeartBeatResponse
+	76, // 63: nokv.kv.v1.KvTxnHeartBeatResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 64: nokv.kv.v1.KvTryAtomicMutateRequest.context:type_name -> nokv.kv.v1.Context
+	33, // 65: nokv.kv.v1.KvTryAtomicMutateRequest.request:type_name -> nokv.kv.v1.TryAtomicMutateRequest
+	34, // 66: nokv.kv.v1.KvTryAtomicMutateResponse.response:type_name -> nokv.kv.v1.TryAtomicMutateResponse
+	76, // 67: nokv.kv.v1.KvTryAtomicMutateResponse.region_error:type_name -> nokv.error.v1.RegionError
+	37, // 68: nokv.kv.v1.KvPerasInstallSegmentRequest.context:type_name -> nokv.kv.v1.Context
+	35, // 69: nokv.kv.v1.KvPerasInstallSegmentRequest.request:type_name -> nokv.kv.v1.PerasInstallSegmentRequest
+	36, // 70: nokv.kv.v1.KvPerasInstallSegmentResponse.response:type_name -> nokv.kv.v1.PerasInstallSegmentResponse
+	76, // 71: nokv.kv.v1.KvPerasInstallSegmentResponse.region_error:type_name -> nokv.error.v1.RegionError
+	5,  // 72: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
+	61, // 73: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
+	63, // 74: nokv.kv.v1.PerasWitnessSegmentRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
+	64, // 75: nokv.kv.v1.PerasWitnessSegmentRequest.record:type_name -> nokv.kv.v1.PerasSegmentWitnessRecord
+	64, // 76: nokv.kv.v1.PerasWitnessProbeResponse.segments:type_name -> nokv.kv.v1.PerasSegmentWitnessRecord
+	70, // 77: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
+	71, // 78: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
+	72, // 79: nokv.kv.v1.KeyError.already_exists:type_name -> nokv.kv.v1.KeyAlreadyExists
+	73, // 80: nokv.kv.v1.KeyError.commit_ts_expired:type_name -> nokv.kv.v1.CommitTsExpired
+	6,  // 81: nokv.kv.v1.Locked.lock_type:type_name -> nokv.kv.v1.Mutation.Op
+	38, // 82: nokv.kv.v1.StoreKV.Get:input_type -> nokv.kv.v1.KvGetRequest
+	40, // 83: nokv.kv.v1.StoreKV.BatchGet:input_type -> nokv.kv.v1.KvBatchGetRequest
+	42, // 84: nokv.kv.v1.StoreKV.Scan:input_type -> nokv.kv.v1.KvScanRequest
+	44, // 85: nokv.kv.v1.StoreKV.Prewrite:input_type -> nokv.kv.v1.KvPrewriteRequest
+	46, // 86: nokv.kv.v1.StoreKV.Commit:input_type -> nokv.kv.v1.KvCommitRequest
+	48, // 87: nokv.kv.v1.StoreKV.BatchRollback:input_type -> nokv.kv.v1.KvBatchRollbackRequest
+	50, // 88: nokv.kv.v1.StoreKV.ResolveLock:input_type -> nokv.kv.v1.KvResolveLockRequest
+	52, // 89: nokv.kv.v1.StoreKV.CheckTxnStatus:input_type -> nokv.kv.v1.KvCheckTxnStatusRequest
+	54, // 90: nokv.kv.v1.StoreKV.TxnHeartBeat:input_type -> nokv.kv.v1.KvTxnHeartBeatRequest
+	56, // 91: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
+	58, // 92: nokv.kv.v1.StoreKV.PerasInstallSegment:input_type -> nokv.kv.v1.KvPerasInstallSegmentRequest
+	60, // 93: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
+	65, // 94: nokv.kv.v1.StoreKV.PerasWitnessSegment:input_type -> nokv.kv.v1.PerasWitnessSegmentRequest
+	67, // 95: nokv.kv.v1.StoreKV.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
+	39, // 96: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
+	41, // 97: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
+	43, // 98: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
+	45, // 99: nokv.kv.v1.StoreKV.Prewrite:output_type -> nokv.kv.v1.KvPrewriteResponse
+	47, // 100: nokv.kv.v1.StoreKV.Commit:output_type -> nokv.kv.v1.KvCommitResponse
+	49, // 101: nokv.kv.v1.StoreKV.BatchRollback:output_type -> nokv.kv.v1.KvBatchRollbackResponse
+	51, // 102: nokv.kv.v1.StoreKV.ResolveLock:output_type -> nokv.kv.v1.KvResolveLockResponse
+	53, // 103: nokv.kv.v1.StoreKV.CheckTxnStatus:output_type -> nokv.kv.v1.KvCheckTxnStatusResponse
+	55, // 104: nokv.kv.v1.StoreKV.TxnHeartBeat:output_type -> nokv.kv.v1.KvTxnHeartBeatResponse
+	57, // 105: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
+	59, // 106: nokv.kv.v1.StoreKV.PerasInstallSegment:output_type -> nokv.kv.v1.KvPerasInstallSegmentResponse
+	62, // 107: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
+	66, // 108: nokv.kv.v1.StoreKV.PerasWitnessSegment:output_type -> nokv.kv.v1.PerasWitnessSegmentResponse
+	68, // 109: nokv.kv.v1.StoreKV.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
+	96, // [96:110] is the sub-list for method output_type
+	82, // [82:96] is the sub-list for method input_type
+	82, // [82:82] is the sub-list for extension type_name
+	82, // [82:82] is the sub-list for extension extendee
+	0,  // [0:82] is the sub-list for field type_name
 }
 
 func init() { file_kv_kv_proto_init() }

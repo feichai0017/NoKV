@@ -59,10 +59,10 @@ type TxnRunner interface {
 	MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
 }
 
-// AtomicMutateFastPath is an optional TxnRunner extension. handled=false
+// AtomicMutateOnePhase is an optional TxnRunner extension. handled=false
 // means the runner could not keep the mutation in one proven-atomic local
 // apply group and the caller must fall back to Mutate.
-type AtomicMutateFastPath interface {
+type AtomicMutateOnePhase interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
 }
 
@@ -114,7 +114,7 @@ type SubtreeAuthorityResolver interface {
 // PerasAuthorityAdmitter is the fsmeta holder-side boundary for Peras.
 // It is intentionally narrower than the root protocol: the executor only asks
 // whether a compiled authority scope is locally owned before it can enter a
-// future Peras fast path.
+// future Peras visible commit.
 type PerasAuthorityAdmitter interface {
 	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
@@ -122,22 +122,41 @@ type PerasAuthorityAdmitter interface {
 // PerasShadowSubmitter is an experimental measurement hook for the Peras
 // holder+witness path. The executor still commits through the ordinary
 // Percolator/Raft runner; submitter failures are counted but do not affect the
-// current fsmeta result until seal/apply/recovery are complete.
+// current fsmeta result until segment apply/recovery are complete.
 type PerasShadowSubmitter interface {
-	SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.CommitCertificateRecord, error)
+	SubmitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error)
 }
 
-// PerasCommitter is the experimental, opt-in Peras fast commit boundary.
+// PerasCommitter is the experimental, opt-in Peras visible commit boundary.
 // Unlike PerasShadowSubmitter, success replaces the ordinary Percolator/Raft
 // commit for this fsmeta operation, so errors are returned and never silently
-// fall back after witness evidence may already exist.
+// fall back after the holder overlay may already include the operation.
 type PerasCommitter interface {
-	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.PerasSeal, error)
+	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta) (fsperas.VisibleAck, error)
 }
 
 type PerasOverlayReader interface {
 	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
 	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
+}
+
+type PerasFlusher interface {
+	Flush(context.Context) error
+}
+
+type PerasAuthorityFlusher interface {
+	FlushAuthority(context.Context, compile.AuthorityScope) error
+}
+
+type PerasQuotaAdmitter interface {
+	AllowPerasVisibleQuota(context.Context, []QuotaChange) (bool, error)
+}
+
+// PerasWatchFence reports whether a visible-only Peras write would intersect
+// live watch subscribers. Until Peras publishes durable watch events at segment
+// seal, watched prefixes must remain on the ordinary raft-backed path.
+type PerasWatchFence interface {
+	HasPerasWatchedWrite([]compile.WriteEffect) bool
 }
 
 // NegativeCache is the dentry-miss memo surface used by Lookup.
@@ -167,6 +186,7 @@ type Executor struct {
 	perasAuthority          PerasAuthorityAdmitter
 	perasShadowSubmitter    PerasShadowSubmitter
 	perasCommitter          PerasCommitter
+	perasWatchFence         PerasWatchFence
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -178,9 +198,9 @@ type Executor struct {
 	createTotal             atomic.Uint64
 	perasAdmission          perasAdmissionCounters
 	perasShadow             perasShadowCounters
-	perasFast               perasFastCounters
+	perasVisible            perasVisibleCounters
 	perasShadowSeq          atomic.Uint64
-	atomicFastPath          map[fsmeta.OperationKind]*atomicFastPathCounters
+	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
 }
 
 type perasAdmissionCounters struct {
@@ -210,17 +230,19 @@ type perasShadowCounters struct {
 	latencyTotalNanosecond atomic.Uint64
 }
 
-type perasFastCounters struct {
+type perasVisibleCounters struct {
 	attemptTotal           atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
 	skipIneligibleTotal    atomic.Uint64
 	skipNoAuthorityTotal   atomic.Uint64
 	skipNonConcreteTotal   atomic.Uint64
+	skipWatchedTotal       atomic.Uint64
+	skipPredicateTotal     atomic.Uint64
 	latencyTotalNanosecond atomic.Uint64
 }
 
-type atomicFastPathCounters struct {
+type atomicOnePhaseCounters struct {
 	attemptTotal           atomic.Uint64
 	skipTotal              atomic.Uint64
 	backoffSkipTotal       atomic.Uint64
@@ -276,19 +298,19 @@ func WithInodeAllocator(allocator InodeAllocator) Option {
 	}
 }
 
-// WithNegativeCache wires the fast-path "this dentry does not exist" memo.
+// WithNegativeCache wires the visible-commit "this dentry does not exist" memo.
 // Lookup checks Has on the dentry primary key before consulting the runner;
 // misses are recorded via Remember; mutating ops call Invalidate on the
 // touched dentry keys after a successful commit.
 //
-// A nil cache disables the fast path.
+// A nil cache disables the cache.
 func WithNegativeCache(cache NegativeCache) Option {
 	return func(e *Executor) {
 		e.negCache = cache
 	}
 }
 
-// WithDirPageCache wires the ReadDirPlus fast path. ReadDirPlus first asks the
+// WithDirPageCache wires the ReadDirPlus derived page cache. ReadDirPlus first asks the
 // cache for a fresh page set keyed by (mountHash, parentInode); on hit the
 // runner-side dentry scan + N inode BatchGet are skipped entirely. On miss, the
 // runner path runs as today and the assembled DentryAttrPair slice is
@@ -298,7 +320,7 @@ func WithNegativeCache(cache NegativeCache) Option {
 // on the affected parent directory's PageKey after a successful commit
 // so subsequent Lookup observes the change.
 //
-// A nil cache disables the fast path. The mount hash uses xxhash.Sum64
+// A nil cache disables the cache. The mount hash uses xxhash.Sum64
 // over the MountID string, so collision probability is negligible.
 func WithDirPageCache(cache DirPageCache) Option {
 	return func(e *Executor) {
@@ -323,8 +345,7 @@ func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 }
 
 // WithPerasAuthorityAdmitter enables holder-authority admission for
-// Peras-eligible mutations. The executor still uses the existing
-// Percolator/Raft write path until the witness and seal layers are wired.
+// Peras-eligible mutations.
 func WithPerasAuthorityAdmitter(admitter PerasAuthorityAdmitter) Option {
 	return func(e *Executor) {
 		e.perasAuthority = admitter
@@ -341,12 +362,21 @@ func WithPerasShadowSubmitter(submitter PerasShadowSubmitter) Option {
 	}
 }
 
-// WithPerasCommitter enables the experimental Peras fast commit path. This
-// option is intentionally separate from shadow submission so production callers
-// must opt in explicitly before Create can bypass the ordinary Raft write path.
+// WithPerasCommitter enables Peras visible commits. This option is intentionally
+// separate from shadow submission so production callers must opt in explicitly.
 func WithPerasCommitter(committer PerasCommitter) Option {
 	return func(e *Executor) {
 		e.perasCommitter = committer
+	}
+}
+
+// WithPerasWatchFence forces visible-only Peras writes that overlap live watch
+// subscribers onto the ordinary durable path. This preserves WatchSubtree's
+// seal/apply ordering contract without making unrelated visible writes pay
+// the slow-path cost.
+func WithPerasWatchFence(fence PerasWatchFence) Option {
+	return func(e *Executor) {
+		e.perasWatchFence = fence
 	}
 }
 
@@ -358,7 +388,7 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	executor := &Executor{
 		runner:         runner,
 		lockTTL:        defaultLockTTL,
-		atomicFastPath: newAtomicFastPathCounters(),
+		atomicOnePhase: newAtomicOnePhaseCounters(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -379,8 +409,8 @@ func (e *Executor) Stats() map[string]any {
 			"create_total":               uint64(0),
 			"peras_admission":            perasAdmissionStats(nil, false),
 			"peras_shadow":               perasShadowStats(nil, false),
-			"peras_fastpath":             perasFastStats(nil, false),
-			"atomic_fastpath":            atomicFastPathStats(nil),
+			"peras_visible_commit":       perasVisibleStats(nil, false),
+			"atomic_one_phase":           atomicOnePhaseStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
 		}
@@ -393,8 +423,8 @@ func (e *Executor) Stats() map[string]any {
 		"create_total":               e.createTotal.Load(),
 		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
 		"peras_shadow":               perasShadowStats(&e.perasShadow, e.perasShadowSubmitter != nil),
-		"peras_fastpath":             perasFastStats(&e.perasFast, e.perasCommitter != nil),
-		"atomic_fastpath":            atomicFastPathStats(e.atomicFastPath),
+		"peras_visible_commit":       perasVisibleStats(&e.perasVisible, e.perasCommitter != nil),
+		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
 	}
@@ -476,7 +506,7 @@ func perasShadowStats(counters *perasShadowCounters, enabled bool) map[string]an
 	}
 }
 
-func perasFastStats(counters *perasFastCounters, enabled bool) map[string]any {
+func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":                    enabled,
@@ -486,6 +516,8 @@ func perasFastStats(counters *perasFastCounters, enabled bool) map[string]any {
 			"skip_ineligible_total":      uint64(0),
 			"skip_no_authority_total":    uint64(0),
 			"skip_non_concrete_total":    uint64(0),
+			"skip_watched_total":         uint64(0),
+			"skip_predicate_total":       uint64(0),
 			"latency_total_nanosecond":   uint64(0),
 			"latency_average_nanosecond": uint64(0),
 		}
@@ -504,6 +536,8 @@ func perasFastStats(counters *perasFastCounters, enabled bool) map[string]any {
 		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
 		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
 		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
+		"skip_watched_total":         counters.skipWatchedTotal.Load(),
+		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
 		"latency_total_nanosecond":   latency,
 		"latency_average_nanosecond": average,
 	}
@@ -556,7 +590,7 @@ func (s *perasAdmissionCounters) recordSlow(reason compile.SlowReason) {
 	}
 }
 
-var atomicFastPathKinds = [...]fsmeta.OperationKind{
+var atomicOnePhaseKinds = [...]fsmeta.OperationKind{
 	fsmeta.OperationCreate,
 	fsmeta.OperationUpdateInode,
 	fsmeta.OperationRename,
@@ -567,27 +601,27 @@ var atomicFastPathKinds = [...]fsmeta.OperationKind{
 	fsmeta.OperationCloseSession,
 }
 
-func newAtomicFastPathCounters() map[fsmeta.OperationKind]*atomicFastPathCounters {
-	out := make(map[fsmeta.OperationKind]*atomicFastPathCounters, len(atomicFastPathKinds))
-	for _, kind := range atomicFastPathKinds {
-		out[kind] = &atomicFastPathCounters{fallbacksByAffinity: make(map[string]uint64)}
+func newAtomicOnePhaseCounters() map[fsmeta.OperationKind]*atomicOnePhaseCounters {
+	out := make(map[fsmeta.OperationKind]*atomicOnePhaseCounters, len(atomicOnePhaseKinds))
+	for _, kind := range atomicOnePhaseKinds {
+		out[kind] = &atomicOnePhaseCounters{fallbacksByAffinity: make(map[string]uint64)}
 	}
 	return out
 }
 
-func atomicFastPathStats(counters map[fsmeta.OperationKind]*atomicFastPathCounters) map[string]any {
-	out := make(map[string]any, len(atomicFastPathKinds))
-	for _, kind := range atomicFastPathKinds {
-		var stats *atomicFastPathCounters
+func atomicOnePhaseStats(counters map[fsmeta.OperationKind]*atomicOnePhaseCounters) map[string]any {
+	out := make(map[string]any, len(atomicOnePhaseKinds))
+	for _, kind := range atomicOnePhaseKinds {
+		var stats *atomicOnePhaseCounters
 		if counters != nil {
 			stats = counters[kind]
 		}
-		out[string(kind)] = atomicFastPathStatsFor(stats)
+		out[string(kind)] = atomicOnePhaseStatsFor(stats)
 	}
 	return out
 }
 
-func atomicFastPathStatsFor(stats *atomicFastPathCounters) map[string]uint64 {
+func atomicOnePhaseStatsFor(stats *atomicOnePhaseCounters) map[string]uint64 {
 	if stats == nil {
 		return map[string]uint64{
 			"attempt_total":            0,
@@ -654,13 +688,31 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		return fsmeta.CreateResult{}, err
 	}
 	e.createTotal.Add(1)
-	if committed, err := e.tryPerasFastCommit(ctx, delta); committed || err != nil {
+	quotaChanges := []QuotaChange{{
+		Mount:      req.Mount,
+		MountKeyID: mount.MountKeyID,
+		Scope:      req.Parent,
+		Bytes:      inodeSizeDelta(inode.Size),
+		Inodes:     1,
+	}}
+	quotaOK := true
+	if e.perasCommitter != nil && e.perasAuthority != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
+		var err error
+		quotaOK, err = e.perasQuotaAllowsFast(ctx, quotaChanges)
 		if err != nil {
 			return fsmeta.CreateResult{}, err
 		}
-		e.invalidateNegative(plan.MutateKeys[0])
-		e.invalidateDirPages(req.Mount, req.Parent)
-		return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
+	}
+	if quotaOK {
+		if committed, err := e.tryPerasVisibleCommit(ctx, delta); committed || err != nil {
+			if err != nil {
+				return fsmeta.CreateResult{}, err
+			}
+			e.rememberPerasCreate(mount, plan, inode)
+			e.invalidateNegative(plan.MutateKeys[0])
+			e.invalidateDirPages(req.Mount, req.Parent)
+			return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
+		}
 	}
 	e.submitPerasShadow(ctx, delta)
 	mutations := []*kvrpcpb.Mutation{
@@ -691,25 +743,26 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		}
 		all := append(cloneMutations(mutations), quotaMutations...)
 		if len(quotaMutations) == 0 {
-			// Fast-path counters are per transaction attempt, not per logical
+			// One-phase counters are per transaction attempt, not per logical
 			// Create, so contention retries and admission misses stay visible.
-			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, all, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, all, startVersion, commitVersion)
 	}); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
 	// The new dentry replaces a previously-missing key; drop any negative
 	// memo a prior Lookup may have planted, and bump the parent's dirpage
 	// epoch so a stale ReadDirPlus result cannot mask the new entry.
+	e.rememberPerasCreate(mount, plan, inode)
 	e.invalidateNegative(plan.MutateKeys[0])
 	e.invalidateDirPages(req.Mount, req.Parent)
 	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
-func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.OperationKind, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
-	stats := e.atomicFastPathCounters(kind)
-	fast, ok := e.runner.(AtomicMutateFastPath)
+func (e *Executor) mutateWithAtomicOnePhase(ctx context.Context, kind fsmeta.OperationKind, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
+	stats := e.atomicOnePhaseCounters(kind)
+	onePhase, ok := e.runner.(AtomicMutateOnePhase)
 	if !ok {
 		if stats != nil {
 			stats.runnerUnsupportedTotal.Add(1)
@@ -717,7 +770,7 @@ func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.Ope
 		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 		return err
 	}
-	affinity := atomicFastPathAffinity(primary, mutations)
+	affinity := atomicOnePhaseAffinity(primary, mutations)
 	if stats != nil && !stats.allowAttempt(affinity) {
 		stats.skipTotal.Add(1)
 		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
@@ -726,7 +779,7 @@ func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.Ope
 	if stats != nil {
 		stats.attemptTotal.Add(1)
 	}
-	handled, err := fast.TryAtomicMutate(ctx, primary, cloneAtomicPredicates(predicates), cloneMutations(mutations), startVersion, commitVersion)
+	handled, err := onePhase.TryAtomicMutate(ctx, primary, cloneAtomicPredicates(predicates), cloneMutations(mutations), startVersion, commitVersion)
 	if err != nil || handled {
 		if err == nil && stats != nil {
 			stats.successTotal.Add(1)
@@ -743,30 +796,30 @@ func (e *Executor) mutateWithAtomicFastPath(ctx context.Context, kind fsmeta.Ope
 }
 
 const (
-	atomicFastPathBackoffAfter = 16
-	atomicFastPathProbeEvery   = 128
+	atomicOnePhaseBackoffAfter = 16
+	atomicOnePhaseProbeEvery   = 128
 )
 
-func (s *atomicFastPathCounters) allowAttempt(affinity string) bool {
+func (s *atomicOnePhaseCounters) allowAttempt(affinity string) bool {
 	if s == nil {
 		return true
 	}
-	if s.affinityFallbacks(affinity) < atomicFastPathBackoffAfter {
+	if s.affinityFallbacks(affinity) < atomicOnePhaseBackoffAfter {
 		return true
 	}
 	// Some plans are only conditionally co-located. Back off after repeated
 	// admission misses for the same placement pattern, but do not let unrelated
 	// patterns force all operations of this kind back onto 2PC.
-	return s.backoffSkipTotal.Add(1)%atomicFastPathProbeEvery == 0
+	return s.backoffSkipTotal.Add(1)%atomicOnePhaseProbeEvery == 0
 }
 
-func (s *atomicFastPathCounters) affinityFallbacks(affinity string) uint64 {
+func (s *atomicOnePhaseCounters) affinityFallbacks(affinity string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.fallbacksByAffinity[affinity]
 }
 
-func (s *atomicFastPathCounters) recordFallback(affinity string) {
+func (s *atomicOnePhaseCounters) recordFallback(affinity string) {
 	s.mu.Lock()
 	next := s.fallbacksByAffinity[affinity] + 1
 	s.fallbacksByAffinity[affinity] = next
@@ -774,14 +827,14 @@ func (s *atomicFastPathCounters) recordFallback(affinity string) {
 	s.consecutiveFallbacks.Store(next)
 }
 
-func (s *atomicFastPathCounters) recordSuccess(affinity string) {
+func (s *atomicOnePhaseCounters) recordSuccess(affinity string) {
 	s.mu.Lock()
 	delete(s.fallbacksByAffinity, affinity)
 	s.mu.Unlock()
 	s.consecutiveFallbacks.Store(0)
 }
 
-func atomicFastPathAffinity(primary []byte, mutations []*kvrpcpb.Mutation) string {
+func atomicOnePhaseAffinity(primary []byte, mutations []*kvrpcpb.Mutation) string {
 	const virtualShards = 64
 	shards := make([]int, 0, 1+len(mutations))
 	if len(primary) > 0 {
@@ -807,26 +860,26 @@ func atomicFastPathAffinity(primary []byte, mutations []*kvrpcpb.Mutation) strin
 	return string(out)
 }
 
-func (e *Executor) mutateWithoutAtomicFastPath(ctx context.Context, kind fsmeta.OperationKind, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
-	if stats := e.atomicFastPathCounters(kind); stats != nil {
+func (e *Executor) mutateWithoutAtomicOnePhase(ctx context.Context, kind fsmeta.OperationKind, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
+	if stats := e.atomicOnePhaseCounters(kind); stats != nil {
 		stats.skipTotal.Add(1)
 	}
 	_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 	return err
 }
 
-func (e *Executor) atomicFastPathCounters(kind fsmeta.OperationKind) *atomicFastPathCounters {
+func (e *Executor) atomicOnePhaseCounters(kind fsmeta.OperationKind) *atomicOnePhaseCounters {
 	if e == nil {
 		return nil
 	}
-	return e.atomicFastPath[kind]
+	return e.atomicOnePhase[kind]
 }
 
 func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.SemanticDelta) error {
 	if e == nil || e.perasAuthority == nil {
 		return nil
 	}
-	if delta.Eligibility != compile.EligibilityFastPath {
+	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		e.perasAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
@@ -845,33 +898,552 @@ func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.Semant
 	return nil
 }
 
-func (e *Executor) tryPerasFastCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
 	if e == nil || e.perasCommitter == nil {
 		return false, nil
 	}
 	if e.perasAuthority == nil {
-		e.perasFast.skipNoAuthorityTotal.Add(1)
+		e.perasVisible.skipNoAuthorityTotal.Add(1)
 		return false, nil
 	}
-	if delta.Eligibility != compile.EligibilityFastPath {
-		e.perasFast.skipIneligibleTotal.Add(1)
+	if delta.Eligibility != compile.EligibilityVisibleCommit {
+		e.perasVisible.skipIneligibleTotal.Add(1)
 		return false, nil
 	}
 	if !perasDeltaHasConcreteWrites(delta) {
-		e.perasFast.skipNonConcreteTotal.Add(1)
+		e.perasVisible.skipNonConcreteTotal.Add(1)
+		return false, nil
+	}
+	if e.perasWatchFence != nil && e.perasWatchFence.HasPerasWatchedWrite(delta.WriteEffects) {
+		e.perasVisible.skipWatchedTotal.Add(1)
+		return false, nil
+	}
+	holds, err := e.perasPredicatesHold(ctx, delta)
+	if err != nil {
+		return false, err
+	}
+	if !holds {
+		e.perasVisible.skipPredicateTotal.Add(1)
 		return false, nil
 	}
 	id := e.nextPerasOperationID(delta.Kind)
-	e.perasFast.attemptTotal.Add(1)
+	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.perasCommitter.CommitPeras(ctx, id, delta)
-	e.perasFast.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
+	_, err = e.perasCommitter.CommitPeras(ctx, id, delta)
+	e.perasVisible.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
-		e.perasFast.errorTotal.Add(1)
+		e.perasVisible.errorTotal.Add(1)
 		return true, err
 	}
-	e.perasFast.successTotal.Add(1)
+	e.perasVisible.successTotal.Add(1)
 	return true, nil
+}
+
+func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+	if len(delta.ReadPredicates) == 0 {
+		return true, nil
+	}
+	index := e.perasPredicateIndex()
+	var version uint64
+	var haveVersion bool
+	read := func(key []byte) (bool, error) {
+		if !haveVersion {
+			var err error
+			version, err = e.reserveReadVersion(ctx)
+			if err != nil {
+				return false, err
+			}
+			haveVersion = true
+		}
+		_, ok, err := e.getMergedValue(ctx, key, version)
+		return ok, err
+	}
+	for _, predicate := range delta.ReadPredicates {
+		switch predicate.Kind {
+		case compile.PredicateExists:
+			if index != nil {
+				present, known := index.KeyState(predicate.Key)
+				if known {
+					if !present {
+						return false, nil
+					}
+					continue
+				}
+			}
+			ok, err := read(predicate.Key)
+			if err != nil || !ok {
+				return ok, err
+			}
+		case compile.PredicateNotExists:
+			if index != nil {
+				present, known := index.KeyState(predicate.Key)
+				if known {
+					if present {
+						return false, nil
+					}
+					continue
+				}
+				if perasNotExistsDerivedFromDelta(delta, predicate, index) {
+					continue
+				}
+			}
+			ok, err := read(predicate.Key)
+			if err != nil || ok {
+				return false, err
+			}
+		case compile.PredicateObservedValue:
+			// Concrete Peras operation builders read these keys before
+			// constructing WriteEffects. The compiler does not yet carry the
+			// observed value digest needed for a generic equality check here.
+			continue
+		case compile.PredicatePrefixScan:
+			return false, nil
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (e *Executor) perasPredicateIndex() fsperas.PredicateIndex {
+	if e == nil || e.perasCommitter == nil {
+		return nil
+	}
+	index, ok := e.perasCommitter.(fsperas.PredicateIndex)
+	if !ok {
+		return nil
+	}
+	return index
+}
+
+func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.OperationPlan, inode fsmeta.InodeRecord) {
+	index := e.perasPredicateIndex()
+	if index == nil {
+		return
+	}
+	if len(plan.MutateKeys) > 0 {
+		index.RememberKey(plan.MutateKeys[0], true)
+	}
+	if len(plan.MutateKeys) > 1 {
+		index.RememberKey(plan.MutateKeys[1], true)
+	}
+	if inode.Type == fsmeta.InodeTypeDirectory {
+		index.RememberEmptyDirectory(mount, inode.Inode)
+	}
+}
+
+func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compile.Predicate, index fsperas.PredicateIndex) bool {
+	if delta.Kind != fsmeta.OperationCreate || len(delta.Plan.MutateKeys) < 2 {
+		return false
+	}
+	if bytes.Equal(predicate.Key, delta.Plan.MutateKeys[1]) {
+		return true
+	}
+	if !bytes.Equal(predicate.Key, delta.Plan.MutateKeys[0]) || len(delta.Authority.Parents) != 1 {
+		return false
+	}
+	return index.DirectoryEmpty(fsmeta.MountIdentity{
+		MountID:    delta.Authority.Mount,
+		MountKeyID: delta.Authority.MountKeyID,
+	}, delta.Authority.Parents[0])
+}
+
+func concretePerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
+	delta.WriteEffects = effects
+	return delta
+}
+
+func runtimeCheckedPerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
+	delta = concretePerasDelta(delta, effects)
+	for i := range delta.ReadPredicates {
+		if delta.ReadPredicates[i].Kind != compile.PredicatePrefixScan {
+			delta.ReadPredicates[i].Kind = compile.PredicateObservedValue
+		}
+	}
+	return delta
+}
+
+func perasPutEffect(key, value []byte) compile.WriteEffect {
+	return compile.WriteEffect{Kind: compile.EffectPut, Key: cloneBytes(key), Value: cloneBytes(value)}
+}
+
+func perasDeleteEffect(key []byte) compile.WriteEffect {
+	return compile.WriteEffect{Kind: compile.EffectDelete, Key: cloneBytes(key)}
+}
+
+func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	inode, ok, err := e.readInode(ctx, mount, req.Inode, version)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	if !ok {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	if inode.Type != fsmeta.InodeTypeFile {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	nowTime := e.clock()
+	expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+	if !ok {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	now := nowTime.UnixNano()
+	if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], version); err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	} else if ok {
+		if sessionLive(existing, now) {
+			return fsmeta.SessionRecord{}, false, nil
+		}
+		// Stale cleanup is value-sensitive and may touch an old session-id key
+		// outside this request's concrete write-set. Keep it on the slow path.
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	if owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[2], version); err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	} else if ok {
+		if sessionLive(owner, now) {
+			return fsmeta.SessionRecord{}, false, nil
+		}
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+	value, err := fsmeta.EncodeSessionValue(record)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+		perasPutEffect(plan.MutateKeys[0], value),
+		perasPutEffect(plan.MutateKeys[1], value),
+	})
+	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	if err != nil {
+		return fsmeta.SessionRecord{}, committed, err
+	}
+	if !committed {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	return record, true, nil
+}
+
+func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	nowTime := e.clock()
+	expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
+	if !ok {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	now := nowTime.UnixNano()
+	session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], version)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	if !ok || !sessionLive(session, now) || session.Inode != req.Inode {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], version)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	if !ok || !sessionLive(owner, now) || owner.Session != req.Session || owner.Inode != req.Inode {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
+	value, err := fsmeta.EncodeSessionValue(record)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+		perasPutEffect(plan.MutateKeys[0], value),
+		perasPutEffect(plan.MutateKeys[1], value),
+	})
+	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	if err != nil {
+		return fsmeta.SessionRecord{}, committed, err
+	}
+	if !committed {
+		return fsmeta.SessionRecord{}, false, nil
+	}
+	return record, true, nil
+}
+
+func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.CloseWriteSessionRequest) (bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return false, nil
+	}
+	session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], version)
+	if err != nil {
+		return false, err
+	}
+	if !ok || session.Inode != req.Inode {
+		return false, nil
+	}
+	effects := []compile.WriteEffect{perasDeleteEffect(plan.MutateKeys[0])}
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, session.Inode)
+	if err != nil {
+		return false, err
+	}
+	if owner, ok, err := e.readSessionByKey(ctx, ownerKey, version); err != nil {
+		return false, err
+	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
+		effects = append(effects, perasDeleteEffect(ownerKey))
+	}
+	concrete := runtimeCheckedPerasDelta(delta, effects)
+	return e.tryPerasVisibleCommit(ctx, concrete)
+}
+
+func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return fsmeta.InodeRecord{}, false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, nil
+	}
+	dentry, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	if dentry.Inode != req.Inode {
+		return fsmeta.InodeRecord{}, false, fsmeta.ErrInvalidRequest
+	}
+	inode, ok, err := e.readInode(ctx, mount, req.Inode, version)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	if !ok {
+		return fsmeta.InodeRecord{}, false, fsmeta.ErrNotFound
+	}
+	if dentry.Type != inode.Type {
+		return fsmeta.InodeRecord{}, false, fsmeta.ErrInvalidValue
+	}
+	if inode.LinkCount != 1 {
+		return fsmeta.InodeRecord{}, false, fsmeta.ErrInvalidRequest
+	}
+	sizeDelta := int64(0)
+	if req.SetSize {
+		sizeDelta = inodeSizeChange(inode.Size, req.Size)
+		if sizeDelta != 0 {
+			quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+				Mount:      req.Mount,
+				MountKeyID: mount.MountKeyID,
+				Scope:      req.Parent,
+				Bytes:      sizeDelta,
+			}})
+			if err != nil {
+				return fsmeta.InodeRecord{}, false, err
+			}
+			if !quotaOK {
+				return fsmeta.InodeRecord{}, false, nil
+			}
+		}
+	}
+	if req.SetMode {
+		inode.Mode = req.Mode
+	}
+	if req.SetSize {
+		inode.Size = req.Size
+	}
+	if req.SetUpdatedUnixNs {
+		inode.UpdatedUnixNs = req.UpdatedUnixNs
+	}
+	if req.SetOpaqueAttrs {
+		inode.OpaqueAttrs = append([]byte(nil), req.OpaqueAttrs...)
+	}
+	value, err := fsmeta.EncodeInodeValue(inode)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
+	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	if err != nil {
+		return fsmeta.InodeRecord{}, committed, err
+	}
+	if !committed {
+		return fsmeta.InodeRecord{}, false, nil
+	}
+	return inode, true, nil
+}
+
+func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, move renameMove) (bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return false, nil
+	}
+	record, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	if err != nil {
+		return false, err
+	}
+	if _, err := e.readDentry(ctx, plan.ReadKeys[1], version); err == nil {
+		return false, fsmeta.ErrExists
+	} else if !errors.Is(err, fsmeta.ErrNotFound) {
+		return false, err
+	}
+	if move.fromParent != move.toParent {
+		if inode, ok, err := e.readInode(ctx, move.identity, record.Inode, version); err != nil {
+			return false, err
+		} else if ok {
+			quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{
+				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.fromParent, Bytes: -inodeSizeDelta(inode.Size), Inodes: -1},
+				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.toParent, Bytes: inodeSizeDelta(inode.Size), Inodes: 1},
+			})
+			if err != nil {
+				return false, err
+			}
+			if !quotaOK {
+				return false, nil
+			}
+		}
+	}
+	record.Parent = move.toParent
+	record.Name = move.toName
+	value, err := fsmeta.EncodeDentryValue(record)
+	if err != nil {
+		return false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+		perasDeleteEffect(plan.MutateKeys[0]),
+		perasPutEffect(plan.MutateKeys[1], value),
+	})
+	return e.tryPerasVisibleCommit(ctx, concrete)
+}
+
+func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.LinkRequest) (bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return false, nil
+	}
+	record, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	if err != nil {
+		return false, err
+	}
+	if record.Type == fsmeta.InodeTypeDirectory {
+		return false, fsmeta.ErrInvalidRequest
+	}
+	if _, err := e.readDentry(ctx, plan.ReadKeys[1], version); err == nil {
+		return false, fsmeta.ErrExists
+	} else if !errors.Is(err, fsmeta.ErrNotFound) {
+		return false, err
+	}
+	inode, ok, err := e.readInode(ctx, mount, record.Inode, version)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, fsmeta.ErrNotFound
+	}
+	if inode.Type == fsmeta.InodeTypeDirectory || inode.LinkCount == ^uint32(0) {
+		return false, fsmeta.ErrInvalidRequest
+	}
+	if inode.LinkCount == 0 {
+		inode.LinkCount = 1
+	}
+	quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+		Mount:      req.Mount,
+		MountKeyID: mount.MountKeyID,
+		Scope:      req.ToParent,
+		Bytes:      inodeSizeDelta(inode.Size),
+		Inodes:     1,
+	}})
+	if err != nil {
+		return false, err
+	}
+	if !quotaOK {
+		return false, nil
+	}
+	inode.LinkCount++
+	dentryValue, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: req.ToParent,
+		Name:   req.ToName,
+		Inode:  record.Inode,
+		Type:   record.Type,
+	})
+	if err != nil {
+		return false, err
+	}
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
+	if err != nil {
+		return false, err
+	}
+	inodeValue, err := fsmeta.EncodeInodeValue(inode)
+	if err != nil {
+		return false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+		perasPutEffect(plan.ReadKeys[1], dentryValue),
+		perasPutEffect(inodeKey, inodeValue),
+	})
+	return e.tryPerasVisibleCommit(ctx, concrete)
+}
+
+func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.UnlinkRequest) (bool, error) {
+	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+		return false, nil
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return false, nil
+	}
+	record, err := e.readDentry(ctx, plan.PrimaryKey, version)
+	if err != nil {
+		return false, err
+	}
+	inode, ok, err := e.readInode(ctx, mount, record.Inode, version)
+	if err != nil {
+		return false, err
+	}
+	if !ok || inode.LinkCount <= 1 {
+		return false, nil
+	}
+	quotaOK, err := e.perasQuotaAllowsFast(ctx, []QuotaChange{{
+		Mount:      req.Mount,
+		MountKeyID: mount.MountKeyID,
+		Scope:      req.Parent,
+		Bytes:      -inodeSizeDelta(inode.Size),
+		Inodes:     -1,
+	}})
+	if err != nil {
+		return false, err
+	}
+	if !quotaOK {
+		return false, nil
+	}
+	inode.LinkCount--
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
+	if err != nil {
+		return false, err
+	}
+	inodeValue, err := fsmeta.EncodeInodeValue(inode)
+	if err != nil {
+		return false, err
+	}
+	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+		perasDeleteEffect(plan.MutateKeys[0]),
+		perasPutEffect(inodeKey, inodeValue),
+	})
+	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
 func (e *Executor) submitPerasShadow(ctx context.Context, delta compile.SemanticDelta) {
@@ -882,7 +1454,7 @@ func (e *Executor) submitPerasShadow(ctx context.Context, delta compile.Semantic
 		e.perasShadow.skipNoAuthorityTotal.Add(1)
 		return
 	}
-	if delta.Eligibility != compile.EligibilityFastPath {
+	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		e.perasShadow.skipIneligibleTotal.Add(1)
 		return
 	}
@@ -912,12 +1484,61 @@ func (e *Executor) perasOverlay() PerasOverlayReader {
 	return overlay
 }
 
+func (e *Executor) flushPeras(ctx context.Context) error {
+	if e == nil || e.perasCommitter == nil {
+		return nil
+	}
+	flusher, ok := e.perasCommitter.(PerasFlusher)
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return flusher.Flush(context.WithoutCancel(ctx))
+}
+
+func (e *Executor) flushPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if e == nil || e.perasCommitter == nil {
+		return nil
+	}
+	if len(scopes) == 0 {
+		return e.flushPeras(ctx)
+	}
+	if scoped, ok := e.perasCommitter.(PerasAuthorityFlusher); ok {
+		for _, scope := range scopes {
+			if authorityScopeEmpty(scope) {
+				return e.flushPeras(ctx)
+			}
+			if err := scoped.FlushAuthority(context.WithoutCancel(ctx), scope); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return e.flushPeras(ctx)
+}
+
+func authorityScopeEmpty(scope compile.AuthorityScope) bool {
+	return scope.Mount == "" || scope.MountKeyID == 0
+}
+
 func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
 	overlay := e.perasOverlay()
 	if overlay == nil {
 		return nil, false, false
 	}
 	return overlay.GetPerasOverlay(key)
+}
+
+func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
+	if value, deleted, ok := e.perasOverlayGet(key); ok {
+		if deleted {
+			return nil, false, nil
+		}
+		return value, true, nil
+	}
+	return e.runner.Get(ctx, key, version)
 }
 
 func (e *Executor) mergePerasOverlayValues(keys [][]byte, values map[string][]byte) {
@@ -1001,16 +1622,21 @@ func perasDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
 }
 
 func (e *Executor) perasQuotaMode() compile.QuotaMode {
-	if e != nil && e.perasCommitter != nil {
-		// The experimental Peras fast path models quota as authority-scoped
-		// escrow. The runtime still falls back for operations whose concrete
-		// write-set cannot be replayed from the compiled delta.
-		return compile.QuotaModeEscrow
-	}
-	if e != nil && e.quotas != nil {
+	if e != nil && e.perasCommitter == nil && e.quotas != nil {
 		return compile.QuotaModeShared
 	}
 	return compile.QuotaModeNone
+}
+
+func (e *Executor) perasQuotaAllowsFast(ctx context.Context, changes []QuotaChange) (bool, error) {
+	if e == nil || e.quotas == nil || len(changes) == 0 {
+		return true, nil
+	}
+	admitter, ok := e.quotas.(PerasQuotaAdmitter)
+	if !ok {
+		return false, nil
+	}
+	return admitter.AllowPerasVisibleQuota(ctx, changes)
 }
 
 func atomicExists(key []byte) *kvrpcpb.AtomicPredicate {
@@ -1048,6 +1674,13 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 	plan := delta.Plan
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return fsmeta.InodeRecord{}, fsmeta.ErrInvalidRequest
+	}
+	if updated, committed, err := e.tryPerasVisibleUpdateInode(ctx, delta, plan, mount, req); committed || err != nil {
+		if err != nil {
+			return fsmeta.InodeRecord{}, err
+		}
+		e.invalidateDirPages(req.Mount, req.Parent)
+		return updated, nil
 	}
 	var updated fsmeta.InodeRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1122,15 +1755,15 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 				atomicValueEquals(plan.ReadKeys[0], dentryValue),
 				atomicValueEquals(plan.MutateKeys[0], oldInodeValue),
 			}
-			if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+			if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 				return err
 			}
-		} else if err := e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		} else if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		updated = inode
 		return nil
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
 	e.invalidateDirPages(req.Mount, req.Parent)
@@ -1141,7 +1774,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 // is wired (WithNegativeCache), Lookup short-circuits a previously-known
 // missing key into ErrNotFound without round-tripping through the runner.
 // Misses observed by the runner are recorded so the next Lookup hits the
-// fast path; subsequent Create/Link/Rename for the same key Invalidate the
+// visible commit; subsequent Create/Link/Rename for the same key Invalidate the
 // entry so the negative memo cannot mask a now-existing dentry.
 func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
@@ -1418,7 +2051,14 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	if _, err := fsmeta.PlanSnapshotSubtree(req, mountRecord.Identity()); err != nil {
+	delta, err := compile.SnapshotSubtree(req, mountRecord.Identity())
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	if err := e.flushPerasAuthority(ctx, delta.Authority); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	version, err := e.reserveReadVersion(ctx)
@@ -1512,6 +2152,14 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	plan := delta.Plan
+	if committed, err := e.tryPerasVisibleLink(ctx, delta, plan, mount, req); committed || err != nil {
+		if err != nil {
+			return err
+		}
+		e.invalidateNegative(plan.ReadKeys[1])
+		e.invalidateDirPages(req.Mount, req.ToParent)
+		return nil
+	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
@@ -1602,10 +2250,10 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 				atomicNotExists(plan.ReadKeys[1]),
 				atomicValueEquals(inodeKey, oldInodeValue),
 			}
-			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
-	}); err != nil {
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+	}, delta.Authority); err != nil {
 		return err
 	}
 	// Link writes a fresh dentry at ReadKeys[1]; drop any negative memo
@@ -1632,6 +2280,14 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		return err
 	}
 	plan := delta.Plan
+	if committed, err := e.tryPerasVisibleUnlink(ctx, delta, plan, mount, req); committed || err != nil {
+		if err != nil {
+			return err
+		}
+		e.invalidateNegative(plan.MutateKeys[0])
+		e.invalidateDirPages(req.Mount, req.Parent)
+		return nil
+	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
@@ -1681,10 +2337,10 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			mutations = append(mutations, quotaMutations...)
 		}
 		if len(mutations) == len(predicates) {
-			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
-	}); err != nil {
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+	}, delta.Authority); err != nil {
 		return err
 	}
 	// Unlink removed the dentry; the next Lookup must observe ErrNotFound
@@ -1716,6 +2372,12 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
+	}
+	if record, committed, err := e.tryPerasVisibleOpenWriteSession(ctx, delta, plan, mount, req); committed || err != nil {
+		if err != nil {
+			return fsmeta.SessionRecord{}, err
+		}
+		return record, nil
 	}
 	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1798,12 +2460,12 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		// key, inode key, and any stale cleanup key must still match the values
 		// read above. Value predicates make the 1PC attempt a real CAS instead
 		// of an existence-only overwrite.
-		if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
 		return nil
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	return record, nil
@@ -1827,6 +2489,12 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
+	}
+	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, delta, plan, req); committed || err != nil {
+		if err != nil {
+			return fsmeta.SessionRecord{}, err
+		}
+		return record, nil
 	}
 	var record fsmeta.SessionRecord
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -1871,12 +2539,12 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 			atomicValueEquals(plan.ReadKeys[0], sessionValue),
 			atomicValueEquals(plan.ReadKeys[1], ownerValue),
 		}
-		if err := e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
 		return nil
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	return record, nil
@@ -1898,6 +2566,9 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		return err
 	}
 	plan := delta.Plan
+	if committed, err := e.tryPerasVisibleCloseWriteSession(ctx, delta, plan, mount, req); committed || err != nil {
+		return err
+	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
@@ -1929,8 +2600,8 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 			predicates = append(predicates, atomicValueEquals(ownerKey, ownerValue))
 			mutations = append(mutations, &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Delete, Key: ownerKey})
 		}
-		return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
-	}); err != nil {
+		return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+	}, delta.Authority); err != nil {
 		return err
 	}
 	return nil
@@ -1955,7 +2626,11 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	// Expiration is base-LSM maintenance, not a user durability barrier. It
+	// intentionally ignores active Peras overlays: live overlay sessions remain
+	// visible through the merged read path, and stale overlay sessions are
+	// cleaned when their segment is installed/materialized.
+	if err := e.withTxnRetryNoPerasFlush(ctx, func(startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   fsmeta.InodeID
@@ -2093,6 +2768,15 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
+	if committed, err := e.tryPerasVisibleRename(ctx, delta, plan, move); committed || err != nil {
+		if err != nil {
+			return err
+		}
+		e.invalidateNegative(plan.ReadKeys...)
+		e.invalidateNegative(plan.MutateKeys...)
+		e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
+		return nil
+	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
 		mutations, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
@@ -2100,10 +2784,10 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		}
 		if len(mutations) == 2 {
 			predicates := []*kvrpcpb.AtomicPredicate{atomicExists(plan.ReadKeys[0]), atomicNotExists(plan.ReadKeys[1])}
-			return e.mutateWithAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicFastPath(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
-	}); err != nil {
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+	}, delta.Authority); err != nil {
 		return err
 	}
 	e.invalidateNegative(plan.ReadKeys...)
@@ -2167,7 +2851,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		}
 		committedAt = actualCommitVersion
 		return nil
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return err
 	}
 	if handoffStarted && committedAt == 0 {
@@ -2366,7 +3050,14 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 	return 0, last
 }
 
-func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
+	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
+		return err
+	}
+	return e.withTxnRetryNoPerasFlush(ctx, run)
+}
+
+func (e *Executor) withTxnRetryNoPerasFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
 	started := time.Now()
 	for attempt := 0; ; attempt++ {
@@ -2547,7 +3238,7 @@ func cloneAtomicPredicates(in []*kvrpcpb.AtomicPredicate) []*kvrpcpb.AtomicPredi
 }
 
 func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (fsmeta.DentryRecord, error) {
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMergedValue(ctx, key, version)
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
 	}
@@ -2562,7 +3253,7 @@ func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountIdentity, in
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMergedValue(ctx, key, version)
 	if err != nil || !ok {
 		return fsmeta.InodeRecord{}, ok, err
 	}
@@ -2574,7 +3265,7 @@ func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountIdentity, in
 }
 
 func (e *Executor) readSessionByKey(ctx context.Context, key []byte, version uint64) (fsmeta.SessionRecord, bool, error) {
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMergedValue(ctx, key, version)
 	if err != nil || !ok {
 		return fsmeta.SessionRecord{}, ok, err
 	}

@@ -34,24 +34,13 @@ func (w *RemotePerasWitness) ID() string {
 	return w.id
 }
 
-func (w *RemotePerasWitness) AppendPrepare(ctx context.Context, scope compile.AuthorityScope, record fsperas.PrepareRecord) error {
+func (w *RemotePerasWitness) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
 	if w == nil || w.client == nil {
 		return ErrPerasWitnessClientInvalid
 	}
-	_, err := w.client.PerasWitnessPrepare(ctx, &kvrpcpb.PerasWitnessPrepareRequest{
+	_, err := w.client.PerasWitnessSegment(ctx, &kvrpcpb.PerasWitnessSegmentRequest{
 		Scope:  rsperas.ScopeToProto(scope),
-		Record: rsperas.PrepareRecordToProto(record),
-	})
-	return normalizeRPCError(err)
-}
-
-func (w *RemotePerasWitness) AppendCommitCertificate(ctx context.Context, scope compile.AuthorityScope, record fsperas.CommitCertificateRecord) error {
-	if w == nil || w.client == nil {
-		return ErrPerasWitnessClientInvalid
-	}
-	_, err := w.client.PerasWitnessCommit(ctx, &kvrpcpb.PerasWitnessCommitRequest{
-		Scope:  rsperas.ScopeToProto(scope),
-		Record: rsperas.CommitCertificateRecordToProto(record),
+		Record: rsperas.SegmentWitnessRecordToProto(record),
 	})
 	return normalizeRPCError(err)
 }

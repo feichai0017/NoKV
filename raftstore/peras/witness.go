@@ -15,9 +15,6 @@ var (
 	ErrWitnessNodeConfigInvalid = errors.New("raftstore peras: invalid witness node config")
 	ErrWitnessAuthorityMissing  = errors.New("raftstore peras: missing active authority")
 	ErrWitnessAuthorityMismatch = errors.New("raftstore peras: authority mismatch")
-	ErrWitnessDuplicateRecord   = errors.New("raftstore peras: duplicate witness record")
-	ErrWitnessPrepareMissing    = errors.New("raftstore peras: missing prepare record")
-	ErrWitnessPrepareMismatch   = errors.New("raftstore peras: prepare digest mismatch")
 )
 
 type WitnessNodeConfig struct {
@@ -34,13 +31,13 @@ type WitnessNode struct {
 	now         func() time.Time
 
 	mu       sync.Mutex
-	prepares map[witnessOpKey][32]byte
-	commits  map[witnessOpKey][32]byte
+	segments map[witnessSegmentKey]struct{}
 }
 
-type witnessOpKey struct {
+type witnessSegmentKey struct {
 	epochID uint64
-	opID    fsperas.OperationID
+	root    [32]byte
+	digest  [32]byte
 }
 
 func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
@@ -56,8 +53,7 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		log:         cfg.Log,
 		authorities: cfg.Authorities,
 		now:         now,
-		prepares:    make(map[witnessOpKey][32]byte),
-		commits:     make(map[witnessOpKey][32]byte),
+		segments:    make(map[witnessSegmentKey]struct{}),
 	}, nil
 }
 
@@ -68,71 +64,30 @@ func (n *WitnessNode) ID() string {
 	return n.nodeID
 }
 
-func (n *WitnessNode) AppendPrepare(ctx context.Context, scope compile.AuthorityScope, record fsperas.PrepareRecord) error {
+func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
 	if n == nil || n.log == nil || n.authorities == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
 	if err := n.validateAuthority(scope, record.EpochID, record.HolderID); err != nil {
 		return err
 	}
-	digest, err := fsperas.PrepareDigest(record)
-	if err != nil {
-		return err
-	}
-	key := witnessKey(record.EpochID, record.OpID)
+	key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if existing, ok := n.prepares[key]; ok {
-		if existing != digest {
-			return ErrWitnessDuplicateRecord
-		}
+	if _, ok := n.segments[key]; ok {
 		return nil
 	}
-	if existing, ok := n.commits[key]; ok && existing != digest {
-		return ErrWitnessDuplicateRecord
-	}
-	if _, err := n.log.AppendPrepare(ctx, record); err != nil {
+	if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
 		return err
 	}
-	n.prepares[key] = digest
-	return nil
-}
-
-func (n *WitnessNode) AppendCommitCertificate(ctx context.Context, scope compile.AuthorityScope, record fsperas.CommitCertificateRecord) error {
-	if n == nil || n.log == nil || n.authorities == nil {
-		return ErrWitnessNodeConfigInvalid
-	}
-	if err := n.validateAuthority(scope, record.EpochID, record.HolderID); err != nil {
-		return err
-	}
-	key := witnessKey(record.EpochID, record.OpID)
-
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if existing, ok := n.commits[key]; ok {
-		if existing != record.PrepareDigest {
-			return ErrWitnessDuplicateRecord
-		}
+	if _, ok := n.segments[key]; ok {
 		return nil
 	}
-	prepareDigest, ok := n.prepares[key]
-	if !ok {
-		if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
-			return err
-		}
-		prepareDigest, ok = n.prepares[key]
-	}
-	if !ok {
-		return ErrWitnessPrepareMissing
-	}
-	if prepareDigest != record.PrepareDigest {
-		return ErrWitnessPrepareMismatch
-	}
-	if _, err := n.log.AppendCommitCertificate(ctx, record); err != nil {
+	if _, err := n.log.AppendSegment(ctx, record); err != nil {
 		return err
 	}
-	n.commits[key] = record.PrepareDigest
+	n.segments[key] = struct{}{}
 	return nil
 }
 
@@ -162,27 +117,8 @@ func (n *WitnessNode) loadEpochLocked(ctx context.Context, epochID uint64) error
 	if err != nil {
 		return err
 	}
-	for _, prepare := range snapshot.Prepares {
-		digest, err := fsperas.PrepareDigest(prepare)
-		if err != nil {
-			return err
-		}
-		key := witnessKey(prepare.EpochID, prepare.OpID)
-		if existing, ok := n.prepares[key]; ok && existing != digest {
-			return ErrWitnessDuplicateRecord
-		}
-		n.prepares[key] = digest
-	}
-	for _, commit := range snapshot.Commits {
-		key := witnessKey(commit.EpochID, commit.OpID)
-		if existing, ok := n.commits[key]; ok && existing != commit.PrepareDigest {
-			return ErrWitnessDuplicateRecord
-		}
-		n.commits[key] = commit.PrepareDigest
+	for _, segment := range snapshot.Segments {
+		n.segments[witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}] = struct{}{}
 	}
 	return nil
-}
-
-func witnessKey(epochID uint64, opID fsperas.OperationID) witnessOpKey {
-	return witnessOpKey{epochID: epochID, opID: opID}
 }
