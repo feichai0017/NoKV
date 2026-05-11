@@ -223,6 +223,7 @@ type perasVisibleCounters struct {
 	skipIneligibleTotal    atomic.Uint64
 	skipNoAuthorityTotal   atomic.Uint64
 	skipNonConcreteTotal   atomic.Uint64
+	skipPlacementTotal     atomic.Uint64
 	skipWatchedTotal       atomic.Uint64
 	skipPredicateTotal     atomic.Uint64
 	latencyTotalNanosecond atomic.Uint64
@@ -457,6 +458,7 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 			"skip_ineligible_total":      uint64(0),
 			"skip_no_authority_total":    uint64(0),
 			"skip_non_concrete_total":    uint64(0),
+			"skip_placement_total":       uint64(0),
 			"skip_watched_total":         uint64(0),
 			"skip_predicate_total":       uint64(0),
 			"latency_total_nanosecond":   uint64(0),
@@ -477,6 +479,7 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
 		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
 		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
+		"skip_placement_total":       counters.skipPlacementTotal.Load(),
 		"skip_watched_total":         counters.skipWatchedTotal.Load(),
 		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
 		"latency_total_nanosecond":   latency,
@@ -854,6 +857,15 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 		e.perasVisible.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
+	singleBucket, err := fsperas.DeltaWritesSingleFSMetaBucket(delta)
+	if err != nil {
+		e.perasVisible.errorTotal.Add(1)
+		return true, err
+	}
+	if !singleBucket {
+		e.perasVisible.skipPlacementTotal.Add(1)
+		return false, nil
+	}
 	if e.perasWatchFence != nil && e.perasWatchFence.HasPerasWatchedWrite(delta.WriteEffects) {
 		e.perasVisible.skipWatchedTotal.Add(1)
 		return false, nil
@@ -861,10 +873,10 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
+	_, err = e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
 	e.perasVisible.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
-		if errors.Is(err, fsperas.ErrAdmissionRejected) {
+		if errors.Is(err, fsperas.ErrAdmissionRejected) || errors.Is(err, fsperas.ErrIneligibleOperation) {
 			e.perasVisible.skipPredicateTotal.Add(1)
 			return false, nil
 		}

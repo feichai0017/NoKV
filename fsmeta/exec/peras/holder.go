@@ -61,6 +61,13 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		return VisibleAck{}, ErrIneligibleOperation
 	}
+	singleBucket, err := DeltaWritesSingleFSMetaBucket(delta)
+	if err != nil {
+		return VisibleAck{}, err
+	}
+	if !singleBucket {
+		return VisibleAck{}, ErrIneligibleOperation
+	}
 	if _, err := h.detector.Admit(id, delta); err != nil {
 		return VisibleAck{}, err
 	}

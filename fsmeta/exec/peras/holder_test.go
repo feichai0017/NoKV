@@ -121,6 +121,25 @@ func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
+func TestHolderRejectsCrossBucketDelta(t *testing.T) {
+	holder := newTestHolder(t)
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	leftKey := fsmetaInodeKeyForBucket(t, mount, 1)
+	rightKey := fsmetaInodeKeyForBucket(t, mount, 2)
+	delta := compile.SemanticDelta{
+		Kind:        fsmeta.OperationCreate,
+		Eligibility: compile.EligibilityVisibleCommit,
+		WriteEffects: []compile.WriteEffect{
+			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("left")},
+			{Kind: compile.EffectPut, Key: rightKey, Value: []byte("right")},
+		},
+	}
+
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), delta)
+	require.ErrorIs(t, err, ErrIneligibleOperation)
+	require.Zero(t, holder.Pending())
+}
+
 func BenchmarkHolderSubmitDisjoint(b *testing.B) {
 	holder := mustHolderForBench(b)
 	ctx := context.Background()
