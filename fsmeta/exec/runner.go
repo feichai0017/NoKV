@@ -1525,7 +1525,30 @@ func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.Opera
 	if e != nil {
 		seq = e.perasSeq.Add(1)
 	}
-	return fsperas.OperationID{ClientID: "fsmeta-exec/" + string(kind), Seq: seq}
+	return fsperas.OperationID{ClientID: perasOperationClientID(kind), Seq: seq}
+}
+
+func perasOperationClientID(kind fsmeta.OperationKind) string {
+	switch kind {
+	case fsmeta.OperationCreate:
+		return "fsmeta-exec/create"
+	case fsmeta.OperationUpdateInode:
+		return "fsmeta-exec/update_inode"
+	case fsmeta.OperationRename:
+		return "fsmeta-exec/rename"
+	case fsmeta.OperationLink:
+		return "fsmeta-exec/link"
+	case fsmeta.OperationUnlink:
+		return "fsmeta-exec/unlink"
+	case fsmeta.OperationOpenWriteSession:
+		return "fsmeta-exec/open_write_session"
+	case fsmeta.OperationHeartbeatSession:
+		return "fsmeta-exec/heartbeat_write_session"
+	case fsmeta.OperationCloseSession:
+		return "fsmeta-exec/close_write_session"
+	default:
+		return "fsmeta-exec/" + string(kind)
+	}
 }
 
 func perasDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
