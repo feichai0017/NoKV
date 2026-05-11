@@ -24,3 +24,11 @@ func TestOpenRejectsNegativeLockTTL(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errLockTTLInvalid)
 }
+
+func TestOpenRejectsNegativeCapsuleAuthorityTTL(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:     "127.0.0.1:1",
+		CapsuleAuthorityTTL: -time.Millisecond,
+	})
+	require.ErrorIs(t, err, errCapsuleAuthorityTTLInvalid)
+}
