@@ -33,6 +33,13 @@ func TestBuildPerasSegmentBuildsSortedQueryableRuns(t *testing.T) {
 	for i := 1; i < len(entries); i++ {
 		require.LessOrEqual(t, string(entries[i-1].Key), string(entries[i].Key))
 	}
+	firstKey, err := segment.FirstKey()
+	require.NoError(t, err)
+	require.Equal(t, entries[0].Key, firstKey)
+	firstKey[0] ^= 0xff
+	again, err := segment.FirstKey()
+	require.NoError(t, err)
+	require.Equal(t, entries[0].Key, again)
 }
 
 func TestBuildPerasSegmentCoalescesLatestValueAndDelete(t *testing.T) {

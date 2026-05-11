@@ -1044,16 +1044,16 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 	if !ok {
 		return errPerasCommitterInvalid
 	}
-	entries := segment.Entries()
-	if len(entries) == 0 || len(entries[0].Key) == 0 {
-		return fsperas.ErrInvalidPerasSegment
+	routingKey, err := segment.FirstKey()
+	if err != nil {
+		return err
 	}
 	installVersion, err := i.runner.ReserveTimestamp(ctx, 1)
 	if err != nil {
 		return err
 	}
-	resp, err := kv.InstallPerasSegment(ctx, entries[0].Key, &kvrpcpb.PerasInstallSegmentRequest{
-		RoutingKey:           runtimeCloneBytes(entries[0].Key),
+	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
+		RoutingKey:           runtimeCloneBytes(routingKey),
 		SegmentRoot:          append([]byte(nil), segment.Root[:]...),
 		SegmentPayloadDigest: append([]byte(nil), digest[:]...),
 		SegmentPayload:       append([]byte(nil), payload...),
