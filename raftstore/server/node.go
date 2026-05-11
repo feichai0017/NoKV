@@ -68,11 +68,15 @@ func NewNode(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
 	}
 	storeCfg := cfg.Store
+	applyOpts := []kv.ApplyOption(nil)
+	if cfg.PerasAuthorities != nil {
+		applyOpts = append(applyOpts, kv.WithPerasAuthorityFence(cfg.PerasAuthorities))
+	}
 	if storeCfg.CommandApplier == nil {
-		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil)
+		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil, applyOpts...)
 	}
 	if storeCfg.CommandBatchApplier == nil {
-		storeCfg.CommandBatchApplier = kv.NewBatchApplier(cfg.Storage.MVCC, nil)
+		storeCfg.CommandBatchApplier = kv.NewBatchApplier(cfg.Storage.MVCC, nil, applyOpts...)
 	}
 	rt := storeCfg.Router
 	if rt == nil {

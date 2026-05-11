@@ -119,6 +119,10 @@ type PerasAuthorityAdmitter interface {
 	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
 
+type PerasAuthorityRetirer interface {
+	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
+}
+
 // PerasShadowSubmitter is an experimental measurement hook for the Peras
 // holder+witness path. The executor still commits through the ordinary
 // Percolator/Raft runner; submitter failures are counted but do not affect the
@@ -748,7 +752,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}
 		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, all, startVersion, commitVersion)
-	}); err != nil {
+	}, delta.Authority); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
 	// The new dentry replaces a previously-missing key; drop any negative
@@ -1517,6 +1521,20 @@ func (e *Executor) flushPerasAuthority(ctx context.Context, scopes ...compile.Au
 		return nil
 	}
 	return e.flushPeras(ctx)
+}
+
+func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if e == nil || e.perasAuthority == nil {
+		return nil
+	}
+	retirer, ok := e.perasAuthority.(PerasAuthorityRetirer)
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return retirer.RetirePerasAuthority(context.WithoutCancel(ctx), scopes...)
 }
 
 func authorityScopeEmpty(scope compile.AuthorityScope) bool {
@@ -3052,6 +3070,9 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
 	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
+		return err
+	}
+	if err := e.retirePerasAuthority(ctx, scopes...); err != nil {
 		return err
 	}
 	return e.withTxnRetryNoPerasFlush(ctx, run)

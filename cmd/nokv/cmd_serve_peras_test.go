@@ -27,9 +27,10 @@ func TestStartServePerasWitnessUsesRootAuthorityFeed(t *testing.T) {
 	opener := &servePerasTestWALOpener{dir: t.TempDir()}
 	defer opener.close(t)
 
-	witness, feed, err := startServePerasWitness(t.Context(), 1, source, opener, wal.DurabilityFsync)
+	witness, authorities, feed, err := startServePerasWitness(t.Context(), 1, source, opener, wal.DurabilityFsync)
 	require.NoError(t, err)
 	require.NotNil(t, witness)
+	require.NotNil(t, authorities)
 	require.NotNil(t, feed)
 	defer func() { require.NoError(t, feed.Close()) }()
 
