@@ -131,6 +131,35 @@ func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (A
 	return cloneGrant(found), true, nil
 }
 
+// FencesKey reports whether a concrete fsmeta key is currently covered by one
+// active Peras authority. Non-fsmeta keys are ignored so generic KV traffic is
+// not accidentally fenced.
+func (a *ActiveAuthorities) FencesKey(key []byte, now time.Time) (AuthorityGrant, bool, error) {
+	if a == nil {
+		return AuthorityGrant{}, false, nil
+	}
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok {
+		return AuthorityGrant{}, false, nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var found AuthorityGrant
+	for _, grant := range a.grants {
+		if !grantCoversKey(grant, parts, now) {
+			continue
+		}
+		if found.Valid() {
+			return AuthorityGrant{}, false, ErrAmbiguousAuthority
+		}
+		found = grant
+	}
+	if !found.Valid() {
+		return AuthorityGrant{}, false, nil
+	}
+	return cloneGrant(found), true, nil
+}
+
 func GrantCoversDelta(grant AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
@@ -160,6 +189,35 @@ func grantCoversBuckets(grant []uint16, requested []fsmeta.AffinityBucket, empty
 		}
 	}
 	return true
+}
+
+func grantCoversKey(grant AuthorityGrant, parts fsmeta.KeyParts, now time.Time) bool {
+	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
+		return false
+	}
+	if grant.Scope.MountKeyID != uint64(parts.MountKeyID) {
+		return false
+	}
+	if !grantCoversBuckets(grant.Scope.Buckets, []fsmeta.AffinityBucket{parts.Bucket}, false) {
+		return false
+	}
+	switch parts.Kind {
+	case fsmeta.KeyKindMount:
+		return true
+	case fsmeta.KeyKindDentry:
+		return grantCoversInodes(grant.Scope.Parents, []fsmeta.InodeID{parts.Parent}, false)
+	case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+		return grantCoversInodes(grant.Scope.Inodes, []fsmeta.InodeID{parts.Inode}, false)
+	case fsmeta.KeyKindUsage:
+		if len(grant.Scope.Parents) == 0 && len(grant.Scope.Inodes) == 0 {
+			return true
+		}
+		scope := uint64(parts.UsageScope)
+		return slices.Contains(grant.Scope.Parents, scope) ||
+			slices.Contains(grant.Scope.Inodes, scope)
+	default:
+		return false
+	}
 }
 
 func grantCoversInodes(grant []uint64, requested []fsmeta.InodeID, emptyRequestCovered bool) bool {
