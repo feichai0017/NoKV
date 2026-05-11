@@ -119,9 +119,7 @@ type PerasAuthorityAdmitter interface {
 	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
 
-type PerasAuthorityRetirer interface {
-	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
-}
+type PerasAuthorityRetirer = fsperas.AuthorityRetirer
 
 // PerasCommitter is the experimental, opt-in Peras visible commit boundary.
 // Success replaces the ordinary Percolator/Raft commit for this fsmeta
@@ -142,6 +140,10 @@ type PerasFlusher interface {
 
 type PerasAuthorityFlusher interface {
 	FlushAuthority(context.Context, compile.AuthorityScope) error
+}
+
+type PerasAuthorityDrainer interface {
+	DrainAuthority(context.Context, fsperas.AuthorityRetirer, ...compile.AuthorityScope) error
 }
 
 type PerasQuotaAdmitter interface {
@@ -1455,6 +1457,26 @@ func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.A
 		ctx = context.Background()
 	}
 	return retirer.RetirePerasAuthority(context.WithoutCancel(ctx), scopes...)
+}
+
+func (e *Executor) drainPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if e == nil {
+		return nil
+	}
+	if e.perasCommitter != nil && e.perasAuthority != nil {
+		drainer, drainOK := e.perasCommitter.(PerasAuthorityDrainer)
+		retirer, retireOK := e.perasAuthority.(PerasAuthorityRetirer)
+		if drainOK && retireOK {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return drainer.DrainAuthority(context.WithoutCancel(ctx), retirer, scopes...)
+		}
+	}
+	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
+		return err
+	}
+	return e.retirePerasAuthority(ctx, scopes...)
 }
 
 func authorityScopeEmpty(scope compile.AuthorityScope) bool {
@@ -3012,10 +3034,7 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 }
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
-	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
-		return err
-	}
-	if err := e.retirePerasAuthority(ctx, scopes...); err != nil {
+	if err := e.drainPerasAuthority(ctx, scopes...); err != nil {
 		return err
 	}
 	return e.withTxnRetryNoPerasFlush(ctx, run)

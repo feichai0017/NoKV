@@ -228,6 +228,8 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}
+	c.commitMu.RLock()
+	defer c.commitMu.RUnlock()
 	grant, owned, err := c.authority.Acquire(ctx, delta.Authority)
 	if err != nil {
 		c.recordError(err)
@@ -242,8 +244,6 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	c.commitMu.RLock()
-	defer c.commitMu.RUnlock()
 	unlockAdmission := c.latches.Lock(delta)
 	defer unlockAdmission()
 	if err := fsperas.Admit(ctx, delta, admission); err != nil {
@@ -300,6 +300,51 @@ func (c *RemotePerasCommitter) FlushAuthority(ctx context.Context, scope compile
 	return c.flush(ctx, &scope)
 }
 
+func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
+	if c == nil || retirer == nil {
+		return errPerasCommitterInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.flushMu.Lock()
+	defer c.flushMu.Unlock()
+	c.commitMu.Lock()
+	defer c.commitMu.Unlock()
+
+	if len(scopes) == 0 {
+		jobs, err := c.freezeFlushJobsLocked(nil)
+		if err != nil {
+			return err
+		}
+		if err := c.installFlushJobs(ctx, jobs); err != nil {
+			return err
+		}
+		return c.retireDrainedAuthority(ctx, retirer)
+	}
+	for _, scope := range scopes {
+		if perasAuthorityScopeEmpty(scope) {
+			jobs, err := c.freezeFlushJobsLocked(nil)
+			if err != nil {
+				return err
+			}
+			if err := c.installFlushJobs(ctx, jobs); err != nil {
+				return err
+			}
+			return c.retireDrainedAuthority(ctx, retirer, scopes...)
+		}
+		target := scope
+		jobs, err := c.freezeFlushJobsLocked(&target)
+		if err != nil {
+			return err
+		}
+		if err := c.installFlushJobs(ctx, jobs); err != nil {
+			return err
+		}
+	}
+	return c.retireDrainedAuthority(ctx, retirer, scopes...)
+}
+
 func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.AuthorityScope) error {
 	if c == nil {
 		return errPerasCommitterInvalid
@@ -351,6 +396,10 @@ func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.A
 	if err != nil {
 		return err
 	}
+	return c.installFlushJobs(ctx, jobs)
+}
+
+func (c *RemotePerasCommitter) installFlushJobs(ctx context.Context, jobs []runtimePerasFlushJob) error {
 	if len(jobs) > 0 && c.installer == nil {
 		return c.recordError(errPerasCommitterInvalid)
 	}
@@ -370,8 +419,21 @@ func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.A
 	return nil
 }
 
+func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
+	if err := retirer.RetirePerasAuthority(ctx, scopes...); err != nil {
+		return c.recordErrorf("retire peras authority: %w", err)
+	}
+	return nil
+}
+
 func (c *RemotePerasCommitter) freezeFlushJobs(target *compile.AuthorityScope) ([]runtimePerasFlushJob, error) {
-	plans, err := c.freezeReplayPlans(target)
+	c.commitMu.Lock()
+	defer c.commitMu.Unlock()
+	return c.freezeFlushJobsLocked(target)
+}
+
+func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthorityScope) ([]runtimePerasFlushJob, error) {
+	plans, err := c.freezeReplayPlansLocked(target)
 	if err != nil {
 		return nil, err
 	}
@@ -407,10 +469,7 @@ func (c *RemotePerasCommitter) freezeFlushJobs(target *compile.AuthorityScope) (
 	return jobs, nil
 }
 
-func (c *RemotePerasCommitter) freezeReplayPlans(target *compile.AuthorityScope) ([]runtimePerasFrozenPlan, error) {
-	c.commitMu.Lock()
-	defer c.commitMu.Unlock()
-
+func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope) ([]runtimePerasFrozenPlan, error) {
 	holders := c.holderSnapshot()
 	plans := make([]runtimePerasFrozenPlan, 0, len(holders))
 	for _, holder := range holders {

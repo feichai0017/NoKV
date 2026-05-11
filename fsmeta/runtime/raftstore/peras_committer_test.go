@@ -253,6 +253,43 @@ func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *t
 	require.Equal(t, 2, installer.calls)
 }
 
+func TestRemotePerasCommitterDrainAuthorityFlushesAndRetires(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	scope := compile.AuthorityScope{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Parents:    []fsmeta.InodeID{1},
+		Inodes:     []fsmeta.InodeID{2},
+	}
+	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
+	delta.Authority = scope
+
+	ctx := context.Background()
+	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	require.NoError(t, err)
+	retirer := &fakeRuntimePerasRetirer{}
+	require.NoError(t, committer.DrainAuthority(ctx, retirer, scope))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, uint64(1), stats["segment_total"])
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, 1, retirer.calls)
+	require.Equal(t, []compile.AuthorityScope{scope}, retirer.scopes)
+}
+
 func TestRemotePerasCommitterBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &blockingRuntimePerasSegmentInstaller{}
@@ -433,6 +470,18 @@ func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.Authori
 		owned = true
 	}
 	return p.grant, owned, p.err
+}
+
+type fakeRuntimePerasRetirer struct {
+	calls  int
+	scopes []compile.AuthorityScope
+	err    error
+}
+
+func (r *fakeRuntimePerasRetirer) RetirePerasAuthority(_ context.Context, scopes ...compile.AuthorityScope) error {
+	r.calls++
+	r.scopes = append(r.scopes, scopes...)
+	return r.err
 }
 
 func testRuntimePerasWitnesses(tb testing.TB, n int) []fsperas.WitnessReplica {
