@@ -926,6 +926,66 @@ func TestExecutorCreateCapsuleFastPathRequiresAuthorityAdmission(t *testing.T) {
 	requireCapsuleFastStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
+func TestExecutorCreateCapsuleBufferedFastPathServesLookupOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedCapsuleCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
+		WithCapsuleCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Empty(t, runner.mutations)
+
+	lookedUp, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry, lookedUp)
+}
+
+func TestExecutorCreateCapsuleBufferedFastPathServesReadDirPlusOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedCapsuleCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithCapsuleAuthorityAdmitter(ownedCapsuleAdmitter{}),
+		WithCapsuleCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{
+		Dentry: created.Dentry,
+		Inode:  created.Inode,
+	}}, pairs)
+}
+
 func TestExecutorCreateStopsWhenCapsuleAuthorityHeldElsewhere(t *testing.T) {
 	runner := newFakeRunner()
 	admitter := &fakeCapsuleAdmitter{owned: false}
@@ -3004,6 +3064,30 @@ func BenchmarkExecutorCreateCapsuleDirectFastPath(b *testing.B) {
 		b.Fatal(err)
 	}
 	benchmarkExecutorCreate(b, executor)
+}
+
+func newTestBufferedCapsuleCommitter(t *testing.T, versions fscapsule.VersionAllocator) *fscapsule.BufferedCommitter {
+	t.Helper()
+	source := newBenchmarkCapsuleWitness("store-1")
+	holder, err := fscapsule.NewHolder(fscapsule.HolderConfig{
+		EpochID:  1,
+		HolderID: "holder-a",
+		Witnesses: []fscapsule.WitnessReplica{
+			source,
+			newBenchmarkCapsuleWitness("store-2"),
+			newBenchmarkCapsuleWitness("store-3"),
+		},
+	})
+	require.NoError(t, err)
+	committer, err := fscapsule.NewBufferedCommitter(fscapsule.BufferedCommitterConfig{
+		Holder:    holder,
+		Snapshot:  source,
+		Versions:  versions,
+		ReplayDB:  benchmarkCapsuleApplier{},
+		BatchSize: 0,
+	})
+	require.NoError(t, err)
+	return committer
 }
 
 func benchmarkExecutorCreate(b *testing.B, executor *Executor) {

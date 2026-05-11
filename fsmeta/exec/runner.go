@@ -135,6 +135,11 @@ type CapsuleCommitter interface {
 	CommitCapsule(context.Context, fscapsule.OperationID, compile.SemanticDelta) (fscapsule.CapsuleSeal, error)
 }
 
+type CapsuleOverlayReader interface {
+	GetCapsuleOverlay(key []byte) (value []byte, deleted bool, ok bool)
+	ScanCapsuleOverlay(start []byte, limit uint32) []fscapsule.OverlayKV
+}
+
 // NegativeCache is the dentry-miss memo surface used by Lookup.
 type NegativeCache interface {
 	Has([]byte) bool
@@ -395,6 +400,9 @@ func (e *Executor) Stats() map[string]any {
 	}
 	if stats, ok := e.runner.(statsProvider); ok {
 		out["runner"] = stats.Stats()
+	}
+	if stats, ok := e.capsuleCommitter.(statsProvider); ok {
+		out["capsule_committer"] = stats.Stats()
 	}
 	if e.dirPages != nil {
 		stats := e.dirPages.Stats()
@@ -893,6 +901,79 @@ func (e *Executor) submitCapsuleShadow(ctx context.Context, delta compile.Semant
 	e.capsuleShadow.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 }
 
+func (e *Executor) capsuleOverlay() CapsuleOverlayReader {
+	if e == nil || e.capsuleCommitter == nil {
+		return nil
+	}
+	overlay, ok := e.capsuleCommitter.(CapsuleOverlayReader)
+	if !ok {
+		return nil
+	}
+	return overlay
+}
+
+func (e *Executor) capsuleOverlayGet(key []byte) ([]byte, bool, bool) {
+	overlay := e.capsuleOverlay()
+	if overlay == nil {
+		return nil, false, false
+	}
+	return overlay.GetCapsuleOverlay(key)
+}
+
+func (e *Executor) mergeCapsuleOverlayValues(keys [][]byte, values map[string][]byte) {
+	overlay := e.capsuleOverlay()
+	if overlay == nil {
+		return
+	}
+	for _, key := range keys {
+		value, deleted, ok := overlay.GetCapsuleOverlay(key)
+		if !ok {
+			continue
+		}
+		if deleted {
+			delete(values, string(key))
+		} else {
+			values[string(key)] = value
+		}
+	}
+}
+
+func (e *Executor) mergeCapsuleOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
+	overlay := e.capsuleOverlay()
+	if overlay == nil || limit == 0 {
+		return kvs
+	}
+	overlayKVs := overlay.ScanCapsuleOverlay(start, limit)
+	if len(overlayKVs) == 0 {
+		return kvs
+	}
+	merged := make(map[string]KV, len(kvs)+len(overlayKVs))
+	for _, kv := range kvs {
+		merged[string(kv.Key)] = KV{Key: cloneBytes(kv.Key), Value: cloneBytes(kv.Value)}
+	}
+	for _, kv := range overlayKVs {
+		key := string(kv.Key)
+		if kv.Delete {
+			delete(merged, key)
+			continue
+		}
+		merged[key] = KV{Key: cloneBytes(kv.Key), Value: cloneBytes(kv.Value)}
+	}
+	keys := make([]string, 0, len(merged))
+	for key := range merged {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > int(limit) {
+		keys = keys[:limit]
+	}
+	out := make([]KV, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, merged[key])
+	}
+	return out
+}
+
 func (e *Executor) nextCapsuleOperationID(kind fsmeta.OperationKind) fscapsule.OperationID {
 	seq := uint64(1)
 	if e != nil {
@@ -1072,6 +1153,12 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
 	}
+	if value, deleted, ok := e.capsuleOverlayGet(plan.PrimaryKey); ok {
+		if deleted {
+			return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+		}
+		return fsmeta.DecodeDentryValue(value)
+	}
 	value, ok, err := e.runner.Get(ctx, plan.PrimaryKey, version)
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
@@ -1155,7 +1242,7 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	var out []fsmeta.DentryRecord
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
 		var err error
-		out, err = e.scanDentries(ctx, plan, version)
+		out, err = e.scanDentries(ctx, plan, version, req.SnapshotVersion == 0)
 		return err
 	})
 	return out, err
@@ -1202,7 +1289,8 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 
 	var out []fsmeta.DentryAttrPair
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		dentries, err := e.scanDentries(ctx, plan, version)
+		includeOverlay := req.SnapshotVersion == 0
+		dentries, err := e.scanDentries(ctx, plan, version, includeOverlay)
 		if err != nil {
 			return err
 		}
@@ -1221,6 +1309,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		inodeValues, err := e.runner.BatchGet(ctx, inodeKeys, version)
 		if err != nil {
 			return err
+		}
+		if includeOverlay {
+			e.mergeCapsuleOverlayValues(inodeKeys, inodeValues)
 		}
 		pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
 		for i, dentry := range dentries {
@@ -1376,12 +1467,15 @@ func (e *Executor) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageReque
 	return fsmeta.DecodeUsageValue(value)
 }
 
-func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64) ([]fsmeta.DentryRecord, error) {
+func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64, includeOverlay bool) ([]fsmeta.DentryRecord, error) {
 	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
 	if err != nil {
 		return nil, err
 	}
 	prefix := plan.ReadPrefixes[0]
+	if includeOverlay {
+		kvs = e.mergeCapsuleOverlayScan(kvs, plan.StartKey, plan.Limit)
+	}
 	out := make([]fsmeta.DentryRecord, 0, len(kvs))
 	for _, kv := range kvs {
 		if !bytes.HasPrefix(kv.Key, prefix) {
