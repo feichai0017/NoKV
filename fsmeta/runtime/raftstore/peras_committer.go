@@ -353,11 +353,8 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
 	}
-	installable, err := fsperas.DeltaWritesPerasInstallable(delta)
-	if err != nil {
-		return fsperas.VisibleAck{}, c.recordError(err)
-	}
-	if !installable {
+	compiled := compile.CompileDelta(delta)
+	if !compiled.Placement.CanSegment {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
 	}
 	leaveAuthority := c.enterAuthority(delta.Authority)

@@ -50,23 +50,19 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 		e.perasVisible.skipIneligibleTotal.Add(1)
 		return false, nil
 	}
-	if !perasDeltaHasConcreteWrites(delta) {
+	compiled := compile.CompileDelta(delta)
+	if compiled.Placement.RequiresMaterialize {
 		e.perasVisible.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
-	installable, err := fsperas.DeltaWritesPerasInstallable(delta)
-	if err != nil {
-		e.perasVisible.errorTotal.Add(1)
-		return true, err
-	}
-	if !installable {
+	if !compiled.Placement.CanSegment {
 		e.perasVisible.skipPlacementTotal.Add(1)
 		return false, nil
 	}
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err = e.perasCommitter.SubmitVisible(ctx, id, delta, e.perasPredicatesHold)
+	_, err := e.perasCommitter.SubmitVisible(ctx, id, delta, e.perasPredicatesHold)
 	latency := uint64(time.Since(start).Nanoseconds())
 	e.perasVisible.latencyTotalNanosecond.Add(latency)
 	recordUint64Max(&e.perasVisible.latencyMaxNanosecond, latency)

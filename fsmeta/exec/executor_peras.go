@@ -46,24 +46,6 @@ func perasOperationClientID(kind fsmeta.OperationKind) string {
 	}
 }
 
-func perasDeltaHasConcreteWrites(delta compile.SemanticDelta) bool {
-	if len(delta.WriteEffects) == 0 {
-		return false
-	}
-	for _, effect := range delta.WriteEffects {
-		switch effect.Kind {
-		case compile.EffectPut:
-			if effect.Value == nil {
-				return false
-			}
-		case compile.EffectDelete:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 func (e *Executor) perasQuotaMode() compile.QuotaMode {
 	if e != nil && e.perasCommitter == nil && e.quotas != nil {
 		return compile.QuotaModeShared

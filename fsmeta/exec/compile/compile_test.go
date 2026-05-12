@@ -77,6 +77,45 @@ func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
 	require.True(t, slices.Contains(delta.Authority.Buckets, fsmeta.BucketForInodeID(22)))
 }
 
+func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
+	inodeID := testParentInDifferentBucket(t, fsmeta.RootInode)
+	delta, err := Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, inodeID)
+	require.NoError(t, err)
+
+	op := CompileDelta(delta)
+	require.Equal(t, delta.Kind, op.Delta.Kind)
+	require.True(t, op.Authority.Required)
+	require.Equal(t, FenceActiveAuthority, op.Authority.Fence)
+	require.True(t, op.Placement.CanSegment)
+	require.False(t, op.Placement.RequiresMaterialize)
+	require.Equal(t, testMount.MountKeyID, op.Placement.MountKeyID)
+	require.Equal(t, DurabilityVisibleOnly, op.Durability)
+	require.Equal(t, SegmentInstallCatalog, op.Placement.Install)
+	require.Equal(t, SegmentInstallCatalog, op.Placement.MergeKey.Install)
+	require.Equal(t, segmentFormatVersion, op.Placement.MergeKey.FormatVersion)
+	require.Equal(t, []MutationID{0, 1}, op.Atomicity.Members)
+	require.False(t, op.Atomicity.Splittable)
+	require.Equal(t, RecoveryReplayAllOrNothing, op.Atomicity.Recovery)
+
+	require.Len(t, op.Predicates, 2)
+	require.True(t, op.Predicates[0].NeedAbsent)
+	require.False(t, op.Predicates[0].NeedValue)
+	require.True(t, op.Predicates[1].NeedAbsent)
+	require.Len(t, op.Effects, 2)
+	require.Equal(t, DerivationNone, op.Effects[0].Derivation)
+	require.Len(t, op.Watch, 1)
+	require.Equal(t, WatchEventCreate, op.Watch[0].EventKind)
+	require.Equal(t, WatchEmitVisible, op.Watch[0].EmitAt)
+	require.Equal(t, fsmeta.RootInode, op.Watch[0].Parent)
+	require.Equal(t, "file", op.Watch[0].Name)
+	require.Equal(t, inodeID, op.Watch[0].Inode)
+}
+
 func TestCreateRespectsQuotaMode(t *testing.T) {
 	req := fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -94,6 +133,30 @@ func TestCreateRespectsQuotaMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EligibilityVisibleCommit, escrow.Eligibility)
 	require.Contains(t, escrow.RuntimeGuards, GuardQuotaCredit)
+}
+
+func TestDerivedOperationRequiresRuntimeMaterialization(t *testing.T) {
+	delta, err := UpdateInode(fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  3,
+		Inode:   44,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	}, testMount)
+	require.NoError(t, err)
+
+	op := CompileDelta(delta)
+	require.True(t, op.Authority.Required)
+	require.Equal(t, FenceActiveAuthority, op.Authority.Fence)
+	require.False(t, op.Placement.CanSegment)
+	require.True(t, op.Placement.RequiresMaterialize)
+	require.Equal(t, DurabilityVisibleOnly, op.Durability)
+	require.Len(t, op.Predicates, 2)
+	require.True(t, op.Predicates[0].NeedValue)
+	require.True(t, op.Predicates[1].NeedValue)
+	require.Len(t, op.Effects, 1)
+	require.Equal(t, DerivationRuntimeValue, op.Effects[0].Derivation)
 }
 
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
@@ -150,6 +213,11 @@ func TestSlowPathBoundariesStayExplicit(t *testing.T) {
 	require.Equal(t, EligibilitySlowPath, snapshot.Eligibility)
 	require.Equal(t, SlowReasonDurabilityBarrier, snapshot.SlowReason)
 	require.True(t, snapshot.DurabilityBarrier)
+	compiledSnapshot := CompileDelta(snapshot)
+	require.False(t, compiledSnapshot.Authority.Required)
+	require.Equal(t, FenceNone, compiledSnapshot.Authority.Fence)
+	require.Equal(t, DurabilityNeedsPublishCheckpoint, compiledSnapshot.Durability)
+	require.False(t, compiledSnapshot.Placement.CanSegment)
 
 	expire, err := ExpireWriteSessions(fsmeta.ExpireWriteSessionsRequest{
 		Mount: "vol",
