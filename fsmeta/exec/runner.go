@@ -714,6 +714,125 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	return fsmeta.DecodeDentryValue(value)
 }
 
+// BatchLookupPlus returns dentry+inode pairs for many parent/name lookups at
+// one MVCC read version. Missing dentries are returned as found=false in their
+// original input slots; existing dentries whose inode rows are missing are
+// treated as metadata corruption and fail the whole batch.
+func (e *Executor) BatchLookupPlus(ctx context.Context, req fsmeta.BatchLookupPlusRequest) ([]fsmeta.BatchLookupPlusResult, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return nil, err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanBatchLookupPlus(req, mount)
+	if err != nil {
+		return nil, err
+	}
+	if len(plan.ReadKeys) == 0 {
+		return []fsmeta.BatchLookupPlusResult{}, nil
+	}
+
+	var out []fsmeta.BatchLookupPlusResult
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		useNegativeCache := req.SnapshotVersion == 0 && e.negCache != nil
+		results := make([]fsmeta.BatchLookupPlusResult, len(plan.ReadKeys))
+
+		dentryKeys := make([][]byte, 0, len(plan.ReadKeys))
+		dentryIndexes := make(map[string][]int, len(plan.ReadKeys))
+		for i, key := range plan.ReadKeys {
+			if useNegativeCache && e.negCache.Has(key) {
+				continue
+			}
+			keyString := string(key)
+			if len(dentryIndexes[keyString]) == 0 {
+				dentryKeys = append(dentryKeys, key)
+			}
+			dentryIndexes[keyString] = append(dentryIndexes[keyString], i)
+		}
+
+		dentryValues := make(map[string][]byte, len(dentryKeys))
+		if len(dentryKeys) > 0 {
+			var err error
+			dentryValues, err = e.runner.BatchGet(ctx, dentryKeys, version)
+			if err != nil {
+				return err
+			}
+		}
+
+		dentries := make([]fsmeta.DentryRecord, len(plan.ReadKeys))
+		inodeKeys := make([][]byte, 0, len(dentryValues))
+		inodeIndexes := make(map[string][]int, len(dentryValues))
+		for keyString, indexes := range dentryIndexes {
+			value, ok := dentryValues[keyString]
+			if !ok {
+				if useNegativeCache {
+					e.negCache.Remember([]byte(keyString))
+				}
+				continue
+			}
+			dentry, err := fsmeta.DecodeDentryValue(value)
+			if err != nil {
+				return err
+			}
+			inodeKey, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
+			if err != nil {
+				return err
+			}
+			inodeKeyString := string(inodeKey)
+			if len(inodeIndexes[inodeKeyString]) == 0 {
+				inodeKeys = append(inodeKeys, inodeKey)
+			}
+			for _, index := range indexes {
+				dentries[index] = dentry
+				inodeIndexes[inodeKeyString] = append(inodeIndexes[inodeKeyString], index)
+			}
+		}
+
+		inodeValues := make(map[string][]byte, len(inodeKeys))
+		if len(inodeKeys) > 0 {
+			var err error
+			inodeValues, err = e.runner.BatchGet(ctx, inodeKeys, version)
+			if err != nil {
+				return err
+			}
+		}
+
+		for inodeKeyString, indexes := range inodeIndexes {
+			value, ok := inodeValues[inodeKeyString]
+			if !ok {
+				return fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentries[indexes[0]].Inode)
+			}
+			inode, err := fsmeta.DecodeInodeValue(value)
+			if err != nil {
+				return err
+			}
+			for _, index := range indexes {
+				dentry := dentries[index]
+				if inode.Inode != dentry.Inode {
+					return fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+				}
+				if dentry.Type != inode.Type {
+					return fmt.Errorf("%w: dentry type=%s inode type=%s", fsmeta.ErrInvalidValue, dentry.Type, inode.Type)
+				}
+				results[index] = fsmeta.BatchLookupPlusResult{
+					Found: true,
+					Entry: fsmeta.DentryAttrPair{
+						Dentry: dentry,
+						Inode:  inode,
+					},
+				}
+			}
+		}
+
+		out = results
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // invalidateNegative drops cached "missing" memos for every dentry key that
 // was just mutated, so the next Lookup re-issues against the runner instead
 // of returning a stale ErrNotFound. Safe with a nil cache.

@@ -1601,6 +1601,101 @@ func TestExecutorLookupReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 }
 
+func TestExecutorBatchLookupPlusReturnsOrderedPartialMissesAtOneVersion(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	})
+	seedDentryType(t, runner, "vol", 7, "b", 22, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 2,
+	})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	results, err := executor.BatchLookupPlus(context.Background(), fsmeta.BatchLookupPlusRequest{
+		Mount: "vol",
+		Lookups: []fsmeta.LookupKey{
+			{Parent: 7, Name: "b"},
+			{Parent: 7, Name: "missing"},
+			{Parent: 7, Name: "a"},
+			{Parent: 7, Name: "a"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.BatchLookupPlusResult{
+		{
+			Found: true,
+			Entry: fsmeta.DentryAttrPair{
+				Dentry: fsmeta.DentryRecord{Parent: 7, Name: "b", Inode: 22, Type: fsmeta.InodeTypeDirectory},
+				Inode:  fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeDirectory, Mode: 0o755, LinkCount: 2},
+			},
+		},
+		{},
+		{
+			Found: true,
+			Entry: fsmeta.DentryAttrPair{
+				Dentry: fsmeta.DentryRecord{Parent: 7, Name: "a", Inode: 21, Type: fsmeta.InodeTypeFile},
+				Inode:  fsmeta.InodeRecord{Inode: 21, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+			},
+		},
+		{
+			Found: true,
+			Entry: fsmeta.DentryAttrPair{
+				Dentry: fsmeta.DentryRecord{Parent: 7, Name: "a", Inode: 21, Type: fsmeta.InodeTypeFile},
+				Inode:  fsmeta.InodeRecord{Inode: 21, Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+			},
+		},
+	}, results)
+	require.Equal(t, []uint64{1, 1}, runner.batchVersions)
+}
+
+func TestExecutorBatchLookupPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {
+	runner := newFakeRunner()
+	runner.batchErrs = []error{txnLockedError("vol", 7, "a")}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	results, err := executor.BatchLookupPlus(context.Background(), fsmeta.BatchLookupPlusRequest{
+		Mount:           "vol",
+		Lookups:         []fsmeta.LookupKey{{Parent: 7, Name: "a"}},
+		SnapshotVersion: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Found)
+	require.Equal(t, []uint64{100, 100, 100}, runner.batchVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 0)
+}
+
+func TestExecutorBatchLookupPlusMissingInodeReturnsNotFound(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	_, err = executor.BatchLookupPlus(context.Background(), fsmeta.BatchLookupPlusRequest{
+		Mount:   "vol",
+		Lookups: []fsmeta.LookupKey{{Parent: 7, Name: "a"}},
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+}
+
 func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)
