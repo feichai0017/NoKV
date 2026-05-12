@@ -107,6 +107,10 @@ func (f *fakeCoordinatorClient) ListPerasAuthorityGrants(context.Context, *coord
 	return &coordpb.ListPerasAuthorityGrantsResponse{}, nil
 }
 
+func (f *fakeCoordinatorClient) ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+	return &coordpb.ListPerasAuthoritySealsResponse{}, nil
+}
+
 func (f *fakeCoordinatorClient) ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
 	return &coordpb.ApplyPerasAuthorityResponse{}, nil
 }

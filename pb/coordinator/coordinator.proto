@@ -177,6 +177,12 @@ message ListPerasAuthorityGrantsResponse {
   repeated nokv.meta.v1.RootPerasAuthorityGrant grants = 1;
 }
 
+message ListPerasAuthoritySealsRequest {}
+
+message ListPerasAuthoritySealsResponse {
+  repeated nokv.meta.v1.RootPerasAuthoritySeal seals = 1;
+}
+
 message ApplyPerasAuthorityRequest {
   nokv.meta.v1.RootPerasAuthorityCommand command = 1;
 }
@@ -484,6 +490,7 @@ service Coordinator {
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
   rpc ListPerasAuthorityGrants(ListPerasAuthorityGrantsRequest) returns (ListPerasAuthorityGrantsResponse);
+  rpc ListPerasAuthoritySeals(ListPerasAuthoritySealsRequest) returns (ListPerasAuthoritySealsResponse);
   rpc ApplyPerasAuthority(ApplyPerasAuthorityRequest) returns (ApplyPerasAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);

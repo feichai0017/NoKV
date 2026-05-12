@@ -200,6 +200,26 @@ func (s *Service) ListPerasAuthorityGrants(ctx context.Context, _ *coordpb.ListP
 	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
 }
 
+func (s *Service) ListPerasAuthoritySeals(ctx context.Context, _ *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, statusContext(err)
+	}
+	if s == nil || s.storage == nil {
+		return &coordpb.ListPerasAuthoritySealsResponse{}, nil
+	}
+	snapshot, err := s.storage.Load()
+	if err != nil {
+		return nil, statusInternalf("load rooted snapshot: %v", err)
+	}
+	out := make([]*metapb.RootPerasAuthoritySeal, 0, len(snapshot.PerasAuthoritySeals))
+	for _, seal := range snapshot.PerasAuthoritySeals {
+		if pbSeal := metawire.RootPerasAuthoritySealToProto(seal); pbSeal != nil {
+			out = append(out, pbSeal)
+		}
+	}
+	return &coordpb.ListPerasAuthoritySealsResponse{Seals: out}, nil
+}
+
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
 	if stream == nil {
 		return statusInvalidArgument("watch root events stream is nil")
