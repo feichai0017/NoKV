@@ -14,7 +14,7 @@ func TestHolderSubmitReturnsVisibleAckWithoutWitnessIO(t *testing.T) {
 	witness := newFakeWitnessReplica("store-1")
 	holder := newTestHolder(t)
 
-	ack, err := holder.Submit(context.Background(), opID("client-a", 1), deltaWithValueWrites("a", "v1"))
+	ack, err := holder.Submit(context.Background(), opID("client-a", 1), opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
 
 	require.Equal(t, uint64(1), ack.EpochID)
@@ -27,7 +27,7 @@ func TestHolderSubmitReturnsVisibleAckWithoutWitnessIO(t *testing.T) {
 func TestHolderSubmitReturnsPendingAckForSameOperationID(t *testing.T) {
 	holder := newTestHolder(t)
 	id := opID("client-a", 1)
-	delta := deltaWithValueWrites("a", "v1")
+	delta := opWithValueWrites("a", "v1")
 
 	first, err := holder.Submit(context.Background(), id, delta)
 	require.NoError(t, err)
@@ -45,9 +45,9 @@ func TestHolderSubmitRejectsSameOperationIDDifferentEffects(t *testing.T) {
 	holder := newTestHolder(t)
 	id := opID("client-a", 1)
 
-	_, err := holder.Submit(context.Background(), id, deltaWithValueWrites("a", "v1"))
+	_, err := holder.Submit(context.Background(), id, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), id, deltaWithValueWrites("a", "v2"))
+	_, err = holder.Submit(context.Background(), id, opWithValueWrites("a", "v2"))
 	require.ErrorIs(t, err, ErrDuplicateOperation)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -57,9 +57,9 @@ func TestHolderBuildPendingReplayPlanUsesAdmissionOrder(t *testing.T) {
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
 
-	_, err := holder.Submit(context.Background(), first, deltaWithValueWrites("a", "v1"))
+	_, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, deltaWithValueWrites("a", "v2"))
+	_, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
 	require.NoError(t, err)
 
 	plan, _, err := holder.BuildPendingReplayPlan(100)
@@ -75,11 +75,11 @@ func TestHolderBuildPendingReplayPlanLimitKeepsLaterOperationsPending(t *testing
 	second := opID("client-b", 1)
 	third := opID("client-c", 1)
 
-	_, err := holder.Submit(context.Background(), first, deltaWithValueWrites("a", "v1"))
+	_, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, deltaWithValueWrites("b", "v2"))
+	_, err = holder.Submit(context.Background(), second, opWithValueWrites("b", "v2"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), third, deltaWithValueWrites("c", "v3"))
+	_, err = holder.Submit(context.Background(), third, opWithValueWrites("c", "v3"))
 	require.NoError(t, err)
 
 	plan, _, err := holder.BuildPendingReplayPlanLimit(100, 2)
@@ -114,9 +114,9 @@ func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing
 	secondDelta := deltaWithValueWrites("dentry/b", "v2")
 	secondDelta.Authority = secondScope
 
-	_, err := holder.Submit(context.Background(), first, firstDelta)
+	_, err := holder.Submit(context.Background(), first, compile.CompileDelta(firstDelta))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, secondDelta)
+	_, err = holder.Submit(context.Background(), second, compile.CompileDelta(secondDelta))
 	require.NoError(t, err)
 
 	plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(100, firstScope)
@@ -147,9 +147,9 @@ func TestHolderBuildReplayPlanAndMarkApplied(t *testing.T) {
 
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
-	_, err = holder.Submit(context.Background(), first, deltaWithValueWrites("a", "v1"))
+	_, err = holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, deltaWithValueWrites("a", "v2"))
+	_, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
 	require.NoError(t, err)
 	require.Equal(t, 2, holder.Pending())
 
@@ -169,7 +169,7 @@ func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	delta := deltaWithValueWrites("a", "v1")
 	delta.Eligibility = compile.EligibilitySlowPath
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), delta)
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.CompileDelta(delta))
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
@@ -187,7 +187,7 @@ func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 		},
 	}
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), delta)
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.CompileDelta(delta))
 	require.NoError(t, err)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -195,7 +195,7 @@ func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 func BenchmarkHolderSubmitDisjoint(b *testing.B) {
 	holder := mustHolderForBench(b)
 	ctx := context.Background()
-	delta := deltaWithValueWrites("bench-key", "value")
+	delta := opWithValueWrites("bench-key", "value")
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -250,6 +250,10 @@ func newTestHolder(t *testing.T) *Holder {
 	})
 	require.NoError(t, err)
 	return holder
+}
+
+func opWithValueWrites(key, value string) compile.CompiledOp {
+	return compile.CompileDelta(deltaWithValueWrites(key, value))
 }
 
 func deltaWithValueWrites(key, value string) compile.SemanticDelta {

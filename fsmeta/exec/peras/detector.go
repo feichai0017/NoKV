@@ -54,11 +54,11 @@ func NewConflictDetector() *ConflictDetector {
 	}
 }
 
-func (d *ConflictDetector) Admit(id OperationID, delta compile.SemanticDelta) ([]OperationID, error) {
+func (d *ConflictDetector) Admit(id OperationID, op compile.CompiledOp) ([]OperationID, error) {
 	if !id.Valid() {
 		return nil, ErrInvalidOperationID
 	}
-	current := trackedFromDelta(id, delta)
+	current := trackedFromCompiled(id, op)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -127,17 +127,16 @@ func (d *ConflictDetector) IDs() []OperationID {
 	return out
 }
 
-func trackedFromDelta(id OperationID, delta compile.SemanticDelta) trackedOperation {
-	compiled := compile.CompileDelta(delta)
+func trackedFromCompiled(id OperationID, op compile.CompiledOp) trackedOperation {
 	out := trackedOperation{
 		id:     id,
-		reads:  make([]trackedKey, 0, len(compiled.Footprint.Reads)),
-		writes: make([]trackedKey, 0, len(compiled.Footprint.Writes)),
+		reads:  make([]trackedKey, 0, len(op.Footprint.Reads)),
+		writes: make([]trackedKey, 0, len(op.Footprint.Writes)),
 	}
-	for _, ref := range compiled.Footprint.Reads {
+	for _, ref := range op.Footprint.Reads {
 		out.reads = append(out.reads, newTrackedKey(ref.Key, ref.Mode == compile.KeyAccessReadPrefix))
 	}
-	for _, ref := range compiled.Footprint.Writes {
+	for _, ref := range op.Footprint.Writes {
 		out.writes = append(out.writes, newTrackedKey(ref.Key, false))
 	}
 	return out

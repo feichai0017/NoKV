@@ -6,17 +6,17 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-type AdmissionFunc func(context.Context, compile.SemanticDelta) (bool, error)
+type AdmissionFunc func(context.Context, compile.CompiledOp) (bool, error)
 
 type AuthorityRetirer interface {
 	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
 }
 
-func Admit(ctx context.Context, delta compile.SemanticDelta, fn AdmissionFunc) error {
+func Admit(ctx context.Context, op compile.CompiledOp, fn AdmissionFunc) error {
 	if fn == nil {
 		return nil
 	}
-	ok, err := fn(ctx, delta)
+	ok, err := fn(ctx, op)
 	if err != nil {
 		return err
 	}

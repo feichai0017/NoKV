@@ -19,14 +19,14 @@ func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.SemanticDelta{
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.CompileDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
 			ExpectedValue:    value,
 			HasExpectedValue: true,
 		}},
-	})
+	}))
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), runner.nextTS, "overlay predicate admission must not reserve a read timestamp")
@@ -43,7 +43,7 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.SemanticDelta{
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.CompileDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
@@ -51,7 +51,7 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 			HasExpectedValue: true,
 			RuntimeChecked:   true,
 		}},
-	})
+	}))
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")

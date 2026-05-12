@@ -50,8 +50,9 @@ func scopedInodeFactKey(mount fsmeta.MountIdentity, inode fsmeta.InodeID, class 
 	return string(buf)
 }
 
-func RememberDeltaFacts(known map[string]bool, emptyDirs map[string]struct{}, emptySessions map[string]struct{}, delta compile.SemanticDelta) error {
-	for _, effect := range delta.WriteEffects {
+func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}, emptySessions map[string]struct{}, op compile.CompiledOp) error {
+	delta := op.Delta
+	for _, effect := range op.Effects {
 		if len(effect.Key) == 0 {
 			return ErrInvalidPerasSegment
 		}
@@ -72,7 +73,7 @@ func RememberDeltaFacts(known map[string]bool, emptyDirs map[string]struct{}, em
 		return nil
 	}
 	inodeKey := delta.Plan.MutateKeys[1]
-	for _, effect := range delta.WriteEffects {
+	for _, effect := range op.Effects {
 		if effect.Kind != compile.EffectPut || !bytes.Equal(effect.Key, inodeKey) {
 			continue
 		}
@@ -136,7 +137,7 @@ func ForgetEmptySessionNamespaceForKey(emptySessions map[string]struct{}, key []
 	delete(emptySessions, SessionNamespaceFactKey(fsmeta.MountIdentity{MountKeyID: parts.MountKeyID}, parts.Inode))
 }
 
-func rememberSessionFactMutation(emptySessions map[string]struct{}, scope compile.AuthorityScope, effect compile.WriteEffect) {
+func rememberSessionFactMutation(emptySessions map[string]struct{}, scope compile.AuthorityScope, effect compile.EffectPlan) {
 	if effect.Kind != compile.EffectPut || emptySessions == nil {
 		return
 	}

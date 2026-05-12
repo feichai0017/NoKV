@@ -48,28 +48,29 @@ type holderPendingOperation struct {
 	op    ReplayOperation
 }
 
-func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.SemanticDelta) (VisibleAck, error) {
+func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.CompiledOp) (VisibleAck, error) {
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, ErrHolderConfigInvalid
 	}
 	if err := ctxErr(ctx); err != nil {
 		return VisibleAck{}, err
 	}
+	delta := op.Delta
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		return VisibleAck{}, ErrIneligibleOperation
 	}
-	op, err := replayOperationFromDelta(id, delta)
+	replay, err := replayOperationFromCompiled(id, op)
 	if err != nil {
 		return VisibleAck{}, err
 	}
 	h.submitMu.Lock()
 	defer h.submitMu.Unlock()
-	if ack, ok, err := h.pendingAckForOperation(id, op); ok || err != nil {
+	if ack, ok, err := h.pendingAckForOperation(id, replay); ok || err != nil {
 		return ack, err
 	}
-	if _, err := h.detector.Admit(id, delta); err != nil {
+	if _, err := h.detector.Admit(id, op); err != nil {
 		if errors.Is(err, ErrDuplicateOperation) {
-			if ack, ok, pendingErr := h.pendingAckForOperation(id, op); ok || pendingErr != nil {
+			if ack, ok, pendingErr := h.pendingAckForOperation(id, replay); ok || pendingErr != nil {
 				return ack, pendingErr
 			}
 		}
@@ -78,21 +79,21 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 	h.mu.Lock()
 	h.pending[id] = holderPendingOperation{
 		scope: cloneAuthorityScope(delta.Authority),
-		op:    op,
+		op:    replay,
 	}
 	h.mu.Unlock()
 	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
 }
 
-func (h *Holder) PendingAck(id OperationID, delta compile.SemanticDelta) (VisibleAck, bool, error) {
+func (h *Holder) PendingAck(id OperationID, op compile.CompiledOp) (VisibleAck, bool, error) {
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, false, ErrHolderConfigInvalid
 	}
-	op, err := replayOperationFromDelta(id, delta)
+	replay, err := replayOperationFromCompiled(id, op)
 	if err != nil {
 		return VisibleAck{}, false, err
 	}
-	return h.pendingAckForOperation(id, op)
+	return h.pendingAckForOperation(id, replay)
 }
 
 func (h *Holder) pendingAckForOperation(id OperationID, op ReplayOperation) (VisibleAck, bool, error) {

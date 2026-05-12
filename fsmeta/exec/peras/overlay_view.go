@@ -43,14 +43,14 @@ func NewOverlayView() *OverlayView {
 	}
 }
 
-func (v *OverlayView) Add(id OperationID, delta compile.SemanticDelta) error {
+func (v *OverlayView) Add(id OperationID, op compile.CompiledOp) error {
 	if v == nil {
 		return ErrInvalidPerasSegment
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.initLocked()
-	for _, effect := range delta.WriteEffects {
+	for _, effect := range op.Effects {
 		if len(effect.Key) == 0 {
 			return ErrInvalidPerasSegment
 		}
@@ -71,7 +71,7 @@ func (v *OverlayView) Add(id OperationID, delta compile.SemanticDelta) error {
 		}
 		v.entries[string(effect.Key)] = entry
 	}
-	return RememberDeltaFacts(v.known, v.emptyDirs, v.emptySessions, delta)
+	return RememberOperationFacts(v.known, v.emptyDirs, v.emptySessions, op)
 }
 
 func (v *OverlayView) AddSegment(segment PerasSegment) error {

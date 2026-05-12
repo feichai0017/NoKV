@@ -54,12 +54,13 @@ func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 	}
 }
 
-func replayOperationFromDelta(id OperationID, delta compile.SemanticDelta) (ReplayOperation, error) {
-	if delta.Eligibility != compile.EligibilityVisibleCommit || len(delta.WriteEffects) == 0 {
+func replayOperationFromCompiled(id OperationID, op compile.CompiledOp) (ReplayOperation, error) {
+	delta := op.Delta
+	if delta.Eligibility != compile.EligibilityVisibleCommit || len(op.Effects) == 0 {
 		return ReplayOperation{}, ErrInvalidPerasSegment
 	}
-	mutations := make([]ReplayMutation, 0, len(delta.WriteEffects))
-	for _, effect := range delta.WriteEffects {
+	mutations := make([]ReplayMutation, 0, len(op.Effects))
+	for _, effect := range op.Effects {
 		switch effect.Kind {
 		case compile.EffectPut:
 			if effect.Value == nil {

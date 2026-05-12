@@ -346,17 +346,17 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	return c, nil
 }
 
-func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.CompiledOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
 	}
-	compiled := compile.CompileDelta(delta)
-	if !compiled.Placement.CanSegment {
+	if !op.Placement.CanSegment {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
 	}
+	delta := op.Delta
 	leaveAuthority := c.enterAuthority(delta.Authority)
 	defer leaveAuthority()
 	c.commitMu.RLock()
@@ -381,31 +381,31 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	if ack, ok, err := holder.PendingAck(id, delta); ok || err != nil {
+	if ack, ok, err := holder.PendingAck(id, op); ok || err != nil {
 		if err != nil {
 			c.recordError(err)
 		}
 		return ack, err
 	}
-	unlockAdmission := c.latches.Lock(delta)
+	unlockAdmission := c.latches.Lock(op)
 	defer unlockAdmission()
-	if err := fsperas.Admit(ctx, delta, admission); err != nil {
+	if err := fsperas.Admit(ctx, op, admission); err != nil {
 		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isPerasAdmissionTerminalError(err) {
 			c.recordError(err)
 		}
 		return fsperas.VisibleAck{}, err
 	}
-	ack, err := holder.Submit(ctx, id, delta)
+	ack, err := holder.Submit(ctx, id, op)
 	if err != nil {
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	if err := c.addOverlay(id, delta); err != nil {
+	if err := c.addOverlay(id, op); err != nil {
 		holder.MarkAppliedIDs(id)
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
-	c.publishVisibleWatch(delta, ack)
+	c.publishVisibleWatch(op, ack)
 	c.commitTotal.Add(1)
 	if c.batchSize > 0 && holder.Pending() >= c.batchSize {
 		c.triggerBackgroundFlush()

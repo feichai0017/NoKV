@@ -32,11 +32,11 @@ func NewAdmissionLatches() *AdmissionLatches {
 	return &AdmissionLatches{}
 }
 
-func (l *AdmissionLatches) Lock(delta compile.SemanticDelta) func() {
+func (l *AdmissionLatches) Lock(op compile.CompiledOp) func() {
 	if l == nil {
 		return func() {}
 	}
-	keys, broad := admissionLatchKeys(delta)
+	keys, broad := admissionLatchKeys(op)
 	if broad {
 		l.global.Lock()
 		return l.global.Unlock
@@ -76,10 +76,9 @@ func (l *AdmissionLatches) Lock(delta compile.SemanticDelta) func() {
 	}
 }
 
-func admissionLatchKeys(delta compile.SemanticDelta) ([]string, bool) {
-	compiled := compile.CompileDelta(delta)
-	keys := make([]string, 0, len(compiled.Footprint.ConflictKeys))
-	for _, ref := range compiled.Footprint.ConflictKeys {
+func admissionLatchKeys(op compile.CompiledOp) ([]string, bool) {
+	keys := make([]string, 0, len(op.Footprint.ConflictKeys))
+	for _, ref := range op.Footprint.ConflictKeys {
 		if ref.Mode == compile.KeyAccessReadPrefix || len(ref.Key) == 0 {
 			return nil, true
 		}

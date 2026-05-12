@@ -12,13 +12,13 @@ import (
 
 func TestAdmissionLatchesSerializeOverlappingKeys(t *testing.T) {
 	latches := NewAdmissionLatches()
-	delta := deltaWithValueWrites("dentry/a", "inode=7")
+	op := opWithValueWrites("dentry/a", "inode=7")
 
-	release := latches.Lock(delta)
+	release := latches.Lock(op)
 	entered := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		unlock := latches.Lock(delta)
+		unlock := latches.Lock(op)
 		close(entered)
 		unlock()
 		close(done)
@@ -40,12 +40,12 @@ func TestAdmissionLatchesSerializeOverlappingKeys(t *testing.T) {
 
 func TestAdmissionLatchesAllowDisjointKeys(t *testing.T) {
 	latches := NewAdmissionLatches()
-	release := latches.Lock(deltaWithValueWrites("dentry/a", "inode=7"))
+	release := latches.Lock(opWithValueWrites("dentry/a", "inode=7"))
 	defer release()
 
 	done := make(chan struct{})
 	go func() {
-		unlock := latches.Lock(deltaWithValueWrites("dentry/b", "inode=8"))
+		unlock := latches.Lock(opWithValueWrites("dentry/b", "inode=8"))
 		unlock()
 		close(done)
 	}()
@@ -58,14 +58,14 @@ func TestAdmissionLatchesAllowDisjointKeys(t *testing.T) {
 
 func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 	latches := NewAdmissionLatches()
-	release := latches.Lock(compile.SemanticDelta{
+	release := latches.Lock(compile.CompileDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{Kind: compile.PredicatePrefixScan, Key: []byte("dentry/")}},
-	})
+	}))
 
 	var entered atomic.Bool
 	done := make(chan struct{})
 	go func() {
-		unlock := latches.Lock(deltaWithValueWrites("dentry/b", "inode=8"))
+		unlock := latches.Lock(opWithValueWrites("dentry/b", "inode=8"))
 		entered.Store(true)
 		unlock()
 		close(done)
@@ -82,7 +82,7 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 }
 
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
-	err := Admit(context.Background(), compile.SemanticDelta{}, func(context.Context, compile.SemanticDelta) (bool, error) {
+	err := Admit(context.Background(), compile.CompileDelta(compile.SemanticDelta{}), func(context.Context, compile.CompiledOp) (bool, error) {
 		return false, nil
 	})
 	require.ErrorIs(t, err, ErrAdmissionRejected)

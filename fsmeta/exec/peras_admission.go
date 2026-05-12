@@ -62,7 +62,7 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.perasCommitter.SubmitVisible(ctx, id, delta, e.perasPredicatesHold)
+	_, err := e.perasCommitter.SubmitVisible(ctx, id, compiled, e.perasPredicatesHold)
 	latency := uint64(time.Since(start).Nanoseconds())
 	e.perasVisible.latencyTotalNanosecond.Add(latency)
 	recordUint64Max(&e.perasVisible.latencyMaxNanosecond, latency)
@@ -85,7 +85,8 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 	return true, nil
 }
 
-func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.CompiledOp) (bool, error) {
+	delta := op.Delta
 	if len(delta.ReadPredicates) == 0 {
 		return true, nil
 	}

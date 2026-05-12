@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
 type replayBucketKey struct {
@@ -161,81 +160,6 @@ func SplitReplayPlanByMutationBudget(plan ReplayPlan, maxMutations int) ([]Repla
 	return out, nil
 }
 
-func DeltaWritesSingleFSMetaBucket(delta compile.SemanticDelta) (bool, error) {
-	if len(delta.WriteEffects) == 0 {
-		return false, ErrInvalidPerasSegment
-	}
-	var bucket replayBucketKey
-	var haveBucket bool
-	var haveOpaque bool
-	for _, effect := range delta.WriteEffects {
-		switch effect.Kind {
-		case compile.EffectPut:
-			if len(effect.Key) == 0 || effect.Value == nil {
-				return false, ErrInvalidPerasSegment
-			}
-		case compile.EffectDelete:
-			if len(effect.Key) == 0 {
-				return false, ErrInvalidPerasSegment
-			}
-		default:
-			return false, ErrInvalidPerasSegment
-		}
-		parts, ok := fsmeta.InspectKey(effect.Key)
-		if !ok {
-			if haveBucket {
-				return false, nil
-			}
-			haveOpaque = true
-			continue
-		}
-		if haveOpaque {
-			return false, nil
-		}
-		key := replayBucketKey{mount: parts.MountKeyID, bucket: parts.Bucket}
-		if !haveBucket {
-			bucket = key
-			haveBucket = true
-			continue
-		}
-		if key != bucket {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func DeltaWritesPerasInstallable(delta compile.SemanticDelta) (bool, error) {
-	singleBucket, err := DeltaWritesSingleFSMetaBucket(delta)
-	if err != nil || singleBucket {
-		return singleBucket, err
-	}
-	if delta.Kind != fsmeta.OperationCreate {
-		return false, nil
-	}
-	if len(delta.WriteEffects) == 0 {
-		return false, ErrInvalidPerasSegment
-	}
-	var mount fsmeta.MountKeyID
-	for _, effect := range delta.WriteEffects {
-		if effect.Kind != compile.EffectPut || len(effect.Key) == 0 || effect.Value == nil {
-			return false, nil
-		}
-		parts, ok := fsmeta.InspectKey(effect.Key)
-		if !ok {
-			return false, nil
-		}
-		if mount == 0 {
-			mount = parts.MountKeyID
-			continue
-		}
-		if parts.MountKeyID != mount {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
 func replayOperationBucket(op ReplayOperation) (replayBucketKey, bool, error) {
 	if !op.OpID.Valid() || len(op.Mutations) == 0 {
 		return replayBucketKey{}, false, ErrInvalidPerasSegment
@@ -256,23 +180,4 @@ func replayOperationBucket(op ReplayOperation) (replayBucketKey, bool, error) {
 		}
 	}
 	return out, true, nil
-}
-
-func replayMutationBucket(mutation ReplayMutation) (replayBucketKey, bool, error) {
-	if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
-		return replayBucketKey{}, false, ErrInvalidPerasSegment
-	}
-	parts, ok := fsmeta.InspectKey(mutation.Key)
-	if !ok {
-		return replayBucketKey{}, false, nil
-	}
-	return replayBucketKey{mount: parts.MountKeyID, bucket: parts.Bucket}, true, nil
-}
-
-func cloneReplayMutation(mutation ReplayMutation) ReplayMutation {
-	return ReplayMutation{
-		Key:    cloneBytes(mutation.Key),
-		Value:  cloneBytes(mutation.Value),
-		Delete: mutation.Delete,
-	}
 }

@@ -13,15 +13,15 @@ func TestConflictDetectorTracksExactPredecessors(t *testing.T) {
 	second := opID("c2", 1)
 	third := opID("c3", 1)
 
-	predecessors, err := detector.Admit(first, deltaWithWrites("a"))
+	predecessors, err := detector.Admit(first, opWithWrites("a"))
 	require.NoError(t, err)
 	require.Empty(t, predecessors)
 
-	predecessors, err = detector.Admit(second, deltaWithWrites("b"))
+	predecessors, err = detector.Admit(second, opWithWrites("b"))
 	require.NoError(t, err)
 	require.Empty(t, predecessors)
 
-	predecessors, err = detector.Admit(third, deltaWithWrites("a"))
+	predecessors, err = detector.Admit(third, opWithWrites("a"))
 	require.NoError(t, err)
 	require.Equal(t, []OperationID{first}, predecessors)
 }
@@ -29,12 +29,12 @@ func TestConflictDetectorTracksExactPredecessors(t *testing.T) {
 func TestConflictDetectorCoversReadWriteOrientations(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		left compile.SemanticDelta
-		next compile.SemanticDelta
+		left compile.CompiledOp
+		next compile.CompiledOp
 	}{
-		{name: "write write", left: deltaWithWrites("a"), next: deltaWithWrites("a")},
-		{name: "write read", left: deltaWithWrites("a"), next: deltaWithReads("a")},
-		{name: "read write", left: deltaWithReads("a"), next: deltaWithWrites("a")},
+		{name: "write write", left: opWithWrites("a"), next: opWithWrites("a")},
+		{name: "write read", left: opWithWrites("a"), next: opWithReads("a")},
+		{name: "read write", left: opWithReads("a"), next: opWithWrites("a")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			detector := NewConflictDetector()
@@ -56,14 +56,14 @@ func TestConflictDetectorHandlesPrefixPredicates(t *testing.T) {
 	second := opID("c2", 1)
 	third := opID("c3", 1)
 
-	_, err := detector.Admit(first, deltaWithPrefixRead("dir/"))
+	_, err := detector.Admit(first, opWithPrefixRead("dir/"))
 	require.NoError(t, err)
 
-	predecessors, err := detector.Admit(second, deltaWithWrites("dir/name"))
+	predecessors, err := detector.Admit(second, opWithWrites("dir/name"))
 	require.NoError(t, err)
 	require.Equal(t, []OperationID{first}, predecessors)
 
-	predecessors, err = detector.Admit(third, deltaWithWrites("other/name"))
+	predecessors, err = detector.Admit(third, opWithWrites("other/name"))
 	require.NoError(t, err)
 	require.Empty(t, predecessors)
 }
@@ -72,11 +72,11 @@ func TestConflictDetectorRemoveRetiresPendingOperation(t *testing.T) {
 	detector := NewConflictDetector()
 	first := opID("c1", 1)
 	second := opID("c2", 1)
-	require.NoError(t, mustAdmit(detector, first, deltaWithWrites("a")))
+	require.NoError(t, mustAdmit(detector, first, opWithWrites("a")))
 
 	detector.Remove(first)
 
-	predecessors, err := detector.Admit(second, deltaWithWrites("a"))
+	predecessors, err := detector.Admit(second, opWithWrites("a"))
 	require.NoError(t, err)
 	require.Empty(t, predecessors)
 	require.Equal(t, 1, detector.Len())
@@ -84,32 +84,32 @@ func TestConflictDetectorRemoveRetiresPendingOperation(t *testing.T) {
 
 func TestConflictDetectorRejectsInvalidAndDuplicateIDs(t *testing.T) {
 	detector := NewConflictDetector()
-	_, err := detector.Admit(OperationID{}, deltaWithWrites("a"))
+	_, err := detector.Admit(OperationID{}, opWithWrites("a"))
 	require.ErrorIs(t, err, ErrInvalidOperationID)
-	_, err = detector.Admit(OperationID{ClientID: "c1"}, deltaWithWrites("a"))
+	_, err = detector.Admit(OperationID{ClientID: "c1"}, opWithWrites("a"))
 	require.ErrorIs(t, err, ErrInvalidOperationID)
-	_, err = detector.Admit(OperationID{Seq: 1}, deltaWithWrites("a"))
+	_, err = detector.Admit(OperationID{Seq: 1}, opWithWrites("a"))
 	require.ErrorIs(t, err, ErrInvalidOperationID)
 
 	id := opID("c1", 1)
-	require.NoError(t, mustAdmit(detector, id, deltaWithWrites("a")))
-	_, err = detector.Admit(id, deltaWithWrites("b"))
+	require.NoError(t, mustAdmit(detector, id, opWithWrites("a")))
+	_, err = detector.Admit(id, opWithWrites("b"))
 	require.ErrorIs(t, err, ErrDuplicateOperation)
 }
 
 func BenchmarkConflictDetectorAdmitDisjoint(b *testing.B) {
 	detector := NewConflictDetector()
 	for i := range 64 {
-		if err := mustAdmit(detector, opID("seed", uint64(i+1)), deltaWithWrites(keyForBench(i))); err != nil {
+		if err := mustAdmit(detector, opID("seed", uint64(i+1)), opWithWrites(keyForBench(i))); err != nil {
 			b.Fatal(err)
 		}
 	}
 	id := opID("bench", 1)
-	delta := deltaWithWrites("bench-key")
+	op := opWithWrites("bench-key")
 
 	b.ReportAllocs()
 	for b.Loop() {
-		predecessors, err := detector.Admit(id, delta)
+		predecessors, err := detector.Admit(id, op)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -124,12 +124,12 @@ func opID(client string, seq uint64) OperationID {
 	return OperationID{ClientID: client, Seq: seq}
 }
 
-func mustAdmit(detector *ConflictDetector, id OperationID, delta compile.SemanticDelta) error {
-	_, err := detector.Admit(id, delta)
+func mustAdmit(detector *ConflictDetector, id OperationID, op compile.CompiledOp) error {
+	_, err := detector.Admit(id, op)
 	return err
 }
 
-func deltaWithReads(keys ...string) compile.SemanticDelta {
+func opWithReads(keys ...string) compile.CompiledOp {
 	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.ReadPredicates = append(delta.ReadPredicates, compile.Predicate{
@@ -137,20 +137,20 @@ func deltaWithReads(keys ...string) compile.SemanticDelta {
 			Key:  []byte(key),
 		})
 	}
-	return delta
+	return compile.CompileDelta(delta)
 }
 
-func deltaWithPrefixRead(prefix string) compile.SemanticDelta {
-	return compile.SemanticDelta{
+func opWithPrefixRead(prefix string) compile.CompiledOp {
+	return compile.CompileDelta(compile.SemanticDelta{
 		Eligibility: compile.EligibilityVisibleCommit,
 		ReadPredicates: []compile.Predicate{{
 			Kind: compile.PredicatePrefixScan,
 			Key:  []byte(prefix),
 		}},
-	}
+	})
 }
 
-func deltaWithWrites(keys ...string) compile.SemanticDelta {
+func opWithWrites(keys ...string) compile.CompiledOp {
 	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.WriteEffects = append(delta.WriteEffects, compile.WriteEffect{
@@ -158,7 +158,7 @@ func deltaWithWrites(keys ...string) compile.SemanticDelta {
 			Key:  []byte(key),
 		})
 	}
-	return delta
+	return compile.CompileDelta(delta)
 }
 
 func keyForBench(i int) string {

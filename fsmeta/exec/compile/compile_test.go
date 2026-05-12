@@ -106,6 +106,8 @@ func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	}, testMount, inodeID)
 	require.NoError(t, err)
+	dentryKey, err := fsmeta.EncodeDentryKey(testMount, fsmeta.RootInode, "file")
+	require.NoError(t, err)
 
 	op := CompileDelta(delta)
 	require.Equal(t, delta.Kind, op.Delta.Kind)
@@ -136,6 +138,7 @@ func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
 	require.Len(t, op.Watch, 1)
 	require.Equal(t, WatchEventCreate, op.Watch[0].EventKind)
 	require.Equal(t, WatchEmitVisible, op.Watch[0].EmitAt)
+	require.Equal(t, dentryKey, op.Watch[0].Key)
 	require.Equal(t, fsmeta.RootInode, op.Watch[0].Parent)
 	require.Equal(t, "file", op.Watch[0].Name)
 	require.Equal(t, inodeID, op.Watch[0].Inode)

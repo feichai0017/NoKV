@@ -188,6 +188,7 @@ const (
 
 type WatchProjection struct {
 	EventKind WatchEventKind
+	Key       []byte
 	Parent    fsmeta.InodeID
 	Name      string
 	Inode     fsmeta.InodeID
@@ -550,6 +551,7 @@ func watchProjections(delta SemanticDelta) []WatchProjection {
 		}
 		projection := WatchProjection{
 			EventKind: watchEventKind(delta, effect),
+			Key:       cloneBytes(effect.Key),
 			Parent:    parts.Parent,
 			Name:      dentryName(effect.Key),
 			EmitAt:    emitAt,

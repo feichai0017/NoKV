@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,44 +75,6 @@ func TestSplitReplayPlanByMutationBudget(t *testing.T) {
 	require.Len(t, out, 2)
 	require.Equal(t, []OperationID{opID("client", 1)}, replayPlanOpIDs(out[0]))
 	require.Equal(t, []OperationID{opID("client", 2), opID("client", 3)}, replayPlanOpIDs(out[1]))
-}
-
-func TestDeltaWritesSingleFSMetaBucket(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	leftKey := fsmetaInodeKeyForBucket(t, mount, 1)
-	leftOtherKey := fsmetaInodeKeyForBucket(t, mount, 1)
-	rightKey := fsmetaInodeKeyForBucket(t, mount, 2)
-
-	ok, err := DeltaWritesSingleFSMetaBucket(compile.SemanticDelta{
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("a")},
-			{Kind: compile.EffectPut, Key: leftOtherKey, Value: []byte("b")},
-		},
-	})
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	ok, err = DeltaWritesSingleFSMetaBucket(compile.SemanticDelta{
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("a")},
-			{Kind: compile.EffectPut, Key: rightKey, Value: []byte("b")},
-		},
-	})
-	require.NoError(t, err)
-	require.False(t, ok)
-
-	ok, err = DeltaWritesSingleFSMetaBucket(deltaWithValueWrites("raw-key", "value"))
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	ok, err = DeltaWritesSingleFSMetaBucket(compile.SemanticDelta{
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: []byte("raw-key"), Value: []byte("a")},
-			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("b")},
-		},
-	})
-	require.NoError(t, err)
-	require.False(t, ok)
 }
 
 func replayPlanOpIDs(plan ReplayPlan) []OperationID {

@@ -10,23 +10,31 @@ type perasWatchPublisher interface {
 	Publish(fsmeta.WatchEvent)
 }
 
-func (c *RemotePerasCommitter) publishVisibleWatch(delta compile.SemanticDelta, ack fsperas.VisibleAck) {
+func (c *RemotePerasCommitter) publishVisibleWatch(op compile.CompiledOp, ack fsperas.VisibleAck) {
 	if c == nil || c.watch == nil {
 		return
 	}
-	keys := perasDentryWatchKeys(delta)
-	if len(keys) == 0 {
+	if len(op.Watch) == 0 {
 		return
 	}
 	cursor := fsmeta.WatchCursor{
 		Term:  ack.EpochID,
 		Index: c.visibleSeq.Add(1),
 	}
-	for _, key := range keys {
+	seen := make(map[string]struct{}, len(op.Watch))
+	for _, projection := range op.Watch {
+		if projection.EmitAt != compile.WatchEmitVisible || len(projection.Key) == 0 {
+			continue
+		}
+		keyID := string(projection.Key)
+		if _, ok := seen[keyID]; ok {
+			continue
+		}
+		seen[keyID] = struct{}{}
 		evt := fsmeta.WatchEvent{
 			Cursor: cursor,
 			Source: fsmeta.WatchEventSourcePerasVisible,
-			Key:    key,
+			Key:    runtimeCloneBytes(projection.Key),
 		}
 		if c.watchQueue != nil && c.watchQueue.TryPush(evt) {
 			continue
@@ -55,25 +63,4 @@ func (c *RemotePerasCommitter) visibleWatchLoop() {
 		}
 		c.watch.Publish(evt)
 	}
-}
-
-func perasDentryWatchKeys(delta compile.SemanticDelta) [][]byte {
-	if len(delta.WriteEffects) == 0 {
-		return nil
-	}
-	keys := make([][]byte, 0, len(delta.WriteEffects))
-	seen := make(map[string]struct{}, len(delta.WriteEffects))
-	for _, effect := range delta.WriteEffects {
-		parts, ok := fsmeta.InspectKey(effect.Key)
-		if !ok || parts.Kind != fsmeta.KeyKindDentry {
-			continue
-		}
-		key := string(effect.Key)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		keys = append(keys, runtimeCloneBytes(effect.Key))
-	}
-	return keys
 }
