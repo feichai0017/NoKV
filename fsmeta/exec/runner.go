@@ -960,6 +960,11 @@ func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.O
 	}
 	if inode.Type == fsmeta.InodeTypeDirectory {
 		index.RememberEmptyDirectory(mount, inode.Inode)
+		return
+	}
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, inode.Inode)
+	if err == nil {
+		index.RememberKey(ownerKey, false)
 	}
 }
 
@@ -1059,13 +1064,15 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 		// runner.
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	if owner, ok, err := view.readSession(plan.ReadKeys[2]); err != nil {
-		return fsmeta.SessionRecord{}, false, err
-	} else if ok {
-		if sessionLive(owner, now) {
+	if index := e.perasPredicateIndex(); !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[2], index) {
+		if owner, ok, err := view.readSession(plan.ReadKeys[2]); err != nil {
+			return fsmeta.SessionRecord{}, false, err
+		} else if ok {
+			if sessionLive(owner, now) {
+				return fsmeta.SessionRecord{}, false, nil
+			}
 			return fsmeta.SessionRecord{}, false, nil
 		}
-		return fsmeta.SessionRecord{}, false, nil
 	}
 	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
 	value, err := fsmeta.EncodeSessionValue(record)

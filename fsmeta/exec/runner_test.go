@@ -1094,6 +1094,42 @@ func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testi
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
 }
 
+func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestBufferedPerasCommitter(t, runner)
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	runner.getCalls = 0
+
+	opened, err := executor.OpenWriteSession(context.Background(), fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   created.Inode.Inode,
+		Session: "writer-1",
+		TTL:     100 * time.Nanosecond,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: created.Inode.Inode, ExpiresUnixNs: 200}, opened)
+	require.Equal(t, 1, runner.getCalls, "open should only probe the caller supplied session id; the create fact proves the inode owner key absent")
+	require.Empty(t, runner.mutations)
+	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
+}
+
 func TestExecutorWriteSessionLifecyclePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
