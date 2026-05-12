@@ -77,18 +77,13 @@ func (l *AdmissionLatches) Lock(delta compile.SemanticDelta) func() {
 }
 
 func admissionLatchKeys(delta compile.SemanticDelta) ([]string, bool) {
-	keys := make([]string, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))
-	for _, predicate := range delta.ReadPredicates {
-		if predicate.Kind == compile.PredicatePrefixScan || len(predicate.Key) == 0 {
+	compiled := compile.CompileDelta(delta)
+	keys := make([]string, 0, len(compiled.Footprint.ConflictKeys))
+	for _, ref := range compiled.Footprint.ConflictKeys {
+		if ref.Mode == compile.KeyAccessReadPrefix || len(ref.Key) == 0 {
 			return nil, true
 		}
-		keys = append(keys, string(predicate.Key))
-	}
-	for _, effect := range delta.WriteEffects {
-		if len(effect.Key) == 0 {
-			return nil, true
-		}
-		keys = append(keys, string(effect.Key))
+		keys = append(keys, string(ref.Key))
 	}
 	if len(keys) == 0 {
 		return nil, true

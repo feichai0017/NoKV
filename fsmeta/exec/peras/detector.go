@@ -128,16 +128,17 @@ func (d *ConflictDetector) IDs() []OperationID {
 }
 
 func trackedFromDelta(id OperationID, delta compile.SemanticDelta) trackedOperation {
+	compiled := compile.CompileDelta(delta)
 	out := trackedOperation{
 		id:     id,
-		reads:  make([]trackedKey, 0, len(delta.ReadPredicates)),
-		writes: make([]trackedKey, 0, len(delta.WriteEffects)),
+		reads:  make([]trackedKey, 0, len(compiled.Footprint.Reads)),
+		writes: make([]trackedKey, 0, len(compiled.Footprint.Writes)),
 	}
-	for _, predicate := range delta.ReadPredicates {
-		out.reads = append(out.reads, newTrackedKey(predicate.Key, predicate.Kind == compile.PredicatePrefixScan))
+	for _, ref := range compiled.Footprint.Reads {
+		out.reads = append(out.reads, newTrackedKey(ref.Key, ref.Mode == compile.KeyAccessReadPrefix))
 	}
-	for _, effect := range delta.WriteEffects {
-		out.writes = append(out.writes, newTrackedKey(effect.Key, false))
+	for _, ref := range compiled.Footprint.Writes {
+		out.writes = append(out.writes, newTrackedKey(ref.Key, false))
 	}
 	return out
 }

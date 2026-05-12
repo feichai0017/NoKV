@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"crypto/sha256"
 	"slices"
 	"testing"
 	"time"
@@ -33,6 +34,25 @@ func testParentInDifferentBucket(t *testing.T, base fsmeta.InodeID) fsmeta.Inode
 	}
 	t.Fatalf("no different-bucket parent found for inode %d", base)
 	return 0
+}
+
+func testParentInDifferentBucketAfter(t *testing.T, base, start fsmeta.InodeID) fsmeta.InodeID {
+	t.Helper()
+	want := fsmeta.BucketForInodeID(base)
+	for candidate := start; candidate < start+4096; candidate++ {
+		if fsmeta.BucketForInodeID(candidate) != want {
+			return candidate
+		}
+	}
+	t.Fatalf("no different-bucket parent found for inode %d after %d", base, start)
+	return 0
+}
+
+func mustInodeKey(t *testing.T, inode fsmeta.InodeID) []byte {
+	t.Helper()
+	key, err := fsmeta.EncodeInodeKey(testMount, inode)
+	require.NoError(t, err)
+	return key
 }
 
 func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
@@ -101,19 +121,38 @@ func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
 	require.Equal(t, []MutationID{0, 1}, op.Atomicity.Members)
 	require.False(t, op.Atomicity.Splittable)
 	require.Equal(t, RecoveryReplayAllOrNothing, op.Atomicity.Recovery)
+	require.Equal(t, op.DescriptorDigest, op.Atomicity.Digest)
 
 	require.Len(t, op.Predicates, 2)
 	require.True(t, op.Predicates[0].NeedAbsent)
 	require.False(t, op.Predicates[0].NeedValue)
 	require.True(t, op.Predicates[1].NeedAbsent)
 	require.Len(t, op.Effects, 2)
+	require.Equal(t, MutationID(0), op.Effects[0].ID)
 	require.Equal(t, DerivationNone, op.Effects[0].Derivation)
+	require.True(t, op.Effects[0].Concrete)
+	require.Equal(t, testMount.MountKeyID, op.Effects[0].MountKeyID)
+	require.Equal(t, fsmeta.KeyKindDentry, op.Effects[0].RecordKind)
 	require.Len(t, op.Watch, 1)
 	require.Equal(t, WatchEventCreate, op.Watch[0].EventKind)
 	require.Equal(t, WatchEmitVisible, op.Watch[0].EmitAt)
 	require.Equal(t, fsmeta.RootInode, op.Watch[0].Parent)
 	require.Equal(t, "file", op.Watch[0].Name)
 	require.Equal(t, inodeID, op.Watch[0].Inode)
+	require.Len(t, op.Footprint.Reads, 2)
+	require.Len(t, op.Footprint.Writes, 2)
+	require.Len(t, op.Footprint.ConflictKeys, 4)
+	require.False(t, op.Footprint.HasPrefixRead)
+	require.False(t, op.Footprint.HasOpaqueKeys)
+	require.True(t, op.Footprint.EstimatedBytes > 0)
+	require.True(t, op.Completion.RetainCompletion)
+	require.Equal(t, CompletionVisible, op.Completion.Kind)
+	require.Equal(t, uint32(2), op.Completion.MutationCount)
+	require.Equal(t, op.DescriptorDigest, op.Completion.DescriptorDigest)
+	require.Equal(t, op.Placement.MergeKey, op.Segment.MergeKey)
+	require.True(t, op.Segment.CanAppend)
+	require.Equal(t, uint32(1), op.Segment.OperationCount)
+	require.Equal(t, uint32(2), op.Segment.MutationCount)
 }
 
 func TestCreateRespectsQuotaMode(t *testing.T) {
@@ -157,6 +196,70 @@ func TestDerivedOperationRequiresRuntimeMaterialization(t *testing.T) {
 	require.True(t, op.Predicates[1].NeedValue)
 	require.Len(t, op.Effects, 1)
 	require.Equal(t, DerivationRuntimeValue, op.Effects[0].Derivation)
+	require.False(t, op.Effects[0].Concrete)
+}
+
+func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
+	expected := []byte("old-inode")
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+		},
+		ReadPredicates: []Predicate{{
+			Kind:             PredicateObservedValue,
+			Key:              mustInodeKey(t, 44),
+			ExpectedValue:    expected,
+			HasExpectedValue: true,
+		}},
+		WriteEffects: []WriteEffect{{
+			Kind:  EffectPut,
+			Key:   mustInodeKey(t, 44),
+			Value: []byte("new-inode"),
+		}},
+	}
+
+	op := CompileDelta(delta)
+	require.Len(t, op.Predicates, 1)
+	require.True(t, op.Predicates[0].NeedValue)
+	require.True(t, op.Predicates[0].HasExpectedValue)
+	require.Equal(t, sha256.Sum256(expected), op.Predicates[0].ExpectHash)
+}
+
+func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
+	left, err := Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 8,
+		Name:   "a",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, testParentInDifferentBucket(t, 8))
+	require.NoError(t, err)
+	right, err := Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 8,
+		Name:   "b",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, testParentInDifferentBucketAfter(t, 8, 128))
+	require.NoError(t, err)
+
+	decision := CanAppendSegment(CompileDelta(left), CompileDelta(right), SegmentBudget{
+		MaxOperations:   2,
+		MaxMutations:    4,
+		MaxPayloadBytes: 1 << 20,
+	})
+	require.Equal(t, SegmentDecisionAppend, decision.Kind)
+
+	decision = CanAppendSegment(CompileDelta(left), CompileDelta(right), SegmentBudget{MaxMutations: 3})
+	require.Equal(t, SegmentDecisionCut, decision.Kind)
+
+	snapshot, err := SnapshotSubtree(fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 8}, testMount)
+	require.NoError(t, err)
+	decision = CanAppendSegment(CompileDelta(left), CompileDelta(snapshot), SegmentBudget{})
+	require.Equal(t, SegmentDecisionFlushBeforeAndAfter, decision.Kind)
+	require.Equal(t, SlowReasonDurabilityBarrier, decision.Reason)
 }
 
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
