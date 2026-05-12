@@ -58,6 +58,23 @@ func (e *fakeExecutor) Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.Den
 	return fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile}, nil
 }
 
+func (e *fakeExecutor) LookupPlus(context.Context, fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	if e.err != nil {
+		return fsmeta.DentryAttrPair{}, e.err
+	}
+	return fsmeta.DentryAttrPair{
+		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
+		Inode: fsmeta.InodeRecord{
+			Inode:       42,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
+		},
+	}, nil
+}
+
 func (e *fakeExecutor) ReadDir(context.Context, fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	if e.err != nil {
 		return nil, e.err
@@ -238,6 +255,24 @@ func TestTypedClientRoundTrip(t *testing.T) {
 		Inode:  42,
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
+
+	pair, err := cli.LookupPlus(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "checkpoint",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryAttrPair{
+		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "checkpoint", Inode: 42, Type: fsmeta.InodeTypeFile},
+		Inode: fsmeta.InodeRecord{
+			Inode:       42,
+			Type:        fsmeta.InodeTypeFile,
+			Size:        4096,
+			Mode:        0o644,
+			LinkCount:   1,
+			OpaqueAttrs: []byte(`{"body_ref":"cas://checkpoint"}`),
+		},
+	}, pair)
 
 	records, err := cli.ReadDir(context.Background(), fsmeta.ReadDirRequest{
 		Mount:      "vol",
