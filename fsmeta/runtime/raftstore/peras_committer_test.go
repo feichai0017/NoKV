@@ -1,9 +1,11 @@
 package raftstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
@@ -293,6 +296,59 @@ func TestRemotePerasCommitterRecoversWitnessSegment(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
+}
+
+func TestRemotePerasCommitterLoadsInstalledSegmentCatalog(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "restored")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("dentry-value")},
+				{Key: inodeKey, Value: []byte("inode-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	catalogKey, err := fsperas.PerasSegmentCatalogKey(segment)
+	require.NoError(t, err)
+	catalogValue, err := fsperas.EncodePerasSegmentCatalogRecord(segment, 99)
+	require.NoError(t, err)
+
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	scanner := &fakeRuntimePerasCatalogScanner{rows: []fsmetaexec.KV{
+		{Key: catalogKey, Value: catalogValue},
+	}}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		CatalogScanner:    scanner,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	scope := compile.AuthorityScope{
+		Mount:      mount.MountID,
+		MountKeyID: mount.MountKeyID,
+	}
+	require.NoError(t, committer.LoadInstalledSegments(context.Background(), scope))
+	value, deleted, ok := committer.GetPerasOverlay(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+	require.Equal(t, uint64(1), committer.Stats()["segment_total"])
+	require.Equal(t, 2, committer.Stats()["segment_keys"])
+
+	require.NoError(t, committer.LoadInstalledSegments(context.Background(), scope))
+	require.Equal(t, uint64(1), committer.Stats()["segment_total"])
 }
 
 func TestRemotePerasCommitterRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
@@ -890,6 +946,33 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallPerasSegment(_ context.Context
 	i.materialize = materialize
 	i.modes = append(i.modes, materialize)
 	return nil
+}
+
+type fakeRuntimePerasCatalogScanner struct {
+	rows  []fsmetaexec.KV
+	calls int
+}
+
+func (s *fakeRuntimePerasCatalogScanner) Scan(_ context.Context, startKey []byte, limit uint32, _ uint64) ([]fsmetaexec.KV, error) {
+	s.calls++
+	rows := append([]fsmetaexec.KV(nil), s.rows...)
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i].Key, rows[j].Key) < 0
+	})
+	out := make([]fsmetaexec.KV, 0, limit)
+	for _, row := range rows {
+		if bytes.Compare(row.Key, startKey) < 0 {
+			continue
+		}
+		out = append(out, fsmetaexec.KV{
+			Key:   append([]byte(nil), row.Key...),
+			Value: append([]byte(nil), row.Value...),
+		})
+		if uint32(len(out)) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 type flakyRuntimePerasSegmentInstaller struct {

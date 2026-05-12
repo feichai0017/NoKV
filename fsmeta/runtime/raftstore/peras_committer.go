@@ -13,6 +13,7 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
@@ -25,6 +26,7 @@ const (
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
 	defaultPerasSegmentBatchSize           = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
+	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
 	// large catalog-only segments on the common path.
@@ -48,6 +50,10 @@ type perasSegmentInstaller interface {
 	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) error
 }
 
+type perasSegmentCatalogScanner interface {
+	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]fsmetaexec.KV, error)
+}
+
 type perasSegmentInstallClient interface {
 	InstallPerasSegment(context.Context, []byte, *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error)
 }
@@ -56,6 +62,7 @@ type RemotePerasCommitterConfig struct {
 	Authority                  perasGrantProvider
 	Witnesses                  []fsperas.WitnessReplica
 	Installer                  perasSegmentInstaller
+	CatalogScanner             perasSegmentCatalogScanner
 	Quorum                     int
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
@@ -74,6 +81,7 @@ type RemotePerasCommitter struct {
 	authority  perasGrantProvider
 	witnesses  []fsperas.WitnessReplica
 	installer  perasSegmentInstaller
+	catalog    perasSegmentCatalogScanner
 	quorum     int
 	retries    int
 	backoff    time.Duration
@@ -230,6 +238,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		authority:  cfg.Authority,
 		witnesses:  witnesses,
 		installer:  cfg.Installer,
+		catalog:    cfg.CatalogScanner,
 		quorum:     quorum,
 		retries:    retries,
 		backoff:    backoff,
@@ -315,11 +324,16 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	}
 	c.holdersMu.Unlock()
 
-	if grantHasPredecessor(grant) && c.installer != nil {
-		recoveryScope := perasAuthorityScopeFromGrant(grant)
-		if authorityScopeEmpty(recoveryScope) {
-			recoveryScope = scope
+	recoveryScope := scope
+	if grantHasPredecessor(grant) {
+		if grantScope := perasAuthorityScopeFromGrant(grant); !authorityScopeEmpty(grantScope) {
+			recoveryScope = grantScope
 		}
+	}
+	if err := c.LoadInstalledSegments(ctx, recoveryScope); err != nil {
+		return nil, err
+	}
+	if grantHasPredecessor(grant) && c.installer != nil {
 		if err := c.RecoverWitnessSegments(ctx, recoveryScope, grant.EpochID-1); err != nil {
 			return nil, err
 		}
@@ -421,6 +435,87 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		c.installSegment(fsperas.ReplayPlan{}, segment)
 	}
 	return nil
+}
+
+func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope compile.AuthorityScope) error {
+	if c == nil || c.catalog == nil || scope.MountKeyID == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	records, err := c.scanInstalledSegmentCatalogs(ctx, scope)
+	if err != nil {
+		return c.recordErrorf("load peras segment catalogs: %w", err)
+	}
+	for _, record := range records {
+		if c.segmentInstalled(record.Root) {
+			continue
+		}
+		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.Root, record.SegmentPayloadDigest)
+		if err != nil {
+			return c.recordErrorf("decode peras segment catalog: %w", err)
+		}
+		if !perasSegmentWithinScope(segment, scope) {
+			continue
+		}
+		c.installSegment(fsperas.ReplayPlan{}, segment)
+	}
+	return nil
+}
+
+func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
+	buckets := perasCatalogBuckets(scope)
+	if len(buckets) == 0 {
+		return nil, nil
+	}
+	records := make([]fsperas.SegmentCatalogRecord, 0)
+	for _, bucket := range buckets {
+		prefix, err := fsmeta.EncodePerasSegmentCatalogPrefix(scope.MountKeyID, bucket)
+		if err != nil {
+			return nil, err
+		}
+		next := runtimeCloneBytes(prefix)
+		for {
+			kvs, err := c.catalog.Scan(ctx, next, defaultPerasSegmentCatalogScanLimit, 0)
+			if err != nil {
+				return nil, err
+			}
+			if len(kvs) == 0 {
+				break
+			}
+			exhausted := false
+			for _, kv := range kvs {
+				if !bytes.HasPrefix(kv.Key, prefix) {
+					exhausted = true
+					break
+				}
+				record, err := fsperas.DecodePerasSegmentCatalogRecord(kv.Value)
+				if err != nil {
+					return nil, err
+				}
+				parts, ok := fsmeta.InspectKey(kv.Key)
+				if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRoot != record.Root {
+					return nil, fsperas.ErrInvalidPerasSegment
+				}
+				records = append(records, record)
+				next = scanAfterKey(kv.Key)
+			}
+			if exhausted || len(kvs) < defaultPerasSegmentCatalogScanLimit {
+				break
+			}
+		}
+	}
+	slices.SortFunc(records, func(a, b fsperas.SegmentCatalogRecord) int {
+		if a.InstallVersion < b.InstallVersion {
+			return -1
+		}
+		if a.InstallVersion > b.InstallVersion {
+			return 1
+		}
+		return bytes.Compare(a.Root[:], b.Root[:])
+	})
+	return records, nil
 }
 
 func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
@@ -842,6 +937,28 @@ func perasSegmentWithinScope(segment fsperas.PerasSegment, scope compile.Authori
 		}
 	}
 	return true
+}
+
+func perasCatalogBuckets(scope compile.AuthorityScope) []fsmeta.AffinityBucket {
+	if scope.MountKeyID == 0 {
+		return nil
+	}
+	if len(scope.Buckets) > 0 {
+		buckets := append([]fsmeta.AffinityBucket(nil), scope.Buckets...)
+		slices.Sort(buckets)
+		return slices.Compact(buckets)
+	}
+	buckets := make([]fsmeta.AffinityBucket, fsmeta.DefaultAffinityBucketCount)
+	for i := range buckets {
+		buckets[i] = fsmeta.AffinityBucket(i)
+	}
+	return buckets
+}
+
+func scanAfterKey(key []byte) []byte {
+	next := make([]byte, 0, len(key)+1)
+	next = append(next, key...)
+	return append(next, 0)
 }
 
 func authorityScopeEmpty(scope compile.AuthorityScope) bool {
