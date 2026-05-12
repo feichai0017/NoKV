@@ -52,6 +52,7 @@ func main() {
 		perasSegmentWitnessRetryBackoff = flag.Duration("peras-segment-witness-retry-backoff", 20*time.Millisecond, "Peras segment witness retry backoff")
 		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras visible operations per segment before background flush; zero uses runtime default")
 		perasSegmentMaxReplayMutations  = flag.Int("peras-segment-max-replay-mutations", 0, "Peras replay mutations per installed segment; zero uses runtime default")
+		perasSegmentInstallParallelism  = flag.Int("peras-segment-install-parallelism", 0, "Peras segment installs per flush; zero uses GOMAXPROCS")
 		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
 		perasBackgroundFlushTimeout     = flag.Duration("peras-background-flush-timeout", 0, "timeout for opportunistic Peras background segment install; zero uses runtime default")
 		perasBackgroundErrorBackoff     = flag.Duration("peras-background-error-backoff", 0, "backoff after failed opportunistic Peras background segment install; zero uses runtime default")
@@ -66,7 +67,7 @@ func main() {
 		return
 	}
 	if *perasAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *perasWitnessQuorum < 0 ||
-		*perasSegmentBatchSize < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentFlushEvery < 0 ||
+		*perasSegmentBatchSize < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushEvery < 0 ||
 		*perasBackgroundFlushTimeout < 0 || *perasBackgroundErrorBackoff < 0 {
 		fatalf("peras options must be non-negative")
 		return
@@ -97,6 +98,7 @@ func main() {
 		PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
 		PerasSegmentBatchSize:           *perasSegmentBatchSize,
 		PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
+		PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
 		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
 		PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
 		PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,

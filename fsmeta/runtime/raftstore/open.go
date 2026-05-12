@@ -105,6 +105,10 @@ type Options struct {
 	// limit: a replay mutation expands to a small fixed number of MVCC entries.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentMaxReplayMutations int
+	// PerasSegmentInstallParallelism bounds how many sealed segments from one
+	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
+	// rejected.
+	PerasSegmentInstallParallelism int
 	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentFlushEvery time.Duration
@@ -164,7 +168,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, errPerasAuthorityTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, errPerasCommitterInvalid
 	}
@@ -275,6 +279,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
 			SegmentBatchSize:           opts.PerasSegmentBatchSize,
 			SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
+			SegmentInstallParallelism:  opts.PerasSegmentInstallParallelism,
 			SegmentFlushEvery:          opts.PerasSegmentFlushEvery,
 			BackgroundFlushTimeout:     opts.PerasBackgroundFlushTimeout,
 			BackgroundErrorBackoff:     opts.PerasBackgroundErrorBackoff,
