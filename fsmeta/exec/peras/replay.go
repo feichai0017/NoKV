@@ -12,9 +12,11 @@ type ReplayMutation struct {
 }
 
 type ReplayOperation struct {
-	OpID      OperationID
-	Kind      fsmeta.OperationKind
-	Mutations []ReplayMutation
+	OpID                 OperationID
+	Kind                 fsmeta.OperationKind
+	DescriptorDigest     [32]byte
+	PredicateProofDigest [32]byte
+	Mutations            []ReplayMutation
 }
 
 type ReplayPlan struct {
@@ -48,9 +50,11 @@ func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 		})
 	}
 	return ReplayOperation{
-		OpID:      op.OpID,
-		Kind:      op.Kind,
-		Mutations: mutations,
+		OpID:                 op.OpID,
+		Kind:                 op.Kind,
+		DescriptorDigest:     op.DescriptorDigest,
+		PredicateProofDigest: op.PredicateProofDigest,
+		Mutations:            mutations,
 	}
 }
 
@@ -80,8 +84,10 @@ func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) 
 		}
 	}
 	return ReplayOperation{
-		OpID:      id,
-		Kind:      delta.Kind,
-		Mutations: mutations,
+		OpID:                 id,
+		Kind:                 delta.Kind,
+		DescriptorDigest:     op.DescriptorDigest,
+		PredicateProofDigest: compile.PredicateProofSetDigest(op.PredicateProofs),
+		Mutations:            mutations,
 	}, nil
 }

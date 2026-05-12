@@ -8,7 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
-var perasSegmentMagic = [4]byte{'N', 'P', 'S', 1}
+var perasSegmentMagic = [4]byte{'N', 'P', 'S', 2}
 
 // SegmentRecordClass is the fsmeta key family stored in one sealed Peras
 // segment. The class is diagnostic and query-planning metadata; the storage
@@ -49,10 +49,12 @@ type SegmentKV struct {
 }
 
 type SegmentCompletion struct {
-	OpID          OperationID
-	Kind          fsmeta.OperationKind
-	Version       uint64
-	MutationCount uint32
+	OpID                 OperationID
+	Kind                 fsmeta.OperationKind
+	Version              uint64
+	MutationCount        uint32
+	DescriptorDigest     [32]byte
+	PredicateProofDigest [32]byte
 }
 
 type SegmentStats struct {
@@ -125,6 +127,8 @@ func EncodePerasSegment(segment PerasSegment) ([]byte, error) {
 		writeString(&out, string(completion.Kind))
 		writeUint64(&out, completion.Version)
 		writeUint64(&out, uint64(completion.MutationCount))
+		writeFixed(&out, completion.DescriptorDigest[:])
+		writeFixed(&out, completion.PredicateProofDigest[:])
 	}
 	return out.Bytes(), nil
 }
@@ -211,11 +215,21 @@ func DecodePerasSegment(payload []byte) (PerasSegment, error) {
 		if err != nil || mutationCount > uint64(^uint32(0)) {
 			return PerasSegment{}, ErrInvalidPerasSegment
 		}
+		var descriptorDigest [32]byte
+		if err := r.readFixed(descriptorDigest[:]); err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
+		var predicateProofDigest [32]byte
+		if err := r.readFixed(predicateProofDigest[:]); err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
 		completions = append(completions, SegmentCompletion{
-			OpID:          opID,
-			Kind:          fsmeta.OperationKind(kind),
-			Version:       version,
-			MutationCount: uint32(mutationCount),
+			OpID:                 opID,
+			Kind:                 fsmeta.OperationKind(kind),
+			Version:              version,
+			MutationCount:        uint32(mutationCount),
+			DescriptorDigest:     descriptorDigest,
+			PredicateProofDigest: predicateProofDigest,
 		})
 	}
 	if !r.done() {
@@ -295,10 +309,12 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 			version = v
 		}
 		completions = append(completions, SegmentCompletion{
-			OpID:          op.OpID,
-			Kind:          op.Kind,
-			Version:       version,
-			MutationCount: uint32(len(op.Mutations)),
+			OpID:                 op.OpID,
+			Kind:                 op.Kind,
+			Version:              version,
+			MutationCount:        uint32(len(op.Mutations)),
+			DescriptorDigest:     op.DescriptorDigest,
+			PredicateProofDigest: op.PredicateProofDigest,
 		})
 		for _, mutation := range op.Mutations {
 			if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
@@ -492,7 +508,7 @@ func perasSegmentPayloadEncodedSize(segment PerasSegment) int {
 		size += 8 + 4 + len(entry.Key) + 1 + 4 + len(entry.Value)
 	}
 	for _, completion := range segment.Completions {
-		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8
+		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32
 	}
 	return size
 }
@@ -595,6 +611,8 @@ func segmentRoot(segment PerasSegment) [32]byte {
 		writeString(h, string(completion.Kind))
 		writeUint64(h, completion.Version)
 		writeUint64(h, uint64(completion.MutationCount))
+		writeFixed(h, completion.DescriptorDigest[:])
+		writeFixed(h, completion.PredicateProofDigest[:])
 	}
 	return digestFromHash(h.Sum(nil))
 }

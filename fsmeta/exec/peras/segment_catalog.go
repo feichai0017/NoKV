@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	perasSegmentCatalogMagic = [4]byte{'N', 'P', 'C', 1}
+	perasSegmentCatalogMagic = [4]byte{'N', 'P', 'C', 2}
 	perasSegmentIndexMagic   = [4]byte{'N', 'P', 'I', 1}
 )
 
@@ -182,6 +182,8 @@ func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVer
 		writeString(&out, string(completion.Kind))
 		writeUint64(&out, completion.Version)
 		writeUint64(&out, uint64(completion.MutationCount))
+		writeFixed(&out, completion.DescriptorDigest[:])
+		writeFixed(&out, completion.PredicateProofDigest[:])
 	}
 	return out.Bytes(), nil
 }
@@ -195,7 +197,7 @@ func segmentCatalogRecordEncodedSize(segment PerasSegment, payloadSize int) int 
 		size += stringEncodedSize(completion.OpID.ClientID)
 		size += 8
 		size += stringEncodedSize(string(completion.Kind))
-		size += 8 + 8
+		size += 8 + 8 + 32 + 32
 	}
 	return size
 }
@@ -344,11 +346,21 @@ func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, erro
 		if err != nil || mutationCount > uint64(^uint32(0)) {
 			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
 		}
+		var descriptorDigest [32]byte
+		if err := r.readFixed(descriptorDigest[:]); err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
+		var predicateProofDigest [32]byte
+		if err := r.readFixed(predicateProofDigest[:]); err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
 		completions = append(completions, SegmentCompletion{
-			OpID:          opID,
-			Kind:          fsmeta.OperationKind(kind),
-			Version:       version,
-			MutationCount: uint32(mutationCount),
+			OpID:                 opID,
+			Kind:                 fsmeta.OperationKind(kind),
+			Version:              version,
+			MutationCount:        uint32(mutationCount),
+			DescriptorDigest:     descriptorDigest,
+			PredicateProofDigest: predicateProofDigest,
 		})
 	}
 	if !r.done() || epochID == 0 || root == ([32]byte{}) || operationCount == 0 || completionCount != uint64(len(completions)) {

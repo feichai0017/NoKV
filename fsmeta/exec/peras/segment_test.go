@@ -97,6 +97,9 @@ func TestBuildPerasSegmentRecordsCompletionAndVersions(t *testing.T) {
 	require.Equal(t, fsmeta.OperationCreate, first.Kind)
 	require.Equal(t, uint64(1000), first.Version)
 	require.Equal(t, uint32(2), first.MutationCount)
+	require.Equal(t, plan.Operations[0].DescriptorDigest, first.DescriptorDigest)
+	require.Equal(t, plan.Operations[0].PredicateProofDigest, first.PredicateProofDigest)
+	require.NotZero(t, first.DescriptorDigest)
 
 	second, ok := segment.Completion(OperationID{ClientID: "workspace-writer", Seq: 2})
 	require.True(t, ok)
@@ -113,6 +116,12 @@ func TestBuildPerasSegmentRootIsStableAndSensitive(t *testing.T) {
 
 	plan.Operations[0].Mutations[0].Value = []byte("changed")
 	changed, err := BuildPerasSegmentFromReplayPlan(plan)
+	require.NoError(t, err)
+	require.NotEqual(t, left.Root, changed.Root)
+
+	plan = workspaceCreateReplayPlan(t, 4)
+	plan.Operations[0].DescriptorDigest[0] ^= 0xff
+	changed, err = BuildPerasSegmentFromReplayPlan(plan)
 	require.NoError(t, err)
 	require.NotEqual(t, left.Root, changed.Root)
 }

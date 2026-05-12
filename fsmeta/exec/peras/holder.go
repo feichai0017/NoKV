@@ -332,7 +332,11 @@ func unionInodes(left, right []fsmeta.InodeID) []fsmeta.InodeID {
 }
 
 func replayOperationsEqual(left, right ReplayOperation) bool {
-	if left.OpID != right.OpID || left.Kind != right.Kind || len(left.Mutations) != len(right.Mutations) {
+	if left.OpID != right.OpID ||
+		left.Kind != right.Kind ||
+		left.DescriptorDigest != right.DescriptorDigest ||
+		left.PredicateProofDigest != right.PredicateProofDigest ||
+		len(left.Mutations) != len(right.Mutations) {
 		return false
 	}
 	for i := range left.Mutations {

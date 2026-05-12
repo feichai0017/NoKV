@@ -634,6 +634,29 @@ func PredicateProofDigest(key, value []byte, present bool, version uint64, sourc
 	return out
 }
 
+func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
+	if len(proofs) == 0 {
+		return [32]byte{}
+	}
+	h := sha256.New()
+	writeDigestUint64(h, uint64(len(proofs)))
+	for _, proof := range proofs {
+		writeDigestBytes(h, proof.Key)
+		if proof.Present {
+			writeDigestUint64(h, 1)
+		} else {
+			writeDigestUint64(h, 0)
+		}
+		writeDigestBytes(h, proof.Value)
+		writeDigestUint64(h, proof.Version)
+		writeDigestUint64(h, uint64(proof.Source))
+		writeDigestBytes(h, proof.Digest[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
 func descriptorDigest(delta SemanticDelta) [32]byte {
 	h := sha256.New()
 	writeDigestString(h, string(delta.Kind))
