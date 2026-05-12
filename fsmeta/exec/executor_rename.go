@@ -47,7 +47,7 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 	if err != nil {
 		return false, err
 	}
-	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
+	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
 		perasDeleteEffect(plan.MutateKeys[0]),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})

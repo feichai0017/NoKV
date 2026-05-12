@@ -346,7 +346,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	return c, nil
 }
 
-func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.CompiledOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}

@@ -119,7 +119,7 @@ type PerasAuthorityRetirer = fsperas.AuthorityRetirer
 // operation, so errors are returned and never silently fall back after the
 // holder overlay may already include the operation.
 type PerasCommitter interface {
-	SubmitVisible(context.Context, fsperas.OperationID, compile.CompiledOp, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
+	SubmitVisible(context.Context, fsperas.OperationID, compile.MaterializedOp, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
 }
 
 type PerasOverlayReader interface {

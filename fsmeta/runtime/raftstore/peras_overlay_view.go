@@ -126,6 +126,6 @@ func (c *RemotePerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fs
 	return fsperas.MergeOverlayScans(c.sealed.Scan(start, limit), c.overlay.Scan(start, limit), limit)
 }
 
-func (c *RemotePerasCommitter) addOverlay(id fsperas.OperationID, op compile.CompiledOp) error {
+func (c *RemotePerasCommitter) addOverlay(id fsperas.OperationID, op compile.MaterializedOp) error {
 	return c.overlay.Add(id, op)
 }

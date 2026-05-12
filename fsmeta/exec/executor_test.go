@@ -387,7 +387,7 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 	return a.owned, nil
 }
 
-func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.CompiledOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
 	}
@@ -409,7 +409,7 @@ func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.CompiledOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.holder == nil || c.view == nil {
 		return fsperas.VisibleAck{}, fsperas.ErrHolderConfigInvalid
 	}
@@ -538,7 +538,7 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.CompiledOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.MaterializedOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 

@@ -67,7 +67,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		}
 	}
 	if quotaOK {
-		if committed, err := e.tryPerasVisibleCommit(ctx, delta); committed || err != nil {
+		if committed, err := e.tryPerasVisibleCommit(ctx, compile.MaterializeDelta(delta, nil)); committed || err != nil {
 			if err != nil {
 				return fsmeta.CreateResult{}, err
 			}

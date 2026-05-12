@@ -109,8 +109,8 @@ type AuthorityScope struct {
 	Inodes     []fsmeta.InodeID
 }
 
-// SemanticDelta is the Peras-facing contract produced from one fsmeta
-// request. The existing executor still uses fsmeta.OperationPlan directly.
+// SemanticDelta is the static lowering result produced from one fsmeta request.
+// Runtime code must materialize it into MaterializedOp before holder admission.
 type SemanticDelta struct {
 	Kind              fsmeta.OperationKind
 	Plan              fsmeta.OperationPlan

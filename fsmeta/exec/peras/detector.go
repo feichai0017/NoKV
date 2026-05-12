@@ -54,11 +54,11 @@ func NewConflictDetector() *ConflictDetector {
 	}
 }
 
-func (d *ConflictDetector) Admit(id OperationID, op compile.CompiledOp) ([]OperationID, error) {
+func (d *ConflictDetector) Admit(id OperationID, op compile.MaterializedOp) ([]OperationID, error) {
 	if !id.Valid() {
 		return nil, ErrInvalidOperationID
 	}
-	current := trackedFromCompiled(id, op)
+	current := trackedFromMaterialized(id, op)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -127,7 +127,7 @@ func (d *ConflictDetector) IDs() []OperationID {
 	return out
 }
 
-func trackedFromCompiled(id OperationID, op compile.CompiledOp) trackedOperation {
+func trackedFromMaterialized(id OperationID, op compile.MaterializedOp) trackedOperation {
 	out := trackedOperation{
 		id:     id,
 		reads:  make([]trackedKey, 0, len(op.Footprint.Reads)),

@@ -137,16 +137,16 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	}
 	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
 		if deleted {
-			v.remember(key, nil, false)
+			v.remember(key, nil, false, compile.ReadSourceOverlay, 0)
 			return nil, false, nil
 		}
-		v.remember(key, value, true)
+		v.remember(key, value, true, compile.ReadSourceOverlay, 0)
 		return value, true, nil
 	}
 	if index := v.executor.perasPredicateIndex(); index != nil {
 		present, known := index.KeyState(key)
 		if known && !present {
-			v.remember(key, nil, false)
+			v.remember(key, nil, false, compile.ReadSourceUnknown, 0)
 			return nil, false, nil
 		}
 	}
@@ -162,29 +162,32 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	v.remember(key, value, ok)
+	v.remember(key, value, ok, compile.ReadSourceBase, v.version)
 	return value, ok, nil
 }
 
 type perasObservedValue struct {
 	value   []byte
 	present bool
+	source  compile.ReadSource
+	version uint64
 }
 
-func (v *perasReadView) remember(key, value []byte, present bool) {
+func (v *perasReadView) remember(key, value []byte, present bool, source compile.ReadSource, version uint64) {
 	if v == nil {
 		return
 	}
 	v.observed[string(key)] = perasObservedValue{
 		value:   cloneBytes(value),
 		present: present,
+		source:  source,
+		version: version,
 	}
 }
 
-func (v *perasReadView) runtimeCheckedDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
-	delta = concretePerasDelta(delta, effects)
+func (v *perasReadView) materializePerasOp(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.MaterializedOp {
 	if v == nil || v.executor == nil {
-		return delta
+		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
 	}
 	index := v.executor.perasPredicateIndex()
 	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
@@ -209,7 +212,7 @@ func (v *perasReadView) runtimeCheckedDelta(delta compile.SemanticDelta, effects
 		}
 	}
 	if len(v.observed) == 0 {
-		return delta
+		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
 	}
 	keys := make([]string, 0, len(v.observed))
 	for key := range v.observed {
@@ -225,7 +228,32 @@ func (v *perasReadView) runtimeCheckedDelta(delta compile.SemanticDelta, effects
 		applyPerasObservedPredicate(&predicate, observed)
 		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
 	}
-	return delta
+	return compile.MaterializeDelta(concretePerasDelta(delta, effects), v.predicateProofs())
+}
+
+func (v *perasReadView) predicateProofs() []compile.PredicateProof {
+	if v == nil || len(v.observed) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(v.observed))
+	for key := range v.observed {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	proofs := make([]compile.PredicateProof, 0, len(keys))
+	for _, key := range keys {
+		observed := v.observed[key]
+		proof := compile.PredicateProof{
+			Key:     []byte(key),
+			Present: observed.present,
+			Value:   cloneBytes(observed.value),
+			Version: observed.version,
+			Source:  observed.source,
+		}
+		proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+		proofs = append(proofs, proof)
+	}
+	return proofs
 }
 
 func applyPerasObservedPredicate(predicate *compile.Predicate, observed perasObservedValue) {

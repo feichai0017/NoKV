@@ -58,9 +58,9 @@ func TestAdmissionLatchesAllowDisjointKeys(t *testing.T) {
 
 func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 	latches := NewAdmissionLatches()
-	release := latches.Lock(compile.CompileDelta(compile.SemanticDelta{
+	release := latches.Lock(compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{Kind: compile.PredicatePrefixScan, Key: []byte("dentry/")}},
-	}))
+	}, nil))
 
 	var entered atomic.Bool
 	done := make(chan struct{})
@@ -82,7 +82,7 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 }
 
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
-	err := Admit(context.Background(), compile.CompileDelta(compile.SemanticDelta{}), func(context.Context, compile.CompiledOp) (bool, error) {
+	err := Admit(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{}, nil), func(context.Context, compile.MaterializedOp) (bool, error) {
 		return false, nil
 	})
 	require.ErrorIs(t, err, ErrAdmissionRejected)

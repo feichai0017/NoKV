@@ -57,7 +57,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
+	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
 		perasPutEffect(plan.MutateKeys[0], value),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
@@ -101,7 +101,7 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, del
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
+	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
 		perasPutEffect(plan.MutateKeys[0], value),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
@@ -137,7 +137,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 		effects = append(effects, perasDeleteEffect(ownerKey))
 	}
-	concrete := view.runtimeCheckedDelta(delta, effects)
+	concrete := view.materializePerasOp(delta, effects)
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 

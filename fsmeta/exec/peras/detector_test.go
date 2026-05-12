@@ -29,8 +29,8 @@ func TestConflictDetectorTracksExactPredecessors(t *testing.T) {
 func TestConflictDetectorCoversReadWriteOrientations(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		left compile.CompiledOp
-		next compile.CompiledOp
+		left compile.MaterializedOp
+		next compile.MaterializedOp
 	}{
 		{name: "write write", left: opWithWrites("a"), next: opWithWrites("a")},
 		{name: "write read", left: opWithWrites("a"), next: opWithReads("a")},
@@ -124,12 +124,12 @@ func opID(client string, seq uint64) OperationID {
 	return OperationID{ClientID: client, Seq: seq}
 }
 
-func mustAdmit(detector *ConflictDetector, id OperationID, op compile.CompiledOp) error {
+func mustAdmit(detector *ConflictDetector, id OperationID, op compile.MaterializedOp) error {
 	_, err := detector.Admit(id, op)
 	return err
 }
 
-func opWithReads(keys ...string) compile.CompiledOp {
+func opWithReads(keys ...string) compile.MaterializedOp {
 	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.ReadPredicates = append(delta.ReadPredicates, compile.Predicate{
@@ -137,20 +137,20 @@ func opWithReads(keys ...string) compile.CompiledOp {
 			Key:  []byte(key),
 		})
 	}
-	return compile.CompileDelta(delta)
+	return compile.MaterializeDelta(delta, nil)
 }
 
-func opWithPrefixRead(prefix string) compile.CompiledOp {
-	return compile.CompileDelta(compile.SemanticDelta{
+func opWithPrefixRead(prefix string) compile.MaterializedOp {
+	return compile.MaterializeDelta(compile.SemanticDelta{
 		Eligibility: compile.EligibilityVisibleCommit,
 		ReadPredicates: []compile.Predicate{{
 			Kind: compile.PredicatePrefixScan,
 			Key:  []byte(prefix),
 		}},
-	})
+	}, nil)
 }
 
-func opWithWrites(keys ...string) compile.CompiledOp {
+func opWithWrites(keys ...string) compile.MaterializedOp {
 	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
 		delta.WriteEffects = append(delta.WriteEffects, compile.WriteEffect{
@@ -158,7 +158,7 @@ func opWithWrites(keys ...string) compile.CompiledOp {
 			Key:  []byte(key),
 		})
 	}
-	return compile.CompileDelta(delta)
+	return compile.MaterializeDelta(delta, nil)
 }
 
 func keyForBench(i int) string {

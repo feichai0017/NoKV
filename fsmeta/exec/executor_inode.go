@@ -66,7 +66,7 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
+	concrete := view.materializePerasOp(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
 	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
 	if err != nil {
 		return fsmeta.InodeRecord{}, committed, err

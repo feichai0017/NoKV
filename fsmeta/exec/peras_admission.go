@@ -38,7 +38,7 @@ func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.Semant
 	return nil
 }
 
-func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
+func (e *Executor) tryPerasVisibleCommit(ctx context.Context, op compile.MaterializedOp) (bool, error) {
 	if e == nil || e.perasCommitter == nil {
 		return false, nil
 	}
@@ -46,23 +46,23 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 		e.perasVisible.skipNoAuthorityTotal.Add(1)
 		return false, nil
 	}
+	delta := op.Delta
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		e.perasVisible.skipIneligibleTotal.Add(1)
 		return false, nil
 	}
-	compiled := compile.CompileDelta(delta)
-	if compiled.Placement.RequiresMaterialize {
+	if op.Placement.RequiresMaterialize {
 		e.perasVisible.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
-	if !compiled.Placement.CanSegment {
+	if !op.Placement.CanSegment {
 		e.perasVisible.skipPlacementTotal.Add(1)
 		return false, nil
 	}
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.perasCommitter.SubmitVisible(ctx, id, compiled, e.perasPredicatesHold)
+	_, err := e.perasCommitter.SubmitVisible(ctx, id, op, e.perasPredicatesHold)
 	latency := uint64(time.Since(start).Nanoseconds())
 	e.perasVisible.latencyTotalNanosecond.Add(latency)
 	recordUint64Max(&e.perasVisible.latencyMaxNanosecond, latency)
@@ -85,8 +85,11 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 	return true, nil
 }
 
-func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.CompiledOp) (bool, error) {
+func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.MaterializedOp) (bool, error) {
 	delta := op.Delta
+	if !perasPredicateProofsValid(op.PredicateProofs) {
+		return false, nil
+	}
 	if len(delta.ReadPredicates) == 0 {
 		return true, nil
 	}
@@ -174,6 +177,22 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.CompiledO
 		}
 	}
 	return true, nil
+}
+
+func perasPredicateProofsValid(proofs []compile.PredicateProof) bool {
+	for _, proof := range proofs {
+		if len(proof.Key) == 0 {
+			return false
+		}
+		if !proof.Present && len(proof.Value) != 0 {
+			return false
+		}
+		digest := compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+		if digest != proof.Digest {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Executor) perasPredicateIndex() fsperas.PredicateIndex {

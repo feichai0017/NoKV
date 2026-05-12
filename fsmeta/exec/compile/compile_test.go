@@ -202,6 +202,46 @@ func TestDerivedOperationRequiresRuntimeMaterialization(t *testing.T) {
 	require.False(t, op.Effects[0].Concrete)
 }
 
+func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
+	delta, err := UpdateInode(fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  3,
+		Inode:   44,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	}, testMount)
+	require.NoError(t, err)
+	compiled := CompileDelta(delta)
+	require.True(t, compiled.Placement.RequiresMaterialize)
+
+	key := mustInodeKey(t, 44)
+	value := []byte("new-inode")
+	proof := PredicateProof{
+		Key:     key,
+		Present: true,
+		Value:   []byte("old-inode"),
+		Version: 9,
+		Source:  ReadSourceBase,
+	}
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	materialized := MaterializeCompiledOp(compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: value}}, []PredicateProof{proof})
+
+	require.True(t, materialized.Placement.CanSegment)
+	require.False(t, materialized.Placement.RequiresMaterialize)
+	require.Len(t, materialized.Effects, 1)
+	require.True(t, materialized.Effects[0].Concrete)
+	require.Equal(t, DerivationNone, materialized.Effects[0].Derivation)
+	require.Equal(t, sha256.Sum256(value), materialized.Effects[0].ValueHash)
+	require.Len(t, materialized.PredicateProofs, 1)
+	require.Equal(t, proof.Digest, materialized.PredicateProofs[0].Digest)
+
+	proof.Value[0] ^= 0xff
+	value[0] ^= 0xff
+	require.NotEqual(t, proof.Value, materialized.PredicateProofs[0].Value)
+	require.NotEqual(t, value, materialized.Effects[0].Value)
+}
+
 func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
 	expected := []byte("old-inode")
 	delta := SemanticDelta{

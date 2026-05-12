@@ -153,13 +153,13 @@ func TestRemotePerasCommitterScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/a"), []byte("sealed-a"))))
 	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/b"), []byte("sealed-b"))))
 	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/d"), []byte("sealed-d"))))
-	require.NoError(t, committer.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, compile.CompileDelta(compile.SemanticDelta{
+	require.NoError(t, committer.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, compile.MaterializeDelta(compile.SemanticDelta{
 		Eligibility: compile.EligibilityVisibleCommit,
 		WriteEffects: []compile.WriteEffect{
 			{Kind: compile.EffectDelete, Key: []byte("k/b")},
 			{Kind: compile.EffectPut, Key: []byte("k/c"), Value: []byte("overlay-c")},
 		},
-	})))
+	}, nil)))
 
 	scan := committer.ScanPerasOverlay([]byte("k/"), 4)
 	require.Equal(t, []fsperas.OverlayKV{
@@ -307,7 +307,7 @@ func TestRemotePerasCommitterReturnsPendingAckOnRetry(t *testing.T) {
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	first, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
-	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.CompiledOp) (bool, error) {
+	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp) (bool, error) {
 		t.Fatal("pending retry should not re-run admission")
 		return false, nil
 	})
@@ -1216,7 +1216,7 @@ func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	raw := delta.Delta
 	raw.WriteEffects = []compile.WriteEffect{{Kind: compile.EffectDelete}}
-	delta = compile.CompileDelta(raw)
+	delta = compile.MaterializeDelta(raw, nil)
 	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.Error(t, err)
 	require.Equal(t, 0, committer.Stats()["pending"])
@@ -1427,12 +1427,12 @@ func BenchmarkRemotePerasCommitterScanPerasOverlay(b *testing.B) {
 	}
 	for i := 0; i < 1024; i++ {
 		key := []byte(fmt.Sprintf("dentry/%08d", i*16))
-		require.NoError(b, committer.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.CompileDelta(compile.SemanticDelta{
+		require.NoError(b, committer.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.MaterializeDelta(compile.SemanticDelta{
 			Eligibility: compile.EligibilityVisibleCommit,
 			WriteEffects: []compile.WriteEffect{
 				{Kind: compile.EffectPut, Key: key, Value: []byte("overlay")},
 			},
-		})))
+		}, nil)))
 	}
 	require.Len(b, committer.ScanPerasOverlay([]byte("dentry/00000000"), 128), 128)
 
@@ -1824,8 +1824,8 @@ func testPerasInstallCursor(offset uint64) perasauthority.InstallCursor {
 	}
 }
 
-func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.CompiledOp {
-	return compile.CompileDelta(compile.SemanticDelta{
+func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.MaterializedOp {
+	return compile.MaterializeDelta(compile.SemanticDelta{
 		Kind: fsmeta.OperationCreate,
 		Authority: compile.AuthorityScope{
 			Mount:      "vol",
@@ -1842,21 +1842,21 @@ func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.CompiledOp {
 			{Kind: compile.EffectPut, Key: inodeKey, Value: []byte("inode-value")},
 		},
 		Eligibility: compile.EligibilityVisibleCommit,
-	})
+	}, nil)
 }
 
-func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.CompiledOp {
+func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.MaterializedOp {
 	delta := testRuntimePerasOp(dentryKey, inodeKey).Delta
 	delta.Authority.Buckets = []fsmeta.AffinityBucket{bucket}
 	delta.Authority.Parents = nil
 	delta.Authority.Inodes = nil
-	return compile.CompileDelta(delta)
+	return compile.MaterializeDelta(delta, nil)
 }
 
-func testRuntimePerasOpWithScope(op compile.CompiledOp, scope compile.AuthorityScope) compile.CompiledOp {
+func testRuntimePerasOpWithScope(op compile.MaterializedOp, scope compile.AuthorityScope) compile.MaterializedOp {
 	delta := op.Delta
 	delta.Authority = scope
-	return compile.CompileDelta(delta)
+	return compile.MaterializeDelta(delta, nil)
 }
 
 func appendUvarintKey(prefix string, v uint64) []byte {

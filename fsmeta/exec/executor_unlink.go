@@ -51,7 +51,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 		}
 		effects = append(effects, perasPutEffect(inodeKey, inodeValue))
 	}
-	concrete := view.runtimeCheckedDelta(delta, effects)
+	concrete := view.materializePerasOp(delta, effects)
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 

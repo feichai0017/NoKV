@@ -50,7 +50,7 @@ func scopedInodeFactKey(mount fsmeta.MountIdentity, inode fsmeta.InodeID, class 
 	return string(buf)
 }
 
-func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}, emptySessions map[string]struct{}, op compile.CompiledOp) error {
+func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}, emptySessions map[string]struct{}, op compile.MaterializedOp) error {
 	delta := op.Delta
 	for _, effect := range op.Effects {
 		if len(effect.Key) == 0 {

@@ -114,9 +114,9 @@ func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing
 	secondDelta := deltaWithValueWrites("dentry/b", "v2")
 	secondDelta.Authority = secondScope
 
-	_, err := holder.Submit(context.Background(), first, compile.CompileDelta(firstDelta))
+	_, err := holder.Submit(context.Background(), first, compile.MaterializeDelta(firstDelta, nil))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, compile.CompileDelta(secondDelta))
+	_, err = holder.Submit(context.Background(), second, compile.MaterializeDelta(secondDelta, nil))
 	require.NoError(t, err)
 
 	plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(100, firstScope)
@@ -169,7 +169,7 @@ func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	delta := deltaWithValueWrites("a", "v1")
 	delta.Eligibility = compile.EligibilitySlowPath
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.CompileDelta(delta))
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.MaterializeDelta(delta, nil))
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
@@ -187,7 +187,7 @@ func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 		},
 	}
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.CompileDelta(delta))
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.MaterializeDelta(delta, nil))
 	require.NoError(t, err)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -252,8 +252,8 @@ func newTestHolder(t *testing.T) *Holder {
 	return holder
 }
 
-func opWithValueWrites(key, value string) compile.CompiledOp {
-	return compile.CompileDelta(deltaWithValueWrites(key, value))
+func opWithValueWrites(key, value string) compile.MaterializedOp {
+	return compile.MaterializeDelta(deltaWithValueWrites(key, value), nil)
 }
 
 func deltaWithValueWrites(key, value string) compile.SemanticDelta {

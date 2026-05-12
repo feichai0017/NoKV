@@ -26,7 +26,7 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 		},
 	}
 	opID := OperationID{ClientID: "c", Seq: 1}
-	require.NoError(t, view.Add(opID, compile.CompileDelta(delta)))
+	require.NoError(t, view.Add(opID, compile.MaterializeDelta(delta, nil)))
 
 	value, deleted, ok := view.Get(dentryKey)
 	require.True(t, ok)

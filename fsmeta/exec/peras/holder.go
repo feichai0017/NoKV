@@ -48,7 +48,7 @@ type holderPendingOperation struct {
 	op    ReplayOperation
 }
 
-func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.CompiledOp) (VisibleAck, error) {
+func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.MaterializedOp) (VisibleAck, error) {
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, ErrHolderConfigInvalid
 	}
@@ -59,7 +59,7 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.Compiled
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		return VisibleAck{}, ErrIneligibleOperation
 	}
-	replay, err := replayOperationFromCompiled(id, op)
+	replay, err := replayOperationFromMaterialized(id, op)
 	if err != nil {
 		return VisibleAck{}, err
 	}
@@ -85,11 +85,11 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.Compiled
 	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
 }
 
-func (h *Holder) PendingAck(id OperationID, op compile.CompiledOp) (VisibleAck, bool, error) {
+func (h *Holder) PendingAck(id OperationID, op compile.MaterializedOp) (VisibleAck, bool, error) {
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, false, ErrHolderConfigInvalid
 	}
-	replay, err := replayOperationFromCompiled(id, op)
+	replay, err := replayOperationFromMaterialized(id, op)
 	if err != nil {
 		return VisibleAck{}, false, err
 	}

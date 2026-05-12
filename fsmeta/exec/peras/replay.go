@@ -54,7 +54,7 @@ func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 	}
 }
 
-func replayOperationFromCompiled(id OperationID, op compile.CompiledOp) (ReplayOperation, error) {
+func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) (ReplayOperation, error) {
 	delta := op.Delta
 	if delta.Eligibility != compile.EligibilityVisibleCommit || len(op.Effects) == 0 {
 		return ReplayOperation{}, ErrInvalidPerasSegment

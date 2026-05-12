@@ -307,7 +307,7 @@ func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 			},
 		}, mount, fsmeta.InodeID(1000+i))
 		require.NoError(tb, err)
-		op, err := replayOperationFromCompiled(OperationID{ClientID: "workspace-writer", Seq: uint64(i + 1)}, compile.CompileDelta(delta))
+		op, err := replayOperationFromMaterialized(OperationID{ClientID: "workspace-writer", Seq: uint64(i + 1)}, compile.MaterializeDelta(delta, nil))
 		require.NoError(tb, err)
 		ops = append(ops, op)
 	}

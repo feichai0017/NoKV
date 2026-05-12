@@ -19,14 +19,14 @@ func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.CompileDelta(compile.SemanticDelta{
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
 			ExpectedValue:    value,
 			HasExpectedValue: true,
 		}},
-	}))
+	}, nil))
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), runner.nextTS, "overlay predicate admission must not reserve a read timestamp")
@@ -43,7 +43,7 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.CompileDelta(compile.SemanticDelta{
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
@@ -51,10 +51,41 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 			HasExpectedValue: true,
 			RuntimeChecked:   true,
 		}},
-	}))
+	}, nil))
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")
+}
+
+func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
+	value := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
+	runner.data[string(key)] = value
+	executor, err := newTestExecutor(runner, WithPerasCommitter(newTestPerasCommitter(t, runner)))
+	require.NoError(t, err)
+
+	proof := compile.PredicateProof{
+		Key:     key,
+		Present: true,
+		Value:   value,
+		Version: 7,
+		Source:  compile.ReadSourceBase,
+	}
+	proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	proof.Digest[0] ^= 0xff
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
+		ReadPredicates: []compile.Predicate{{
+			Kind:             compile.PredicateObservedValue,
+			Key:              key,
+			ExpectedValue:    value,
+			HasExpectedValue: true,
+		}},
+	}, []compile.PredicateProof{proof}))
+
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, 0, runner.getCalls)
 }
 
 func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {

@@ -10,7 +10,7 @@ type perasWatchPublisher interface {
 	Publish(fsmeta.WatchEvent)
 }
 
-func (c *RemotePerasCommitter) publishVisibleWatch(op compile.CompiledOp, ack fsperas.VisibleAck) {
+func (c *RemotePerasCommitter) publishVisibleWatch(op compile.MaterializedOp, ack fsperas.VisibleAck) {
 	if c == nil || c.watch == nil {
 		return
 	}

@@ -43,7 +43,7 @@ func NewOverlayView() *OverlayView {
 	}
 }
 
-func (v *OverlayView) Add(id OperationID, op compile.CompiledOp) error {
+func (v *OverlayView) Add(id OperationID, op compile.MaterializedOp) error {
 	if v == nil {
 		return ErrInvalidPerasSegment
 	}

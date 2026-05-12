@@ -32,7 +32,7 @@ func NewAdmissionLatches() *AdmissionLatches {
 	return &AdmissionLatches{}
 }
 
-func (l *AdmissionLatches) Lock(op compile.CompiledOp) func() {
+func (l *AdmissionLatches) Lock(op compile.MaterializedOp) func() {
 	if l == nil {
 		return func() {}
 	}
@@ -76,7 +76,7 @@ func (l *AdmissionLatches) Lock(op compile.CompiledOp) func() {
 	}
 }
 
-func admissionLatchKeys(op compile.CompiledOp) ([]string, bool) {
+func admissionLatchKeys(op compile.MaterializedOp) ([]string, bool) {
 	keys := make([]string, 0, len(op.Footprint.ConflictKeys))
 	for _, ref := range op.Footprint.ConflictKeys {
 		if ref.Mode == compile.KeyAccessReadPrefix || len(ref.Key) == 0 {

@@ -28,6 +28,14 @@ type CompiledOp struct {
 	Segment          SegmentPlan
 }
 
+// MaterializedOp is the closed Peras IR admitted by the holder. It has the
+// static descriptor from CompileDelta plus any runtime predicate proofs and
+// concrete effects needed to install the operation inside a segment.
+type MaterializedOp struct {
+	CompiledOp
+	PredicateProofs []PredicateProof
+}
+
 type FenceMode uint8
 
 const (
@@ -267,6 +275,21 @@ func CompileDelta(delta SemanticDelta) CompiledOp {
 		Watch:      watchProjections(delta),
 		Completion: completionPlan(delta, uint32(len(effects)), digest),
 		Segment:    segment,
+	}
+}
+
+func MaterializeDelta(delta SemanticDelta, proofs []PredicateProof) MaterializedOp {
+	return MaterializeCompiledOp(CompileDelta(delta), nil, proofs)
+}
+
+func MaterializeCompiledOp(op CompiledOp, effects []WriteEffect, proofs []PredicateProof) MaterializedOp {
+	delta := op.Delta
+	if effects != nil {
+		delta.WriteEffects = cloneEffects(effects)
+	}
+	return MaterializedOp{
+		CompiledOp:      CompileDelta(delta),
+		PredicateProofs: clonePredicateProofs(proofs),
 	}
 }
 
@@ -674,4 +697,22 @@ func cloneDelta(delta SemanticDelta) SemanticDelta {
 		DurabilityBarrier: delta.DurabilityBarrier,
 		WatchAtSeal:       delta.WatchAtSeal,
 	}
+}
+
+func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]PredicateProof, len(proofs))
+	for i, proof := range proofs {
+		out[i] = PredicateProof{
+			Key:     cloneBytes(proof.Key),
+			Present: proof.Present,
+			Value:   cloneBytes(proof.Value),
+			Version: proof.Version,
+			Source:  proof.Source,
+			Digest:  proof.Digest,
+		}
+	}
+	return out
 }

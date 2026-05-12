@@ -71,7 +71,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.Semant
 	if err != nil {
 		return false, err
 	}
-	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
+	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
 		perasPutEffect(plan.ReadKeys[1], dentryValue),
 		perasPutEffect(inodeKey, inodeValue),
 	})

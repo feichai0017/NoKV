@@ -6,13 +6,13 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-type AdmissionFunc func(context.Context, compile.CompiledOp) (bool, error)
+type AdmissionFunc func(context.Context, compile.MaterializedOp) (bool, error)
 
 type AuthorityRetirer interface {
 	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
 }
 
-func Admit(ctx context.Context, op compile.CompiledOp, fn AdmissionFunc) error {
+func Admit(ctx context.Context, op compile.MaterializedOp, fn AdmissionFunc) error {
 	if fn == nil {
 		return nil
 	}
