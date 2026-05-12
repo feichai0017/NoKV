@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langgraph-checkpoint-nokv"
+version = "0.1.0a0"
+description = "Experimental NoKV fsmeta checkpoint saver for LangGraph."
+authors = []
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+dependencies = [
+  "grpcio>=1.80.0",
+  "langgraph-checkpoint>=4.1.0a4,<5.0.0",
+  "protobuf>=6.31.1,<7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "grpcio-tools>=1.80.0",
+  "langgraph-checkpoint-conformance>=0.0.2",
+  "pytest>=8.0.0",
+]
+bench = [
+  "langgraph>=1.2.0a7,<2.0.0",
+  "langgraph-checkpoint-postgres>=3.1.0a4,<4.0.0",
+  "psycopg[binary]>=3.2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+include = ["src/langgraph"]
+sources = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["src/langgraph/checkpoint/nokv/_proto/*.py"]
+lint.select = ["E", "F", "I", "UP", "B"]
+lint.ignore = ["E501"]

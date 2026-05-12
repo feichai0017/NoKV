@@ -50,6 +50,21 @@ func lookupRequestToProto(req fsmeta.LookupRequest) *fsmetapb.LookupRequest {
 	}
 }
 
+func batchLookupPlusRequestToProto(req fsmeta.BatchLookupPlusRequest) *fsmetapb.BatchLookupPlusRequest {
+	lookups := make([]*fsmetapb.LookupKey, 0, len(req.Lookups))
+	for _, lookup := range req.Lookups {
+		lookups = append(lookups, &fsmetapb.LookupKey{
+			Parent: uint64(lookup.Parent),
+			Name:   lookup.Name,
+		})
+	}
+	return &fsmetapb.BatchLookupPlusRequest{
+		Mount:           string(req.Mount),
+		Lookups:         lookups,
+		SnapshotVersion: req.SnapshotVersion,
+	}
+}
+
 func readDirRequestToProto(req fsmeta.ReadDirRequest) *fsmetapb.ReadDirRequest {
 	return &fsmetapb.ReadDirRequest{
 		Mount:           string(req.Mount),
@@ -221,6 +236,16 @@ func pairFromProto(pb *fsmetapb.DentryAttrPair) fsmeta.DentryAttrPair {
 	return fsmeta.DentryAttrPair{
 		Dentry: dentryFromProto(pb.GetDentry()),
 		Inode:  inodeFromProto(pb.GetInode()),
+	}
+}
+
+func batchLookupPlusResultFromProto(pb *fsmetapb.BatchLookupPlusResult) fsmeta.BatchLookupPlusResult {
+	if pb == nil {
+		return fsmeta.BatchLookupPlusResult{}
+	}
+	return fsmeta.BatchLookupPlusResult{
+		Found: pb.GetFound(),
+		Entry: pairFromProto(pb.GetEntry()),
 	}
 }
 

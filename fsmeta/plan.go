@@ -16,6 +16,7 @@ const (
 	OperationCreate           OperationKind = "create"
 	OperationUpdateInode      OperationKind = "update_inode"
 	OperationLookup           OperationKind = "lookup"
+	OperationBatchLookupPlus  OperationKind = "batch_lookup_plus"
 	OperationReadDir          OperationKind = "readdir"
 	OperationSnapshotSubtree  OperationKind = "snapshot_subtree"
 	OperationRename           OperationKind = "rename"
@@ -83,6 +84,22 @@ type LookupRequest struct {
 	Mount  MountID
 	Parent InodeID
 	Name   string
+}
+
+type LookupKey struct {
+	Parent InodeID
+	Name   string
+}
+
+type BatchLookupPlusRequest struct {
+	Mount           MountID
+	Lookups         []LookupKey
+	SnapshotVersion uint64
+}
+
+type BatchLookupPlusResult struct {
+	Found bool
+	Entry DentryAttrPair
 }
 
 type ReadDirRequest struct {
@@ -262,6 +279,28 @@ func PlanLookup(req LookupRequest, mount MountIdentity) (OperationPlan, error) {
 		Mount:      req.Mount,
 		PrimaryKey: cloneBytes(dentry),
 		ReadKeys:   cloneKeySet(dentry),
+	}, nil
+}
+
+func PlanBatchLookupPlus(req BatchLookupPlusRequest, mount MountIdentity) (OperationPlan, error) {
+	if err := validateMountIdentityForRequest(mount, req.Mount); err != nil {
+		return OperationPlan{}, err
+	}
+	if len(req.Lookups) > int(MaxBatchLookupPlusLimit) {
+		return OperationPlan{}, ErrInvalidPageSize
+	}
+	readKeys := make([][]byte, 0, len(req.Lookups))
+	for _, lookup := range req.Lookups {
+		dentry, err := EncodeDentryKey(mount, lookup.Parent, lookup.Name)
+		if err != nil {
+			return OperationPlan{}, err
+		}
+		readKeys = append(readKeys, dentry)
+	}
+	return OperationPlan{
+		Kind:     OperationBatchLookupPlus,
+		Mount:    req.Mount,
+		ReadKeys: cloneKeySet(readKeys...),
 	}, nil
 }
 

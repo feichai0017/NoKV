@@ -28,7 +28,11 @@
 # ports 9380-9382 belong to the three meta-root peers.
 
 x-nokv-image: &nokv-image
-  build: .
+  platform: linux/arm64
+  build:
+    context: .
+    platforms:
+      - linux/arm64
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
   # Compose is a local dev/test deployment. The seed is intentionally public
   # and only keeps all local containers on one Eunomia grant key; production
@@ -37,6 +41,7 @@ x-nokv-image: &nokv-image
     NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY: "${NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY:-rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc=}"
 
 x-common: &common
+  platform: linux/arm64
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
   restart: unless-stopped
   stop_signal: SIGINT
