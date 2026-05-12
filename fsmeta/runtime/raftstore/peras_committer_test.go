@@ -121,6 +121,38 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 	require.Equal(t, installer.digest, provider.sealedDigest)
 }
 
+func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	opID := fsperas.OperationID{ClientID: "client", Seq: 7}
+	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
+	ack, err := committer.CommitPeras(ctx, opID, delta, nil)
+	require.NoError(t, err)
+	require.Equal(t, opID, ack.OpID)
+	require.NoError(t, committer.Flush(ctx))
+	completion, ok := committer.Completion(opID)
+	require.True(t, ok)
+	require.Equal(t, opID, completion.OpID)
+
+	retryAck, err := committer.CommitPeras(ctx, opID, delta, nil)
+	require.NoError(t, err)
+	require.Equal(t, ack.OpID, retryAck.OpID)
+	require.Equal(t, ack.EpochID, retryAck.EpochID)
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, 0, committer.Stats()["pending"])
+}
+
 func TestRemotePerasCommitterShutdownFlushesPendingSegment(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
@@ -373,6 +405,9 @@ func TestRemotePerasCommitterLoadsInstalledSegmentCatalog(t *testing.T) {
 	require.Equal(t, []byte("dentry-value"), value)
 	require.Equal(t, uint64(1), committer.Stats()["segment_total"])
 	require.Equal(t, 2, committer.Stats()["segment_keys"])
+	completion, ok := committer.Completion(fsperas.OperationID{ClientID: "client", Seq: 1})
+	require.True(t, ok)
+	require.Equal(t, fsmeta.OperationCreate, completion.Kind)
 
 	require.NoError(t, committer.LoadInstalledSegments(context.Background(), scope))
 	require.Equal(t, uint64(1), committer.Stats()["segment_total"])
