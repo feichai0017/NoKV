@@ -29,7 +29,15 @@ benchmark.test
 
 AGENTS.md
 
-./artifacts/
+artifacts/
+integrations/**/artifacts/
+integrations/**/.pytest_cache/
+integrations/**/__pycache__/
+integrations/**/*.py[cod]
+integrations/**/.venv/
+integrations/**/dist/
+integrations/**/build/
+integrations/**/*.egg-info/
 
 work_redis
 
