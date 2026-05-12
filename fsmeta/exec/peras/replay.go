@@ -27,6 +27,33 @@ func ReplayPlanOperationCount(plan ReplayPlan) uint64 {
 	return uint64(len(plan.Operations))
 }
 
+func cloneReplayOperations(ops []ReplayOperation) []ReplayOperation {
+	if len(ops) == 0 {
+		return nil
+	}
+	out := make([]ReplayOperation, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, cloneReplayOperation(op))
+	}
+	return out
+}
+
+func cloneReplayOperation(op ReplayOperation) ReplayOperation {
+	mutations := make([]ReplayMutation, 0, len(op.Mutations))
+	for _, mutation := range op.Mutations {
+		mutations = append(mutations, ReplayMutation{
+			Key:    cloneBytes(mutation.Key),
+			Value:  cloneBytes(mutation.Value),
+			Delete: mutation.Delete,
+		})
+	}
+	return ReplayOperation{
+		OpID:      op.OpID,
+		Kind:      op.Kind,
+		Mutations: mutations,
+	}
+}
+
 func replayOperationFromDelta(id OperationID, delta compile.SemanticDelta) (ReplayOperation, error) {
 	if delta.Eligibility != compile.EligibilityVisibleCommit || len(delta.WriteEffects) == 0 {
 		return ReplayOperation{}, ErrInvalidPerasSegment

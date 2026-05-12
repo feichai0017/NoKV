@@ -77,6 +77,7 @@ type Predicate struct {
 	Key              []byte
 	ExpectedValue    []byte
 	HasExpectedValue bool
+	RuntimeChecked   bool
 }
 
 // EffectKind is the mutation class a Peras certificate would eventually
@@ -497,6 +498,7 @@ func clonePredicates(in []Predicate) []Predicate {
 			Key:              cloneBytes(predicate.Key),
 			ExpectedValue:    cloneBytes(predicate.ExpectedValue),
 			HasExpectedValue: predicate.HasExpectedValue,
+			RuntimeChecked:   predicate.RuntimeChecked,
 		})
 	}
 	return out

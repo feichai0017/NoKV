@@ -3,7 +3,9 @@ package raftstore
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -31,6 +33,16 @@ type PerasAuthorityManager struct {
 	holderID string
 	ttl      time.Duration
 	now      func() time.Time
+
+	acquireMu sync.Mutex
+	acquires  map[string]*perasAuthorityAcquireCall
+}
+
+type perasAuthorityAcquireCall struct {
+	done  chan struct{}
+	grant perasauth.AuthorityGrant
+	owned bool
+	err   error
 }
 
 func NewPerasAuthorityManager(coord perasAuthorityClient, table *perasauth.ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*PerasAuthorityManager, error) {
@@ -85,10 +97,23 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 		return grant, true, nil
 	}
 
+	rootScope := perasAuthorityAcquireScope(scope)
+	key := perasAuthorityAcquireKey(rootScope)
+	if call, leader := m.beginAcquire(key); !leader {
+		select {
+		case <-call.done:
+			return call.grant, call.owned, call.err
+		case <-ctx.Done():
+			return perasauth.AuthorityGrant{}, false, ctx.Err()
+		}
+	}
+
+	var grant perasauth.AuthorityGrant
+	var owned bool
 	cmd := rootproto.PerasAuthorityCommand{
 		Kind:            rootproto.PerasAuthorityActAcquire,
 		HolderID:        m.holderID,
-		Scope:           perasAuthorityAcquireScope(scope),
+		Scope:           rootScope,
 		NowUnixNano:     now.UnixNano(),
 		ExpiresUnixNano: now.Add(m.ttl).UnixNano(),
 	}
@@ -96,34 +121,78 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
+		m.finishAcquire(key, perasauth.AuthorityGrant{}, false, err)
 		return perasauth.AuthorityGrant{}, false, err
 	}
 	if err := m.installResponse(resp); err != nil {
+		m.finishAcquire(key, perasauth.AuthorityGrant{}, false, err)
 		return perasauth.AuthorityGrant{}, false, err
 	}
 	switch resp.GetStatus() {
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
-		grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
+		grant = metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
+			m.finishAcquire(key, perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse)
 			return perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse
 		}
-		return grant, true, nil
+		owned = true
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
-		grant, _, err := m.table.Find(scope, now)
-		return grant, false, err
+		grant, _, err = m.table.Find(scope, now)
+		owned = false
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
-		return perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse
+		err = errPerasAuthorityInvalidResponse
 	default:
-		return perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse
+		err = errPerasAuthorityInvalidResponse
 	}
+	m.finishAcquire(key, grant, owned, err)
+	return grant, owned, err
+}
+
+func (m *PerasAuthorityManager) beginAcquire(key string) (*perasAuthorityAcquireCall, bool) {
+	m.acquireMu.Lock()
+	defer m.acquireMu.Unlock()
+	if m.acquires == nil {
+		m.acquires = make(map[string]*perasAuthorityAcquireCall)
+	}
+	if call := m.acquires[key]; call != nil {
+		return call, false
+	}
+	call := &perasAuthorityAcquireCall{done: make(chan struct{})}
+	m.acquires[key] = call
+	return call, true
+}
+
+func (m *PerasAuthorityManager) finishAcquire(key string, grant perasauth.AuthorityGrant, owned bool, err error) {
+	m.acquireMu.Lock()
+	call := m.acquires[key]
+	if call != nil {
+		call.grant = grant
+		call.owned = owned
+		call.err = err
+		delete(m.acquires, key)
+		close(call.done)
+	}
+	m.acquireMu.Unlock()
+}
+
+func perasAuthorityAcquireKey(scope rootproto.PerasAuthorityScope) string {
+	var b strings.Builder
+	b.WriteString(strconv.FormatUint(scope.MountKeyID, 10))
+	for _, bucket := range scope.Buckets {
+		b.WriteByte('/')
+		b.WriteString(strconv.FormatUint(uint64(bucket), 10))
+	}
+	return b.String()
 }
 
 func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	rootScope := perasauth.AuthorityScopeFromDelta(scope)
-	// Segment install is bucket-local, but the holder-visible transition is
-	// authority-local and may span buckets before seal. Keep the rooted grant
-	// mount-wide for this holder epoch; region locality is enforced later by
-	// splitting the sealed segment into bucket-local install records.
+	// Root v1 proves exclusion, not workload intent. Request the mount-local
+	// bucket set as one rooted capability so bursty namespace creation pays one
+	// authority round instead of one round per affinity bucket. Do not pin parent
+	// or freshly allocated inode IDs into the rooted grant: parent-only grants
+	// with wildcard inodes still overlap at root, while per-inode grants make
+	// ordinary create bursts conflict with their own predecessor grant.
 	rootScope.Buckets = nil
 	rootScope.Parents = nil
 	rootScope.Inodes = nil

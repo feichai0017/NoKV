@@ -12,7 +12,7 @@ import (
 const defaultWindow uint32 = 256
 const defaultRecentEvents = 4096
 
-// Router fans committed raftstore key events out to fsmeta prefix subscribers.
+// Router fans durable and live fsmeta key events out to prefix subscribers.
 type Router struct {
 	mu      sync.RWMutex
 	next    uint64
@@ -91,20 +91,23 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 	return sub, nil
 }
 
-// Publish fans one committed key event out to matching subscribers.
+// Publish fans one key event out to matching subscribers. Durable storage
+// events are kept for resume replay; Peras visible events are live-only because
+// their replay boundary is the later durable segment frontier.
 func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	if r == nil || len(evt.Key) == 0 {
 		return
 	}
-	id := eventID(evt)
-	stored := cloneEvent(evt)
 	r.mu.Lock()
-	history := r.regionLocked(evt.Cursor.RegionID)
-	if history.remembered(id) {
-		r.mu.Unlock()
-		return
+	if eventIsReplayable(evt) {
+		id := eventID(evt)
+		history := r.regionLocked(evt.Cursor.RegionID)
+		if history.remembered(id) {
+			r.mu.Unlock()
+			return
+		}
+		history.remember(id, cloneEvent(evt))
 	}
-	history.remember(id, stored)
 	subs := make([]*Subscription, 0, len(r.subs))
 	for _, sub := range r.subs {
 		subs = append(subs, sub)
@@ -113,9 +116,17 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	r.published.Add(1)
 	for _, sub := range subs {
 		if bytes.HasPrefix(evt.Key, sub.prefix) {
-			sub.enqueue(evt)
+			if eventIsReplayable(evt) {
+				sub.enqueue(evt)
+			} else {
+				sub.enqueueLive(evt)
+			}
 		}
 	}
+}
+
+func eventIsReplayable(evt fsmeta.WatchEvent) bool {
+	return evt.Source != fsmeta.WatchEventSourcePerasVisible
 }
 
 // OnApply publishes one storage-apply event after the runtime adapter has
@@ -345,6 +356,31 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 	}
 	s.outstanding++
 	s.pending[evt.Cursor]++
+	s.mu.Unlock()
+
+	select {
+	case s.events <- cloneEvent(evt):
+		if s.router != nil {
+			s.router.delivered.Add(1)
+		}
+	default:
+		s.closeWith(fsmeta.ErrWatchOverflow)
+		if s.router != nil {
+			s.router.dropped.Add(1)
+			s.router.overflow.Add(1)
+		}
+	}
+}
+
+func (s *Subscription) enqueueLive(evt fsmeta.WatchEvent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Unlock()
 
 	select {

@@ -103,6 +103,28 @@ func TestReplicatedStoreApplyPerasAuthorityRejectsConflicts(t *testing.T) {
 	require.True(t, errors.Is(err, rootstate.ErrPrimacy))
 }
 
+func TestReplicatedStoreApplyPerasAuthorityExpandsSameHolderGrant(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	store := stores[leaderID]
+
+	first := testPerasAcquireCommand("holder-a", 1)
+	state, grant, err := store.ApplyPerasAuthority(context.Background(), first)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), grant.EpochID)
+
+	second := testPerasAcquireCommand("holder-a", 2)
+	second.Scope.Buckets = []uint16{1, 2}
+	second.ExpiresUnixNano = first.ExpiresUnixNano + 100
+	state, expanded, err := store.ApplyPerasAuthority(context.Background(), second)
+	require.NoError(t, err)
+	require.Equal(t, grant.GrantID, expanded.GrantID)
+	require.Equal(t, grant.EpochID, expanded.EpochID)
+	require.Equal(t, second.ExpiresUnixNano, expanded.ExpiresUnixNano)
+	require.ElementsMatch(t, []uint16{1, 2}, expanded.Scope.Buckets)
+	require.Len(t, state.ActivePerasGrants, 1)
+	require.Equal(t, expanded, state.ActivePerasGrants[0])
+}
+
 func TestReplicatedStoreApplyPerasAuthorityReplacesExpiredGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	store := stores[leaderID]

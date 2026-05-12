@@ -252,6 +252,18 @@ func newTestHolder(t *testing.T) *Holder {
 	return holder
 }
 
+func deltaWithValueWrites(key, value string) compile.SemanticDelta {
+	return compile.SemanticDelta{
+		Kind:        fsmeta.OperationCreate,
+		Eligibility: compile.EligibilityVisibleCommit,
+		WriteEffects: []compile.WriteEffect{{
+			Kind:  compile.EffectPut,
+			Key:   []byte(key),
+			Value: []byte(value),
+		}},
+	}
+}
+
 func mustHolderForBench(b *testing.B) *Holder {
 	b.Helper()
 	holder, err := NewHolder(HolderConfig{

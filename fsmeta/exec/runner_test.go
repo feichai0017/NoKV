@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
-	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -197,6 +197,19 @@ type fakePerasCommitter struct {
 	deltas          []compile.SemanticDelta
 }
 
+type testVersionAllocator interface {
+	ReserveTimestamp(context.Context, uint64) (uint64, error)
+}
+
+type testPerasCommitter struct {
+	holder   *fsperas.Holder
+	versions testVersionAllocator
+	view     *fsperas.OverlayView
+
+	mu          sync.Mutex
+	commitTotal uint64
+}
+
 type fakePerasAuthorityFlusher struct {
 	fakePerasCommitter
 	flushCalls  int
@@ -209,8 +222,11 @@ type ownedPerasAdmitter struct{}
 
 type scanOverlayCommitter struct {
 	noopPerasCommitter
-	rows []fsperas.OverlayKV
+	rows   []fsperas.OverlayKV
+	values map[string]fsperas.OverlayKV
 }
+
+var _ PerasOverlayReader = scanOverlayCommitter{}
 
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
@@ -373,7 +389,7 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 	return a.owned, nil
 }
 
-func (c *fakePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
 	}
@@ -395,6 +411,123 @@ func (c *fakePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Operati
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
+func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+	if c == nil || c.holder == nil || c.view == nil {
+		return fsperas.VisibleAck{}, fsperas.ErrHolderConfigInvalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := fsperas.Admit(ctx, delta, admission); err != nil {
+		return fsperas.VisibleAck{}, err
+	}
+	ack, err := c.holder.Submit(ctx, id, delta)
+	if err != nil {
+		return fsperas.VisibleAck{}, err
+	}
+	if err := c.view.Add(id, delta); err != nil {
+		return fsperas.VisibleAck{}, err
+	}
+	c.commitTotal++
+	return ack, nil
+}
+
+func (c *testPerasCommitter) Flush(ctx context.Context) error {
+	return c.FlushDurable(ctx)
+}
+
+func (c *testPerasCommitter) FlushDurable(ctx context.Context) error {
+	if c == nil || c.holder == nil || c.versions == nil || c.view == nil {
+		return fsperas.ErrHolderConfigInvalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pending := c.holder.PendingIDs()
+	if len(pending) == 0 {
+		return nil
+	}
+	firstVersion, err := c.versions.ReserveTimestamp(ctx, uint64(len(pending)))
+	if err != nil {
+		return err
+	}
+	plan, _, err := c.holder.BuildPendingReplayPlan(firstVersion)
+	if err != nil {
+		return err
+	}
+	if len(plan.Operations) != len(pending) {
+		return fsperas.ErrInvalidPerasSegment
+	}
+	if err := c.holder.MarkReplayPlanApplied(plan); err != nil {
+		return err
+	}
+	c.view.RemovePlan(plan)
+	return nil
+}
+
+func (c *testPerasCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	if c == nil || c.view == nil {
+		return nil, false, false
+	}
+	return c.view.Get(key)
+}
+
+func (c *testPerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
+	if c == nil || c.view == nil {
+		return nil
+	}
+	return c.view.Scan(start, limit)
+}
+
+func (c *testPerasCommitter) KeyState(key []byte) (bool, bool) {
+	if c == nil || c.view == nil {
+		return false, false
+	}
+	return c.view.KeyState(key)
+}
+
+func (c *testPerasCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil || c.view == nil {
+		return false
+	}
+	return c.view.DirectoryEmpty(mount, inode)
+}
+
+func (c *testPerasCommitter) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil || c.view == nil {
+		return false
+	}
+	return c.view.SessionNamespaceEmpty(mount, inode)
+}
+
+func (c *testPerasCommitter) RememberKey(key []byte, present bool) {
+	if c == nil || c.view == nil {
+		return
+	}
+	c.view.RememberKey(key, present)
+}
+
+func (c *testPerasCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if c == nil || c.view == nil {
+		return
+	}
+	c.view.RememberEmptyDirectory(mount, inode)
+}
+
+func (c *testPerasCommitter) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if c == nil || c.view == nil {
+		return
+	}
+	c.view.RememberEmptySessionNamespace(mount, inode)
+}
+
+func (c *testPerasCommitter) Stats() map[string]any {
+	if c == nil {
+		return map[string]any{"commit_total": uint64(0)}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return map[string]any{"commit_total": c.commitTotal}
+}
+
 func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
 	f.flushCalls++
 	f.flushScopes = append(f.flushScopes, compile.AuthorityScope{
@@ -407,12 +540,74 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (noopPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (c scanOverlayCommitter) GetPerasOverlay([]byte) ([]byte, bool, bool) {
-	return nil, false, false
+func (c scanOverlayCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	if c.values == nil {
+		return nil, false, false
+	}
+	row, ok := c.values[string(key)]
+	if !ok {
+		return nil, false, false
+	}
+	return append([]byte(nil), row.Value...), row.Delete, true
+}
+
+func overlayValueForTest(key, value []byte) fsperas.OverlayKV {
+	return fsperas.OverlayKV{
+		Key:   append([]byte(nil), key...),
+		Value: append([]byte(nil), value...),
+	}
+}
+
+func overlayDeleteForTest(key []byte) fsperas.OverlayKV {
+	return fsperas.OverlayKV{
+		Key:    append([]byte(nil), key...),
+		Delete: true,
+	}
+}
+
+func overlayMapForTest(rows ...fsperas.OverlayKV) map[string]fsperas.OverlayKV {
+	out := make(map[string]fsperas.OverlayKV, len(rows))
+	for _, row := range rows {
+		out[string(row.Key)] = row
+	}
+	return out
+}
+
+func dentryValueForTest(t *testing.T, parent fsmeta.InodeID, name string, inode fsmeta.InodeID, typ fsmeta.InodeType) []byte {
+	t.Helper()
+	value, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
+		Parent: parent,
+		Name:   name,
+		Inode:  inode,
+		Type:   typ,
+	})
+	require.NoError(t, err)
+	return value
+}
+
+func inodeValueForTest(t *testing.T, record fsmeta.InodeRecord) []byte {
+	t.Helper()
+	value, err := fsmeta.EncodeInodeValue(record)
+	require.NoError(t, err)
+	return value
+}
+
+func dentryKeyForTest(t *testing.T, mount fsmeta.MountID, parent fsmeta.InodeID, name string) []byte {
+	t.Helper()
+	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
+	require.NoError(t, err)
+	return key
+}
+
+func inodeKeyForTest(t *testing.T, mount fsmeta.MountID, inode fsmeta.InodeID) []byte {
+	t.Helper()
+	key, err := fsmeta.EncodeInodeKey(testMountIdentityFor(mount), inode)
+	require.NoError(t, err)
+	return key
 }
 
 func (c scanOverlayCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
@@ -858,6 +1053,80 @@ func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
 }
 
+func TestExecutorCreatePerasVisibleCommitAcceptsCrossBucketCatalogInstall(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakePerasCommitter{}
+	inode := testInodeForDifferentBucket(t, fsmeta.RootInode)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, committer.calls)
+	require.Empty(t, runner.mutations)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+}
+
+func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
+	value := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(key, value)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.SemanticDelta{
+		ReadPredicates: []compile.Predicate{{
+			Kind:             compile.PredicateObservedValue,
+			Key:              key,
+			ExpectedValue:    value,
+			HasExpectedValue: true,
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), runner.nextTS, "overlay predicate admission must not reserve a read timestamp")
+}
+
+func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
+	oldValue := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
+	newValue := dentryValueForTest(t, fsmeta.RootInode, "file", 22, fsmeta.InodeTypeFile)
+	runner.data[string(key)] = newValue
+	committer := newTestPerasCommitter(t, runner)
+	committer.RememberKey(key, true)
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	ok, err := executor.perasPredicatesHold(context.Background(), compile.SemanticDelta{
+		ReadPredicates: []compile.Predicate{{
+			Kind:             compile.PredicateObservedValue,
+			Key:              key,
+			ExpectedValue:    oldValue,
+			HasExpectedValue: true,
+			RuntimeChecked:   true,
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")
+}
+
 func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
 	commitErr := errors.New("peras commit failed")
@@ -1017,9 +1286,9 @@ func TestExecutorOpenWriteSessionPerasVisibleCommitBypassesRaftCommit(t *testing
 	requirePerasVisibleStatUint(t, stats, "skip_non_concrete_total", 0)
 }
 
-func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitServesLookupOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
@@ -1047,9 +1316,9 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesLookupOverlay(t *testing.
 	require.Equal(t, created.Dentry, lookedUp)
 }
 
-func TestExecutorCreatePerasBufferedVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	firstInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	secondInode := testInodeForParentBucket(t, fsmeta.RootInode, firstInode)
 	executor, err := newTestExecutor(
@@ -1085,9 +1354,9 @@ func TestExecutorCreatePerasBufferedVisibleCommitRejectsOverlayDuplicate(t *test
 	requirePerasVisibleStatUint(t, stats, "error_total", 0)
 }
 
-func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	childInode := testInodeForParentBucket(t, dirInode, dirInode)
 	executor, err := newTestExecutor(
@@ -1123,7 +1392,7 @@ func TestExecutorCreatePerasBufferedVisibleCommitUsesEmptyDirectoryFact(t *testi
 
 func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
@@ -1152,15 +1421,15 @@ func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: created.Inode.Inode, ExpiresUnixNs: 200}, opened)
-	require.Equal(t, 2, runner.getCalls, "open should probe and recheck the caller supplied session id; the create fact proves the inode owner key absent")
+	require.Equal(t, 0, runner.getCalls, "create facts prove both the inode owner key and the per-inode session namespace are absent")
 	require.Empty(t, runner.mutations)
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
 }
 
-func TestExecutorWriteSessionLifecyclePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorWriteSessionLifecyclePerasVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
@@ -1209,16 +1478,16 @@ func TestExecutorWriteSessionLifecyclePerasBufferedVisibleCommitServesOverlay(t 
 	_, deleted, ok = committer.GetPerasOverlay(ownerKey)
 	require.True(t, ok)
 	require.True(t, deleted)
-	require.Empty(t, runner.mutations, "buffered session lifecycle should stay entirely inside Peras overlay")
+	require.Empty(t, runner.mutations, "Peras session lifecycle should stay entirely inside Peras overlay")
 
 	stats := executor.Stats()
 	requirePerasVisibleStatUint(t, stats, "attempt_total", 3)
 	requirePerasVisibleStatUint(t, stats, "success_total", 3)
 }
 
-func TestExecutorCreatePerasBufferedVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
+func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
@@ -1245,6 +1514,56 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesReadDirPlusOverlay(t *tes
 		Dentry: created.Dentry,
 		Inode:  created.Inode,
 	}}, pairs)
+}
+
+func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
+	runner := newFakeRunner()
+	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
+	childInode := testInodeForParentBucket(t, dirInode, dirInode)
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	dir, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "run",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeDirectory},
+	})
+	require.NoError(t, err)
+	file, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Name:   "artifact",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	runner.scanVersions = nil
+	runner.batchVersions = nil
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{file.Dentry}, records)
+	require.Empty(t, runner.scanVersions, "Peras-created directory has a covered base namespace")
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{Dentry: file.Dentry, Inode: file.Inode}}, pairs)
+	require.Empty(t, runner.scanVersions)
+	require.Empty(t, runner.batchVersions)
 }
 
 func TestExecutorCreateFallsBackWhenPerasAuthorityHeldElsewhere(t *testing.T) {
@@ -1530,9 +1849,9 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "skip_total", 1)
 }
 
-func TestExecutorUpdateInodePerasBufferedVisibleCommitReadsCreateOverlay(t *testing.T) {
+func TestExecutorUpdateInodePerasVisibleCommitReadsCreateOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	inode := testInodeForParentBucket(t, 7)
 	executor, err := newTestExecutor(
 		runner,
@@ -2120,6 +2439,29 @@ func TestExecutorExpireWriteSessionsCountsSessionPerInode(t *testing.T) {
 	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 2}, result)
 }
 
+func TestExecutorExpireWriteSessionsUsesSessionBucketHint(t *testing.T) {
+	runner := newFakeRunner()
+	first := fsmeta.SessionRecord{Session: "writer-first", Inode: 22, ExpiresUnixNs: 50}
+	second := fsmeta.SessionRecord{Session: "writer-second", Inode: testInodeForDifferentBucket(t, first.Inode), ExpiresUnixNs: 50}
+	seedSession(t, runner, "vol", first)
+	seedSession(t, runner, "vol", second)
+	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
+	require.NoError(t, err)
+	executor.rememberSessionBucket(testMountIdentity, first.Inode)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
+	require.Len(t, runner.scanVersions, 1)
+
+	firstSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, first.Inode, first.Session)
+	require.NoError(t, err)
+	secondSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, second.Inode, second.Session)
+	require.NoError(t, err)
+	require.NotContains(t, runner.data, string(firstSessionKey))
+	require.Contains(t, runner.data, string(secondSessionKey))
+}
+
 func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T) {
 	runner := newFakeRunner()
 	expired := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}
@@ -2208,12 +2550,12 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
-func TestExecutorLinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorLinkPerasVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 8)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
@@ -2778,12 +3120,12 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	require.Equal(t, uint32(1), inode.LinkCount)
 }
 
-func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorUnlinkPerasVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
@@ -2804,12 +3146,12 @@ func TestExecutorUnlinkPerasBufferedVisibleCommitServesOverlay(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkLastReferencePerasBufferedVisibleCommitDeletesInode(t *testing.T) {
+func TestExecutorUnlinkLastReferencePerasVisibleCommitDeletesInode(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
@@ -2829,12 +3171,12 @@ func TestExecutorUnlinkLastReferencePerasBufferedVisibleCommitDeletesInode(t *te
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkDirectorySkipsPerasBufferedVisibleCommit(t *testing.T) {
+func TestExecutorUnlinkDirectorySkipsPerasVisibleCommit(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentryType(t, runner, "vol", 7, "dir", inode, fsmeta.InodeTypeDirectory)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeDirectory, Mode: 0o755, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
@@ -2974,10 +3316,10 @@ func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
 	require.Equal(t, fsmeta.InodeID(22), record.Inode)
 }
 
-func TestExecutorRenamePerasBufferedVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorRenamePerasVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
@@ -3014,7 +3356,7 @@ func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T)
 	require.Equal(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
 	seedDentry(t, runner, "vol", 7, "old", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
@@ -3047,7 +3389,7 @@ func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
 	toParent := testInodeForParentBucket(t, fromParent, fromParent)
 	seedDentry(t, runner, "vol", fromParent, "old", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	sourceKey, err := fsmeta.EncodeDentryKey(testMountIdentity, fromParent, "old")
 	require.NoError(t, err)
 	committer.RememberKey(sourceKey, true)
@@ -3070,7 +3412,7 @@ func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, 4, runner.getCalls, "rename should recheck observed source values and avoid reading a destination key proven absent by the Peras directory fact")
+	require.Equal(t, 4, runner.getCalls, "rename must recheck observed source values, but still avoid reading a destination key proven absent by the Peras directory fact")
 	require.Empty(t, runner.mutations)
 }
 
@@ -3082,7 +3424,7 @@ func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {
 	require.NotEqual(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
 	seedDentry(t, runner, "vol", fromParent, "old", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestBufferedPerasCommitter(t, runner)
+	committer := newTestPerasCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
@@ -3420,6 +3762,74 @@ func (e fakeTxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 // engine/slab/{negativecache,dirpage}/_test.go.
 // -----------------------------------------------------------------------------
 
+func TestExecutorLookupUsesPerasOverlayWithoutTimestamp(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "visible")
+	value := dentryValueForTest(t, fsmeta.RootInode, "visible", 22, fsmeta.InodeTypeFile)
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(key, value)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "visible",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	require.Zero(t, runner.getCalls)
+	require.Equal(t, uint64(1), runner.nextTS, "overlay lookup must not reserve a read timestamp")
+}
+
+func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "deleted")
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayDeleteForTest(key)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "deleted",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Zero(t, runner.getCalls)
+	require.Equal(t, uint64(1), runner.nextTS, "overlay tombstone lookup must not reserve a read timestamp")
+}
+
+func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "visible", 22)
+	inodeKey := inodeKeyForTest(t, "vol", 22)
+	inodeValue := inodeValueForTest(t, fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(inodeKey, inodeValue)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, "visible", pairs[0].Dentry.Name)
+	require.Equal(t, fsmeta.InodeID(22), pairs[0].Inode.Inode)
+	require.NotEmpty(t, runner.scanVersions)
+	require.Empty(t, runner.batchVersions, "inode attributes supplied by overlay should skip runner.BatchGet")
+}
+
 func TestExecutorNegativeCacheLookupShortCircuit(t *testing.T) {
 	runner := newFakeRunner()
 	cache := negativecache.New(negativecache.Config{
@@ -3646,35 +4056,6 @@ func BenchmarkExecutorCreatePerasVisibleCommit(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreatePerasDirectVisibleCommit(b *testing.B) {
-	runner := newFakeRunner()
-	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
-		EpochID:  1,
-		HolderID: "holder-a",
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
-	committer, err := fsperas.NewDirectCommitter(fsperas.DirectCommitterConfig{
-		Holder:   holder,
-		Versions: runner,
-		ReplayDB: benchmarkPerasApplier{},
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
-	)
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkExecutorCreate(b, executor)
-}
-
 func BenchmarkExecutorCheckpointStormDefaultPath100(b *testing.B) {
 	executor, err := newTestExecutor(newFakeRunner(), WithInodeAllocator(&fakeInodeAllocator{next: 22}))
 	if err != nil {
@@ -3685,7 +4066,7 @@ func BenchmarkExecutorCheckpointStormDefaultPath100(b *testing.B) {
 
 func BenchmarkExecutorCheckpointStormPerasSegment100(b *testing.B) {
 	runner := newFakeRunner()
-	committer := newTestBufferedPerasCommitter(b, runner)
+	committer := newTestPerasCommitter(b, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
@@ -3822,20 +4203,18 @@ func BenchmarkExecutorUnlinkPerasVisibleCommit(b *testing.B) {
 	benchmarkExecutorUnlink(b, runner, executor)
 }
 
-func newTestBufferedPerasCommitter(t testing.TB, versions fsperas.VersionAllocator) *fsperas.BufferedCommitter {
+func newTestPerasCommitter(t testing.TB, versions testVersionAllocator) *testPerasCommitter {
 	t.Helper()
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
 	})
 	require.NoError(t, err)
-	committer, err := fsperas.NewBufferedCommitter(fsperas.BufferedCommitterConfig{
-		Holder:   holder,
-		Versions: versions,
-		ReplayDB: benchmarkPerasApplier{},
-	})
-	require.NoError(t, err)
-	return committer
+	return &testPerasCommitter{
+		holder:   holder,
+		versions: versions,
+		view:     fsperas.NewOverlayView(),
+	}
 }
 
 func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
@@ -4032,12 +4411,6 @@ func benchmarkSeedInodeRecord(b *testing.B, runner *fakeRunner, record fsmeta.In
 		b.Fatal(err)
 	}
 	runner.data[string(key)] = value
-}
-
-type benchmarkPerasApplier struct{}
-
-func (benchmarkPerasApplier) ApplyInternalEntries([]*entrykv.Entry) error {
-	return nil
 }
 
 type corruptDirPageCache struct{}

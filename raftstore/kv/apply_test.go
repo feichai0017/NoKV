@@ -183,12 +183,14 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
 
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           dentryKey,
+				RoutingKey:           objectKey,
 				SegmentRoot:          segment.Root[:],
 				SegmentPayloadDigest: digest[:],
 				SegmentPayload:       payload,
@@ -312,6 +314,8 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
 
 	install := func(version uint64) *kvrpcpb.PerasInstallSegmentResponse {
 		t.Helper()
@@ -319,7 +323,7 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 			Requests: []*raftcmdpb.Request{{
 				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-					RoutingKey:           dentryKey,
+					RoutingKey:           objectKey,
 					SegmentRoot:          segment.Root[:],
 					SegmentPayloadDigest: digest[:],
 					SegmentPayload:       payload,

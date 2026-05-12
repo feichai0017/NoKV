@@ -14,9 +14,9 @@ type replayBucketKey struct {
 }
 
 // SplitReplayPlanByFSMetaBucket keeps segment install units inside one fsmeta
-// affinity bucket. A logical operation may span buckets; in that case each
-// bucket receives the operation's local mutations and the caller must release
-// the original holder operation only after every returned plan installs.
+// affinity bucket without splitting a logical operation. A cross-bucket
+// operation must stay on the ordinary durable path until Peras has a group
+// atomic install protocol.
 func SplitReplayPlanByFSMetaBucket(plan ReplayPlan) ([]ReplayPlan, error) {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 {
 		return nil, ErrInvalidPerasSegment
@@ -32,44 +32,27 @@ func SplitReplayPlanByFSMetaBucket(plan ReplayPlan) ([]ReplayPlan, error) {
 	haveFSMeta := false
 	haveOpaque := false
 	for i, op := range plan.Operations {
-		if !op.OpID.Valid() || len(op.Mutations) == 0 {
-			return nil, ErrInvalidPerasSegment
+		key, ok, err := replayOperationBucket(op)
+		if err != nil {
+			return nil, err
 		}
-		opBuckets := make(map[replayBucketKey][]ReplayMutation)
-		opBucketOrder := make([]replayBucketKey, 0, len(op.Mutations))
-		for _, mutation := range op.Mutations {
-			key, ok, err := replayMutationBucket(mutation)
-			if err != nil {
-				return nil, err
+		if !ok {
+			haveOpaque = true
+			if haveFSMeta {
+				return nil, ErrInvalidPerasSegment
 			}
-			if !ok {
-				haveOpaque = true
-				continue
-			}
-			haveFSMeta = true
-			if _, exists := opBuckets[key]; !exists {
-				opBucketOrder = append(opBucketOrder, key)
-			}
-			opBuckets[key] = append(opBuckets[key], cloneReplayMutation(mutation))
-		}
-		if haveOpaque && haveFSMeta {
-			return nil, ErrInvalidPerasSegment
-		}
-		if len(opBuckets) == 0 {
 			continue
 		}
-		for _, key := range opBucketOrder {
-			group := groups[key]
-			if group == nil {
-				group = &bucketPlan{first: i}
-				groups[key] = group
-			}
-			group.ops = append(group.ops, ReplayOperation{
-				OpID:      op.OpID,
-				Kind:      op.Kind,
-				Mutations: opBuckets[key],
-			})
+		haveFSMeta = true
+		if haveOpaque {
+			return nil, ErrInvalidPerasSegment
 		}
+		group := groups[key]
+		if group == nil {
+			group = &bucketPlan{first: i}
+			groups[key] = group
+		}
+		group.ops = append(group.ops, cloneReplayOperation(op))
 	}
 	if haveOpaque {
 		return []ReplayPlan{{EpochID: plan.EpochID, Operations: cloneReplayOperations(plan.Operations)}}, nil
@@ -95,6 +78,44 @@ func SplitReplayPlanByFSMetaBucket(plan ReplayPlan) ([]ReplayPlan, error) {
 		})
 	}
 	return out, nil
+}
+
+// SplitReplayPlanForCatalogInstall preserves fsmeta operations as one logical
+// segment whenever the install path writes only Peras catalog records. The
+// raftstore installer will write one bucket-local catalog object per touched
+// bucket, so a single segment may safely cover root dentry + workspace inode
+// creates without forcing the foreground operation back to the ordinary path.
+func SplitReplayPlanForCatalogInstall(plan ReplayPlan) ([]ReplayPlan, error) {
+	if plan.EpochID == 0 || len(plan.Operations) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	if !plan.Versions.Empty() {
+		return nil, ErrReplayVersionRequired
+	}
+	haveFSMeta := false
+	haveOpaque := false
+	for _, op := range plan.Operations {
+		if !op.OpID.Valid() || len(op.Mutations) == 0 {
+			return nil, ErrInvalidPerasSegment
+		}
+		for _, mutation := range op.Mutations {
+			if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
+				return nil, ErrInvalidPerasSegment
+			}
+			if _, ok := fsmeta.InspectKey(mutation.Key); ok {
+				haveFSMeta = true
+			} else {
+				haveOpaque = true
+			}
+			if haveFSMeta && haveOpaque {
+				return nil, ErrInvalidPerasSegment
+			}
+		}
+	}
+	if haveOpaque {
+		return SplitReplayPlanByFSMetaBucket(plan)
+	}
+	return []ReplayPlan{{EpochID: plan.EpochID, Operations: cloneReplayOperations(plan.Operations)}}, nil
 }
 
 // SplitReplayPlanByMutationBudget keeps each segment install under the local
@@ -178,6 +199,37 @@ func DeltaWritesSingleFSMetaBucket(delta compile.SemanticDelta) (bool, error) {
 			continue
 		}
 		if key != bucket {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func DeltaWritesPerasInstallable(delta compile.SemanticDelta) (bool, error) {
+	singleBucket, err := DeltaWritesSingleFSMetaBucket(delta)
+	if err != nil || singleBucket {
+		return singleBucket, err
+	}
+	if delta.Kind != fsmeta.OperationCreate {
+		return false, nil
+	}
+	if len(delta.WriteEffects) == 0 {
+		return false, ErrInvalidPerasSegment
+	}
+	var mount fsmeta.MountKeyID
+	for _, effect := range delta.WriteEffects {
+		if effect.Kind != compile.EffectPut || len(effect.Key) == 0 || effect.Value == nil {
+			return false, nil
+		}
+		parts, ok := fsmeta.InspectKey(effect.Key)
+		if !ok {
+			return false, nil
+		}
+		if mount == 0 {
+			mount = parts.MountKeyID
+			continue
+		}
+		if parts.MountKeyID != mount {
 			return false, nil
 		}
 	}

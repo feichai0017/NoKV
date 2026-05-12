@@ -1,9 +1,11 @@
 package raftstore
 
 import (
+	"errors"
 	"fmt"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -48,4 +50,26 @@ func runnerKeyError(op string, keyErr *kvrpcpb.KeyError) error {
 		return nil
 	}
 	return fmt.Errorf("fsmeta/runtime/raftstore: %s: %w", op, nokverrors.NewTxnKeyError(keyErr))
+}
+
+func (c *RemotePerasCommitter) recordErrorf(format string, args ...any) error {
+	return c.recordError(fmt.Errorf(format, args...))
+}
+
+func isPerasAdmissionTerminalError(err error) bool {
+	return errors.Is(err, fsmeta.ErrExists) ||
+		errors.Is(err, fsmeta.ErrNotFound) ||
+		errors.Is(err, fsmeta.ErrInvalidRequest) ||
+		errors.Is(err, fsmeta.ErrInvalidValue)
+}
+
+func (c *RemotePerasCommitter) recordError(err error) error {
+	if c == nil || err == nil {
+		return err
+	}
+	c.errorTotal.Add(1)
+	c.statsMu.Lock()
+	c.lastError = err.Error()
+	c.statsMu.Unlock()
+	return err
 }

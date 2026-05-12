@@ -68,14 +68,52 @@ func PerasSegmentCatalogIndexKeys(segment PerasSegment) ([][]byte, error) {
 }
 
 func PerasSegmentObjectKey(segment PerasSegment) ([]byte, error) {
+	keys, err := PerasSegmentCatalogObjectKeys(segment)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	return keys[0], nil
+}
+
+// PerasSegmentCatalogObjectKeys returns one bucket-local object key per
+// fsmeta bucket touched by the segment. Each object stores the same segment
+// payload; bucket-local index records point at their local copy so raftstore
+// never writes catalog metadata outside the region that committed it.
+func PerasSegmentCatalogObjectKeys(segment PerasSegment) ([][]byte, error) {
 	buckets, err := perasSegmentCatalogBuckets(segment)
 	if err != nil {
 		return nil, err
 	}
-	if len(buckets) == 0 {
-		return nil, ErrInvalidPerasSegment
+	keys := make([][]byte, 0, len(buckets))
+	for _, bucket := range buckets {
+		key, err := fsmeta.EncodePerasSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
 	}
-	return fsmeta.EncodePerasSegmentObjectKey(buckets[0].mount, buckets[0].bucket, segment.Root)
+	return keys, nil
+}
+
+func perasSegmentObjectBucket(segment PerasSegment, objectKey []byte) (perasSegmentCatalogBucket, error) {
+	parts, ok := fsmeta.InspectKey(objectKey)
+	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != segment.Root {
+		return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
+	}
+	target := perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}
+	buckets, err := perasSegmentCatalogBuckets(segment)
+	if err != nil {
+		return perasSegmentCatalogBucket{}, err
+	}
+	for _, bucket := range buckets {
+		if bucket == target {
+			return target, nil
+		}
+	}
+	return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
 }
 
 type perasSegmentCatalogBucket struct {
@@ -124,11 +162,11 @@ func perasSegmentCatalogBuckets(segment PerasSegment) ([]perasSegmentCatalogBuck
 
 func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord, error) {
 	if store == nil {
-		return nil, ErrReplayStoreRequired
+		return nil, ErrSegmentCatalogStoreRequired
 	}
 	it := store.NewInternalIterator(&index.Options{IsAsc: true})
 	if it == nil {
-		return nil, ErrReplayStoreRequired
+		return nil, ErrSegmentCatalogStoreRequired
 	}
 	var records []SegmentCatalogRecord
 	it.Rewind()
@@ -181,16 +219,23 @@ func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord
 }
 
 func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (SegmentCatalogRecord, bool, error) {
-	if store == nil {
-		return SegmentCatalogRecord{}, false, ErrReplayStoreRequired
-	}
 	catalogKey, err := PerasSegmentObjectKey(segment)
 	if err != nil {
 		return SegmentCatalogRecord{}, false, err
 	}
+	return LoadPerasSegmentCatalogForObjectKey(store, segment, catalogKey)
+}
+
+func LoadPerasSegmentCatalogForObjectKey(store SegmentCatalogStore, segment PerasSegment, catalogKey []byte) (SegmentCatalogRecord, bool, error) {
+	if store == nil {
+		return SegmentCatalogRecord{}, false, ErrSegmentCatalogStoreRequired
+	}
+	if _, err := perasSegmentObjectBucket(segment, catalogKey); err != nil {
+		return SegmentCatalogRecord{}, false, err
+	}
 	it := store.NewInternalIterator(&index.Options{IsAsc: true})
 	if it == nil {
-		return SegmentCatalogRecord{}, false, ErrReplayStoreRequired
+		return SegmentCatalogRecord{}, false, ErrSegmentCatalogStoreRequired
 	}
 	defer func() { _ = it.Close() }()
 

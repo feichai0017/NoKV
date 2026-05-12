@@ -37,7 +37,7 @@ func TestRemotePerasCommitterCommitsAndServesOverlay(t *testing.T) {
 	defer committer.Close()
 
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
-	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.NoError(t, err)
 
 	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
@@ -45,6 +45,46 @@ func TestRemotePerasCommitterCommitsAndServesOverlay(t *testing.T) {
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestRemotePerasCommitterPublishesVisibleWatch(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	parent := fsmeta.InodeID(1)
+	inode := testRuntimeInodeForBucket(t, fsmeta.BucketForInodeID(parent))
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, parent, "visible")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode)
+	require.NoError(t, err)
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	require.NoError(t, err)
+	router := fsmetawatch.NewRouter()
+	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{KeyPrefix: prefix})
+	require.NoError(t, err)
+	defer sub.Close()
+
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		WatchPublisher:    router,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	delta := testRuntimePerasDelta(dentryKey, inodeKey)
+	delta.Authority.Parents = []fsmeta.InodeID{parent}
+	delta.Authority.Inodes = []fsmeta.InodeID{inode}
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	require.NoError(t, err)
+
+	got := <-sub.Events()
+	require.Equal(t, fsmeta.WatchEventSourcePerasVisible, got.Source)
+	require.Equal(t, dentryKey, got.Key)
+	require.Zero(t, got.Cursor.RegionID)
+	require.Equal(t, uint64(1), got.Cursor.Term)
+	require.Equal(t, uint64(1), got.Cursor.Index)
 }
 
 func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
@@ -105,19 +145,16 @@ func TestRemotePerasCommitterScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	committer.overlayMu.Lock()
-	committer.sealed = map[string]runtimePerasOverlayEntry{
-		"k/a": {key: []byte("k/a"), value: []byte("sealed-a")},
-		"k/b": {key: []byte("k/b"), value: []byte("sealed-b")},
-		"k/d": {key: []byte("k/d"), value: []byte("sealed-d")},
-	}
-	committer.overlay = map[string]runtimePerasOverlayEntry{
-		"k/b": {key: []byte("k/b"), delete: true},
-		"k/c": {key: []byte("k/c"), value: []byte("overlay-c")},
-	}
-	committer.sealedKeysDirty = true
-	committer.overlayKeysDirty = true
-	committer.overlayMu.Unlock()
+	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/a"), []byte("sealed-a"))))
+	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/b"), []byte("sealed-b"))))
+	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/d"), []byte("sealed-d"))))
+	require.NoError(t, committer.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, compile.SemanticDelta{
+		Eligibility: compile.EligibilityVisibleCommit,
+		WriteEffects: []compile.WriteEffect{
+			{Kind: compile.EffectDelete, Key: []byte("k/b")},
+			{Kind: compile.EffectPut, Key: []byte("k/c"), Value: []byte("overlay-c")},
+		},
+	}))
 
 	scan := committer.ScanPerasOverlay([]byte("k/"), 4)
 	require.Equal(t, []fsperas.OverlayKV{
@@ -233,7 +270,7 @@ func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
 	ctx := context.Background()
 	opID := fsperas.OperationID{ClientID: "client", Seq: 7}
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
-	ack, err := committer.CommitPeras(ctx, opID, delta, nil)
+	ack, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
 	require.Equal(t, opID, ack.OpID)
 	require.NoError(t, committer.Flush(ctx))
@@ -241,7 +278,7 @@ func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, opID, completion.OpID)
 
-	retryAck, err := committer.CommitPeras(ctx, opID, delta, nil)
+	retryAck, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
 	require.Equal(t, ack.OpID, retryAck.OpID)
 	require.Equal(t, ack.EpochID, retryAck.EpochID)
@@ -263,9 +300,9 @@ func TestRemotePerasCommitterReturnsPendingAckOnRetry(t *testing.T) {
 	ctx := context.Background()
 	opID := fsperas.OperationID{ClientID: "client", Seq: 9}
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
-	first, err := committer.CommitPeras(ctx, opID, delta, nil)
+	first, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
-	second, err := committer.CommitPeras(ctx, opID, delta, func(context.Context, compile.SemanticDelta) (bool, error) {
+	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.SemanticDelta) (bool, error) {
 		t.Fatal("pending retry should not re-run admission")
 		return false, nil
 	})
@@ -301,7 +338,7 @@ func TestRemotePerasCommitterShutdownFlushesPendingSegment(t *testing.T) {
 	require.ErrorIs(t, err, errPerasCommitterClosed)
 }
 
-func TestRemotePerasCommitterFlushPartitionsSegmentsByFSMetaBucket(t *testing.T) {
+func TestRemotePerasCommitterFlushPreservesCatalogSegmentAcrossFSMetaBuckets(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -323,13 +360,13 @@ func TestRemotePerasCommitterFlushPartitionsSegmentsByFSMetaBucket(t *testing.T)
 	require.NoError(t, committer.Flush(ctx))
 
 	stats := committer.Stats()
-	require.Equal(t, uint64(2), stats["flush_total"])
-	require.Equal(t, uint64(2), stats["segment_total"])
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, uint64(1), stats["segment_total"])
 	require.Equal(t, uint64(2), stats["segment_operations_total"])
-	require.Equal(t, 2, installer.calls)
+	require.Equal(t, 1, installer.calls)
 }
 
-func TestRemotePerasCommitterFlushKeepsCrossBucketOperationVisible(t *testing.T) {
+func TestRemotePerasCommitterAcceptsCrossBucketCreateForCatalogInstall(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -346,19 +383,26 @@ func TestRemotePerasCommitterFlushKeepsCrossBucketOperationVisible(t *testing.T)
 	leftA, _ := testRuntimeBucketKeys(t, mount, 1)
 	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
 	ctx := context.Background()
-	require.NoError(t, commitRuntimePeras(ctx, committer, 1, leftA, rightA))
-	require.NoError(t, committer.Flush(ctx))
+	err = commitRuntimePeras(ctx, committer, 1, leftA, rightA)
+	require.NoError(t, err)
 
 	stats := committer.Stats()
-	require.Equal(t, uint64(2), stats["flush_total"])
-	require.Equal(t, uint64(2), stats["segment_total"])
-	require.Equal(t, uint64(2), stats["segment_operations_total"])
-	require.Equal(t, 2, installer.calls)
-	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, uint64(0), stats["flush_total"])
+	require.Equal(t, uint64(0), stats["segment_total"])
+	require.Equal(t, uint64(0), stats["segment_operations_total"])
+	require.Equal(t, 0, installer.calls)
+	require.Equal(t, 1, stats["pending"])
 	_, _, ok := committer.GetPerasOverlay(leftA)
 	require.True(t, ok)
 	_, _, ok = committer.GetPerasOverlay(rightA)
 	require.True(t, ok)
+
+	require.NoError(t, committer.Flush(ctx))
+	stats = committer.Stats()
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, uint64(1), stats["segment_total"])
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, 0, stats["pending"])
 }
 
 func TestRemotePerasCommitterFlushHonorsReplayMutationBudget(t *testing.T) {
@@ -518,8 +562,12 @@ func TestRemotePerasCommitterRecoveryPrefersInstalledCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, committer.appendSegmentWitnesses(context.Background(), scope, holder, segment, payload, digest))
 
+	seal := testRuntimePerasSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	seal.SegmentPayloadDigest = digest
 	scanner := &fakeRuntimePerasCatalogScanner{rows: testRuntimePerasCatalogRows(t, segment, 99)}
 	installer := &fakeRuntimePerasSegmentInstaller{}
+	provider.seals = []rootproto.PerasAuthoritySeal{seal}
 	recoverer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
 		Authority:         provider,
 		Witnesses:         witnesses,
@@ -622,6 +670,30 @@ func TestRemotePerasCommitterLoadsRootSealedSegments(t *testing.T) {
 	require.Equal(t, uint64(1), stats["root_sealed_segment_total"])
 	require.Equal(t, uint64(0), stats["root_sealed_segment_missing_total"])
 	require.Equal(t, uint64(1), stats["segment_total"])
+}
+
+func TestRemotePerasCommitterLoadRootSealedSegmentsSkipsCatalogWithoutRootSeal(t *testing.T) {
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 7}
+	provider := &fakeRuntimePerasGrantProvider{
+		holderID: "holder-a",
+		grant:    testRuntimeCommitterGrant(),
+	}
+	scanner := &fakeRuntimePerasCatalogScanner{rows: testRuntimePerasCatalogRows(t, testRuntimePerasSegment(t), 99)}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		CatalogScanner:    scanner,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.NoError(t, committer.LoadRootSealedSegments(context.Background(), scope))
+	require.Zero(t, scanner.calls)
+	stats := committer.Stats()
+	require.Equal(t, uint64(0), stats["segment_catalog_load_total"])
+	require.Equal(t, uint64(0), stats["root_sealed_segment_total"])
 }
 
 func TestRemotePerasCommitterRejectsMissingRootSealedSegmentCatalog(t *testing.T) {
@@ -768,9 +840,9 @@ func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *t
 	deltaB.Authority = scopeB
 
 	ctx := context.Background()
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, deltaA, nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, deltaA, nil)
 	require.NoError(t, err)
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, deltaB, nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, deltaB, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, committer.FlushAuthority(ctx, scopeA))
@@ -835,9 +907,9 @@ func TestRemotePerasCommitterDrainAuthorityFlushesAndRetires(t *testing.T) {
 	otherDelta.Authority = otherScope
 
 	ctx := context.Background()
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.NoError(t, err)
-	_, err = committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, otherDelta, nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, otherDelta, nil)
 	require.NoError(t, err)
 	retirer := &fakeRuntimePerasRetirer{}
 	require.NoError(t, committer.DrainAuthority(ctx, retirer, scope))
@@ -845,8 +917,8 @@ func TestRemotePerasCommitterDrainAuthorityFlushesAndRetires(t *testing.T) {
 	stats := committer.Stats()
 	require.Equal(t, uint64(1), stats["flush_total"])
 	require.Equal(t, uint64(1), stats["segment_total"])
-	require.Equal(t, uint64(2), stats["segment_operations_total"])
-	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, uint64(1), stats["segment_operations_total"])
+	require.Equal(t, 1, stats["pending"])
 	require.Equal(t, 1, installer.calls)
 	require.True(t, installer.materialize)
 	require.Equal(t, 1, retirer.calls)
@@ -908,6 +980,48 @@ func TestRemotePerasCommitterBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), installer.calls.Load())
 	require.Equal(t, 2, committer.Stats()["pending"])
+}
+
+func TestRemotePerasCommitterCloseCancelsInstallLane(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &blockingRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:                  provider,
+		Witnesses:                  testRuntimePerasWitnesses(t, 3),
+		Installer:                  installer,
+		SegmentBatchSize:           1024,
+		SegmentInstallParallelism:  1,
+		SegmentFlushEvery:          time.Hour,
+		BackgroundFlushTimeout:     time.Hour,
+		BackgroundErrorBackoff:     time.Hour,
+		SegmentMaxReplayMutations:  defaultPerasSegmentMaxReplayMutations,
+		SegmentWitnessRetryBackoff: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- committer.Flush(context.Background())
+	}()
+	require.Eventually(t, func() bool {
+		return installer.calls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	stats := committer.Stats()
+	require.Equal(t, 1, stats["segment_install_parallelism"])
+	require.Equal(t, 4, stats["segment_install_queue_capacity"])
+
+	closeDone := make(chan struct{})
+	go func() {
+		committer.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("committer close did not cancel blocked segment install")
+	}
+	require.Error(t, <-flushDone)
 }
 
 func TestRemotePerasCommitterFlushChainsBoundedReplayWindows(t *testing.T) {
@@ -1020,6 +1134,54 @@ func TestRemotePerasCommitterDrainAuthorityBlocksConcurrentCommitsUntilInstallFi
 	require.NoError(t, <-commitDone)
 }
 
+func TestRemotePerasCommitterDrainAuthorityAllowsDisjointCommitsDuringInstall(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &blockingRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
+	rightA, rightB := testRuntimeBucketKeys(t, mount, 2)
+	left := testRuntimePerasDeltaForBucket(leftA, leftB, 1)
+	right := testRuntimePerasDeltaForBucket(rightA, rightB, 2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, left, nil)
+	require.NoError(t, err)
+
+	drainDone := make(chan error, 1)
+	go func() {
+		drainDone <- committer.DrainAuthority(ctx, &fakeRuntimePerasRetirer{}, left.Authority)
+	}()
+	require.Eventually(t, func() bool {
+		return installer.calls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	disjointDone := make(chan error, 1)
+	go func() {
+		_, err := committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 2}, right, nil)
+		disjointDone <- err
+	}()
+	select {
+	case err := <-disjointDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("disjoint commit blocked behind scoped authority drain")
+	}
+
+	cancel()
+	require.ErrorIs(t, <-drainDone, context.Canceled)
+}
+
 func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
@@ -1033,7 +1195,7 @@ func TestRemotePerasCommitterRollsBackHolderOnOverlayAdmissionFailure(t *testing
 
 	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
 	delta.WriteEffects = []compile.WriteEffect{{Kind: compile.EffectDelete}}
-	_, err = committer.CommitPeras(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.Error(t, err)
 	require.Equal(t, 0, committer.Stats()["pending"])
 }
@@ -1194,7 +1356,7 @@ func BenchmarkRemotePerasCommitterCreate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dentryKey := appendUvarintKey("dentry/", uint64(i))
 		inodeKey := appendUvarintKey("inode/", uint64(i))
-		_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
+		_, err := committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1221,7 +1383,7 @@ func BenchmarkRemotePerasCommitterCreateParallel(b *testing.B) {
 			current := seq.Add(1)
 			dentryKey := appendUvarintKey("dentry/", current)
 			inodeKey := appendUvarintKey("inode/", current)
-			_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "bench", Seq: current}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
+			_, err := committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "bench", Seq: current}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1231,19 +1393,22 @@ func BenchmarkRemotePerasCommitterCreateParallel(b *testing.B) {
 
 func BenchmarkRemotePerasCommitterScanPerasOverlay(b *testing.B) {
 	committer := &RemotePerasCommitter{
-		overlay: make(map[string]runtimePerasOverlayEntry, 1024),
-		sealed:  make(map[string]runtimePerasOverlayEntry, 100_000),
+		overlay: fsperas.NewOverlayView(),
+		sealed:  fsperas.NewOverlayView(),
 	}
 	for i := 0; i < 100_000; i++ {
 		key := []byte(fmt.Sprintf("dentry/%08d", i))
-		committer.sealed[string(key)] = runtimePerasOverlayEntry{key: key, value: []byte("sealed")}
+		require.NoError(b, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay(key, []byte("sealed"))))
 	}
 	for i := 0; i < 1024; i++ {
 		key := []byte(fmt.Sprintf("dentry/%08d", i*16))
-		committer.overlay[string(key)] = runtimePerasOverlayEntry{key: key, value: []byte("overlay")}
+		require.NoError(b, committer.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.SemanticDelta{
+			Eligibility: compile.EligibilityVisibleCommit,
+			WriteEffects: []compile.WriteEffect{
+				{Kind: compile.EffectPut, Key: key, Value: []byte("overlay")},
+			},
+		}))
 	}
-	committer.sealedKeysDirty = true
-	committer.overlayKeysDirty = true
 	require.Len(b, committer.ScanPerasOverlay([]byte("dentry/00000000"), 128), 128)
 
 	b.ReportAllocs()
@@ -1293,8 +1458,25 @@ func BenchmarkRemotePerasCommitterFlushInstallParallelism(b *testing.B) {
 }
 
 func commitRuntimePeras(ctx context.Context, committer *RemotePerasCommitter, seq uint64, dentryKey, inodeKey []byte) error {
-	_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: seq}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
+	_, err := committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: seq}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 	return err
+}
+
+func testRuntimePerasSegmentForOverlay(key, value []byte) fsperas.PerasSegment {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "overlay", Seq: 1},
+			Kind: fsmeta.OperationUpdateInode,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: key, Value: value},
+			},
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return segment
 }
 
 func testRuntimePerasCatalogRows(tb testing.TB, segment fsperas.PerasSegment, installVersion uint64) []fsmetaexec.KV {
@@ -1597,6 +1779,14 @@ func testRuntimePerasDelta(dentryKey, inodeKey []byte) compile.SemanticDelta {
 	}
 }
 
+func testRuntimePerasDeltaForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.SemanticDelta {
+	delta := testRuntimePerasDelta(dentryKey, inodeKey)
+	delta.Authority.Buckets = []fsmeta.AffinityBucket{bucket}
+	delta.Authority.Parents = nil
+	delta.Authority.Inodes = nil
+	return delta
+}
+
 func appendUvarintKey(prefix string, v uint64) []byte {
 	out := append([]byte(prefix), 0)
 	return binary.AppendUvarint(out, v)
@@ -1621,4 +1811,15 @@ func testRuntimeBucketKeys(tb testing.TB, mount fsmeta.MountIdentity, bucket fsm
 	require.NotNil(tb, first)
 	require.NotNil(tb, second)
 	return first, second
+}
+
+func testRuntimeInodeForBucket(tb testing.TB, bucket fsmeta.AffinityBucket) fsmeta.InodeID {
+	tb.Helper()
+	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
+		if fsmeta.BucketForInodeID(inode) == bucket {
+			return inode
+		}
+	}
+	tb.Fatalf("no inode found for bucket %d", bucket)
+	return 0
 }

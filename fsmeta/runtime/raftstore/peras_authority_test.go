@@ -65,6 +65,32 @@ func TestPerasAuthorityManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	require.Equal(t, []perasauth.AuthorityGrant{grant}, table.Snapshot())
 }
 
+func TestPerasAuthorityManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
+	now := time.Unix(10, 0)
+	scope := testRuntimePerasScope(1)
+	wideScope := scope
+	wideScope.Buckets = nil
+	wideScope.Parents = nil
+	wideScope.Inodes = nil
+	grant := testRuntimePerasGrant("holder-a/1", "holder-a", wideScope, now.Add(time.Minute))
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{grant}))
+	client := &fakePerasAuthorityClient{}
+	manager, err := NewPerasAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+
+	got, owned, err := manager.Acquire(context.Background(), scope)
+	require.NoError(t, err)
+	require.True(t, owned)
+	require.Equal(t, grant.GrantID, got.GrantID)
+	require.Equal(t, grant.HolderID, got.HolderID)
+	require.Equal(t, grant.Scope.MountKeyID, got.Scope.MountKeyID)
+	require.Empty(t, got.Scope.Buckets)
+	require.Empty(t, got.Scope.Parents)
+	require.Empty(t, got.Scope.Inodes)
+	require.Zero(t, client.calls)
+}
+
 func TestPerasAuthorityManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)

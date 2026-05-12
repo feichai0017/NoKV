@@ -1256,6 +1256,7 @@ func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T
 			SegmentPayloadDigest: append([]byte(nil), digest[:]...),
 			SegmentPayload:       payload,
 			InstallVersion:       10,
+			MaterializeMvcc:      true,
 		}},
 	}}}
 

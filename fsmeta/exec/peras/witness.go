@@ -4,19 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"sync"
 
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-)
-
-var (
-	ErrInvalidWitnessRecord            = errors.New("fsmeta peras: invalid witness record")
-	ErrWitnessLogRequired              = errors.New("fsmeta peras: witness log required")
-	ErrWitnessReplicaInvalid           = errors.New("fsmeta peras: invalid witness replica")
-	ErrSegmentWitnessQuorumUnavailable = errors.New("fsmeta peras: segment witness quorum unavailable")
 )
 
 type WitnessReplica interface {

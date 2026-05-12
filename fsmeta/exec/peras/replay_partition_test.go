@@ -28,11 +28,11 @@ func TestSplitReplayPlanByFSMetaBucket(t *testing.T) {
 	require.Equal(t, []OperationID{opID("client", 2)}, replayPlanOpIDs(out[1]))
 }
 
-func TestSplitReplayPlanByFSMetaBucketSplitsOneOperationAcrossBuckets(t *testing.T) {
+func TestSplitReplayPlanByFSMetaBucketRejectsOneOperationAcrossBuckets(t *testing.T) {
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftKey := fsmetaInodeKeyForBucket(t, mount, 1)
 	rightKey := fsmetaInodeKeyForBucket(t, mount, 2)
-	out, err := SplitReplayPlanByFSMetaBucket(ReplayPlan{
+	_, err := SplitReplayPlanByFSMetaBucket(ReplayPlan{
 		EpochID: 1,
 		Operations: []ReplayOperation{{
 			OpID: opID("client", 1),
@@ -43,12 +43,7 @@ func TestSplitReplayPlanByFSMetaBucketSplitsOneOperationAcrossBuckets(t *testing
 			},
 		}},
 	})
-	require.NoError(t, err)
-	require.Len(t, out, 2)
-	require.Equal(t, []OperationID{opID("client", 1)}, replayPlanOpIDs(out[0]))
-	require.Equal(t, []OperationID{opID("client", 1)}, replayPlanOpIDs(out[1]))
-	require.Len(t, out[0].Operations[0].Mutations, 1)
-	require.Len(t, out[1].Operations[0].Mutations, 1)
+	require.ErrorIs(t, err, ErrInvalidPerasSegment)
 }
 
 func TestSplitReplayPlanByFSMetaBucketLeavesNonFSMetaTestPlansWhole(t *testing.T) {

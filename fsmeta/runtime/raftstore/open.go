@@ -274,6 +274,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			Witnesses:                  perasWitnesses.witnesses,
 			Installer:                  newRunnerPerasSegmentInstaller(runner, router),
 			CatalogScanner:             runner,
+			WatchPublisher:             router,
 			Quorum:                     opts.PerasWitnessQuorum,
 			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,

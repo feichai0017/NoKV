@@ -2,17 +2,11 @@ package peras
 
 import (
 	"bytes"
-	"errors"
 	"slices"
 	"sort"
 	"sync"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-)
-
-var (
-	ErrInvalidOperationID = errors.New("fsmeta peras: invalid operation id")
-	ErrDuplicateOperation = errors.New("fsmeta peras: duplicate operation id")
 )
 
 // OperationID is the holder-local idempotency key for one Peras operation.

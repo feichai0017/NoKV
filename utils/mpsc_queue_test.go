@@ -101,6 +101,28 @@ func TestMPSCQueueCloseUnblocksFullProducer(t *testing.T) {
 	}
 }
 
+func TestMPSCQueueTryPushDoesNotBlockOnFullQueue(t *testing.T) {
+	q := NewMPSCQueue[int](2)
+	if !q.TryPush(1) || !q.TryPush(2) {
+		t.Fatalf("try-push should fill empty queue")
+	}
+	if q.TryPush(3) {
+		t.Fatalf("try-push should fail on full queue")
+	}
+	consumer := q.AcquireConsumer()
+	if consumer == nil {
+		t.Fatalf("expected consumer")
+	}
+	defer consumer.Close()
+	got, ok := consumer.Pop()
+	if !ok || got != 1 {
+		t.Fatalf("pop got %d %v, want 1 true", got, ok)
+	}
+	if !q.TryPush(3) {
+		t.Fatalf("try-push should succeed after one pop")
+	}
+}
+
 func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 	q := NewMPSCQueue[int](64)
 	const (

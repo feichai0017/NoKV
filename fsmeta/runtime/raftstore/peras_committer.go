@@ -1,27 +1,20 @@
 package raftstore
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
-	"slices"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 const (
@@ -42,6 +35,7 @@ const (
 	defaultPerasSegmentInstallMaxBackoff      = 500 * time.Millisecond
 	defaultPerasInstallTimestampRetries       = 6
 	defaultPerasInstallTimestampBackoff       = 2 * time.Millisecond
+	defaultPerasVisibleWatchQueue             = 65536
 )
 
 type perasGrantProvider interface {
@@ -65,10 +59,6 @@ type perasSegmentCatalogScanner interface {
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]fsmetaexec.KV, error)
 }
 
-type perasSegmentInstallClient interface {
-	InstallPerasSegment(context.Context, []byte, *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error)
-}
-
 type PerasInstallCursor struct {
 	RegionID       uint64
 	Term           uint64
@@ -85,6 +75,7 @@ type RemotePerasCommitterConfig struct {
 	Witnesses                  []fsperas.WitnessReplica
 	Installer                  perasSegmentInstaller
 	CatalogScanner             perasSegmentCatalogScanner
+	WatchPublisher             perasWatchPublisher
 	Quorum                     int
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
@@ -106,6 +97,7 @@ type RemotePerasCommitter struct {
 	witnesses  []fsperas.WitnessReplica
 	installer  perasSegmentInstaller
 	catalog    perasSegmentCatalogScanner
+	watch      perasWatchPublisher
 	quorum     int
 	retries    int
 	backoff    time.Duration
@@ -117,29 +109,38 @@ type RemotePerasCommitter struct {
 	bgBackoff  time.Duration
 	now        func() time.Time
 
-	commitMu  sync.RWMutex
-	flushMu   sync.Mutex
-	bgRunning atomic.Bool
-	bgNext    atomic.Int64
-	closed    atomic.Bool
+	commitMu   sync.RWMutex
+	flushMu    sync.Mutex
+	bgLaunchMu sync.Mutex
+	bgRunning  atomic.Bool
+	bgNext     atomic.Int64
+	visibleSeq atomic.Uint64
+	closed     atomic.Bool
+	closer     *utils.Closer
+	flushTask  *utils.PeriodicTask
+	watchQueue *utils.MPSCQueue[fsmeta.WatchEvent]
+	installQ   *perasInstallLane
+	sealQ      *perasSealLane
+
+	// Lock order for multi-lock paths:
+	// commitMu -> flushMu -> drainMu -> holdersMu -> overlayMu -> statsMu.
+	// Lane workers communicate through queues and must not take commitMu.
+	drainMu     sync.Mutex
+	drainCond   *sync.Cond
+	drainNextID uint64
+	drainUses   []perasAuthorityUse
+	drainScopes []compile.AuthorityScope
+
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
 	grants    map[uint64]perasauth.AuthorityGrant
 	latches   *fsperas.AdmissionLatches
 
-	overlayMu        sync.RWMutex
-	overlay          map[string]runtimePerasOverlayEntry
-	sealed           map[string]runtimePerasOverlayEntry
-	known            map[string]bool
-	emptyDirs        map[string]struct{}
-	segments         []fsperas.PerasSegment
-	completed        map[fsperas.OperationID]runtimePerasCompletion
-	overlayKeys      []string
-	sealedKeys       []string
-	overlayKeysDirty bool
-	sealedKeysDirty  bool
-
-	stop chan struct{}
+	overlayMu sync.RWMutex
+	overlay   *fsperas.OverlayView
+	sealed    *fsperas.OverlayView
+	segments  []fsperas.PerasSegment
+	completed map[fsperas.OperationID]perasCompletion
 
 	commitTotal          atomic.Uint64
 	flushTotal           atomic.Uint64
@@ -179,19 +180,12 @@ type RemotePerasCommitter struct {
 	lastError        string
 }
 
-type runtimePerasOverlayEntry struct {
-	opID   fsperas.OperationID
-	key    []byte
-	value  []byte
-	delete bool
-}
-
-type runtimePerasCompletion struct {
+type perasCompletion struct {
 	epochID    uint64
 	completion fsperas.SegmentCompletion
 }
 
-type runtimePerasFlushJob struct {
+type perasFlushJob struct {
 	scope       compile.AuthorityScope
 	plan        fsperas.ReplayPlan
 	segment     fsperas.PerasSegment
@@ -201,13 +195,13 @@ type runtimePerasFlushJob struct {
 	cursor      PerasInstallCursor
 }
 
-type runtimePerasFlushBatch struct {
+type perasFlushBatch struct {
 	holder *fsperas.Holder
 	plan   fsperas.ReplayPlan
-	jobs   []runtimePerasFlushJob
+	jobs   []perasFlushJob
 }
 
-type runtimePerasFrozenPlan struct {
+type perasFrozenPlan struct {
 	holder *fsperas.Holder
 	scope  compile.AuthorityScope
 	plan   fsperas.ReplayPlan
@@ -303,6 +297,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		witnesses:  witnesses,
 		installer:  cfg.Installer,
 		catalog:    cfg.CatalogScanner,
+		watch:      cfg.WatchPublisher,
 		quorum:     quorum,
 		retries:    retries,
 		backoff:    backoff,
@@ -313,29 +308,61 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		bgTimeout:  bgTimeout,
 		bgBackoff:  bgBackoff,
 		now:        now,
+		closer:     utils.NewCloser(),
 		holders:    make(map[uint64]*fsperas.Holder),
 		grants:     make(map[uint64]perasauth.AuthorityGrant),
 		latches:    fsperas.NewAdmissionLatches(),
-		overlay:    make(map[string]runtimePerasOverlayEntry),
-		sealed:     make(map[string]runtimePerasOverlayEntry),
-		known:      make(map[string]bool),
-		emptyDirs:  make(map[string]struct{}),
-		completed:  make(map[fsperas.OperationID]runtimePerasCompletion),
-		stop:       make(chan struct{}),
+		overlay:    fsperas.NewOverlayView(),
+		sealed:     fsperas.NewOverlayView(),
+		completed:  make(map[fsperas.OperationID]perasCompletion),
+	}
+	c.drainCond = sync.NewCond(&c.drainMu)
+	if c.installer != nil {
+		c.installQ = newPerasInstallLane(c, c.installN)
+	}
+	if _, ok := c.authority.(perasSealPublisher); ok {
+		c.sealQ = newPerasSealLane(c, c.installN)
+	}
+	if c.watch != nil {
+		c.watchQueue = utils.NewMPSCQueue[fsmeta.WatchEvent](defaultPerasVisibleWatchQueue)
+		c.closer.Add(1)
+		go c.visibleWatchLoop()
 	}
 	if c.flushEvery > 0 {
-		go c.flushLoop()
+		var skipFirst atomic.Bool
+		skipFirst.Store(true)
+		c.flushTask = utils.NewPeriodicTask(utils.PeriodicTaskConfig{
+			Name:     "peras-segment-flush",
+			Interval: c.flushEvery,
+			Run: func(context.Context) error {
+				if skipFirst.Swap(false) {
+					return nil
+				}
+				c.triggerBackgroundFlush()
+				return nil
+			},
+		})
+		c.flushTask.Start()
 	}
 	return c, nil
 }
 
-func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, errPerasCommitterInvalid
 	}
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
 	}
+	installable, err := fsperas.DeltaWritesPerasInstallable(delta)
+	if err != nil {
+		return fsperas.VisibleAck{}, c.recordError(err)
+	}
+	if !installable {
+		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
+	}
+	leaveAuthority := c.enterAuthority(delta.Authority)
+	defer leaveAuthority()
 	c.commitMu.RLock()
 	defer c.commitMu.RUnlock()
 	if c.closed.Load() {
@@ -382,6 +409,7 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
+	c.publishVisibleWatch(delta, ack)
 	c.commitTotal.Add(1)
 	if c.batchSize > 0 && holder.Pending() >= c.batchSize {
 		c.triggerBackgroundFlush()
@@ -435,6 +463,10 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 }
 
 func (c *RemotePerasCommitter) Flush(ctx context.Context) error {
+	return c.FlushDurable(ctx)
+}
+
+func (c *RemotePerasCommitter) FlushDurable(ctx context.Context) error {
 	return c.flush(ctx, nil)
 }
 
@@ -443,28 +475,6 @@ func (c *RemotePerasCommitter) FlushAuthority(ctx context.Context, scope compile
 		return c.Flush(ctx)
 	}
 	return c.flush(ctx, &scope)
-}
-
-func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
-	if c == nil || retirer == nil {
-		return errPerasCommitterInvalid
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	c.flushMu.Lock()
-	defer c.flushMu.Unlock()
-	c.commitMu.Lock()
-	defer c.commitMu.Unlock()
-
-	batches, err := c.freezeFlushBatchesLocked(nil, true, 0)
-	if err != nil {
-		return err
-	}
-	if err := c.installFlushBatches(ctx, batches); err != nil {
-		return err
-	}
-	return c.retireDrainedAuthority(ctx, retirer, scopes...)
 }
 
 func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.AuthorityScope) error {
@@ -479,909 +489,12 @@ func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.Authori
 	return c.flushLocked(ctx, scope)
 }
 
-func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope compile.AuthorityScope, epochID uint64) error {
-	if c == nil || epochID == 0 || c.installer == nil {
-		return errPerasCommitterInvalid
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := c.LoadRootSealedSegments(ctx, scope); err != nil {
-		return err
-	}
-	records, err := c.collectWitnessSegments(ctx, epochID)
-	if err != nil {
-		return c.recordErrorf("probe peras segment witnesses: %w", err)
-	}
-	for _, record := range records {
-		if c.segmentInstalled(record.SegmentRoot) {
-			c.recoverySkipTotal.Add(1)
-			continue
-		}
-		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
-			return c.recordErrorf("verify peras segment witness: %w", err)
-		}
-		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
-		if err != nil {
-			return c.recordErrorf("decode peras witness segment: %w", err)
-		}
-		if !perasSegmentWithinScope(segment, scope) {
-			continue
-		}
-		stats := segment.Stats()
-		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
-			return c.recordError(fsperas.ErrInvalidWitnessRecord)
-		}
-		if _, err := c.installer.InstallPerasSegment(ctx, scope, segment, record.SegmentPayload, record.SegmentPayloadDigest, false); err != nil {
-			return c.recordErrorf("recover peras segment install: %w", err)
-		}
-		c.installSegment(fsperas.ReplayPlan{}, segment)
-		c.recoveryInstallTotal.Add(1)
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope compile.AuthorityScope) error {
-	if c == nil || c.catalog == nil || scope.MountKeyID == 0 {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	records, err := c.scanInstalledSegmentCatalogs(ctx, scope)
-	if err != nil {
-		return c.recordErrorf("load peras segment catalogs: %w", err)
-	}
-	for _, record := range records {
-		if c.segmentInstalled(record.Root) {
-			continue
-		}
-		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.Root, record.SegmentPayloadDigest)
-		if err != nil {
-			return c.recordErrorf("decode peras segment catalog: %w", err)
-		}
-		if !perasSegmentWithinScope(segment, scope) {
-			continue
-		}
-		c.installSegment(fsperas.ReplayPlan{}, segment)
-		c.catalogLoadTotal.Add(1)
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) LoadRootSealedSegments(ctx context.Context, scope compile.AuthorityScope) error {
-	if c == nil {
-		return errPerasCommitterInvalid
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := c.LoadInstalledSegments(ctx, scope); err != nil {
-		return err
-	}
-	if c.seals == nil {
-		return nil
-	}
-	seals, err := c.seals.ListPerasAuthoritySeals(ctx, scope)
-	if err != nil {
-		return c.recordErrorf("list rooted peras segment seals: %w", err)
-	}
-	for _, seal := range seals {
-		if !seal.Valid() {
-			return c.recordError(fsperas.ErrInvalidPerasSegment)
-		}
-		c.rootSealTotal.Add(1)
-		if c.segmentInstalled(seal.SegmentRoot) {
-			continue
-		}
-		c.rootSealMissingTotal.Add(1)
-		return c.recordErrorf("rooted peras segment seal missing installed catalog: %w", fsperas.ErrInvalidPerasSegment)
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
-	buckets := perasCatalogBuckets(scope)
-	if len(buckets) == 0 {
-		return nil, nil
-	}
-	records := make([]fsperas.SegmentCatalogRecord, 0)
-	seen := make(map[[32]byte]struct{})
-	for _, bucket := range buckets {
-		prefix, err := fsmeta.EncodePerasSegmentCatalogIndexPrefix(scope.MountKeyID, bucket)
-		if err != nil {
-			return nil, err
-		}
-		next := runtimeCloneBytes(prefix)
-		for {
-			kvs, err := c.catalog.Scan(ctx, next, defaultPerasSegmentCatalogScanLimit, 0)
-			if err != nil {
-				return nil, err
-			}
-			if len(kvs) == 0 {
-				break
-			}
-			exhausted := false
-			for _, kv := range kvs {
-				if !bytes.HasPrefix(kv.Key, prefix) {
-					exhausted = true
-					break
-				}
-				index, err := fsperas.DecodePerasSegmentCatalogIndexRecord(kv.Value)
-				if err != nil {
-					return nil, err
-				}
-				parts, ok := fsmeta.InspectKey(kv.Key)
-				if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordIndex || parts.PerasRoot != index.Root {
-					return nil, fsperas.ErrInvalidPerasSegment
-				}
-				if _, ok := seen[index.Root]; ok {
-					next = scanAfterKey(kv.Key)
-					continue
-				}
-				record, err := c.loadInstalledSegmentObject(ctx, index)
-				if err != nil {
-					return nil, err
-				}
-				seen[index.Root] = struct{}{}
-				records = append(records, record)
-				next = scanAfterKey(kv.Key)
-			}
-			if exhausted || len(kvs) < defaultPerasSegmentCatalogScanLimit {
-				break
-			}
-		}
-	}
-	slices.SortFunc(records, func(a, b fsperas.SegmentCatalogRecord) int {
-		if a.InstallVersion < b.InstallVersion {
-			return -1
-		}
-		if a.InstallVersion > b.InstallVersion {
-			return 1
-		}
-		return bytes.Compare(a.Root[:], b.Root[:])
-	})
-	return records, nil
-}
-
-func (c *RemotePerasCommitter) loadInstalledSegmentObject(ctx context.Context, index fsperas.SegmentCatalogIndexRecord) (fsperas.SegmentCatalogRecord, error) {
-	kvs, err := c.catalog.Scan(ctx, index.ObjectKey, 1, 0)
-	if err != nil {
-		return fsperas.SegmentCatalogRecord{}, err
-	}
-	if len(kvs) == 0 || !bytes.Equal(kvs[0].Key, index.ObjectKey) {
-		return fsperas.SegmentCatalogRecord{}, fsperas.ErrInvalidPerasSegment
-	}
-	record, err := fsperas.DecodePerasSegmentCatalogRecord(kvs[0].Value)
-	if err != nil {
-		return fsperas.SegmentCatalogRecord{}, err
-	}
-	if record.Root != index.Root ||
-		record.InstallVersion != index.InstallVersion ||
-		record.SegmentPayloadDigest != index.SegmentPayloadDigest ||
-		record.SegmentPayloadSize != index.SegmentPayloadSize {
-		return fsperas.SegmentCatalogRecord{}, fsperas.ErrInvalidPerasSegment
-	}
-	return record, nil
-}
-
-func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
-	c.commitMu.Lock()
-	batches, err := c.freezeFlushBatchesLocked(scope, false, 0)
-	c.commitMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return c.installFlushBatches(ctx, batches)
-}
-
-func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches []runtimePerasFlushBatch) error {
-	if len(batches) > 0 && c.installer == nil {
-		return c.recordError(errPerasCommitterInvalid)
-	}
-	for _, batch := range batches {
-		if err := c.installFlushBatchJobs(ctx, batch); err != nil {
-			return err
-		}
-		if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
-			return c.recordErrorf("mark peras plan applied: %w", err)
-		}
-		for _, job := range batch.jobs {
-			c.installSegment(job.plan, job.segment)
-		}
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch runtimePerasFlushBatch) error {
-	c.recordFlushBatch(len(batch.jobs))
-	if len(batch.jobs) <= 1 || c.installN <= 1 {
-		jobs := make([]runtimePerasFlushJob, 0, len(batch.jobs))
-		for _, job := range batch.jobs {
-			installed, err := c.installOneFlushJob(ctx, batch.holder, job)
-			if err != nil {
-				return err
-			}
-			jobs = append(jobs, installed)
-		}
-		batch.jobs = jobs
-		return c.publishFlushJobSeals(ctx, batch)
-	}
-	started := make([]time.Time, len(batch.jobs))
-	for idx := range started {
-		started[idx] = time.Now()
-	}
-	if err := c.appendFlushBatchWitnesses(ctx, batch); err != nil {
-		return err
-	}
-	jobs, err := c.installFlushBatchSegments(ctx, batch, started)
-	if err != nil {
-		return err
-	}
-	batch.jobs = jobs
-	return c.publishFlushJobSeals(ctx, batch)
-}
-
-func (c *RemotePerasCommitter) appendFlushBatchWitnesses(ctx context.Context, batch runtimePerasFlushBatch) error {
-	return c.runFlushBatchJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job runtimePerasFlushJob) error {
-		witnessStart := time.Now()
-		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, batch.holder, job.segment, job.payload, job.digest); err != nil {
-			return c.recordErrorf("append peras segment witness: %w", err)
-		}
-		c.recordWitnessLatency(time.Since(witnessStart))
-		return nil
-	})
-}
-
-func (c *RemotePerasCommitter) installFlushBatchSegments(ctx context.Context, batch runtimePerasFlushBatch, started []time.Time) ([]runtimePerasFlushJob, error) {
-	jobs := make([]runtimePerasFlushJob, len(batch.jobs))
-	copy(jobs, batch.jobs)
-	if err := c.runFlushBatchJobs(ctx, jobs, func(ctx context.Context, idx int, job runtimePerasFlushJob) error {
-		installStart := time.Now()
-		cursor, err := c.installSegmentWithRetry(ctx, job)
-		if err != nil {
-			return c.recordErrorf("install peras segment: %w", err)
-		}
-		jobs[idx].cursor = cursor
-		c.recordInstallLatency(time.Since(installStart))
-		if idx >= 0 && idx < len(started) && !started[idx].IsZero() {
-			c.recordFlushLatency(time.Since(started[idx]))
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return jobs, nil
-}
-
-func (c *RemotePerasCommitter) runFlushBatchJobs(ctx context.Context, jobs []runtimePerasFlushJob, run func(context.Context, int, runtimePerasFlushJob) error) error {
-	workers := c.installN
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	work := make(chan struct {
-		index int
-		job   runtimePerasFlushJob
-	})
-	var wg sync.WaitGroup
-	var errMu sync.Mutex
-	var firstErr error
-	setErr := func(err error) {
-		if err == nil {
-			return
-		}
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-			cancel()
-		}
-		errMu.Unlock()
-	}
-	wg.Add(workers)
-	for range workers {
-		go func() {
-			defer wg.Done()
-			for item := range work {
-				if err := run(runCtx, item.index, item.job); err != nil {
-					setErr(err)
-					return
-				}
-			}
-		}()
-	}
-send:
-	for idx, job := range jobs {
-		select {
-		case <-runCtx.Done():
-			break send
-		case work <- struct {
-			index int
-			job   runtimePerasFlushJob
-		}{index: idx, job: job}:
-		}
-	}
-	close(work)
-	wg.Wait()
-	errMu.Lock()
-	err := firstErr
-	errMu.Unlock()
-	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) (runtimePerasFlushJob, error) {
-	flushStart := time.Now()
-	defer func() {
-		c.recordFlushLatency(time.Since(flushStart))
-	}()
-	witnessStart := time.Now()
-	if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, holder, job.segment, job.payload, job.digest); err != nil {
-		return job, c.recordErrorf("append peras segment witness: %w", err)
-	}
-	c.recordWitnessLatency(time.Since(witnessStart))
-	installStart := time.Now()
-	cursor, err := c.installSegmentWithRetry(ctx, job)
-	if err != nil {
-		return job, c.recordErrorf("install peras segment: %w", err)
-	}
-	job.cursor = cursor
-	c.recordInstallLatency(time.Since(installStart))
-	return job, nil
-}
-
-func (c *RemotePerasCommitter) publishFlushJobSeals(ctx context.Context, batch runtimePerasFlushBatch) error {
-	for _, job := range batch.jobs {
-		if err := c.publishFlushJobSeal(ctx, batch.holder, job); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) publishFlushJobSeal(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) error {
-	if publisher, ok := c.authority.(perasSealPublisher); ok {
-		if !job.cursor.Valid() {
-			return c.recordError(errPerasCommitterInvalid)
-		}
-		grant, found := c.grantForEpoch(holder.EpochID())
-		if !found {
-			return c.recordError(errPerasAuthorityNotHeld)
-		}
-		sealStart := time.Now()
-		if err := publisher.SealPerasSegment(ctx, grant, job.segment, job.digest, job.cursor); err != nil {
-			return c.recordErrorf("publish peras segment seal: %w", err)
-		}
-		c.recordSealLatency(time.Since(sealStart))
-		c.sealTotal.Add(1)
-	}
-	c.flushTotal.Add(1)
-	return nil
-}
-
-func (c *RemotePerasCommitter) recordFlushLatency(d time.Duration) {
-	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, &c.flushLatencyMax, d)
-}
-
-func (c *RemotePerasCommitter) recordWitnessLatency(d time.Duration) {
-	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, &c.witnessLatencyMax, d)
-}
-
-func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
-	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, &c.installLatencyMax, d)
-}
-
-func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
-	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, &c.sealLatencyMax, d)
-}
-
-func (c *RemotePerasCommitter) recordFlushBatch(jobs int) {
-	if jobs <= 0 {
-		return
-	}
-	n := uint64(jobs)
-	c.flushBatchTotal.Add(1)
-	c.flushJobTotal.Add(n)
-	c.flushJobLast.Store(n)
-	recordPerasMax(&c.flushJobMax, n)
-}
-
-func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	ns := uint64(d.Nanoseconds())
-	total.Add(ns)
-	last.Store(ns)
-	recordPerasMax(max, ns)
-}
-
-func recordPerasMax(max *atomic.Uint64, value uint64) {
-	if max == nil {
-		return
-	}
-	for {
-		old := max.Load()
-		if value <= old {
-			return
-		}
-		if max.CompareAndSwap(old, value) {
-			return
-		}
-	}
-}
-
-func averagePerasDuration(total, count uint64) uint64 {
-	if count == 0 {
-		return 0
-	}
-	return total / count
-}
-
 func defaultPerasSegmentInstallParallelism() int {
 	n := runtime.GOMAXPROCS(0)
 	if n < 1 {
 		return 1
 	}
 	return n
-}
-
-func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (perasauth.AuthorityGrant, bool) {
-	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
-	grant, ok := c.grants[epochID]
-	if !ok {
-		return perasauth.AuthorityGrant{}, false
-	}
-	return grant, true
-}
-
-func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job runtimePerasFlushJob) (PerasInstallCursor, error) {
-	var last error
-	for attempt := 0; attempt <= defaultPerasSegmentInstallRetries; attempt++ {
-		cursor, err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest, job.materialize)
-		if err == nil {
-			return cursor, nil
-		}
-		last = err
-		if !nokverrors.Retryable(err) || attempt == defaultPerasSegmentInstallRetries {
-			break
-		}
-		c.retryTotal.Add(1)
-		delay := defaultPerasSegmentInstallRetryBackoff << attempt
-		if delay > defaultPerasSegmentInstallMaxBackoff {
-			delay = defaultPerasSegmentInstallMaxBackoff
-		}
-		if !sleepContext(ctx, delay) {
-			return PerasInstallCursor{}, ctx.Err()
-		}
-	}
-	return PerasInstallCursor{}, last
-}
-
-func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
-	if err := retirer.RetirePerasAuthority(ctx, scopes...); err != nil {
-		return c.recordErrorf("retire peras authority: %w", err)
-	}
-	return nil
-}
-
-func (c *RemotePerasCommitter) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]runtimePerasFlushBatch, error) {
-	plans, err := c.freezeReplayPlansLocked(target, maxOpsPerHolder)
-	if err != nil {
-		return nil, err
-	}
-	batches := make([]runtimePerasFlushBatch, 0, len(plans))
-	for _, frozen := range plans {
-		installPlans, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
-		if err != nil {
-			return nil, c.recordErrorf("split peras replay plan: %w", err)
-		}
-		batch := runtimePerasFlushBatch{
-			holder: frozen.holder,
-			plan:   frozen.plan,
-			jobs:   make([]runtimePerasFlushJob, 0, len(installPlans)),
-		}
-		for _, installPlan := range installPlans {
-			sized, err := fsperas.SplitReplayPlanByMutationBudget(installPlan, c.replayMutationBudget(materialize))
-			if err != nil {
-				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
-			}
-			for _, plan := range sized {
-				segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
-				if err != nil {
-					return nil, c.recordErrorf("build peras segment: %w", err)
-				}
-				payload, err := fsperas.EncodePerasSegment(segment)
-				if err != nil {
-					return nil, c.recordErrorf("encode peras segment: %w", err)
-				}
-				digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-				if err != nil {
-					return nil, c.recordErrorf("digest peras segment: %w", err)
-				}
-				batch.jobs = append(batch.jobs, runtimePerasFlushJob{
-					scope:       frozen.scope,
-					plan:        plan,
-					segment:     segment,
-					payload:     payload,
-					digest:      digest,
-					materialize: materialize,
-				})
-			}
-		}
-		if len(batch.jobs) > 0 {
-			batches = append(batches, batch)
-		}
-	}
-	return batches, nil
-}
-
-func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
-	if !materialize {
-		return c.maxReplay
-	}
-	if c.maxReplay > 0 && c.maxReplay < defaultPerasMaterializeMaxReplayMutations {
-		return c.maxReplay
-	}
-	return defaultPerasMaterializeMaxReplayMutations
-}
-
-func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope, maxOpsPerHolder int) ([]runtimePerasFrozenPlan, error) {
-	holders := c.holderSnapshot()
-	plans := make([]runtimePerasFrozenPlan, 0, len(holders))
-	for _, holder := range holders {
-		plan, scope, ok, err := c.buildFlushPlan(holder, target, maxOpsPerHolder)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		plans = append(plans, runtimePerasFrozenPlan{
-			holder: holder,
-			scope:  scope,
-			plan:   plan,
-		})
-	}
-	return plans, nil
-}
-
-func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *compile.AuthorityScope, maxOps int) (fsperas.ReplayPlan, compile.AuthorityScope, bool, error) {
-	if target != nil {
-		plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(0, *target)
-		if err != nil {
-			return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordErrorf("build peras replay plan: %w", err)
-		}
-		return plan, scope, ok, nil
-	}
-	pending := holder.PendingIDs()
-	if len(pending) == 0 {
-		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, nil
-	}
-	plan, scope, err := holder.BuildPendingReplayPlanLimit(0, maxOps)
-	if err != nil {
-		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordErrorf("build peras replay plan: %w", err)
-	}
-	if maxOps <= 0 && len(plan.Operations) != len(pending) {
-		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordError(fsperas.ErrInvalidPerasSegment)
-	}
-	return plan, scope, true, nil
-}
-
-func (c *RemotePerasCommitter) holderSnapshot() []*fsperas.Holder {
-	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
-	out := make([]*fsperas.Holder, 0, len(c.holders))
-	for _, holder := range c.holders {
-		out = append(out, holder)
-	}
-	return out
-}
-
-func (c *RemotePerasCommitter) appendSegmentWitnessesWithRetry(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
-	var last error
-	attempts := c.retries + 1
-	for attempt := range attempts {
-		err := c.appendSegmentWitnesses(ctx, scope, holder, segment, payload, digest)
-		if err == nil {
-			return nil
-		}
-		last = err
-		if !errors.Is(err, fsperas.ErrSegmentWitnessQuorumUnavailable) || attempt == attempts-1 {
-			break
-		}
-		c.retryTotal.Add(1)
-		if !sleepContext(ctx, c.backoff) {
-			return ctx.Err()
-		}
-	}
-	return last
-}
-
-func (c *RemotePerasCommitter) appendSegmentWitnesses(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	stats := segment.Stats()
-	record := fsperas.SegmentWitnessRecord{
-		EpochID:              holder.EpochID(),
-		SegmentRoot:          segment.Root,
-		SegmentPayloadDigest: digest,
-		SegmentPayloadSize:   uint64(len(payload)),
-		SegmentPayload:       runtimeCloneBytes(payload),
-		OperationCount:       stats.OperationCount,
-		EntryCount:           stats.EntryCount,
-		TimestampUnixNano:    c.now().UnixNano(),
-		HolderID:             holder.HolderID(),
-	}
-	broadcastCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type result struct {
-		id  string
-		err error
-	}
-	resultCh := make(chan result, len(c.witnesses))
-	for _, witness := range c.witnesses {
-		go func() {
-			err := witness.AppendSegment(broadcastCtx, scope, record)
-			resultCh <- result{id: witness.ID(), err: err}
-		}()
-	}
-	acks := make([]string, 0, len(c.witnesses))
-	failures := make([]error, 0, len(c.witnesses))
-	for range c.witnesses {
-		res := <-resultCh
-		if res.err == nil {
-			acks = append(acks, res.id)
-			if len(acks) >= c.quorum {
-				cancel()
-				slices.Sort(acks)
-				return nil
-			}
-			continue
-		}
-		failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
-	}
-	if len(failures) == 0 {
-		return fsperas.ErrSegmentWitnessQuorumUnavailable
-	}
-	return errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
-}
-
-func (c *RemotePerasCommitter) collectWitnessSegments(ctx context.Context, epochID uint64) ([]fsperas.SegmentWitnessRecord, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	type result struct {
-		id       string
-		snapshot fsperas.WitnessSnapshot
-		err      error
-	}
-	resultCh := make(chan result, len(c.witnesses))
-	for _, witness := range c.witnesses {
-		go func() {
-			snapshot, err := witness.Probe(ctx, epochID)
-			resultCh <- result{id: witness.ID(), snapshot: snapshot, err: err}
-		}()
-	}
-	type key struct {
-		root   [32]byte
-		digest [32]byte
-	}
-	records := make(map[key]fsperas.SegmentWitnessRecord)
-	failures := make([]error, 0, len(c.witnesses))
-	successes := 0
-	for range c.witnesses {
-		res := <-resultCh
-		if res.err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
-			continue
-		}
-		successes++
-		for _, record := range res.snapshot.Segments {
-			if record.EpochID != epochID {
-				continue
-			}
-			k := key{root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
-			current, ok := records[k]
-			if !ok || len(record.SegmentPayload) > len(current.SegmentPayload) {
-				records[k] = record
-			}
-		}
-	}
-	if successes == 0 {
-		if len(failures) == 0 {
-			return nil, fsperas.ErrSegmentWitnessQuorumUnavailable
-		}
-		return nil, errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
-	}
-	out := make([]fsperas.SegmentWitnessRecord, 0, len(records))
-	for _, record := range records {
-		out = append(out, record)
-	}
-	slices.SortFunc(out, func(a, b fsperas.SegmentWitnessRecord) int {
-		if a.TimestampUnixNano < b.TimestampUnixNano {
-			return -1
-		}
-		if a.TimestampUnixNano > b.TimestampUnixNano {
-			return 1
-		}
-		return bytes.Compare(a.SegmentRoot[:], b.SegmentRoot[:])
-	})
-	return out, nil
-}
-
-func (c *RemotePerasCommitter) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment) {
-	stats := segment.Stats()
-	c.overlayMu.Lock()
-	c.segments = append(c.segments, segment)
-	for _, kv := range segment.ScanView(nil, ^uint32(0)) {
-		c.sealed[string(kv.Key)] = runtimePerasOverlayEntry{
-			key:    kv.Key,
-			value:  kv.Value,
-			delete: kv.Delete,
-		}
-	}
-	c.sealedKeysDirty = true
-	for _, op := range plan.Operations {
-		for _, mutation := range op.Mutations {
-			key := string(mutation.Key)
-			entry, ok := c.overlay[key]
-			if ok && entry.opID == op.OpID {
-				delete(c.overlay, key)
-				c.overlayKeysDirty = true
-			}
-		}
-	}
-	if c.completed == nil {
-		c.completed = make(map[fsperas.OperationID]runtimePerasCompletion)
-	}
-	for _, completion := range segment.Completions {
-		c.completed[completion.OpID] = runtimePerasCompletion{epochID: segment.EpochID, completion: completion}
-	}
-	c.overlayMu.Unlock()
-
-	c.segmentTotal.Add(1)
-	c.segmentOpsTotal.Add(stats.OperationCount)
-	c.segmentEntryTotal.Add(stats.EntryCount)
-	c.statsMu.Lock()
-	c.lastSegmentStats = stats
-	c.lastSegmentRoot = segment.Root
-	c.statsMu.Unlock()
-}
-
-func (c *RemotePerasCommitter) Completion(id fsperas.OperationID) (fsperas.SegmentCompletion, bool) {
-	completion, ok := c.completionForOperation(id)
-	if !ok {
-		return fsperas.SegmentCompletion{}, false
-	}
-	return completion.completion, true
-}
-
-func (c *RemotePerasCommitter) completionForOperation(id fsperas.OperationID) (runtimePerasCompletion, bool) {
-	if c == nil || !id.Valid() {
-		return runtimePerasCompletion{}, false
-	}
-	c.overlayMu.RLock()
-	completion, ok := c.completed[id]
-	c.overlayMu.RUnlock()
-	return completion, ok
-}
-
-func (c *RemotePerasCommitter) segmentInstalled(root [32]byte) bool {
-	c.overlayMu.RLock()
-	defer c.overlayMu.RUnlock()
-	for _, segment := range c.segments {
-		if segment.Root == root {
-			return true
-		}
-	}
-	return false
-}
-
-func perasAuthorityScopeFromGrant(grant perasauth.AuthorityGrant) compile.AuthorityScope {
-	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID(grant.Scope.MountID),
-		MountKeyID: fsmeta.MountKeyID(grant.Scope.MountKeyID),
-		Parents:    rootInodesToFSMeta(grant.Scope.Parents),
-		Inodes:     rootInodesToFSMeta(grant.Scope.Inodes),
-	}
-	if len(grant.Scope.Buckets) > 0 {
-		scope.Buckets = make([]fsmeta.AffinityBucket, len(grant.Scope.Buckets))
-		for i, bucket := range grant.Scope.Buckets {
-			scope.Buckets[i] = fsmeta.AffinityBucket(bucket)
-		}
-	}
-	return scope
-}
-
-func grantHasPredecessor(grant perasauth.AuthorityGrant) bool {
-	var zero [32]byte
-	return grant.EpochID > 1 && grant.PredecessorDigest != zero
-}
-
-func rootInodesToFSMeta(in []uint64) []fsmeta.InodeID {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fsmeta.InodeID, len(in))
-	for i, inode := range in {
-		out[i] = fsmeta.InodeID(inode)
-	}
-	return out
-}
-
-func perasSegmentWithinScope(segment fsperas.PerasSegment, scope compile.AuthorityScope) bool {
-	if authorityScopeEmpty(scope) {
-		return true
-	}
-	checked := false
-	for _, entry := range segment.EntriesView() {
-		parts, ok := fsmeta.InspectKey(entry.Key)
-		if !ok {
-			if checked {
-				return false
-			}
-			continue
-		}
-		checked = true
-		if !perasScopeCoversKeyParts(scope, parts) {
-			return false
-		}
-	}
-	return true
-}
-
-func perasCatalogBuckets(scope compile.AuthorityScope) []fsmeta.AffinityBucket {
-	if scope.MountKeyID == 0 {
-		return nil
-	}
-	if len(scope.Buckets) > 0 {
-		buckets := append([]fsmeta.AffinityBucket(nil), scope.Buckets...)
-		slices.Sort(buckets)
-		return slices.Compact(buckets)
-	}
-	buckets := make([]fsmeta.AffinityBucket, fsmeta.DefaultAffinityBucketCount)
-	for i := range buckets {
-		buckets[i] = fsmeta.AffinityBucket(i)
-	}
-	return buckets
-}
-
-func scanAfterKey(key []byte) []byte {
-	next := make([]byte, 0, len(key)+1)
-	next = append(next, key...)
-	return append(next, 0)
-}
-
-func authorityScopeEmpty(scope compile.AuthorityScope) bool {
-	return scope.Mount == "" || scope.MountKeyID == 0
-}
-
-func perasScopeCoversKeyParts(scope compile.AuthorityScope, parts fsmeta.KeyParts) bool {
-	if scope.MountKeyID == 0 || parts.MountKeyID != scope.MountKeyID {
-		return false
-	}
-	if len(scope.Buckets) > 0 && !slices.Contains(scope.Buckets, parts.Bucket) {
-		return false
-	}
-	switch parts.Kind {
-	case fsmeta.KeyKindDentry:
-		return len(scope.Parents) == 0 || slices.Contains(scope.Parents, parts.Parent)
-	case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
-		return len(scope.Inodes) == 0 || slices.Contains(scope.Inodes, parts.Inode)
-	case fsmeta.KeyKindUsage:
-		return len(scope.Parents) == 0 || slices.Contains(scope.Parents, parts.UsageScope)
-	default:
-		return true
-	}
 }
 
 func (c *RemotePerasCommitter) flushBackground() {
@@ -1412,8 +525,12 @@ func (c *RemotePerasCommitter) flushBackground() {
 		defer cancel()
 	}
 	c.commitMu.Lock()
-	batches, err := c.freezeFlushBatchesLocked(nil, false, c.batchSize)
+	plans, err := c.freezeReplayPlansLocked(nil, c.batchSize)
 	c.commitMu.Unlock()
+	var batches []perasFlushBatch
+	if err == nil {
+		batches, err = c.buildFlushBatches(plans, false)
+	}
 	if err == nil {
 		err = c.installFlushBatches(ctx, batches)
 	}
@@ -1439,304 +556,27 @@ func (c *RemotePerasCommitter) pendingOperations() int {
 	return total
 }
 
-func (c *RemotePerasCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
-	if c == nil {
-		return nil, false, false
-	}
-	c.overlayMu.RLock()
-	entry, ok := c.overlay[string(key)]
-	if ok {
-		c.overlayMu.RUnlock()
-		return runtimeCloneBytes(entry.value), entry.delete, true
-	}
-	entry, ok = c.sealed[string(key)]
-	if ok {
-		c.overlayMu.RUnlock()
-		return runtimeCloneBytes(entry.value), entry.delete, true
-	}
-	c.overlayMu.RUnlock()
-	return nil, false, false
-}
-
-func (c *RemotePerasCommitter) KeyState(key []byte) (present bool, known bool) {
-	if c == nil {
-		return false, false
-	}
-	c.overlayMu.RLock()
-	entry, ok := c.overlay[string(key)]
-	if ok {
-		c.overlayMu.RUnlock()
-		return !entry.delete, true
-	}
-	entry, ok = c.sealed[string(key)]
-	if ok {
-		c.overlayMu.RUnlock()
-		return !entry.delete, true
-	}
-	present, ok = c.known[string(key)]
-	c.overlayMu.RUnlock()
-	return present, ok
-}
-
-func (c *RemotePerasCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
-	if c == nil {
-		return false
-	}
-	c.overlayMu.RLock()
-	_, ok := c.emptyDirs[fsperas.DirectoryFactKey(mount, inode)]
-	c.overlayMu.RUnlock()
-	return ok
-}
-
-func (c *RemotePerasCommitter) RememberKey(key []byte, present bool) {
-	if c == nil || len(key) == 0 {
-		return
-	}
-	c.overlayMu.Lock()
-	if c.known == nil {
-		c.known = make(map[string]bool)
-	}
-	c.known[string(key)] = present
-	c.overlayMu.Unlock()
-}
-
-func (c *RemotePerasCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
-	if c == nil {
-		return
-	}
-	c.overlayMu.Lock()
-	if c.emptyDirs == nil {
-		c.emptyDirs = make(map[string]struct{})
-	}
-	fsperas.RememberEmptyDirectoryFact(c.emptyDirs, mount, inode)
-	c.overlayMu.Unlock()
-}
-
-func (c *RemotePerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
-	if c == nil || limit == 0 {
-		return nil
-	}
-	c.overlayMu.Lock()
-	c.refreshPerasViewKeysLocked()
-	out := c.mergePerasViewSuffixLocked(start, int(limit))
-	c.overlayMu.Unlock()
-	return out
-}
-
-func (c *RemotePerasCommitter) refreshPerasViewKeysLocked() {
-	if c.sealedKeysDirty {
-		c.sealedKeys = sortedRuntimePerasViewKeys(c.sealed, c.sealedKeys)
-		c.sealedKeysDirty = false
-	}
-	if c.overlayKeysDirty {
-		c.overlayKeys = sortedRuntimePerasViewKeys(c.overlay, c.overlayKeys)
-		c.overlayKeysDirty = false
-	}
-}
-
-func sortedRuntimePerasViewKeys(view map[string]runtimePerasOverlayEntry, reuse []string) []string {
-	reuse = reuse[:0]
-	for key := range view {
-		reuse = append(reuse, key)
-	}
-	sort.Strings(reuse)
-	return reuse
-}
-
-func (c *RemotePerasCommitter) mergePerasViewSuffixLocked(start []byte, limit int) []fsperas.OverlayKV {
-	if limit <= 0 {
-		return nil
-	}
-	startKey := string(start)
-	sealed := sort.SearchStrings(c.sealedKeys, startKey)
-	overlay := sort.SearchStrings(c.overlayKeys, startKey)
-	out := make([]fsperas.OverlayKV, 0, limit)
-	for len(out) < limit && (sealed < len(c.sealedKeys) || overlay < len(c.overlayKeys)) {
-		switch {
-		case sealed >= len(c.sealedKeys):
-			entry := c.overlay[c.overlayKeys[overlay]]
-			overlay++
-			out = appendPerasViewKV(out, entry)
-		case overlay >= len(c.overlayKeys):
-			entry := c.sealed[c.sealedKeys[sealed]]
-			sealed++
-			out = appendPerasViewKV(out, entry)
-		default:
-			sealedKey := c.sealedKeys[sealed]
-			overlayKey := c.overlayKeys[overlay]
-			cmp := strings.Compare(sealedKey, overlayKey)
-			switch {
-			case cmp < 0:
-				entry := c.sealed[sealedKey]
-				sealed++
-				out = appendPerasViewKV(out, entry)
-			case cmp > 0:
-				entry := c.overlay[overlayKey]
-				overlay++
-				out = appendPerasViewKV(out, entry)
-			default:
-				entry := c.overlay[overlayKey]
-				sealed++
-				overlay++
-				out = appendPerasViewKV(out, entry)
-			}
-		}
-	}
-	return out
-}
-
-func appendPerasViewKV(out []fsperas.OverlayKV, entry runtimePerasOverlayEntry) []fsperas.OverlayKV {
-	return append(out, fsperas.OverlayKV{
-		Key:    runtimeCloneBytes(entry.key),
-		Value:  runtimeCloneBytes(entry.value),
-		Delete: entry.delete,
-	})
-}
-
-func (c *RemotePerasCommitter) Stats() map[string]any {
-	if c == nil {
-		return map[string]any{
-			"commit_total":                       uint64(0),
-			"flush_total":                        uint64(0),
-			"segment_total":                      uint64(0),
-			"seal_total":                         uint64(0),
-			"segment_operations_total":           uint64(0),
-			"segment_entries_total":              uint64(0),
-			"flush_latency_total_nanosecond":     uint64(0),
-			"flush_latency_last_nanosecond":      uint64(0),
-			"flush_latency_max_nanosecond":       uint64(0),
-			"flush_latency_average_nanosecond":   uint64(0),
-			"witness_latency_total_nanosecond":   uint64(0),
-			"witness_latency_last_nanosecond":    uint64(0),
-			"witness_latency_max_nanosecond":     uint64(0),
-			"witness_latency_average_nanosecond": uint64(0),
-			"install_latency_total_nanosecond":   uint64(0),
-			"install_latency_last_nanosecond":    uint64(0),
-			"install_latency_max_nanosecond":     uint64(0),
-			"install_latency_average_nanosecond": uint64(0),
-			"seal_latency_total_nanosecond":      uint64(0),
-			"seal_latency_last_nanosecond":       uint64(0),
-			"seal_latency_max_nanosecond":        uint64(0),
-			"seal_latency_average_nanosecond":    uint64(0),
-			"flush_batch_total":                  uint64(0),
-			"flush_jobs_total":                   uint64(0),
-			"flush_jobs_last":                    uint64(0),
-			"flush_jobs_max":                     uint64(0),
-			"last_segment_operations":            uint64(0),
-			"last_segment_input_mutations":       uint64(0),
-			"last_segment_entries":               uint64(0),
-			"last_segment_coalesced":             uint64(0),
-			"last_segment_compression_x100":      uint64(0),
-			"last_segment_root":                  [32]byte{},
-			"last_error":                         "",
-			"error_total":                        uint64(0),
-			"retry_total":                        uint64(0),
-			"background_skip_total":              uint64(0),
-			"background_error_total":             uint64(0),
-			"segment_catalog_load_total":         uint64(0),
-			"root_sealed_segment_total":          uint64(0),
-			"root_sealed_segment_missing_total":  uint64(0),
-			"segment_recovery_install_total":     uint64(0),
-			"segment_recovery_skip_total":        uint64(0),
-			"overlay_keys":                       0,
-			"segment_keys":                       0,
-			"predicate_known_keys":               0,
-			"predicate_empty_dirs":               0,
-			"holders":                            0,
-			"pending":                            0,
-			"segment_install_parallelism":        0,
-			"witness_count":                      0,
-			"quorum":                             0,
-		}
-	}
-	c.overlayMu.RLock()
-	overlayKeys := len(c.overlay)
-	segmentKeys := len(c.sealed)
-	knownKeys := len(c.known)
-	emptyDirs := len(c.emptyDirs)
-	c.overlayMu.RUnlock()
-	c.holdersMu.Lock()
-	holders := len(c.holders)
-	pending := 0
-	for _, holder := range c.holders {
-		pending += holder.Pending()
-	}
-	c.holdersMu.Unlock()
-	c.statsMu.RLock()
-	lastSegmentStats := c.lastSegmentStats
-	lastSegmentRoot := c.lastSegmentRoot
-	lastError := c.lastError
-	c.statsMu.RUnlock()
-	flushTotal := c.flushTotal.Load()
-	sealTotal := c.sealTotal.Load()
-	flushLatencyTotal := c.flushLatencyTotal.Load()
-	witnessLatencyTotal := c.witnessLatencyTotal.Load()
-	installLatencyTotal := c.installLatencyTotal.Load()
-	sealLatencyTotal := c.sealLatencyTotal.Load()
-	return map[string]any{
-		"commit_total":                       c.commitTotal.Load(),
-		"flush_total":                        flushTotal,
-		"segment_total":                      c.segmentTotal.Load(),
-		"seal_total":                         sealTotal,
-		"segment_operations_total":           c.segmentOpsTotal.Load(),
-		"segment_entries_total":              c.segmentEntryTotal.Load(),
-		"flush_latency_total_nanosecond":     flushLatencyTotal,
-		"flush_latency_last_nanosecond":      c.flushLatencyLast.Load(),
-		"flush_latency_max_nanosecond":       c.flushLatencyMax.Load(),
-		"flush_latency_average_nanosecond":   averagePerasDuration(flushLatencyTotal, flushTotal),
-		"witness_latency_total_nanosecond":   witnessLatencyTotal,
-		"witness_latency_last_nanosecond":    c.witnessLatencyLast.Load(),
-		"witness_latency_max_nanosecond":     c.witnessLatencyMax.Load(),
-		"witness_latency_average_nanosecond": averagePerasDuration(witnessLatencyTotal, flushTotal),
-		"install_latency_total_nanosecond":   installLatencyTotal,
-		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
-		"install_latency_max_nanosecond":     c.installLatencyMax.Load(),
-		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
-		"seal_latency_total_nanosecond":      sealLatencyTotal,
-		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
-		"seal_latency_max_nanosecond":        c.sealLatencyMax.Load(),
-		"seal_latency_average_nanosecond":    averagePerasDuration(sealLatencyTotal, sealTotal),
-		"flush_batch_total":                  c.flushBatchTotal.Load(),
-		"flush_jobs_total":                   c.flushJobTotal.Load(),
-		"flush_jobs_last":                    c.flushJobLast.Load(),
-		"flush_jobs_max":                     c.flushJobMax.Load(),
-		"last_segment_operations":            lastSegmentStats.OperationCount,
-		"last_segment_input_mutations":       lastSegmentStats.InputMutationCount,
-		"last_segment_entries":               lastSegmentStats.EntryCount,
-		"last_segment_coalesced":             lastSegmentStats.CoalescedMutations,
-		"last_segment_compression_x100":      uint64(lastSegmentStats.CompressionRatio * 100),
-		"last_segment_root":                  lastSegmentRoot,
-		"last_error":                         lastError,
-		"error_total":                        c.errorTotal.Load(),
-		"retry_total":                        c.retryTotal.Load(),
-		"background_skip_total":              c.bgSkipTotal.Load(),
-		"background_error_total":             c.bgErrorTotal.Load(),
-		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),
-		"root_sealed_segment_total":          c.rootSealTotal.Load(),
-		"root_sealed_segment_missing_total":  c.rootSealMissingTotal.Load(),
-		"segment_recovery_install_total":     c.recoveryInstallTotal.Load(),
-		"segment_recovery_skip_total":        c.recoverySkipTotal.Load(),
-		"overlay_keys":                       overlayKeys,
-		"segment_keys":                       segmentKeys,
-		"predicate_known_keys":               knownKeys,
-		"predicate_empty_dirs":               emptyDirs,
-		"holders":                            holders,
-		"pending":                            pending,
-		"segment_install_parallelism":        c.installN,
-		"witness_count":                      len(c.witnesses),
-		"quorum":                             c.quorum,
-	}
-}
-
 func (c *RemotePerasCommitter) Close() {
-	if c == nil || c.stop == nil {
+	if c == nil {
 		return
 	}
 	c.closed.Store(true)
-	select {
-	case <-c.stop:
-	default:
-		close(c.stop)
+	if c.flushTask != nil {
+		c.flushTask.Close()
+	}
+	if c.watchQueue != nil {
+		c.watchQueue.Close()
+	}
+	if c.installQ != nil {
+		c.installQ.close()
+	}
+	if c.sealQ != nil {
+		c.sealQ.close()
+	}
+	c.bgLaunchMu.Lock()
+	c.bgLaunchMu.Unlock()
+	if c.closer != nil {
+		c.closer.Close()
 	}
 }
 
@@ -1744,230 +584,38 @@ func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
-	c.Close()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return c.Flush(ctx)
-}
-
-func (c *RemotePerasCommitter) flushLoop() {
-	ticker := time.NewTicker(c.flushEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			c.triggerBackgroundFlush()
-		case <-c.stop:
-			return
-		}
-	}
+	err := c.Flush(ctx)
+	c.Close()
+	return err
 }
 
 func (c *RemotePerasCommitter) triggerBackgroundFlush() {
 	if c == nil {
 		return
 	}
+	c.bgLaunchMu.Lock()
+	defer c.bgLaunchMu.Unlock()
+	if c.closed.Load() {
+		return
+	}
 	if !c.bgRunning.CompareAndSwap(false, true) {
 		c.bgSkipTotal.Add(1)
 		return
 	}
-	go c.flushBackground()
-}
-
-func (c *RemotePerasCommitter) addOverlay(id fsperas.OperationID, delta compile.SemanticDelta) error {
-	c.overlayMu.Lock()
-	defer c.overlayMu.Unlock()
-	for _, effect := range delta.WriteEffects {
-		if len(effect.Key) == 0 {
-			return errPerasCommitterInvalid
-		}
-		entry := runtimePerasOverlayEntry{
-			opID: id,
-			key:  runtimeCloneBytes(effect.Key),
-		}
-		switch effect.Kind {
-		case compile.EffectPut:
-			if effect.Value == nil {
-				return errPerasCommitterInvalid
+	if c.closer != nil {
+		c.closer.Add(1)
+	}
+	go func() {
+		defer func() {
+			if c.closer != nil {
+				c.closer.Done()
 			}
-			entry.value = runtimeCloneBytes(effect.Value)
-		case compile.EffectDelete:
-			entry.delete = true
-		default:
-			return errPerasCommitterInvalid
-		}
-		if _, ok := c.overlay[string(effect.Key)]; !ok {
-			c.overlayKeysDirty = true
-		}
-		c.overlay[string(effect.Key)] = entry
-	}
-	if c.known == nil {
-		c.known = make(map[string]bool)
-	}
-	if c.emptyDirs == nil {
-		c.emptyDirs = make(map[string]struct{})
-	}
-	if err := fsperas.RememberDeltaFacts(c.known, c.emptyDirs, delta); err != nil {
-		return err
-	}
-	return nil
-}
-
-type runnerPerasSegmentInstaller struct {
-	runner *Runner
-	router *fsmetawatch.Router
-}
-
-func newRunnerPerasSegmentInstaller(runner *Runner, router *fsmetawatch.Router) *runnerPerasSegmentInstaller {
-	return &runnerPerasSegmentInstaller{runner: runner, router: router}
-}
-
-func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) (PerasInstallCursor, error) {
-	if i == nil || i.runner == nil || i.runner.kv == nil {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
-	}
-	kv, ok := i.runner.kv.(perasSegmentInstallClient)
-	if !ok {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
-	}
-	routingKey, err := segment.FirstKey()
-	if err != nil {
-		return PerasInstallCursor{}, err
-	}
-	installVersion, err := i.reserveInstallVersion(ctx)
-	if err != nil {
-		return PerasInstallCursor{}, err
-	}
-	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
-		RoutingKey:           runtimeCloneBytes(routingKey),
-		SegmentRoot:          append([]byte(nil), segment.Root[:]...),
-		SegmentPayloadDigest: append([]byte(nil), digest[:]...),
-		SegmentPayload:       append([]byte(nil), payload...),
-		InstallVersion:       installVersion,
-		MaterializeMvcc:      materialize,
-	})
-	if err != nil {
-		return PerasInstallCursor{}, err
-	}
-	if resp == nil {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
-	}
-	if keyErr := resp.GetError(); keyErr != nil {
-		return PerasInstallCursor{}, runnerKeyError("peras install segment", keyErr)
-	}
-	if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
-		return PerasInstallCursor{}, err
-	}
-	if !materialize {
-		i.publishInstalledSegment(segment, resp)
-	}
-	cursor := perasInstallCursorFromResponse(resp)
-	if !cursor.Valid() {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
-	}
-	return cursor, nil
-}
-
-func (i *runnerPerasSegmentInstaller) reserveInstallVersion(ctx context.Context) (uint64, error) {
-	var last error
-	for attempt := 0; attempt <= defaultPerasInstallTimestampRetries; attempt++ {
-		version, err := i.runner.ReserveTimestamp(ctx, 1)
-		if err == nil {
-			return version, nil
-		}
-		if !nokverrors.Retryable(err) {
-			return 0, err
-		}
-		last = err
-		if attempt == defaultPerasInstallTimestampRetries {
-			break
-		}
-		timer := time.NewTimer(defaultPerasInstallTimestampBackoff << attempt)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return 0, last
-}
-
-func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) error {
-	if resp == nil {
-		return errPerasCommitterInvalid
-	}
-	if !bytes.Equal(resp.GetSegmentRoot(), segment.Root[:]) {
-		return errPerasCommitterInvalid
-	}
-	stats := segment.Stats()
-	if resp.GetOperationCount() != stats.OperationCount ||
-		resp.GetEntryCount() != stats.EntryCount ||
-		(stats.EntryCount > 0 && resp.GetAppliedEntries() == 0) {
-		return errPerasCommitterInvalid
-	}
-	return nil
-}
-
-func perasInstallCursorFromResponse(resp *kvrpcpb.PerasInstallSegmentResponse) PerasInstallCursor {
-	if resp == nil {
-		return PerasInstallCursor{}
-	}
-	return PerasInstallCursor{
-		RegionID:       resp.GetRegionId(),
-		Term:           resp.GetTerm(),
-		Index:          resp.GetIndex(),
-		InstallVersion: resp.GetCommitVersion(),
-	}
-}
-
-func (i *runnerPerasSegmentInstaller) publishInstalledSegment(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) {
-	if i == nil || i.router == nil || resp == nil || resp.GetRegionId() == 0 || resp.GetIndex() == 0 {
-		return
-	}
-	commitVersion := resp.GetCommitVersion()
-	if commitVersion == 0 {
-		return
-	}
-	cursor := fsmeta.WatchCursor{
-		RegionID: resp.GetRegionId(),
-		Term:     resp.GetTerm(),
-		Index:    resp.GetIndex(),
-	}
-	for _, entry := range segment.Dentries {
-		if len(entry.Key) == 0 {
-			continue
-		}
-		i.router.Publish(fsmeta.WatchEvent{
-			Cursor:        cursor,
-			CommitVersion: commitVersion,
-			Source:        fsmeta.WatchEventSourceCommit,
-			Key:           entry.Key,
-		})
-	}
-}
-
-func (c *RemotePerasCommitter) recordErrorf(format string, args ...any) error {
-	return c.recordError(fmt.Errorf(format, args...))
-}
-
-func isPerasAdmissionTerminalError(err error) bool {
-	return errors.Is(err, fsmeta.ErrExists) ||
-		errors.Is(err, fsmeta.ErrNotFound) ||
-		errors.Is(err, fsmeta.ErrInvalidRequest) ||
-		errors.Is(err, fsmeta.ErrInvalidValue)
-}
-
-func (c *RemotePerasCommitter) recordError(err error) error {
-	if c == nil || err == nil {
-		return err
-	}
-	c.errorTotal.Add(1)
-	c.statsMu.Lock()
-	c.lastError = err.Error()
-	c.statsMu.Unlock()
-	return err
+		}()
+		c.flushBackground()
+	}()
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) bool {

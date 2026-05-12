@@ -10,11 +10,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-var (
-	ErrHolderConfigInvalid = errors.New("fsmeta peras: invalid holder config")
-	ErrIneligibleOperation = errors.New("fsmeta peras: ineligible operation")
-)
-
 type HolderConfig struct {
 	EpochID  uint64
 	HolderID string
@@ -265,6 +260,12 @@ func authorityScopesOverlap(left, right compile.AuthorityScope) bool {
 	return bucketsOverlap(left.Buckets, right.Buckets) &&
 		inodesOverlap(left.Parents, right.Parents) &&
 		inodesOverlap(left.Inodes, right.Inodes)
+}
+
+// AuthorityScopesOverlap reports whether two authority scopes may cover the
+// same fsmeta write.
+func AuthorityScopesOverlap(left, right compile.AuthorityScope) bool {
+	return authorityScopesOverlap(left, right)
 }
 
 func bucketsOverlap(left, right []fsmeta.AffinityBucket) bool {

@@ -1,0 +1,218 @@
+package raftstore
+
+import (
+	"sync/atomic"
+	"time"
+)
+
+func (c *RemotePerasCommitter) recordFlushLatency(d time.Duration) {
+	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, &c.flushLatencyMax, d)
+}
+
+func (c *RemotePerasCommitter) recordWitnessLatency(d time.Duration) {
+	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, &c.witnessLatencyMax, d)
+}
+
+func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
+	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, &c.installLatencyMax, d)
+}
+
+func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
+	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, &c.sealLatencyMax, d)
+}
+
+func (c *RemotePerasCommitter) recordFlushBatch(jobs int) {
+	if jobs <= 0 {
+		return
+	}
+	n := uint64(jobs)
+	c.flushBatchTotal.Add(1)
+	c.flushJobTotal.Add(n)
+	c.flushJobLast.Store(n)
+	recordPerasMax(&c.flushJobMax, n)
+}
+
+func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	ns := uint64(d.Nanoseconds())
+	total.Add(ns)
+	last.Store(ns)
+	recordPerasMax(max, ns)
+}
+
+func recordPerasMax(max *atomic.Uint64, value uint64) {
+	if max == nil {
+		return
+	}
+	for {
+		old := max.Load()
+		if value <= old {
+			return
+		}
+		if max.CompareAndSwap(old, value) {
+			return
+		}
+	}
+}
+
+func averagePerasDuration(total, count uint64) uint64 {
+	if count == 0 {
+		return 0
+	}
+	return total / count
+}
+
+func (c *RemotePerasCommitter) Stats() map[string]any {
+	if c == nil {
+		return map[string]any{
+			"commit_total":                       uint64(0),
+			"flush_total":                        uint64(0),
+			"segment_total":                      uint64(0),
+			"seal_total":                         uint64(0),
+			"segment_operations_total":           uint64(0),
+			"segment_entries_total":              uint64(0),
+			"flush_latency_total_nanosecond":     uint64(0),
+			"flush_latency_last_nanosecond":      uint64(0),
+			"flush_latency_max_nanosecond":       uint64(0),
+			"flush_latency_average_nanosecond":   uint64(0),
+			"witness_latency_total_nanosecond":   uint64(0),
+			"witness_latency_last_nanosecond":    uint64(0),
+			"witness_latency_max_nanosecond":     uint64(0),
+			"witness_latency_average_nanosecond": uint64(0),
+			"install_latency_total_nanosecond":   uint64(0),
+			"install_latency_last_nanosecond":    uint64(0),
+			"install_latency_max_nanosecond":     uint64(0),
+			"install_latency_average_nanosecond": uint64(0),
+			"seal_latency_total_nanosecond":      uint64(0),
+			"seal_latency_last_nanosecond":       uint64(0),
+			"seal_latency_max_nanosecond":        uint64(0),
+			"seal_latency_average_nanosecond":    uint64(0),
+			"flush_batch_total":                  uint64(0),
+			"flush_jobs_total":                   uint64(0),
+			"flush_jobs_last":                    uint64(0),
+			"flush_jobs_max":                     uint64(0),
+			"last_segment_operations":            uint64(0),
+			"last_segment_input_mutations":       uint64(0),
+			"last_segment_entries":               uint64(0),
+			"last_segment_coalesced":             uint64(0),
+			"last_segment_compression_x100":      uint64(0),
+			"last_segment_root":                  [32]byte{},
+			"last_error":                         "",
+			"error_total":                        uint64(0),
+			"retry_total":                        uint64(0),
+			"background_skip_total":              uint64(0),
+			"background_error_total":             uint64(0),
+			"segment_catalog_load_total":         uint64(0),
+			"root_sealed_segment_total":          uint64(0),
+			"root_sealed_segment_missing_total":  uint64(0),
+			"segment_recovery_install_total":     uint64(0),
+			"segment_recovery_skip_total":        uint64(0),
+			"overlay_keys":                       0,
+			"segment_keys":                       0,
+			"predicate_known_keys":               0,
+			"predicate_empty_dirs":               0,
+			"predicate_empty_sessions":           0,
+			"holders":                            0,
+			"pending":                            0,
+			"segment_install_parallelism":        0,
+			"segment_install_queue_depth":        0,
+			"segment_install_queue_capacity":     0,
+			"segment_seal_queue_depth":           0,
+			"segment_seal_queue_capacity":        0,
+			"witness_count":                      0,
+			"quorum":                             0,
+		}
+	}
+	overlayKeys, knownKeys, emptyDirs, emptySessions := c.overlay.Stats()
+	segmentKeys, _, _, _ := c.sealed.Stats()
+	c.holdersMu.Lock()
+	holders := len(c.holders)
+	pending := 0
+	for _, holder := range c.holders {
+		pending += holder.Pending()
+	}
+	c.holdersMu.Unlock()
+	c.statsMu.RLock()
+	lastSegmentStats := c.lastSegmentStats
+	lastSegmentRoot := c.lastSegmentRoot
+	lastError := c.lastError
+	c.statsMu.RUnlock()
+	installQueueDepth := 0
+	installQueueCapacity := 0
+	if c.installQ != nil {
+		installQueueDepth = c.installQ.depth()
+		installQueueCapacity = c.installQ.capacity()
+	}
+	sealQueueDepth := 0
+	sealQueueCapacity := 0
+	if c.sealQ != nil {
+		sealQueueDepth = c.sealQ.depth()
+		sealQueueCapacity = c.sealQ.capacity()
+	}
+	flushTotal := c.flushTotal.Load()
+	sealTotal := c.sealTotal.Load()
+	flushLatencyTotal := c.flushLatencyTotal.Load()
+	witnessLatencyTotal := c.witnessLatencyTotal.Load()
+	installLatencyTotal := c.installLatencyTotal.Load()
+	sealLatencyTotal := c.sealLatencyTotal.Load()
+	return map[string]any{
+		"commit_total":                       c.commitTotal.Load(),
+		"flush_total":                        flushTotal,
+		"segment_total":                      c.segmentTotal.Load(),
+		"seal_total":                         sealTotal,
+		"segment_operations_total":           c.segmentOpsTotal.Load(),
+		"segment_entries_total":              c.segmentEntryTotal.Load(),
+		"flush_latency_total_nanosecond":     flushLatencyTotal,
+		"flush_latency_last_nanosecond":      c.flushLatencyLast.Load(),
+		"flush_latency_max_nanosecond":       c.flushLatencyMax.Load(),
+		"flush_latency_average_nanosecond":   averagePerasDuration(flushLatencyTotal, flushTotal),
+		"witness_latency_total_nanosecond":   witnessLatencyTotal,
+		"witness_latency_last_nanosecond":    c.witnessLatencyLast.Load(),
+		"witness_latency_max_nanosecond":     c.witnessLatencyMax.Load(),
+		"witness_latency_average_nanosecond": averagePerasDuration(witnessLatencyTotal, flushTotal),
+		"install_latency_total_nanosecond":   installLatencyTotal,
+		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
+		"install_latency_max_nanosecond":     c.installLatencyMax.Load(),
+		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
+		"seal_latency_total_nanosecond":      sealLatencyTotal,
+		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
+		"seal_latency_max_nanosecond":        c.sealLatencyMax.Load(),
+		"seal_latency_average_nanosecond":    averagePerasDuration(sealLatencyTotal, sealTotal),
+		"flush_batch_total":                  c.flushBatchTotal.Load(),
+		"flush_jobs_total":                   c.flushJobTotal.Load(),
+		"flush_jobs_last":                    c.flushJobLast.Load(),
+		"flush_jobs_max":                     c.flushJobMax.Load(),
+		"last_segment_operations":            lastSegmentStats.OperationCount,
+		"last_segment_input_mutations":       lastSegmentStats.InputMutationCount,
+		"last_segment_entries":               lastSegmentStats.EntryCount,
+		"last_segment_coalesced":             lastSegmentStats.CoalescedMutations,
+		"last_segment_compression_x100":      uint64(lastSegmentStats.CompressionRatio * 100),
+		"last_segment_root":                  lastSegmentRoot,
+		"last_error":                         lastError,
+		"error_total":                        c.errorTotal.Load(),
+		"retry_total":                        c.retryTotal.Load(),
+		"background_skip_total":              c.bgSkipTotal.Load(),
+		"background_error_total":             c.bgErrorTotal.Load(),
+		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),
+		"root_sealed_segment_total":          c.rootSealTotal.Load(),
+		"root_sealed_segment_missing_total":  c.rootSealMissingTotal.Load(),
+		"segment_recovery_install_total":     c.recoveryInstallTotal.Load(),
+		"segment_recovery_skip_total":        c.recoverySkipTotal.Load(),
+		"overlay_keys":                       overlayKeys,
+		"segment_keys":                       segmentKeys,
+		"predicate_known_keys":               knownKeys,
+		"predicate_empty_dirs":               emptyDirs,
+		"predicate_empty_sessions":           emptySessions,
+		"holders":                            holders,
+		"pending":                            pending,
+		"segment_install_parallelism":        c.installN,
+		"segment_install_queue_depth":        installQueueDepth,
+		"segment_install_queue_capacity":     installQueueCapacity,
+		"segment_seal_queue_depth":           sealQueueDepth,
+		"segment_seal_queue_capacity":        sealQueueCapacity,
+		"witness_count":                      len(c.witnesses),
+		"quorum":                             c.quorum,
+	}
+}

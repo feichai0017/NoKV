@@ -535,6 +535,18 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
+	if !req.GetMaterializeMvcc() {
+		objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+		if err != nil {
+			return epochNotMatchError(&meta), AdmissionReasonInvalid
+		}
+		for _, objectKey := range objectKeys {
+			if bytes.Equal(objectKey, key) {
+				return nil, AdmissionReasonUnknown
+			}
+		}
+		return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+	}
 	entries := segment.EntriesView()
 	if len(entries) == 0 {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid

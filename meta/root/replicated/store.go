@@ -409,6 +409,7 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 	}
 
 	events := make([]rootevent.Event, 0, 2)
+	var expansion rootproto.PerasAuthorityGrant
 	for _, active := range s.state.ActivePerasGrants {
 		if !active.Overlaps(request) {
 			continue
@@ -417,9 +418,28 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
 				return rootstate.CloneState(s.state), rootproto.ClonePerasAuthorityGrant(active), nil
 			}
+			if active.HolderID == holderID && !expansion.Valid() {
+				expansion = rootproto.ClonePerasAuthorityGrant(active)
+				continue
+			}
 			return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 		}
 		events = append(events, rootevent.PerasAuthorityRetired(active))
+	}
+	if expansion.Valid() {
+		expansion.Scope = mergePerasAuthorityScopes(expansion.Scope, cmd.Scope)
+		if cmd.ExpiresUnixNano > expansion.ExpiresUnixNano {
+			expansion.ExpiresUnixNano = cmd.ExpiresUnixNano
+		}
+		commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(expansion))
+		if err != nil {
+			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		}
+		committed, ok := commit.State.ActivePerasGrantByID(expansion.GrantID)
+		if !ok || !committed.Covers(cmd.Scope, cmd.NowUnixNano) {
+			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrFinality
+		}
+		return rootstate.CloneState(commit.State), committed, nil
 	}
 
 	epoch := s.state.PerasAuthorityEpoch + 1
@@ -628,6 +648,52 @@ func activePerasGrantByID(grants []rootproto.PerasAuthorityGrant, grantID string
 		}
 	}
 	return rootproto.PerasAuthorityGrant{}, false
+}
+
+func mergePerasAuthorityScopes(left, right rootproto.PerasAuthorityScope) rootproto.PerasAuthorityScope {
+	out := rootproto.ClonePerasAuthorityScope(left)
+	if out.MountID == "" {
+		out.MountID = right.MountID
+	}
+	if out.MountKeyID == 0 {
+		out.MountKeyID = right.MountKeyID
+	}
+	out.Buckets = appendMissingUint16(out.Buckets, right.Buckets)
+	out.Parents = appendMissingUint64(out.Parents, right.Parents)
+	out.Inodes = appendMissingUint64(out.Inodes, right.Inodes)
+	return out
+}
+
+func appendMissingUint16(out []uint16, values []uint16) []uint16 {
+	for _, value := range values {
+		seen := false
+		for _, current := range out {
+			if current == value {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func appendMissingUint64(out []uint64, values []uint64) []uint64 {
+	for _, value := range values {
+		seen := false
+		for _, current := range out {
+			if current == value {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {

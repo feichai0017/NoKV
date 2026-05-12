@@ -126,7 +126,7 @@ type PerasAuthorityRetirer = fsperas.AuthorityRetirer
 // operation, so errors are returned and never silently fall back after the
 // holder overlay may already include the operation.
 type PerasCommitter interface {
-	CommitPeras(context.Context, fsperas.OperationID, compile.SemanticDelta, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
+	SubmitVisible(context.Context, fsperas.OperationID, compile.SemanticDelta, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
 }
 
 type PerasOverlayReader interface {
@@ -135,7 +135,7 @@ type PerasOverlayReader interface {
 }
 
 type PerasFlusher interface {
-	Flush(context.Context) error
+	FlushDurable(context.Context) error
 }
 
 type PerasAuthorityFlusher interface {
@@ -189,6 +189,8 @@ type Executor struct {
 	perasVisible            perasVisibleCounters
 	perasSeq                atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
+	sessionBucketsMu        sync.RWMutex
+	sessionBuckets          map[fsmeta.MountKeyID]map[fsmeta.AffinityBucket]struct{}
 }
 
 type perasAdmissionCounters struct {
@@ -218,6 +220,7 @@ type perasVisibleCounters struct {
 	skipPlacementTotal     atomic.Uint64
 	skipPredicateTotal     atomic.Uint64
 	latencyTotalNanosecond atomic.Uint64
+	latencyMaxNanosecond   atomic.Uint64
 }
 
 type atomicOnePhaseCounters struct {
@@ -442,6 +445,7 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 			"skip_placement_total":       uint64(0),
 			"skip_predicate_total":       uint64(0),
 			"latency_total_nanosecond":   uint64(0),
+			"latency_max_nanosecond":     uint64(0),
 			"latency_average_nanosecond": uint64(0),
 		}
 	}
@@ -462,7 +466,23 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 		"skip_placement_total":       counters.skipPlacementTotal.Load(),
 		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
 		"latency_total_nanosecond":   latency,
+		"latency_max_nanosecond":     counters.latencyMaxNanosecond.Load(),
 		"latency_average_nanosecond": average,
+	}
+}
+
+func recordUint64Max(max *atomic.Uint64, value uint64) {
+	if max == nil {
+		return
+	}
+	for {
+		old := max.Load()
+		if value <= old {
+			return
+		}
+		if max.CompareAndSwap(old, value) {
+			return
+		}
 	}
 }
 
@@ -795,228 +815,6 @@ func (e *Executor) atomicOnePhaseCounters(kind fsmeta.OperationKind) *atomicOneP
 		return nil
 	}
 	return e.atomicOnePhase[kind]
-}
-
-func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.SemanticDelta) error {
-	if e == nil || e.perasAuthority == nil {
-		return nil
-	}
-	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.perasAdmission.recordSlow(delta.SlowReason)
-		return nil
-	}
-	e.perasAdmission.eligibleTotal.Add(1)
-	if e.perasCommitter != nil {
-		return nil
-	}
-	e.perasAdmission.acquireTotal.Add(1)
-	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)
-	if err != nil {
-		e.perasAdmission.errorTotal.Add(1)
-		return nil
-	}
-	if !owned {
-		e.perasAdmission.heldTotal.Add(1)
-		return nil
-	}
-	e.perasAdmission.ownedTotal.Add(1)
-	return nil
-}
-
-func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
-	if e == nil || e.perasCommitter == nil {
-		return false, nil
-	}
-	if e.perasAuthority == nil {
-		e.perasVisible.skipNoAuthorityTotal.Add(1)
-		return false, nil
-	}
-	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.perasVisible.skipIneligibleTotal.Add(1)
-		return false, nil
-	}
-	if !perasDeltaHasConcreteWrites(delta) {
-		e.perasVisible.skipNonConcreteTotal.Add(1)
-		return false, nil
-	}
-	id := e.nextPerasOperationID(delta.Kind)
-	e.perasVisible.attemptTotal.Add(1)
-	start := time.Now()
-	_, err := e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
-	e.perasVisible.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
-	if err != nil {
-		if errors.Is(err, fsperas.ErrAdmissionRejected) ||
-			errors.Is(err, fsperas.ErrIneligibleOperation) ||
-			errors.Is(err, errPerasAuthorityNotHeld) ||
-			nokverrors.KindOf(err) == nokverrors.KindNotLeader {
-			e.perasVisible.skipPredicateTotal.Add(1)
-			return false, nil
-		}
-		if isPerasAdmissionTerminalError(err) {
-			e.perasVisible.skipPredicateTotal.Add(1)
-			return true, err
-		}
-		e.perasVisible.errorTotal.Add(1)
-		return true, err
-	}
-	e.perasVisible.successTotal.Add(1)
-	return true, nil
-}
-
-func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.SemanticDelta) (bool, error) {
-	if len(delta.ReadPredicates) == 0 {
-		return true, nil
-	}
-	index := e.perasPredicateIndex()
-	var version uint64
-	var haveVersion bool
-	read := func(key []byte) ([]byte, bool, error) {
-		if !haveVersion {
-			var err error
-			version, err = e.reserveReadVersion(ctx)
-			if err != nil {
-				return nil, false, err
-			}
-			haveVersion = true
-		}
-		return e.getMergedValue(ctx, key, version)
-	}
-	for _, predicate := range delta.ReadPredicates {
-		switch predicate.Kind {
-		case compile.PredicateExists:
-			if index != nil {
-				present, known := index.KeyState(predicate.Key)
-				if known {
-					if !present {
-						return false, fsmeta.ErrNotFound
-					}
-					continue
-				}
-			}
-			_, ok, err := read(predicate.Key)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				return false, fsmeta.ErrNotFound
-			}
-		case compile.PredicateNotExists:
-			if index != nil {
-				present, known := index.KeyState(predicate.Key)
-				if known {
-					if present {
-						return false, fsmeta.ErrExists
-					}
-					continue
-				}
-				if e.perasNotExistsKnown(delta.Authority, predicate.Key, index) ||
-					perasNotExistsDerivedFromDelta(delta, predicate, index) {
-					continue
-				}
-			}
-			_, ok, err := read(predicate.Key)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				return false, fsmeta.ErrExists
-			}
-		case compile.PredicateObservedValue:
-			if !predicate.HasExpectedValue {
-				return false, nil
-			}
-			value, ok, err := read(predicate.Key)
-			if err != nil {
-				return false, err
-			}
-			if !ok || !bytes.Equal(value, predicate.ExpectedValue) {
-				return false, nil
-			}
-		case compile.PredicatePrefixScan:
-			return false, nil
-		default:
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func (e *Executor) perasPredicateIndex() fsperas.PredicateIndex {
-	if e == nil || e.perasCommitter == nil {
-		return nil
-	}
-	index, ok := e.perasCommitter.(fsperas.PredicateIndex)
-	if !ok {
-		return nil
-	}
-	return index
-}
-
-func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.OperationPlan, inode fsmeta.InodeRecord) {
-	index := e.perasPredicateIndex()
-	if index == nil {
-		return
-	}
-	if len(plan.MutateKeys) > 0 {
-		index.RememberKey(plan.MutateKeys[0], true)
-	}
-	if len(plan.MutateKeys) > 1 {
-		index.RememberKey(plan.MutateKeys[1], true)
-	}
-	if inode.Type == fsmeta.InodeTypeDirectory {
-		index.RememberEmptyDirectory(mount, inode.Inode)
-		return
-	}
-	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, inode.Inode)
-	if err == nil {
-		index.RememberKey(ownerKey, false)
-	}
-}
-
-func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compile.Predicate, index fsperas.PredicateIndex) bool {
-	if delta.Kind != fsmeta.OperationCreate || len(delta.Plan.MutateKeys) < 2 {
-		return false
-	}
-	if bytes.Equal(predicate.Key, delta.Plan.MutateKeys[1]) {
-		return true
-	}
-	if !bytes.Equal(predicate.Key, delta.Plan.MutateKeys[0]) || len(delta.Authority.Parents) != 1 {
-		return false
-	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
-		MountID:    delta.Authority.Mount,
-		MountKeyID: delta.Authority.MountKeyID,
-	}, delta.Authority.Parents[0])
-}
-
-func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte, index fsperas.PredicateIndex) bool {
-	if index == nil || len(key) == 0 || scope.Mount == "" || scope.MountKeyID == 0 {
-		return false
-	}
-	present, known := index.KeyState(key)
-	if known {
-		return !present
-	}
-	parts, ok := fsmeta.InspectKey(key)
-	if !ok || parts.Kind != fsmeta.KeyKindDentry || parts.MountKeyID != scope.MountKeyID {
-		return false
-	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
-		MountID:    scope.Mount,
-		MountKeyID: scope.MountKeyID,
-	}, parts.Parent)
-}
-
-func isPerasAdmissionTerminalError(err error) bool {
-	return errors.Is(err, fsmeta.ErrExists) ||
-		errors.Is(err, fsmeta.ErrNotFound) ||
-		errors.Is(err, fsmeta.ErrInvalidRequest) ||
-		errors.Is(err, fsmeta.ErrInvalidValue)
-}
-
-func concretePerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
-	delta.WriteEffects = effects
-	return delta
 }
 
 func perasPutEffect(key, value []byte) compile.WriteEffect {
@@ -1391,331 +1189,6 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
-func (e *Executor) perasOverlay() PerasOverlayReader {
-	if e == nil || e.perasCommitter == nil {
-		return nil
-	}
-	overlay, ok := e.perasCommitter.(PerasOverlayReader)
-	if !ok {
-		return nil
-	}
-	return overlay
-}
-
-func (e *Executor) flushPeras(ctx context.Context) error {
-	if e == nil || e.perasCommitter == nil {
-		return nil
-	}
-	flusher, ok := e.perasCommitter.(PerasFlusher)
-	if !ok {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return flusher.Flush(context.WithoutCancel(ctx))
-}
-
-func (e *Executor) flushPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.perasCommitter == nil {
-		return nil
-	}
-	if len(scopes) == 0 {
-		return e.flushPeras(ctx)
-	}
-	if scoped, ok := e.perasCommitter.(PerasAuthorityFlusher); ok {
-		for _, scope := range scopes {
-			if authorityScopeEmpty(scope) {
-				return e.flushPeras(ctx)
-			}
-			if err := scoped.FlushAuthority(context.WithoutCancel(ctx), scope); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return e.flushPeras(ctx)
-}
-
-func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.perasAuthority == nil {
-		return nil
-	}
-	retirer, ok := e.perasAuthority.(PerasAuthorityRetirer)
-	if !ok {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return retirer.RetirePerasAuthority(context.WithoutCancel(ctx), scopes...)
-}
-
-func (e *Executor) drainPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil {
-		return nil
-	}
-	if e.perasCommitter != nil && e.perasAuthority != nil {
-		drainer, drainOK := e.perasCommitter.(PerasAuthorityDrainer)
-		retirer, retireOK := e.perasAuthority.(PerasAuthorityRetirer)
-		if drainOK && retireOK {
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			return drainer.DrainAuthority(context.WithoutCancel(ctx), retirer, scopes...)
-		}
-	}
-	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
-		return err
-	}
-	return e.retirePerasAuthority(ctx, scopes...)
-}
-
-func authorityScopeEmpty(scope compile.AuthorityScope) bool {
-	return scope.Mount == "" || scope.MountKeyID == 0
-}
-
-func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
-	overlay := e.perasOverlay()
-	if overlay == nil {
-		return nil, false, false
-	}
-	return overlay.GetPerasOverlay(key)
-}
-
-func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
-	if value, deleted, ok := e.perasOverlayGet(key); ok {
-		if deleted {
-			return nil, false, nil
-		}
-		return value, true, nil
-	}
-	return e.runner.Get(ctx, key, version)
-}
-
-type perasReadView struct {
-	executor    *Executor
-	ctx         context.Context
-	version     uint64
-	haveVersion bool
-	observed    map[string]perasObservedValue
-}
-
-func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return &perasReadView{
-		executor: e,
-		ctx:      ctx,
-		observed: make(map[string]perasObservedValue),
-	}
-}
-
-func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
-	if v == nil || v.executor == nil {
-		return nil, false, fsmeta.ErrInvalidRequest
-	}
-	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
-		if deleted {
-			v.remember(key, nil, false)
-			return nil, false, nil
-		}
-		v.remember(key, value, true)
-		return value, true, nil
-	}
-	if !v.haveVersion {
-		version, err := v.executor.reserveReadVersion(v.ctx)
-		if err != nil {
-			return nil, false, err
-		}
-		v.version = version
-		v.haveVersion = true
-	}
-	value, ok, err := v.executor.runner.Get(v.ctx, key, v.version)
-	if err != nil {
-		return nil, false, err
-	}
-	v.remember(key, value, ok)
-	return value, ok, nil
-}
-
-type perasObservedValue struct {
-	value   []byte
-	present bool
-}
-
-func (v *perasReadView) remember(key, value []byte, present bool) {
-	if v == nil {
-		return
-	}
-	v.observed[string(key)] = perasObservedValue{
-		value:   cloneBytes(value),
-		present: present,
-	}
-}
-
-func (v *perasReadView) runtimeCheckedDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
-	delta = concretePerasDelta(delta, effects)
-	if v == nil || v.executor == nil {
-		return delta
-	}
-	index := v.executor.perasPredicateIndex()
-	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(v.observed))
-	for i := range delta.ReadPredicates {
-		predicate := &delta.ReadPredicates[i]
-		if predicate.Kind == compile.PredicatePrefixScan {
-			continue
-		}
-		seen[string(predicate.Key)] = struct{}{}
-		if observed, ok := v.observed[string(predicate.Key)]; ok {
-			applyPerasObservedPredicate(predicate, observed)
-			continue
-		}
-		if predicate.Kind == compile.PredicateObservedValue &&
-			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
-			predicate.Kind = compile.PredicateNotExists
-			predicate.ExpectedValue = nil
-			predicate.HasExpectedValue = false
-		}
-	}
-	if len(v.observed) == 0 {
-		return delta
-	}
-	keys := make([]string, 0, len(v.observed))
-	for key := range v.observed {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		observed := v.observed[key]
-		predicate := compile.Predicate{Key: []byte(key)}
-		applyPerasObservedPredicate(&predicate, observed)
-		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
-	}
-	return delta
-}
-
-func applyPerasObservedPredicate(predicate *compile.Predicate, observed perasObservedValue) {
-	if predicate == nil {
-		return
-	}
-	if !observed.present {
-		predicate.Kind = compile.PredicateNotExists
-		predicate.ExpectedValue = nil
-		predicate.HasExpectedValue = false
-		return
-	}
-	predicate.Kind = compile.PredicateObservedValue
-	predicate.ExpectedValue = cloneBytes(observed.value)
-	predicate.HasExpectedValue = true
-}
-
-func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
-	value, ok, err := v.get(key)
-	if err != nil {
-		return fsmeta.DentryRecord{}, err
-	}
-	if !ok {
-		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
-	}
-	return fsmeta.DecodeDentryValue(value)
-}
-
-func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.InodeID) (fsmeta.InodeRecord, bool, error) {
-	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
-	if err != nil {
-		return fsmeta.InodeRecord{}, false, err
-	}
-	value, ok, err := v.get(key)
-	if err != nil || !ok {
-		return fsmeta.InodeRecord{}, ok, err
-	}
-	inode, err := fsmeta.DecodeInodeValue(value)
-	if err != nil {
-		return fsmeta.InodeRecord{}, false, err
-	}
-	return inode, true, nil
-}
-
-func (v *perasReadView) readSession(key []byte) (fsmeta.SessionRecord, bool, error) {
-	value, ok, err := v.get(key)
-	if err != nil || !ok {
-		return fsmeta.SessionRecord{}, ok, err
-	}
-	session, err := fsmeta.DecodeSessionValue(value)
-	if err != nil {
-		return fsmeta.SessionRecord{}, false, err
-	}
-	return session, true, nil
-}
-
-func (e *Executor) mergePerasOverlayValues(keys [][]byte, values map[string][]byte) {
-	overlay := e.perasOverlay()
-	if overlay == nil {
-		return
-	}
-	for _, key := range keys {
-		value, deleted, ok := overlay.GetPerasOverlay(key)
-		if !ok {
-			continue
-		}
-		if deleted {
-			delete(values, string(key))
-		} else {
-			values[string(key)] = value
-		}
-	}
-}
-
-func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
-	overlay := e.perasOverlay()
-	if overlay == nil || limit == 0 {
-		return kvs
-	}
-	overlayKVs := overlay.ScanPerasOverlay(start, limit)
-	if len(overlayKVs) == 0 {
-		return kvs
-	}
-	out := make([]KV, 0, int(limit))
-	base, peras := 0, 0
-	for len(out) < int(limit) && (base < len(kvs) || peras < len(overlayKVs)) {
-		switch {
-		case base >= len(kvs):
-			out = appendOverlayScanKV(out, overlayKVs[peras])
-			peras++
-		case peras >= len(overlayKVs):
-			out = append(out, kvs[base])
-			base++
-		default:
-			cmp := bytes.Compare(kvs[base].Key, overlayKVs[peras].Key)
-			switch {
-			case cmp < 0:
-				out = append(out, kvs[base])
-				base++
-			case cmp > 0:
-				out = appendOverlayScanKV(out, overlayKVs[peras])
-				peras++
-			default:
-				out = appendOverlayScanKV(out, overlayKVs[peras])
-				base++
-				peras++
-			}
-		}
-	}
-	return out
-}
-
-func appendOverlayScanKV(out []KV, kv fsperas.OverlayKV) []KV {
-	if kv.Delete {
-		return out
-	}
-	return append(out, KV{Key: kv.Key, Value: kv.Value})
-}
-
 func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.OperationID {
 	seq := uint64(1)
 	if e != nil {
@@ -1781,6 +1254,70 @@ func (e *Executor) perasQuotaAllowsVisibleCommit(ctx context.Context, changes []
 		return false, nil
 	}
 	return admitter.AllowPerasVisibleQuota(ctx, changes)
+}
+
+func (e *Executor) rememberSessionBucket(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if e == nil || mount.MountKeyID == 0 || inode == 0 {
+		return
+	}
+	bucket := fsmeta.BucketForInodeID(inode)
+	e.sessionBucketsMu.Lock()
+	if e.sessionBuckets == nil {
+		e.sessionBuckets = make(map[fsmeta.MountKeyID]map[fsmeta.AffinityBucket]struct{})
+	}
+	buckets := e.sessionBuckets[mount.MountKeyID]
+	if buckets == nil {
+		buckets = make(map[fsmeta.AffinityBucket]struct{})
+		e.sessionBuckets[mount.MountKeyID] = buckets
+	}
+	buckets[bucket] = struct{}{}
+	e.sessionBucketsMu.Unlock()
+}
+
+func (e *Executor) sessionExpirePrefixes(mount fsmeta.MountIdentity, prefixes [][]byte) ([][]byte, compile.AuthorityScope, bool) {
+	emptyScope := compile.AuthorityScope{}
+	if e == nil || mount.MountKeyID == 0 || len(prefixes) == 0 {
+		return prefixes, emptyScope, false
+	}
+	e.sessionBucketsMu.RLock()
+	buckets := e.sessionBuckets[mount.MountKeyID]
+	if len(buckets) == 0 {
+		e.sessionBucketsMu.RUnlock()
+		return prefixes, emptyScope, false
+	}
+	hot := make(map[fsmeta.AffinityBucket]struct{}, len(buckets))
+	for bucket := range buckets {
+		hot[bucket] = struct{}{}
+	}
+	e.sessionBucketsMu.RUnlock()
+
+	out := make([][]byte, 0, len(prefixes))
+	cold := make([][]byte, 0, len(prefixes))
+	drainBuckets := make([]fsmeta.AffinityBucket, 0, len(hot))
+	seenDrain := make(map[fsmeta.AffinityBucket]struct{}, len(hot))
+	for _, prefix := range prefixes {
+		bucket, ok := fsmeta.BucketOfKey(prefix)
+		if ok {
+			if _, hit := hot[bucket]; hit {
+				out = append(out, prefix)
+				if _, seen := seenDrain[bucket]; !seen {
+					seenDrain[bucket] = struct{}{}
+					drainBuckets = append(drainBuckets, bucket)
+				}
+				continue
+			}
+		}
+		cold = append(cold, prefix)
+	}
+	if len(out) == 0 {
+		return prefixes, emptyScope, false
+	}
+	out = append(out, cold...)
+	return out, compile.AuthorityScope{
+		Mount:      mount.MountID,
+		MountKeyID: mount.MountKeyID,
+		Buckets:    drainBuckets,
+	}, true
 }
 
 func atomicExists(key []byte) *kvrpcpb.AtomicPredicate {
@@ -1932,15 +1469,15 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	if e.negCache != nil && e.negCache.Has(plan.PrimaryKey) {
 		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return fsmeta.DentryRecord{}, err
-	}
 	if value, deleted, ok := e.perasOverlayGet(plan.PrimaryKey); ok {
 		if deleted {
 			return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
 		}
 		return fsmeta.DecodeDentryValue(value)
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
 	}
 	value, ok, err := e.runner.Get(ctx, plan.PrimaryKey, version)
 	if err != nil {
@@ -2022,10 +1559,14 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	if err != nil {
 		return nil, err
 	}
+	includeOverlay := req.SnapshotVersion == 0
+	if includeOverlay && e.perasDirectoryBaseEmpty(mountRecord.Identity(), req.Parent) {
+		return e.scanDentries(ctx, plan, 0, true, true)
+	}
 	var out []fsmeta.DentryRecord
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
 		var err error
-		out, err = e.scanDentries(ctx, plan, version, req.SnapshotVersion == 0)
+		out, err = e.scanDentries(ctx, plan, version, includeOverlay, includeOverlay && e.perasDirectoryBaseEmpty(mountRecord.Identity(), req.Parent))
 		return err
 	})
 	return out, err
@@ -2069,11 +1610,22 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 			}
 		}
 	}
+	if req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent) {
+		dentries, err := e.scanDentries(ctx, plan, 0, true, true)
+		if err != nil {
+			return nil, err
+		}
+		if pairs, ok, err := e.readDirPlusFromPerasView(mount, dentries); err != nil {
+			return nil, err
+		} else if ok {
+			return pairs, nil
+		}
+	}
 
 	var out []fsmeta.DentryAttrPair
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
 		includeOverlay := req.SnapshotVersion == 0
-		dentries, err := e.scanDentries(ctx, plan, version, includeOverlay)
+		dentries, err := e.scanDentries(ctx, plan, version, includeOverlay, includeOverlay && e.perasDirectoryBaseEmpty(mount, req.Parent))
 		if err != nil {
 			return err
 		}
@@ -2089,12 +1641,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 			}
 			inodeKeys = append(inodeKeys, key)
 		}
-		inodeValues, err := e.runner.BatchGet(ctx, inodeKeys, version)
+		inodeValues, err := e.batchGetMergedValues(ctx, inodeKeys, version, includeOverlay)
 		if err != nil {
 			return err
-		}
-		if includeOverlay {
-			e.mergePerasOverlayValues(inodeKeys, inodeValues)
 		}
 		pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
 		for i, dentry := range dentries {
@@ -2129,6 +1678,32 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		}
 	}
 	return out, nil
+}
+
+func (e *Executor) readDirPlusFromPerasView(mount fsmeta.MountIdentity, dentries []fsmeta.DentryRecord) ([]fsmeta.DentryAttrPair, bool, error) {
+	if len(dentries) == 0 {
+		return []fsmeta.DentryAttrPair{}, true, nil
+	}
+	pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
+	for _, dentry := range dentries {
+		key, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
+		if err != nil {
+			return nil, false, err
+		}
+		value, deleted, ok := e.perasOverlayGet(key)
+		if !ok || deleted {
+			return nil, false, nil
+		}
+		inode, err := fsmeta.DecodeInodeValue(value)
+		if err != nil {
+			return nil, false, err
+		}
+		if inode.Inode != dentry.Inode {
+			return nil, false, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+		}
+		pairs = append(pairs, fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode})
+	}
+	return pairs, true, nil
 }
 
 // encodeDirPageEntries converts assembled DentryAttrPairs into the
@@ -2257,10 +1832,14 @@ func (e *Executor) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageReque
 	return fsmeta.DecodeUsageValue(value)
 }
 
-func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64, includeOverlay bool) ([]fsmeta.DentryRecord, error) {
-	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
-	if err != nil {
-		return nil, err
+func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, version uint64, includeOverlay, overlayOnly bool) ([]fsmeta.DentryRecord, error) {
+	var kvs []KV
+	if !overlayOnly {
+		var err error
+		kvs, err = e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
+		if err != nil {
+			return nil, err
+		}
 	}
 	prefix := plan.ReadPrefixes[0]
 	if includeOverlay {
@@ -2278,6 +1857,14 @@ func (e *Executor) scanDentries(ctx context.Context, plan fsmeta.OperationPlan, 
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+func (e *Executor) perasDirectoryBaseEmpty(mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {
+	index := e.perasPredicateIndex()
+	if index == nil {
+		return false
+	}
+	return index.DirectoryEmpty(mount, parent)
 }
 
 // Link creates a second dentry for an existing non-directory inode and bumps
@@ -2521,6 +2108,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
+		e.rememberSessionBucket(mount, record.Inode)
 		return record, nil
 	}
 	var record fsmeta.SessionRecord
@@ -2612,6 +2200,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	}, delta.Authority); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
+	e.rememberSessionBucket(mount, record.Inode)
 	return record, nil
 }
 
@@ -2770,6 +2359,11 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
+	scanPrefixes, drainScope, hinted := e.sessionExpirePrefixes(mount, plan.ReadPrefixes)
+	drainScopes := []compile.AuthorityScope{delta.Authority}
+	if hinted && !authorityScopeEmpty(drainScope) {
+		drainScopes = []compile.AuthorityScope{drainScope}
+	}
 	// Expiration is base-LSM maintenance, but it still writes fsmeta session
 	// keys. Drain the active Peras authority before mutating so storage-side
 	// authority fences stay fail-closed for callers that bypass this executor.
@@ -2781,7 +2375,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		}
 		expiredSessions := make(map[expiredSessionKey]struct{})
 		remaining := plan.Limit
-		for _, scanPrefix := range plan.ReadPrefixes {
+		for _, scanPrefix := range scanPrefixes {
 			if remaining == 0 {
 				break
 			}
@@ -2831,6 +2425,9 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 				}
 			}
 			remaining -= matched
+			if hinted && len(deletes) > 0 {
+				break
+			}
 		}
 		if len(deletes) == 0 {
 			expired = 0
@@ -2851,7 +2448,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		}
 		expired = uint64(len(expiredSessions))
 		return nil
-	}, delta.Authority); err != nil {
+	}, drainScopes...); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
