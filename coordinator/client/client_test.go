@@ -560,6 +560,35 @@ func TestValidateListPerasAuthorityGrantsResponse(t *testing.T) {
 	}))
 }
 
+func TestValidateListPerasAuthoritySealsResponse(t *testing.T) {
+	seal := rootproto.PerasAuthoritySeal{
+		GrantID:              "peras-1",
+		EpochID:              1,
+		HolderID:             "holder-a",
+		Scope:                rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		SegmentRoot:          [32]byte{1},
+		SegmentPayloadDigest: [32]byte{2},
+		OperationCount:       3,
+		EntryCount:           4,
+		SealedUnixNano:       time.Now().UnixNano(),
+		InstallRegionID:      5,
+		InstallTerm:          6,
+		InstallIndex:         7,
+		InstallVersion:       8,
+	}
+	require.NoError(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
+		Seals: []*metapb.RootPerasAuthoritySeal{metawire.RootPerasAuthoritySealToProto(seal)},
+	}))
+
+	require.Error(t, validateListPerasAuthoritySealsResponse(nil))
+	require.Error(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
+		Seals: []*metapb.RootPerasAuthoritySeal{
+			metawire.RootPerasAuthoritySealToProto(seal),
+			metawire.RootPerasAuthoritySealToProto(seal),
+		},
+	}))
+}
+
 func TestValidateApplyPerasAuthorityResponse(t *testing.T) {
 	grant := rootproto.PerasAuthorityGrant{
 		GrantID:         "peras-1",

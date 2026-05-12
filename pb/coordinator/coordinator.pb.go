@@ -2201,6 +2201,86 @@ func (x *ListPerasAuthorityGrantsResponse) GetGrants() []*meta.RootPerasAuthorit
 	return nil
 }
 
+type ListPerasAuthoritySealsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPerasAuthoritySealsRequest) Reset() {
+	*x = ListPerasAuthoritySealsRequest{}
+	mi := &file_coordinator_coordinator_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPerasAuthoritySealsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPerasAuthoritySealsRequest) ProtoMessage() {}
+
+func (x *ListPerasAuthoritySealsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_coordinator_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPerasAuthoritySealsRequest.ProtoReflect.Descriptor instead.
+func (*ListPerasAuthoritySealsRequest) Descriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{23}
+}
+
+type ListPerasAuthoritySealsResponse struct {
+	state         protoimpl.MessageState         `protogen:"open.v1"`
+	Seals         []*meta.RootPerasAuthoritySeal `protobuf:"bytes,1,rep,name=seals,proto3" json:"seals,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPerasAuthoritySealsResponse) Reset() {
+	*x = ListPerasAuthoritySealsResponse{}
+	mi := &file_coordinator_coordinator_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPerasAuthoritySealsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPerasAuthoritySealsResponse) ProtoMessage() {}
+
+func (x *ListPerasAuthoritySealsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_coordinator_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPerasAuthoritySealsResponse.ProtoReflect.Descriptor instead.
+func (*ListPerasAuthoritySealsResponse) Descriptor() ([]byte, []int) {
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListPerasAuthoritySealsResponse) GetSeals() []*meta.RootPerasAuthoritySeal {
+	if x != nil {
+		return x.Seals
+	}
+	return nil
+}
+
 type ApplyPerasAuthorityRequest struct {
 	state         protoimpl.MessageState          `protogen:"open.v1"`
 	Command       *meta.RootPerasAuthorityCommand `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
@@ -2210,7 +2290,7 @@ type ApplyPerasAuthorityRequest struct {
 
 func (x *ApplyPerasAuthorityRequest) Reset() {
 	*x = ApplyPerasAuthorityRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[23]
+	mi := &file_coordinator_coordinator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2222,7 +2302,7 @@ func (x *ApplyPerasAuthorityRequest) String() string {
 func (*ApplyPerasAuthorityRequest) ProtoMessage() {}
 
 func (x *ApplyPerasAuthorityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[23]
+	mi := &file_coordinator_coordinator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2235,7 +2315,7 @@ func (x *ApplyPerasAuthorityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyPerasAuthorityRequest.ProtoReflect.Descriptor instead.
 func (*ApplyPerasAuthorityRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{23}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ApplyPerasAuthorityRequest) GetCommand() *meta.RootPerasAuthorityCommand {
@@ -2256,7 +2336,7 @@ type ApplyPerasAuthorityResponse struct {
 
 func (x *ApplyPerasAuthorityResponse) Reset() {
 	*x = ApplyPerasAuthorityResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[24]
+	mi := &file_coordinator_coordinator_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2268,7 +2348,7 @@ func (x *ApplyPerasAuthorityResponse) String() string {
 func (*ApplyPerasAuthorityResponse) ProtoMessage() {}
 
 func (x *ApplyPerasAuthorityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[24]
+	mi := &file_coordinator_coordinator_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2281,7 +2361,7 @@ func (x *ApplyPerasAuthorityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyPerasAuthorityResponse.ProtoReflect.Descriptor instead.
 func (*ApplyPerasAuthorityResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{24}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ApplyPerasAuthorityResponse) GetGrant() *meta.RootPerasAuthorityGrant {
@@ -2314,7 +2394,7 @@ type WatchRootEventsRequest struct {
 
 func (x *WatchRootEventsRequest) Reset() {
 	*x = WatchRootEventsRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[25]
+	mi := &file_coordinator_coordinator_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2326,7 +2406,7 @@ func (x *WatchRootEventsRequest) String() string {
 func (*WatchRootEventsRequest) ProtoMessage() {}
 
 func (x *WatchRootEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[25]
+	mi := &file_coordinator_coordinator_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2339,7 +2419,7 @@ func (x *WatchRootEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRootEventsRequest.ProtoReflect.Descriptor instead.
 func (*WatchRootEventsRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{25}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WatchRootEventsRequest) GetAfter() *meta.RootTailToken {
@@ -2360,7 +2440,7 @@ type WatchRootEventsResponse struct {
 
 func (x *WatchRootEventsResponse) Reset() {
 	*x = WatchRootEventsResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[26]
+	mi := &file_coordinator_coordinator_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2372,7 +2452,7 @@ func (x *WatchRootEventsResponse) String() string {
 func (*WatchRootEventsResponse) ProtoMessage() {}
 
 func (x *WatchRootEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[26]
+	mi := &file_coordinator_coordinator_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2385,7 +2465,7 @@ func (x *WatchRootEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRootEventsResponse.ProtoReflect.Descriptor instead.
 func (*WatchRootEventsResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{26}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *WatchRootEventsResponse) GetToken() *meta.RootTailToken {
@@ -2424,7 +2504,7 @@ type SchedulerOperation struct {
 
 func (x *SchedulerOperation) Reset() {
 	*x = SchedulerOperation{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[27]
+	mi := &file_coordinator_coordinator_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2436,7 +2516,7 @@ func (x *SchedulerOperation) String() string {
 func (*SchedulerOperation) ProtoMessage() {}
 
 func (x *SchedulerOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[27]
+	mi := &file_coordinator_coordinator_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2449,7 +2529,7 @@ func (x *SchedulerOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchedulerOperation.ProtoReflect.Descriptor instead.
 func (*SchedulerOperation) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{27}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SchedulerOperation) GetType() SchedulerOperationType {
@@ -2511,7 +2591,7 @@ type StoreHeartbeatResponse struct {
 
 func (x *StoreHeartbeatResponse) Reset() {
 	*x = StoreHeartbeatResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[28]
+	mi := &file_coordinator_coordinator_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2523,7 +2603,7 @@ func (x *StoreHeartbeatResponse) String() string {
 func (*StoreHeartbeatResponse) ProtoMessage() {}
 
 func (x *StoreHeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[28]
+	mi := &file_coordinator_coordinator_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2536,7 +2616,7 @@ func (x *StoreHeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoreHeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*StoreHeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{28}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *StoreHeartbeatResponse) GetAccepted() bool {
@@ -2562,7 +2642,7 @@ type RegionLivenessRequest struct {
 
 func (x *RegionLivenessRequest) Reset() {
 	*x = RegionLivenessRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[29]
+	mi := &file_coordinator_coordinator_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2574,7 +2654,7 @@ func (x *RegionLivenessRequest) String() string {
 func (*RegionLivenessRequest) ProtoMessage() {}
 
 func (x *RegionLivenessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[29]
+	mi := &file_coordinator_coordinator_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2587,7 +2667,7 @@ func (x *RegionLivenessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionLivenessRequest.ProtoReflect.Descriptor instead.
 func (*RegionLivenessRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{29}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RegionLivenessRequest) GetRegionId() uint64 {
@@ -2606,7 +2686,7 @@ type RegionLivenessResponse struct {
 
 func (x *RegionLivenessResponse) Reset() {
 	*x = RegionLivenessResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[30]
+	mi := &file_coordinator_coordinator_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2618,7 +2698,7 @@ func (x *RegionLivenessResponse) String() string {
 func (*RegionLivenessResponse) ProtoMessage() {}
 
 func (x *RegionLivenessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[30]
+	mi := &file_coordinator_coordinator_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2631,7 +2711,7 @@ func (x *RegionLivenessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegionLivenessResponse.ProtoReflect.Descriptor instead.
 func (*RegionLivenessResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{30}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *RegionLivenessResponse) GetAccepted() bool {
@@ -2653,7 +2733,7 @@ type PublishRootEventRequest struct {
 
 func (x *PublishRootEventRequest) Reset() {
 	*x = PublishRootEventRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[31]
+	mi := &file_coordinator_coordinator_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2665,7 +2745,7 @@ func (x *PublishRootEventRequest) String() string {
 func (*PublishRootEventRequest) ProtoMessage() {}
 
 func (x *PublishRootEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[31]
+	mi := &file_coordinator_coordinator_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2678,7 +2758,7 @@ func (x *PublishRootEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishRootEventRequest.ProtoReflect.Descriptor instead.
 func (*PublishRootEventRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{31}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *PublishRootEventRequest) GetEvent() *meta.RootEvent {
@@ -2709,7 +2789,7 @@ type PublishRootEventResponse struct {
 
 func (x *PublishRootEventResponse) Reset() {
 	*x = PublishRootEventResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[32]
+	mi := &file_coordinator_coordinator_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2721,7 +2801,7 @@ func (x *PublishRootEventResponse) String() string {
 func (*PublishRootEventResponse) ProtoMessage() {}
 
 func (x *PublishRootEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[32]
+	mi := &file_coordinator_coordinator_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2734,7 +2814,7 @@ func (x *PublishRootEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishRootEventResponse.ProtoReflect.Descriptor instead.
 func (*PublishRootEventResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{32}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PublishRootEventResponse) GetAccepted() bool {
@@ -2770,7 +2850,7 @@ type TransitionEntry struct {
 
 func (x *TransitionEntry) Reset() {
 	*x = TransitionEntry{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[33]
+	mi := &file_coordinator_coordinator_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2782,7 +2862,7 @@ func (x *TransitionEntry) String() string {
 func (*TransitionEntry) ProtoMessage() {}
 
 func (x *TransitionEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[33]
+	mi := &file_coordinator_coordinator_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2795,7 +2875,7 @@ func (x *TransitionEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransitionEntry.ProtoReflect.Descriptor instead.
 func (*TransitionEntry) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{33}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *TransitionEntry) GetKey() uint64 {
@@ -2872,7 +2952,7 @@ type TransitionAssessment struct {
 
 func (x *TransitionAssessment) Reset() {
 	*x = TransitionAssessment{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[34]
+	mi := &file_coordinator_coordinator_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2884,7 +2964,7 @@ func (x *TransitionAssessment) String() string {
 func (*TransitionAssessment) ProtoMessage() {}
 
 func (x *TransitionAssessment) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[34]
+	mi := &file_coordinator_coordinator_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2897,7 +2977,7 @@ func (x *TransitionAssessment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransitionAssessment.ProtoReflect.Descriptor instead.
 func (*TransitionAssessment) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{34}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *TransitionAssessment) GetKey() uint64 {
@@ -2957,7 +3037,7 @@ type ListTransitionsRequest struct {
 
 func (x *ListTransitionsRequest) Reset() {
 	*x = ListTransitionsRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[35]
+	mi := &file_coordinator_coordinator_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2969,7 +3049,7 @@ func (x *ListTransitionsRequest) String() string {
 func (*ListTransitionsRequest) ProtoMessage() {}
 
 func (x *ListTransitionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[35]
+	mi := &file_coordinator_coordinator_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2982,7 +3062,7 @@ func (x *ListTransitionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTransitionsRequest.ProtoReflect.Descriptor instead.
 func (*ListTransitionsRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{35}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{37}
 }
 
 type ListTransitionsResponse struct {
@@ -2994,7 +3074,7 @@ type ListTransitionsResponse struct {
 
 func (x *ListTransitionsResponse) Reset() {
 	*x = ListTransitionsResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[36]
+	mi := &file_coordinator_coordinator_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3006,7 +3086,7 @@ func (x *ListTransitionsResponse) String() string {
 func (*ListTransitionsResponse) ProtoMessage() {}
 
 func (x *ListTransitionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[36]
+	mi := &file_coordinator_coordinator_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3019,7 +3099,7 @@ func (x *ListTransitionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTransitionsResponse.ProtoReflect.Descriptor instead.
 func (*ListTransitionsResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{36}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ListTransitionsResponse) GetEntries() []*TransitionEntry {
@@ -3038,7 +3118,7 @@ type AssessRootEventRequest struct {
 
 func (x *AssessRootEventRequest) Reset() {
 	*x = AssessRootEventRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	mi := &file_coordinator_coordinator_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3050,7 +3130,7 @@ func (x *AssessRootEventRequest) String() string {
 func (*AssessRootEventRequest) ProtoMessage() {}
 
 func (x *AssessRootEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[37]
+	mi := &file_coordinator_coordinator_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3063,7 +3143,7 @@ func (x *AssessRootEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssessRootEventRequest.ProtoReflect.Descriptor instead.
 func (*AssessRootEventRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{37}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *AssessRootEventRequest) GetEvent() *meta.RootEvent {
@@ -3082,7 +3162,7 @@ type AssessRootEventResponse struct {
 
 func (x *AssessRootEventResponse) Reset() {
 	*x = AssessRootEventResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	mi := &file_coordinator_coordinator_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3094,7 +3174,7 @@ func (x *AssessRootEventResponse) String() string {
 func (*AssessRootEventResponse) ProtoMessage() {}
 
 func (x *AssessRootEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[38]
+	mi := &file_coordinator_coordinator_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3107,7 +3187,7 @@ func (x *AssessRootEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssessRootEventResponse.ProtoReflect.Descriptor instead.
 func (*AssessRootEventResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{38}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AssessRootEventResponse) GetAssessment() *TransitionAssessment {
@@ -3127,7 +3207,7 @@ type RemoveRegionRequest struct {
 
 func (x *RemoveRegionRequest) Reset() {
 	*x = RemoveRegionRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[39]
+	mi := &file_coordinator_coordinator_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3139,7 +3219,7 @@ func (x *RemoveRegionRequest) String() string {
 func (*RemoveRegionRequest) ProtoMessage() {}
 
 func (x *RemoveRegionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[39]
+	mi := &file_coordinator_coordinator_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3152,7 +3232,7 @@ func (x *RemoveRegionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRegionRequest.ProtoReflect.Descriptor instead.
 func (*RemoveRegionRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{39}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RemoveRegionRequest) GetRegionId() uint64 {
@@ -3178,7 +3258,7 @@ type RemoveRegionResponse struct {
 
 func (x *RemoveRegionResponse) Reset() {
 	*x = RemoveRegionResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[40]
+	mi := &file_coordinator_coordinator_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3190,7 +3270,7 @@ func (x *RemoveRegionResponse) String() string {
 func (*RemoveRegionResponse) ProtoMessage() {}
 
 func (x *RemoveRegionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[40]
+	mi := &file_coordinator_coordinator_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3203,7 +3283,7 @@ func (x *RemoveRegionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRegionResponse.ProtoReflect.Descriptor instead.
 func (*RemoveRegionResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{40}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RemoveRegionResponse) GetRemoved() bool {
@@ -3227,7 +3307,7 @@ type RootToken struct {
 
 func (x *RootToken) Reset() {
 	*x = RootToken{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[41]
+	mi := &file_coordinator_coordinator_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3239,7 +3319,7 @@ func (x *RootToken) String() string {
 func (*RootToken) ProtoMessage() {}
 
 func (x *RootToken) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[41]
+	mi := &file_coordinator_coordinator_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3252,7 +3332,7 @@ func (x *RootToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RootToken.ProtoReflect.Descriptor instead.
 func (*RootToken) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{41}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *RootToken) GetTerm() uint64 {
@@ -3295,7 +3375,7 @@ type GetRegionByKeyRequest struct {
 
 func (x *GetRegionByKeyRequest) Reset() {
 	*x = GetRegionByKeyRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[42]
+	mi := &file_coordinator_coordinator_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3307,7 +3387,7 @@ func (x *GetRegionByKeyRequest) String() string {
 func (*GetRegionByKeyRequest) ProtoMessage() {}
 
 func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[42]
+	mi := &file_coordinator_coordinator_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3320,7 +3400,7 @@ func (x *GetRegionByKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{42}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetRegionByKeyRequest) GetKey() []byte {
@@ -3399,7 +3479,7 @@ type GetRegionByKeyResponse struct {
 
 func (x *GetRegionByKeyResponse) Reset() {
 	*x = GetRegionByKeyResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[43]
+	mi := &file_coordinator_coordinator_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3411,7 +3491,7 @@ func (x *GetRegionByKeyResponse) String() string {
 func (*GetRegionByKeyResponse) ProtoMessage() {}
 
 func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[43]
+	mi := &file_coordinator_coordinator_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3424,7 +3504,7 @@ func (x *GetRegionByKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegionByKeyResponse.ProtoReflect.Descriptor instead.
 func (*GetRegionByKeyResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{43}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetRegionByKeyResponse) GetRegionDescriptor() *meta.RegionDescriptor {
@@ -3548,7 +3628,7 @@ type AllocIDRequest struct {
 
 func (x *AllocIDRequest) Reset() {
 	*x = AllocIDRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[44]
+	mi := &file_coordinator_coordinator_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3560,7 +3640,7 @@ func (x *AllocIDRequest) String() string {
 func (*AllocIDRequest) ProtoMessage() {}
 
 func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[44]
+	mi := &file_coordinator_coordinator_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3573,7 +3653,7 @@ func (x *AllocIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDRequest.ProtoReflect.Descriptor instead.
 func (*AllocIDRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{44}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *AllocIDRequest) GetCount() uint64 {
@@ -3599,7 +3679,7 @@ type AllocIDResponse struct {
 
 func (x *AllocIDResponse) Reset() {
 	*x = AllocIDResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[45]
+	mi := &file_coordinator_coordinator_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3611,7 +3691,7 @@ func (x *AllocIDResponse) String() string {
 func (*AllocIDResponse) ProtoMessage() {}
 
 func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[45]
+	mi := &file_coordinator_coordinator_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3624,7 +3704,7 @@ func (x *AllocIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AllocIDResponse.ProtoReflect.Descriptor instead.
 func (*AllocIDResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{45}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *AllocIDResponse) GetFirstId() uint64 {
@@ -3678,7 +3758,7 @@ type TsoRequest struct {
 
 func (x *TsoRequest) Reset() {
 	*x = TsoRequest{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[46]
+	mi := &file_coordinator_coordinator_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3690,7 +3770,7 @@ func (x *TsoRequest) String() string {
 func (*TsoRequest) ProtoMessage() {}
 
 func (x *TsoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[46]
+	mi := &file_coordinator_coordinator_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3703,7 +3783,7 @@ func (x *TsoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoRequest.ProtoReflect.Descriptor instead.
 func (*TsoRequest) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{46}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *TsoRequest) GetCount() uint64 {
@@ -3729,7 +3809,7 @@ type TsoResponse struct {
 
 func (x *TsoResponse) Reset() {
 	*x = TsoResponse{}
-	mi := &file_coordinator_coordinator_proto_msgTypes[47]
+	mi := &file_coordinator_coordinator_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3741,7 +3821,7 @@ func (x *TsoResponse) String() string {
 func (*TsoResponse) ProtoMessage() {}
 
 func (x *TsoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_coordinator_proto_msgTypes[47]
+	mi := &file_coordinator_coordinator_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3754,7 +3834,7 @@ func (x *TsoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TsoResponse.ProtoReflect.Descriptor instead.
 func (*TsoResponse) Descriptor() ([]byte, []int) {
-	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{47}
+	return file_coordinator_coordinator_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *TsoResponse) GetTimestamp() uint64 {
@@ -3916,7 +3996,10 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x06fences\x18\x01 \x03(\v2#.nokv.coordinator.v1.QuotaFenceInfoR\x06fences\"!\n" +
 	"\x1fListPerasAuthorityGrantsRequest\"a\n" +
 	" ListPerasAuthorityGrantsResponse\x12=\n" +
-	"\x06grants\x18\x01 \x03(\v2%.nokv.meta.v1.RootPerasAuthorityGrantR\x06grants\"_\n" +
+	"\x06grants\x18\x01 \x03(\v2%.nokv.meta.v1.RootPerasAuthorityGrantR\x06grants\" \n" +
+	"\x1eListPerasAuthoritySealsRequest\"]\n" +
+	"\x1fListPerasAuthoritySealsResponse\x12:\n" +
+	"\x05seals\x18\x01 \x03(\v2$.nokv.meta.v1.RootPerasAuthoritySealR\x05seals\"_\n" +
 	"\x1aApplyPerasAuthorityRequest\x12A\n" +
 	"\acommand\x18\x01 \x01(\v2'.nokv.meta.v1.RootPerasAuthorityCommandR\acommand\"\xeb\x01\n" +
 	"\x1bApplyPerasAuthorityResponse\x12;\n" +
@@ -4113,7 +4196,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x13SYNC_HEALTH_HEALTHY\x10\x01\x12\x17\n" +
 	"\x13SYNC_HEALTH_LAGGING\x10\x02\x12\"\n" +
 	"\x1eSYNC_HEALTH_BOOTSTRAP_REQUIRED\x10\x03\x12 \n" +
-	"\x1cSYNC_HEALTH_ROOT_UNAVAILABLE\x10\x042\xde\x0f\n" +
+	"\x1cSYNC_HEALTH_ROOT_UNAVAILABLE\x10\x042\xe5\x10\n" +
 	"\vCoordinator\x12i\n" +
 	"\x0eStoreHeartbeat\x12*.nokv.coordinator.v1.StoreHeartbeatRequest\x1a+.nokv.coordinator.v1.StoreHeartbeatResponse\x12W\n" +
 	"\bGetStore\x12$.nokv.coordinator.v1.GetStoreRequest\x1a%.nokv.coordinator.v1.GetStoreResponse\x12]\n" +
@@ -4125,7 +4208,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x16ListSubtreeAuthorities\x122.nokv.coordinator.v1.ListSubtreeAuthoritiesRequest\x1a3.nokv.coordinator.v1.ListSubtreeAuthoritiesResponse\x12f\n" +
 	"\rGetQuotaFence\x12).nokv.coordinator.v1.GetQuotaFenceRequest\x1a*.nokv.coordinator.v1.GetQuotaFenceResponse\x12l\n" +
 	"\x0fListQuotaFences\x12+.nokv.coordinator.v1.ListQuotaFencesRequest\x1a,.nokv.coordinator.v1.ListQuotaFencesResponse\x12\x87\x01\n" +
-	"\x18ListPerasAuthorityGrants\x124.nokv.coordinator.v1.ListPerasAuthorityGrantsRequest\x1a5.nokv.coordinator.v1.ListPerasAuthorityGrantsResponse\x12x\n" +
+	"\x18ListPerasAuthorityGrants\x124.nokv.coordinator.v1.ListPerasAuthorityGrantsRequest\x1a5.nokv.coordinator.v1.ListPerasAuthorityGrantsResponse\x12\x84\x01\n" +
+	"\x17ListPerasAuthoritySeals\x123.nokv.coordinator.v1.ListPerasAuthoritySealsRequest\x1a4.nokv.coordinator.v1.ListPerasAuthoritySealsResponse\x12x\n" +
 	"\x13ApplyPerasAuthority\x12/.nokv.coordinator.v1.ApplyPerasAuthorityRequest\x1a0.nokv.coordinator.v1.ApplyPerasAuthorityResponse\x12n\n" +
 	"\x0fWatchRootEvents\x12+.nokv.coordinator.v1.WatchRootEventsRequest\x1a,.nokv.coordinator.v1.WatchRootEventsResponse0\x01\x12i\n" +
 	"\x0eRegionLiveness\x12*.nokv.coordinator.v1.RegionLivenessRequest\x1a+.nokv.coordinator.v1.RegionLivenessResponse\x12o\n" +
@@ -4150,7 +4234,7 @@ func file_coordinator_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_coordinator_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
+var file_coordinator_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_coordinator_coordinator_proto_goTypes = []any{
 	(StoreState)(0),                          // 0: nokv.coordinator.v1.StoreState
 	(MountState)(0),                          // 1: nokv.coordinator.v1.MountState
@@ -4189,42 +4273,45 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(*ListQuotaFencesResponse)(nil),          // 34: nokv.coordinator.v1.ListQuotaFencesResponse
 	(*ListPerasAuthorityGrantsRequest)(nil),  // 35: nokv.coordinator.v1.ListPerasAuthorityGrantsRequest
 	(*ListPerasAuthorityGrantsResponse)(nil), // 36: nokv.coordinator.v1.ListPerasAuthorityGrantsResponse
-	(*ApplyPerasAuthorityRequest)(nil),       // 37: nokv.coordinator.v1.ApplyPerasAuthorityRequest
-	(*ApplyPerasAuthorityResponse)(nil),      // 38: nokv.coordinator.v1.ApplyPerasAuthorityResponse
-	(*WatchRootEventsRequest)(nil),           // 39: nokv.coordinator.v1.WatchRootEventsRequest
-	(*WatchRootEventsResponse)(nil),          // 40: nokv.coordinator.v1.WatchRootEventsResponse
-	(*SchedulerOperation)(nil),               // 41: nokv.coordinator.v1.SchedulerOperation
-	(*StoreHeartbeatResponse)(nil),           // 42: nokv.coordinator.v1.StoreHeartbeatResponse
-	(*RegionLivenessRequest)(nil),            // 43: nokv.coordinator.v1.RegionLivenessRequest
-	(*RegionLivenessResponse)(nil),           // 44: nokv.coordinator.v1.RegionLivenessResponse
-	(*PublishRootEventRequest)(nil),          // 45: nokv.coordinator.v1.PublishRootEventRequest
-	(*PublishRootEventResponse)(nil),         // 46: nokv.coordinator.v1.PublishRootEventResponse
-	(*TransitionEntry)(nil),                  // 47: nokv.coordinator.v1.TransitionEntry
-	(*TransitionAssessment)(nil),             // 48: nokv.coordinator.v1.TransitionAssessment
-	(*ListTransitionsRequest)(nil),           // 49: nokv.coordinator.v1.ListTransitionsRequest
-	(*ListTransitionsResponse)(nil),          // 50: nokv.coordinator.v1.ListTransitionsResponse
-	(*AssessRootEventRequest)(nil),           // 51: nokv.coordinator.v1.AssessRootEventRequest
-	(*AssessRootEventResponse)(nil),          // 52: nokv.coordinator.v1.AssessRootEventResponse
-	(*RemoveRegionRequest)(nil),              // 53: nokv.coordinator.v1.RemoveRegionRequest
-	(*RemoveRegionResponse)(nil),             // 54: nokv.coordinator.v1.RemoveRegionResponse
-	(*RootToken)(nil),                        // 55: nokv.coordinator.v1.RootToken
-	(*GetRegionByKeyRequest)(nil),            // 56: nokv.coordinator.v1.GetRegionByKeyRequest
-	(*GetRegionByKeyResponse)(nil),           // 57: nokv.coordinator.v1.GetRegionByKeyResponse
-	(*AllocIDRequest)(nil),                   // 58: nokv.coordinator.v1.AllocIDRequest
-	(*AllocIDResponse)(nil),                  // 59: nokv.coordinator.v1.AllocIDResponse
-	(*TsoRequest)(nil),                       // 60: nokv.coordinator.v1.TsoRequest
-	(*TsoResponse)(nil),                      // 61: nokv.coordinator.v1.TsoResponse
-	(*meta.RootCursor)(nil),                  // 62: nokv.meta.v1.RootCursor
-	(*meta.RootPerasAuthorityGrant)(nil),     // 63: nokv.meta.v1.RootPerasAuthorityGrant
-	(*meta.RootPerasAuthorityCommand)(nil),   // 64: nokv.meta.v1.RootPerasAuthorityCommand
-	(meta.RootPerasAuthorityApplyStatus)(0),  // 65: nokv.meta.v1.RootPerasAuthorityApplyStatus
-	(*meta.RootTailToken)(nil),               // 66: nokv.meta.v1.RootTailToken
-	(*meta.RootCommittedEvent)(nil),          // 67: nokv.meta.v1.RootCommittedEvent
-	(*meta.RegionDescriptor)(nil),            // 68: nokv.meta.v1.RegionDescriptor
-	(*meta.RootEvent)(nil),                   // 69: nokv.meta.v1.RootEvent
-	(*meta.RootPendingPeerChange)(nil),       // 70: nokv.meta.v1.RootPendingPeerChange
-	(*meta.RootPendingRangeChange)(nil),      // 71: nokv.meta.v1.RootPendingRangeChange
-	(*meta.RootAuthorityEvidence)(nil),       // 72: nokv.meta.v1.RootAuthorityEvidence
+	(*ListPerasAuthoritySealsRequest)(nil),   // 37: nokv.coordinator.v1.ListPerasAuthoritySealsRequest
+	(*ListPerasAuthoritySealsResponse)(nil),  // 38: nokv.coordinator.v1.ListPerasAuthoritySealsResponse
+	(*ApplyPerasAuthorityRequest)(nil),       // 39: nokv.coordinator.v1.ApplyPerasAuthorityRequest
+	(*ApplyPerasAuthorityResponse)(nil),      // 40: nokv.coordinator.v1.ApplyPerasAuthorityResponse
+	(*WatchRootEventsRequest)(nil),           // 41: nokv.coordinator.v1.WatchRootEventsRequest
+	(*WatchRootEventsResponse)(nil),          // 42: nokv.coordinator.v1.WatchRootEventsResponse
+	(*SchedulerOperation)(nil),               // 43: nokv.coordinator.v1.SchedulerOperation
+	(*StoreHeartbeatResponse)(nil),           // 44: nokv.coordinator.v1.StoreHeartbeatResponse
+	(*RegionLivenessRequest)(nil),            // 45: nokv.coordinator.v1.RegionLivenessRequest
+	(*RegionLivenessResponse)(nil),           // 46: nokv.coordinator.v1.RegionLivenessResponse
+	(*PublishRootEventRequest)(nil),          // 47: nokv.coordinator.v1.PublishRootEventRequest
+	(*PublishRootEventResponse)(nil),         // 48: nokv.coordinator.v1.PublishRootEventResponse
+	(*TransitionEntry)(nil),                  // 49: nokv.coordinator.v1.TransitionEntry
+	(*TransitionAssessment)(nil),             // 50: nokv.coordinator.v1.TransitionAssessment
+	(*ListTransitionsRequest)(nil),           // 51: nokv.coordinator.v1.ListTransitionsRequest
+	(*ListTransitionsResponse)(nil),          // 52: nokv.coordinator.v1.ListTransitionsResponse
+	(*AssessRootEventRequest)(nil),           // 53: nokv.coordinator.v1.AssessRootEventRequest
+	(*AssessRootEventResponse)(nil),          // 54: nokv.coordinator.v1.AssessRootEventResponse
+	(*RemoveRegionRequest)(nil),              // 55: nokv.coordinator.v1.RemoveRegionRequest
+	(*RemoveRegionResponse)(nil),             // 56: nokv.coordinator.v1.RemoveRegionResponse
+	(*RootToken)(nil),                        // 57: nokv.coordinator.v1.RootToken
+	(*GetRegionByKeyRequest)(nil),            // 58: nokv.coordinator.v1.GetRegionByKeyRequest
+	(*GetRegionByKeyResponse)(nil),           // 59: nokv.coordinator.v1.GetRegionByKeyResponse
+	(*AllocIDRequest)(nil),                   // 60: nokv.coordinator.v1.AllocIDRequest
+	(*AllocIDResponse)(nil),                  // 61: nokv.coordinator.v1.AllocIDResponse
+	(*TsoRequest)(nil),                       // 62: nokv.coordinator.v1.TsoRequest
+	(*TsoResponse)(nil),                      // 63: nokv.coordinator.v1.TsoResponse
+	(*meta.RootCursor)(nil),                  // 64: nokv.meta.v1.RootCursor
+	(*meta.RootPerasAuthorityGrant)(nil),     // 65: nokv.meta.v1.RootPerasAuthorityGrant
+	(*meta.RootPerasAuthoritySeal)(nil),      // 66: nokv.meta.v1.RootPerasAuthoritySeal
+	(*meta.RootPerasAuthorityCommand)(nil),   // 67: nokv.meta.v1.RootPerasAuthorityCommand
+	(meta.RootPerasAuthorityApplyStatus)(0),  // 68: nokv.meta.v1.RootPerasAuthorityApplyStatus
+	(*meta.RootTailToken)(nil),               // 69: nokv.meta.v1.RootTailToken
+	(*meta.RootCommittedEvent)(nil),          // 70: nokv.meta.v1.RootCommittedEvent
+	(*meta.RegionDescriptor)(nil),            // 71: nokv.meta.v1.RegionDescriptor
+	(*meta.RootEvent)(nil),                   // 72: nokv.meta.v1.RootEvent
+	(*meta.RootPendingPeerChange)(nil),       // 73: nokv.meta.v1.RootPendingPeerChange
+	(*meta.RootPendingRangeChange)(nil),      // 74: nokv.meta.v1.RootPendingRangeChange
+	(*meta.RootAuthorityEvidence)(nil),       // 75: nokv.meta.v1.RootAuthorityEvidence
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	15, // 0: nokv.coordinator.v1.StoreHeartbeatRequest.region_stats:type_name -> nokv.coordinator.v1.RegionRuntimeStats
@@ -4232,103 +4319,106 @@ var file_coordinator_coordinator_proto_depIdxs = []int32{
 	16, // 2: nokv.coordinator.v1.GetStoreResponse.store:type_name -> nokv.coordinator.v1.StoreInfo
 	16, // 3: nokv.coordinator.v1.ListStoresResponse.stores:type_name -> nokv.coordinator.v1.StoreInfo
 	1,  // 4: nokv.coordinator.v1.MountInfo.state:type_name -> nokv.coordinator.v1.MountState
-	62, // 5: nokv.coordinator.v1.MountInfo.registered_at:type_name -> nokv.meta.v1.RootCursor
-	62, // 6: nokv.coordinator.v1.MountInfo.retired_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 5: nokv.coordinator.v1.MountInfo.registered_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 6: nokv.coordinator.v1.MountInfo.retired_at:type_name -> nokv.meta.v1.RootCursor
 	21, // 7: nokv.coordinator.v1.GetMountResponse.mount:type_name -> nokv.coordinator.v1.MountInfo
 	21, // 8: nokv.coordinator.v1.ListMountsResponse.mounts:type_name -> nokv.coordinator.v1.MountInfo
 	2,  // 9: nokv.coordinator.v1.SubtreeAuthorityInfo.state:type_name -> nokv.coordinator.v1.SubtreeAuthorityState
-	62, // 10: nokv.coordinator.v1.SubtreeAuthorityInfo.declared_at:type_name -> nokv.meta.v1.RootCursor
-	62, // 11: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_started_at:type_name -> nokv.meta.v1.RootCursor
-	62, // 12: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_completed_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 10: nokv.coordinator.v1.SubtreeAuthorityInfo.declared_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 11: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_started_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 12: nokv.coordinator.v1.SubtreeAuthorityInfo.handoff_completed_at:type_name -> nokv.meta.v1.RootCursor
 	26, // 13: nokv.coordinator.v1.ListSubtreeAuthoritiesResponse.subtrees:type_name -> nokv.coordinator.v1.SubtreeAuthorityInfo
 	29, // 14: nokv.coordinator.v1.QuotaFenceInfo.subject:type_name -> nokv.coordinator.v1.QuotaSubject
-	62, // 15: nokv.coordinator.v1.QuotaFenceInfo.updated_at:type_name -> nokv.meta.v1.RootCursor
+	64, // 15: nokv.coordinator.v1.QuotaFenceInfo.updated_at:type_name -> nokv.meta.v1.RootCursor
 	29, // 16: nokv.coordinator.v1.GetQuotaFenceRequest.subject:type_name -> nokv.coordinator.v1.QuotaSubject
 	30, // 17: nokv.coordinator.v1.GetQuotaFenceResponse.fence:type_name -> nokv.coordinator.v1.QuotaFenceInfo
 	30, // 18: nokv.coordinator.v1.ListQuotaFencesResponse.fences:type_name -> nokv.coordinator.v1.QuotaFenceInfo
-	63, // 19: nokv.coordinator.v1.ListPerasAuthorityGrantsResponse.grants:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
-	64, // 20: nokv.coordinator.v1.ApplyPerasAuthorityRequest.command:type_name -> nokv.meta.v1.RootPerasAuthorityCommand
-	63, // 21: nokv.coordinator.v1.ApplyPerasAuthorityResponse.grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
-	65, // 22: nokv.coordinator.v1.ApplyPerasAuthorityResponse.status:type_name -> nokv.meta.v1.RootPerasAuthorityApplyStatus
-	63, // 23: nokv.coordinator.v1.ApplyPerasAuthorityResponse.active_grants:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
-	66, // 24: nokv.coordinator.v1.WatchRootEventsRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	66, // 25: nokv.coordinator.v1.WatchRootEventsResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	67, // 26: nokv.coordinator.v1.WatchRootEventsResponse.events:type_name -> nokv.meta.v1.RootCommittedEvent
-	3,  // 27: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
-	68, // 28: nokv.coordinator.v1.SchedulerOperation.split_child:type_name -> nokv.meta.v1.RegionDescriptor
-	41, // 29: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
-	69, // 30: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	48, // 31: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
-	4,  // 32: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
-	5,  // 33: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
-	6,  // 34: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
-	7,  // 35: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	70, // 36: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
-	71, // 37: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
-	4,  // 38: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
-	5,  // 39: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
-	6,  // 40: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
-	7,  // 41: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
-	8,  // 42: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
-	47, // 43: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
-	69, // 44: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
-	48, // 45: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
-	9,  // 46: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
-	55, // 47: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
-	68, // 48: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	55, // 49: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
-	9,  // 50: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
-	10, // 51: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
-	55, // 52: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
-	11, // 53: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
-	12, // 54: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
-	13, // 55: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
-	72, // 56: nokv.coordinator.v1.GetRegionByKeyResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	72, // 57: nokv.coordinator.v1.AllocIDResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	72, // 58: nokv.coordinator.v1.TsoResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	14, // 59: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	17, // 60: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
-	19, // 61: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
-	22, // 62: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
-	24, // 63: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
-	27, // 64: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
-	31, // 65: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
-	33, // 66: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
-	35, // 67: nokv.coordinator.v1.Coordinator.ListPerasAuthorityGrants:input_type -> nokv.coordinator.v1.ListPerasAuthorityGrantsRequest
-	37, // 68: nokv.coordinator.v1.Coordinator.ApplyPerasAuthority:input_type -> nokv.coordinator.v1.ApplyPerasAuthorityRequest
-	39, // 69: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
-	43, // 70: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	45, // 71: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	49, // 72: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	51, // 73: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	53, // 74: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	56, // 75: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	58, // 76: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	60, // 77: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	42, // 78: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	18, // 79: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
-	20, // 80: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
-	23, // 81: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
-	25, // 82: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
-	28, // 83: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
-	32, // 84: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
-	34, // 85: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
-	36, // 86: nokv.coordinator.v1.Coordinator.ListPerasAuthorityGrants:output_type -> nokv.coordinator.v1.ListPerasAuthorityGrantsResponse
-	38, // 87: nokv.coordinator.v1.Coordinator.ApplyPerasAuthority:output_type -> nokv.coordinator.v1.ApplyPerasAuthorityResponse
-	40, // 88: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
-	44, // 89: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	46, // 90: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	50, // 91: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	52, // 92: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	54, // 93: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	57, // 94: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	59, // 95: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	61, // 96: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	78, // [78:97] is the sub-list for method output_type
-	59, // [59:78] is the sub-list for method input_type
-	59, // [59:59] is the sub-list for extension type_name
-	59, // [59:59] is the sub-list for extension extendee
-	0,  // [0:59] is the sub-list for field type_name
+	65, // 19: nokv.coordinator.v1.ListPerasAuthorityGrantsResponse.grants:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
+	66, // 20: nokv.coordinator.v1.ListPerasAuthoritySealsResponse.seals:type_name -> nokv.meta.v1.RootPerasAuthoritySeal
+	67, // 21: nokv.coordinator.v1.ApplyPerasAuthorityRequest.command:type_name -> nokv.meta.v1.RootPerasAuthorityCommand
+	65, // 22: nokv.coordinator.v1.ApplyPerasAuthorityResponse.grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
+	68, // 23: nokv.coordinator.v1.ApplyPerasAuthorityResponse.status:type_name -> nokv.meta.v1.RootPerasAuthorityApplyStatus
+	65, // 24: nokv.coordinator.v1.ApplyPerasAuthorityResponse.active_grants:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
+	69, // 25: nokv.coordinator.v1.WatchRootEventsRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	69, // 26: nokv.coordinator.v1.WatchRootEventsResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	70, // 27: nokv.coordinator.v1.WatchRootEventsResponse.events:type_name -> nokv.meta.v1.RootCommittedEvent
+	3,  // 28: nokv.coordinator.v1.SchedulerOperation.type:type_name -> nokv.coordinator.v1.SchedulerOperationType
+	71, // 29: nokv.coordinator.v1.SchedulerOperation.split_child:type_name -> nokv.meta.v1.RegionDescriptor
+	43, // 30: nokv.coordinator.v1.StoreHeartbeatResponse.operations:type_name -> nokv.coordinator.v1.SchedulerOperation
+	72, // 31: nokv.coordinator.v1.PublishRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	50, // 32: nokv.coordinator.v1.PublishRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	4,  // 33: nokv.coordinator.v1.TransitionEntry.kind:type_name -> nokv.coordinator.v1.TransitionKind
+	5,  // 34: nokv.coordinator.v1.TransitionEntry.status:type_name -> nokv.coordinator.v1.TransitionStatus
+	6,  // 35: nokv.coordinator.v1.TransitionEntry.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
+	7,  // 36: nokv.coordinator.v1.TransitionEntry.reason:type_name -> nokv.coordinator.v1.TransitionReason
+	73, // 37: nokv.coordinator.v1.TransitionEntry.pending_peer_change:type_name -> nokv.meta.v1.RootPendingPeerChange
+	74, // 38: nokv.coordinator.v1.TransitionEntry.pending_range_change:type_name -> nokv.meta.v1.RootPendingRangeChange
+	4,  // 39: nokv.coordinator.v1.TransitionAssessment.kind:type_name -> nokv.coordinator.v1.TransitionKind
+	5,  // 40: nokv.coordinator.v1.TransitionAssessment.status:type_name -> nokv.coordinator.v1.TransitionStatus
+	6,  // 41: nokv.coordinator.v1.TransitionAssessment.retry_class:type_name -> nokv.coordinator.v1.TransitionRetryClass
+	7,  // 42: nokv.coordinator.v1.TransitionAssessment.reason:type_name -> nokv.coordinator.v1.TransitionReason
+	8,  // 43: nokv.coordinator.v1.TransitionAssessment.decision:type_name -> nokv.coordinator.v1.TransitionDecision
+	49, // 44: nokv.coordinator.v1.ListTransitionsResponse.entries:type_name -> nokv.coordinator.v1.TransitionEntry
+	72, // 45: nokv.coordinator.v1.AssessRootEventRequest.event:type_name -> nokv.meta.v1.RootEvent
+	50, // 46: nokv.coordinator.v1.AssessRootEventResponse.assessment:type_name -> nokv.coordinator.v1.TransitionAssessment
+	9,  // 47: nokv.coordinator.v1.GetRegionByKeyRequest.freshness:type_name -> nokv.coordinator.v1.Freshness
+	57, // 48: nokv.coordinator.v1.GetRegionByKeyRequest.required_root_token:type_name -> nokv.coordinator.v1.RootToken
+	71, // 49: nokv.coordinator.v1.GetRegionByKeyResponse.region_descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	57, // 50: nokv.coordinator.v1.GetRegionByKeyResponse.served_root_token:type_name -> nokv.coordinator.v1.RootToken
+	9,  // 51: nokv.coordinator.v1.GetRegionByKeyResponse.served_freshness:type_name -> nokv.coordinator.v1.Freshness
+	10, // 52: nokv.coordinator.v1.GetRegionByKeyResponse.degraded_mode:type_name -> nokv.coordinator.v1.DegradedMode
+	57, // 53: nokv.coordinator.v1.GetRegionByKeyResponse.current_root_token:type_name -> nokv.coordinator.v1.RootToken
+	11, // 54: nokv.coordinator.v1.GetRegionByKeyResponse.catch_up_state:type_name -> nokv.coordinator.v1.CatchUpState
+	12, // 55: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
+	13, // 56: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
+	75, // 57: nokv.coordinator.v1.GetRegionByKeyResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	75, // 58: nokv.coordinator.v1.AllocIDResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	75, // 59: nokv.coordinator.v1.TsoResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	14, // 60: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	17, // 61: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
+	19, // 62: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
+	22, // 63: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
+	24, // 64: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
+	27, // 65: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
+	31, // 66: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
+	33, // 67: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
+	35, // 68: nokv.coordinator.v1.Coordinator.ListPerasAuthorityGrants:input_type -> nokv.coordinator.v1.ListPerasAuthorityGrantsRequest
+	37, // 69: nokv.coordinator.v1.Coordinator.ListPerasAuthoritySeals:input_type -> nokv.coordinator.v1.ListPerasAuthoritySealsRequest
+	39, // 70: nokv.coordinator.v1.Coordinator.ApplyPerasAuthority:input_type -> nokv.coordinator.v1.ApplyPerasAuthorityRequest
+	41, // 71: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
+	45, // 72: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	47, // 73: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	51, // 74: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	53, // 75: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	55, // 76: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	58, // 77: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	60, // 78: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	62, // 79: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	44, // 80: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	18, // 81: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
+	20, // 82: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
+	23, // 83: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
+	25, // 84: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
+	28, // 85: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
+	32, // 86: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
+	34, // 87: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
+	36, // 88: nokv.coordinator.v1.Coordinator.ListPerasAuthorityGrants:output_type -> nokv.coordinator.v1.ListPerasAuthorityGrantsResponse
+	38, // 89: nokv.coordinator.v1.Coordinator.ListPerasAuthoritySeals:output_type -> nokv.coordinator.v1.ListPerasAuthoritySealsResponse
+	40, // 90: nokv.coordinator.v1.Coordinator.ApplyPerasAuthority:output_type -> nokv.coordinator.v1.ApplyPerasAuthorityResponse
+	42, // 91: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
+	46, // 92: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	48, // 93: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	52, // 94: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	54, // 95: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	56, // 96: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	59, // 97: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	61, // 98: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	63, // 99: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	80, // [80:100] is the sub-list for method output_type
+	60, // [60:80] is the sub-list for method input_type
+	60, // [60:60] is the sub-list for extension type_name
+	60, // [60:60] is the sub-list for extension extendee
+	0,  // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }
@@ -4336,14 +4426,14 @@ func file_coordinator_coordinator_proto_init() {
 	if File_coordinator_coordinator_proto != nil {
 		return
 	}
-	file_coordinator_coordinator_proto_msgTypes[42].OneofWrappers = []any{}
+	file_coordinator_coordinator_proto_msgTypes[44].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_coordinator_proto_rawDesc), len(file_coordinator_coordinator_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   48,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -39,6 +39,7 @@ type Client interface {
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
 	ListPerasAuthorityGrants(ctx context.Context, req *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
+	ListPerasAuthoritySeals(ctx context.Context, req *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error)
 	ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
@@ -314,6 +315,12 @@ func (c *GRPCClient) ListPerasAuthorityGrants(ctx context.Context, req *coordpb.
 	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
 		return coord.ListPerasAuthorityGrants(ctx, req)
 	}, validateListPerasAuthorityGrantsResponse)
+}
+
+func (c *GRPCClient) ListPerasAuthoritySeals(ctx context.Context, req *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+		return coord.ListPerasAuthoritySeals(ctx, req)
+	}, validateListPerasAuthoritySealsResponse)
 }
 
 func (c *GRPCClient) ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
@@ -851,6 +858,25 @@ func validateListPerasAuthorityGrantsResponse(resp *coordpb.ListPerasAuthorityGr
 			return fmt.Errorf("%w: list_peras_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
 		}
 		seen[parsed.GrantID] = struct{}{}
+	}
+	return nil
+}
+
+func validateListPerasAuthoritySealsResponse(resp *coordpb.ListPerasAuthoritySealsResponse) error {
+	if resp == nil {
+		return fmt.Errorf("%w: list_peras_authority_seals response is nil", errInvalidWitness)
+	}
+	seen := make(map[string]struct{}, len(resp.GetSeals()))
+	for _, seal := range resp.GetSeals() {
+		parsed := metawire.RootPerasAuthoritySealFromProto(seal)
+		if !parsed.Valid() {
+			return fmt.Errorf("%w: list_peras_authority_seals contains invalid seal", errInvalidWitness)
+		}
+		key := fmt.Sprintf("%s/%d", parsed.GrantID, parsed.EpochID)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w: list_peras_authority_seals duplicate seal=%s", errInvalidWitness, key)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

@@ -30,6 +30,7 @@ const (
 	Coordinator_GetQuotaFence_FullMethodName            = "/nokv.coordinator.v1.Coordinator/GetQuotaFence"
 	Coordinator_ListQuotaFences_FullMethodName          = "/nokv.coordinator.v1.Coordinator/ListQuotaFences"
 	Coordinator_ListPerasAuthorityGrants_FullMethodName = "/nokv.coordinator.v1.Coordinator/ListPerasAuthorityGrants"
+	Coordinator_ListPerasAuthoritySeals_FullMethodName  = "/nokv.coordinator.v1.Coordinator/ListPerasAuthoritySeals"
 	Coordinator_ApplyPerasAuthority_FullMethodName      = "/nokv.coordinator.v1.Coordinator/ApplyPerasAuthority"
 	Coordinator_WatchRootEvents_FullMethodName          = "/nokv.coordinator.v1.Coordinator/WatchRootEvents"
 	Coordinator_RegionLiveness_FullMethodName           = "/nokv.coordinator.v1.Coordinator/RegionLiveness"
@@ -55,6 +56,7 @@ type CoordinatorClient interface {
 	GetQuotaFence(ctx context.Context, in *GetQuotaFenceRequest, opts ...grpc.CallOption) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, in *ListQuotaFencesRequest, opts ...grpc.CallOption) (*ListQuotaFencesResponse, error)
 	ListPerasAuthorityGrants(ctx context.Context, in *ListPerasAuthorityGrantsRequest, opts ...grpc.CallOption) (*ListPerasAuthorityGrantsResponse, error)
+	ListPerasAuthoritySeals(ctx context.Context, in *ListPerasAuthoritySealsRequest, opts ...grpc.CallOption) (*ListPerasAuthoritySealsResponse, error)
 	ApplyPerasAuthority(ctx context.Context, in *ApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, in *WatchRootEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRootEventsResponse], error)
 	RegionLiveness(ctx context.Context, in *RegionLivenessRequest, opts ...grpc.CallOption) (*RegionLivenessResponse, error)
@@ -159,6 +161,16 @@ func (c *coordinatorClient) ListPerasAuthorityGrants(ctx context.Context, in *Li
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListPerasAuthorityGrantsResponse)
 	err := c.cc.Invoke(ctx, Coordinator_ListPerasAuthorityGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListPerasAuthoritySeals(ctx context.Context, in *ListPerasAuthoritySealsRequest, opts ...grpc.CallOption) (*ListPerasAuthoritySealsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPerasAuthoritySealsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListPerasAuthoritySeals_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +299,7 @@ type CoordinatorServer interface {
 	GetQuotaFence(context.Context, *GetQuotaFenceRequest) (*GetQuotaFenceResponse, error)
 	ListQuotaFences(context.Context, *ListQuotaFencesRequest) (*ListQuotaFencesResponse, error)
 	ListPerasAuthorityGrants(context.Context, *ListPerasAuthorityGrantsRequest) (*ListPerasAuthorityGrantsResponse, error)
+	ListPerasAuthoritySeals(context.Context, *ListPerasAuthoritySealsRequest) (*ListPerasAuthoritySealsResponse, error)
 	ApplyPerasAuthority(context.Context, *ApplyPerasAuthorityRequest) (*ApplyPerasAuthorityResponse, error)
 	WatchRootEvents(*WatchRootEventsRequest, grpc.ServerStreamingServer[WatchRootEventsResponse]) error
 	RegionLiveness(context.Context, *RegionLivenessRequest) (*RegionLivenessResponse, error)
@@ -332,6 +345,9 @@ func (UnimplementedCoordinatorServer) ListQuotaFences(context.Context, *ListQuot
 }
 func (UnimplementedCoordinatorServer) ListPerasAuthorityGrants(context.Context, *ListPerasAuthorityGrantsRequest) (*ListPerasAuthorityGrantsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPerasAuthorityGrants not implemented")
+}
+func (UnimplementedCoordinatorServer) ListPerasAuthoritySeals(context.Context, *ListPerasAuthoritySealsRequest) (*ListPerasAuthoritySealsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPerasAuthoritySeals not implemented")
 }
 func (UnimplementedCoordinatorServer) ApplyPerasAuthority(context.Context, *ApplyPerasAuthorityRequest) (*ApplyPerasAuthorityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyPerasAuthority not implemented")
@@ -541,6 +557,24 @@ func _Coordinator_ListPerasAuthorityGrants_Handler(srv interface{}, ctx context.
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CoordinatorServer).ListPerasAuthorityGrants(ctx, req.(*ListPerasAuthorityGrantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListPerasAuthoritySeals_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPerasAuthoritySealsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListPerasAuthoritySeals(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListPerasAuthoritySeals_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListPerasAuthoritySeals(ctx, req.(*ListPerasAuthoritySealsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -760,6 +794,10 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPerasAuthorityGrants",
 			Handler:    _Coordinator_ListPerasAuthorityGrants_Handler,
+		},
+		{
+			MethodName: "ListPerasAuthoritySeals",
+			Handler:    _Coordinator_ListPerasAuthoritySeals_Handler,
 		},
 		{
 			MethodName: "ApplyPerasAuthority",
