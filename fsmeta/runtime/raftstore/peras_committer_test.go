@@ -165,10 +165,18 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 	require.NotZero(t, stats["witness_latency_total_nanosecond"])
 	require.NotZero(t, stats["install_latency_total_nanosecond"])
 	require.NotZero(t, stats["seal_latency_total_nanosecond"])
+	require.NotZero(t, stats["flush_latency_max_nanosecond"])
+	require.NotZero(t, stats["witness_latency_max_nanosecond"])
+	require.NotZero(t, stats["install_latency_max_nanosecond"])
+	require.NotZero(t, stats["seal_latency_max_nanosecond"])
 	require.NotZero(t, stats["flush_latency_average_nanosecond"])
 	require.NotZero(t, stats["witness_latency_average_nanosecond"])
 	require.NotZero(t, stats["install_latency_average_nanosecond"])
 	require.NotZero(t, stats["seal_latency_average_nanosecond"])
+	require.Equal(t, uint64(1), stats["flush_batch_total"])
+	require.Equal(t, uint64(1), stats["flush_jobs_total"])
+	require.Equal(t, uint64(1), stats["flush_jobs_last"])
+	require.Equal(t, uint64(1), stats["flush_jobs_max"])
 }
 
 func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
