@@ -223,6 +223,15 @@ func EncodePerasSegmentCatalogKey(mountKeyID MountKeyID, bucket AffinityBucket, 
 	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, root[:]), nil
 }
 
+// EncodePerasSegmentCatalogPrefix returns the hidden catalog scan prefix for
+// durable Peras segment installs in one mount-local affinity bucket.
+func EncodePerasSegmentCatalogPrefix(mountKeyID MountKeyID, bucket AffinityBucket) ([]byte, error) {
+	if err := validateMountKeyID(mountKeyID); err != nil {
+		return nil, err
+	}
+	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, nil), nil
+}
+
 // KeyKindOf returns the kind byte encoded in a fsmeta key.
 func KeyKindOf(key []byte) (KeyKind, error) {
 	_, pos, err := decodeHeaderParts(key)

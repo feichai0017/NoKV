@@ -51,6 +51,20 @@ func TestPerasSegmentCatalogKeyUsesRootedMountAndBucket(t *testing.T) {
 	require.Equal(t, root, parts.PerasRoot)
 }
 
+func TestPerasSegmentCatalogPrefixCoversCatalogKeys(t *testing.T) {
+	var root [32]byte
+	root[0] = 7
+	key, err := EncodePerasSegmentCatalogKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	prefix, err := EncodePerasSegmentCatalogPrefix(testMount.MountKeyID, 3)
+	require.NoError(t, err)
+
+	require.True(t, bytes.HasPrefix(key, prefix))
+	otherBucketPrefix, err := EncodePerasSegmentCatalogPrefix(testMount.MountKeyID, 4)
+	require.NoError(t, err)
+	require.False(t, bytes.HasPrefix(key, otherBucketPrefix))
+}
+
 func TestAuxiliaryKeyEncoders(t *testing.T) {
 	mount, err := EncodeMountKey(testMount)
 	require.NoError(t, err)
