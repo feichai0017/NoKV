@@ -10,7 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -206,7 +206,7 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.Equal(t, uint64(2), installResp.GetEntryCount())
 	require.Equal(t, uint64(2), installResp.GetAppliedEntries())
 
-	records, err := fsperas.LoadPerasSegmentCatalogs(db)
+	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	require.Equal(t, segment.Root, records[0].Root)
@@ -280,7 +280,7 @@ func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("attrs"), value)
 
-	records, err := fsperas.LoadPerasSegmentCatalogs(db)
+	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	require.Equal(t, segment.Root, records[0].Root)
@@ -345,7 +345,7 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 	install(99)
 	install(150)
 
-	records, err := fsperas.LoadPerasSegmentCatalogs(db)
+	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	require.Equal(t, segment.Root, records[0].Root)
@@ -403,7 +403,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasauth.NewActiveAuthorities()))
+	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasauthority.NewActiveAuthorities()))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -738,10 +738,10 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 	return nil, nil
 }
 
-func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *perasauth.ActiveAuthorities {
+func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *perasauthority.ActiveAuthorities {
 	t.Helper()
-	table := perasauth.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{{
+	table := perasauthority.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauthority.AuthorityGrant{{
 		GrantID:         "grant-apply-test",
 		EpochID:         1,
 		HolderID:        "holder-a",

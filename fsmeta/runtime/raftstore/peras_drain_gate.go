@@ -7,6 +7,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 )
 
 type perasAuthorityUse struct {
@@ -31,7 +32,7 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	defer c.flushMu.Unlock()
 	c.commitMu.Lock()
 	var batches []perasFlushBatch
-	if len(drainScopes) == 1 && authorityScopeEmpty(drainScopes[0]) {
+	if len(drainScopes) == 1 && perasauthority.ScopeEmpty(drainScopes[0]) {
 		var err error
 		batches, err = c.freezeFlushBatchesLocked(nil, true, 0)
 		if err != nil {
@@ -167,7 +168,7 @@ func normalizeAuthorityDrainScopes(scopes []compile.AuthorityScope) []compile.Au
 	}
 	out := make([]compile.AuthorityScope, 0, len(scopes))
 	for _, scope := range scopes {
-		if authorityScopeEmpty(scope) {
+		if perasauthority.ScopeEmpty(scope) {
 			return []compile.AuthorityScope{{}}
 		}
 		out = append(out, cloneRuntimeAuthorityScope(scope))
@@ -176,7 +177,7 @@ func normalizeAuthorityDrainScopes(scopes []compile.AuthorityScope) []compile.Au
 }
 
 func authorityDrainScopesOverlap(left, right compile.AuthorityScope) bool {
-	if authorityScopeEmpty(left) || authorityScopeEmpty(right) {
+	if perasauthority.ScopeEmpty(left) || perasauthority.ScopeEmpty(right) {
 		return true
 	}
 	return fsperas.AuthorityScopesOverlap(left, right)

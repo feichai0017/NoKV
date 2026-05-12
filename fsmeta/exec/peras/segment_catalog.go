@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"slices"
 
-	"github.com/feichai0017/NoKV/engine/index"
-	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
@@ -17,7 +15,7 @@ var (
 // SegmentCatalogRecord is the hidden segment object written with a durable
 // segment install. Bucket-local index records point to this object so restart
 // can rebuild the installed segment frontier and operation completion table
-// without replaying per-operation witness records.
+// without replaying request-level evidence.
 type SegmentCatalogRecord struct {
 	EpochID        uint64
 	InstallVersion uint64
@@ -45,10 +43,6 @@ type SegmentCatalogIndexRecord struct {
 	SegmentPayloadDigest [32]byte
 	SegmentPayloadSize   uint64
 	ObjectKey            []byte
-}
-
-type SegmentCatalogStore interface {
-	NewInternalIterator(*index.Options) index.Iterator
 }
 
 func PerasSegmentCatalogIndexKeys(segment PerasSegment) ([][]byte, error) {
@@ -98,24 +92,6 @@ func PerasSegmentCatalogObjectKeys(segment PerasSegment) ([][]byte, error) {
 	return keys, nil
 }
 
-func perasSegmentObjectBucket(segment PerasSegment, objectKey []byte) (perasSegmentCatalogBucket, error) {
-	parts, ok := fsmeta.InspectKey(objectKey)
-	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != segment.Root {
-		return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
-	}
-	target := perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}
-	buckets, err := perasSegmentCatalogBuckets(segment)
-	if err != nil {
-		return perasSegmentCatalogBucket{}, err
-	}
-	for _, bucket := range buckets {
-		if bucket == target {
-			return target, nil
-		}
-	}
-	return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
-}
-
 type perasSegmentCatalogBucket struct {
 	mount  fsmeta.MountKeyID
 	bucket fsmeta.AffinityBucket
@@ -158,153 +134,6 @@ func perasSegmentCatalogBuckets(segment PerasSegment) ([]perasSegmentCatalogBuck
 		return 0
 	})
 	return out, nil
-}
-
-func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord, error) {
-	if store == nil {
-		return nil, ErrSegmentCatalogStoreRequired
-	}
-	it := store.NewInternalIterator(&index.Options{IsAsc: true})
-	if it == nil {
-		return nil, ErrSegmentCatalogStoreRequired
-	}
-	var records []SegmentCatalogRecord
-	it.Rewind()
-	for it.Valid() {
-		item := it.Item()
-		if item == nil || item.Entry() == nil {
-			it.Next()
-			continue
-		}
-		entry := item.Entry()
-		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
-		if !ok || cf != entrykv.CFDefault {
-			it.Next()
-			continue
-		}
-		parts, ok := fsmeta.InspectKey(userKey)
-		if !ok || parts.Kind != fsmeta.KeyKindPeras {
-			it.Next()
-			continue
-		}
-		if parts.PerasRecord != fsmeta.PerasSegmentRecordObject {
-			it.Next()
-			continue
-		}
-		record, err := DecodePerasSegmentCatalogRecord(entry.Value)
-		if err != nil {
-			_ = it.Close()
-			return nil, err
-		}
-		if record.Root != parts.PerasRoot {
-			_ = it.Close()
-			return nil, ErrInvalidPerasSegment
-		}
-		records = append(records, record)
-		it.Next()
-	}
-	if err := it.Close(); err != nil {
-		return nil, err
-	}
-	slices.SortFunc(records, func(a, b SegmentCatalogRecord) int {
-		if a.InstallVersion < b.InstallVersion {
-			return -1
-		}
-		if a.InstallVersion > b.InstallVersion {
-			return 1
-		}
-		return bytes.Compare(a.Root[:], b.Root[:])
-	})
-	return records, nil
-}
-
-func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (SegmentCatalogRecord, bool, error) {
-	catalogKey, err := PerasSegmentObjectKey(segment)
-	if err != nil {
-		return SegmentCatalogRecord{}, false, err
-	}
-	return LoadPerasSegmentCatalogForObjectKey(store, segment, catalogKey)
-}
-
-func LoadPerasSegmentCatalogInstallForObjectKey(store SegmentCatalogStore, segment PerasSegment, objectKey []byte) (bool, error) {
-	if store == nil {
-		return false, ErrSegmentCatalogStoreRequired
-	}
-	bucket, err := perasSegmentObjectBucket(segment, objectKey)
-	if err != nil {
-		return false, err
-	}
-	canonicalObjectKey, err := PerasSegmentObjectKey(segment)
-	if err != nil {
-		return false, err
-	}
-	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
-	if err != nil {
-		return false, err
-	}
-	it := store.NewInternalIterator(&index.Options{IsAsc: true})
-	if it == nil {
-		return false, ErrSegmentCatalogStoreRequired
-	}
-	defer func() { _ = it.Close() }()
-
-	it.Seek(entrykv.InternalKey(entrykv.CFDefault, indexKey, entrykv.MaxVersion))
-	if !it.Valid() {
-		return false, nil
-	}
-	item := it.Item()
-	if item == nil || item.Entry() == nil {
-		return false, nil
-	}
-	entry := item.Entry()
-	cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
-	if !ok || cf != entrykv.CFDefault || !bytes.Equal(userKey, indexKey) {
-		return false, nil
-	}
-	record, err := DecodePerasSegmentCatalogIndexRecord(entry.Value)
-	if err != nil {
-		return false, err
-	}
-	if record.Root != segment.Root || !bytes.Equal(record.ObjectKey, canonicalObjectKey) {
-		return false, ErrInvalidPerasSegment
-	}
-	return true, nil
-}
-
-func LoadPerasSegmentCatalogForObjectKey(store SegmentCatalogStore, segment PerasSegment, catalogKey []byte) (SegmentCatalogRecord, bool, error) {
-	if store == nil {
-		return SegmentCatalogRecord{}, false, ErrSegmentCatalogStoreRequired
-	}
-	if _, err := perasSegmentObjectBucket(segment, catalogKey); err != nil {
-		return SegmentCatalogRecord{}, false, err
-	}
-	it := store.NewInternalIterator(&index.Options{IsAsc: true})
-	if it == nil {
-		return SegmentCatalogRecord{}, false, ErrSegmentCatalogStoreRequired
-	}
-	defer func() { _ = it.Close() }()
-
-	it.Seek(entrykv.InternalKey(entrykv.CFDefault, catalogKey, entrykv.MaxVersion))
-	if !it.Valid() {
-		return SegmentCatalogRecord{}, false, nil
-	}
-	item := it.Item()
-	if item == nil || item.Entry() == nil {
-		return SegmentCatalogRecord{}, false, nil
-	}
-	entry := item.Entry()
-	cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
-	if !ok || cf != entrykv.CFDefault || !bytes.Equal(userKey, catalogKey) {
-		return SegmentCatalogRecord{}, false, nil
-	}
-	record, err := DecodePerasSegmentCatalogRecord(entry.Value)
-	if err != nil {
-		return SegmentCatalogRecord{}, false, err
-	}
-	if record.Root != segment.Root {
-		return SegmentCatalogRecord{}, false, ErrInvalidPerasSegment
-	}
-	return record, true, nil
 }
 
 func EncodePerasSegmentCatalogRecord(segment PerasSegment, installVersion uint64) ([]byte, error) {

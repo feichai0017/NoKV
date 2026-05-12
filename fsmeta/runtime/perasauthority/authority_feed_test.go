@@ -1,4 +1,4 @@
-package perasauth
+package perasauthority
 
 import (
 	"context"

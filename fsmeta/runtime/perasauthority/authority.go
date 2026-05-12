@@ -1,5 +1,5 @@
-// Package perasauth adapts root-issued Peras authority grants to fsmeta runtime scopes.
-package perasauth
+// Package perasauthority adapts root-issued Peras authority grants to fsmeta runtime scopes.
+package perasauthority
 
 import (
 	"errors"
@@ -293,6 +293,26 @@ func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.PerasAuthor
 	}
 }
 
+func ScopeFromGrant(grant AuthorityGrant) compile.AuthorityScope {
+	scope := compile.AuthorityScope{
+		Mount:      fsmeta.MountID(grant.Scope.MountID),
+		MountKeyID: fsmeta.MountKeyID(grant.Scope.MountKeyID),
+		Parents:    fsmetaInodesFromRoot(grant.Scope.Parents),
+		Inodes:     fsmetaInodesFromRoot(grant.Scope.Inodes),
+	}
+	if len(grant.Scope.Buckets) > 0 {
+		scope.Buckets = make([]fsmeta.AffinityBucket, len(grant.Scope.Buckets))
+		for i, bucket := range grant.Scope.Buckets {
+			scope.Buckets[i] = fsmeta.AffinityBucket(bucket)
+		}
+	}
+	return scope
+}
+
+func ScopeEmpty(scope compile.AuthorityScope) bool {
+	return scope.Mount == "" || scope.MountKeyID == 0
+}
+
 func perasBucketsFromDelta(buckets []fsmeta.AffinityBucket) []uint16 {
 	out := make([]uint16, len(buckets))
 	for i, bucket := range buckets {
@@ -305,6 +325,14 @@ func perasInodesFromDelta(inodes []fsmeta.InodeID) []uint64 {
 	out := make([]uint64, len(inodes))
 	for i, inode := range inodes {
 		out[i] = uint64(inode)
+	}
+	return out
+}
+
+func fsmetaInodesFromRoot(inodes []uint64) []fsmeta.InodeID {
+	out := make([]fsmeta.InodeID, len(inodes))
+	for i, inode := range inodes {
+		out[i] = fsmeta.InodeID(inode)
 	}
 	return out
 }

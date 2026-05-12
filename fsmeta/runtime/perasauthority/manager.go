@@ -1,8 +1,7 @@
-package raftstore
+package perasauthority
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -10,62 +9,72 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 )
 
-const defaultPerasAuthorityTTL = 5 * time.Minute
+const defaultGrantTTL = 5 * time.Minute
 
-type perasAuthorityClient interface {
+type Client interface {
 	ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
 	ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error)
 }
 
-// PerasAuthorityManager is the fsmeta-side holder adapter for Peras
-// authority. It talks only to coordinator; meta/root remains hidden behind the
-// coordinator service boundary.
-type PerasAuthorityManager struct {
-	coord    perasAuthorityClient
-	table    *perasauth.ActiveAuthorities
+type InstallCursor struct {
+	RegionID       uint64
+	Term           uint64
+	Index          uint64
+	InstallVersion uint64
+}
+
+func (c InstallCursor) Valid() bool {
+	return c.RegionID != 0 && c.Term != 0 && c.Index != 0 && c.InstallVersion != 0
+}
+
+// Manager is the fsmeta holder adapter for root-issued Peras authority. It
+// talks only to coordinator; meta/root remains hidden behind the coordinator
+// service boundary.
+type Manager struct {
+	coord    Client
+	table    *ActiveAuthorities
 	holderID string
 	ttl      time.Duration
 	now      func() time.Time
 
 	acquireMu sync.Mutex
-	acquires  map[string]*perasAuthorityAcquireCall
+	acquires  map[string]*acquireCall
 }
 
-type perasAuthorityAcquireCall struct {
+type acquireCall struct {
 	done  chan struct{}
-	grant perasauth.AuthorityGrant
+	grant AuthorityGrant
 	owned bool
 	err   error
 }
 
-func NewPerasAuthorityManager(coord perasAuthorityClient, table *perasauth.ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*PerasAuthorityManager, error) {
+func NewManager(coord Client, table *ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*Manager, error) {
 	holderID = strings.TrimSpace(holderID)
 	if coord == nil {
-		return nil, errPerasAuthorityClientRequired
+		return nil, ErrClientRequired
 	}
 	if table == nil {
-		return nil, errPerasAuthorityTableRequired
+		return nil, ErrTableRequired
 	}
 	if holderID == "" {
-		return nil, errPerasAuthorityHolderRequired
+		return nil, ErrHolderRequired
 	}
 	if ttl < 0 {
-		return nil, errPerasAuthorityTTLInvalid
+		return nil, ErrTTLInvalid
 	}
 	if ttl == 0 {
-		ttl = defaultPerasAuthorityTTL
+		ttl = defaultGrantTTL
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return &PerasAuthorityManager{
+	return &Manager{
 		coord:    coord,
 		table:    table,
 		holderID: holderID,
@@ -74,41 +83,41 @@ func NewPerasAuthorityManager(coord perasAuthorityClient, table *perasauth.Activ
 	}, nil
 }
 
-func (m *PerasAuthorityManager) HolderID() string {
+func (m *Manager) HolderID() string {
 	if m == nil {
 		return ""
 	}
 	return m.holderID
 }
 
-func (m *PerasAuthorityManager) AcquirePerasAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
+func (m *Manager) AcquirePerasAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
 	_, owned, err := m.Acquire(ctx, scope)
 	return owned, err
 }
 
-func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (perasauth.AuthorityGrant, bool, error) {
+func (m *Manager) Acquire(ctx context.Context, scope compile.AuthorityScope) (AuthorityGrant, bool, error) {
 	if m == nil {
-		return perasauth.AuthorityGrant{}, false, errPerasAuthorityClientRequired
+		return AuthorityGrant{}, false, ErrClientRequired
 	}
 	now := m.now()
 	if grant, ok, err := m.table.Find(scope, now); err != nil {
-		return perasauth.AuthorityGrant{}, false, err
+		return AuthorityGrant{}, false, err
 	} else if ok && grant.HolderID == m.holderID {
 		return grant, true, nil
 	}
 
-	rootScope := perasAuthorityAcquireScope(scope)
-	key := perasAuthorityAcquireKey(rootScope)
+	rootScope := acquireScope(scope)
+	key := acquireKey(rootScope)
 	if call, leader := m.beginAcquire(key); !leader {
 		select {
 		case <-call.done:
 			return call.grant, call.owned, call.err
 		case <-ctx.Done():
-			return perasauth.AuthorityGrant{}, false, ctx.Err()
+			return AuthorityGrant{}, false, ctx.Err()
 		}
 	}
 
-	var grant perasauth.AuthorityGrant
+	var grant AuthorityGrant
 	var owned bool
 	cmd := rootproto.PerasAuthorityCommand{
 		Kind:            rootproto.PerasAuthorityActAcquire,
@@ -121,48 +130,48 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
-		m.finishAcquire(key, perasauth.AuthorityGrant{}, false, err)
-		return perasauth.AuthorityGrant{}, false, err
+		m.finishAcquire(key, AuthorityGrant{}, false, err)
+		return AuthorityGrant{}, false, err
 	}
 	if err := m.installResponse(resp); err != nil {
-		m.finishAcquire(key, perasauth.AuthorityGrant{}, false, err)
-		return perasauth.AuthorityGrant{}, false, err
+		m.finishAcquire(key, AuthorityGrant{}, false, err)
+		return AuthorityGrant{}, false, err
 	}
 	switch resp.GetStatus() {
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
 		grant = metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
-			m.finishAcquire(key, perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse)
-			return perasauth.AuthorityGrant{}, false, errPerasAuthorityInvalidResponse
+			m.finishAcquire(key, AuthorityGrant{}, false, ErrInvalidResponse)
+			return AuthorityGrant{}, false, ErrInvalidResponse
 		}
 		owned = true
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
 		grant, _, err = m.table.Find(scope, now)
 		owned = false
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
-		err = errPerasAuthorityInvalidResponse
+		err = ErrInvalidResponse
 	default:
-		err = errPerasAuthorityInvalidResponse
+		err = ErrInvalidResponse
 	}
 	m.finishAcquire(key, grant, owned, err)
 	return grant, owned, err
 }
 
-func (m *PerasAuthorityManager) beginAcquire(key string) (*perasAuthorityAcquireCall, bool) {
+func (m *Manager) beginAcquire(key string) (*acquireCall, bool) {
 	m.acquireMu.Lock()
 	defer m.acquireMu.Unlock()
 	if m.acquires == nil {
-		m.acquires = make(map[string]*perasAuthorityAcquireCall)
+		m.acquires = make(map[string]*acquireCall)
 	}
 	if call := m.acquires[key]; call != nil {
 		return call, false
 	}
-	call := &perasAuthorityAcquireCall{done: make(chan struct{})}
+	call := &acquireCall{done: make(chan struct{})}
 	m.acquires[key] = call
 	return call, true
 }
 
-func (m *PerasAuthorityManager) finishAcquire(key string, grant perasauth.AuthorityGrant, owned bool, err error) {
+func (m *Manager) finishAcquire(key string, grant AuthorityGrant, owned bool, err error) {
 	m.acquireMu.Lock()
 	call := m.acquires[key]
 	if call != nil {
@@ -175,7 +184,7 @@ func (m *PerasAuthorityManager) finishAcquire(key string, grant perasauth.Author
 	m.acquireMu.Unlock()
 }
 
-func perasAuthorityAcquireKey(scope rootproto.PerasAuthorityScope) string {
+func acquireKey(scope rootproto.PerasAuthorityScope) string {
 	var b strings.Builder
 	b.WriteString(strconv.FormatUint(scope.MountKeyID, 10))
 	for _, bucket := range scope.Buckets {
@@ -185,8 +194,8 @@ func perasAuthorityAcquireKey(scope rootproto.PerasAuthorityScope) string {
 	return b.String()
 }
 
-func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
-	rootScope := perasauth.AuthorityScopeFromDelta(scope)
+func acquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
+	rootScope := AuthorityScopeFromDelta(scope)
 	// Root v1 proves exclusion, not workload intent. Request the mount-local
 	// bucket set as one rooted capability so bursty namespace creation pays one
 	// authority round instead of one round per affinity bucket. Do not pin parent
@@ -199,15 +208,15 @@ func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAut
 	return rootScope
 }
 
-func (m *PerasAuthorityManager) Retire(ctx context.Context, grant perasauth.AuthorityGrant) error {
+func (m *Manager) Retire(ctx context.Context, grant AuthorityGrant) error {
 	if m == nil {
-		return errPerasAuthorityClientRequired
+		return ErrClientRequired
 	}
 	if !grant.Valid() {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	if strings.TrimSpace(grant.HolderID) != m.holderID {
-		return errPerasAuthorityNotHeld
+		return ErrNotHeld
 	}
 	now := m.now()
 	cmd := rootproto.PerasAuthorityCommand{
@@ -226,26 +235,26 @@ func (m *PerasAuthorityManager) Retire(ctx context.Context, grant perasauth.Auth
 		return err
 	}
 	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
-		return errPerasAuthorityNotHeld
+		return ErrNotHeld
 	}
 	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	return nil
 }
 
-func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor PerasInstallCursor) error {
+func (m *Manager) PublishSegmentSeal(ctx context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
 	if m == nil {
-		return errPerasAuthorityClientRequired
+		return ErrClientRequired
 	}
 	if !grant.Valid() {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	if !cursor.Valid() {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	if strings.TrimSpace(grant.HolderID) != m.holderID {
-		return errPerasAuthorityNotHeld
+		return ErrNotHeld
 	}
 	stats := segment.Stats()
 	now := m.now()
@@ -273,17 +282,17 @@ func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant pera
 		return err
 	}
 	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
-		return errPerasAuthorityNotHeld
+		return ErrNotHeld
 	}
 	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	return nil
 }
 
-func (m *PerasAuthorityManager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
+func (m *Manager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
 	if m == nil {
-		return nil, errPerasAuthorityClientRequired
+		return nil, ErrClientRequired
 	}
 	resp, err := m.coord.ListPerasAuthoritySeals(ctx, &coordpb.ListPerasAuthoritySealsRequest{})
 	if err != nil {
@@ -293,9 +302,9 @@ func (m *PerasAuthorityManager) ListPerasAuthoritySeals(ctx context.Context, sco
 	for _, pbSeal := range resp.GetSeals() {
 		seal := metawire.RootPerasAuthoritySealFromProto(pbSeal)
 		if !seal.Valid() {
-			return nil, errPerasAuthorityInvalidResponse
+			return nil, ErrInvalidResponse
 		}
-		if !perasAuthoritySealCoversScope(seal, scope) {
+		if !sealCoversScope(seal, scope) {
 			continue
 		}
 		out = append(out, rootproto.ClonePerasAuthoritySeal(seal))
@@ -303,11 +312,11 @@ func (m *PerasAuthorityManager) ListPerasAuthoritySeals(ctx context.Context, sco
 	return out, nil
 }
 
-func perasAuthoritySealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityScope) bool {
+func sealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityScope) bool {
 	if !seal.Valid() {
 		return false
 	}
-	if authorityScopeEmpty(scope) {
+	if ScopeEmpty(scope) {
 		return true
 	}
 	grant := rootproto.PerasAuthorityGrant{
@@ -317,12 +326,12 @@ func perasAuthoritySealCoversScope(seal rootproto.PerasAuthoritySeal, scope comp
 		Scope:           seal.Scope,
 		ExpiresUnixNano: 1,
 	}
-	return grant.Covers(perasauth.AuthorityScopeFromDelta(scope), 0)
+	return grant.Covers(AuthorityScopeFromDelta(scope), 0)
 }
 
-func (m *PerasAuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+func (m *Manager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
 	if m == nil {
-		return errPerasAuthorityClientRequired
+		return ErrClientRequired
 	}
 	grants := m.ownedGrantsForScopes(scopes...)
 	for _, grant := range grants {
@@ -333,13 +342,13 @@ func (m *PerasAuthorityManager) RetirePerasAuthority(ctx context.Context, scopes
 	return nil
 }
 
-func (m *PerasAuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []perasauth.AuthorityGrant {
+func (m *Manager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []AuthorityGrant {
 	if m == nil || m.table == nil || strings.TrimSpace(m.holderID) == "" {
 		return nil
 	}
 	now := m.now()
 	snapshot := m.table.Snapshot()
-	out := make([]perasauth.AuthorityGrant, 0, len(snapshot))
+	out := make([]AuthorityGrant, 0, len(snapshot))
 	for _, grant := range snapshot {
 		if grant.HolderID != m.holderID || !grant.ActiveAt(now.UnixNano()) {
 			continue
@@ -349,7 +358,7 @@ func (m *PerasAuthorityManager) ownedGrantsForScopes(scopes ...compile.Authority
 			continue
 		}
 		for _, scope := range scopes {
-			if perasAuthorityScopeEmpty(scope) || perasGrantMatchesRetireScope(grant, scope, now) {
+			if ScopeEmpty(scope) || grantMatchesRetireScope(grant, scope, now) {
 				out = append(out, grant)
 				break
 			}
@@ -358,7 +367,7 @@ func (m *PerasAuthorityManager) ownedGrantsForScopes(scopes ...compile.Authority
 	return out
 }
 
-func perasGrantMatchesRetireScope(grant perasauth.AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+func grantMatchesRetireScope(grant AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
 	}
@@ -368,19 +377,15 @@ func perasGrantMatchesRetireScope(grant perasauth.AuthorityGrant, scope compile.
 	if len(scope.Buckets) == 0 && len(scope.Parents) == 0 && len(scope.Inodes) == 0 {
 		return true
 	}
-	return perasauth.GrantCoversDelta(grant, scope, now)
+	return GrantCoversDelta(grant, scope, now)
 }
 
-func perasAuthorityScopeEmpty(scope compile.AuthorityScope) bool {
-	return scope.Mount == "" || scope.MountKeyID == 0
-}
-
-func (m *PerasAuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
+func (m *Manager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
 	if m == nil || m.table == nil {
-		return errPerasAuthorityTableRequired
+		return ErrTableRequired
 	}
 	if resp == nil {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	grants, err := parsePerasAuthorityGrants(resp.GetActiveGrants())
 	if err != nil {
@@ -389,29 +394,29 @@ func (m *PerasAuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorit
 	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED {
 		grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
-			return errPerasAuthorityInvalidResponse
+			return ErrInvalidResponse
 		}
 		grants = appendPerasGrantIfMissing(grants, grant)
 	}
 	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD && len(grants) == 0 {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED {
-		return errPerasAuthorityInvalidResponse
+		return ErrInvalidResponse
 	}
 	return m.table.Replace(grants)
 }
 
-func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]perasauth.AuthorityGrant, error) {
-	out := make([]perasauth.AuthorityGrant, 0, len(in))
+func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]AuthorityGrant, error) {
+	out := make([]AuthorityGrant, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
 	for _, pbGrant := range in {
 		grant := metawire.RootPerasAuthorityGrantFromProto(pbGrant)
 		if !grant.Valid() {
-			return nil, errPerasAuthorityInvalidResponse
+			return nil, ErrInvalidResponse
 		}
 		if _, ok := seen[grant.GrantID]; ok {
-			return nil, errPerasAuthorityInvalidResponse
+			return nil, ErrInvalidResponse
 		}
 		seen[grant.GrantID] = struct{}{}
 		out = append(out, grant)
@@ -419,15 +424,11 @@ func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]perasaut
 	return out, nil
 }
 
-func appendPerasGrantIfMissing(grants []perasauth.AuthorityGrant, grant perasauth.AuthorityGrant) []perasauth.AuthorityGrant {
+func appendPerasGrantIfMissing(grants []AuthorityGrant, grant AuthorityGrant) []AuthorityGrant {
 	for _, current := range grants {
 		if current.GrantID == grant.GrantID {
 			return grants
 		}
 	}
 	return append(grants, grant)
-}
-
-func IsPerasAuthorityNotHeld(err error) bool {
-	return errors.Is(err, errPerasAuthorityNotHeld)
 }

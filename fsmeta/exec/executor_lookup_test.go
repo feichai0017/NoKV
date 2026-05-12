@@ -1,0 +1,522 @@
+package exec
+
+import (
+	"context"
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestExecutorCreateAndLookup(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	require.NoError(t, err)
+
+	result, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), result.Inode.Inode)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Inode:  22,
+		Type:   fsmeta.InodeTypeFile,
+	}, record)
+
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 2)
+	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
+	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+}
+
+func TestExecutorCreatePerasVisibleCommitServesLookupOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestPerasCommitter(t, runner)
+	inode := testInodeForParentBucket(t, fsmeta.RootInode)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Empty(t, runner.mutations)
+
+	lookedUp, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry, lookedUp)
+}
+
+func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{
+		Dentry: created.Dentry,
+		Inode:  created.Inode,
+	}}, pairs)
+}
+
+func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
+	runner := newFakeRunner()
+	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
+	childInode := testInodeForParentBucket(t, dirInode, dirInode)
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	dir, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "run",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeDirectory},
+	})
+	require.NoError(t, err)
+	file, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Name:   "artifact",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	runner.scanVersions = nil
+	runner.batchVersions = nil
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{file.Dentry}, records)
+	require.Empty(t, runner.scanVersions, "Peras-created directory has a covered base namespace")
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: dir.Inode.Inode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{Dentry: file.Dentry, Inode: file.Inode}}, pairs)
+	require.Empty(t, runner.scanVersions)
+	require.Empty(t, runner.batchVersions)
+}
+
+func TestExecutorLookupReturnsNotFound(t *testing.T) {
+	executor, err := newTestExecutor(newFakeRunner())
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "missing",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+}
+
+func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedDentry(t, runner, "vol", 7, "b", 22)
+	seedDentry(t, runner, "vol", 7, "c", 23)
+	seedDentry(t, runner, "vol", 8, "outside", 99)
+
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:      "vol",
+		Parent:     7,
+		StartAfter: "a",
+		Limit:      1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{{
+		Parent: 7,
+		Name:   "b",
+		Inode:  22,
+		Type:   fsmeta.InodeTypeFile,
+	}}, records)
+}
+
+func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
+	runner := newFakeRunner()
+	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, []uint64{1, 2}, runner.scanVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 0)
+}
+
+func TestExecutorReadDirExhaustsRetriesOnLiveLock(t *testing.T) {
+	runner := newFakeRunner()
+	for range maxReadContentionRetries + 1 {
+		runner.scanErrs = append(runner.scanErrs, txnLockedError("vol", 7, "a"))
+	}
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	_, err = executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.Error(t, err)
+	wantVersions := make([]uint64, maxReadContentionRetries+1)
+	for i := range wantVersions {
+		wantVersions[i] = uint64(i + 1)
+	}
+	require.Equal(t, wantVersions, runner.scanVersions)
+	requireStatUint(t, executor.Stats(), "read_retries_total", uint64(maxReadContentionRetries))
+	requireStatUint(t, executor.Stats(), "read_retry_exhausted_total", 1)
+}
+
+func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	})
+	seedDentryType(t, runner, "vol", 7, "b", 22, fsmeta.InodeTypeDirectory)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 2,
+	})
+
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{
+		{
+			Dentry: fsmeta.DentryRecord{Parent: 7, Name: "a", Inode: 21, Type: fsmeta.InodeTypeFile},
+			Inode: fsmeta.InodeRecord{
+				Inode:     21,
+				Type:      fsmeta.InodeTypeFile,
+				Size:      4096,
+				Mode:      0o644,
+				LinkCount: 1,
+			},
+		},
+		{
+			Dentry: fsmeta.DentryRecord{Parent: 7, Name: "b", Inode: 22, Type: fsmeta.InodeTypeDirectory},
+			Inode: fsmeta.InodeRecord{
+				Inode:     22,
+				Type:      fsmeta.InodeTypeDirectory,
+				Mode:      0o755,
+				LinkCount: 2,
+			},
+		},
+	}, pairs)
+}
+
+func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  8,
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+}
+
+func TestExecutorLookupUsesPerasOverlayWithoutTimestamp(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "visible")
+	value := dentryValueForTest(t, fsmeta.RootInode, "visible", 22, fsmeta.InodeTypeFile)
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(key, value)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "visible",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	require.Zero(t, runner.getCalls)
+	require.Equal(t, uint64(1), runner.nextTS, "overlay lookup must not reserve a read timestamp")
+}
+
+func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
+	runner := newFakeRunner()
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "deleted")
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayDeleteForTest(key)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "deleted",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Zero(t, runner.getCalls)
+	require.Equal(t, uint64(1), runner.nextTS, "overlay tombstone lookup must not reserve a read timestamp")
+}
+
+func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "visible", 22)
+	inodeKey := inodeKeyForTest(t, "vol", 22)
+	inodeValue := inodeValueForTest(t, fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(inodeKey, inodeValue)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, "visible", pairs[0].Dentry.Name)
+	require.Equal(t, fsmeta.InodeID(22), pairs[0].Inode.Inode)
+	require.NotEmpty(t, runner.scanVersions)
+	require.Empty(t, runner.batchVersions, "inode attributes supplied by overlay should skip runner.BatchGet")
+}
+
+func TestExecutorNegativeCacheLookupShortCircuit(t *testing.T) {
+	runner := newFakeRunner()
+	cache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{100}}), WithNegativeCache(cache))
+	require.NoError(t, err)
+
+	req := fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "missing"}
+
+	// First lookup: real LSM probe (runner.Get), records the miss.
+	_, err = executor.Lookup(context.Background(), req)
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	firstGetCalls := runner.getCalls
+
+	// Second lookup: served by cache, no runner round-trip.
+	_, err = executor.Lookup(context.Background(), req)
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Equal(t, firstGetCalls, runner.getCalls,
+		"runner.Get must not be called when negative cache memo is fresh")
+}
+
+func TestExecutorDirPageReadDirPlusCacheHit(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+	for _, name := range []string{"a", "b", "c"} {
+		_, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount: mount, Parent: parent, Name: name, Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
+		require.NoError(t, err)
+	}
+
+	req := fsmeta.ReadDirRequest{Mount: mount, Parent: parent, Limit: 100}
+
+	// First call: runner Scan + BatchGet, then async materialize.
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 3)
+	scansAfterFirst := len(runner.scanVersions)
+
+	// Second call: cache hit → no new Scan / BatchGet against the runner.
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions),
+		"runner.Scan must not be called when dirpage cache hits")
+}
+
+func TestExecutorDirPageReadDirPlusCacheKeysPagination(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10, 11, 12}}), WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+	for _, name := range []string{"a", "b", "c"} {
+		_, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+			Mount: mount, Parent: parent, Name: name, Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
+		require.NoError(t, err)
+	}
+
+	// Materialize a non-leading page first. A later first-page request must not
+	// reuse it just because both requests target the same parent directory.
+	pageAfterA, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, StartAfter: "a", Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b", pageAfterA[0].Dentry.Name)
+
+	firstPage, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "a", firstPage[0].Dentry.Name)
+	require.Equal(t, parent, firstPage[0].Dentry.Parent)
+}
+
+func TestExecutorDirPageDecodeFailureFallsBackToRunner(t *testing.T) {
+	runner := newFakeRunner()
+	cache := &corruptDirPageCache{}
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{10}}), WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "a", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	out, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "a", out[0].Dentry.Name)
+	require.NotEmpty(t, runner.scanVersions, "corrupt derived cache must fall back to the runner")
+}
+
+func TestEncodeDirPageEntriesRejectsPartialMaterialization(t *testing.T) {
+	_, err := encodeDirPageEntries([]fsmeta.DentryAttrPair{{
+		Dentry: fsmeta.DentryRecord{Parent: 1, Name: "bad", Inode: 10, Type: fsmeta.InodeTypeFile},
+		Inode: fsmeta.InodeRecord{
+			Inode:       10,
+			Type:        fsmeta.InodeTypeFile,
+			OpaqueAttrs: make([]byte, fsmeta.MaxInodeOpaqueAttrsBytes+1),
+		},
+	}})
+	require.Error(t, err)
+}
+
+func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{99}}), WithDirPageCache(cache))
+	require.NoError(t, err)
+
+	mount := fsmeta.MountID("vol")
+	parent := fsmeta.RootInode
+
+	// Materialize an initial empty page set under frontier 0.
+	_, err = executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 10,
+	})
+	require.NoError(t, err)
+
+	// Create a dentry; this must bump the dirpage epoch.
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount: mount, Parent: parent, Name: "fresh", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	// Next ReadDirPlus must miss the cache (epoch advanced) and re-scan.
+	scansBefore := len(runner.scanVersions)
+	out, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount: mount, Parent: parent, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, out, 1, "create must invalidate the cached empty page set")
+	require.Greater(t, len(runner.scanVersions), scansBefore,
+		"epoch bump must force a runner scan on the next ReadDirPlus")
+}

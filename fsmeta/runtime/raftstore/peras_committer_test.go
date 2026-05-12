@@ -18,10 +18,11 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,7 +104,7 @@ func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
 	require.NoError(t, commitRuntimePeras(ctx, committer, 2, []byte("dentry/b"), []byte("inode/b")))
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 
 	stats := committer.Stats()
 	require.Equal(t, uint64(1), stats["flush_total"])
@@ -188,7 +189,7 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -245,7 +246,7 @@ func TestRemotePerasCommitterAppendsBatchWitnessesBeforeParallelInstall(t *testi
 	for idx, pair := range keys {
 		require.NoError(t, commitRuntimePeras(ctx, committer, uint64(idx+1), pair[0], pair[1]))
 	}
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 	require.Equal(t, len(keys), witness.Count())
 	require.Equal(t, int32(len(keys)), installer.calls.Load())
 	stats := committer.Stats()
@@ -273,7 +274,7 @@ func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
 	ack, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
 	require.Equal(t, opID, ack.OpID)
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 	completion, ok := committer.Completion(opID)
 	require.True(t, ok)
 	require.Equal(t, opID, completion.OpID)
@@ -357,7 +358,7 @@ func TestRemotePerasCommitterFlushPreservesCatalogSegmentAcrossFSMetaBuckets(t *
 	ctx := context.Background()
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, leftA, leftB))
 	require.NoError(t, commitRuntimePeras(ctx, committer, 2, rightA, rightB))
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 
 	stats := committer.Stats()
 	require.Equal(t, uint64(1), stats["flush_total"])
@@ -397,7 +398,7 @@ func TestRemotePerasCommitterAcceptsCrossBucketCreateForCatalogInstall(t *testin
 	_, _, ok = committer.GetPerasOverlay(rightA)
 	require.True(t, ok)
 
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 	stats = committer.Stats()
 	require.Equal(t, uint64(1), stats["flush_total"])
 	require.Equal(t, uint64(1), stats["segment_total"])
@@ -423,7 +424,7 @@ func TestRemotePerasCommitterFlushHonorsReplayMutationBudget(t *testing.T) {
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
 	require.NoError(t, commitRuntimePeras(ctx, committer, 2, []byte("dentry/b"), []byte("inode/b")))
 	require.NoError(t, commitRuntimePeras(ctx, committer, 3, []byte("dentry/c"), []byte("inode/c")))
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 
 	stats := committer.Stats()
 	require.Equal(t, uint64(2), stats["flush_total"])
@@ -446,7 +447,7 @@ func TestRemotePerasCommitterRetriesRetryableSegmentInstall(t *testing.T) {
 	defer committer.Close()
 
 	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
-	require.NoError(t, committer.Flush(context.Background()))
+	require.NoError(t, committer.FlushDurable(context.Background()))
 
 	require.Equal(t, 3, installer.calls)
 	stats := committer.Stats()
@@ -478,7 +479,7 @@ func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
-	require.ErrorIs(t, committer.Flush(ctx), errPerasCommitterInvalid)
+	require.ErrorIs(t, committer.FlushDurable(ctx), errPerasCommitterInvalid)
 
 	stats := committer.Stats()
 	require.Equal(t, uint64(0), stats["flush_total"])
@@ -877,7 +878,7 @@ func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *t
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
 
-	require.NoError(t, committer.Flush(ctx))
+	require.NoError(t, committer.FlushDurable(ctx))
 	stats = committer.Stats()
 	require.Equal(t, uint64(2), stats["flush_total"])
 	require.Equal(t, uint64(2), stats["segment_total"])
@@ -1013,7 +1014,7 @@ func TestRemotePerasCommitterCloseCancelsInstallLane(t *testing.T) {
 	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
 	flushDone := make(chan error, 1)
 	go func() {
-		flushDone <- committer.Flush(context.Background())
+		flushDone <- committer.FlushDurable(context.Background())
 	}()
 	require.Eventually(t, func() bool {
 		return installer.calls.Load() == 1
@@ -1083,7 +1084,7 @@ func TestRemotePerasCommitterFlushAllowsConcurrentCommitsDuringInstall(t *testin
 
 	flushDone := make(chan error, 1)
 	go func() {
-		flushDone <- committer.Flush(ctx)
+		flushDone <- committer.FlushDurable(ctx)
 	}()
 	require.Eventually(t, func() bool {
 		return installer.calls.Load() == 1
@@ -1283,7 +1284,7 @@ func TestRunnerPerasSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	installer := newRunnerPerasSegmentInstaller(runner, nil)
 	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, true)
 	require.NoError(t, err)
-	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
+	require.Equal(t, perasauthority.InstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
 
 	require.Equal(t, 0, tso.calls)
 	require.NotNil(t, kv.req)
@@ -1338,7 +1339,7 @@ func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	installer := newRunnerPerasSegmentInstaller(runner, router)
 	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, false)
 	require.NoError(t, err)
-	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
+	require.Equal(t, perasauthority.InstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
 	require.NotNil(t, kv.req)
 	require.Equal(t, uint64(1), kv.req.GetInstallVersion())
 	require.Equal(t, 0, tso.calls)
@@ -1461,7 +1462,7 @@ func BenchmarkRemotePerasCommitterFlushInstallParallelism(b *testing.B) {
 				for idx, pair := range keys {
 					require.NoError(b, commitRuntimePeras(context.Background(), committer, uint64(idx+1), pair[0], pair[1]))
 				}
-				require.NoError(b, committer.Flush(context.Background()))
+				require.NoError(b, committer.FlushDurable(context.Background()))
 				committer.Close()
 				if got := installer.calls.Load(); got != int32(len(keys)) {
 					b.Fatalf("installed %d segments, want %d", got, len(keys))
@@ -1523,7 +1524,7 @@ type fakeRuntimePerasSegmentInstaller struct {
 	modes       []bool
 }
 
-func (i *fakeRuntimePerasSegmentInstaller) InstallPerasSegment(_ context.Context, scope compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) (PerasInstallCursor, error) {
+func (i *fakeRuntimePerasSegmentInstaller) InstallPerasSegment(_ context.Context, scope compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) (perasauthority.InstallCursor, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls++
@@ -1569,12 +1570,12 @@ type flakyRuntimePerasSegmentInstaller struct {
 	failures int
 }
 
-func (i *flakyRuntimePerasSegmentInstaller) InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (PerasInstallCursor, error) {
+func (i *flakyRuntimePerasSegmentInstaller) InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (perasauthority.InstallCursor, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls++
 	if i.calls <= i.failures {
-		return PerasInstallCursor{}, nokverrors.New(nokverrors.KindStaleEpoch, "stale install era")
+		return perasauthority.InstallCursor{}, nokverrors.New(nokverrors.KindStaleEpoch, "stale install era")
 	}
 	return testPerasInstallCursor(uint64(i.calls)), nil
 }
@@ -1583,10 +1584,10 @@ type blockingRuntimePerasSegmentInstaller struct {
 	calls atomic.Int32
 }
 
-func (i *blockingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, _ fsperas.PerasSegment, _ []byte, _ [32]byte, _ bool) (PerasInstallCursor, error) {
+func (i *blockingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, _ fsperas.PerasSegment, _ []byte, _ [32]byte, _ bool) (perasauthority.InstallCursor, error) {
 	i.calls.Add(1)
 	<-ctx.Done()
-	return PerasInstallCursor{}, ctx.Err()
+	return perasauthority.InstallCursor{}, ctx.Err()
 }
 
 type delayingRuntimePerasSegmentInstaller struct {
@@ -1594,13 +1595,13 @@ type delayingRuntimePerasSegmentInstaller struct {
 	delay time.Duration
 }
 
-func (i *delayingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, _ fsperas.PerasSegment, _ []byte, _ [32]byte, _ bool) (PerasInstallCursor, error) {
+func (i *delayingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, _ fsperas.PerasSegment, _ []byte, _ [32]byte, _ bool) (perasauthority.InstallCursor, error) {
 	i.calls.Add(1)
 	timer := time.NewTimer(i.delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return PerasInstallCursor{}, ctx.Err()
+		return perasauthority.InstallCursor{}, ctx.Err()
 	case <-timer.C:
 		return testPerasInstallCursor(uint64(i.calls.Load())), nil
 	}
@@ -1639,10 +1640,10 @@ type witnessPhaseCheckingRuntimePerasSegmentInstaller struct {
 	calls   atomic.Int32
 }
 
-func (i *witnessPhaseCheckingRuntimePerasSegmentInstaller) InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (PerasInstallCursor, error) {
+func (i *witnessPhaseCheckingRuntimePerasSegmentInstaller) InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (perasauthority.InstallCursor, error) {
 	i.calls.Add(1)
 	if got := i.witness.Count(); got < i.want {
-		return PerasInstallCursor{}, fmt.Errorf("install started after %d witnessed segments, want %d", got, i.want)
+		return perasauthority.InstallCursor{}, fmt.Errorf("install started after %d witnessed segments, want %d", got, i.want)
 	}
 	return testPerasInstallCursor(uint64(i.calls.Load())), nil
 }
@@ -1661,7 +1662,7 @@ func (f *fakeRunnerPerasInstallKV) InstallPerasSegment(_ context.Context, _ []by
 
 type fakeRuntimePerasGrantProvider struct {
 	holderID string
-	grant    perasauth.AuthorityGrant
+	grant    perasauthority.AuthorityGrant
 	seals    []rootproto.PerasAuthoritySeal
 	owned    bool
 	err      error
@@ -1672,7 +1673,7 @@ func (p *fakeRuntimePerasGrantProvider) HolderID() string {
 	return p.holderID
 }
 
-func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (perasauth.AuthorityGrant, bool, error) {
+func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (perasauthority.AuthorityGrant, bool, error) {
 	owned := p.owned
 	if !owned {
 		owned = true
@@ -1695,14 +1696,14 @@ type publishingRuntimePerasGrantProvider struct {
 	fakeRuntimePerasGrantProvider
 	mu            sync.Mutex
 	sealCalls     int
-	sealedGrant   perasauth.AuthorityGrant
+	sealedGrant   perasauthority.AuthorityGrant
 	sealedSegment fsperas.PerasSegment
 	sealedDigest  [32]byte
-	sealedCursor  PerasInstallCursor
+	sealedCursor  perasauthority.InstallCursor
 	sealErr       error
 }
 
-func (p *publishingRuntimePerasGrantProvider) SealPerasSegment(_ context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor PerasInstallCursor) error {
+func (p *publishingRuntimePerasGrantProvider) PublishSegmentSeal(_ context.Context, grant perasauthority.AuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor perasauthority.InstallCursor) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sealCalls++
@@ -1736,17 +1737,17 @@ func testRuntimePerasWitnessesWithDurability(tb testing.TB, n int, durability wa
 		manager, err := wal.Open(wal.Config{Dir: tb.TempDir()})
 		require.NoError(tb, err)
 		tb.Cleanup(func() { _ = manager.Close() })
-		log, err := fsperas.NewWALWitnessLog(manager, durability)
+		log, err := rsperas.NewWALWitnessLog(manager, durability)
 		require.NoError(tb, err)
-		witness, err := fsperas.NewLocalWitnessReplica(fmt.Sprintf("witness-%d", i), log)
+		witness, err := rsperas.NewLocalWitnessReplica(fmt.Sprintf("witness-%d", i), log)
 		require.NoError(tb, err)
 		witnesses = append(witnesses, witness)
 	}
 	return witnesses
 }
 
-func testRuntimeCommitterGrant() perasauth.AuthorityGrant {
-	return perasauth.AuthorityGrant{
+func testRuntimeCommitterGrant() perasauthority.AuthorityGrant {
+	return perasauthority.AuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
@@ -1760,11 +1761,52 @@ func testRuntimeCommitterGrant() perasauth.AuthorityGrant {
 	}
 }
 
-func testPerasInstallCursor(offset uint64) PerasInstallCursor {
+func testRuntimePerasSeal(id, holder string, scope compile.AuthorityScope, sealed time.Time) rootproto.PerasAuthoritySeal {
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              id,
+		EpochID:              1,
+		HolderID:             holder,
+		Scope:                perasauthority.AuthorityScopeFromDelta(scope),
+		SegmentRoot:          [32]byte{1},
+		SegmentPayloadDigest: [32]byte{2},
+		OperationCount:       3,
+		EntryCount:           4,
+		SealedUnixNano:       sealed.UnixNano(),
+		InstallRegionID:      5,
+		InstallTerm:          6,
+		InstallIndex:         7,
+		InstallVersion:       8,
+	}
+}
+
+func testRuntimePerasSegment(t *testing.T) fsperas.PerasSegment {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
+	dentry, err := fsmeta.EncodeDentryKey(mount, 99, "a")
+	require.NoError(t, err)
+	inode, err := fsmeta.EncodeInodeKey(mount, 100)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{
+			{
+				OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+				Mutations: []fsperas.ReplayMutation{
+					{Key: dentry, Value: []byte("dentry-value")},
+					{Key: inode, Value: []byte("inode-value")},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return segment
+}
+
+func testPerasInstallCursor(offset uint64) perasauthority.InstallCursor {
 	if offset == 0 {
 		offset = 1
 	}
-	return PerasInstallCursor{
+	return perasauthority.InstallCursor{
 		RegionID:       10 + offset,
 		Term:           20 + offset,
 		Index:          30 + offset,

@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -48,10 +48,10 @@ type Config struct {
 	// PerasWitness enables StoreKV's experimental fsmeta Peras witness RPCs.
 	// Nil keeps the wire surface registered but returns FailedPrecondition.
 	PerasWitness kv.PerasWitness
-	// PerasAuthorities enables storage-side admission fencing for ordinary
+	// PerasAuthorityTable enables storage-side admission fencing for ordinary
 	// fsmeta writes that target an active Peras authority. Nil leaves raftstore
 	// apply behaviour unchanged.
-	PerasAuthorities *perasauth.ActiveAuthorities
+	PerasAuthorityTable *perasauthority.ActiveAuthorities
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore

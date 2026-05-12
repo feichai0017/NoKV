@@ -6,43 +6,16 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 )
 
-func perasAuthorityScopeFromGrant(grant perasauth.AuthorityGrant) compile.AuthorityScope {
-	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID(grant.Scope.MountID),
-		MountKeyID: fsmeta.MountKeyID(grant.Scope.MountKeyID),
-		Parents:    rootInodesToFSMeta(grant.Scope.Parents),
-		Inodes:     rootInodesToFSMeta(grant.Scope.Inodes),
-	}
-	if len(grant.Scope.Buckets) > 0 {
-		scope.Buckets = make([]fsmeta.AffinityBucket, len(grant.Scope.Buckets))
-		for i, bucket := range grant.Scope.Buckets {
-			scope.Buckets[i] = fsmeta.AffinityBucket(bucket)
-		}
-	}
-	return scope
-}
-
-func grantHasPredecessor(grant perasauth.AuthorityGrant) bool {
+func grantHasPredecessor(grant perasauthority.AuthorityGrant) bool {
 	var zero [32]byte
 	return grant.EpochID > 1 && grant.PredecessorDigest != zero
 }
 
-func rootInodesToFSMeta(in []uint64) []fsmeta.InodeID {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fsmeta.InodeID, len(in))
-	for i, inode := range in {
-		out[i] = fsmeta.InodeID(inode)
-	}
-	return out
-}
-
 func perasSegmentWithinScope(segment fsperas.PerasSegment, scope compile.AuthorityScope) bool {
-	if authorityScopeEmpty(scope) {
+	if perasauthority.ScopeEmpty(scope) {
 		return true
 	}
 	checked := false
@@ -76,10 +49,6 @@ func perasCatalogBuckets(scope compile.AuthorityScope) []fsmeta.AffinityBucket {
 		buckets[i] = fsmeta.AffinityBucket(i)
 	}
 	return buckets
-}
-
-func authorityScopeEmpty(scope compile.AuthorityScope) bool {
-	return scope.Mount == "" || scope.MountKeyID == 0
 }
 
 func perasScopeCoversKeyParts(scope compile.AuthorityScope, parts fsmeta.KeyParts) bool {

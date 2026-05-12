@@ -88,6 +88,18 @@ type PerasSegment struct {
 	inputMutationCount uint64
 }
 
+func (s PerasSegment) ForEachEntry(fn func(SegmentKV) error) error {
+	if fn == nil {
+		return nil
+	}
+	for _, entry := range s.entries {
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func EncodePerasSegment(segment PerasSegment) ([]byte, error) {
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err

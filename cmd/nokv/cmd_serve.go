@@ -17,7 +17,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/fsmeta"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	local "github.com/feichai0017/NoKV/local"
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -233,10 +233,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	}()
 
 	var perasWitness kv.PerasWitness
-	var perasAuthorities *perasauth.ActiveAuthorities
-	var perasAuthorityFeed *perasauth.RootAuthorityFeed
+	var perasAuthorityTable *perasauthority.ActiveAuthorities
+	var perasAuthorityFeed *perasauthority.RootAuthorityFeed
 	if *perasWitnessEnabled {
-		perasWitness, perasAuthorities, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+		perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
 		if err != nil {
 			return err
 		}
@@ -328,9 +328,9 @@ func runServeCmd(w io.Writer, args []string) error {
 			},
 			Mount: fsmeta.MountKeyResolver,
 		},
-		TransportAddr:    *listenAddr,
-		PerasWitness:     perasWitness,
-		PerasAuthorities: perasAuthorities,
+		TransportAddr:       *listenAddr,
+		PerasWitness:        perasWitness,
+		PerasAuthorityTable: perasAuthorityTable,
 	})
 	if err != nil {
 		return err

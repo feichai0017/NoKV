@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -34,7 +35,7 @@ type perasInstallRequest struct {
 }
 
 type perasInstallResult struct {
-	cursor PerasInstallCursor
+	cursor perasauthority.InstallCursor
 	err    error
 }
 
@@ -54,16 +55,16 @@ func newPerasInstallLane(owner *RemotePerasCommitter, workers int) *perasInstall
 	return lane
 }
 
-func (l *perasInstallLane) install(ctx context.Context, job perasFlushJob) (PerasInstallCursor, error) {
+func (l *perasInstallLane) install(ctx context.Context, job perasFlushJob) (perasauthority.InstallCursor, error) {
 	if l == nil || l.owner == nil {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case <-l.closed:
-		return PerasInstallCursor{}, errPerasCommitterClosed
+		return perasauthority.InstallCursor{}, errPerasCommitterClosed
 	default:
 	}
 	done := make(chan perasInstallResult, 1)
@@ -71,17 +72,17 @@ func (l *perasInstallLane) install(ctx context.Context, job perasFlushJob) (Pera
 	select {
 	case l.jobs <- req:
 	case <-ctx.Done():
-		return PerasInstallCursor{}, ctx.Err()
+		return perasauthority.InstallCursor{}, ctx.Err()
 	case <-l.closed:
-		return PerasInstallCursor{}, errPerasCommitterClosed
+		return perasauthority.InstallCursor{}, errPerasCommitterClosed
 	}
 	select {
 	case result := <-done:
 		return result.cursor, result.err
 	case <-ctx.Done():
-		return PerasInstallCursor{}, ctx.Err()
+		return perasauthority.InstallCursor{}, ctx.Err()
 	case <-l.closed:
-		return PerasInstallCursor{}, errPerasCommitterClosed
+		return perasauthority.InstallCursor{}, errPerasCommitterClosed
 	}
 }
 
@@ -146,7 +147,7 @@ func (l *perasInstallLane) run(req perasInstallRequest) {
 	req.done <- perasInstallResult{cursor: cursor, err: err}
 }
 
-func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job perasFlushJob) (PerasInstallCursor, error) {
+func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job perasFlushJob) (perasauthority.InstallCursor, error) {
 	c.recordInstallJobShape(job)
 	var last error
 	for attempt := 0; attempt <= defaultPerasSegmentInstallRetries; attempt++ {
@@ -161,10 +162,10 @@ func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job 
 		c.recordInstallRetry(err)
 		delay := perasSegmentInstallRetryDelay(err, attempt)
 		if !sleepContext(ctx, delay) {
-			return PerasInstallCursor{}, ctx.Err()
+			return perasauthority.InstallCursor{}, ctx.Err()
 		}
 	}
-	return PerasInstallCursor{}, last
+	return perasauthority.InstallCursor{}, last
 }
 
 func perasSegmentInstallRetryDelay(err error, attempt int) time.Duration {
@@ -214,9 +215,9 @@ func (c *RemotePerasCommitter) recordInstallRetry(err error) {
 	}
 }
 
-func (c *RemotePerasCommitter) submitInstallJob(ctx context.Context, job perasFlushJob) (PerasInstallCursor, error) {
+func (c *RemotePerasCommitter) submitInstallJob(ctx context.Context, job perasFlushJob) (perasauthority.InstallCursor, error) {
 	if c == nil || c.installer == nil {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 	}
 	if c.installQ != nil {
 		return c.installQ.install(ctx, job)
@@ -239,23 +240,23 @@ func newRunnerPerasSegmentInstaller(runner *Runner, router *fsmetawatch.Router) 
 	return &runnerPerasSegmentInstaller{runner: runner, router: router}
 }
 
-func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) (PerasInstallCursor, error) {
+func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) (perasauthority.InstallCursor, error) {
 	if i == nil || i.runner == nil || i.runner.kv == nil {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 	}
 	kv, ok := i.runner.kv.(perasSegmentInstallClient)
 	if !ok {
-		return PerasInstallCursor{}, errPerasCommitterInvalid
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 	}
 	installVersion, err := i.reserveInstallVersion(ctx)
 	if err != nil {
-		return PerasInstallCursor{}, err
+		return perasauthority.InstallCursor{}, err
 	}
 	routingKeys, err := perasSegmentInstallRoutingKeys(segment, materialize)
 	if err != nil {
-		return PerasInstallCursor{}, err
+		return perasauthority.InstallCursor{}, err
 	}
-	var firstCursor PerasInstallCursor
+	var firstCursor perasauthority.InstallCursor
 	var firstResp *kvrpcpb.PerasInstallSegmentResponse
 	for _, routingKey := range routingKeys {
 		resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
@@ -267,20 +268,20 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 			MaterializeMvcc:      materialize,
 		})
 		if err != nil {
-			return PerasInstallCursor{}, err
+			return perasauthority.InstallCursor{}, err
 		}
 		if resp == nil {
-			return PerasInstallCursor{}, errPerasCommitterInvalid
+			return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 		}
 		if keyErr := resp.GetError(); keyErr != nil {
-			return PerasInstallCursor{}, runnerKeyError("peras install segment", keyErr)
+			return perasauthority.InstallCursor{}, runnerKeyError("peras install segment", keyErr)
 		}
 		if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
-			return PerasInstallCursor{}, err
+			return perasauthority.InstallCursor{}, err
 		}
 		cursor := perasInstallCursorFromResponse(resp)
 		if !cursor.Valid() {
-			return PerasInstallCursor{}, errPerasCommitterInvalid
+			return perasauthority.InstallCursor{}, errPerasCommitterInvalid
 		}
 		if !firstCursor.Valid() {
 			firstCursor = cursor
@@ -332,11 +333,11 @@ func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvr
 	return nil
 }
 
-func perasInstallCursorFromResponse(resp *kvrpcpb.PerasInstallSegmentResponse) PerasInstallCursor {
+func perasInstallCursorFromResponse(resp *kvrpcpb.PerasInstallSegmentResponse) perasauthority.InstallCursor {
 	if resp == nil {
-		return PerasInstallCursor{}
+		return perasauthority.InstallCursor{}
 	}
-	return PerasInstallCursor{
+	return perasauthority.InstallCursor{
 		RegionID:       resp.GetRegionId(),
 		Term:           resp.GetTerm(),
 		Index:          resp.GetIndex(),

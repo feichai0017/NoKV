@@ -8,7 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -39,14 +39,14 @@ type monitor struct {
 	cache    *mountCache
 	quotas   *quotaCache
 	subtrees fsmetaexec.SubtreeHandoffPublisher
-	peras    *perasauth.ActiveAuthorities
+	peras    *perasauthority.ActiveAuthorities
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, peras *perasauth.ActiveAuthorities, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, peras *perasauthority.ActiveAuthorities, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (m *monitor) bootstrap(ctx context.Context) error {
 		return err
 	}
 	if m.peras != nil {
-		grants := make([]perasauth.AuthorityGrant, 0, len(peras.GetGrants()))
+		grants := make([]perasauthority.AuthorityGrant, 0, len(peras.GetGrants()))
 		for _, grant := range peras.GetGrants() {
 			parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
 			if parsed.Valid() {

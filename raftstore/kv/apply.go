@@ -9,7 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"github.com/feichai0017/NoKV/txn/latch"
@@ -24,13 +24,13 @@ const defaultLatchSlots = 512
 type ApplyOption func(*applyConfig)
 
 type applyConfig struct {
-	perasAuthorities *perasauth.ActiveAuthorities
-	now              func() time.Time
+	perasAuthorityTable *perasauthority.ActiveAuthorities
+	now                 func() time.Time
 }
 
-func WithPerasAuthorityFence(authorities *perasauth.ActiveAuthorities) ApplyOption {
+func WithPerasAuthorityFence(authorityTable *perasauthority.ActiveAuthorities) ApplyOption {
 	return func(cfg *applyConfig) {
-		cfg.perasAuthorities = authorities
+		cfg.perasAuthorityTable = authorityTable
 	}
 }
 
@@ -358,7 +358,7 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	}
 	materialize := req.GetMaterializeMvcc()
 	if !materialize {
-		if ok, err := fsperas.LoadPerasSegmentCatalogInstallForObjectKey(db, segment, req.GetRoutingKey()); err != nil {
+		if ok, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, req.GetRoutingKey()); err != nil {
 			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 		} else if ok {
 			stats := segment.Stats()
@@ -373,9 +373,9 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	var entries []*kv.Entry
 	var err error
 	if materialize {
-		entries, err = fsperas.BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
+		entries, err = BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
 	} else {
-		entries, err = fsperas.BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest, req.GetRoutingKey())
+		entries, err = BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest, req.GetRoutingKey())
 	}
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
@@ -509,7 +509,7 @@ func applyBatchWithFence(
 	if len(reqs) == 0 {
 		return nil, nil
 	}
-	if cfg.perasAuthorities == nil {
+	if cfg.perasAuthorityTable == nil {
 		return ApplyBatch(db, latches, reqs)
 	}
 	resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
@@ -537,7 +537,7 @@ func applyBatchWithFence(
 }
 
 func rejectPerasFencedRequest(cfg applyConfig, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, bool) {
-	if cfg.perasAuthorities == nil || req == nil {
+	if cfg.perasAuthorityTable == nil || req == nil {
 		return nil, false
 	}
 	var keyErr *kvrpcpb.KeyError
@@ -645,14 +645,14 @@ func firstPerasFenceError(cfg applyConfig, keys [][]byte) *kvrpcpb.KeyError {
 }
 
 func perasFenceErrorForKey(cfg applyConfig, key []byte) *kvrpcpb.KeyError {
-	if len(key) == 0 || cfg.perasAuthorities == nil {
+	if len(key) == 0 || cfg.perasAuthorityTable == nil {
 		return nil
 	}
 	now := time.Now
 	if cfg.now != nil {
 		now = cfg.now
 	}
-	grant, ok, err := cfg.perasAuthorities.FencesKey(key, now())
+	grant, ok, err := cfg.perasAuthorityTable.FencesKey(key, now())
 	if err != nil {
 		return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + err.Error()}
 	}

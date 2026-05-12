@@ -69,8 +69,8 @@ func NewNode(cfg Config) (*Node, error) {
 	}
 	storeCfg := cfg.Store
 	applyOpts := []kv.ApplyOption(nil)
-	if cfg.PerasAuthorities != nil {
-		applyOpts = append(applyOpts, kv.WithPerasAuthorityFence(cfg.PerasAuthorities))
+	if cfg.PerasAuthorityTable != nil {
+		applyOpts = append(applyOpts, kv.WithPerasAuthorityFence(cfg.PerasAuthorityTable))
 	}
 	if storeCfg.CommandApplier == nil {
 		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil, applyOpts...)

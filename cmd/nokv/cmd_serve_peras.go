@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
@@ -19,7 +18,7 @@ type controlWALOpener interface {
 	OpenControlWAL(uint64) (*wal.Manager, error)
 }
 
-func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *perasauth.ActiveAuthorities, *perasauth.RootAuthorityFeed, error) {
+func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauthority.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *perasauthority.ActiveAuthorities, *perasauthority.RootAuthorityFeed, error) {
 	if storeID == 0 || coord == nil || db == nil {
 		return nil, nil, nil, fmt.Errorf("serve: peras witness requires store id, coordinator, and db")
 	}
@@ -27,16 +26,16 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("serve: open peras witness WAL: %w", err)
 	}
-	log, err := fsperas.NewWALWitnessLog(manager, durability)
+	log, err := rsperas.NewWALWitnessLog(manager, durability)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("serve: open peras witness log: %w", err)
 	}
-	authorities := perasauth.NewActiveAuthorities()
-	feed := perasauth.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
+	authorities := perasauthority.NewActiveAuthorities()
+	feed := perasauthority.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
 	witness, err := rsperas.NewWitnessNode(rsperas.WitnessNodeConfig{
 		NodeID:           fmt.Sprintf("store-%d", storeID),
 		Log:              log,
-		Authorities:      authorities,
+		AuthorityTable:   authorities,
 		AuthorityRefresh: feed.Refresh,
 	})
 	if err != nil {

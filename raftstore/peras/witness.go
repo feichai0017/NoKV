@@ -9,7 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 )
 
 var (
@@ -20,18 +20,18 @@ var (
 
 type WitnessNodeConfig struct {
 	NodeID           string
-	Log              *fsperas.WALWitnessLog
-	Authorities      *perasauth.ActiveAuthorities
+	Log              *WALWitnessLog
+	AuthorityTable   *perasauthority.ActiveAuthorities
 	AuthorityRefresh func(context.Context) error
 	Now              func() time.Time
 }
 
 type WitnessNode struct {
-	nodeID      string
-	log         *fsperas.WALWitnessLog
-	authorities *perasauth.ActiveAuthorities
-	refresh     func(context.Context) error
-	now         func() time.Time
+	nodeID         string
+	log            *WALWitnessLog
+	authorityTable *perasauthority.ActiveAuthorities
+	refresh        func(context.Context) error
+	now            func() time.Time
 
 	mu       sync.Mutex
 	segments map[witnessSegmentKey]struct{}
@@ -44,7 +44,7 @@ type witnessSegmentKey struct {
 }
 
 func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
-	if cfg.NodeID == "" || cfg.Log == nil || cfg.Authorities == nil {
+	if cfg.NodeID == "" || cfg.Log == nil || cfg.AuthorityTable == nil {
 		return nil, ErrWitnessNodeConfigInvalid
 	}
 	now := cfg.Now
@@ -52,12 +52,12 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		now = time.Now
 	}
 	return &WitnessNode{
-		nodeID:      cfg.NodeID,
-		log:         cfg.Log,
-		authorities: cfg.Authorities,
-		refresh:     cfg.AuthorityRefresh,
-		now:         now,
-		segments:    make(map[witnessSegmentKey]struct{}),
+		nodeID:         cfg.NodeID,
+		log:            cfg.Log,
+		authorityTable: cfg.AuthorityTable,
+		refresh:        cfg.AuthorityRefresh,
+		now:            now,
+		segments:       make(map[witnessSegmentKey]struct{}),
 	}, nil
 }
 
@@ -69,7 +69,7 @@ func (n *WitnessNode) ID() string {
 }
 
 func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
-	if n == nil || n.log == nil || n.authorities == nil {
+	if n == nil || n.log == nil || n.authorityTable == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
 	if err := n.validateAuthority(ctx, scope, record.EpochID, record.HolderID); err != nil {
@@ -120,7 +120,7 @@ func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.Autho
 }
 
 func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, epochID uint64, holderID string) error {
-	grant, ok, err := n.authorities.Find(scope, n.now())
+	grant, ok, err := n.authorityTable.Find(scope, n.now())
 	if err != nil {
 		return err
 	}

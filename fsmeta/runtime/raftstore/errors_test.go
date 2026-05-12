@@ -12,10 +12,6 @@ func TestRuntimeErrorsExposeStableKinds(t *testing.T) {
 	invalid := []error{
 		errCoordinatorAddrRequired,
 		errSessionCleanupLimitExceeded,
-		errPerasAuthorityClientRequired,
-		errPerasAuthorityTableRequired,
-		errPerasAuthorityHolderRequired,
-		errPerasAuthorityTTLInvalid,
 		errMountCacheNotConfigured,
 		errRootPublisherNotConfigured,
 		errStoreListerRequired,
@@ -33,13 +29,10 @@ func TestRuntimeErrorsExposeStableKinds(t *testing.T) {
 		errNilTSOResponse,
 		errZeroTSOTimestamp,
 		errTSOCountMismatch(1, 2),
-		errPerasAuthorityInvalidResponse,
 	}
 	for _, err := range protocol {
 		require.Equal(t, nokverrors.KindProtocolViolation, nokverrors.KindOf(err))
 	}
-
-	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(errPerasAuthorityNotHeld))
 }
 
 func TestRunnerKeyErrorPreservesStableKind(t *testing.T) {

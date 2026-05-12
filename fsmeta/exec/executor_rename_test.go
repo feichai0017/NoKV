@@ -1,0 +1,292 @@
+package exec
+
+import (
+	"context"
+	"github.com/feichai0017/NoKV/fsmeta"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestExecutorCreatePerasVisibleCommitAcceptsCrossBucketCatalogInstall(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakePerasCommitter{}
+	inode := testInodeForDifferentBucket(t, fsmeta.RootInode)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, committer.calls)
+	require.Empty(t, runner.mutations)
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+}
+
+func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	publisher := &fakeSubtreePublisher{}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{
+		Parent: 8,
+		Name:   "new",
+		Inode:  22,
+		Type:   fsmeta.InodeTypeFile,
+	}, record)
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 2)
+	require.Equal(t, kvrpcpb.Mutation_Delete, runner.mutations[0][0].GetOp())
+	require.Equal(t, kvrpcpb.Mutation_Put, runner.mutations[0][1].GetOp())
+	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.starts)
+	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
+}
+
+func TestExecutorRenamePerasVisibleCommitServesOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   7,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: 7, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Empty(t, runner.mutations, "same-parent rename should stay inside Peras overlay")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
+	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+}
+
+func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T) {
+	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForParentBucket(t, fromParent, fromParent)
+	require.NotEqual(t, fromParent, toParent)
+	require.Equal(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fromParent,
+		FromName:   "old",
+		ToParent:   toParent,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fromParent, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: toParent, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Empty(t, runner.mutations, "bucket-local cross-parent rename should stay inside Peras overlay")
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
+	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForParentBucket(t, fromParent, fromParent)
+	seedDentry(t, runner, "vol", fromParent, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestPerasCommitter(t, runner)
+	sourceKey, err := fsmeta.EncodeDentryKey(testMountIdentity, fromParent, "old")
+	require.NoError(t, err)
+	committer.RememberKey(sourceKey, true)
+	committer.RememberEmptyDirectory(testMountIdentity, toParent)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	runner.getCalls = 0
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fromParent,
+		FromName:   "old",
+		ToParent:   toParent,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 4, runner.getCalls, "rename must recheck observed source values, but still avoid reading a destination key proven absent by the Peras directory fact")
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {
+	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForDifferentBucket(t, fromParent, fromParent)
+	require.NotEqual(t, fromParent, toParent)
+	require.NotEqual(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
+	seedDentry(t, runner, "vol", fromParent, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fromParent,
+		FromName:   "old",
+		ToParent:   toParent,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: fromParent, Name: "old"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: toParent, Name: "new"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+	require.Len(t, runner.mutations, 1, "cross-bucket rename remains on the ordinary durable path until multi-bucket segment install is atomic")
+	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
+}
+
+func TestExecutorRenameRejectsCrossAuthority(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	authority := &fakeAuthorityResolver{same: false}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeAuthorityResolver(authority))
+	require.NoError(t, err)
+
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrCrossAuthorityRename)
+	require.Empty(t, runner.mutations)
+	require.Equal(t, 1, authority.calls)
+}
+
+func TestExecutorRenameSubtreeRejectsMissingSource(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "missing",
+		ToParent:   8,
+		ToName:     "new",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	require.Empty(t, runner.mutations)
+}
+
+func TestExecutorRenameSubtreeRejectsExistingDestination(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "old", 22)
+	seedDentry(t, runner, "vol", 8, "existing", 23)
+	publisher := &fakeSubtreePublisher{}
+	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{
+		"vol": {MountID: "vol", MountKeyID: 1, RootInode: fsmeta.RootInode, SchemaVersion: 1},
+	}}
+	executor, err := newTestExecutor(runner, WithMountResolver(resolver), WithSubtreeHandoffPublisher(publisher))
+	require.NoError(t, err)
+
+	err = executor.RenameSubtree(context.Background(), fsmeta.RenameSubtreeRequest{
+		Mount:      "vol",
+		FromParent: 7,
+		FromName:   "old",
+		ToParent:   8,
+		ToName:     "existing",
+	})
+	require.ErrorIs(t, err, fsmeta.ErrExists)
+	require.Empty(t, runner.mutations)
+	require.Empty(t, publisher.starts)
+	require.Empty(t, publisher.completes)
+}
+
+func BenchmarkExecutorRenameDefaultPath(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorRename(b, runner, executor)
+}
+
+func BenchmarkExecutorRenamePerasVisibleCommit(b *testing.B) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(noopPerasCommitter{}),
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchmarkExecutorRename(b, runner, executor)
+}

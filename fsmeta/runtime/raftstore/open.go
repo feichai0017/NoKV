@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -125,15 +125,15 @@ type Options struct {
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
 // every client and goroutine it creates; Close releases all of them.
 type Runtime struct {
-	Executor          *fsmetaexec.Executor
-	Watcher           fsmeta.Watcher
-	SnapshotPublisher fsmeta.SnapshotPublisher
-	MountResolver     fsmetaexec.MountResolver
-	QuotaResolver     fsmetaexec.QuotaResolver
-	SessionCleaner    interface{ Stats() map[string]any }
-	PerasCommitter    interface{ Stats() map[string]any }
-	PerasAuthorities  *perasauth.ActiveAuthorities
-	PerasAuthority    *PerasAuthorityManager
+	Executor              *fsmetaexec.Executor
+	Watcher               fsmeta.Watcher
+	SnapshotPublisher     fsmeta.SnapshotPublisher
+	MountResolver         fsmetaexec.MountResolver
+	QuotaResolver         fsmetaexec.QuotaResolver
+	SessionCleaner        interface{ Stats() map[string]any }
+	PerasCommitter        interface{ Stats() map[string]any }
+	PerasAuthorityTable   *perasauthority.ActiveAuthorities
+	PerasAuthorityManager *perasauthority.Manager
 
 	close func() error
 	once  sync.Once
@@ -166,14 +166,14 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, errLockTTLInvalid
 	}
 	if opts.PerasAuthorityTTL < 0 {
-		return nil, errPerasAuthorityTTLInvalid
+		return nil, perasauthority.ErrTTLInvalid
 	}
 	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, errPerasCommitterInvalid
 	}
 	if opts.PerasVisibleCommit && strings.TrimSpace(opts.PerasHolderID) == "" {
-		return nil, errPerasAuthorityHolderRequired
+		return nil, perasauthority.ErrHolderRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -234,14 +234,10 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
-	peras := perasauth.NewActiveAuthorities()
-	var perasAuthority *PerasAuthorityManager
+	peras := perasauthority.NewActiveAuthorities()
+	var perasAuthorityManager *perasauthority.Manager
 	if holderID := strings.TrimSpace(opts.PerasHolderID); holderID != "" {
-		perasAuthorityTTL := opts.PerasAuthorityTTL
-		if perasAuthorityTTL == 0 {
-			perasAuthorityTTL = defaultPerasAuthorityTTL
-		}
-		perasAuthority, err = NewPerasAuthorityManager(coord, peras, holderID, perasAuthorityTTL, nil)
+		perasAuthorityManager, err = perasauthority.NewManager(coord, peras, holderID, opts.PerasAuthorityTTL, nil)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()
@@ -257,8 +253,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
 	}
-	if perasAuthority != nil {
-		execOpts = append(execOpts, fsmetaexec.WithPerasAuthorityAdmitter(perasAuthority))
+	if perasAuthorityManager != nil {
+		execOpts = append(execOpts, fsmetaexec.WithPerasAuthorityAdmitter(perasAuthorityManager))
 	}
 	var perasWitnesses *perasWitnessConnections
 	var perasCommitter *RemotePerasCommitter
@@ -270,7 +266,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			return nil, fmt.Errorf("init peras witnesses: %w", err)
 		}
 		perasCommitter, err = NewRemotePerasCommitter(RemotePerasCommitterConfig{
-			Authority:                  perasAuthority,
+			Authority:                  perasAuthorityManager,
 			Witnesses:                  perasWitnesses.witnesses,
 			Installer:                  newRunnerPerasSegmentInstaller(runner, router),
 			CatalogScanner:             runner,
@@ -368,15 +364,15 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		Executor:          exec,
-		Watcher:           watcher{Router: router, source: source, mounts: mounts},
-		SnapshotPublisher: pub,
-		MountResolver:     mounts,
-		QuotaResolver:     quotas,
-		SessionCleaner:    sessions,
-		PerasCommitter:    perasCommitter,
-		PerasAuthorities:  peras,
-		PerasAuthority:    perasAuthority,
+		Executor:              exec,
+		Watcher:               watcher{Router: router, source: source, mounts: mounts},
+		SnapshotPublisher:     pub,
+		MountResolver:         mounts,
+		QuotaResolver:         quotas,
+		SessionCleaner:        sessions,
+		PerasCommitter:        perasCommitter,
+		PerasAuthorityTable:   peras,
+		PerasAuthorityManager: perasAuthorityManager,
 	}
 	rt.close = func() error {
 		var first error

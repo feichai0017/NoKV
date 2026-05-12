@@ -10,7 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +33,7 @@ func TestWitnessNodeAppendSegmentAndProbe(t *testing.T) {
 func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
 	defer cleanup()
-	require.NoError(t, node.authorities.Replace(nil))
+	require.NoError(t, node.authorityTable.Replace(nil))
 
 	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
@@ -44,17 +44,17 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, manager.Close()) }()
-	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityFsync)
+	log, err := NewWALWitnessLog(manager, wal.DurabilityFsync)
 	require.NoError(t, err)
-	authorities := perasauth.NewActiveAuthorities()
+	authorities := perasauthority.NewActiveAuthorities()
 	refreshed := false
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         log,
-		Authorities: authorities,
+		NodeID:         "store-1",
+		Log:            log,
+		AuthorityTable: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			refreshed = true
-			return authorities.Replace([]perasauth.AuthorityGrant{testAuthorityGrant()})
+			return authorities.Replace([]perasauthority.AuthorityGrant{testAuthorityGrant()})
 		},
 		Now: func() time.Time { return now },
 	})
@@ -69,14 +69,14 @@ func TestWitnessNodeRefreshFailureIsFatal(t *testing.T) {
 	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, manager.Close()) }()
-	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityFsync)
+	log, err := NewWALWitnessLog(manager, wal.DurabilityFsync)
 	require.NoError(t, err)
-	authorities := perasauth.NewActiveAuthorities()
+	authorities := perasauthority.NewActiveAuthorities()
 	refreshErr := errors.New("refresh failed")
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         log,
-		Authorities: authorities,
+		NodeID:         "store-1",
+		Log:            log,
+		AuthorityTable: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			return refreshErr
 		},
@@ -108,7 +108,7 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	defer cleanup()
 	expired := testAuthorityGrant()
 	expired.ExpiresUnixNano = now.Add(-time.Nanosecond).UnixNano()
-	require.NoError(t, node.authorities.Replace([]perasauth.AuthorityGrant{expired}))
+	require.NoError(t, node.authorityTable.Replace([]perasauthority.AuthorityGrant{expired}))
 
 	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
@@ -133,14 +133,14 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager, err := wal.Open(wal.Config{Dir: dir})
 	require.NoError(t, err)
-	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityFsync)
+	log, err := NewWALWitnessLog(manager, wal.DurabilityFsync)
 	require.NoError(t, err)
 	authorities := testActiveAuthorities(t, now)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         log,
-		Authorities: authorities,
-		Now:         func() time.Time { return now },
+		NodeID:         "store-1",
+		Log:            log,
+		AuthorityTable: authorities,
+		Now:            func() time.Time { return now },
 	})
 	require.NoError(t, err)
 	record := testSegmentRecord()
@@ -150,13 +150,13 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	reopened, err := wal.Open(wal.Config{Dir: dir})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
-	reopenedLog, err := fsperas.NewWALWitnessLog(reopened, wal.DurabilityFsync)
+	reopenedLog, err := NewWALWitnessLog(reopened, wal.DurabilityFsync)
 	require.NoError(t, err)
 	reopenedNode, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         reopenedLog,
-		Authorities: authorities,
-		Now:         func() time.Time { return now },
+		NodeID:         "store-1",
+		Log:            reopenedLog,
+		AuthorityTable: authorities,
+		Now:            func() time.Time { return now },
 	})
 	require.NoError(t, err)
 
@@ -201,13 +201,13 @@ func openTestWitnessNodeWithNow(t *testing.T, durability wal.DurabilityPolicy, n
 	t.Helper()
 	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
-	log, err := fsperas.NewWALWitnessLog(manager, durability)
+	log, err := NewWALWitnessLog(manager, durability)
 	require.NoError(t, err)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         log,
-		Authorities: testActiveAuthorities(t, now()),
-		Now:         now,
+		NodeID:         "store-1",
+		Log:            log,
+		AuthorityTable: testActiveAuthorities(t, now()),
+		Now:            now,
 	})
 	require.NoError(t, err)
 	return node, func() { require.NoError(t, manager.Close()) }
@@ -218,33 +218,33 @@ func openBenchWitnessNode(b *testing.B) (*WitnessNode, func()) {
 	now := time.Unix(100, 0)
 	manager, err := wal.Open(wal.Config{Dir: b.TempDir()})
 	require.NoError(b, err)
-	log, err := fsperas.NewWALWitnessLog(manager, wal.DurabilityBuffered)
+	log, err := NewWALWitnessLog(manager, wal.DurabilityBuffered)
 	require.NoError(b, err)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:      "store-1",
-		Log:         log,
-		Authorities: testActiveAuthorities(b, now),
-		Now:         func() time.Time { return now },
+		NodeID:         "store-1",
+		Log:            log,
+		AuthorityTable: testActiveAuthorities(b, now),
+		Now:            func() time.Time { return now },
 	})
 	require.NoError(b, err)
 	return node, func() { require.NoError(b, manager.Close()) }
 }
 
-func testActiveAuthorities(tb testing.TB, now time.Time) *perasauth.ActiveAuthorities {
+func testActiveAuthorities(tb testing.TB, now time.Time) *perasauthority.ActiveAuthorities {
 	tb.Helper()
-	table := perasauth.NewActiveAuthorities()
+	table := perasauthority.NewActiveAuthorities()
 	grant := testAuthorityGrant()
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(tb, table.Replace([]perasauth.AuthorityGrant{grant}))
+	require.NoError(tb, table.Replace([]perasauthority.AuthorityGrant{grant}))
 	return table
 }
 
-func testAuthorityGrant() perasauth.AuthorityGrant {
+func testAuthorityGrant() perasauthority.AuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           perasauth.AuthorityScopeFromDelta(testAuthorityScope()),
+		Scope:           perasauthority.AuthorityScopeFromDelta(testAuthorityScope()),
 		ExpiresUnixNano: time.Unix(101, 0).UnixNano(),
 	}
 }

@@ -12,7 +12,7 @@ import (
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -40,11 +40,11 @@ const (
 
 type perasGrantProvider interface {
 	HolderID() string
-	Acquire(context.Context, compile.AuthorityScope) (perasauth.AuthorityGrant, bool, error)
+	Acquire(context.Context, compile.AuthorityScope) (perasauthority.AuthorityGrant, bool, error)
 }
 
 type perasSealPublisher interface {
-	SealPerasSegment(context.Context, perasauth.AuthorityGrant, fsperas.PerasSegment, [32]byte, PerasInstallCursor) error
+	PublishSegmentSeal(context.Context, perasauthority.AuthorityGrant, fsperas.PerasSegment, [32]byte, perasauthority.InstallCursor) error
 }
 
 type perasSealProvider interface {
@@ -52,22 +52,11 @@ type perasSealProvider interface {
 }
 
 type perasSegmentInstaller interface {
-	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (PerasInstallCursor, error)
+	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (perasauthority.InstallCursor, error)
 }
 
 type perasSegmentCatalogScanner interface {
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]fsmetaexec.KV, error)
-}
-
-type PerasInstallCursor struct {
-	RegionID       uint64
-	Term           uint64
-	Index          uint64
-	InstallVersion uint64
-}
-
-func (c PerasInstallCursor) Valid() bool {
-	return c.RegionID != 0 && c.Term != 0 && c.Index != 0 && c.InstallVersion != 0
 }
 
 type RemotePerasCommitterConfig struct {
@@ -133,7 +122,7 @@ type RemotePerasCommitter struct {
 
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
-	grants    map[uint64]perasauth.AuthorityGrant
+	grants    map[uint64]perasauthority.AuthorityGrant
 	latches   *fsperas.AdmissionLatches
 
 	overlayMu sync.RWMutex
@@ -202,7 +191,7 @@ type perasFlushJob struct {
 	payload     []byte
 	digest      [32]byte
 	materialize bool
-	cursor      PerasInstallCursor
+	cursor      perasauthority.InstallCursor
 }
 
 type perasFlushBatch struct {
@@ -320,7 +309,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		now:        now,
 		closer:     utils.NewCloser(),
 		holders:    make(map[uint64]*fsperas.Holder),
-		grants:     make(map[uint64]perasauth.AuthorityGrant),
+		grants:     make(map[uint64]perasauthority.AuthorityGrant),
 		latches:    fsperas.NewAdmissionLatches(),
 		overlay:    fsperas.NewOverlayView(),
 		sealed:     fsperas.NewOverlayView(),
@@ -387,8 +376,8 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 		return fsperas.VisibleAck{}, err
 	}
 	if !owned {
-		c.recordError(errPerasAuthorityNotHeld)
-		return fsperas.VisibleAck{}, errPerasAuthorityNotHeld
+		c.recordError(perasauthority.ErrNotHeld)
+		return fsperas.VisibleAck{}, perasauthority.ErrNotHeld
 	}
 	holder, err := c.holderForGrant(ctx, grant, delta.Authority)
 	if err != nil {
@@ -427,7 +416,7 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	return ack, nil
 }
 
-func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasauth.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
+func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasauthority.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
 		return nil, errPerasCommitterInvalid
 	}
@@ -441,7 +430,7 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 
 	recoveryScope := scope
 	if grantHasPredecessor(grant) {
-		if grantScope := perasAuthorityScopeFromGrant(grant); !authorityScopeEmpty(grantScope) {
+		if grantScope := perasauthority.ScopeFromGrant(grant); !perasauthority.ScopeEmpty(grantScope) {
 			recoveryScope = grantScope
 		}
 	}
@@ -472,17 +461,13 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	return holder, nil
 }
 
-func (c *RemotePerasCommitter) Flush(ctx context.Context) error {
-	return c.FlushDurable(ctx)
-}
-
 func (c *RemotePerasCommitter) FlushDurable(ctx context.Context) error {
 	return c.flush(ctx, nil)
 }
 
 func (c *RemotePerasCommitter) FlushAuthority(ctx context.Context, scope compile.AuthorityScope) error {
 	if scope.Mount == "" || scope.MountKeyID == 0 {
-		return c.Flush(ctx)
+		return c.FlushDurable(ctx)
 	}
 	return c.flush(ctx, &scope)
 }
@@ -597,7 +582,7 @@ func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err := c.Flush(ctx)
+	err := c.FlushDurable(ctx)
 	c.Close()
 	return err
 }
