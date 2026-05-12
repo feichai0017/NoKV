@@ -37,6 +37,26 @@ func TestApplyPerasAuthorityGrantLifecycleToState(t *testing.T) {
 	require.Equal(t, grant.EpochID, st.PerasAuthorityEpoch)
 }
 
+func TestApplyPerasAuthoritySealTracksLatestFrontier(t *testing.T) {
+	var st rootstate.State
+	grant := testStatePerasGrant("peras-1", 1)
+	first := testStatePerasSeal(grant, 1)
+	second := testStatePerasSeal(grant, 2)
+
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PerasAuthoritySealed(first))
+	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 2}, rootevent.PerasAuthoritySealed(second))
+
+	require.Len(t, st.PerasAuthoritySeals, 1)
+	require.Equal(t, second.SegmentRoot, st.PerasAuthoritySeals[0].SegmentRoot)
+	found, ok := st.LatestPerasAuthoritySealFor(rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7})
+	require.True(t, ok)
+	require.Equal(t, second.SegmentRoot, found.SegmentRoot)
+
+	clone := rootstate.CloneState(st)
+	clone.PerasAuthoritySeals[0].Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, st.PerasAuthoritySeals[0].Scope.Buckets)
+}
+
 func TestApplyPerasAuthorityRejectsInvalidAndConflictingGrants(t *testing.T) {
 	var st rootstate.State
 	rootstate.ApplyEventToState(&st, rootstate.Cursor{Term: 1, Index: 1}, rootevent.PerasAuthorityGranted(rootproto.PerasAuthorityGrant{
@@ -102,5 +122,23 @@ func testStatePerasGrant(grantID string, bucket uint16) rootproto.PerasAuthority
 			Parents:    []uint64{10},
 		},
 		ExpiresUnixNano: 1_000,
+	}
+}
+
+func testStatePerasSeal(grant rootproto.PerasAuthorityGrant, marker byte) rootproto.PerasAuthoritySeal {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = marker
+	digest[0] = marker + 10
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              grant.GrantID,
+		EpochID:              grant.EpochID,
+		HolderID:             grant.HolderID,
+		Scope:                grant.Scope,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		OperationCount:       7,
+		EntryCount:           11,
+		SealedUnixNano:       int64(marker),
 	}
 }

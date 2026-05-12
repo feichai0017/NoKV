@@ -192,8 +192,11 @@ func (s *Service) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataR
 		return nil, rpcError(err)
 	}
 	applyStatus := metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED
-	if cmd.Kind == rootproto.PerasAuthorityActRetire {
+	switch cmd.Kind {
+	case rootproto.PerasAuthorityActRetire:
 		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED
+	case rootproto.PerasAuthorityActSeal:
+		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED
 	}
 	return &metapb.MetadataRootApplyPerasAuthorityResponse{
 		State:  metawire.RootStateToProto(state),

@@ -32,6 +32,10 @@ func CloneEvent(in Event) Event {
 		cp := rootproto.ClonePerasAuthorityGrant(*in.PerasGrant)
 		out.PerasGrant = &cp
 	}
+	if in.PerasSeal != nil {
+		cp := rootproto.ClonePerasAuthoritySeal(*in.PerasSeal)
+		out.PerasSeal = &cp
+	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch
 		out.SnapshotEpoch = &cp

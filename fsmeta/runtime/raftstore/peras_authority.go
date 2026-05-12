@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -158,6 +159,46 @@ func (m *PerasAuthorityManager) Retire(ctx context.Context, grant perasauth.Auth
 		return errPerasAuthorityNotHeld
 	}
 	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED {
+		return errPerasAuthorityInvalidResponse
+	}
+	return nil
+}
+
+func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte) error {
+	if m == nil {
+		return errPerasAuthorityClientRequired
+	}
+	if !grant.Valid() {
+		return errPerasAuthorityInvalidResponse
+	}
+	if strings.TrimSpace(grant.HolderID) != m.holderID {
+		return errPerasAuthorityNotHeld
+	}
+	stats := segment.Stats()
+	now := m.now()
+	cmd := rootproto.PerasAuthorityCommand{
+		Kind:                 rootproto.PerasAuthorityActSeal,
+		HolderID:             m.holderID,
+		GrantID:              grant.GrantID,
+		NowUnixNano:          now.UnixNano(),
+		SegmentRoot:          segment.Root,
+		SegmentPayloadDigest: payloadDigest,
+		OperationCount:       stats.OperationCount,
+		EntryCount:           stats.EntryCount,
+	}
+	resp, err := m.coord.ApplyPerasAuthority(ctx, &coordpb.ApplyPerasAuthorityRequest{
+		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+	})
+	if err != nil {
+		return err
+	}
+	if err := m.installResponse(resp); err != nil {
+		return err
+	}
+	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
+		return errPerasAuthorityNotHeld
+	}
+	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED {
 		return errPerasAuthorityInvalidResponse
 	}
 	return nil

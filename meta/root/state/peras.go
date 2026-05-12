@@ -23,6 +23,23 @@ func (s State) ActivePerasGrantFor(scope rootproto.PerasAuthorityScope, nowUnixN
 	return rootproto.PerasAuthorityGrant{}, false
 }
 
+func (s State) LatestPerasAuthoritySealFor(scope rootproto.PerasAuthorityScope) (rootproto.PerasAuthoritySeal, bool) {
+	for i := len(s.PerasAuthoritySeals) - 1; i >= 0; i-- {
+		seal := s.PerasAuthoritySeals[i]
+		grant := rootproto.PerasAuthorityGrant{
+			GrantID:         seal.GrantID,
+			EpochID:         seal.EpochID,
+			HolderID:        seal.HolderID,
+			Scope:           rootproto.ClonePerasAuthorityScope(seal.Scope),
+			ExpiresUnixNano: 1,
+		}
+		if grant.Covers(scope, 0) || grant.Scope.MountKeyID == scope.MountKeyID {
+			return rootproto.ClonePerasAuthoritySeal(seal), true
+		}
+	}
+	return rootproto.PerasAuthoritySeal{}, false
+}
+
 func applyPerasAuthorityGrantedToState(state *State, event rootevent.Event) {
 	if state == nil || event.PerasGrant == nil {
 		return
@@ -49,6 +66,23 @@ func applyPerasAuthorityGrantedToState(state *State, event rootevent.Event) {
 	}
 }
 
+func applyPerasAuthoritySealedToState(state *State, event rootevent.Event) {
+	if state == nil || event.PerasSeal == nil {
+		return
+	}
+	seal := rootproto.ClonePerasAuthoritySeal(*event.PerasSeal)
+	if !seal.Valid() {
+		return
+	}
+	for i, current := range state.PerasAuthoritySeals {
+		if current.GrantID == seal.GrantID {
+			state.PerasAuthoritySeals[i] = seal
+			return
+		}
+	}
+	state.PerasAuthoritySeals = append(state.PerasAuthoritySeals, seal)
+}
+
 func applyPerasAuthorityRetiredToState(state *State, event rootevent.Event) {
 	if state == nil || event.PerasGrant == nil || event.PerasGrant.GrantID == "" {
 		return
@@ -69,6 +103,17 @@ func clonePerasAuthorityGrants(grants []rootproto.PerasAuthorityGrant) []rootpro
 	out := make([]rootproto.PerasAuthorityGrant, len(grants))
 	for i, grant := range grants {
 		out[i] = rootproto.ClonePerasAuthorityGrant(grant)
+	}
+	return out
+}
+
+func clonePerasAuthoritySeals(seals []rootproto.PerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
+	if len(seals) == 0 {
+		return nil
+	}
+	out := make([]rootproto.PerasAuthoritySeal, len(seals))
+	for i, seal := range seals {
+		out[i] = rootproto.ClonePerasAuthoritySeal(seal)
 	}
 	return out
 }

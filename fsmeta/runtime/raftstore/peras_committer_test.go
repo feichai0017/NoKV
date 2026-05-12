@@ -94,6 +94,33 @@ func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+	}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.Flush(ctx))
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	require.Equal(t, 1, provider.sealCalls)
+	require.Equal(t, provider.grant.GrantID, provider.sealedGrant.GrantID)
+	require.Equal(t, installer.segment.Root, provider.sealedSegment.Root)
+	require.Equal(t, installer.digest, provider.sealedDigest)
+}
+
 func TestRemotePerasCommitterShutdownFlushesPendingSegment(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
@@ -1030,6 +1057,26 @@ func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.Authori
 		owned = true
 	}
 	return p.grant, owned, p.err
+}
+
+type publishingRuntimePerasGrantProvider struct {
+	fakeRuntimePerasGrantProvider
+	mu            sync.Mutex
+	sealCalls     int
+	sealedGrant   perasauth.AuthorityGrant
+	sealedSegment fsperas.PerasSegment
+	sealedDigest  [32]byte
+	sealErr       error
+}
+
+func (p *publishingRuntimePerasGrantProvider) SealPerasSegment(_ context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, digest [32]byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sealCalls++
+	p.sealedGrant = grant
+	p.sealedSegment = segment
+	p.sealedDigest = digest
+	return p.sealErr
 }
 
 type fakeRuntimePerasRetirer struct {

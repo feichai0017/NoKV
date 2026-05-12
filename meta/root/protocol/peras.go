@@ -30,12 +30,28 @@ type PerasAuthorityGrant struct {
 	QuotaCreditInodes int64
 }
 
+// PerasAuthoritySeal is rooted evidence that one Peras segment for an
+// authority grant has been installed through raftstore. Segment bytes remain
+// in raftstore's catalog; root records only the digest frontier.
+type PerasAuthoritySeal struct {
+	GrantID              string
+	EpochID              uint64
+	HolderID             string
+	Scope                PerasAuthorityScope
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+	OperationCount       uint64
+	EntryCount           uint64
+	SealedUnixNano       int64
+}
+
 type PerasAuthorityAct uint8
 
 const (
 	PerasAuthorityActUnknown PerasAuthorityAct = iota
 	PerasAuthorityActAcquire
 	PerasAuthorityActRetire
+	PerasAuthorityActSeal
 )
 
 type PerasAuthorityCommand struct {
@@ -48,6 +64,11 @@ type PerasAuthorityCommand struct {
 	PredecessorDigest [32]byte
 	QuotaCreditBytes  int64
 	QuotaCreditInodes int64
+
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+	OperationCount       uint64
+	EntryCount           uint64
 }
 
 func (g PerasAuthorityGrant) Valid() bool {
@@ -56,6 +77,17 @@ func (g PerasAuthorityGrant) Valid() bool {
 		g.HolderID != "" &&
 		g.Scope.Valid() &&
 		g.ExpiresUnixNano > 0
+}
+
+func (s PerasAuthoritySeal) Valid() bool {
+	var zero [32]byte
+	return s.GrantID != "" &&
+		s.EpochID != 0 &&
+		s.HolderID != "" &&
+		s.Scope.Valid() &&
+		s.SegmentRoot != zero &&
+		s.SegmentPayloadDigest != zero &&
+		s.SealedUnixNano > 0
 }
 
 func (g PerasAuthorityGrant) ActiveAt(nowUnixNano int64) bool {
@@ -91,6 +123,11 @@ func (g PerasAuthorityGrant) Overlaps(other PerasAuthorityGrant) bool {
 func ClonePerasAuthorityGrant(grant PerasAuthorityGrant) PerasAuthorityGrant {
 	grant.Scope = ClonePerasAuthorityScope(grant.Scope)
 	return grant
+}
+
+func ClonePerasAuthoritySeal(seal PerasAuthoritySeal) PerasAuthoritySeal {
+	seal.Scope = ClonePerasAuthorityScope(seal.Scope)
+	return seal
 }
 
 func ClonePerasAuthorityScope(scope PerasAuthorityScope) PerasAuthorityScope {

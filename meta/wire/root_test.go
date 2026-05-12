@@ -69,6 +69,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
 	}
 	perasGrant := testWirePerasAuthorityGrant()
+	perasSeal := testWirePerasAuthoritySeal(perasGrant)
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
 		ClusterEpoch:        7,
@@ -81,6 +82,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
 		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
 		PerasAuthorityEpoch: perasGrant.EpochID,
+		PerasAuthoritySeals: []rootproto.PerasAuthoritySeal{perasSeal},
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -96,6 +98,8 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
 	require.Nil(t, RootPerasAuthorityGrantToProto(rootproto.PerasAuthorityGrant{}))
 	require.Equal(t, perasGrant, RootPerasAuthorityGrantFromProto(RootPerasAuthorityGrantToProto(perasGrant)))
+	require.Nil(t, RootPerasAuthoritySealToProto(rootproto.PerasAuthoritySeal{}))
+	require.Equal(t, perasSeal, RootPerasAuthoritySealFromProto(RootPerasAuthoritySealToProto(perasSeal)))
 
 	protocolState := rootstate.EunomiaState{
 		ActiveGrants:      state.ActiveGrants,
@@ -118,15 +122,19 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
 
 	perasCmd := rootproto.PerasAuthorityCommand{
-		Kind:              rootproto.PerasAuthorityActAcquire,
-		HolderID:          perasGrant.HolderID,
-		GrantID:           perasGrant.GrantID,
-		Scope:             perasGrant.Scope,
-		ExpiresUnixNano:   perasGrant.ExpiresUnixNano,
-		NowUnixNano:       321,
-		PredecessorDigest: [32]byte{1, 2, 3},
-		QuotaCreditBytes:  4096,
-		QuotaCreditInodes: 128,
+		Kind:                 rootproto.PerasAuthorityActAcquire,
+		HolderID:             perasGrant.HolderID,
+		GrantID:              perasGrant.GrantID,
+		Scope:                perasGrant.Scope,
+		ExpiresUnixNano:      perasGrant.ExpiresUnixNano,
+		NowUnixNano:          321,
+		PredecessorDigest:    [32]byte{1, 2, 3},
+		QuotaCreditBytes:     4096,
+		QuotaCreditInodes:    128,
+		SegmentRoot:          perasSeal.SegmentRoot,
+		SegmentPayloadDigest: perasSeal.SegmentPayloadDigest,
+		OperationCount:       perasSeal.OperationCount,
+		EntryCount:           perasSeal.EntryCount,
 	}
 	require.Equal(t, perasCmd, RootPerasAuthorityCommandFromProto(RootPerasAuthorityCommandToProto(perasCmd)))
 	require.Equal(t, rootproto.PerasAuthorityCommand{}, RootPerasAuthorityCommandFromProto(nil))
@@ -314,6 +322,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.GrantSealed(retirement),
 		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
 		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
+		rootevent.PerasAuthoritySealed(testWirePerasAuthoritySeal(testWirePerasAuthorityGrant())),
 		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
 		rootevent.SnapshotEpochPublished("vol", 1, 42, 99),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
@@ -379,6 +388,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindGrantRetired,
 		rootevent.KindGrantInherited,
 		rootevent.KindPerasAuthorityGranted,
+		rootevent.KindPerasAuthoritySealed,
 		rootevent.KindPerasAuthorityRetired,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
@@ -419,6 +429,24 @@ func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
 		PredecessorDigest: predecessor,
 		QuotaCreditBytes:  4096,
 		QuotaCreditInodes: 8,
+	}
+}
+
+func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.PerasAuthoritySeal {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = 9
+	digest[0] = 8
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              grant.GrantID,
+		EpochID:              grant.EpochID,
+		HolderID:             grant.HolderID,
+		Scope:                grant.Scope,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		OperationCount:       10,
+		EntryCount:           20,
+		SealedUnixNano:       30,
 	}
 }
 

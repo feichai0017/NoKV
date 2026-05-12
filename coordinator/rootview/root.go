@@ -487,11 +487,13 @@ func (s *RootStore) mergePerasAuthorityState(state rootstate.State) {
 	incoming := Snapshot{
 		ActivePerasGrants:   rootstate.CloneState(state).ActivePerasGrants,
 		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
+		PerasAuthoritySeals: rootstate.CloneState(state).PerasAuthoritySeals,
 	}
 	s.mu.Lock()
 	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
 	s.snapshot.ActivePerasGrants = clonePerasAuthorityGrants(merged.ActivePerasGrants)
 	s.snapshot.PerasAuthorityEpoch = merged.PerasAuthorityEpoch
+	s.snapshot.PerasAuthoritySeals = clonePerasAuthoritySeals(merged.PerasAuthoritySeals)
 	s.mu.Unlock()
 }
 

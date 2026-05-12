@@ -100,6 +100,25 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	perasRetired := rootevent.PerasAuthorityRetired(perasGrant)
 	require.Equal(t, rootevent.KindPerasAuthorityRetired, perasRetired.Kind)
 	require.Equal(t, perasGrant.GrantID, perasRetired.PerasGrant.GrantID)
+
+	var root [32]byte
+	var digest [32]byte
+	root[0] = 1
+	digest[0] = 2
+	perasSeal := rootproto.PerasAuthoritySeal{
+		GrantID:              perasGrant.GrantID,
+		EpochID:              perasGrant.EpochID,
+		HolderID:             perasGrant.HolderID,
+		Scope:                perasGrant.Scope,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		SealedUnixNano:       10,
+	}
+	perasSealed := rootevent.PerasAuthoritySealed(perasSeal)
+	perasSealedClone := rootevent.CloneEvent(perasSealed)
+	perasSealed.PerasSeal.Scope.Buckets[0] = 10
+	require.Equal(t, rootevent.KindPerasAuthoritySealed, perasSealedClone.Kind)
+	require.Equal(t, []uint16{1}, perasSealedClone.PerasSeal.Scope.Buckets)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {

@@ -44,6 +44,44 @@ func TestReplicatedStoreApplyPerasAuthorityAcquireRetire(t *testing.T) {
 	require.Equal(t, uint64(1), state.PerasAuthorityEpoch)
 }
 
+func TestReplicatedStoreApplyPerasAuthoritySealPublishesFrontier(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	store := stores[leaderID]
+	cmd := testPerasAcquireCommand("holder-a", 1)
+
+	state, grant, err := store.ApplyPerasAuthority(context.Background(), cmd)
+	require.NoError(t, err)
+	require.Empty(t, state.PerasAuthoritySeals)
+
+	var root [32]byte
+	var digest [32]byte
+	root[0] = 9
+	digest[0] = 8
+	state, sealedGrant, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
+		Kind:                 rootproto.PerasAuthorityActSeal,
+		HolderID:             grant.HolderID,
+		GrantID:              grant.GrantID,
+		NowUnixNano:          200,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		OperationCount:       32,
+		EntryCount:           64,
+	})
+	require.NoError(t, err)
+	require.Equal(t, grant, sealedGrant)
+	require.Len(t, state.PerasAuthoritySeals, 1)
+	require.Equal(t, root, state.PerasAuthoritySeals[0].SegmentRoot)
+
+	expired := testPerasAcquireCommand("holder-b", 1)
+	expired.NowUnixNano = cmd.ExpiresUnixNano + 1
+	expired.ExpiresUnixNano = expired.NowUnixNano + 1_000
+	state, successor, err := store.ApplyPerasAuthority(context.Background(), expired)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), successor.EpochID)
+	require.Equal(t, root, successor.PredecessorDigest)
+	require.Equal(t, state.ActivePerasGrants[0].PredecessorDigest, successor.PredecessorDigest)
+}
+
 func TestReplicatedStoreApplyPerasAuthorityRejectsConflicts(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	store := stores[leaderID]

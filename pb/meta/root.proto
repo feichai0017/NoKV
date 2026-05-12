@@ -42,6 +42,7 @@ enum RootEventKind {
   ROOT_EVENT_KIND_GRANT_INHERITED = 31;
   ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED = 32;
   ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED = 33;
+  ROOT_EVENT_KIND_PERAS_AUTHORITY_SEALED = 34;
 }
 
 message RootCursor {
@@ -61,6 +62,7 @@ message RootState {
   uint64 retired_era_floor = 10;
   repeated RootPerasAuthorityGrant active_peras_grants = 11;
   uint64 peras_authority_epoch = 12;
+  repeated RootPerasAuthoritySeal peras_authority_seals = 13;
 }
 
 message RootCheckpoint {
@@ -259,10 +261,23 @@ message RootPerasAuthorityGrant {
   int64 quota_credit_inodes = 8;
 }
 
+message RootPerasAuthoritySeal {
+  string grant_id = 1;
+  uint64 epoch_id = 2;
+  string holder_id = 3;
+  RootPerasAuthorityScope scope = 4;
+  bytes segment_root = 5;
+  bytes segment_payload_digest = 6;
+  uint64 operation_count = 7;
+  uint64 entry_count = 8;
+  int64 sealed_unix_nano = 9;
+}
+
 enum RootPerasAuthorityAct {
   ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED = 0;
   ROOT_PERAS_AUTHORITY_ACT_ACQUIRE = 1;
   ROOT_PERAS_AUTHORITY_ACT_RETIRE = 2;
+  ROOT_PERAS_AUTHORITY_ACT_SEAL = 3;
 }
 
 message RootPerasAuthorityCommand {
@@ -275,6 +290,10 @@ message RootPerasAuthorityCommand {
   bytes predecessor_digest = 7;
   int64 quota_credit_bytes = 8;
   int64 quota_credit_inodes = 9;
+  bytes segment_root = 10;
+  bytes segment_payload_digest = 11;
+  uint64 operation_count = 12;
+  uint64 entry_count = 13;
 }
 
 enum RootPerasAuthorityApplyStatus {
@@ -282,6 +301,7 @@ enum RootPerasAuthorityApplyStatus {
   ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED = 1;
   ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD = 2;
   ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED = 3;
+  ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED = 4;
 }
 
 message RootGrantCertificate {
@@ -408,6 +428,7 @@ message RootEvent {
     RootSubtreeAuthority subtree_authority = 14;
     RootQuotaFence quota_fence = 15;
     RootPerasAuthorityGrant peras_authority_grant = 16;
+    RootPerasAuthoritySeal peras_authority_seal = 17;
   }
 }
 
