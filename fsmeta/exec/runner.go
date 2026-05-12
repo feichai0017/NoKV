@@ -806,6 +806,9 @@ func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.Semant
 		return nil
 	}
 	e.perasAdmission.eligibleTotal.Add(1)
+	if e.perasCommitter != nil {
+		return nil
+	}
 	e.perasAdmission.acquireTotal.Add(1)
 	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)
 	if err != nil {
