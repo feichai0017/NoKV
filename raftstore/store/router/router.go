@@ -9,6 +9,7 @@ package router
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -167,12 +168,43 @@ func (r *Router) SendTick(id uint64) error {
 // BroadcastTick invokes Tick on every registered peer. The first error is
 // returned to the caller.
 func (r *Router) BroadcastTick() error {
-	for _, p := range r.List() {
-		if err := p.Tick(); err != nil {
-			return err
-		}
+	peers := r.List()
+	if len(peers) == 0 {
+		return nil
 	}
-	return nil
+	workers := runtime.GOMAXPROCS(0)
+	if workers <= 1 || len(peers) == 1 {
+		for _, p := range peers {
+			if err := p.Tick(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if workers > len(peers) {
+		workers = len(peers)
+	}
+	work := make(chan *peer.Peer)
+	var wg sync.WaitGroup
+	var once sync.Once
+	var firstErr error
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range work {
+				if err := p.Tick(); err != nil {
+					once.Do(func() { firstErr = err })
+				}
+			}
+		}()
+	}
+	for _, p := range peers {
+		work <- p
+	}
+	close(work)
+	wg.Wait()
+	return firstErr
 }
 
 // BroadcastFlush forces processReady on all registered peers. This mirrors

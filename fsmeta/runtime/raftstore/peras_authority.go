@@ -118,10 +118,11 @@ func (m *PerasAuthorityManager) Acquire(ctx context.Context, scope compile.Autho
 
 func perasAuthorityAcquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	rootScope := perasauth.AuthorityScopeFromDelta(scope)
-	// Segment install is bucket-local. The grant is therefore bucket-wide, not
-	// mount-wide: parent/inode filters would make same-bucket closure segments
-	// churn grants, while a mount-wide grant makes every slow-path barrier drain
-	// unrelated metadata bursts.
+	// Segment install is bucket-local, but the holder-visible transition is
+	// authority-local and may span buckets before seal. Keep the rooted grant
+	// mount-wide for this holder epoch; region locality is enforced later by
+	// splitting the sealed segment into bucket-local install records.
+	rootScope.Buckets = nil
 	rootScope.Parents = nil
 	rootScope.Inodes = nil
 	return rootScope

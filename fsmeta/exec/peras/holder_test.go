@@ -41,6 +41,30 @@ func TestHolderBuildPendingReplayPlanUsesAdmissionOrder(t *testing.T) {
 	require.Equal(t, 1, holder.Pending())
 }
 
+func TestHolderBuildPendingReplayPlanLimitKeepsLaterOperationsPending(t *testing.T) {
+	holder := newTestHolder(t)
+	first := opID("client-a", 1)
+	second := opID("client-b", 1)
+	third := opID("client-c", 1)
+
+	_, err := holder.Submit(context.Background(), first, deltaWithValueWrites("a", "v1"))
+	require.NoError(t, err)
+	_, err = holder.Submit(context.Background(), second, deltaWithValueWrites("b", "v2"))
+	require.NoError(t, err)
+	_, err = holder.Submit(context.Background(), third, deltaWithValueWrites("c", "v3"))
+	require.NoError(t, err)
+
+	plan, _, err := holder.BuildPendingReplayPlanLimit(100, 2)
+	require.NoError(t, err)
+	require.Equal(t, []OperationID{first, second}, []OperationID{plan.Operations[0].OpID, plan.Operations[1].OpID})
+	require.Equal(t, ReplayVersionRange{First: 100, Count: 2}, plan.Versions)
+
+	require.NoError(t, holder.MarkReplayPlanApplied(plan))
+	require.Equal(t, 1, holder.Pending())
+	remaining := holder.PendingIDs()
+	require.Equal(t, []OperationID{third}, remaining)
+}
+
 func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing.T) {
 	holder := newTestHolder(t)
 	firstScope := compile.AuthorityScope{
@@ -121,7 +145,7 @@ func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
-func TestHolderRejectsCrossBucketDelta(t *testing.T) {
+func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 	holder := newTestHolder(t)
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftKey := fsmetaInodeKeyForBucket(t, mount, 1)
@@ -136,8 +160,8 @@ func TestHolderRejectsCrossBucketDelta(t *testing.T) {
 	}
 
 	_, err := holder.Submit(context.Background(), opID("client-a", 1), delta)
-	require.ErrorIs(t, err, ErrIneligibleOperation)
-	require.Zero(t, holder.Pending())
+	require.NoError(t, err)
+	require.Equal(t, 1, holder.Pending())
 }
 
 func BenchmarkHolderSubmitDisjoint(b *testing.B) {

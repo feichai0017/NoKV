@@ -1184,7 +1184,7 @@ func TestExecutorCreatePerasBufferedVisibleCommitServesReadDirPlusOverlay(t *tes
 	}}, pairs)
 }
 
-func TestExecutorCreateStopsWhenPerasAuthorityHeldElsewhere(t *testing.T) {
+func TestExecutorCreateFallsBackWhenPerasAuthorityHeldElsewhere(t *testing.T) {
 	runner := newFakeRunner()
 	admitter := &fakePerasAdmitter{owned: false}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
@@ -1201,9 +1201,9 @@ func TestExecutorCreateStopsWhenPerasAuthorityHeldElsewhere(t *testing.T) {
 		Name:   "file",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
-	require.ErrorIs(t, err, errPerasAuthorityNotHeld)
+	require.NoError(t, err)
 	require.Equal(t, 1, admitter.calls)
-	require.Empty(t, runner.mutations)
+	require.NotEmpty(t, runner.mutations)
 
 	stats := executor.Stats()
 	requirePerasStatUint(t, stats, "eligible_total", 1)

@@ -805,26 +805,16 @@ func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.Semant
 		e.perasAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
-	if perasDeltaHasConcreteWrites(delta) {
-		singleBucket, err := fsperas.DeltaWritesSingleFSMetaBucket(delta)
-		if err != nil {
-			e.perasAdmission.errorTotal.Add(1)
-			return err
-		}
-		if !singleBucket {
-			return nil
-		}
-	}
 	e.perasAdmission.eligibleTotal.Add(1)
 	e.perasAdmission.acquireTotal.Add(1)
 	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)
 	if err != nil {
 		e.perasAdmission.errorTotal.Add(1)
-		return err
+		return nil
 	}
 	if !owned {
 		e.perasAdmission.heldTotal.Add(1)
-		return errPerasAuthorityNotHeld
+		return nil
 	}
 	e.perasAdmission.ownedTotal.Add(1)
 	return nil
@@ -846,22 +836,16 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, delta compile.Sema
 		e.perasVisible.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
-	singleBucket, err := fsperas.DeltaWritesSingleFSMetaBucket(delta)
-	if err != nil {
-		e.perasVisible.errorTotal.Add(1)
-		return true, err
-	}
-	if !singleBucket {
-		e.perasVisible.skipPlacementTotal.Add(1)
-		return false, nil
-	}
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
-	_, err = e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
+	_, err := e.perasCommitter.CommitPeras(ctx, id, delta, e.perasPredicatesHold)
 	e.perasVisible.latencyTotalNanosecond.Add(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
-		if errors.Is(err, fsperas.ErrAdmissionRejected) || errors.Is(err, fsperas.ErrIneligibleOperation) {
+		if errors.Is(err, fsperas.ErrAdmissionRejected) ||
+			errors.Is(err, fsperas.ErrIneligibleOperation) ||
+			errors.Is(err, errPerasAuthorityNotHeld) ||
+			nokverrors.KindOf(err) == nokverrors.KindNotLeader {
 			e.perasVisible.skipPredicateTotal.Add(1)
 			return false, nil
 		}
@@ -1025,11 +1009,8 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return fsmeta.SessionRecord{}, false, nil
-	}
-	inode, ok, err := e.readInode(ctx, mount, req.Inode, version)
+	view := e.newPerasReadView(ctx)
+	inode, ok, err := view.readInode(mount, req.Inode)
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
@@ -1045,7 +1026,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	now := nowTime.UnixNano()
-	if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], version); err != nil {
+	if existing, ok, err := view.readSession(plan.ReadKeys[1]); err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	} else if ok {
 		if sessionLive(existing, now) {
@@ -1055,7 +1036,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 		// outside this request's concrete write-set. Keep it on the slow path.
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	if owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[2], version); err != nil {
+	if owner, ok, err := view.readSession(plan.ReadKeys[2]); err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	} else if ok {
 		if sessionLive(owner, now) {
@@ -1086,24 +1067,21 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, del
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return fsmeta.SessionRecord{}, false, nil
-	}
+	view := e.newPerasReadView(ctx)
 	nowTime := e.clock()
 	expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
 	if !ok {
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	now := nowTime.UnixNano()
-	session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], version)
+	session, ok, err := view.readSession(plan.ReadKeys[0])
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
 	if !ok || !sessionLive(session, now) || session.Inode != req.Inode {
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], version)
+	owner, ok, err := view.readSession(plan.ReadKeys[1])
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
@@ -1133,11 +1111,8 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return false, nil
-	}
-	session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], version)
+	view := e.newPerasReadView(ctx)
+	session, ok, err := view.readSession(plan.ReadKeys[0])
 	if err != nil {
 		return false, err
 	}
@@ -1149,7 +1124,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	if err != nil {
 		return false, err
 	}
-	if owner, ok, err := e.readSessionByKey(ctx, ownerKey, version); err != nil {
+	if owner, ok, err := view.readSession(ownerKey); err != nil {
 		return false, err
 	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 		effects = append(effects, perasDeleteEffect(ownerKey))
@@ -1162,18 +1137,15 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.InodeRecord{}, false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return fsmeta.InodeRecord{}, false, nil
-	}
-	dentry, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	view := e.newPerasReadView(ctx)
+	dentry, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
 	if dentry.Inode != req.Inode {
 		return fsmeta.InodeRecord{}, false, fsmeta.ErrInvalidRequest
 	}
-	inode, ok, err := e.readInode(ctx, mount, req.Inode, version)
+	inode, ok, err := view.readInode(mount, req.Inode)
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
@@ -1235,21 +1207,18 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return false, nil
-	}
-	record, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	view := e.newPerasReadView(ctx)
+	record, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
 		return false, err
 	}
-	if _, err := e.readDentry(ctx, plan.ReadKeys[1], version); err == nil {
+	if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
 		return false, fsmeta.ErrExists
 	} else if !errors.Is(err, fsmeta.ErrNotFound) {
 		return false, err
 	}
 	if move.fromParent != move.toParent {
-		if inode, ok, err := e.readInode(ctx, move.identity, record.Inode, version); err != nil {
+		if inode, ok, err := view.readInode(move.identity, record.Inode); err != nil {
 			return false, err
 		} else if ok {
 			quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{
@@ -1281,23 +1250,20 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.Semant
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return false, nil
-	}
-	record, err := e.readDentry(ctx, plan.ReadKeys[0], version)
+	view := e.newPerasReadView(ctx)
+	record, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
 		return false, err
 	}
 	if record.Type == fsmeta.InodeTypeDirectory {
 		return false, fsmeta.ErrInvalidRequest
 	}
-	if _, err := e.readDentry(ctx, plan.ReadKeys[1], version); err == nil {
+	if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
 		return false, fsmeta.ErrExists
 	} else if !errors.Is(err, fsmeta.ErrNotFound) {
 		return false, err
 	}
-	inode, ok, err := e.readInode(ctx, mount, record.Inode, version)
+	inode, ok, err := view.readInode(mount, record.Inode)
 	if err != nil {
 		return false, err
 	}
@@ -1352,15 +1318,12 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return false, nil
-	}
-	record, err := e.readDentry(ctx, plan.PrimaryKey, version)
+	view := e.newPerasReadView(ctx)
+	record, err := view.readDentry(plan.PrimaryKey)
 	if err != nil {
 		return false, err
 	}
-	inode, ok, err := e.readInode(ctx, mount, record.Inode, version)
+	inode, ok, err := view.readInode(mount, record.Inode)
 	if err != nil {
 		return false, err
 	}
@@ -1499,6 +1462,80 @@ func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint6
 		return value, true, nil
 	}
 	return e.runner.Get(ctx, key, version)
+}
+
+type perasReadView struct {
+	executor    *Executor
+	ctx         context.Context
+	version     uint64
+	haveVersion bool
+}
+
+func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &perasReadView{executor: e, ctx: ctx}
+}
+
+func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
+	if v == nil || v.executor == nil {
+		return nil, false, fsmeta.ErrInvalidRequest
+	}
+	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
+		if deleted {
+			return nil, false, nil
+		}
+		return value, true, nil
+	}
+	if !v.haveVersion {
+		version, err := v.executor.reserveReadVersion(v.ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		v.version = version
+		v.haveVersion = true
+	}
+	return v.executor.runner.Get(v.ctx, key, v.version)
+}
+
+func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
+	value, ok, err := v.get(key)
+	if err != nil {
+		return fsmeta.DentryRecord{}, err
+	}
+	if !ok {
+		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+	}
+	return fsmeta.DecodeDentryValue(value)
+}
+
+func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.InodeID) (fsmeta.InodeRecord, bool, error) {
+	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	value, ok, err := v.get(key)
+	if err != nil || !ok {
+		return fsmeta.InodeRecord{}, ok, err
+	}
+	inode, err := fsmeta.DecodeInodeValue(value)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	return inode, true, nil
+}
+
+func (v *perasReadView) readSession(key []byte) (fsmeta.SessionRecord, bool, error) {
+	value, ok, err := v.get(key)
+	if err != nil || !ok {
+		return fsmeta.SessionRecord{}, ok, err
+	}
+	session, err := fsmeta.DecodeSessionValue(value)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	return session, true, nil
 }
 
 func (e *Executor) mergePerasOverlayValues(keys [][]byte, values map[string][]byte) {

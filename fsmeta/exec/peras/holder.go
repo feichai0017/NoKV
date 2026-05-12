@@ -61,13 +61,6 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		return VisibleAck{}, ErrIneligibleOperation
 	}
-	singleBucket, err := DeltaWritesSingleFSMetaBucket(delta)
-	if err != nil {
-		return VisibleAck{}, err
-	}
-	if !singleBucket {
-		return VisibleAck{}, ErrIneligibleOperation
-	}
 	if _, err := h.detector.Admit(id, delta); err != nil {
 		return VisibleAck{}, err
 	}
@@ -100,10 +93,14 @@ func (h *Holder) MarkAppliedIDs(ids ...OperationID) {
 }
 
 func (h *Holder) BuildPendingReplayPlan(firstVersion uint64) (ReplayPlan, compile.AuthorityScope, error) {
+	return h.BuildPendingReplayPlanLimit(firstVersion, 0)
+}
+
+func (h *Holder) BuildPendingReplayPlanLimit(firstVersion uint64, maxOps int) (ReplayPlan, compile.AuthorityScope, error) {
 	if h == nil || h.detector == nil {
 		return ReplayPlan{}, compile.AuthorityScope{}, ErrHolderConfigInvalid
 	}
-	plan, scope, ok, err := h.buildPendingReplayPlan(firstVersion, nil)
+	plan, scope, ok, err := h.buildPendingReplayPlan(firstVersion, nil, maxOps)
 	if err != nil {
 		return ReplayPlan{}, compile.AuthorityScope{}, err
 	}
@@ -119,13 +116,16 @@ func (h *Holder) BuildPendingReplayPlanForScope(firstVersion uint64, target comp
 	}
 	return h.buildPendingReplayPlan(firstVersion, func(scope compile.AuthorityScope) bool {
 		return authorityScopesOverlap(scope, target)
-	})
+	}, 0)
 }
 
-func (h *Holder) buildPendingReplayPlan(firstVersion uint64, include func(compile.AuthorityScope) bool) (ReplayPlan, compile.AuthorityScope, bool, error) {
+func (h *Holder) buildPendingReplayPlan(firstVersion uint64, include func(compile.AuthorityScope) bool, maxOps int) (ReplayPlan, compile.AuthorityScope, bool, error) {
 	ids := h.detector.IDs()
 	if len(ids) == 0 {
 		return ReplayPlan{}, compile.AuthorityScope{}, false, nil
+	}
+	if maxOps > 0 && len(ids) > maxOps {
+		ids = ids[:maxOps]
 	}
 	plan := ReplayPlan{
 		EpochID:    h.epochID,

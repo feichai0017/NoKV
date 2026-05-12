@@ -149,9 +149,9 @@ func perasSegmentKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {
 	if err != nil {
 		return nil
 	}
-	entries := segment.Entries()
-	out := make([][]byte, 0, len(entries))
-	for _, entry := range entries {
+	dentries := segment.Dentries
+	out := make([][]byte, 0, len(dentries))
+	for _, entry := range dentries {
 		out = append(out, kv.SafeCopy(nil, entry.Key))
 	}
 	return out
