@@ -24,6 +24,34 @@ func TestHolderSubmitReturnsVisibleAckWithoutWitnessIO(t *testing.T) {
 	require.Empty(t, witness.snapshot().Segments)
 }
 
+func TestHolderSubmitReturnsPendingAckForSameOperationID(t *testing.T) {
+	holder := newTestHolder(t)
+	id := opID("client-a", 1)
+	delta := deltaWithValueWrites("a", "v1")
+
+	first, err := holder.Submit(context.Background(), id, delta)
+	require.NoError(t, err)
+	second, err := holder.Submit(context.Background(), id, delta)
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
+	require.Equal(t, 1, holder.Pending())
+	plan, _, err := holder.BuildPendingReplayPlan(100)
+	require.NoError(t, err)
+	require.Equal(t, []OperationID{id}, []OperationID{plan.Operations[0].OpID})
+}
+
+func TestHolderSubmitRejectsSameOperationIDDifferentEffects(t *testing.T) {
+	holder := newTestHolder(t)
+	id := opID("client-a", 1)
+
+	_, err := holder.Submit(context.Background(), id, deltaWithValueWrites("a", "v1"))
+	require.NoError(t, err)
+	_, err = holder.Submit(context.Background(), id, deltaWithValueWrites("a", "v2"))
+	require.ErrorIs(t, err, ErrDuplicateOperation)
+	require.Equal(t, 1, holder.Pending())
+}
+
 func TestHolderBuildPendingReplayPlanUsesAdmissionOrder(t *testing.T) {
 	holder := newTestHolder(t)
 	first := opID("client-a", 1)

@@ -1,6 +1,7 @@
 package peras
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -24,8 +25,9 @@ type Holder struct {
 	holderID string
 	detector *ConflictDetector
 
-	mu      sync.Mutex
-	pending map[OperationID]holderPendingOperation
+	submitMu sync.Mutex
+	mu       sync.Mutex
+	pending  map[OperationID]holderPendingOperation
 }
 
 func NewHolder(cfg HolderConfig) (*Holder, error) {
@@ -61,12 +63,21 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
 		return VisibleAck{}, ErrIneligibleOperation
 	}
-	if _, err := h.detector.Admit(id, delta); err != nil {
-		return VisibleAck{}, err
-	}
 	op, err := replayOperationFromDelta(id, delta)
 	if err != nil {
-		h.detector.Remove(id)
+		return VisibleAck{}, err
+	}
+	h.submitMu.Lock()
+	defer h.submitMu.Unlock()
+	if ack, ok, err := h.pendingAckForOperation(id, op); ok || err != nil {
+		return ack, err
+	}
+	if _, err := h.detector.Admit(id, delta); err != nil {
+		if errors.Is(err, ErrDuplicateOperation) {
+			if ack, ok, pendingErr := h.pendingAckForOperation(id, op); ok || pendingErr != nil {
+				return ack, pendingErr
+			}
+		}
 		return VisibleAck{}, err
 	}
 	h.mu.Lock()
@@ -76,6 +87,33 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, delta compile.Seman
 	}
 	h.mu.Unlock()
 	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
+}
+
+func (h *Holder) PendingAck(id OperationID, delta compile.SemanticDelta) (VisibleAck, bool, error) {
+	if h == nil || h.detector == nil {
+		return VisibleAck{}, false, ErrHolderConfigInvalid
+	}
+	op, err := replayOperationFromDelta(id, delta)
+	if err != nil {
+		return VisibleAck{}, false, err
+	}
+	return h.pendingAckForOperation(id, op)
+}
+
+func (h *Holder) pendingAckForOperation(id OperationID, op ReplayOperation) (VisibleAck, bool, error) {
+	if !id.Valid() {
+		return VisibleAck{}, false, ErrInvalidOperationID
+	}
+	h.mu.Lock()
+	pending, ok := h.pending[id]
+	h.mu.Unlock()
+	if !ok {
+		return VisibleAck{}, false, nil
+	}
+	if !replayOperationsEqual(pending.op, op) {
+		return VisibleAck{}, false, ErrDuplicateOperation
+	}
+	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, true, nil
 }
 
 func (h *Holder) MarkAppliedIDs(ids ...OperationID) {
@@ -289,4 +327,18 @@ func unionInodes(left, right []fsmeta.InodeID) []fsmeta.InodeID {
 		}
 	}
 	return out
+}
+
+func replayOperationsEqual(left, right ReplayOperation) bool {
+	if left.OpID != right.OpID || left.Kind != right.Kind || len(left.Mutations) != len(right.Mutations) {
+		return false
+	}
+	for i := range left.Mutations {
+		l := left.Mutations[i]
+		r := right.Mutations[i]
+		if l.Delete != r.Delete || !bytes.Equal(l.Key, r.Key) || !bytes.Equal(l.Value, r.Value) {
+			return false
+		}
+	}
+	return true
 }

@@ -304,6 +304,12 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 		c.recordError(err)
 		return fsperas.VisibleAck{}, err
 	}
+	if ack, ok, err := holder.PendingAck(id, delta); ok || err != nil {
+		if err != nil {
+			c.recordError(err)
+		}
+		return ack, err
+	}
 	unlockAdmission := c.latches.Lock(delta)
 	defer unlockAdmission()
 	if err := fsperas.Admit(ctx, delta, admission); err != nil {
