@@ -268,7 +268,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		perasCommitter, err = NewRemotePerasCommitter(RemotePerasCommitterConfig{
 			Authority:                  perasAuthority,
 			Witnesses:                  perasWitnesses.witnesses,
-			Installer:                  newRunnerPerasSegmentInstaller(runner),
+			Installer:                  newRunnerPerasSegmentInstaller(runner, router),
 			Quorum:                     opts.PerasWitnessQuorum,
 			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,

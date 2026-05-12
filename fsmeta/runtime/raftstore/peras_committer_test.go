@@ -14,6 +14,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -744,13 +745,70 @@ func TestRunnerPerasSegmentInstallerRetriesTimestampStaleEpoch(t *testing.T) {
 	runner, err := NewRunner(kv, tso)
 	require.NoError(t, err)
 
-	installer := newRunnerPerasSegmentInstaller(runner)
+	installer := newRunnerPerasSegmentInstaller(runner, nil)
 	require.NoError(t, installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, true))
 
 	require.Equal(t, 3, tso.calls)
 	require.NotNil(t, kv.req)
 	require.Equal(t, uint64(77), kv.req.GetInstallVersion())
 	require.True(t, kv.req.GetMaterializeMvcc())
+}
+
+func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("dentry-value")},
+				{Key: inodeKey, Value: []byte("inode-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	stats := segment.Stats()
+	kv := &fakeRunnerPerasInstallKV{resp: &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
+		OperationCount: stats.OperationCount,
+		EntryCount:     stats.EntryCount,
+		AppliedEntries: 1,
+		RegionId:       7,
+		Term:           3,
+		Index:          99,
+		CommitVersion:  1234,
+	}}
+	tso := &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}}
+	runner, err := NewRunner(kv, tso)
+	require.NoError(t, err)
+	router := fsmetawatch.NewRouter()
+	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+		KeyPrefix:          dentryKey,
+		BackPressureWindow: 4,
+	})
+	require.NoError(t, err)
+	defer sub.Close()
+
+	installer := newRunnerPerasSegmentInstaller(runner, router)
+	require.NoError(t, installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, false))
+
+	select {
+	case evt := <-sub.Events():
+		require.Equal(t, dentryKey, evt.Key)
+		require.Equal(t, fsmeta.WatchCursor{RegionID: 7, Term: 3, Index: 99}, evt.Cursor)
+		require.Equal(t, uint64(1234), evt.CommitVersion)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for installed segment watch event")
+	}
 }
 
 func BenchmarkRemotePerasCommitterCreate(b *testing.B) {

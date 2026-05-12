@@ -102,6 +102,36 @@ func EventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *
 	return out
 }
 
+// AttachCommandCursor copies the raft apply cursor into response payloads that
+// need to publish from the submitter process after apply completes.
+func AttachCommandCursor(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *raftcmdpb.RaftCmdResponse) {
+	if req == nil || resp == nil {
+		return
+	}
+	regionID := req.GetHeader().GetRegionId()
+	responses := resp.GetResponses()
+	for i, request := range req.GetRequests() {
+		if request == nil || request.GetCmdType() != raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+			continue
+		}
+		install := request.GetPerasInstallSegment()
+		if install == nil {
+			continue
+		}
+		if i >= len(responses) || responses[i] == nil {
+			continue
+		}
+		peras := responses[i].GetPerasInstallSegment()
+		if peras == nil || peras.GetError() != nil {
+			continue
+		}
+		peras.RegionId = regionID
+		peras.Term = entry.Term
+		peras.Index = entry.Index
+		peras.CommitVersion = install.GetInstallVersion()
+	}
+}
+
 func cloneKeys(keys [][]byte) [][]byte {
 	if len(keys) == 0 {
 		return nil

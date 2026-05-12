@@ -907,7 +907,8 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 					}
 					continue
 				}
-				if perasNotExistsDerivedFromDelta(delta, predicate, index) {
+				if e.perasNotExistsKnown(delta.Authority, predicate.Key, index) ||
+					perasNotExistsDerivedFromDelta(delta, predicate, index) {
 					continue
 				}
 			}
@@ -975,6 +976,24 @@ func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compi
 	}, delta.Authority.Parents[0])
 }
 
+func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte, index fsperas.PredicateIndex) bool {
+	if index == nil || len(key) == 0 || scope.Mount == "" || scope.MountKeyID == 0 {
+		return false
+	}
+	present, known := index.KeyState(key)
+	if known {
+		return !present
+	}
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok || parts.Kind != fsmeta.KeyKindDentry || parts.MountKeyID != scope.MountKeyID {
+		return false
+	}
+	return index.DirectoryEmpty(fsmeta.MountIdentity{
+		MountID:    scope.Mount,
+		MountKeyID: scope.MountKeyID,
+	}, parts.Parent)
+}
+
 func isPerasAdmissionTerminalError(err error) bool {
 	return errors.Is(err, fsmeta.ErrExists) ||
 		errors.Is(err, fsmeta.ErrNotFound) ||
@@ -1033,7 +1052,8 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 			return fsmeta.SessionRecord{}, false, nil
 		}
 		// Stale cleanup is value-sensitive and may touch an old session-id key
-		// outside this request's concrete write-set. Keep it on the slow path.
+		// outside this request's concrete write-set. Keep it on the transaction
+		// runner.
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	if owner, ok, err := view.readSession(plan.ReadKeys[2]); err != nil {
@@ -1212,10 +1232,12 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 	if err != nil {
 		return false, err
 	}
-	if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
-		return false, fsmeta.ErrExists
-	} else if !errors.Is(err, fsmeta.ErrNotFound) {
-		return false, err
+	if !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.perasPredicateIndex()) {
+		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
+			return false, fsmeta.ErrExists
+		} else if !errors.Is(err, fsmeta.ErrNotFound) {
+			return false, err
+		}
 	}
 	if move.fromParent != move.toParent {
 		if inode, ok, err := view.readInode(move.identity, record.Inode); err != nil {
@@ -1258,10 +1280,12 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.Semant
 	if record.Type == fsmeta.InodeTypeDirectory {
 		return false, fsmeta.ErrInvalidRequest
 	}
-	if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
-		return false, fsmeta.ErrExists
-	} else if !errors.Is(err, fsmeta.ErrNotFound) {
-		return false, err
+	if !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.perasPredicateIndex()) {
+		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
+			return false, fsmeta.ErrExists
+		} else if !errors.Is(err, fsmeta.ErrNotFound) {
+			return false, err
+		}
 	}
 	inode, ok, err := view.readInode(mount, record.Inode)
 	if err != nil {

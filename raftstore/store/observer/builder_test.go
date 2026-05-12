@@ -181,3 +181,26 @@ func TestEventsFromCommandExtractsPerasSegmentInstallKeys(t *testing.T) {
 		Keys:          [][]byte{dentryKey},
 	}, events[0])
 }
+
+func TestAttachCommandCursorAnnotatesPerasInstallResponse(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: 9},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				InstallVersion: 55,
+			}},
+		}},
+	}
+	perasResp := &kvrpcpb.PerasInstallSegmentResponse{}
+	resp := &raftcmdpb.RaftCmdResponse{Responses: []*raftcmdpb.Response{{
+		Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: perasResp},
+	}}}
+
+	AttachCommandCursor(myraft.Entry{Term: 4, Index: 12}, req, resp)
+
+	require.Equal(t, uint64(9), perasResp.GetRegionId())
+	require.Equal(t, uint64(4), perasResp.GetTerm())
+	require.Equal(t, uint64(12), perasResp.GetIndex())
+	require.Equal(t, uint64(55), perasResp.GetCommitVersion())
+}
