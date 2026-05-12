@@ -94,6 +94,46 @@ func TestRemotePerasCommitterFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRemotePerasCommitterScanPerasOverlayMergesViewsByLimit(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	committer.overlayMu.Lock()
+	committer.sealed = map[string]runtimePerasOverlayEntry{
+		"k/a": {key: []byte("k/a"), value: []byte("sealed-a")},
+		"k/b": {key: []byte("k/b"), value: []byte("sealed-b")},
+		"k/d": {key: []byte("k/d"), value: []byte("sealed-d")},
+	}
+	committer.overlay = map[string]runtimePerasOverlayEntry{
+		"k/b": {key: []byte("k/b"), delete: true},
+		"k/c": {key: []byte("k/c"), value: []byte("overlay-c")},
+	}
+	committer.sealedKeysDirty = true
+	committer.overlayKeysDirty = true
+	committer.overlayMu.Unlock()
+
+	scan := committer.ScanPerasOverlay([]byte("k/"), 4)
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: []byte("k/a"), Value: []byte("sealed-a")},
+		{Key: []byte("k/b"), Delete: true},
+		{Key: []byte("k/c"), Value: []byte("overlay-c")},
+		{Key: []byte("k/d"), Value: []byte("sealed-d")},
+	}, scan)
+
+	scan = committer.ScanPerasOverlay([]byte("k/b"), 2)
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: []byte("k/b"), Delete: true},
+		{Key: []byte("k/c"), Value: []byte("overlay-c")},
+	}, scan)
+}
+
 func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 	provider := &publishingRuntimePerasGrantProvider{
 		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
@@ -1008,6 +1048,33 @@ func BenchmarkRemotePerasCommitterCreateParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkRemotePerasCommitterScanPerasOverlay(b *testing.B) {
+	committer := &RemotePerasCommitter{
+		overlay: make(map[string]runtimePerasOverlayEntry, 1024),
+		sealed:  make(map[string]runtimePerasOverlayEntry, 100_000),
+	}
+	for i := 0; i < 100_000; i++ {
+		key := []byte(fmt.Sprintf("dentry/%08d", i))
+		committer.sealed[string(key)] = runtimePerasOverlayEntry{key: key, value: []byte("sealed")}
+	}
+	for i := 0; i < 1024; i++ {
+		key := []byte(fmt.Sprintf("dentry/%08d", i*16))
+		committer.overlay[string(key)] = runtimePerasOverlayEntry{key: key, value: []byte("overlay")}
+	}
+	committer.sealedKeysDirty = true
+	committer.overlayKeysDirty = true
+	require.Len(b, committer.ScanPerasOverlay([]byte("dentry/00000000"), 128), 128)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		out := committer.ScanPerasOverlay([]byte("dentry/00000000"), 128)
+		if len(out) != 128 {
+			b.Fatalf("scan returned %d rows", len(out))
+		}
+	}
 }
 
 func commitRuntimePeras(ctx context.Context, committer *RemotePerasCommitter, seq uint64, dentryKey, inodeKey []byte) error {
