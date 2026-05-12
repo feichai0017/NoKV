@@ -1599,31 +1599,40 @@ func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) [
 	if len(overlayKVs) == 0 {
 		return kvs
 	}
-	merged := make(map[string]KV, len(kvs)+len(overlayKVs))
-	for _, kv := range kvs {
-		merged[string(kv.Key)] = KV{Key: cloneBytes(kv.Key), Value: cloneBytes(kv.Value)}
-	}
-	for _, kv := range overlayKVs {
-		key := string(kv.Key)
-		if kv.Delete {
-			delete(merged, key)
-			continue
+	out := make([]KV, 0, int(limit))
+	base, peras := 0, 0
+	for len(out) < int(limit) && (base < len(kvs) || peras < len(overlayKVs)) {
+		switch {
+		case base >= len(kvs):
+			out = appendOverlayScanKV(out, overlayKVs[peras])
+			peras++
+		case peras >= len(overlayKVs):
+			out = append(out, kvs[base])
+			base++
+		default:
+			cmp := bytes.Compare(kvs[base].Key, overlayKVs[peras].Key)
+			switch {
+			case cmp < 0:
+				out = append(out, kvs[base])
+				base++
+			case cmp > 0:
+				out = appendOverlayScanKV(out, overlayKVs[peras])
+				peras++
+			default:
+				out = appendOverlayScanKV(out, overlayKVs[peras])
+				base++
+				peras++
+			}
 		}
-		merged[key] = KV{Key: cloneBytes(kv.Key), Value: cloneBytes(kv.Value)}
-	}
-	keys := make([]string, 0, len(merged))
-	for key := range merged {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	if len(keys) > int(limit) {
-		keys = keys[:limit]
-	}
-	out := make([]KV, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, merged[key])
 	}
 	return out
+}
+
+func appendOverlayScanKV(out []KV, kv fsperas.OverlayKV) []KV {
+	if kv.Delete {
+		return out
+	}
+	return append(out, KV{Key: kv.Key, Value: kv.Value})
 }
 
 func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.OperationID {

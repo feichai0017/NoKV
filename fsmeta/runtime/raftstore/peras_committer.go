@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1186,26 +1187,7 @@ func (c *RemotePerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fs
 	}
 	c.overlayMu.Lock()
 	c.refreshPerasViewKeysLocked()
-	merged := make(map[string]runtimePerasOverlayEntry, int(limit)*2)
-	c.collectPerasViewSuffixLocked(merged, c.sealed, c.sealedKeys, start, limit)
-	c.collectPerasViewSuffixLocked(merged, c.overlay, c.overlayKeys, start, limit)
-	keys := make([]string, 0, len(merged))
-	for key := range merged {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	if len(keys) > int(limit) {
-		keys = keys[:limit]
-	}
-	out := make([]fsperas.OverlayKV, 0, len(keys))
-	for _, key := range keys {
-		entry := merged[key]
-		out = append(out, fsperas.OverlayKV{
-			Key:    runtimeCloneBytes(entry.key),
-			Value:  runtimeCloneBytes(entry.value),
-			Delete: entry.delete,
-		})
-	}
+	out := c.mergePerasViewSuffixLocked(start, int(limit))
 	c.overlayMu.Unlock()
 	return out
 }
@@ -1230,20 +1212,54 @@ func sortedRuntimePerasViewKeys(view map[string]runtimePerasOverlayEntry, reuse 
 	return reuse
 }
 
-func (c *RemotePerasCommitter) collectPerasViewSuffixLocked(dst map[string]runtimePerasOverlayEntry, view map[string]runtimePerasOverlayEntry, keys []string, start []byte, _ uint32) {
-	if len(keys) == 0 {
-		return
+func (c *RemotePerasCommitter) mergePerasViewSuffixLocked(start []byte, limit int) []fsperas.OverlayKV {
+	if limit <= 0 {
+		return nil
 	}
 	startKey := string(start)
-	i := sort.SearchStrings(keys, startKey)
-	for ; i < len(keys); i++ {
-		key := keys[i]
-		entry, ok := view[key]
-		if !ok {
-			continue
+	sealed := sort.SearchStrings(c.sealedKeys, startKey)
+	overlay := sort.SearchStrings(c.overlayKeys, startKey)
+	out := make([]fsperas.OverlayKV, 0, limit)
+	for len(out) < limit && (sealed < len(c.sealedKeys) || overlay < len(c.overlayKeys)) {
+		switch {
+		case sealed >= len(c.sealedKeys):
+			entry := c.overlay[c.overlayKeys[overlay]]
+			overlay++
+			out = appendPerasViewKV(out, entry)
+		case overlay >= len(c.overlayKeys):
+			entry := c.sealed[c.sealedKeys[sealed]]
+			sealed++
+			out = appendPerasViewKV(out, entry)
+		default:
+			sealedKey := c.sealedKeys[sealed]
+			overlayKey := c.overlayKeys[overlay]
+			cmp := strings.Compare(sealedKey, overlayKey)
+			switch {
+			case cmp < 0:
+				entry := c.sealed[sealedKey]
+				sealed++
+				out = appendPerasViewKV(out, entry)
+			case cmp > 0:
+				entry := c.overlay[overlayKey]
+				overlay++
+				out = appendPerasViewKV(out, entry)
+			default:
+				entry := c.overlay[overlayKey]
+				sealed++
+				overlay++
+				out = appendPerasViewKV(out, entry)
+			}
 		}
-		dst[key] = entry
 	}
+	return out
+}
+
+func appendPerasViewKV(out []fsperas.OverlayKV, entry runtimePerasOverlayEntry) []fsperas.OverlayKV {
+	return append(out, fsperas.OverlayKV{
+		Key:    runtimeCloneBytes(entry.key),
+		Value:  runtimeCloneBytes(entry.value),
+		Delete: entry.delete,
+	})
 }
 
 func (c *RemotePerasCommitter) Stats() map[string]any {

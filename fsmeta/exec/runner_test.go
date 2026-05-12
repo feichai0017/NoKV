@@ -206,6 +206,11 @@ type noopPerasCommitter struct{}
 
 type ownedPerasAdmitter struct{}
 
+type scanOverlayCommitter struct {
+	noopPerasCommitter
+	rows []fsperas.OverlayKV
+}
+
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
 	completes   []subtreePublishCall
@@ -400,6 +405,24 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 
 func (noopPerasCommitter) CommitPeras(_ context.Context, id fsperas.OperationID, _ compile.SemanticDelta, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
+}
+
+func (c scanOverlayCommitter) GetPerasOverlay([]byte) ([]byte, bool, bool) {
+	return nil, false, false
+}
+
+func (c scanOverlayCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
+	out := make([]fsperas.OverlayKV, 0, len(c.rows))
+	for _, row := range c.rows {
+		if bytes.Compare(row.Key, start) < 0 {
+			continue
+		}
+		out = append(out, row)
+		if uint32(len(out)) == limit {
+			break
+		}
+	}
+	return out
 }
 
 func (ownedPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
@@ -2482,6 +2505,28 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 		Inode:  22,
 		Type:   fsmeta.InodeTypeFile,
 	}}, records)
+}
+
+func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
+	executor := &Executor{perasCommitter: scanOverlayCommitter{rows: []fsperas.OverlayKV{
+		{Key: []byte("k/b"), Delete: true},
+		{Key: []byte("k/c"), Value: []byte("overlay-c")},
+		{Key: []byte("k/e"), Value: []byte("overlay-e")},
+	}}}
+	base := []KV{
+		{Key: []byte("k/a"), Value: []byte("base-a")},
+		{Key: []byte("k/b"), Value: []byte("base-b")},
+		{Key: []byte("k/d"), Value: []byte("base-d")},
+	}
+
+	merged := executor.mergePerasOverlayScan(base, []byte("k/"), 4)
+
+	require.Equal(t, []KV{
+		{Key: []byte("k/a"), Value: []byte("base-a")},
+		{Key: []byte("k/c"), Value: []byte("overlay-c")},
+		{Key: []byte("k/d"), Value: []byte("base-d")},
+		{Key: []byte("k/e"), Value: []byte("overlay-e")},
+	}, merged)
 }
 
 func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
