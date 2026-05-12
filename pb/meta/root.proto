@@ -271,6 +271,10 @@ message RootPerasAuthoritySeal {
   uint64 operation_count = 7;
   uint64 entry_count = 8;
   int64 sealed_unix_nano = 9;
+  uint64 install_region_id = 10;
+  uint64 install_term = 11;
+  uint64 install_index = 12;
+  uint64 install_version = 13;
 }
 
 enum RootPerasAuthorityAct {
@@ -294,6 +298,10 @@ message RootPerasAuthorityCommand {
   bytes segment_payload_digest = 11;
   uint64 operation_count = 12;
   uint64 entry_count = 13;
+  uint64 install_region_id = 14;
+  uint64 install_term = 15;
+  uint64 install_index = 16;
+  uint64 install_version = 17;
 }
 
 enum RootPerasAuthorityApplyStatus {

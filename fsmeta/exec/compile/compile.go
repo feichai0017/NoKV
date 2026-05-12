@@ -70,12 +70,13 @@ const (
 	PredicatePrefixScan
 )
 
-// Predicate describes one key or prefix condition. ObservedValue means the
-// holder must read the current value and later prove it did not change before
-// certificate issue; the concrete value is intentionally not embedded here.
+// Predicate describes one key or prefix condition. ExpectedValue is set only
+// for PredicateObservedValue after the executor has observed a concrete value.
 type Predicate struct {
-	Kind PredicateKind
-	Key  []byte
+	Kind             PredicateKind
+	Key              []byte
+	ExpectedValue    []byte
+	HasExpectedValue bool
 }
 
 // EffectKind is the mutation class a Peras certificate would eventually
@@ -492,8 +493,10 @@ func clonePredicates(in []Predicate) []Predicate {
 	out := make([]Predicate, 0, len(in))
 	for _, predicate := range in {
 		out = append(out, Predicate{
-			Kind: predicate.Kind,
-			Key:  cloneBytes(predicate.Key),
+			Kind:             predicate.Kind,
+			Key:              cloneBytes(predicate.Key),
+			ExpectedValue:    cloneBytes(predicate.ExpectedValue),
+			HasExpectedValue: predicate.HasExpectedValue,
 		})
 	}
 	return out

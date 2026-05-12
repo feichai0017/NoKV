@@ -447,6 +447,10 @@ func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.P
 		OperationCount:       10,
 		EntryCount:           20,
 		SealedUnixNano:       30,
+		InstallRegionID:      7,
+		InstallTerm:          3,
+		InstallIndex:         99,
+		InstallVersion:       1234,
 	}
 }
 

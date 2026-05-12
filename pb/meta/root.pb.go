@@ -2557,6 +2557,10 @@ type RootPerasAuthoritySeal struct {
 	OperationCount       uint64                   `protobuf:"varint,7,opt,name=operation_count,json=operationCount,proto3" json:"operation_count,omitempty"`
 	EntryCount           uint64                   `protobuf:"varint,8,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
 	SealedUnixNano       int64                    `protobuf:"varint,9,opt,name=sealed_unix_nano,json=sealedUnixNano,proto3" json:"sealed_unix_nano,omitempty"`
+	InstallRegionId      uint64                   `protobuf:"varint,10,opt,name=install_region_id,json=installRegionId,proto3" json:"install_region_id,omitempty"`
+	InstallTerm          uint64                   `protobuf:"varint,11,opt,name=install_term,json=installTerm,proto3" json:"install_term,omitempty"`
+	InstallIndex         uint64                   `protobuf:"varint,12,opt,name=install_index,json=installIndex,proto3" json:"install_index,omitempty"`
+	InstallVersion       uint64                   `protobuf:"varint,13,opt,name=install_version,json=installVersion,proto3" json:"install_version,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2654,6 +2658,34 @@ func (x *RootPerasAuthoritySeal) GetSealedUnixNano() int64 {
 	return 0
 }
 
+func (x *RootPerasAuthoritySeal) GetInstallRegionId() uint64 {
+	if x != nil {
+		return x.InstallRegionId
+	}
+	return 0
+}
+
+func (x *RootPerasAuthoritySeal) GetInstallTerm() uint64 {
+	if x != nil {
+		return x.InstallTerm
+	}
+	return 0
+}
+
+func (x *RootPerasAuthoritySeal) GetInstallIndex() uint64 {
+	if x != nil {
+		return x.InstallIndex
+	}
+	return 0
+}
+
+func (x *RootPerasAuthoritySeal) GetInstallVersion() uint64 {
+	if x != nil {
+		return x.InstallVersion
+	}
+	return 0
+}
+
 type RootPerasAuthorityCommand struct {
 	state                protoimpl.MessageState   `protogen:"open.v1"`
 	Kind                 RootPerasAuthorityAct    `protobuf:"varint,1,opt,name=kind,proto3,enum=nokv.meta.v1.RootPerasAuthorityAct" json:"kind,omitempty"`
@@ -2669,6 +2701,10 @@ type RootPerasAuthorityCommand struct {
 	SegmentPayloadDigest []byte                   `protobuf:"bytes,11,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
 	OperationCount       uint64                   `protobuf:"varint,12,opt,name=operation_count,json=operationCount,proto3" json:"operation_count,omitempty"`
 	EntryCount           uint64                   `protobuf:"varint,13,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
+	InstallRegionId      uint64                   `protobuf:"varint,14,opt,name=install_region_id,json=installRegionId,proto3" json:"install_region_id,omitempty"`
+	InstallTerm          uint64                   `protobuf:"varint,15,opt,name=install_term,json=installTerm,proto3" json:"install_term,omitempty"`
+	InstallIndex         uint64                   `protobuf:"varint,16,opt,name=install_index,json=installIndex,proto3" json:"install_index,omitempty"`
+	InstallVersion       uint64                   `protobuf:"varint,17,opt,name=install_version,json=installVersion,proto3" json:"install_version,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2790,6 +2826,34 @@ func (x *RootPerasAuthorityCommand) GetOperationCount() uint64 {
 func (x *RootPerasAuthorityCommand) GetEntryCount() uint64 {
 	if x != nil {
 		return x.EntryCount
+	}
+	return 0
+}
+
+func (x *RootPerasAuthorityCommand) GetInstallRegionId() uint64 {
+	if x != nil {
+		return x.InstallRegionId
+	}
+	return 0
+}
+
+func (x *RootPerasAuthorityCommand) GetInstallTerm() uint64 {
+	if x != nil {
+		return x.InstallTerm
+	}
+	return 0
+}
+
+func (x *RootPerasAuthorityCommand) GetInstallIndex() uint64 {
+	if x != nil {
+		return x.InstallIndex
+	}
+	return 0
+}
+
+func (x *RootPerasAuthorityCommand) GetInstallVersion() uint64 {
+	if x != nil {
+		return x.InstallVersion
 	}
 	return 0
 }
@@ -5417,7 +5481,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x11expires_unix_nano\x18\x05 \x01(\x03R\x0fexpiresUnixNano\x12-\n" +
 	"\x12predecessor_digest\x18\x06 \x01(\fR\x11predecessorDigest\x12,\n" +
 	"\x12quota_credit_bytes\x18\a \x01(\x03R\x10quotaCreditBytes\x12.\n" +
-	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\"\xf5\x02\n" +
+	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\"\x92\x04\n" +
 	"\x16RootPerasAuthoritySeal\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x12\x19\n" +
 	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
@@ -5428,7 +5492,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x0foperation_count\x18\a \x01(\x04R\x0eoperationCount\x12\x1f\n" +
 	"\ventry_count\x18\b \x01(\x04R\n" +
 	"entryCount\x12(\n" +
-	"\x10sealed_unix_nano\x18\t \x01(\x03R\x0esealedUnixNano\"\xc9\x04\n" +
+	"\x10sealed_unix_nano\x18\t \x01(\x03R\x0esealedUnixNano\x12*\n" +
+	"\x11install_region_id\x18\n" +
+	" \x01(\x04R\x0finstallRegionId\x12!\n" +
+	"\finstall_term\x18\v \x01(\x04R\vinstallTerm\x12#\n" +
+	"\rinstall_index\x18\f \x01(\x04R\finstallIndex\x12'\n" +
+	"\x0finstall_version\x18\r \x01(\x04R\x0einstallVersion\"\xe6\x05\n" +
 	"\x19RootPerasAuthorityCommand\x127\n" +
 	"\x04kind\x18\x01 \x01(\x0e2#.nokv.meta.v1.RootPerasAuthorityActR\x04kind\x12\x1b\n" +
 	"\tholder_id\x18\x02 \x01(\tR\bholderId\x12\x19\n" +
@@ -5444,7 +5513,11 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x16segment_payload_digest\x18\v \x01(\fR\x14segmentPayloadDigest\x12'\n" +
 	"\x0foperation_count\x18\f \x01(\x04R\x0eoperationCount\x12\x1f\n" +
 	"\ventry_count\x18\r \x01(\x04R\n" +
-	"entryCount\"\x90\x01\n" +
+	"entryCount\x12*\n" +
+	"\x11install_region_id\x18\x0e \x01(\x04R\x0finstallRegionId\x12!\n" +
+	"\finstall_term\x18\x0f \x01(\x04R\vinstallTerm\x12#\n" +
+	"\rinstall_index\x18\x10 \x01(\x04R\finstallIndex\x12'\n" +
+	"\x0finstall_version\x18\x11 \x01(\x04R\x0einstallVersion\"\x90\x01\n" +
 	"\x14RootGrantCertificate\x126\n" +
 	"\x05grant\x18\x01 \x01(\v2 .nokv.meta.v1.RootAuthorityGrantR\x05grant\x12\"\n" +
 	"\rsigner_key_id\x18\x02 \x01(\tR\vsignerKeyId\x12\x1c\n" +

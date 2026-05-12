@@ -24,7 +24,7 @@ import (
 //	  chunk   'c' : inode be64 | chunk index be64
 //	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
-//	  peras   'p' : sealed segment root sha256
+//	  peras   'p' : record-kind byte | sealed segment root sha256
 //
 // Big-endian integer fields preserve numeric order inside each key family.
 var keyMagic = []byte{'f', 's', 'm', 0}
@@ -53,14 +53,20 @@ const (
 	KeyKindPeras   KeyKind = 'p'
 )
 
+const (
+	PerasSegmentRecordObject byte = 'o'
+	PerasSegmentRecordIndex  byte = 'i'
+)
+
 type KeyParts struct {
-	MountKeyID MountKeyID
-	Bucket     AffinityBucket
-	Kind       KeyKind
-	Parent     InodeID
-	Inode      InodeID
-	UsageScope InodeID
-	PerasRoot  [32]byte
+	MountKeyID  MountKeyID
+	Bucket      AffinityBucket
+	Kind        KeyKind
+	Parent      InodeID
+	Inode       InodeID
+	UsageScope  InodeID
+	PerasRecord byte
+	PerasRoot   [32]byte
 }
 
 func (k KeyKind) String() string {
@@ -209,27 +215,46 @@ func EncodeUsageKey(mount MountIdentity, scope InodeID) ([]byte, error) {
 	return encodeKey(mount, BucketForInodeID(scope), KeyKindUsage, body[:])
 }
 
-// EncodePerasSegmentCatalogKey returns the hidden per-bucket catalog key that
-// records one durable Peras segment install. It deliberately takes the rooted
-// mount key id rather than a human mount name because recovery reconstructs it
-// from already-encoded fsmeta keys.
-func EncodePerasSegmentCatalogKey(mountKeyID MountKeyID, bucket AffinityBucket, root [32]byte) ([]byte, error) {
+// EncodePerasSegmentCatalogIndexKey returns the hidden per-bucket catalog key
+// that points reads at one durable Peras segment object. It deliberately takes
+// the rooted mount key id rather than a human mount name because recovery
+// reconstructs it from already-encoded fsmeta keys.
+func EncodePerasSegmentCatalogIndexKey(mountKeyID MountKeyID, bucket AffinityBucket, root [32]byte) ([]byte, error) {
+	return encodePerasSegmentKey(mountKeyID, bucket, PerasSegmentRecordIndex, root)
+}
+
+// EncodePerasSegmentObjectKey returns the hidden segment-object key that stores
+// one copy of a sealed segment payload. Per-bucket catalog keys point at this
+// object so multi-bucket segments do not duplicate payload bytes.
+func EncodePerasSegmentObjectKey(mountKeyID MountKeyID, bucket AffinityBucket, root [32]byte) ([]byte, error) {
+	return encodePerasSegmentKey(mountKeyID, bucket, PerasSegmentRecordObject, root)
+}
+
+func encodePerasSegmentKey(mountKeyID MountKeyID, bucket AffinityBucket, record byte, root [32]byte) ([]byte, error) {
 	if err := validateMountKeyID(mountKeyID); err != nil {
 		return nil, err
 	}
 	if root == ([32]byte{}) {
 		return nil, ErrInvalidKey
 	}
-	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, root[:]), nil
+	switch record {
+	case PerasSegmentRecordObject, PerasSegmentRecordIndex:
+	default:
+		return nil, ErrInvalidKey
+	}
+	body := make([]byte, 1+len(root))
+	body[0] = record
+	copy(body[1:], root[:])
+	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, body), nil
 }
 
-// EncodePerasSegmentCatalogPrefix returns the hidden catalog scan prefix for
-// durable Peras segment installs in one mount-local affinity bucket.
-func EncodePerasSegmentCatalogPrefix(mountKeyID MountKeyID, bucket AffinityBucket) ([]byte, error) {
+// EncodePerasSegmentCatalogIndexPrefix returns the hidden catalog scan prefix
+// for durable Peras segment indexes in one mount-local affinity bucket.
+func EncodePerasSegmentCatalogIndexPrefix(mountKeyID MountKeyID, bucket AffinityBucket) ([]byte, error) {
 	if err := validateMountKeyID(mountKeyID); err != nil {
 		return nil, err
 	}
-	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, nil), nil
+	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, []byte{PerasSegmentRecordIndex}), nil
 }
 
 // KeyKindOf returns the kind byte encoded in a fsmeta key.
@@ -330,10 +355,16 @@ func InspectKey(key []byte) (KeyParts, bool) {
 		parts.UsageScope = InodeID(binary.BigEndian.Uint64(body[:8]))
 		return parts, true
 	case KeyKindPeras:
-		if len(body) != len(parts.PerasRoot) {
+		if len(body) != 1+len(parts.PerasRoot) {
 			return KeyParts{}, false
 		}
-		copy(parts.PerasRoot[:], body)
+		switch body[0] {
+		case PerasSegmentRecordObject, PerasSegmentRecordIndex:
+			parts.PerasRecord = body[0]
+		default:
+			return KeyParts{}, false
+		}
+		copy(parts.PerasRoot[:], body[1:])
 		return parts, true
 	default:
 		return KeyParts{}, false
@@ -373,10 +404,10 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 		}
 		shape.BloomPrefix = key[:bodyPos+8]
 	case KeyKindPeras:
-		if len(key) < bodyPos+32 {
+		if len(key) < bodyPos+33 {
 			return localdb.UserKeyShape{}
 		}
-		shape.BloomPrefix = key[:bodyPos+32]
+		shape.BloomPrefix = key[:bodyPos+33]
 	default:
 		return localdb.UserKeyShape{}
 	}

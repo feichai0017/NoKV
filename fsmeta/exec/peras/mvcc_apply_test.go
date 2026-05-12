@@ -106,14 +106,20 @@ func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
 	require.NoError(t, err)
 	defer releaseMVCCReplayEntries(entries)
 
-	catalogKey, err := PerasSegmentCatalogKey(segment)
+	objectKey, err := PerasSegmentObjectKey(segment)
 	require.NoError(t, err)
+	indexKeys, err := PerasSegmentCatalogIndexKeys(segment)
+	require.NoError(t, err)
+	indexFound := make(map[string]bool, len(indexKeys))
 	var catalogFound bool
 	for _, entry := range entries {
 		require.Equal(t, uint64(99), entry.Version)
 		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
 		require.True(t, ok)
-		if cf == entrykv.CFDefault && bytes.Equal(userKey, catalogKey) {
+		if cf != entrykv.CFDefault {
+			continue
+		}
+		if bytes.Equal(userKey, objectKey) {
 			catalogFound = true
 			catalog, err := DecodePerasSegmentCatalogRecord(entry.Value)
 			require.NoError(t, err)
@@ -123,12 +129,24 @@ func TestBuildMVCCSegmentInstallEntriesUsesOneInstallVersion(t *testing.T) {
 			require.Equal(t, digest, catalog.SegmentPayloadDigest)
 			require.Equal(t, uint64(len(payload)), catalog.SegmentPayloadSize)
 			require.Equal(t, payload, catalog.SegmentPayload)
+			continue
+		}
+		for _, indexKey := range indexKeys {
+			if !bytes.Equal(userKey, indexKey) {
+				continue
+			}
+			indexFound[string(indexKey)] = true
+			index, err := DecodePerasSegmentCatalogIndexRecord(entry.Value)
+			require.NoError(t, err)
+			require.Equal(t, segment.Root, index.Root)
+			require.Equal(t, objectKey, index.ObjectKey)
 		}
 	}
 	require.True(t, catalogFound)
+	require.Len(t, indexFound, len(indexKeys))
 }
 
-func TestBuildMVCCSegmentCatalogInstallEntriesStoresOnlySegmentObject(t *testing.T) {
+func TestBuildMVCCSegmentCatalogInstallEntriesStoresObjectAndBucketIndexes(t *testing.T) {
 	segment := fsmetaSegmentForTest(t)
 	payload, err := EncodePerasSegment(segment)
 	require.NoError(t, err)
@@ -138,16 +156,43 @@ func TestBuildMVCCSegmentCatalogInstallEntriesStoresOnlySegmentObject(t *testing
 	entries, err := BuildMVCCSegmentCatalogInstallEntries(segment, 99)
 	require.NoError(t, err)
 	defer releaseMVCCReplayEntries(entries)
-	require.Len(t, entries, 1)
+	indexKeys, err := PerasSegmentCatalogIndexKeys(segment)
+	require.NoError(t, err)
+	objectKey, err := PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	require.Len(t, entries, len(indexKeys)+1)
 
-	catalog, err := DecodePerasSegmentCatalogRecord(entries[0].Value)
-	require.NoError(t, err)
-	require.Equal(t, segment.Root, catalog.Root)
-	require.Equal(t, digest, catalog.SegmentPayloadDigest)
-	require.Equal(t, uint64(len(payload)), catalog.SegmentPayloadSize)
-	decoded, err := VerifyPerasSegmentPayload(catalog.SegmentPayload, segment.Root, digest)
-	require.NoError(t, err)
-	require.Equal(t, segment.Stats(), decoded.Stats())
+	var objectFound bool
+	indexFound := make(map[string]bool, len(indexKeys))
+	for _, entry := range entries {
+		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
+		require.Equal(t, entrykv.CFDefault, cf)
+		if bytes.Equal(userKey, objectKey) {
+			objectFound = true
+			catalog, err := DecodePerasSegmentCatalogRecord(entry.Value)
+			require.NoError(t, err)
+			require.Equal(t, segment.Root, catalog.Root)
+			require.Equal(t, digest, catalog.SegmentPayloadDigest)
+			require.Equal(t, uint64(len(payload)), catalog.SegmentPayloadSize)
+			decoded, err := VerifyPerasSegmentPayload(catalog.SegmentPayload, segment.Root, digest)
+			require.NoError(t, err)
+			require.Equal(t, segment.Stats(), decoded.Stats())
+			continue
+		}
+		for _, indexKey := range indexKeys {
+			if !bytes.Equal(userKey, indexKey) {
+				continue
+			}
+			indexFound[string(indexKey)] = true
+			index, err := DecodePerasSegmentCatalogIndexRecord(entry.Value)
+			require.NoError(t, err)
+			require.Equal(t, segment.Root, index.Root)
+			require.Equal(t, objectKey, index.ObjectKey)
+		}
+	}
+	require.True(t, objectFound)
+	require.Len(t, indexFound, len(indexKeys))
 }
 
 func TestBuildMVCCSegmentInstallEntriesRequiresFSMetaKeys(t *testing.T) {

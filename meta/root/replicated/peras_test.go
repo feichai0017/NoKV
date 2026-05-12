@@ -66,6 +66,10 @@ func TestReplicatedStoreApplyPerasAuthoritySealPublishesFrontier(t *testing.T) {
 		SegmentPayloadDigest: digest,
 		OperationCount:       32,
 		EntryCount:           64,
+		InstallRegionID:      7,
+		InstallTerm:          3,
+		InstallIndex:         99,
+		InstallVersion:       1234,
 	})
 	require.NoError(t, err)
 	require.Equal(t, grant, sealedGrant)

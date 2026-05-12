@@ -190,10 +190,11 @@ type fakePerasAdmitter struct {
 }
 
 type fakePerasCommitter struct {
-	err    error
-	calls  int
-	ids    []fsperas.OperationID
-	deltas []compile.SemanticDelta
+	err             error
+	beforeAdmission func()
+	calls           int
+	ids             []fsperas.OperationID
+	deltas          []compile.SemanticDelta
 }
 
 type fakePerasAuthorityFlusher struct {
@@ -373,6 +374,9 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 }
 
 func (c *fakePerasCommitter) CommitPeras(ctx context.Context, id fsperas.OperationID, delta compile.SemanticDelta, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+	if c.beforeAdmission != nil {
+		c.beforeAdmission()
+	}
 	if admission != nil {
 		ok, err := admission(ctx, delta)
 		if err != nil {
@@ -1148,7 +1152,7 @@ func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, fsmeta.SessionRecord{Session: "writer-1", Inode: created.Inode.Inode, ExpiresUnixNs: 200}, opened)
-	require.Equal(t, 1, runner.getCalls, "open should only probe the caller supplied session id; the create fact proves the inode owner key absent")
+	require.Equal(t, 2, runner.getCalls, "open should probe and recheck the caller supplied session id; the create fact proves the inode owner key absent")
 	require.Empty(t, runner.mutations)
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
 }
@@ -1572,6 +1576,53 @@ func TestExecutorUpdateInodePerasBufferedVisibleCommitReadsCreateOverlay(t *test
 	stats := executor.Stats()
 	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
 	requirePerasVisibleStatUint(t, stats, "success_total", 2)
+}
+
+func TestExecutorUpdateInodePerasRechecksObservedValue(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+		Size:      1024,
+	})
+	changed := false
+	committer := &fakePerasCommitter{
+		beforeAdmission: func() {
+			if changed {
+				return
+			}
+			changed = true
+			seedInode(t, runner, "vol", fsmeta.InodeRecord{
+				Inode:     22,
+				Type:      fsmeta.InodeTypeFile,
+				LinkCount: 1,
+				Size:      4096,
+			})
+		},
+	}
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	updated, err := executor.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  7,
+		Inode:   22,
+		Name:    "file",
+		SetSize: true,
+		Size:    2048,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(2048), updated.Size)
+	require.Zero(t, committer.calls, "stale observed value must reject the Peras admission before commit")
+	require.Len(t, runner.mutations, 1, "rejected Peras admission should fall back to the ordinary transaction path")
+	requirePerasVisibleStatUint(t, executor.Stats(), "skip_predicate_total", 1)
 }
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
@@ -3019,7 +3070,7 @@ func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, 2, runner.getCalls, "rename should not read a destination key proven absent by the Peras directory fact")
+	require.Equal(t, 4, runner.getCalls, "rename should recheck observed source values and avoid reading a destination key proven absent by the Peras directory fact")
 	require.Empty(t, runner.mutations)
 }
 

@@ -316,6 +316,10 @@ func RootPerasAuthoritySealToProto(seal rootproto.PerasAuthoritySeal) *metapb.Ro
 		OperationCount:       seal.OperationCount,
 		EntryCount:           seal.EntryCount,
 		SealedUnixNano:       seal.SealedUnixNano,
+		InstallRegionId:      seal.InstallRegionID,
+		InstallTerm:          seal.InstallTerm,
+		InstallIndex:         seal.InstallIndex,
+		InstallVersion:       seal.InstallVersion,
 	}
 }
 
@@ -337,6 +341,10 @@ func RootPerasAuthoritySealFromProto(seal *metapb.RootPerasAuthoritySeal) rootpr
 		OperationCount:       seal.GetOperationCount(),
 		EntryCount:           seal.GetEntryCount(),
 		SealedUnixNano:       seal.GetSealedUnixNano(),
+		InstallRegionID:      seal.GetInstallRegionId(),
+		InstallTerm:          seal.GetInstallTerm(),
+		InstallIndex:         seal.GetInstallIndex(),
+		InstallVersion:       seal.GetInstallVersion(),
 	}
 }
 
@@ -381,6 +389,10 @@ func RootPerasAuthorityCommandToProto(cmd rootproto.PerasAuthorityCommand) *meta
 		SegmentPayloadDigest: append([]byte(nil), cmd.SegmentPayloadDigest[:]...),
 		OperationCount:       cmd.OperationCount,
 		EntryCount:           cmd.EntryCount,
+		InstallRegionId:      cmd.InstallRegionID,
+		InstallTerm:          cmd.InstallTerm,
+		InstallIndex:         cmd.InstallIndex,
+		InstallVersion:       cmd.InstallVersion,
 	}
 }
 
@@ -408,6 +420,10 @@ func RootPerasAuthorityCommandFromProto(cmd *metapb.RootPerasAuthorityCommand) r
 		SegmentPayloadDigest: segmentPayloadDigest,
 		OperationCount:       cmd.GetOperationCount(),
 		EntryCount:           cmd.GetEntryCount(),
+		InstallRegionID:      cmd.GetInstallRegionId(),
+		InstallTerm:          cmd.GetInstallTerm(),
+		InstallIndex:         cmd.GetInstallIndex(),
+		InstallVersion:       cmd.GetInstallVersion(),
 	}
 }
 

@@ -140,5 +140,9 @@ func testStatePerasSeal(grant rootproto.PerasAuthorityGrant, marker byte) rootpr
 		OperationCount:       7,
 		EntryCount:           11,
 		SealedUnixNano:       int64(marker),
+		InstallRegionID:      uint64(marker) + 100,
+		InstallTerm:          uint64(marker) + 200,
+		InstallIndex:         uint64(marker) + 300,
+		InstallVersion:       uint64(marker) + 400,
 	}
 }

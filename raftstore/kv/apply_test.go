@@ -202,7 +202,7 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.Nil(t, installResp.GetError())
 	require.Equal(t, uint64(2), installResp.GetOperationCount())
 	require.Equal(t, uint64(2), installResp.GetEntryCount())
-	require.Equal(t, uint64(1), installResp.GetAppliedEntries())
+	require.Equal(t, uint64(2), installResp.GetAppliedEntries())
 
 	records, err := fsperas.LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
 	require.Len(t, resp.GetResponses(), 1)
 	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
 	require.Nil(t, installResp.GetError())
-	require.Equal(t, uint64(3), installResp.GetAppliedEntries())
+	require.Equal(t, uint64(4), installResp.GetAppliedEntries())
 
 	reader := percolator.NewReader(db)
 	value, _, err := reader.GetValue(dentryKey, 100)
@@ -382,6 +382,35 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
 	require.NotNil(t, atomicResp)
 	require.Contains(t, atomicResp.GetError().GetRetryable(), "peras authority fence")
+
+	reader := percolator.NewReader(db)
+	_, _, err = reader.GetValue(key, 12)
+	require.ErrorIs(t, err, utils.ErrKeyNotFound)
+}
+
+func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
+	require.NoError(t, err)
+
+	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasauth.NewActiveAuthorities()))
+	resp, err := applier(&raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+			Cmd:     &raftcmdpb.Request_TryAtomicMutate{TryAtomicMutate: atomicPutForApplyTest(10, 11, key, []byte("value"))},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
+	require.NotNil(t, atomicResp)
+	require.Contains(t, atomicResp.GetError().GetRetryable(), "active authority view stale")
 
 	reader := percolator.NewReader(db)
 	_, _, err = reader.GetValue(key, 12)

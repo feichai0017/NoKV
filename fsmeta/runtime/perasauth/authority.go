@@ -17,6 +17,7 @@ var (
 	ErrInvalidGrant       = errors.New("fsmeta peras: invalid authority grant")
 	ErrAmbiguousAuthority = errors.New("fsmeta peras: ambiguous active authority")
 	ErrConflictingGrant   = errors.New("fsmeta peras: conflicting authority grant")
+	ErrAuthorityViewStale = errors.New("fsmeta peras: active authority view stale")
 )
 
 // AuthorityGrant is the execution-side alias for the root-issued fsmeta
@@ -27,6 +28,7 @@ type AuthorityGrant = rootproto.PerasAuthorityGrant
 type ActiveAuthorities struct {
 	mu     sync.RWMutex
 	grants map[string]AuthorityGrant
+	ready  bool
 }
 
 func NewActiveAuthorities() *ActiveAuthorities {
@@ -54,6 +56,7 @@ func (a *ActiveAuthorities) Replace(grants []AuthorityGrant) error {
 	}
 	a.mu.Lock()
 	a.grants = next
+	a.ready = true
 	a.mu.Unlock()
 	return nil
 }
@@ -163,6 +166,9 @@ func (a *ActiveAuthorities) FencesKey(key []byte, now time.Time) (AuthorityGrant
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	if !a.ready {
+		return AuthorityGrant{}, false, ErrAuthorityViewStale
+	}
 	var found AuthorityGrant
 	for _, grant := range a.grants {
 		if !grantCoversKey(grant, parts, now) {

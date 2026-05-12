@@ -66,6 +66,12 @@ func testSemanticDelta() compile.SemanticDelta {
 		},
 		ReadPredicates: []compile.Predicate{
 			{Kind: compile.PredicateNotExists, Key: []byte("dentry/a")},
+			{
+				Kind:             compile.PredicateObservedValue,
+				Key:              []byte("inode/parent"),
+				ExpectedValue:    []byte("parent-value"),
+				HasExpectedValue: true,
+			},
 		},
 		WriteEffects: []compile.WriteEffect{
 			{Kind: compile.EffectPut, Key: []byte("dentry/a"), Value: []byte("inode=7")},

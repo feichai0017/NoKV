@@ -870,17 +870,16 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 	index := e.perasPredicateIndex()
 	var version uint64
 	var haveVersion bool
-	read := func(key []byte) (bool, error) {
+	read := func(key []byte) ([]byte, bool, error) {
 		if !haveVersion {
 			var err error
 			version, err = e.reserveReadVersion(ctx)
 			if err != nil {
-				return false, err
+				return nil, false, err
 			}
 			haveVersion = true
 		}
-		_, ok, err := e.getMergedValue(ctx, key, version)
-		return ok, err
+		return e.getMergedValue(ctx, key, version)
 	}
 	for _, predicate := range delta.ReadPredicates {
 		switch predicate.Kind {
@@ -894,7 +893,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 					continue
 				}
 			}
-			ok, err := read(predicate.Key)
+			_, ok, err := read(predicate.Key)
 			if err != nil {
 				return false, err
 			}
@@ -915,7 +914,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 					continue
 				}
 			}
-			ok, err := read(predicate.Key)
+			_, ok, err := read(predicate.Key)
 			if err != nil {
 				return false, err
 			}
@@ -923,10 +922,16 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, delta compile.Semant
 				return false, fsmeta.ErrExists
 			}
 		case compile.PredicateObservedValue:
-			// Concrete Peras operation builders read these keys before
-			// constructing WriteEffects. The compiler does not yet carry the
-			// observed value digest needed for a generic equality check here.
-			continue
+			if !predicate.HasExpectedValue {
+				return false, nil
+			}
+			value, ok, err := read(predicate.Key)
+			if err != nil {
+				return false, err
+			}
+			if !ok || !bytes.Equal(value, predicate.ExpectedValue) {
+				return false, nil
+			}
 		case compile.PredicatePrefixScan:
 			return false, nil
 		default:
@@ -1014,16 +1019,6 @@ func concretePerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffe
 	return delta
 }
 
-func runtimeCheckedPerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
-	delta = concretePerasDelta(delta, effects)
-	for i := range delta.ReadPredicates {
-		if delta.ReadPredicates[i].Kind != compile.PredicatePrefixScan {
-			delta.ReadPredicates[i].Kind = compile.PredicateObservedValue
-		}
-	}
-	return delta
-}
-
 func perasPutEffect(key, value []byte) compile.WriteEffect {
 	return compile.WriteEffect{Kind: compile.EffectPut, Key: cloneBytes(key), Value: cloneBytes(value)}
 }
@@ -1079,7 +1074,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
 		perasPutEffect(plan.MutateKeys[0], value),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
@@ -1123,7 +1118,7 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, del
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
 		perasPutEffect(plan.MutateKeys[0], value),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
@@ -1159,7 +1154,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 		effects = append(effects, perasDeleteEffect(ownerKey))
 	}
-	concrete := runtimeCheckedPerasDelta(delta, effects)
+	concrete := view.runtimeCheckedDelta(delta, effects)
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
@@ -1222,7 +1217,7 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
+	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
 	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
 	if err != nil {
 		return fsmeta.InodeRecord{}, committed, err
@@ -1271,7 +1266,7 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 	if err != nil {
 		return false, err
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
 		perasDeleteEffect(plan.MutateKeys[0]),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
@@ -1341,7 +1336,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, delta compile.Semant
 	if err != nil {
 		return false, err
 	}
-	concrete := runtimeCheckedPerasDelta(delta, []compile.WriteEffect{
+	concrete := view.runtimeCheckedDelta(delta, []compile.WriteEffect{
 		perasPutEffect(plan.ReadKeys[1], dentryValue),
 		perasPutEffect(inodeKey, inodeValue),
 	})
@@ -1392,7 +1387,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 		}
 		effects = append(effects, perasPutEffect(inodeKey, inodeValue))
 	}
-	concrete := runtimeCheckedPerasDelta(delta, effects)
+	concrete := view.runtimeCheckedDelta(delta, effects)
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
@@ -1503,13 +1498,18 @@ type perasReadView struct {
 	ctx         context.Context
 	version     uint64
 	haveVersion bool
+	observed    map[string]perasObservedValue
 }
 
 func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &perasReadView{executor: e, ctx: ctx}
+	return &perasReadView{
+		executor: e,
+		ctx:      ctx,
+		observed: make(map[string]perasObservedValue),
+	}
 }
 
 func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
@@ -1518,8 +1518,10 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	}
 	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
 		if deleted {
+			v.remember(key, nil, false)
 			return nil, false, nil
 		}
+		v.remember(key, value, true)
 		return value, true, nil
 	}
 	if !v.haveVersion {
@@ -1530,7 +1532,86 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 		v.version = version
 		v.haveVersion = true
 	}
-	return v.executor.runner.Get(v.ctx, key, v.version)
+	value, ok, err := v.executor.runner.Get(v.ctx, key, v.version)
+	if err != nil {
+		return nil, false, err
+	}
+	v.remember(key, value, ok)
+	return value, ok, nil
+}
+
+type perasObservedValue struct {
+	value   []byte
+	present bool
+}
+
+func (v *perasReadView) remember(key, value []byte, present bool) {
+	if v == nil {
+		return
+	}
+	v.observed[string(key)] = perasObservedValue{
+		value:   cloneBytes(value),
+		present: present,
+	}
+}
+
+func (v *perasReadView) runtimeCheckedDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
+	delta = concretePerasDelta(delta, effects)
+	if v == nil || v.executor == nil {
+		return delta
+	}
+	index := v.executor.perasPredicateIndex()
+	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(v.observed))
+	for i := range delta.ReadPredicates {
+		predicate := &delta.ReadPredicates[i]
+		if predicate.Kind == compile.PredicatePrefixScan {
+			continue
+		}
+		seen[string(predicate.Key)] = struct{}{}
+		if observed, ok := v.observed[string(predicate.Key)]; ok {
+			applyPerasObservedPredicate(predicate, observed)
+			continue
+		}
+		if predicate.Kind == compile.PredicateObservedValue &&
+			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
+			predicate.Kind = compile.PredicateNotExists
+			predicate.ExpectedValue = nil
+			predicate.HasExpectedValue = false
+		}
+	}
+	if len(v.observed) == 0 {
+		return delta
+	}
+	keys := make([]string, 0, len(v.observed))
+	for key := range v.observed {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		observed := v.observed[key]
+		predicate := compile.Predicate{Key: []byte(key)}
+		applyPerasObservedPredicate(&predicate, observed)
+		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
+	}
+	return delta
+}
+
+func applyPerasObservedPredicate(predicate *compile.Predicate, observed perasObservedValue) {
+	if predicate == nil {
+		return
+	}
+	if !observed.present {
+		predicate.Kind = compile.PredicateNotExists
+		predicate.ExpectedValue = nil
+		predicate.HasExpectedValue = false
+		return
+	}
+	predicate.Kind = compile.PredicateObservedValue
+	predicate.ExpectedValue = cloneBytes(observed.value)
+	predicate.HasExpectedValue = true
 }
 
 func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {

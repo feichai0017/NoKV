@@ -33,10 +33,10 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
-func TestPerasSegmentCatalogKeyUsesRootedMountAndBucket(t *testing.T) {
+func TestPerasSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
 	var root [32]byte
 	root[0] = 7
-	key, err := EncodePerasSegmentCatalogKey(testMount.MountKeyID, 3, root)
+	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
 
 	kind, err := KeyKindOf(key)
@@ -48,19 +48,30 @@ func TestPerasSegmentCatalogKeyUsesRootedMountAndBucket(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
 	require.Equal(t, AffinityBucket(3), parts.Bucket)
+	require.Equal(t, PerasSegmentRecordIndex, parts.PerasRecord)
+	require.Equal(t, root, parts.PerasRoot)
+
+	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	parts, ok = InspectKey(object)
+	require.True(t, ok)
+	require.Equal(t, PerasSegmentRecordObject, parts.PerasRecord)
 	require.Equal(t, root, parts.PerasRoot)
 }
 
-func TestPerasSegmentCatalogPrefixCoversCatalogKeys(t *testing.T) {
+func TestPerasSegmentCatalogIndexPrefixCoversCatalogKeys(t *testing.T) {
 	var root [32]byte
 	root[0] = 7
-	key, err := EncodePerasSegmentCatalogKey(testMount.MountKeyID, 3, root)
+	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
-	prefix, err := EncodePerasSegmentCatalogPrefix(testMount.MountKeyID, 3)
+	prefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 3)
 	require.NoError(t, err)
 
 	require.True(t, bytes.HasPrefix(key, prefix))
-	otherBucketPrefix, err := EncodePerasSegmentCatalogPrefix(testMount.MountKeyID, 4)
+	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	require.False(t, bytes.HasPrefix(object, prefix))
+	otherBucketPrefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 4)
 	require.NoError(t, err)
 	require.False(t, bytes.HasPrefix(key, otherBucketPrefix))
 }

@@ -497,6 +497,10 @@ func (s *Store) sealPerasAuthorityLocked(ctx context.Context, cmd rootproto.Pera
 		OperationCount:       cmd.OperationCount,
 		EntryCount:           cmd.EntryCount,
 		SealedUnixNano:       cmd.NowUnixNano,
+		InstallRegionID:      cmd.InstallRegionID,
+		InstallTerm:          cmd.InstallTerm,
+		InstallIndex:         cmd.InstallIndex,
+		InstallVersion:       cmd.InstallVersion,
 	}
 	if !seal.Valid() {
 		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant

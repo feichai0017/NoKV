@@ -8,7 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-var semanticDeltaPayloadMagic = [4]byte{'N', 'C', 'D', 1}
+var semanticDeltaPayloadMagic = [4]byte{'N', 'C', 'D', 2}
 
 func EncodeSemanticDeltaPayload(delta compile.SemanticDelta) ([]byte, error) {
 	var out bytes.Buffer
@@ -122,6 +122,10 @@ func writePredicates(out *bytes.Buffer, predicates []compile.Predicate) {
 	for _, predicate := range predicates {
 		writeUint64(out, uint64(predicate.Kind))
 		writeBytes(out, predicate.Key)
+		writeBool(out, predicate.HasExpectedValue)
+		if predicate.HasExpectedValue {
+			writeBytes(out, predicate.ExpectedValue)
+		}
 	}
 }
 
@@ -256,7 +260,23 @@ func (r *witnessReader) readPredicates() ([]compile.Predicate, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, compile.Predicate{Kind: compile.PredicateKind(kind), Key: key})
+		hasExpectedValue, err := r.readBool()
+		if err != nil {
+			return nil, err
+		}
+		var expectedValue []byte
+		if hasExpectedValue {
+			expectedValue, err = r.readBytes()
+			if err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, compile.Predicate{
+			Kind:             compile.PredicateKind(kind),
+			Key:              key,
+			ExpectedValue:    expectedValue,
+			HasExpectedValue: hasExpectedValue,
+		})
 	}
 	return out, nil
 }
