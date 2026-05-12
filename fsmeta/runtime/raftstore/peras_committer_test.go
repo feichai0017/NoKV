@@ -159,6 +159,16 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 	require.Equal(t, provider.grant.GrantID, provider.sealedGrant.GrantID)
 	require.Equal(t, installer.segment.Root, provider.sealedSegment.Root)
 	require.Equal(t, installer.digest, provider.sealedDigest)
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["seal_total"])
+	require.NotZero(t, stats["flush_latency_total_nanosecond"])
+	require.NotZero(t, stats["witness_latency_total_nanosecond"])
+	require.NotZero(t, stats["install_latency_total_nanosecond"])
+	require.NotZero(t, stats["seal_latency_total_nanosecond"])
+	require.NotZero(t, stats["flush_latency_average_nanosecond"])
+	require.NotZero(t, stats["witness_latency_average_nanosecond"])
+	require.NotZero(t, stats["install_latency_average_nanosecond"])
+	require.NotZero(t, stats["seal_latency_average_nanosecond"])
 }
 
 func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
@@ -1077,6 +1087,41 @@ func BenchmarkRemotePerasCommitterScanPerasOverlay(b *testing.B) {
 	}
 }
 
+func BenchmarkRemotePerasCommitterFlushInstallParallelism(b *testing.B) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	keys := make([][2][]byte, 0, 16)
+	for bucket := fsmeta.AffinityBucket(0); len(keys) < cap(keys); bucket++ {
+		first, second := testRuntimeBucketKeys(b, mount, bucket)
+		keys = append(keys, [2][]byte{first, second})
+	}
+	for _, parallelism := range []int{1, 4} {
+		b.Run(fmt.Sprintf("parallel_%d", parallelism), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+				installer := &delayingRuntimePerasSegmentInstaller{delay: time.Millisecond}
+				committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+					Authority:                 provider,
+					Witnesses:                 testRuntimePerasWitnesses(b, 3),
+					Installer:                 installer,
+					SegmentBatchSize:          1 << 30,
+					SegmentInstallParallelism: parallelism,
+					SegmentFlushEvery:         time.Hour,
+				})
+				require.NoError(b, err)
+				for idx, pair := range keys {
+					require.NoError(b, commitRuntimePeras(context.Background(), committer, uint64(idx+1), pair[0], pair[1]))
+				}
+				require.NoError(b, committer.Flush(context.Background()))
+				committer.Close()
+				if got := installer.calls.Load(); got != int32(len(keys)) {
+					b.Fatalf("installed %d segments, want %d", got, len(keys))
+				}
+			}
+		})
+	}
+}
+
 func commitRuntimePeras(ctx context.Context, committer *RemotePerasCommitter, seq uint64, dentryKey, inodeKey []byte) error {
 	_, err := committer.CommitPeras(ctx, fsperas.OperationID{ClientID: "client", Seq: seq}, testRuntimePerasDelta(dentryKey, inodeKey), nil)
 	return err
@@ -1157,6 +1202,23 @@ func (i *blockingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.C
 	i.calls.Add(1)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type delayingRuntimePerasSegmentInstaller struct {
+	calls atomic.Int32
+	delay time.Duration
+}
+
+func (i *delayingRuntimePerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, _ fsperas.PerasSegment, _ []byte, _ [32]byte, _ bool) error {
+	i.calls.Add(1)
+	timer := time.NewTimer(i.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type fakeRunnerPerasInstallKV struct {
@@ -1283,15 +1345,15 @@ func appendUvarintKey(prefix string, v uint64) []byte {
 	return binary.AppendUvarint(out, v)
 }
 
-func testRuntimeBucketKeys(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) ([]byte, []byte) {
-	t.Helper()
+func testRuntimeBucketKeys(tb testing.TB, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) ([]byte, []byte) {
+	tb.Helper()
 	var first, second []byte
 	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
 		if fsmeta.BucketForInodeID(inode) != bucket {
 			continue
 		}
 		key, err := fsmeta.EncodeInodeKey(mount, inode)
-		require.NoError(t, err)
+		require.NoError(tb, err)
 		if first == nil {
 			first = key
 			continue
@@ -1299,7 +1361,7 @@ func testRuntimeBucketKeys(t *testing.T, mount fsmeta.MountIdentity, bucket fsme
 		second = key
 		break
 	}
-	require.NotNil(t, first)
-	require.NotNil(t, second)
+	require.NotNil(tb, first)
+	require.NotNil(tb, second)
 	return first, second
 }

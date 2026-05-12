@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -76,6 +77,7 @@ type RemotePerasCommitterConfig struct {
 	SegmentFlushEvery          time.Duration
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
+	SegmentInstallParallelism  int
 	Now                        func() time.Time
 }
 
@@ -92,6 +94,7 @@ type RemotePerasCommitter struct {
 	backoff    time.Duration
 	batchSize  int
 	maxReplay  int
+	installN   int
 	flushEvery time.Duration
 	bgTimeout  time.Duration
 	bgBackoff  time.Duration
@@ -121,15 +124,24 @@ type RemotePerasCommitter struct {
 
 	stop chan struct{}
 
-	commitTotal       atomic.Uint64
-	flushTotal        atomic.Uint64
-	segmentTotal      atomic.Uint64
-	segmentOpsTotal   atomic.Uint64
-	segmentEntryTotal atomic.Uint64
-	errorTotal        atomic.Uint64
-	retryTotal        atomic.Uint64
-	bgSkipTotal       atomic.Uint64
-	bgErrorTotal      atomic.Uint64
+	commitTotal         atomic.Uint64
+	flushTotal          atomic.Uint64
+	segmentTotal        atomic.Uint64
+	segmentOpsTotal     atomic.Uint64
+	segmentEntryTotal   atomic.Uint64
+	sealTotal           atomic.Uint64
+	flushLatencyTotal   atomic.Uint64
+	flushLatencyLast    atomic.Uint64
+	witnessLatencyTotal atomic.Uint64
+	witnessLatencyLast  atomic.Uint64
+	installLatencyTotal atomic.Uint64
+	installLatencyLast  atomic.Uint64
+	sealLatencyTotal    atomic.Uint64
+	sealLatencyLast     atomic.Uint64
+	errorTotal          atomic.Uint64
+	retryTotal          atomic.Uint64
+	bgSkipTotal         atomic.Uint64
+	bgErrorTotal        atomic.Uint64
 
 	statsMu          sync.RWMutex
 	lastSegmentStats fsperas.SegmentStats
@@ -221,6 +233,13 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	if maxReplay < 0 {
 		return nil, errPerasCommitterInvalid
 	}
+	installN := cfg.SegmentInstallParallelism
+	if installN == 0 {
+		installN = defaultPerasSegmentInstallParallelism()
+	}
+	if installN < 0 {
+		return nil, errPerasCommitterInvalid
+	}
 	flushEvery := cfg.SegmentFlushEvery
 	if flushEvery == 0 {
 		flushEvery = defaultPerasSegmentFlushEvery
@@ -256,6 +275,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		backoff:    backoff,
 		batchSize:  batchSize,
 		maxReplay:  maxReplay,
+		installN:   installN,
 		flushEvery: flushEvery,
 		bgTimeout:  bgTimeout,
 		bgBackoff:  bgBackoff,
@@ -573,32 +593,151 @@ func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches 
 }
 
 func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch runtimePerasFlushBatch) error {
+	if len(batch.jobs) <= 1 || c.installN <= 1 {
+		for _, job := range batch.jobs {
+			if err := c.installOneFlushJob(ctx, batch.holder, job); err != nil {
+				return err
+			}
+		}
+		return c.publishFlushJobSeals(ctx, batch)
+	}
+	workers := c.installN
+	if workers > len(batch.jobs) {
+		workers = len(batch.jobs)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan runtimePerasFlushJob)
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := c.installOneFlushJob(runCtx, batch.holder, job); err != nil {
+					setErr(err)
+					return
+				}
+			}
+		}()
+	}
+send:
 	for _, job := range batch.jobs {
-		if err := c.installOneFlushJob(ctx, batch.holder, job); err != nil {
+		select {
+		case <-runCtx.Done():
+			break send
+		case jobs <- job:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	errMu.Lock()
+	err := firstErr
+	errMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.publishFlushJobSeals(ctx, batch)
+}
+
+func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) error {
+	flushStart := time.Now()
+	defer func() {
+		c.recordFlushLatency(time.Since(flushStart))
+	}()
+	witnessStart := time.Now()
+	if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, holder, job.segment, job.payload, job.digest); err != nil {
+		return c.recordErrorf("append peras segment witness: %w", err)
+	}
+	c.recordWitnessLatency(time.Since(witnessStart))
+	installStart := time.Now()
+	if err := c.installSegmentWithRetry(ctx, job); err != nil {
+		return c.recordErrorf("install peras segment: %w", err)
+	}
+	c.recordInstallLatency(time.Since(installStart))
+	return nil
+}
+
+func (c *RemotePerasCommitter) publishFlushJobSeals(ctx context.Context, batch runtimePerasFlushBatch) error {
+	for _, job := range batch.jobs {
+		if err := c.publishFlushJobSeal(ctx, batch.holder, job); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) error {
-	if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, holder, job.segment, job.payload, job.digest); err != nil {
-		return c.recordErrorf("append peras segment witness: %w", err)
-	}
-	if err := c.installSegmentWithRetry(ctx, job); err != nil {
-		return c.recordErrorf("install peras segment: %w", err)
-	}
+func (c *RemotePerasCommitter) publishFlushJobSeal(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) error {
 	if publisher, ok := c.authority.(perasSealPublisher); ok {
 		grant, found := c.grantForEpoch(holder.EpochID())
 		if !found {
 			return c.recordError(errPerasAuthorityNotHeld)
 		}
+		sealStart := time.Now()
 		if err := publisher.SealPerasSegment(ctx, grant, job.segment, job.digest); err != nil {
 			return c.recordErrorf("publish peras segment seal: %w", err)
 		}
+		c.recordSealLatency(time.Since(sealStart))
+		c.sealTotal.Add(1)
 	}
 	c.flushTotal.Add(1)
 	return nil
+}
+
+func (c *RemotePerasCommitter) recordFlushLatency(d time.Duration) {
+	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, d)
+}
+
+func (c *RemotePerasCommitter) recordWitnessLatency(d time.Duration) {
+	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, d)
+}
+
+func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
+	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, d)
+}
+
+func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
+	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, d)
+}
+
+func recordPerasDuration(total, last *atomic.Uint64, d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	ns := uint64(d.Nanoseconds())
+	total.Add(ns)
+	last.Store(ns)
+}
+
+func averagePerasDuration(total, count uint64) uint64 {
+	if count == 0 {
+		return 0
+	}
+	return total / count
+}
+
+func defaultPerasSegmentInstallParallelism() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (perasauth.AuthorityGrant, bool) {
@@ -1265,30 +1404,44 @@ func appendPerasViewKV(out []fsperas.OverlayKV, entry runtimePerasOverlayEntry) 
 func (c *RemotePerasCommitter) Stats() map[string]any {
 	if c == nil {
 		return map[string]any{
-			"commit_total":                  uint64(0),
-			"flush_total":                   uint64(0),
-			"segment_total":                 uint64(0),
-			"segment_operations_total":      uint64(0),
-			"segment_entries_total":         uint64(0),
-			"last_segment_operations":       uint64(0),
-			"last_segment_input_mutations":  uint64(0),
-			"last_segment_entries":          uint64(0),
-			"last_segment_coalesced":        uint64(0),
-			"last_segment_compression_x100": uint64(0),
-			"last_segment_root":             [32]byte{},
-			"last_error":                    "",
-			"error_total":                   uint64(0),
-			"retry_total":                   uint64(0),
-			"background_skip_total":         uint64(0),
-			"background_error_total":        uint64(0),
-			"overlay_keys":                  0,
-			"segment_keys":                  0,
-			"predicate_known_keys":          0,
-			"predicate_empty_dirs":          0,
-			"holders":                       0,
-			"pending":                       0,
-			"witness_count":                 0,
-			"quorum":                        0,
+			"commit_total":                       uint64(0),
+			"flush_total":                        uint64(0),
+			"segment_total":                      uint64(0),
+			"seal_total":                         uint64(0),
+			"segment_operations_total":           uint64(0),
+			"segment_entries_total":              uint64(0),
+			"flush_latency_total_nanosecond":     uint64(0),
+			"flush_latency_last_nanosecond":      uint64(0),
+			"flush_latency_average_nanosecond":   uint64(0),
+			"witness_latency_total_nanosecond":   uint64(0),
+			"witness_latency_last_nanosecond":    uint64(0),
+			"witness_latency_average_nanosecond": uint64(0),
+			"install_latency_total_nanosecond":   uint64(0),
+			"install_latency_last_nanosecond":    uint64(0),
+			"install_latency_average_nanosecond": uint64(0),
+			"seal_latency_total_nanosecond":      uint64(0),
+			"seal_latency_last_nanosecond":       uint64(0),
+			"seal_latency_average_nanosecond":    uint64(0),
+			"last_segment_operations":            uint64(0),
+			"last_segment_input_mutations":       uint64(0),
+			"last_segment_entries":               uint64(0),
+			"last_segment_coalesced":             uint64(0),
+			"last_segment_compression_x100":      uint64(0),
+			"last_segment_root":                  [32]byte{},
+			"last_error":                         "",
+			"error_total":                        uint64(0),
+			"retry_total":                        uint64(0),
+			"background_skip_total":              uint64(0),
+			"background_error_total":             uint64(0),
+			"overlay_keys":                       0,
+			"segment_keys":                       0,
+			"predicate_known_keys":               0,
+			"predicate_empty_dirs":               0,
+			"holders":                            0,
+			"pending":                            0,
+			"segment_install_parallelism":        0,
+			"witness_count":                      0,
+			"quorum":                             0,
 		}
 	}
 	c.overlayMu.RLock()
@@ -1309,31 +1462,51 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 	lastSegmentRoot := c.lastSegmentRoot
 	lastError := c.lastError
 	c.statsMu.RUnlock()
+	flushTotal := c.flushTotal.Load()
+	sealTotal := c.sealTotal.Load()
+	flushLatencyTotal := c.flushLatencyTotal.Load()
+	witnessLatencyTotal := c.witnessLatencyTotal.Load()
+	installLatencyTotal := c.installLatencyTotal.Load()
+	sealLatencyTotal := c.sealLatencyTotal.Load()
 	return map[string]any{
-		"commit_total":                  c.commitTotal.Load(),
-		"flush_total":                   c.flushTotal.Load(),
-		"segment_total":                 c.segmentTotal.Load(),
-		"segment_operations_total":      c.segmentOpsTotal.Load(),
-		"segment_entries_total":         c.segmentEntryTotal.Load(),
-		"last_segment_operations":       lastSegmentStats.OperationCount,
-		"last_segment_input_mutations":  lastSegmentStats.InputMutationCount,
-		"last_segment_entries":          lastSegmentStats.EntryCount,
-		"last_segment_coalesced":        lastSegmentStats.CoalescedMutations,
-		"last_segment_compression_x100": uint64(lastSegmentStats.CompressionRatio * 100),
-		"last_segment_root":             lastSegmentRoot,
-		"last_error":                    lastError,
-		"error_total":                   c.errorTotal.Load(),
-		"retry_total":                   c.retryTotal.Load(),
-		"background_skip_total":         c.bgSkipTotal.Load(),
-		"background_error_total":        c.bgErrorTotal.Load(),
-		"overlay_keys":                  overlayKeys,
-		"segment_keys":                  segmentKeys,
-		"predicate_known_keys":          knownKeys,
-		"predicate_empty_dirs":          emptyDirs,
-		"holders":                       holders,
-		"pending":                       pending,
-		"witness_count":                 len(c.witnesses),
-		"quorum":                        c.quorum,
+		"commit_total":                       c.commitTotal.Load(),
+		"flush_total":                        flushTotal,
+		"segment_total":                      c.segmentTotal.Load(),
+		"seal_total":                         sealTotal,
+		"segment_operations_total":           c.segmentOpsTotal.Load(),
+		"segment_entries_total":              c.segmentEntryTotal.Load(),
+		"flush_latency_total_nanosecond":     flushLatencyTotal,
+		"flush_latency_last_nanosecond":      c.flushLatencyLast.Load(),
+		"flush_latency_average_nanosecond":   averagePerasDuration(flushLatencyTotal, flushTotal),
+		"witness_latency_total_nanosecond":   witnessLatencyTotal,
+		"witness_latency_last_nanosecond":    c.witnessLatencyLast.Load(),
+		"witness_latency_average_nanosecond": averagePerasDuration(witnessLatencyTotal, flushTotal),
+		"install_latency_total_nanosecond":   installLatencyTotal,
+		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
+		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
+		"seal_latency_total_nanosecond":      sealLatencyTotal,
+		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
+		"seal_latency_average_nanosecond":    averagePerasDuration(sealLatencyTotal, sealTotal),
+		"last_segment_operations":            lastSegmentStats.OperationCount,
+		"last_segment_input_mutations":       lastSegmentStats.InputMutationCount,
+		"last_segment_entries":               lastSegmentStats.EntryCount,
+		"last_segment_coalesced":             lastSegmentStats.CoalescedMutations,
+		"last_segment_compression_x100":      uint64(lastSegmentStats.CompressionRatio * 100),
+		"last_segment_root":                  lastSegmentRoot,
+		"last_error":                         lastError,
+		"error_total":                        c.errorTotal.Load(),
+		"retry_total":                        c.retryTotal.Load(),
+		"background_skip_total":              c.bgSkipTotal.Load(),
+		"background_error_total":             c.bgErrorTotal.Load(),
+		"overlay_keys":                       overlayKeys,
+		"segment_keys":                       segmentKeys,
+		"predicate_known_keys":               knownKeys,
+		"predicate_empty_dirs":               emptyDirs,
+		"holders":                            holders,
+		"pending":                            pending,
+		"segment_install_parallelism":        c.installN,
+		"witness_count":                      len(c.witnesses),
+		"quorum":                             c.quorum,
 	}
 }
 
