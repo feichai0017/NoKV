@@ -12,6 +12,7 @@ LAYOUT_VERSION = 1
 OPAQUE_ATTRS_MAX_BYTES = 16 * 1024
 
 _COMPONENT_PREFIX = "b64~"
+_DELTA_WRITE_ORDERED_PREFIX = "dw~2~"
 _WRITE_IDX_OFFSET = 1 << 63
 _WRITE_IDX_WIDTH = 20
 
@@ -308,6 +309,17 @@ def write_name(task_id: str, idx: int) -> str:
 
 def delta_write_name(checkpoint_id: str, task_id: str, idx: int) -> str:
     return (
+        _DELTA_WRITE_ORDERED_PREFIX
+        + _encode_ordered_component(checkpoint_id)
+        + "~"
+        + encode_component(task_id)
+        + "~"
+        + encode_write_idx(idx)
+    )
+
+
+def legacy_delta_write_name(checkpoint_id: str, task_id: str, idx: int) -> str:
+    return (
         "dw~"
         + encode_component(checkpoint_id)
         + "~"
@@ -315,6 +327,27 @@ def delta_write_name(checkpoint_id: str, task_id: str, idx: int) -> str:
         + "~"
         + encode_write_idx(idx)
     )
+
+
+def delta_write_checkpoint_id_from_name(name: str) -> str | None:
+    if not name.startswith(_DELTA_WRITE_ORDERED_PREFIX):
+        return None
+    remainder = name[len(_DELTA_WRITE_ORDERED_PREFIX) :]
+    checkpoint_hex, _, _ = remainder.partition("~")
+    if checkpoint_hex == "":
+        return ""
+    try:
+        return _decode_ordered_component(checkpoint_hex)
+    except ValueError:
+        return None
+
+
+def delta_write_range_start_after(checkpoint_id: str) -> str:
+    return _DELTA_WRITE_ORDERED_PREFIX + _encode_ordered_component(checkpoint_id) + "~"
+
+
+def delta_write_range_stop_after(checkpoint_id: str) -> str:
+    return delta_write_range_start_after(checkpoint_id) + "\uffff"
 
 
 def encode_write_idx(idx: int) -> str:
@@ -328,6 +361,17 @@ def decode_write_idx(name: str) -> int:
     if not name.startswith("i~"):
         raise ValueError("write idx component must start with 'i~'")
     return int(name[2:]) - _WRITE_IDX_OFFSET
+
+
+def _encode_ordered_component(value: str) -> str:
+    return value.encode("utf-8").hex()
+
+
+def _decode_ordered_component(value: str) -> str:
+    try:
+        return bytes.fromhex(value).decode("utf-8")
+    except ValueError as exc:
+        raise ValueError("ordered component must be UTF-8 hex") from exc
 
 
 def directory_attrs(kind: str = "generic") -> bytes:

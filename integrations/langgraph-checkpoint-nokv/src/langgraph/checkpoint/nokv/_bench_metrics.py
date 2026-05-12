@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from threading import RLock
@@ -55,18 +55,34 @@ class OperationStats:
         }
 
 
-class InstrumentedFsMetaClient:
-    def __init__(self, inner: Any, *, root_inode: int = 1) -> None:
-        self.inner = inner
-        self.operations: dict[str, OperationStats] = {}
-        self._by_phase: dict[str, dict[str, OperationStats]] = {}
-        self._by_category: dict[str, dict[str, OperationStats]] = {}
-        self._by_phase_category: dict[
-            str, dict[str, dict[str, OperationStats]]
-        ] = {}
+@dataclass
+class PayloadOperationStats:
+    durations_s: list[float] = field(default_factory=list)
+    bytes_total: int = 0
+    items_total: int = 0
+
+    def add(self, duration_s: float = 0.0, *, bytes_count: int = 0, items: int = 1) -> None:
+        self.durations_s.append(duration_s)
+        self.bytes_total += bytes_count
+        self.items_total += items
+
+    def to_json(self) -> dict[str, float | int]:
+        timing = OperationStats(self.durations_s).to_json()
+        count = int(timing["count"])
+        timing["bytes_total"] = self.bytes_total
+        timing["items_total"] = self.items_total
+        timing["avg_bytes"] = self.bytes_total / count if count else 0.0
+        timing["avg_items"] = self.items_total / count if count else 0.0
+        return timing
+
+
+class PhaseTracker:
+    def __init__(self) -> None:
         self._phase = UNSCOPED_PHASE
-        self._lock = RLock()
-        self._inode_paths: dict[int, tuple[str, ...]] = {root_inode: ()}
+
+    @property
+    def current(self) -> str:
+        return self._phase
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -76,6 +92,31 @@ class InstrumentedFsMetaClient:
             yield
         finally:
             self._phase = previous
+
+
+class InstrumentedFsMetaClient:
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        root_inode: int = 1,
+        phase_tracker: PhaseTracker | None = None,
+    ) -> None:
+        self.inner = inner
+        self.operations: dict[str, OperationStats] = {}
+        self._by_phase: dict[str, dict[str, OperationStats]] = {}
+        self._by_category: dict[str, dict[str, OperationStats]] = {}
+        self._by_phase_category: dict[
+            str, dict[str, dict[str, OperationStats]]
+        ] = {}
+        self._phase_tracker = phase_tracker or PhaseTracker()
+        self._lock = RLock()
+        self._inode_paths: dict[int, tuple[str, ...]] = {root_inode: ()}
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        with self._phase_tracker.phase(name):
+            yield
 
     def close(self) -> None:
         self.inner.close()
@@ -111,7 +152,7 @@ class InstrumentedFsMetaClient:
         return self._call("snapshot_subtree", self.inner.snapshot_subtree, **kwargs)
 
     def _call(self, op_name: str, fn: Callable[..., Any], **kwargs: Any) -> Any:
-        phase = self._phase
+        phase = self._phase_tracker.current
         category = self._category_for_request(op_name, kwargs)
         start = time.perf_counter()
         try:
@@ -241,6 +282,183 @@ class InstrumentedFsMetaClient:
             return out
 
 
+class InstrumentedCheckpointBodyStore:
+    """Benchmark-only wrapper for body-store IO timing and byte counts."""
+
+    empty_type = "empty"
+
+    def __init__(self, inner: Any, *, phase_tracker: PhaseTracker) -> None:
+        self.inner = inner
+        self._phase_tracker = phase_tracker
+        self.operations: dict[str, PayloadOperationStats] = {}
+        self._by_phase: dict[str, dict[str, PayloadOperationStats]] = {}
+        self._lock = RLock()
+        self.empty_type = getattr(inner, "empty_type", self.empty_type)
+
+    def put_typed(self, type_tag: str, data: bytes | None) -> Any:
+        start = time.perf_counter()
+        result = self.inner.put_typed(type_tag, data)
+        self._record(
+            "put_typed",
+            time.perf_counter() - start,
+            bytes_count=_bytes_len(data),
+        )
+        return result
+
+    def get_typed(self, body: Any) -> tuple[str, bytes | None]:
+        start = time.perf_counter()
+        type_tag, data = self.inner.get_typed(body)
+        self._record(
+            "get_typed",
+            time.perf_counter() - start,
+            bytes_count=_bytes_len(data),
+        )
+        return type_tag, data
+
+    def _record(self, op_name: str, duration_s: float, *, bytes_count: int) -> None:
+        phase = self._phase_tracker.current
+        with self._lock:
+            self.operations.setdefault(op_name, PayloadOperationStats()).add(
+                duration_s,
+                bytes_count=bytes_count,
+            )
+            self._by_phase.setdefault(phase, {}).setdefault(
+                op_name,
+                PayloadOperationStats(),
+            ).add(duration_s, bytes_count=bytes_count)
+
+    def to_json(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "operations": _payload_stats_to_json(self.operations),
+                "by_phase": _payload_stats_by_operation_to_json(self._by_phase),
+            }
+
+
+class InstrumentedSerde:
+    """Benchmark-only wrapper for serializer/deserializer hydrate timing."""
+
+    def __init__(self, inner: Any, *, phase_tracker: PhaseTracker) -> None:
+        self.inner = inner
+        self._phase_tracker = phase_tracker
+        self.operations: dict[str, PayloadOperationStats] = {}
+        self._by_phase: dict[str, dict[str, PayloadOperationStats]] = {}
+        self._lock = RLock()
+
+    def dumps_typed(self, value: Any) -> tuple[str, bytes]:
+        start = time.perf_counter()
+        type_tag, data = self.inner.dumps_typed(value)
+        self._record(
+            "dumps_typed",
+            time.perf_counter() - start,
+            bytes_count=_bytes_len(data),
+        )
+        return type_tag, data
+
+    def loads_typed(self, value: tuple[str, bytes | None]) -> Any:
+        start = time.perf_counter()
+        result = self.inner.loads_typed(value)
+        self._record(
+            "loads_typed",
+            time.perf_counter() - start,
+            bytes_count=_bytes_len(value[1]),
+        )
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def _record(self, op_name: str, duration_s: float, *, bytes_count: int) -> None:
+        phase = self._phase_tracker.current
+        with self._lock:
+            self.operations.setdefault(op_name, PayloadOperationStats()).add(
+                duration_s,
+                bytes_count=bytes_count,
+            )
+            self._by_phase.setdefault(phase, {}).setdefault(
+                op_name,
+                PayloadOperationStats(),
+            ).add(duration_s, bytes_count=bytes_count)
+
+    def to_json(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "operations": _payload_stats_to_json(self.operations),
+                "by_phase": _payload_stats_by_operation_to_json(self._by_phase),
+            }
+
+
+class InstrumentedSaverMetrics:
+    """Benchmark-only counters for saver-level hydrated pending writes."""
+
+    def __init__(self, *, phase_tracker: PhaseTracker) -> None:
+        self._phase_tracker = phase_tracker
+        self.operations: dict[str, PayloadOperationStats] = {}
+        self._by_phase: dict[str, dict[str, PayloadOperationStats]] = {}
+        self._lock = RLock()
+
+    def record_items(self, op_name: str, items: int, duration_s: float = 0.0) -> None:
+        phase = self._phase_tracker.current
+        with self._lock:
+            self.operations.setdefault(op_name, PayloadOperationStats()).add(
+                duration_s,
+                items=items,
+            )
+            self._by_phase.setdefault(phase, {}).setdefault(
+                op_name,
+                PayloadOperationStats(),
+            ).add(duration_s, items=items)
+
+    def wrap_nokv_saver(self, saver: Any) -> None:
+        original = saver._load_pending_writes
+
+        def measured_load_pending_writes(*args: Any, **kwargs: Any) -> Any:
+            start = time.perf_counter()
+            result = original(*args, **kwargs)
+            self.record_items(
+                "load_pending_writes",
+                len(result),
+                time.perf_counter() - start,
+            )
+            return result
+
+        saver._load_pending_writes = measured_load_pending_writes
+
+    def wrap_postgres_saver(self, saver: Any) -> None:
+        original = saver._load_writes
+
+        def measured_load_writes(*args: Any, **kwargs: Any) -> Any:
+            start = time.perf_counter()
+            result = original(*args, **kwargs)
+            self.record_items(
+                "load_pending_writes",
+                len(result),
+                time.perf_counter() - start,
+            )
+            return result
+
+        saver._load_writes = measured_load_writes
+
+    def record_delta_history_result(
+        self, result: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        self.record_items(
+            "delta_history_writes",
+            sum(len(history.get("writes", ())) for history in result.values()),
+        )
+        self.record_items(
+            "delta_history_seeds",
+            sum(1 for history in result.values() if "seed" in history),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "operations": _payload_stats_to_json(self.operations),
+                "by_phase": _payload_stats_by_operation_to_json(self._by_phase),
+            }
+
+
 def _category_for_entry_path(path: tuple[str, ...] | None) -> str:
     if not path:
         return CATEGORY_OTHER
@@ -309,6 +527,28 @@ def _stats_by_phase_category_to_json(
         phase: _stats_by_operation_to_json(categories)
         for phase, categories in sorted(values.items(), key=lambda item: item[0])
     }
+
+
+def _payload_stats_to_json(
+    values: dict[str, PayloadOperationStats],
+) -> dict[str, dict[str, float | int]]:
+    return {
+        name: stats.to_json()
+        for name, stats in sorted(values.items(), key=lambda item: item[0])
+    }
+
+
+def _payload_stats_by_operation_to_json(
+    values: dict[str, dict[str, PayloadOperationStats]],
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    return {
+        group: _payload_stats_to_json(operations)
+        for group, operations in sorted(values.items(), key=lambda item: item[0])
+    }
+
+
+def _bytes_len(value: bytes | None) -> int:
+    return len(value) if value is not None else 0
 
 
 def _int_or_none(value: Any) -> int | None:

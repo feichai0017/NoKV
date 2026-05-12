@@ -18,6 +18,7 @@ from langgraph.checkpoint.nokv import (
     CheckpointBodyStore,
     CheckpointEntryAttrs,
     NoKVCheckpointSaver,
+    delta_write_checkpoint_id_from_name,
 )
 from langgraph.checkpoint.serde.types import _DeltaSnapshot
 
@@ -50,6 +51,7 @@ class CountingFsMetaClient(FakeFsMetaClient):
         self.batch_lookup_plus_count = 0
         self.batch_lookup_plus_names: list[list[str]] = []
         self.read_dir_plus_count = 0
+        self.read_dir_plus_pages: list[list[str]] = []
 
     def create(self, **kwargs):
         self.create_count += 1
@@ -75,7 +77,9 @@ class CountingFsMetaClient(FakeFsMetaClient):
 
     def read_dir_plus(self, **kwargs):
         self.read_dir_plus_count += 1
-        return super().read_dir_plus(**kwargs)
+        page = super().read_dir_plus(**kwargs)
+        self.read_dir_plus_pages.append([pair.dentry.name for pair in page])
+        return page
 
 
 class StaleLookupAfterCreateConflictFsMetaClient(FakeFsMetaClient):
@@ -499,7 +503,7 @@ def test_delta_history_fast_path_avoids_canonical_writes_scan(tmp_path):
     asyncio.run(run())
 
 
-def test_delta_history_stage1_reads_checkpoint_directory_page(tmp_path):
+def test_delta_history_stage1_uses_cached_checkpoint_attrs_after_put(tmp_path):
     async def run():
         client = CountingFsMetaClient()
         saver = NoKVCheckpointSaver(
@@ -530,7 +534,7 @@ def test_delta_history_stage1_reads_checkpoint_directory_page(tmp_path):
         assert [write[2] for write in result["ch"]["writes"]] == [1, 2, 3]
         assert result["ch"]["seed"].value == 0
         assert client.lookup_plus_count == 1  # logical thread tombstone check
-        assert client.read_dir_plus_count == 2  # checkpoints page + delta index page
+        assert client.read_dir_plus_count == 1  # delta index page only
 
     asyncio.run(run())
 
@@ -747,6 +751,49 @@ def test_delta_history_multi_channel_windows_are_independent(tmp_path):
     asyncio.run(run())
 
 
+def test_delta_history_ordered_delta_index_scans_only_replay_window(tmp_path):
+    async def run():
+        client = CountingFsMetaClient()
+        saver = NoKVCheckpointSaver(
+            fsmeta_client=client,
+            mount="vol",
+            body_store=CheckpointBodyStore.from_local_path(tmp_path),
+        )
+        configs = await build_delta_chain(
+            saver,
+            thread_id="thread-ordered-delta-range",
+            channel="ch",
+            snapshots_at_steps=[0, 4],
+            total_steps=7,
+            write_value_fn=lambda step: f"write-{step}",
+            checkpoint_id_fn=lambda step: f"{step:06d}",
+        )
+
+        client.read_dir_plus_count = 0
+        client.read_dir_plus_pages.clear()
+        result = await saver.aget_delta_channel_history(
+            config=configs[-1],
+            channels=["ch"],
+        )
+
+        assert [write[2] for write in result["ch"]["writes"]] == ["write-5"]
+        assert result["ch"]["seed"].value == "write-4"
+        delta_pages = [
+            names
+            for names in client.read_dir_plus_pages
+            if any(name.startswith("dw~") for name in names)
+        ]
+        assert len(delta_pages) == 1
+        scanned_checkpoint_ids = {
+            checkpoint_id
+            for name in delta_pages[0]
+            if (checkpoint_id := delta_write_checkpoint_id_from_name(name)) is not None
+        }
+        assert scanned_checkpoint_ids == {"000005", "000006"}
+
+    asyncio.run(run())
+
+
 def test_delta_history_plain_value_seed_keeps_seed_checkpoint_writes(tmp_path):
     async def run():
         saver = make_saver(tmp_path)
@@ -790,6 +837,7 @@ async def build_delta_chain(
     snapshots_at_steps: Sequence[int] = (0,),
     total_steps: int = 6,
     write_value_fn: Any | None = None,
+    checkpoint_id_fn: Any | None = None,
 ) -> list[RunnableConfig]:
     """Local DeltaChannel fixture matching LangGraph's public saver contract.
 
@@ -803,6 +851,11 @@ async def build_delta_chain(
 
         def write_value_fn(step: int) -> Any:
             return step
+
+    if checkpoint_id_fn is None:
+
+        def checkpoint_id_fn(step: int) -> str:
+            return str(uuid6(clock_seq=-1))
 
     thread_id = thread_id or str(uuid4())
     snapshot_set = set(snapshots_at_steps)
@@ -821,6 +874,7 @@ async def build_delta_chain(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             parent_config=parent_config,
+            checkpoint_id=checkpoint_id_fn(step),
             channel_values=channel_values,
             channel_versions=channel_versions,
         )

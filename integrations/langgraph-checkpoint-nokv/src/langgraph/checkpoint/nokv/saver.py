@@ -38,6 +38,10 @@ from langgraph.checkpoint.nokv.layout import (
     FsMetaLayout,
     HeadEntryAttrs,
     WriteEntryAttrs,
+    decode_component,
+    delta_write_checkpoint_id_from_name,
+    delta_write_range_start_after,
+    delta_write_range_stop_after,
     directory_attrs,
     thread_tombstone_attrs,
 )
@@ -82,6 +86,16 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
         self._metadata_cache: OrderedDict[
             tuple[str, ...], CheckpointEntryAttrs | ChannelBlobEntryAttrs
         ] = OrderedDict()
+        self._checkpoint_attrs_lock = RLock()
+        self._checkpoint_attrs_by_namespace: dict[
+            tuple[str, str], dict[str, CheckpointEntryAttrs]
+        ] = {}
+        self._checkpoint_order_by_namespace: dict[tuple[str, str], list[str]] = {}
+        self._checkpoint_complete_namespaces: set[tuple[str, str]] = set()
+        self._delta_ordered_index_lock = RLock()
+        self._delta_ordered_index_checkpoints: dict[
+            tuple[str, str, str], set[str]
+        ] = {}
 
     def put(
         self,
@@ -171,18 +185,19 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
             return
 
         before_id = get_checkpoint_id(before) if before else None
-        entries = self._list_dir(self.layout.checkpoints_dir(thread_id, checkpoint_ns))
-        checkpoint_ids: list[str] = []
-        for pair in entries:
-            try:
-                attrs = CheckpointEntryAttrs.from_opaque_attrs(pair.inode.opaque_attrs)
-            except (KeyError, ValueError):
-                continue
-            self._remember_checkpoint_attrs(thread_id, checkpoint_ns, attrs)
-            checkpoint_ids.append(attrs.checkpoint_id)
+        attrs_by_id = self._load_checkpoint_attrs_map(thread_id, checkpoint_ns)
+        if attrs_by_id is None:
+            return
+        checkpoint_ids = self._checkpoint_ids_desc(
+            thread_id, checkpoint_ns, attrs_by_id
+        )
 
         yielded = 0
-        for checkpoint_id in sorted(set(checkpoint_ids), reverse=True):
+        seen_checkpoint_ids: set[str] = set()
+        for checkpoint_id in checkpoint_ids:
+            if checkpoint_id in seen_checkpoint_ids:
+                continue
+            seen_checkpoint_ids.add(checkpoint_id)
             if before_id is not None and checkpoint_id >= before_id:
                 continue
             tup = self._load_tuple(thread_id, checkpoint_ns, checkpoint_id)
@@ -448,6 +463,12 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
             self._put_file(entry, delta_attrs.to_opaque_attrs())
         else:
             self._create_file_noop_on_exists(entry, delta_attrs.to_opaque_attrs())
+        self._remember_delta_ordered_index_checkpoint(
+            thread_id,
+            checkpoint_ns,
+            attrs.channel,
+            checkpoint_id,
+        )
 
     def _target_checkpoint_id_if_thread_active(
         self, config: RunnableConfig, thread_id: str, checkpoint_ns: str
@@ -473,12 +494,52 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
         seed body refs, so this stage does not hydrate checkpoint envelopes or
         read channel blob inodes just to discover where each channel's seed is.
         """
+        cached = self._delta_replay_window_from_cached_attrs(
+            thread_id, checkpoint_ns, checkpoint_id, channels
+        )
+        if cached is not None:
+            return cached
+
         attrs_by_id = self._load_checkpoint_attrs_map(thread_id, checkpoint_ns)
         if attrs_by_id is None:
             return None
 
+        return self._build_delta_replay_window(
+            attrs_by_id,
+            checkpoint_id,
+            channels,
+            require_complete_chain=False,
+        )
+
+    def _delta_replay_window_from_cached_attrs(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        channels: Sequence[str],
+    ) -> tuple[dict[str, set[str]], dict[str, TypedBodyRef], dict[str, int]] | None:
+        attrs_by_id = self._cached_checkpoint_attrs_map(thread_id, checkpoint_ns)
+        if not attrs_by_id:
+            return None
+        return self._build_delta_replay_window(
+            attrs_by_id,
+            checkpoint_id,
+            channels,
+            require_complete_chain=True,
+        )
+
+    def _build_delta_replay_window(
+        self,
+        attrs_by_id: Mapping[str, CheckpointEntryAttrs],
+        checkpoint_id: str,
+        channels: Sequence[str],
+        *,
+        require_complete_chain: bool,
+    ) -> tuple[dict[str, set[str]], dict[str, TypedBodyRef], dict[str, int]] | None:
         target = attrs_by_id.get(checkpoint_id)
         if target is None:
+            if require_complete_chain:
+                return None
             empty = {channel: set() for channel in channels}
             return empty, {}, {}
         if target.seed_body_refs_by_channel is None:
@@ -494,6 +555,8 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
         while cursor_id is not None and remaining:
             attrs = attrs_by_id.get(cursor_id)
             if attrs is None:
+                if require_complete_chain:
+                    return None
                 break
             if attrs.seed_body_refs_by_channel is None:
                 return None
@@ -515,6 +578,10 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
     def _load_checkpoint_attrs_map(
         self, thread_id: str, checkpoint_ns: str
     ) -> dict[str, CheckpointEntryAttrs] | None:
+        cached = self._cached_complete_checkpoint_attrs_map(thread_id, checkpoint_ns)
+        if cached is not None:
+            return cached
+
         attrs_by_id: dict[str, CheckpointEntryAttrs] = {}
         for pair in self._list_dir(self.layout.checkpoints_dir(thread_id, checkpoint_ns)):
             try:
@@ -523,7 +590,72 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
                 return None
             attrs_by_id[attrs.checkpoint_id] = attrs
             self._remember_checkpoint_attrs(thread_id, checkpoint_ns, attrs)
+        self._remember_complete_checkpoint_attrs_map(
+            thread_id,
+            checkpoint_ns,
+            attrs_by_id,
+        )
         return attrs_by_id
+
+    def _cached_checkpoint_attrs_map(
+        self, thread_id: str, checkpoint_ns: str
+    ) -> dict[str, CheckpointEntryAttrs] | None:
+        key = (thread_id, checkpoint_ns)
+        with self._checkpoint_attrs_lock:
+            cached = self._checkpoint_attrs_by_namespace.get(key)
+            if cached is None:
+                return None
+            return dict(cached)
+
+    def _cached_complete_checkpoint_attrs_map(
+        self, thread_id: str, checkpoint_ns: str
+    ) -> dict[str, CheckpointEntryAttrs] | None:
+        key = (thread_id, checkpoint_ns)
+        with self._checkpoint_attrs_lock:
+            if key not in self._checkpoint_complete_namespaces:
+                return None
+            cached = self._checkpoint_attrs_by_namespace.get(key)
+            return dict(cached) if cached is not None else {}
+
+    def _remember_complete_checkpoint_attrs_map(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        attrs_by_id: Mapping[str, CheckpointEntryAttrs],
+    ) -> None:
+        key = (thread_id, checkpoint_ns)
+        with self._checkpoint_attrs_lock:
+            self._checkpoint_attrs_by_namespace[key] = dict(attrs_by_id)
+            self._checkpoint_order_by_namespace[key] = sorted(
+                attrs_by_id.keys(),
+                reverse=True,
+            )
+            self._checkpoint_complete_namespaces.add(key)
+
+    def _remember_checkpoint_attrs_in_namespace(
+        self, thread_id: str, checkpoint_ns: str, attrs: CheckpointEntryAttrs
+    ) -> None:
+        key = (thread_id, checkpoint_ns)
+        with self._checkpoint_attrs_lock:
+            cached = self._checkpoint_attrs_by_namespace.setdefault(key, {})
+            cached[attrs.checkpoint_id] = attrs
+            self._checkpoint_order_by_namespace[key] = sorted(
+                cached.keys(),
+                reverse=True,
+            )
+
+    def _checkpoint_ids_desc(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        attrs_by_id: Mapping[str, CheckpointEntryAttrs],
+    ) -> list[str]:
+        key = (thread_id, checkpoint_ns)
+        with self._checkpoint_attrs_lock:
+            cached = self._checkpoint_order_by_namespace.get(key)
+            if cached is not None and set(cached) == set(attrs_by_id):
+                return list(cached)
+        return sorted(attrs_by_id, reverse=True)
 
     def _load_delta_index_writes(
         self,
@@ -539,10 +671,87 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
 
         delta_dir = self.layout.delta_channel_dir(thread_id, checkpoint_ns, channel)
         try:
-            self._resolve_path(delta_dir)
+            delta_parent = self._resolve_path(delta_dir)
         except FileNotFoundError:
             return None
 
+        if self._delta_ordered_index_covers(
+            thread_id,
+            checkpoint_ns,
+            channel,
+            eligible_checkpoints,
+        ):
+            return self._load_delta_index_writes_ordered(
+                delta_parent=delta_parent,
+                eligible_checkpoints=eligible_checkpoints,
+                ancestor_rank=ancestor_rank,
+            )
+
+        return self._load_delta_index_writes_legacy(
+            delta_dir=delta_dir,
+            channel=channel,
+            eligible_checkpoints=eligible_checkpoints,
+            ancestor_rank=ancestor_rank,
+        )
+
+    def _load_delta_index_writes_ordered(
+        self,
+        *,
+        delta_parent: int,
+        eligible_checkpoints: set[str],
+        ancestor_rank: Mapping[str, int],
+    ) -> list[PendingWrite] | None:
+        lower_checkpoint = min(eligible_checkpoints)
+        upper_checkpoint = max(eligible_checkpoints)
+        start_after = delta_write_range_start_after(lower_checkpoint)
+        stop_after = delta_write_range_stop_after(upper_checkpoint)
+
+        writes: list[tuple[int, str, int, DeltaWriteEntryAttrs]] = []
+        while True:
+            page = self.fsmeta.read_dir_plus(
+                mount=self.mount,
+                parent=delta_parent,
+                start_after=start_after,
+                limit=_DIR_PAGE_LIMIT,
+            )
+            if not page:
+                break
+            stop = False
+            for pair in page:
+                name = pair.dentry.name
+                if name > stop_after:
+                    stop = True
+                    break
+                checkpoint_id = delta_write_checkpoint_id_from_name(name)
+                if checkpoint_id is None:
+                    continue
+                if checkpoint_id not in eligible_checkpoints:
+                    continue
+                try:
+                    attrs = DeltaWriteEntryAttrs.from_opaque_attrs(
+                        pair.inode.opaque_attrs
+                    )
+                except (KeyError, ValueError):
+                    return None
+                if attrs.checkpoint_id != checkpoint_id:
+                    return None
+                rank = ancestor_rank.get(attrs.checkpoint_id)
+                if rank is None:
+                    return None
+                writes.append((rank, attrs.task_id, attrs.idx, attrs))
+            if stop or len(page) < _DIR_PAGE_LIMIT:
+                break
+            start_after = page[-1].dentry.name
+        return self._delta_index_writes_to_pending(writes)
+
+    def _load_delta_index_writes_legacy(
+        self,
+        *,
+        delta_dir: tuple[str, ...],
+        channel: str,
+        eligible_checkpoints: set[str],
+        ancestor_rank: Mapping[str, int],
+    ) -> list[PendingWrite] | None:
         writes: list[tuple[int, str, int, DeltaWriteEntryAttrs]] = []
         for pair in self._list_dir(delta_dir):
             try:
@@ -564,12 +773,39 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
                     attrs,
                 )
             )
+        return self._delta_index_writes_to_pending(writes)
 
+    def _delta_index_writes_to_pending(
+        self, writes: list[tuple[int, str, int, DeltaWriteEntryAttrs]]
+    ) -> list[PendingWrite]:
         writes.sort(key=lambda item: (-item[0], item[1], item[2]))
         return [
             (attrs.task_id, attrs.channel, self._get_typed_body(attrs.body))
             for _, _, _, attrs in writes
         ]
+
+    def _remember_delta_ordered_index_checkpoint(
+        self, thread_id: str, checkpoint_ns: str, channel: str, checkpoint_id: str
+    ) -> None:
+        key = (thread_id, checkpoint_ns, channel)
+        with self._delta_ordered_index_lock:
+            self._delta_ordered_index_checkpoints.setdefault(key, set()).add(
+                checkpoint_id
+            )
+
+    def _delta_ordered_index_covers(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel: str,
+        eligible_checkpoints: set[str],
+    ) -> bool:
+        key = (thread_id, checkpoint_ns, channel)
+        with self._delta_ordered_index_lock:
+            indexed = self._delta_ordered_index_checkpoints.get(key)
+            if indexed is None:
+                return False
+            return eligible_checkpoints.issubset(indexed)
 
     def _write_channel_blobs(
         self,
@@ -579,11 +815,18 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
         new_versions: ChannelVersions,
     ) -> dict[str, TypedBodyRef]:
         values = checkpoint["channel_values"]
+        checkpoint_id = checkpoint["id"]
         seed_body_refs_by_channel: dict[str, TypedBodyRef] = {}
         for channel, version in new_versions.items():
             if channel in values:
                 body = self._put_typed_body(values[channel])
                 seed_body_refs_by_channel[channel] = body
+                self._remember_delta_ordered_index_checkpoint(
+                    thread_id,
+                    checkpoint_ns,
+                    channel,
+                    checkpoint_id,
+                )
             else:
                 body = TypedBodyRef(type=CheckpointBodyStore.empty_type)
             attrs = ChannelBlobEntryAttrs(
@@ -716,6 +959,7 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
             _checkpoint_attrs_cache_key(thread_id, checkpoint_ns, attrs.checkpoint_id),
             attrs,
         )
+        self._remember_checkpoint_attrs_in_namespace(thread_id, checkpoint_ns, attrs)
 
     def _cached_channel_blob_attrs(
         self, thread_id: str, checkpoint_ns: str, channel: str, version: Any
@@ -861,14 +1105,16 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
         existing = self._find_child(parent, entry.name)
         if existing is None:
             try:
-                return self._create_file_at(parent, entry.name, opaque_attrs)
+                inode = self._create_file_at(parent, entry.name, opaque_attrs)
+                self._maybe_remember_checkpoint_entry_attrs(entry, opaque_attrs)
+                return inode
             except Exception as exc:
                 if not _is_already_exists(exc):
                     raise
                 existing = self._find_child_after_create_conflict(parent, entry.name)
                 if existing is None:
                     raise
-        return self.fsmeta.update_inode(
+        inode = self.fsmeta.update_inode(
             mount=self.mount,
             parent=parent,
             inode=existing.inode.inode,
@@ -877,11 +1123,15 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
             updated_unix_ns=time.time_ns(),
             opaque_attrs=opaque_attrs,
         )
+        self._maybe_remember_checkpoint_entry_attrs(entry, opaque_attrs)
+        return inode
 
     def _create_immutable_file(self, entry: EntryPath, opaque_attrs: bytes) -> Inode:
         parent = self._ensure_dir(entry.parent)
         try:
-            return self._create_file_at(parent, entry.name, opaque_attrs)
+            inode = self._create_file_at(parent, entry.name, opaque_attrs)
+            self._maybe_remember_checkpoint_entry_attrs(entry, opaque_attrs)
+            return inode
         except Exception as exc:
             if not _is_already_exists(exc):
                 raise
@@ -892,6 +1142,7 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
                 raise FileExistsError(
                     f"immutable fsmeta entry already exists with different attrs: {entry.name}"
                 ) from exc
+            self._maybe_remember_checkpoint_entry_attrs(entry, opaque_attrs)
             return existing.inode
 
     def _create_file_noop_on_exists(
@@ -915,6 +1166,41 @@ class NoKVCheckpointSaver(BaseCheckpointSaver[str]):
             mode=0o600,
             opaque_attrs=opaque_attrs,
         ).inode
+
+    def _maybe_remember_checkpoint_entry_attrs(
+        self, entry: EntryPath, opaque_attrs: bytes
+    ) -> None:
+        namespace = self._checkpoint_namespace_from_entry(entry)
+        if namespace is None:
+            return
+        try:
+            attrs = CheckpointEntryAttrs.from_opaque_attrs(opaque_attrs)
+        except (KeyError, ValueError):
+            return
+        thread_id, checkpoint_ns = namespace
+        self._remember_checkpoint_attrs(thread_id, checkpoint_ns, attrs)
+
+    def _checkpoint_namespace_from_entry(
+        self, entry: EntryPath
+    ) -> tuple[str, str] | None:
+        parent = entry.parent
+        root_len = len(self.layout.root)
+        if len(parent) != root_len + 5:
+            return None
+        if parent[:root_len] != self.layout.root:
+            return None
+        if (
+            parent[root_len] != "threads"
+            or parent[root_len + 2] != "namespaces"
+            or parent[root_len + 4] != "checkpoints"
+        ):
+            return None
+        if not entry.name.startswith("c~"):
+            return None
+        return (
+            decode_component(parent[root_len + 1]),
+            decode_component(parent[root_len + 3]),
+        )
 
     def _read_file(self, entry: EntryPath) -> DentryAttrPair | None:
         try:

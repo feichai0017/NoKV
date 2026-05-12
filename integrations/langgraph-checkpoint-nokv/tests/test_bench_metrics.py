@@ -2,8 +2,22 @@ from __future__ import annotations
 
 from fake_fsmeta import FakeFsMetaClient
 
-from langgraph.checkpoint.nokv import InodeType, LookupKey
-from langgraph.checkpoint.nokv._bench_metrics import InstrumentedFsMetaClient
+from langgraph.checkpoint.nokv import CheckpointBodyStore, InodeType, LookupKey
+from langgraph.checkpoint.nokv._bench_metrics import (
+    InstrumentedCheckpointBodyStore,
+    InstrumentedFsMetaClient,
+    InstrumentedSaverMetrics,
+    InstrumentedSerde,
+    PhaseTracker,
+)
+
+
+class DummySerde:
+    def dumps_typed(self, value):
+        return "bytes", bytes(value)
+
+    def loads_typed(self, value):
+        return value[1]
 
 
 def test_instrumented_fsmeta_client_splits_phase_and_path_category():
@@ -163,3 +177,45 @@ def test_instrumented_fsmeta_client_records_batch_lookup_plus():
     assert metrics["batch_lookup_plus"]["count"] == 1
     assert metrics["by_phase"]["get_state_phase"]["batch_lookup_plus"]["count"] == 1
     assert metrics["by_category"]["mixed_lookup"]["batch_lookup_plus"]["count"] == 1
+
+
+def test_instrumented_payload_metrics_record_phase_bytes_and_items(tmp_path):
+    phase_tracker = PhaseTracker()
+    body_store = InstrumentedCheckpointBodyStore(
+        CheckpointBodyStore.from_local_path(tmp_path / "body"),
+        phase_tracker=phase_tracker,
+    )
+    serde = InstrumentedSerde(DummySerde(), phase_tracker=phase_tracker)
+    saver_metrics = InstrumentedSaverMetrics(phase_tracker=phase_tracker)
+
+    with phase_tracker.phase("get_state_phase"):
+        body = serde.dumps_typed(b"payload")
+        ref = body_store.put_typed(*body)
+        loaded = body_store.get_typed(ref)
+        assert serde.loads_typed(loaded) == b"payload"
+        saver_metrics.record_items("load_pending_writes", 3)
+
+    with phase_tracker.phase("delta_history_phase"):
+        saver_metrics.record_delta_history_result(
+            {
+                "ch0": {"writes": [("task", "ch0", 1), ("task", "ch0", 2)]},
+                "ch1": {"writes": [], "seed": "snapshot"},
+            }
+        )
+
+    assert body_store.to_json()["by_phase"]["get_state_phase"]["get_typed"][
+        "bytes_total"
+    ] == len(b"payload")
+    assert serde.to_json()["by_phase"]["get_state_phase"]["loads_typed"][
+        "bytes_total"
+    ] == len(b"payload")
+    saver_json = saver_metrics.to_json()
+    assert saver_json["by_phase"]["get_state_phase"]["load_pending_writes"][
+        "items_total"
+    ] == 3
+    assert saver_json["by_phase"]["delta_history_phase"]["delta_history_writes"][
+        "items_total"
+    ] == 2
+    assert saver_json["by_phase"]["delta_history_phase"]["delta_history_seeds"][
+        "items_total"
+    ] == 1
