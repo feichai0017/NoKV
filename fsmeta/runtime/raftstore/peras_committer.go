@@ -135,32 +135,35 @@ type RemotePerasCommitter struct {
 
 	stop chan struct{}
 
-	commitTotal         atomic.Uint64
-	flushTotal          atomic.Uint64
-	segmentTotal        atomic.Uint64
-	segmentOpsTotal     atomic.Uint64
-	segmentEntryTotal   atomic.Uint64
-	sealTotal           atomic.Uint64
-	flushLatencyTotal   atomic.Uint64
-	flushLatencyLast    atomic.Uint64
-	flushLatencyMax     atomic.Uint64
-	witnessLatencyTotal atomic.Uint64
-	witnessLatencyLast  atomic.Uint64
-	witnessLatencyMax   atomic.Uint64
-	installLatencyTotal atomic.Uint64
-	installLatencyLast  atomic.Uint64
-	installLatencyMax   atomic.Uint64
-	sealLatencyTotal    atomic.Uint64
-	sealLatencyLast     atomic.Uint64
-	sealLatencyMax      atomic.Uint64
-	flushBatchTotal     atomic.Uint64
-	flushJobTotal       atomic.Uint64
-	flushJobLast        atomic.Uint64
-	flushJobMax         atomic.Uint64
-	errorTotal          atomic.Uint64
-	retryTotal          atomic.Uint64
-	bgSkipTotal         atomic.Uint64
-	bgErrorTotal        atomic.Uint64
+	commitTotal          atomic.Uint64
+	flushTotal           atomic.Uint64
+	segmentTotal         atomic.Uint64
+	segmentOpsTotal      atomic.Uint64
+	segmentEntryTotal    atomic.Uint64
+	sealTotal            atomic.Uint64
+	flushLatencyTotal    atomic.Uint64
+	flushLatencyLast     atomic.Uint64
+	flushLatencyMax      atomic.Uint64
+	witnessLatencyTotal  atomic.Uint64
+	witnessLatencyLast   atomic.Uint64
+	witnessLatencyMax    atomic.Uint64
+	installLatencyTotal  atomic.Uint64
+	installLatencyLast   atomic.Uint64
+	installLatencyMax    atomic.Uint64
+	sealLatencyTotal     atomic.Uint64
+	sealLatencyLast      atomic.Uint64
+	sealLatencyMax       atomic.Uint64
+	flushBatchTotal      atomic.Uint64
+	flushJobTotal        atomic.Uint64
+	flushJobLast         atomic.Uint64
+	flushJobMax          atomic.Uint64
+	errorTotal           atomic.Uint64
+	retryTotal           atomic.Uint64
+	bgSkipTotal          atomic.Uint64
+	bgErrorTotal         atomic.Uint64
+	catalogLoadTotal     atomic.Uint64
+	recoveryInstallTotal atomic.Uint64
+	recoverySkipTotal    atomic.Uint64
 
 	statsMu          sync.RWMutex
 	lastSegmentStats fsperas.SegmentStats
@@ -473,12 +476,16 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := c.LoadInstalledSegments(ctx, scope); err != nil {
+		return err
+	}
 	records, err := c.collectWitnessSegments(ctx, epochID)
 	if err != nil {
 		return c.recordErrorf("probe peras segment witnesses: %w", err)
 	}
 	for _, record := range records {
 		if c.segmentInstalled(record.SegmentRoot) {
+			c.recoverySkipTotal.Add(1)
 			continue
 		}
 		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
@@ -499,6 +506,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 			return c.recordErrorf("recover peras segment install: %w", err)
 		}
 		c.installSegment(fsperas.ReplayPlan{}, segment)
+		c.recoveryInstallTotal.Add(1)
 	}
 	return nil
 }
@@ -526,6 +534,7 @@ func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope 
 			continue
 		}
 		c.installSegment(fsperas.ReplayPlan{}, segment)
+		c.catalogLoadTotal.Add(1)
 	}
 	return nil
 }
@@ -1583,6 +1592,9 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"retry_total":                        uint64(0),
 			"background_skip_total":              uint64(0),
 			"background_error_total":             uint64(0),
+			"segment_catalog_load_total":         uint64(0),
+			"segment_recovery_install_total":     uint64(0),
+			"segment_recovery_skip_total":        uint64(0),
 			"overlay_keys":                       0,
 			"segment_keys":                       0,
 			"predicate_known_keys":               0,
@@ -1656,6 +1668,9 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"retry_total":                        c.retryTotal.Load(),
 		"background_skip_total":              c.bgSkipTotal.Load(),
 		"background_error_total":             c.bgErrorTotal.Load(),
+		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),
+		"segment_recovery_install_total":     c.recoveryInstallTotal.Load(),
+		"segment_recovery_skip_total":        c.recoverySkipTotal.Load(),
 		"overlay_keys":                       overlayKeys,
 		"segment_keys":                       segmentKeys,
 		"predicate_known_keys":               knownKeys,
