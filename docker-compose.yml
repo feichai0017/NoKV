@@ -140,6 +140,8 @@ services:
       - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
+      - "--id-window-size=1000000"
+      - "--tso-window-size=1000000"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
@@ -166,6 +168,8 @@ services:
       - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
+      - "--id-window-size=1000000"
+      - "--tso-window-size=1000000"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
@@ -192,6 +196,8 @@ services:
       - "--grant-duties=alloc_id,tso,region_lookup"
       - "--grant-ttl=30s"
       - "--grant-renew-before=10s"
+      - "--id-window-size=1000000"
+      - "--tso-window-size=1000000"
     volumes:
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
     expose: ["2379", "9100"]
