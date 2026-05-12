@@ -112,6 +112,7 @@ type RemotePerasCommitter struct {
 	known            map[string]bool
 	emptyDirs        map[string]struct{}
 	segments         []fsperas.PerasSegment
+	completed        map[fsperas.OperationID]runtimePerasCompletion
 	overlayKeys      []string
 	sealedKeys       []string
 	overlayKeysDirty bool
@@ -140,6 +141,11 @@ type runtimePerasOverlayEntry struct {
 	key    []byte
 	value  []byte
 	delete bool
+}
+
+type runtimePerasCompletion struct {
+	epochID    uint64
+	completion fsperas.SegmentCompletion
 }
 
 type runtimePerasFlushJob struct {
@@ -260,6 +266,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		sealed:     make(map[string]runtimePerasOverlayEntry),
 		known:      make(map[string]bool),
 		emptyDirs:  make(map[string]struct{}),
+		completed:  make(map[fsperas.OperationID]runtimePerasCompletion),
 		stop:       make(chan struct{}),
 	}
 	if c.flushEvery > 0 {
@@ -279,6 +286,9 @@ func (c *RemotePerasCommitter) CommitPeras(ctx context.Context, id fsperas.Opera
 	defer c.commitMu.RUnlock()
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
+	}
+	if completion, ok := c.completionForOperation(id); ok {
+		return fsperas.VisibleAck{EpochID: completion.epochID, OpID: id, HolderID: c.authority.HolderID()}, nil
 	}
 	grant, owned, err := c.authority.Acquire(ctx, delta.Authority)
 	if err != nil {
@@ -892,6 +902,12 @@ func (c *RemotePerasCommitter) installSegment(plan fsperas.ReplayPlan, segment f
 			}
 		}
 	}
+	if c.completed == nil {
+		c.completed = make(map[fsperas.OperationID]runtimePerasCompletion)
+	}
+	for _, completion := range segment.Completions {
+		c.completed[completion.OpID] = runtimePerasCompletion{epochID: segment.EpochID, completion: completion}
+	}
 	c.overlayMu.Unlock()
 
 	c.segmentTotal.Add(1)
@@ -901,6 +917,24 @@ func (c *RemotePerasCommitter) installSegment(plan fsperas.ReplayPlan, segment f
 	c.lastSegmentStats = stats
 	c.lastSegmentRoot = segment.Root
 	c.statsMu.Unlock()
+}
+
+func (c *RemotePerasCommitter) Completion(id fsperas.OperationID) (fsperas.SegmentCompletion, bool) {
+	completion, ok := c.completionForOperation(id)
+	if !ok {
+		return fsperas.SegmentCompletion{}, false
+	}
+	return completion.completion, true
+}
+
+func (c *RemotePerasCommitter) completionForOperation(id fsperas.OperationID) (runtimePerasCompletion, bool) {
+	if c == nil || !id.Valid() {
+		return runtimePerasCompletion{}, false
+	}
+	c.overlayMu.RLock()
+	completion, ok := c.completed[id]
+	c.overlayMu.RUnlock()
+	return completion, ok
 }
 
 func (c *RemotePerasCommitter) segmentInstalled(root [32]byte) bool {
