@@ -244,6 +244,7 @@ func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVer
 	}
 	stats := segment.Stats()
 	var out bytes.Buffer
+	out.Grow(segmentCatalogRecordEncodedSize(segment, len(payload)))
 	writeFixed(&out, perasSegmentCatalogMagic[:])
 	writeUint64(&out, segment.EpochID)
 	writeUint64(&out, installVersion)
@@ -266,20 +267,43 @@ func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVer
 	return out.Bytes(), nil
 }
 
+func segmentCatalogRecordEncodedSize(segment PerasSegment, payloadSize int) int {
+	size := len(perasSegmentCatalogMagic) +
+		8 + 8 + 32 + 32 + 8 +
+		4 + payloadSize +
+		8 + 8 + 8 + 8 + 8 + 8
+	for _, completion := range segment.Completions {
+		size += stringEncodedSize(completion.OpID.ClientID)
+		size += 8
+		size += stringEncodedSize(string(completion.Kind))
+		size += 8 + 8
+	}
+	return size
+}
+
 func EncodePerasSegmentCatalogIndexRecord(record SegmentCatalogRecord, objectKey []byte) ([]byte, error) {
 	if err := validateSegmentCatalogPayload(record); err != nil {
 		return nil, err
 	}
-	if len(objectKey) == 0 {
+	return encodePerasSegmentCatalogIndexRecord(record.EpochID, record.InstallVersion, record.Root, record.SegmentPayloadDigest, record.SegmentPayloadSize, objectKey)
+}
+
+func encodePerasSegmentCatalogIndexRecord(epochID, installVersion uint64, root, digest [32]byte, payloadSize uint64, objectKey []byte) ([]byte, error) {
+	if epochID == 0 || installVersion == 0 || root == ([32]byte{}) || digest == ([32]byte{}) || payloadSize == 0 || len(objectKey) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	parts, ok := fsmeta.InspectKey(objectKey)
+	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
 		return nil, ErrInvalidPerasSegment
 	}
 	var out bytes.Buffer
+	out.Grow(len(perasSegmentIndexMagic) + 8 + 8 + 32 + 32 + 8 + 4 + len(objectKey))
 	writeFixed(&out, perasSegmentIndexMagic[:])
-	writeUint64(&out, record.EpochID)
-	writeUint64(&out, record.InstallVersion)
-	writeFixed(&out, record.Root[:])
-	writeFixed(&out, record.SegmentPayloadDigest[:])
-	writeUint64(&out, record.SegmentPayloadSize)
+	writeUint64(&out, epochID)
+	writeUint64(&out, installVersion)
+	writeFixed(&out, root[:])
+	writeFixed(&out, digest[:])
+	writeUint64(&out, payloadSize)
 	writeBytes(&out, objectKey)
 	return out.Bytes(), nil
 }

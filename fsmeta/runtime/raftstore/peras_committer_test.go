@@ -596,6 +596,61 @@ func TestRemotePerasCommitterLoadsInstalledSegmentCatalog(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["segment_catalog_load_total"])
 }
 
+func TestRemotePerasCommitterLoadsRootSealedSegments(t *testing.T) {
+	segment := testRuntimePerasSegment(t)
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 7}
+	seal := testRuntimePerasSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	provider := &fakeRuntimePerasGrantProvider{
+		holderID: "holder-a",
+		grant:    testRuntimeCommitterGrant(),
+		seals:    []rootproto.PerasAuthoritySeal{seal},
+	}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		CatalogScanner:    &fakeRuntimePerasCatalogScanner{rows: testRuntimePerasCatalogRows(t, segment, 99)},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.NoError(t, committer.LoadRootSealedSegments(context.Background(), scope))
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["segment_catalog_load_total"])
+	require.Equal(t, uint64(1), stats["root_sealed_segment_total"])
+	require.Equal(t, uint64(0), stats["root_sealed_segment_missing_total"])
+	require.Equal(t, uint64(1), stats["segment_total"])
+}
+
+func TestRemotePerasCommitterRejectsMissingRootSealedSegmentCatalog(t *testing.T) {
+	segment := testRuntimePerasSegment(t)
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 7}
+	seal := testRuntimePerasSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	provider := &fakeRuntimePerasGrantProvider{
+		holderID: "holder-a",
+		grant:    testRuntimeCommitterGrant(),
+		seals:    []rootproto.PerasAuthoritySeal{seal},
+	}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		CatalogScanner:    &fakeRuntimePerasCatalogScanner{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	err = committer.LoadRootSealedSegments(context.Background(), scope)
+	require.ErrorIs(t, err, fsperas.ErrInvalidPerasSegment)
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["root_sealed_segment_total"])
+	require.Equal(t, uint64(1), stats["root_sealed_segment_missing_total"])
+}
+
 func TestRemotePerasCommitterRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 	witnesses := testRuntimePerasWitnessesWithDurability(t, 3, wal.DurabilityFsync)
 	predecessorProvider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1411,8 +1466,10 @@ func (f *fakeRunnerPerasInstallKV) InstallPerasSegment(_ context.Context, _ []by
 type fakeRuntimePerasGrantProvider struct {
 	holderID string
 	grant    perasauth.AuthorityGrant
+	seals    []rootproto.PerasAuthoritySeal
 	owned    bool
 	err      error
+	sealErr  error
 }
 
 func (p *fakeRuntimePerasGrantProvider) HolderID() string {
@@ -1425,6 +1482,17 @@ func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.Authori
 		owned = true
 	}
 	return p.grant, owned, p.err
+}
+
+func (p *fakeRuntimePerasGrantProvider) ListPerasAuthoritySeals(context.Context, compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
+	if p.sealErr != nil {
+		return nil, p.sealErr
+	}
+	out := make([]rootproto.PerasAuthoritySeal, len(p.seals))
+	for i, seal := range p.seals {
+		out[i] = rootproto.ClonePerasAuthoritySeal(seal)
+	}
+	return out, nil
 }
 
 type publishingRuntimePerasGrantProvider struct {

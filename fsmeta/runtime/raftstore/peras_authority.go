@@ -19,6 +19,7 @@ const defaultPerasAuthorityTTL = 5 * time.Minute
 
 type perasAuthorityClient interface {
 	ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
+	ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error)
 }
 
 // PerasAuthorityManager is the fsmeta-side holder adapter for Peras
@@ -209,6 +210,45 @@ func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant pera
 		return errPerasAuthorityInvalidResponse
 	}
 	return nil
+}
+
+func (m *PerasAuthorityManager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
+	if m == nil {
+		return nil, errPerasAuthorityClientRequired
+	}
+	resp, err := m.coord.ListPerasAuthoritySeals(ctx, &coordpb.ListPerasAuthoritySealsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]rootproto.PerasAuthoritySeal, 0, len(resp.GetSeals()))
+	for _, pbSeal := range resp.GetSeals() {
+		seal := metawire.RootPerasAuthoritySealFromProto(pbSeal)
+		if !seal.Valid() {
+			return nil, errPerasAuthorityInvalidResponse
+		}
+		if !perasAuthoritySealCoversScope(seal, scope) {
+			continue
+		}
+		out = append(out, rootproto.ClonePerasAuthoritySeal(seal))
+	}
+	return out, nil
+}
+
+func perasAuthoritySealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityScope) bool {
+	if !seal.Valid() {
+		return false
+	}
+	if authorityScopeEmpty(scope) {
+		return true
+	}
+	grant := rootproto.PerasAuthorityGrant{
+		GrantID:         seal.GrantID,
+		EpochID:         seal.EpochID,
+		HolderID:        seal.HolderID,
+		Scope:           seal.Scope,
+		ExpiresUnixNano: 1,
+	}
+	return grant.Covers(perasauth.AuthorityScopeFromDelta(scope), 0)
 }
 
 func (m *PerasAuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {

@@ -17,16 +17,23 @@ import (
 )
 
 type fakePerasAuthorityClient struct {
-	calls int
-	last  rootproto.PerasAuthorityCommand
-	resp  *coordpb.ApplyPerasAuthorityResponse
-	err   error
+	calls     int
+	sealCalls int
+	last      rootproto.PerasAuthorityCommand
+	resp      *coordpb.ApplyPerasAuthorityResponse
+	seals     []*metapb.RootPerasAuthoritySeal
+	err       error
 }
 
 func (f *fakePerasAuthorityClient) ApplyPerasAuthority(_ context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
 	f.calls++
 	f.last = metawire.RootPerasAuthorityCommandFromProto(req.GetCommand())
 	return f.resp, f.err
+}
+
+func (f *fakePerasAuthorityClient) ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+	f.sealCalls++
+	return &coordpb.ListPerasAuthoritySealsResponse{Seals: f.seals}, f.err
 }
 
 func TestPerasAuthorityManagerAcquireInstallsGrantedAuthority(t *testing.T) {
@@ -146,6 +153,27 @@ func TestPerasAuthorityManagerSealPerasSegmentPublishesRootSeal(t *testing.T) {
 	require.Equal(t, cursor.Term, client.last.InstallTerm)
 	require.Equal(t, cursor.Index, client.last.InstallIndex)
 	require.Equal(t, cursor.InstallVersion, client.last.InstallVersion)
+}
+
+func TestPerasAuthorityManagerListsMatchingRootSeals(t *testing.T) {
+	now := time.Unix(10, 0)
+	scope := testRuntimePerasScope(1)
+	matching := testRuntimePerasSeal("grant-a", "holder-a", scope, now)
+	otherScope := testRuntimePerasScope(2)
+	other := testRuntimePerasSeal("grant-b", "holder-a", otherScope, now)
+	client := &fakePerasAuthorityClient{
+		seals: []*metapb.RootPerasAuthoritySeal{
+			metawire.RootPerasAuthoritySealToProto(matching),
+			metawire.RootPerasAuthoritySealToProto(other),
+		},
+	}
+	manager, err := NewPerasAuthorityManager(client, perasauth.NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+
+	seals, err := manager.ListPerasAuthoritySeals(context.Background(), scope)
+	require.NoError(t, err)
+	require.Equal(t, []rootproto.PerasAuthoritySeal{matching}, seals)
+	require.Equal(t, 1, client.sealCalls)
 }
 
 func TestPerasAuthorityManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
@@ -270,6 +298,24 @@ func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expi
 		HolderID:        holder,
 		Scope:           perasauth.AuthorityScopeFromDelta(scope),
 		ExpiresUnixNano: expires.UnixNano(),
+	}
+}
+
+func testRuntimePerasSeal(id, holder string, scope compile.AuthorityScope, sealed time.Time) rootproto.PerasAuthoritySeal {
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              id,
+		EpochID:              1,
+		HolderID:             holder,
+		Scope:                perasauth.AuthorityScopeFromDelta(scope),
+		SegmentRoot:          [32]byte{1},
+		SegmentPayloadDigest: [32]byte{2},
+		OperationCount:       3,
+		EntryCount:           4,
+		SealedUnixNano:       sealed.UnixNano(),
+		InstallRegionID:      5,
+		InstallTerm:          6,
+		InstallIndex:         7,
+		InstallVersion:       8,
 	}
 }
 

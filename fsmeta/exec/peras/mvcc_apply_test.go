@@ -305,6 +305,11 @@ func BenchmarkBuildMVCCSegmentCatalogInstallEntries1000(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	catalogKeys, err := PerasSegmentCatalogIndexKeys(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	wantEntries := len(catalogKeys) + 1
 
 	b.ReportAllocs()
 	for b.Loop() {
@@ -312,7 +317,7 @@ func BenchmarkBuildMVCCSegmentCatalogInstallEntries1000(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if len(entries) != 1 {
+		if len(entries) != wantEntries {
 			b.Fatalf("unexpected catalog entry count %d", len(entries))
 		}
 		releaseMVCCReplayEntries(entries)

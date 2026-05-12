@@ -20,6 +20,7 @@ import (
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -50,6 +51,10 @@ type perasGrantProvider interface {
 
 type perasSealPublisher interface {
 	SealPerasSegment(context.Context, perasauth.AuthorityGrant, fsperas.PerasSegment, [32]byte, PerasInstallCursor) error
+}
+
+type perasSealProvider interface {
+	ListPerasAuthoritySeals(context.Context, compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error)
 }
 
 type perasSegmentInstaller interface {
@@ -97,6 +102,7 @@ type RemotePerasCommitterConfig struct {
 // apply lands.
 type RemotePerasCommitter struct {
 	authority  perasGrantProvider
+	seals      perasSealProvider
 	witnesses  []fsperas.WitnessReplica
 	installer  perasSegmentInstaller
 	catalog    perasSegmentCatalogScanner
@@ -162,6 +168,8 @@ type RemotePerasCommitter struct {
 	bgSkipTotal          atomic.Uint64
 	bgErrorTotal         atomic.Uint64
 	catalogLoadTotal     atomic.Uint64
+	rootSealTotal        atomic.Uint64
+	rootSealMissingTotal atomic.Uint64
 	recoveryInstallTotal atomic.Uint64
 	recoverySkipTotal    atomic.Uint64
 
@@ -288,8 +296,10 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	if now == nil {
 		now = time.Now
 	}
+	seals, _ := cfg.Authority.(perasSealProvider)
 	c := &RemotePerasCommitter{
 		authority:  cfg.Authority,
+		seals:      seals,
 		witnesses:  witnesses,
 		installer:  cfg.Installer,
 		catalog:    cfg.CatalogScanner,
@@ -397,7 +407,7 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 			recoveryScope = grantScope
 		}
 	}
-	if err := c.LoadInstalledSegments(ctx, recoveryScope); err != nil {
+	if err := c.LoadRootSealedSegments(ctx, recoveryScope); err != nil {
 		return nil, err
 	}
 	if grantHasPredecessor(grant) && c.installer != nil {
@@ -476,7 +486,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := c.LoadInstalledSegments(ctx, scope); err != nil {
+	if err := c.LoadRootSealedSegments(ctx, scope); err != nil {
 		return err
 	}
 	records, err := c.collectWitnessSegments(ctx, epochID)
@@ -535,6 +545,37 @@ func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope 
 		}
 		c.installSegment(fsperas.ReplayPlan{}, segment)
 		c.catalogLoadTotal.Add(1)
+	}
+	return nil
+}
+
+func (c *RemotePerasCommitter) LoadRootSealedSegments(ctx context.Context, scope compile.AuthorityScope) error {
+	if c == nil {
+		return errPerasCommitterInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := c.LoadInstalledSegments(ctx, scope); err != nil {
+		return err
+	}
+	if c.seals == nil {
+		return nil
+	}
+	seals, err := c.seals.ListPerasAuthoritySeals(ctx, scope)
+	if err != nil {
+		return c.recordErrorf("list rooted peras segment seals: %w", err)
+	}
+	for _, seal := range seals {
+		if !seal.Valid() {
+			return c.recordError(fsperas.ErrInvalidPerasSegment)
+		}
+		c.rootSealTotal.Add(1)
+		if c.segmentInstalled(seal.SegmentRoot) {
+			continue
+		}
+		c.rootSealMissingTotal.Add(1)
+		return c.recordErrorf("rooted peras segment seal missing installed catalog: %w", fsperas.ErrInvalidPerasSegment)
 	}
 	return nil
 }
@@ -1593,6 +1634,8 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"background_skip_total":              uint64(0),
 			"background_error_total":             uint64(0),
 			"segment_catalog_load_total":         uint64(0),
+			"root_sealed_segment_total":          uint64(0),
+			"root_sealed_segment_missing_total":  uint64(0),
 			"segment_recovery_install_total":     uint64(0),
 			"segment_recovery_skip_total":        uint64(0),
 			"overlay_keys":                       0,
@@ -1669,6 +1712,8 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"background_skip_total":              c.bgSkipTotal.Load(),
 		"background_error_total":             c.bgErrorTotal.Load(),
 		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),
+		"root_sealed_segment_total":          c.rootSealTotal.Load(),
+		"root_sealed_segment_missing_total":  c.rootSealMissingTotal.Load(),
 		"segment_recovery_install_total":     c.recoveryInstallTotal.Load(),
 		"segment_recovery_skip_total":        c.recoverySkipTotal.Load(),
 		"overlay_keys":                       overlayKeys,

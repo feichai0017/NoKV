@@ -142,12 +142,22 @@ func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*en
 		}
 		entries = append(entries, mutationEntries...)
 	}
-	catalogValue, err := EncodePerasSegmentCatalogRecord(segment, version)
+	payload, err := EncodePerasSegment(segment)
 	if err != nil {
 		releaseMVCCReplayEntries(entries)
 		return nil, err
 	}
-	catalogEntries, err := buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		releaseMVCCReplayEntries(entries)
+		return nil, err
+	}
+	catalogValue, err := EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
+	if err != nil {
+		releaseMVCCReplayEntries(entries)
+		return nil, err
+	}
+	catalogEntries, err := buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue, digest, uint64(len(payload)))
 	if err != nil {
 		releaseMVCCReplayEntries(entries)
 		return nil, err
@@ -184,19 +194,15 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment PerasSegment, vers
 	if err != nil {
 		return nil, err
 	}
-	return buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue)
+	return buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue, digest, uint64(len(payload)))
 }
 
-func buildMVCCSegmentCatalogInstallEntries(segment PerasSegment, version uint64, objectValue []byte) ([]*entrykv.Entry, error) {
+func buildMVCCSegmentCatalogInstallEntries(segment PerasSegment, version uint64, objectValue []byte, digest [32]byte, payloadSize uint64) ([]*entrykv.Entry, error) {
 	objectKey, err := PerasSegmentObjectKey(segment)
 	if err != nil {
 		return nil, err
 	}
-	record, err := DecodePerasSegmentCatalogRecord(objectValue)
-	if err != nil {
-		return nil, err
-	}
-	indexValue, err := EncodePerasSegmentCatalogIndexRecord(record, objectKey)
+	indexValue, err := encodePerasSegmentCatalogIndexRecord(segment.EpochID, version, segment.Root, digest, payloadSize, objectKey)
 	if err != nil {
 		return nil, err
 	}
