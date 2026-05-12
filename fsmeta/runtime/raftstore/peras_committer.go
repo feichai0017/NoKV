@@ -132,12 +132,20 @@ type RemotePerasCommitter struct {
 	sealTotal           atomic.Uint64
 	flushLatencyTotal   atomic.Uint64
 	flushLatencyLast    atomic.Uint64
+	flushLatencyMax     atomic.Uint64
 	witnessLatencyTotal atomic.Uint64
 	witnessLatencyLast  atomic.Uint64
+	witnessLatencyMax   atomic.Uint64
 	installLatencyTotal atomic.Uint64
 	installLatencyLast  atomic.Uint64
+	installLatencyMax   atomic.Uint64
 	sealLatencyTotal    atomic.Uint64
 	sealLatencyLast     atomic.Uint64
+	sealLatencyMax      atomic.Uint64
+	flushBatchTotal     atomic.Uint64
+	flushJobTotal       atomic.Uint64
+	flushJobLast        atomic.Uint64
+	flushJobMax         atomic.Uint64
 	errorTotal          atomic.Uint64
 	retryTotal          atomic.Uint64
 	bgSkipTotal         atomic.Uint64
@@ -593,6 +601,7 @@ func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches 
 }
 
 func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch runtimePerasFlushBatch) error {
+	c.recordFlushBatch(len(batch.jobs))
 	if len(batch.jobs) <= 1 || c.installN <= 1 {
 		for _, job := range batch.jobs {
 			if err := c.installOneFlushJob(ctx, batch.holder, job); err != nil {
@@ -701,28 +710,55 @@ func (c *RemotePerasCommitter) publishFlushJobSeal(ctx context.Context, holder *
 }
 
 func (c *RemotePerasCommitter) recordFlushLatency(d time.Duration) {
-	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, d)
+	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, &c.flushLatencyMax, d)
 }
 
 func (c *RemotePerasCommitter) recordWitnessLatency(d time.Duration) {
-	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, d)
+	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, &c.witnessLatencyMax, d)
 }
 
 func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
-	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, d)
+	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, &c.installLatencyMax, d)
 }
 
 func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
-	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, d)
+	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, &c.sealLatencyMax, d)
 }
 
-func recordPerasDuration(total, last *atomic.Uint64, d time.Duration) {
+func (c *RemotePerasCommitter) recordFlushBatch(jobs int) {
+	if jobs <= 0 {
+		return
+	}
+	n := uint64(jobs)
+	c.flushBatchTotal.Add(1)
+	c.flushJobTotal.Add(n)
+	c.flushJobLast.Store(n)
+	recordPerasMax(&c.flushJobMax, n)
+}
+
+func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {
 	if d < 0 {
 		d = 0
 	}
 	ns := uint64(d.Nanoseconds())
 	total.Add(ns)
 	last.Store(ns)
+	recordPerasMax(max, ns)
+}
+
+func recordPerasMax(max *atomic.Uint64, value uint64) {
+	if max == nil {
+		return
+	}
+	for {
+		old := max.Load()
+		if value <= old {
+			return
+		}
+		if max.CompareAndSwap(old, value) {
+			return
+		}
+	}
 }
 
 func averagePerasDuration(total, count uint64) uint64 {
@@ -1412,16 +1448,24 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"segment_entries_total":              uint64(0),
 			"flush_latency_total_nanosecond":     uint64(0),
 			"flush_latency_last_nanosecond":      uint64(0),
+			"flush_latency_max_nanosecond":       uint64(0),
 			"flush_latency_average_nanosecond":   uint64(0),
 			"witness_latency_total_nanosecond":   uint64(0),
 			"witness_latency_last_nanosecond":    uint64(0),
+			"witness_latency_max_nanosecond":     uint64(0),
 			"witness_latency_average_nanosecond": uint64(0),
 			"install_latency_total_nanosecond":   uint64(0),
 			"install_latency_last_nanosecond":    uint64(0),
+			"install_latency_max_nanosecond":     uint64(0),
 			"install_latency_average_nanosecond": uint64(0),
 			"seal_latency_total_nanosecond":      uint64(0),
 			"seal_latency_last_nanosecond":       uint64(0),
+			"seal_latency_max_nanosecond":        uint64(0),
 			"seal_latency_average_nanosecond":    uint64(0),
+			"flush_batch_total":                  uint64(0),
+			"flush_jobs_total":                   uint64(0),
+			"flush_jobs_last":                    uint64(0),
+			"flush_jobs_max":                     uint64(0),
 			"last_segment_operations":            uint64(0),
 			"last_segment_input_mutations":       uint64(0),
 			"last_segment_entries":               uint64(0),
@@ -1477,16 +1521,24 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"segment_entries_total":              c.segmentEntryTotal.Load(),
 		"flush_latency_total_nanosecond":     flushLatencyTotal,
 		"flush_latency_last_nanosecond":      c.flushLatencyLast.Load(),
+		"flush_latency_max_nanosecond":       c.flushLatencyMax.Load(),
 		"flush_latency_average_nanosecond":   averagePerasDuration(flushLatencyTotal, flushTotal),
 		"witness_latency_total_nanosecond":   witnessLatencyTotal,
 		"witness_latency_last_nanosecond":    c.witnessLatencyLast.Load(),
+		"witness_latency_max_nanosecond":     c.witnessLatencyMax.Load(),
 		"witness_latency_average_nanosecond": averagePerasDuration(witnessLatencyTotal, flushTotal),
 		"install_latency_total_nanosecond":   installLatencyTotal,
 		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
+		"install_latency_max_nanosecond":     c.installLatencyMax.Load(),
 		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
 		"seal_latency_total_nanosecond":      sealLatencyTotal,
 		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
+		"seal_latency_max_nanosecond":        c.sealLatencyMax.Load(),
 		"seal_latency_average_nanosecond":    averagePerasDuration(sealLatencyTotal, sealTotal),
+		"flush_batch_total":                  c.flushBatchTotal.Load(),
+		"flush_jobs_total":                   c.flushJobTotal.Load(),
+		"flush_jobs_last":                    c.flushJobLast.Load(),
+		"flush_jobs_max":                     c.flushJobMax.Load(),
 		"last_segment_operations":            lastSegmentStats.OperationCount,
 		"last_segment_input_mutations":       lastSegmentStats.InputMutationCount,
 		"last_segment_entries":               lastSegmentStats.EntryCount,
