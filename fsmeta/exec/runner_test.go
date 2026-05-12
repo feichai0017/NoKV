@@ -908,7 +908,7 @@ func TestExecutorCreatePerasVisibleCommitSkipsSharedQuota(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Zero(t, committer.calls, "shared quota must remain on the slow path until quota credits exist")
+	require.Zero(t, committer.calls, "shared quota must remain on the transaction runner until quota credits exist")
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
 	require.Len(t, runner.mutations[0], 3)
@@ -2907,6 +2907,39 @@ func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T)
 	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
 	require.Empty(t, runner.mutations, "bucket-local cross-parent rename should stay inside Peras overlay")
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
+	runner := newFakeRunner()
+	fromParent := fsmeta.InodeID(7)
+	toParent := testInodeForParentBucket(t, fromParent, fromParent)
+	seedDentry(t, runner, "vol", fromParent, "old", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
+	committer := newTestBufferedPerasCommitter(t, runner)
+	sourceKey, err := fsmeta.EncodeDentryKey(testMountIdentity, fromParent, "old")
+	require.NoError(t, err)
+	committer.RememberKey(sourceKey, true)
+	committer.RememberEmptyDirectory(testMountIdentity, toParent)
+	executor, err := newTestExecutor(
+		runner,
+		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	runner.getCalls = 0
+	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fromParent,
+		FromName:   "old",
+		ToParent:   toParent,
+		ToName:     "new",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 2, runner.getCalls, "rename should not read a destination key proven absent by the Peras directory fact")
+	require.Empty(t, runner.mutations)
 }
 
 func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {

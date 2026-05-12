@@ -237,6 +237,10 @@ message PerasInstallSegmentResponse {
   uint64 operation_count = 3;
   uint64 entry_count = 4;
   uint64 applied_entries = 5;
+  uint64 region_id = 6;
+  uint64 term = 7;
+  uint64 index = 8;
+  uint64 commit_version = 9;
 }
 
 message Context {

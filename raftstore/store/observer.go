@@ -47,6 +47,7 @@ func (s *Store) emitApplyEvents(entry myraft.Entry, req *raftcmdpb.RaftCmdReques
 	if s == nil {
 		return
 	}
+	observer.AttachCommandCursor(entry, req, resp)
 	for _, evt := range observer.EventsFromCommand(entry, req, resp) {
 		if s.regionStats != nil {
 			var keyBytes uint64

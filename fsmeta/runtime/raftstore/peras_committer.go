@@ -15,6 +15,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
@@ -22,7 +23,7 @@ import (
 const (
 	defaultPerasSegmentWitnessRetries      = 3
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
-	defaultPerasSegmentBatchSize           = 128
+	defaultPerasSegmentBatchSize           = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
@@ -1223,10 +1224,11 @@ func (c *RemotePerasCommitter) addOverlay(id fsperas.OperationID, delta compile.
 
 type runnerPerasSegmentInstaller struct {
 	runner *Runner
+	router *fsmetawatch.Router
 }
 
-func newRunnerPerasSegmentInstaller(runner *Runner) *runnerPerasSegmentInstaller {
-	return &runnerPerasSegmentInstaller{runner: runner}
+func newRunnerPerasSegmentInstaller(runner *Runner, router *fsmetawatch.Router) *runnerPerasSegmentInstaller {
+	return &runnerPerasSegmentInstaller{runner: runner, router: router}
 }
 
 func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _ compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) error {
@@ -1262,7 +1264,13 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 	if keyErr := resp.GetError(); keyErr != nil {
 		return runnerKeyError("peras install segment", keyErr)
 	}
-	return validatePerasSegmentInstallResponse(segment, resp)
+	if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
+		return err
+	}
+	if !materialize {
+		i.publishInstalledSegment(segment, resp)
+	}
+	return nil
 }
 
 func (i *runnerPerasSegmentInstaller) reserveInstallVersion(ctx context.Context) (uint64, error) {
@@ -1304,6 +1312,32 @@ func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvr
 		return errPerasCommitterInvalid
 	}
 	return nil
+}
+
+func (i *runnerPerasSegmentInstaller) publishInstalledSegment(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) {
+	if i == nil || i.router == nil || resp == nil || resp.GetRegionId() == 0 || resp.GetIndex() == 0 {
+		return
+	}
+	commitVersion := resp.GetCommitVersion()
+	if commitVersion == 0 {
+		return
+	}
+	cursor := fsmeta.WatchCursor{
+		RegionID: resp.GetRegionId(),
+		Term:     resp.GetTerm(),
+		Index:    resp.GetIndex(),
+	}
+	for _, entry := range segment.Dentries {
+		if len(entry.Key) == 0 {
+			continue
+		}
+		i.router.Publish(fsmeta.WatchEvent{
+			Cursor:        cursor,
+			CommitVersion: commitVersion,
+			Source:        fsmeta.WatchEventSourceCommit,
+			Key:           entry.Key,
+		})
+	}
 }
 
 func (c *RemotePerasCommitter) recordErrorf(format string, args ...any) error {

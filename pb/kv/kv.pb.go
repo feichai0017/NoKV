@@ -2149,6 +2149,10 @@ type PerasInstallSegmentResponse struct {
 	OperationCount uint64                 `protobuf:"varint,3,opt,name=operation_count,json=operationCount,proto3" json:"operation_count,omitempty"`
 	EntryCount     uint64                 `protobuf:"varint,4,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
 	AppliedEntries uint64                 `protobuf:"varint,5,opt,name=applied_entries,json=appliedEntries,proto3" json:"applied_entries,omitempty"`
+	RegionId       uint64                 `protobuf:"varint,6,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	Term           uint64                 `protobuf:"varint,7,opt,name=term,proto3" json:"term,omitempty"`
+	Index          uint64                 `protobuf:"varint,8,opt,name=index,proto3" json:"index,omitempty"`
+	CommitVersion  uint64                 `protobuf:"varint,9,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -2214,6 +2218,34 @@ func (x *PerasInstallSegmentResponse) GetEntryCount() uint64 {
 func (x *PerasInstallSegmentResponse) GetAppliedEntries() uint64 {
 	if x != nil {
 		return x.AppliedEntries
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetIndex() uint64 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentResponse) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
 	}
 	return 0
 }
@@ -4502,14 +4534,18 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\x12'\n" +
 	"\x0fsegment_payload\x18\x04 \x01(\fR\x0esegmentPayload\x12'\n" +
 	"\x0finstall_version\x18\x05 \x01(\x04R\x0einstallVersion\x12)\n" +
-	"\x10materialize_mvcc\x18\x06 \x01(\bR\x0fmaterializeMvcc\"\xdf\x01\n" +
+	"\x10materialize_mvcc\x18\x06 \x01(\bR\x0fmaterializeMvcc\"\xcd\x02\n" +
 	"\x1bPerasInstallSegmentResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +
 	"\x0foperation_count\x18\x03 \x01(\x04R\x0eoperationCount\x12\x1f\n" +
 	"\ventry_count\x18\x04 \x01(\x04R\n" +
 	"entryCount\x12'\n" +
-	"\x0fapplied_entries\x18\x05 \x01(\x04R\x0eappliedEntries\"\xfb\x02\n" +
+	"\x0fapplied_entries\x18\x05 \x01(\x04R\x0eappliedEntries\x12\x1b\n" +
+	"\tregion_id\x18\x06 \x01(\x04R\bregionId\x12\x12\n" +
+	"\x04term\x18\a \x01(\x04R\x04term\x12\x14\n" +
+	"\x05index\x18\b \x01(\x04R\x05index\x12%\n" +
+	"\x0ecommit_version\x18\t \x01(\x04R\rcommitVersion\"\xfb\x02\n" +
 	"\aContext\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12<\n" +
 	"\fregion_epoch\x18\x02 \x01(\v2\x19.nokv.meta.v1.RegionEpochR\vregionEpoch\x12,\n" +
