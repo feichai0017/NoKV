@@ -23,6 +23,7 @@ type fakeExecutor struct {
 	createReq        fsmeta.CreateRequest
 	createInode      fsmeta.InodeRecord
 	updateReq        fsmeta.UpdateInodeRequest
+	batchLookupReq   fsmeta.BatchLookupPlusRequest
 	readDirReq       fsmeta.ReadDirRequest
 	readVersionReq   fsmeta.ReadVersionRequest
 	snapshotReq      fsmeta.SnapshotSubtreeRequest
@@ -98,6 +99,39 @@ func (e *fakeExecutor) LookupPlus(context.Context, fsmeta.LookupRequest) (fsmeta
 			LinkCount: 1,
 		},
 	}, nil
+}
+
+func (e *fakeExecutor) BatchLookupPlus(_ context.Context, req fsmeta.BatchLookupPlusRequest) ([]fsmeta.BatchLookupPlusResult, error) {
+	e.batchLookupReq = req
+	if e.err != nil {
+		return nil, e.err
+	}
+	results := make([]fsmeta.BatchLookupPlusResult, 0, len(req.Lookups))
+	for _, lookup := range req.Lookups {
+		if lookup.Name == "missing" {
+			results = append(results, fsmeta.BatchLookupPlusResult{})
+			continue
+		}
+		results = append(results, fsmeta.BatchLookupPlusResult{
+			Found: true,
+			Entry: fsmeta.DentryAttrPair{
+				Dentry: fsmeta.DentryRecord{
+					Parent: lookup.Parent,
+					Name:   lookup.Name,
+					Inode:  42,
+					Type:   fsmeta.InodeTypeFile,
+				},
+				Inode: fsmeta.InodeRecord{
+					Inode:     42,
+					Type:      fsmeta.InodeTypeFile,
+					Size:      4096,
+					Mode:      0o644,
+					LinkCount: 1,
+				},
+			},
+		})
+	}
+	return results, nil
 }
 
 func (e *fakeExecutor) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
@@ -281,6 +315,29 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "checkpoint", lookupPlusResp.GetEntry().GetDentry().GetName())
 	require.Equal(t, uint64(4096), lookupPlusResp.GetEntry().GetInode().GetSize())
+
+	batchResp, err := client.BatchLookupPlus(context.Background(), &fsmetapb.BatchLookupPlusRequest{
+		Mount: "vol",
+		Lookups: []*fsmetapb.LookupKey{
+			{Parent: uint64(fsmeta.RootInode), Name: "checkpoint"},
+			{Parent: uint64(fsmeta.RootInode), Name: "missing"},
+		},
+		SnapshotVersion: 55,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.BatchLookupPlusRequest{
+		Mount: "vol",
+		Lookups: []fsmeta.LookupKey{
+			{Parent: fsmeta.RootInode, Name: "checkpoint"},
+			{Parent: fsmeta.RootInode, Name: "missing"},
+		},
+		SnapshotVersion: 55,
+	}, executor.batchLookupReq)
+	require.Len(t, batchResp.GetResults(), 2)
+	require.True(t, batchResp.GetResults()[0].GetFound())
+	require.Equal(t, "checkpoint", batchResp.GetResults()[0].GetEntry().GetDentry().GetName())
+	require.False(t, batchResp.GetResults()[1].GetFound())
+	require.Nil(t, batchResp.GetResults()[1].GetEntry())
 }
 
 func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {

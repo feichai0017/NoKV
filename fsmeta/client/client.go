@@ -42,6 +42,7 @@ type Client interface {
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error)
+	BatchLookupPlus(ctx context.Context, req fsmeta.BatchLookupPlusRequest) ([]fsmeta.BatchLookupPlusResult, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
@@ -191,6 +192,25 @@ func (c *GRPCClient) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (
 	pair := pairFromProto(resp.GetEntry())
 	c.lookup.Put(req.Mount, pair.Dentry)
 	return pair, nil
+}
+
+func (c *GRPCClient) BatchLookupPlus(ctx context.Context, req fsmeta.BatchLookupPlusRequest) ([]fsmeta.BatchLookupPlusResult, error) {
+	if err := c.requireRPC(); err != nil {
+		return nil, err
+	}
+	resp, err := c.rpc.BatchLookupPlus(ctx, batchLookupPlusRequestToProto(req))
+	if err != nil {
+		return nil, translateRPCError(err)
+	}
+	out := make([]fsmeta.BatchLookupPlusResult, 0, len(resp.GetResults()))
+	for _, result := range resp.GetResults() {
+		typed := batchLookupPlusResultFromProto(result)
+		out = append(out, typed)
+		if req.SnapshotVersion == 0 && typed.Found {
+			c.lookup.Put(req.Mount, typed.Entry.Dentry)
+		}
+	}
+	return out, nil
 }
 
 func (c *GRPCClient) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {

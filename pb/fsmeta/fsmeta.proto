@@ -94,6 +94,26 @@ message LookupPlusResponse {
   DentryAttrPair entry = 1;
 }
 
+message LookupKey {
+  uint64 parent = 1;
+  string name = 2;
+}
+
+message BatchLookupPlusRequest {
+  string mount = 1;
+  repeated LookupKey lookups = 2;
+  uint64 snapshot_version = 3;
+}
+
+message BatchLookupPlusResult {
+  bool found = 1;
+  DentryAttrPair entry = 2;
+}
+
+message BatchLookupPlusResponse {
+  repeated BatchLookupPlusResult results = 1;
+}
+
 message ReadDirRequest {
   string mount = 1;
   uint64 parent = 2;
@@ -297,6 +317,7 @@ service FSMetadata {
   rpc UpdateInode(UpdateInodeRequest) returns (UpdateInodeResponse);
   rpc Lookup(LookupRequest) returns (LookupResponse);
   rpc LookupPlus(LookupRequest) returns (LookupPlusResponse);
+  rpc BatchLookupPlus(BatchLookupPlusRequest) returns (BatchLookupPlusResponse);
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
   rpc ReadDirPlus(ReadDirRequest) returns (ReadDirPlusResponse);
   rpc WatchSubtree(stream WatchAckOrSubscribe) returns (stream WatchSubtreeResponse);

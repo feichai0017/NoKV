@@ -93,6 +93,10 @@ const (
 	// streaming API.
 	MaxReadDirLimit uint32 = 16 * 1024
 
+	// MaxBatchLookupPlusLimit keeps one batched point-read bounded before
+	// fsmeta grows streaming or shard-aware request splitting.
+	MaxBatchLookupPlusLimit uint32 = 16 * 1024
+
 	// DefaultSessionExpireLimit bounds one stale-session cleanup pass when the
 	// caller does not provide an explicit page size.
 	DefaultSessionExpireLimit uint32 = 1024
