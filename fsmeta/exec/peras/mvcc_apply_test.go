@@ -111,6 +111,37 @@ func TestBuildMVCCSegmentCatalogInstallEntriesStoresObjectAndBucketIndexes(t *te
 	require.Len(t, indexFound, len(indexKeys))
 }
 
+func TestBuildMVCCSegmentCatalogInstallEntriesForObjectKeyStoresPayloadOnce(t *testing.T) {
+	segment := fsmetaMultiBucketSegmentForTest(t)
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	objectKeys, err := PerasSegmentCatalogObjectKeys(segment)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(objectKeys), 2)
+	canonicalObjectKey, err := PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	require.Equal(t, objectKeys[0], canonicalObjectKey)
+
+	canonicalEntries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, 99, payload, digest, canonicalObjectKey)
+	require.NoError(t, err)
+	defer releaseMVCCReplayEntries(canonicalEntries)
+	require.Len(t, canonicalEntries, 2)
+	require.True(t, entriesContainUserKey(canonicalEntries, canonicalObjectKey))
+
+	nonCanonicalEntries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, 99, payload, digest, objectKeys[1])
+	require.NoError(t, err)
+	defer releaseMVCCReplayEntries(nonCanonicalEntries)
+	require.Len(t, nonCanonicalEntries, 1)
+	require.False(t, entriesContainUserKey(nonCanonicalEntries, objectKeys[1]))
+
+	canonicalIndex := decodeOnlyCatalogIndex(t, canonicalEntries)
+	require.Equal(t, canonicalObjectKey, canonicalIndex.ObjectKey)
+	nonCanonicalIndex := decodeOnlyCatalogIndex(t, nonCanonicalEntries)
+	require.Equal(t, canonicalObjectKey, nonCanonicalIndex.ObjectKey)
+}
+
 func TestBuildMVCCSegmentInstallEntriesRequiresFSMetaKeys(t *testing.T) {
 	segment, err := BuildPerasSegmentFromReplayPlan(ReplayPlan{
 		EpochID: 1,
@@ -161,6 +192,38 @@ func TestLoadPerasSegmentCatalogFindsInstalledSegment(t *testing.T) {
 	require.Equal(t, uint64(99), record.InstallVersion)
 	require.Equal(t, segment.Stats().EntryCount, record.EntryCount)
 	require.Len(t, record.Completions, len(segment.Completions))
+}
+
+func TestLoadPerasSegmentCatalogInstallForObjectKeyUsesBucketIndex(t *testing.T) {
+	db := openPerasReplayDB(t)
+	segment := fsmetaMultiBucketSegmentForTest(t)
+	payload, err := EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	objectKeys, err := PerasSegmentCatalogObjectKeys(segment)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(objectKeys), 2)
+
+	for _, objectKey := range objectKeys {
+		entries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, 99, payload, digest, objectKey)
+		require.NoError(t, err)
+		require.NoError(t, db.ApplyInternalEntries(entries))
+		releaseMVCCReplayEntries(entries)
+	}
+
+	for _, objectKey := range objectKeys {
+		installed, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, objectKey)
+		require.NoError(t, err)
+		require.True(t, installed)
+	}
+	canonical, ok, err := LoadPerasSegmentCatalogForObjectKey(db, segment, objectKeys[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, segment.Root, canonical.Root)
+	_, ok, err = LoadPerasSegmentCatalogForObjectKey(db, segment, objectKeys[1])
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func BenchmarkBuildMVCCSegmentCatalogInstallEntries1000(b *testing.B) {
@@ -257,4 +320,68 @@ func fsmetaSegmentForTest(t *testing.T) PerasSegment {
 	})
 	require.NoError(t, err)
 	return segment
+}
+
+func fsmetaMultiBucketSegmentForTest(t *testing.T) PerasSegment {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	var inode fsmeta.InodeID
+	for candidate := fsmeta.InodeID(2); candidate < 1_000_000; candidate++ {
+		if fsmeta.BucketForInodeID(candidate) != fsmeta.RootAffinityBucket {
+			inode = candidate
+			break
+		}
+	}
+	require.NotZero(t, inode)
+	dentry, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "artifact")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode)
+	require.NoError(t, err)
+	segment, err := BuildPerasSegmentFromReplayPlan(ReplayPlan{
+		EpochID: 1,
+		Operations: []ReplayOperation{{
+			OpID: opID("client-a", 1),
+			Kind: fsmeta.OperationCreate,
+			Mutations: []ReplayMutation{
+				{Key: dentry, Value: []byte("inode")},
+				{Key: inodeKey, Value: []byte("attrs")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	return segment
+}
+
+func entriesContainUserKey(entries []*entrykv.Entry, want []byte) bool {
+	for _, entry := range entries {
+		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+		if ok && cf == entrykv.CFDefault && bytes.Equal(userKey, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeOnlyCatalogIndex(t *testing.T, entries []*entrykv.Entry) SegmentCatalogIndexRecord {
+	t.Helper()
+	var record SegmentCatalogIndexRecord
+	var found bool
+	for _, entry := range entries {
+		cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+		require.True(t, ok)
+		if cf != entrykv.CFDefault {
+			continue
+		}
+		parts, ok := fsmeta.InspectKey(userKey)
+		if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordIndex {
+			continue
+		}
+		next, err := DecodePerasSegmentCatalogIndexRecord(entry.Value)
+		require.NoError(t, err)
+		require.False(t, found)
+		record = next
+		found = true
+	}
+	require.True(t, found)
+	return record
 }

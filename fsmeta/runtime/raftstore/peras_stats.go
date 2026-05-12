@@ -17,6 +17,26 @@ func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
 	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, &c.installLatencyMax, d)
 }
 
+func (c *RemotePerasCommitter) recordInstallShape(payloadBytes, routeKeys int) {
+	if c == nil {
+		return
+	}
+	if payloadBytes < 0 {
+		payloadBytes = 0
+	}
+	if routeKeys < 0 {
+		routeKeys = 0
+	}
+	payload := uint64(payloadBytes)
+	routes := uint64(routeKeys)
+	c.installPayloadTotal.Add(payload)
+	c.installPayloadLast.Store(payload)
+	recordPerasMax(&c.installPayloadMax, payload)
+	c.installRoutesTotal.Add(routes)
+	c.installRoutesLast.Store(routes)
+	recordPerasMax(&c.installRoutesMax, routes)
+}
+
 func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
 	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, &c.sealLatencyMax, d)
 }
@@ -85,6 +105,12 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"install_latency_last_nanosecond":    uint64(0),
 			"install_latency_max_nanosecond":     uint64(0),
 			"install_latency_average_nanosecond": uint64(0),
+			"install_payload_bytes_total":        uint64(0),
+			"install_payload_bytes_last":         uint64(0),
+			"install_payload_bytes_max":          uint64(0),
+			"install_route_keys_total":           uint64(0),
+			"install_route_keys_last":            uint64(0),
+			"install_route_keys_max":             uint64(0),
 			"seal_latency_total_nanosecond":      uint64(0),
 			"seal_latency_last_nanosecond":       uint64(0),
 			"seal_latency_max_nanosecond":        uint64(0),
@@ -102,6 +128,10 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"last_error":                         "",
 			"error_total":                        uint64(0),
 			"retry_total":                        uint64(0),
+			"retry_unavailable_total":            uint64(0),
+			"retry_routing_total":                uint64(0),
+			"retry_stale_epoch_total":            uint64(0),
+			"retry_other_total":                  uint64(0),
 			"background_skip_total":              uint64(0),
 			"background_error_total":             uint64(0),
 			"segment_catalog_load_total":         uint64(0),
@@ -176,6 +206,12 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
 		"install_latency_max_nanosecond":     c.installLatencyMax.Load(),
 		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
+		"install_payload_bytes_total":        c.installPayloadTotal.Load(),
+		"install_payload_bytes_last":         c.installPayloadLast.Load(),
+		"install_payload_bytes_max":          c.installPayloadMax.Load(),
+		"install_route_keys_total":           c.installRoutesTotal.Load(),
+		"install_route_keys_last":            c.installRoutesLast.Load(),
+		"install_route_keys_max":             c.installRoutesMax.Load(),
 		"seal_latency_total_nanosecond":      sealLatencyTotal,
 		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
 		"seal_latency_max_nanosecond":        c.sealLatencyMax.Load(),
@@ -193,6 +229,10 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"last_error":                         lastError,
 		"error_total":                        c.errorTotal.Load(),
 		"retry_total":                        c.retryTotal.Load(),
+		"retry_unavailable_total":            c.retryUnavailable.Load(),
+		"retry_routing_total":                c.retryRouting.Load(),
+		"retry_stale_epoch_total":            c.retryStaleEpoch.Load(),
+		"retry_other_total":                  c.retryOther.Load(),
 		"background_skip_total":              c.bgSkipTotal.Load(),
 		"background_error_total":             c.bgErrorTotal.Load(),
 		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),

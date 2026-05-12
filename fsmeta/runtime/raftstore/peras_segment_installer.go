@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -146,6 +147,7 @@ func (l *perasInstallLane) run(req perasInstallRequest) {
 }
 
 func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job perasFlushJob) (PerasInstallCursor, error) {
+	c.recordInstallJobShape(job)
 	var last error
 	for attempt := 0; attempt <= defaultPerasSegmentInstallRetries; attempt++ {
 		cursor, err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest, job.materialize)
@@ -156,16 +158,60 @@ func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job 
 		if !nokverrors.Retryable(err) || attempt == defaultPerasSegmentInstallRetries {
 			break
 		}
-		c.retryTotal.Add(1)
-		delay := defaultPerasSegmentInstallRetryBackoff << attempt
-		if delay > defaultPerasSegmentInstallMaxBackoff {
-			delay = defaultPerasSegmentInstallMaxBackoff
-		}
+		c.recordInstallRetry(err)
+		delay := perasSegmentInstallRetryDelay(err, attempt)
 		if !sleepContext(ctx, delay) {
 			return PerasInstallCursor{}, ctx.Err()
 		}
 	}
 	return PerasInstallCursor{}, last
+}
+
+func perasSegmentInstallRetryDelay(err error, attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	base := defaultPerasSegmentInstallRetryBackoff
+	maxDelay := defaultPerasSegmentInstallMaxBackoff
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindStaleEpoch, nokverrors.KindRegionRouting, nokverrors.KindNotLeader:
+		base = defaultPerasSegmentInstallStaleBackoff
+		maxDelay = defaultPerasSegmentInstallStaleMaxBackoff
+	}
+	delay := base << attempt
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
+}
+
+func (c *RemotePerasCommitter) recordInstallJobShape(job perasFlushJob) {
+	if c == nil {
+		return
+	}
+	routeKeys, err := perasSegmentInstallRoutingKeys(job.segment, job.materialize)
+	if err != nil {
+		c.recordInstallShape(len(job.payload), 0)
+		return
+	}
+	c.recordInstallShape(len(job.payload), len(routeKeys))
+}
+
+func (c *RemotePerasCommitter) recordInstallRetry(err error) {
+	if c == nil {
+		return
+	}
+	c.retryTotal.Add(1)
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable:
+		c.retryUnavailable.Add(1)
+	case nokverrors.KindRegionRouting, nokverrors.KindNotLeader:
+		c.retryRouting.Add(1)
+	case nokverrors.KindStaleEpoch:
+		c.retryStaleEpoch.Add(1)
+	default:
+		c.retryOther.Add(1)
+	}
 }
 
 func (c *RemotePerasCommitter) submitInstallJob(ctx context.Context, job perasFlushJob) (PerasInstallCursor, error) {
@@ -184,8 +230,9 @@ func (c *RemotePerasCommitter) submitInstallJob(ctx context.Context, job perasFl
 }
 
 type runnerPerasSegmentInstaller struct {
-	runner *Runner
-	router *fsmetawatch.Router
+	runner             *Runner
+	router             *fsmetawatch.Router
+	nextInstallVersion atomic.Uint64
 }
 
 func newRunnerPerasSegmentInstaller(runner *Runner, router *fsmetawatch.Router) *runnerPerasSegmentInstaller {
@@ -258,28 +305,15 @@ func perasSegmentInstallRoutingKeys(segment fsperas.PerasSegment, materialize bo
 }
 
 func (i *runnerPerasSegmentInstaller) reserveInstallVersion(ctx context.Context) (uint64, error) {
-	var last error
-	for attempt := 0; attempt <= defaultPerasInstallTimestampRetries; attempt++ {
-		version, err := i.runner.ReserveTimestamp(ctx, 1)
-		if err == nil {
-			return version, nil
-		}
-		if !nokverrors.Retryable(err) {
+	if i == nil {
+		return 0, errPerasCommitterInvalid
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		last = err
-		if attempt == defaultPerasInstallTimestampRetries {
-			break
-		}
-		timer := time.NewTimer(defaultPerasInstallTimestampBackoff << attempt)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, ctx.Err()
-		case <-timer.C:
-		}
 	}
-	return 0, last
+	return i.nextInstallVersion.Add(1), nil
 }
 
 func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) error {

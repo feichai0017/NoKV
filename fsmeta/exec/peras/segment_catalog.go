@@ -79,9 +79,9 @@ func PerasSegmentObjectKey(segment PerasSegment) ([]byte, error) {
 }
 
 // PerasSegmentCatalogObjectKeys returns one bucket-local object key per
-// fsmeta bucket touched by the segment. Each object stores the same segment
-// payload; bucket-local index records point at their local copy so raftstore
-// never writes catalog metadata outside the region that committed it.
+// fsmeta bucket touched by the segment. These keys are routing markers for
+// raftstore install: only the canonical object key stores the segment payload;
+// every bucket writes a local index record pointing at that canonical object.
 func PerasSegmentCatalogObjectKeys(segment PerasSegment) ([][]byte, error) {
 	buckets, err := perasSegmentCatalogBuckets(segment)
 	if err != nil {
@@ -224,6 +224,51 @@ func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (S
 		return SegmentCatalogRecord{}, false, err
 	}
 	return LoadPerasSegmentCatalogForObjectKey(store, segment, catalogKey)
+}
+
+func LoadPerasSegmentCatalogInstallForObjectKey(store SegmentCatalogStore, segment PerasSegment, objectKey []byte) (bool, error) {
+	if store == nil {
+		return false, ErrSegmentCatalogStoreRequired
+	}
+	bucket, err := perasSegmentObjectBucket(segment, objectKey)
+	if err != nil {
+		return false, err
+	}
+	canonicalObjectKey, err := PerasSegmentObjectKey(segment)
+	if err != nil {
+		return false, err
+	}
+	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
+	if err != nil {
+		return false, err
+	}
+	it := store.NewInternalIterator(&index.Options{IsAsc: true})
+	if it == nil {
+		return false, ErrSegmentCatalogStoreRequired
+	}
+	defer func() { _ = it.Close() }()
+
+	it.Seek(entrykv.InternalKey(entrykv.CFDefault, indexKey, entrykv.MaxVersion))
+	if !it.Valid() {
+		return false, nil
+	}
+	item := it.Item()
+	if item == nil || item.Entry() == nil {
+		return false, nil
+	}
+	entry := item.Entry()
+	cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+	if !ok || cf != entrykv.CFDefault || !bytes.Equal(userKey, indexKey) {
+		return false, nil
+	}
+	record, err := DecodePerasSegmentCatalogIndexRecord(entry.Value)
+	if err != nil {
+		return false, err
+	}
+	if record.Root != segment.Root || !bytes.Equal(record.ObjectKey, canonicalObjectKey) {
+		return false, ErrInvalidPerasSegment
+	}
+	return true, nil
 }
 
 func LoadPerasSegmentCatalogForObjectKey(store SegmentCatalogStore, segment PerasSegment, catalogKey []byte) (SegmentCatalogRecord, bool, error) {

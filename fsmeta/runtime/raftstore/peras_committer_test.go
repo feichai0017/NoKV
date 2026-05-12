@@ -451,7 +451,18 @@ func TestRemotePerasCommitterRetriesRetryableSegmentInstall(t *testing.T) {
 	require.Equal(t, 3, installer.calls)
 	stats := committer.Stats()
 	require.Equal(t, uint64(2), stats["retry_total"])
+	require.Equal(t, uint64(2), stats["retry_stale_epoch_total"])
 	require.Equal(t, uint64(1), stats["flush_total"])
+}
+
+func TestPerasSegmentInstallRetryDelayKeepsStaleEpochShort(t *testing.T) {
+	stale := nokverrors.New(nokverrors.KindStaleEpoch, "stale")
+	require.Equal(t, defaultPerasSegmentInstallStaleBackoff, perasSegmentInstallRetryDelay(stale, 0))
+	require.Equal(t, defaultPerasSegmentInstallStaleMaxBackoff, perasSegmentInstallRetryDelay(stale, 20))
+
+	unavailable := nokverrors.New(nokverrors.KindUnavailable, "down")
+	require.Equal(t, defaultPerasSegmentInstallRetryBackoff, perasSegmentInstallRetryDelay(unavailable, 0))
+	require.Equal(t, defaultPerasSegmentInstallMaxBackoff, perasSegmentInstallRetryDelay(unavailable, 20))
 }
 
 func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
@@ -1231,7 +1242,7 @@ func TestValidatePerasSegmentInstallResponseChecksRootAndCounts(t *testing.T) {
 	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), errPerasCommitterInvalid)
 }
 
-func TestRunnerPerasSegmentInstallerRetriesTimestampStaleEpoch(t *testing.T) {
+func TestRunnerPerasSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{{
@@ -1257,7 +1268,7 @@ func TestRunnerPerasSegmentInstallerRetriesTimestampStaleEpoch(t *testing.T) {
 		RegionId:       7,
 		Term:           3,
 		Index:          99,
-		CommitVersion:  77,
+		CommitVersion:  1,
 	}}
 	tso := &fakeRunnerTSO{
 		resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1},
@@ -1272,11 +1283,11 @@ func TestRunnerPerasSegmentInstallerRetriesTimestampStaleEpoch(t *testing.T) {
 	installer := newRunnerPerasSegmentInstaller(runner, nil)
 	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, true)
 	require.NoError(t, err)
-	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 77}, cursor)
+	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
 
-	require.Equal(t, 3, tso.calls)
+	require.Equal(t, 0, tso.calls)
 	require.NotNil(t, kv.req)
-	require.Equal(t, uint64(77), kv.req.GetInstallVersion())
+	require.Equal(t, uint64(1), kv.req.GetInstallVersion())
 	require.True(t, kv.req.GetMaterializeMvcc())
 }
 
@@ -1311,7 +1322,7 @@ func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 		RegionId:       7,
 		Term:           3,
 		Index:          99,
-		CommitVersion:  1234,
+		CommitVersion:  1,
 	}}
 	tso := &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}}
 	runner, err := NewRunner(kv, tso)
@@ -1327,13 +1338,16 @@ func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	installer := newRunnerPerasSegmentInstaller(runner, router)
 	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, false)
 	require.NoError(t, err)
-	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1234}, cursor)
+	require.Equal(t, PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
+	require.NotNil(t, kv.req)
+	require.Equal(t, uint64(1), kv.req.GetInstallVersion())
+	require.Equal(t, 0, tso.calls)
 
 	select {
 	case evt := <-sub.Events():
 		require.Equal(t, dentryKey, evt.Key)
 		require.Equal(t, fsmeta.WatchCursor{RegionID: 7, Term: 3, Index: 99}, evt.Cursor)
-		require.Equal(t, uint64(1234), evt.CommitVersion)
+		require.Equal(t, uint64(1), evt.CommitVersion)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for installed segment watch event")
 	}

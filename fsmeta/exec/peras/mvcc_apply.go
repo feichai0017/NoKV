@@ -1,6 +1,8 @@
 package peras
 
 import (
+	"bytes"
+
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -86,10 +88,10 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment PerasSegment, vers
 	return buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue, digest, uint64(len(payload)))
 }
 
-// BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey installs one
-// bucket-local copy of a segment catalog. Cross-bucket segments are installed
-// by issuing this once per touched bucket; each raft region only writes its
-// local object and index keys.
+// BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey installs a
+// bucket-local discovery marker for a segment catalog. Only the canonical
+// object key stores the segment payload; the other touched buckets write an
+// index record pointing at that canonical object.
 func BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment PerasSegment, version uint64, payload []byte, digest [32]byte, objectKey []byte) ([]*entrykv.Entry, error) {
 	if version == 0 || version == entrykv.MaxVersion {
 		return nil, ErrReplayVersionRequired
@@ -101,11 +103,11 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment PerasS
 	if err != nil {
 		return nil, err
 	}
-	catalogValue, err := EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
+	canonicalObjectKey, err := PerasSegmentObjectKey(segment)
 	if err != nil {
 		return nil, err
 	}
-	indexValue, err := encodePerasSegmentCatalogIndexRecord(segment.EpochID, version, segment.Root, digest, uint64(len(payload)), objectKey)
+	indexValue, err := encodePerasSegmentCatalogIndexRecord(segment.EpochID, version, segment.Root, digest, uint64(len(payload)), canonicalObjectKey)
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +115,18 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment PerasS
 	if err != nil {
 		return nil, err
 	}
-	return []*entrykv.Entry{
-		entrykv.NewInternalEntry(entrykv.CFDefault, objectKey, version, catalogValue, 0, 0),
+	entries := []*entrykv.Entry{
 		entrykv.NewInternalEntry(entrykv.CFDefault, indexKey, version, indexValue, 0, 0),
-	}, nil
+	}
+	if bytes.Equal(objectKey, canonicalObjectKey) {
+		catalogValue, err := EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
+		if err != nil {
+			releaseMVCCReplayEntries(entries)
+			return nil, err
+		}
+		entries = append(entries, entrykv.NewInternalEntry(entrykv.CFDefault, objectKey, version, catalogValue, 0, 0))
+	}
+	return entries, nil
 }
 
 func buildMVCCSegmentCatalogInstallEntries(segment PerasSegment, version uint64, objectValue []byte, digest [32]byte, payloadSize uint64) ([]*entrykv.Entry, error) {

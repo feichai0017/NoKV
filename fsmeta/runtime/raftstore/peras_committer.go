@@ -33,8 +33,8 @@ const (
 	defaultPerasSegmentInstallRetries         = 24
 	defaultPerasSegmentInstallRetryBackoff    = 10 * time.Millisecond
 	defaultPerasSegmentInstallMaxBackoff      = 500 * time.Millisecond
-	defaultPerasInstallTimestampRetries       = 6
-	defaultPerasInstallTimestampBackoff       = 2 * time.Millisecond
+	defaultPerasSegmentInstallStaleBackoff    = time.Millisecond
+	defaultPerasSegmentInstallStaleMaxBackoff = 10 * time.Millisecond
 	defaultPerasVisibleWatchQueue             = 65536
 )
 
@@ -157,6 +157,12 @@ type RemotePerasCommitter struct {
 	installLatencyTotal  atomic.Uint64
 	installLatencyLast   atomic.Uint64
 	installLatencyMax    atomic.Uint64
+	installPayloadTotal  atomic.Uint64
+	installPayloadLast   atomic.Uint64
+	installPayloadMax    atomic.Uint64
+	installRoutesTotal   atomic.Uint64
+	installRoutesLast    atomic.Uint64
+	installRoutesMax     atomic.Uint64
 	sealLatencyTotal     atomic.Uint64
 	sealLatencyLast      atomic.Uint64
 	sealLatencyMax       atomic.Uint64
@@ -166,6 +172,10 @@ type RemotePerasCommitter struct {
 	flushJobMax          atomic.Uint64
 	errorTotal           atomic.Uint64
 	retryTotal           atomic.Uint64
+	retryUnavailable     atomic.Uint64
+	retryRouting         atomic.Uint64
+	retryStaleEpoch      atomic.Uint64
+	retryOther           atomic.Uint64
 	bgSkipTotal          atomic.Uint64
 	bgErrorTotal         atomic.Uint64
 	catalogLoadTotal     atomic.Uint64
