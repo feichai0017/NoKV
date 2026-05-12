@@ -133,14 +133,19 @@ func TestEventsFromCommandSkipsAtomicMutateFallback(t *testing.T) {
 }
 
 func TestEventsFromCommandExtractsPerasSegmentInstallKeys(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
 		EpochID: 7,
 		Operations: []fsperas.ReplayOperation{{
 			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
 			Kind: fsmeta.OperationCreate,
 			Mutations: []fsperas.ReplayMutation{
-				{Key: []byte("dentry/a"), Value: []byte("dentry-value")},
-				{Key: []byte("inode/a"), Value: []byte("inode-value")},
+				{Key: dentryKey, Value: []byte("dentry-value")},
+				{Key: inodeKey, Value: []byte("inode-value")},
 			},
 		}},
 	})
@@ -173,6 +178,6 @@ func TestEventsFromCommandExtractsPerasSegmentInstallKeys(t *testing.T) {
 		Index:         11,
 		Source:        SourceCommit,
 		CommitVersion: 44,
-		Keys:          [][]byte{[]byte("dentry/a"), []byte("inode/a")},
+		Keys:          [][]byte{dentryKey},
 	}, events[0])
 }

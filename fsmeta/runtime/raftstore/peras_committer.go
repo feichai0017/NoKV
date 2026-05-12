@@ -22,15 +22,18 @@ import (
 const (
 	defaultPerasSegmentWitnessRetries      = 3
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
-	defaultPerasSegmentBatchSize           = 1024
+	defaultPerasSegmentBatchSize           = 128
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
 	// large catalog-only segments on the common path.
 	defaultPerasMaterializeMaxReplayMutations = 20
-	defaultPerasSegmentFlushEvery             = 100 * time.Millisecond
-	defaultPerasBackgroundFlushTimeout        = 10 * time.Second
+	defaultPerasSegmentFlushEvery             = 20 * time.Millisecond
+	defaultPerasBackgroundFlushTimeout        = 30 * time.Second
 	defaultPerasBackgroundErrorBackoff        = time.Second
+	defaultPerasSegmentInstallRetries         = 24
+	defaultPerasSegmentInstallRetryBackoff    = 10 * time.Millisecond
+	defaultPerasSegmentInstallMaxBackoff      = 500 * time.Millisecond
 	defaultPerasInstallTimestampRetries       = 6
 	defaultPerasInstallTimestampBackoff       = 2 * time.Millisecond
 )
@@ -126,13 +129,18 @@ type runtimePerasOverlayEntry struct {
 }
 
 type runtimePerasFlushJob struct {
-	holder      *fsperas.Holder
 	scope       compile.AuthorityScope
 	plan        fsperas.ReplayPlan
 	segment     fsperas.PerasSegment
 	payload     []byte
 	digest      [32]byte
 	materialize bool
+}
+
+type runtimePerasFlushBatch struct {
+	holder *fsperas.Holder
+	plan   fsperas.ReplayPlan
+	jobs   []runtimePerasFlushJob
 }
 
 type runtimePerasFrozenPlan struct {
@@ -355,11 +363,11 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	c.commitMu.Lock()
 	defer c.commitMu.Unlock()
 
-	jobs, err := c.freezeFlushJobsLocked(nil, true)
+	batches, err := c.freezeFlushBatchesLocked(nil, true, 0)
 	if err != nil {
 		return err
 	}
-	if err := c.installFlushJobs(ctx, jobs); err != nil {
+	if err := c.installFlushBatches(ctx, batches); err != nil {
 		return err
 	}
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
@@ -416,32 +424,73 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 
 func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
 	c.commitMu.Lock()
-	jobs, err := c.freezeFlushJobsLocked(scope, false)
+	batches, err := c.freezeFlushBatchesLocked(scope, false, 0)
 	c.commitMu.Unlock()
 	if err != nil {
 		return err
 	}
-	return c.installFlushJobs(ctx, jobs)
+	return c.installFlushBatches(ctx, batches)
 }
 
-func (c *RemotePerasCommitter) installFlushJobs(ctx context.Context, jobs []runtimePerasFlushJob) error {
-	if len(jobs) > 0 && c.installer == nil {
+func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches []runtimePerasFlushBatch) error {
+	if len(batches) > 0 && c.installer == nil {
 		return c.recordError(errPerasCommitterInvalid)
 	}
-	for _, job := range jobs {
-		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, job.holder, job.segment, job.payload, job.digest); err != nil {
-			return c.recordErrorf("append peras segment witness: %w", err)
+	for _, batch := range batches {
+		if err := c.installFlushBatchJobs(ctx, batch); err != nil {
+			return err
 		}
-		if err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest, job.materialize); err != nil {
-			return c.recordErrorf("install peras segment: %w", err)
-		}
-		if err := job.holder.MarkReplayPlanApplied(job.plan); err != nil {
+		if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
 			return c.recordErrorf("mark peras plan applied: %w", err)
 		}
-		c.installSegment(job.plan, job.segment)
-		c.flushTotal.Add(1)
+		for _, job := range batch.jobs {
+			c.installSegment(job.plan, job.segment)
+		}
 	}
 	return nil
+}
+
+func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch runtimePerasFlushBatch) error {
+	for _, job := range batch.jobs {
+		if err := c.installOneFlushJob(ctx, batch.holder, job); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job runtimePerasFlushJob) error {
+	if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, holder, job.segment, job.payload, job.digest); err != nil {
+		return c.recordErrorf("append peras segment witness: %w", err)
+	}
+	if err := c.installSegmentWithRetry(ctx, job); err != nil {
+		return c.recordErrorf("install peras segment: %w", err)
+	}
+	c.flushTotal.Add(1)
+	return nil
+}
+
+func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job runtimePerasFlushJob) error {
+	var last error
+	for attempt := 0; attempt <= defaultPerasSegmentInstallRetries; attempt++ {
+		err := c.installer.InstallPerasSegment(ctx, job.scope, job.segment, job.payload, job.digest, job.materialize)
+		if err == nil {
+			return nil
+		}
+		last = err
+		if !nokverrors.Retryable(err) || attempt == defaultPerasSegmentInstallRetries {
+			break
+		}
+		c.retryTotal.Add(1)
+		delay := defaultPerasSegmentInstallRetryBackoff << attempt
+		if delay > defaultPerasSegmentInstallMaxBackoff {
+			delay = defaultPerasSegmentInstallMaxBackoff
+		}
+		if !sleepContext(ctx, delay) {
+			return ctx.Err()
+		}
+	}
+	return last
 }
 
 func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
@@ -451,50 +500,55 @@ func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retir
 	return nil
 }
 
-func (c *RemotePerasCommitter) freezeFlushJobsLocked(target *compile.AuthorityScope, materialize bool) ([]runtimePerasFlushJob, error) {
-	plans, err := c.freezeReplayPlansLocked(target)
+func (c *RemotePerasCommitter) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]runtimePerasFlushBatch, error) {
+	plans, err := c.freezeReplayPlansLocked(target, maxOpsPerHolder)
 	if err != nil {
 		return nil, err
 	}
-	jobs := make([]runtimePerasFlushJob, 0, len(plans))
+	batches := make([]runtimePerasFlushBatch, 0, len(plans))
 	for _, frozen := range plans {
 		bucketPlans, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan: %w", err)
 		}
-		parts := make([]fsperas.ReplayPlan, 0, len(bucketPlans))
+		batch := runtimePerasFlushBatch{
+			holder: frozen.holder,
+			plan:   frozen.plan,
+			jobs:   make([]runtimePerasFlushJob, 0, len(bucketPlans)),
+		}
 		for _, bucketPlan := range bucketPlans {
 			sized, err := fsperas.SplitReplayPlanByMutationBudget(bucketPlan, c.replayMutationBudget(materialize))
 			if err != nil {
 				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 			}
-			parts = append(parts, sized...)
+			for _, plan := range sized {
+				segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+				if err != nil {
+					return nil, c.recordErrorf("build peras segment: %w", err)
+				}
+				payload, err := fsperas.EncodePerasSegment(segment)
+				if err != nil {
+					return nil, c.recordErrorf("encode peras segment: %w", err)
+				}
+				digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+				if err != nil {
+					return nil, c.recordErrorf("digest peras segment: %w", err)
+				}
+				batch.jobs = append(batch.jobs, runtimePerasFlushJob{
+					scope:       frozen.scope,
+					plan:        plan,
+					segment:     segment,
+					payload:     payload,
+					digest:      digest,
+					materialize: materialize,
+				})
+			}
 		}
-		for _, plan := range parts {
-			segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
-			if err != nil {
-				return nil, c.recordErrorf("build peras segment: %w", err)
-			}
-			payload, err := fsperas.EncodePerasSegment(segment)
-			if err != nil {
-				return nil, c.recordErrorf("encode peras segment: %w", err)
-			}
-			digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-			if err != nil {
-				return nil, c.recordErrorf("digest peras segment: %w", err)
-			}
-			jobs = append(jobs, runtimePerasFlushJob{
-				holder:      frozen.holder,
-				scope:       frozen.scope,
-				plan:        plan,
-				segment:     segment,
-				payload:     payload,
-				digest:      digest,
-				materialize: materialize,
-			})
+		if len(batch.jobs) > 0 {
+			batches = append(batches, batch)
 		}
 	}
-	return jobs, nil
+	return batches, nil
 }
 
 func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
@@ -507,11 +561,11 @@ func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
 	return defaultPerasMaterializeMaxReplayMutations
 }
 
-func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope) ([]runtimePerasFrozenPlan, error) {
+func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope, maxOpsPerHolder int) ([]runtimePerasFrozenPlan, error) {
 	holders := c.holderSnapshot()
 	plans := make([]runtimePerasFrozenPlan, 0, len(holders))
 	for _, holder := range holders {
-		plan, scope, ok, err := c.buildFlushPlan(holder, target)
+		plan, scope, ok, err := c.buildFlushPlan(holder, target, maxOpsPerHolder)
 		if err != nil {
 			return nil, err
 		}
@@ -527,7 +581,7 @@ func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.Authority
 	return plans, nil
 }
 
-func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *compile.AuthorityScope) (fsperas.ReplayPlan, compile.AuthorityScope, bool, error) {
+func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *compile.AuthorityScope, maxOps int) (fsperas.ReplayPlan, compile.AuthorityScope, bool, error) {
 	if target != nil {
 		plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(0, *target)
 		if err != nil {
@@ -539,11 +593,11 @@ func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *co
 	if len(pending) == 0 {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, nil
 	}
-	plan, scope, err := holder.BuildPendingReplayPlan(0)
+	plan, scope, err := holder.BuildPendingReplayPlanLimit(0, maxOps)
 	if err != nil {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordErrorf("build peras replay plan: %w", err)
 	}
-	if len(plan.Operations) != len(pending) {
+	if maxOps <= 0 && len(plan.Operations) != len(pending) {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordError(fsperas.ErrInvalidPerasSegment)
 	}
 	return plan, scope, true, nil
@@ -816,7 +870,13 @@ func (c *RemotePerasCommitter) flushBackground() {
 	if c == nil {
 		return
 	}
-	defer c.bgRunning.Store(false)
+	reschedule := false
+	defer func() {
+		c.bgRunning.Store(false)
+		if reschedule {
+			c.triggerBackgroundFlush()
+		}
+	}()
 	now := c.now().UnixNano()
 	if until := c.bgNext.Load(); until > now {
 		c.bgSkipTotal.Add(1)
@@ -833,7 +893,13 @@ func (c *RemotePerasCommitter) flushBackground() {
 		ctx, cancel = context.WithTimeout(ctx, c.bgTimeout)
 		defer cancel()
 	}
-	if err := c.flushLocked(ctx, nil); err != nil {
+	c.commitMu.Lock()
+	batches, err := c.freezeFlushBatchesLocked(nil, false, c.batchSize)
+	c.commitMu.Unlock()
+	if err == nil {
+		err = c.installFlushBatches(ctx, batches)
+	}
+	if err != nil {
 		c.bgErrorTotal.Add(1)
 		if c.bgBackoff > 0 {
 			c.bgNext.Store(c.now().Add(c.bgBackoff).UnixNano())
@@ -841,6 +907,18 @@ func (c *RemotePerasCommitter) flushBackground() {
 		return
 	}
 	c.bgNext.Store(0)
+	reschedule = c.pendingOperations() > 0
+}
+
+func (c *RemotePerasCommitter) pendingOperations() int {
+	if c == nil {
+		return 0
+	}
+	total := 0
+	for _, holder := range c.holderSnapshot() {
+		total += holder.Pending()
+	}
+	return total
 }
 
 func (c *RemotePerasCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {

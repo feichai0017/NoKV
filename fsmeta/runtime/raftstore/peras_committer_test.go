@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,6 +141,38 @@ func TestRemotePerasCommitterFlushSplitsFSMetaBuckets(t *testing.T) {
 	require.Equal(t, 2, installer.calls)
 }
 
+func TestRemotePerasCommitterFlushSplitsOneOperationAcrossBuckets(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	leftA, _ := testRuntimeBucketKeys(t, mount, 1)
+	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, leftA, rightA))
+	require.NoError(t, committer.Flush(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(2), stats["flush_total"])
+	require.Equal(t, uint64(2), stats["segment_total"])
+	require.Equal(t, uint64(2), stats["segment_operations_total"])
+	require.Equal(t, 2, installer.calls)
+	require.Equal(t, 0, stats["pending"])
+	_, _, ok := committer.GetPerasOverlay(leftA)
+	require.True(t, ok)
+	_, _, ok = committer.GetPerasOverlay(rightA)
+	require.True(t, ok)
+}
+
 func TestRemotePerasCommitterFlushHonorsReplayMutationBudget(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
@@ -165,6 +198,28 @@ func TestRemotePerasCommitterFlushHonorsReplayMutationBudget(t *testing.T) {
 	require.Equal(t, uint64(2), stats["segment_total"])
 	require.Equal(t, uint64(3), stats["segment_operations_total"])
 	require.Equal(t, 2, installer.calls)
+}
+
+func TestRemotePerasCommitterRetriesRetryableSegmentInstall(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &flakyRuntimePerasSegmentInstaller{failures: 2}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.NoError(t, commitRuntimePeras(context.Background(), committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.Flush(context.Background()))
+
+	require.Equal(t, 3, installer.calls)
+	stats := committer.Stats()
+	require.Equal(t, uint64(2), stats["retry_total"])
+	require.Equal(t, uint64(1), stats["flush_total"])
 }
 
 func TestRemotePerasCommitterFlushRequiresInstaller(t *testing.T) {
@@ -498,6 +553,33 @@ func TestRemotePerasCommitterBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 	require.Equal(t, 2, committer.Stats()["pending"])
 }
 
+func TestRemotePerasCommitterBackgroundFlushChainsBoundedReplayWindows(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	for seq := uint64(1); seq <= 5; seq++ {
+		require.NoError(t, commitRuntimePeras(context.Background(), committer, seq, appendUvarintKey("dentry/", seq), appendUvarintKey("inode/", seq)))
+	}
+
+	committer.batchSize = 2
+	committer.triggerBackgroundFlush()
+
+	require.Eventually(t, func() bool {
+		stats := committer.Stats()
+		return stats["pending"] == 0 && stats["segment_total"] == uint64(3)
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(5), committer.Stats()["segment_operations_total"])
+}
+
 func TestRemotePerasCommitterFlushAllowsConcurrentCommitsDuringInstall(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &blockingRuntimePerasSegmentInstaller{}
@@ -729,6 +811,7 @@ func commitRuntimePeras(ctx context.Context, committer *RemotePerasCommitter, se
 }
 
 type fakeRuntimePerasSegmentInstaller struct {
+	mu          sync.Mutex
 	calls       int
 	scope       compile.AuthorityScope
 	segment     fsperas.PerasSegment
@@ -739,6 +822,8 @@ type fakeRuntimePerasSegmentInstaller struct {
 }
 
 func (i *fakeRuntimePerasSegmentInstaller) InstallPerasSegment(_ context.Context, scope compile.AuthorityScope, segment fsperas.PerasSegment, payload []byte, digest [32]byte, materialize bool) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.calls++
 	i.scope = scope
 	i.segment = segment
@@ -746,6 +831,22 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallPerasSegment(_ context.Context
 	i.digest = digest
 	i.materialize = materialize
 	i.modes = append(i.modes, materialize)
+	return nil
+}
+
+type flakyRuntimePerasSegmentInstaller struct {
+	mu       sync.Mutex
+	calls    int
+	failures int
+}
+
+func (i *flakyRuntimePerasSegmentInstaller) InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.calls++
+	if i.calls <= i.failures {
+		return nokverrors.New(nokverrors.KindStaleEpoch, "stale install era")
+	}
 	return nil
 }
 

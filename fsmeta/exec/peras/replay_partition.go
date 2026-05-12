@@ -14,9 +14,9 @@ type replayBucketKey struct {
 }
 
 // SplitReplayPlanByFSMetaBucket keeps segment install units inside one fsmeta
-// affinity bucket. A single operation that writes multiple buckets is rejected:
-// it must use the ordinary transaction path until Peras grows a multi-segment
-// atomic install protocol.
+// affinity bucket. A logical operation may span buckets; in that case each
+// bucket receives the operation's local mutations and the caller must release
+// the original holder operation only after every returned plan installs.
 func SplitReplayPlanByFSMetaBucket(plan ReplayPlan) ([]ReplayPlan, error) {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 {
 		return nil, ErrInvalidPerasSegment
@@ -29,20 +29,50 @@ func SplitReplayPlanByFSMetaBucket(plan ReplayPlan) ([]ReplayPlan, error) {
 		ops   []ReplayOperation
 	}
 	groups := make(map[replayBucketKey]*bucketPlan)
+	haveFSMeta := false
+	haveOpaque := false
 	for i, op := range plan.Operations {
-		key, ok, err := replayOperationBucket(op)
-		if err != nil {
-			return nil, err
+		if !op.OpID.Valid() || len(op.Mutations) == 0 {
+			return nil, ErrInvalidPerasSegment
 		}
-		if !ok {
-			return []ReplayPlan{{EpochID: plan.EpochID, Operations: cloneReplayOperations(plan.Operations)}}, nil
+		opBuckets := make(map[replayBucketKey][]ReplayMutation)
+		opBucketOrder := make([]replayBucketKey, 0, len(op.Mutations))
+		for _, mutation := range op.Mutations {
+			key, ok, err := replayMutationBucket(mutation)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				haveOpaque = true
+				continue
+			}
+			haveFSMeta = true
+			if _, exists := opBuckets[key]; !exists {
+				opBucketOrder = append(opBucketOrder, key)
+			}
+			opBuckets[key] = append(opBuckets[key], cloneReplayMutation(mutation))
 		}
-		group := groups[key]
-		if group == nil {
-			group = &bucketPlan{first: i}
-			groups[key] = group
+		if haveOpaque && haveFSMeta {
+			return nil, ErrInvalidPerasSegment
 		}
-		group.ops = append(group.ops, cloneReplayOperation(op))
+		if len(opBuckets) == 0 {
+			continue
+		}
+		for _, key := range opBucketOrder {
+			group := groups[key]
+			if group == nil {
+				group = &bucketPlan{first: i}
+				groups[key] = group
+			}
+			group.ops = append(group.ops, ReplayOperation{
+				OpID:      op.OpID,
+				Kind:      op.Kind,
+				Mutations: opBuckets[key],
+			})
+		}
+	}
+	if haveOpaque {
+		return []ReplayPlan{{EpochID: plan.EpochID, Operations: cloneReplayOperations(plan.Operations)}}, nil
 	}
 	ordered := make([]*bucketPlan, 0, len(groups))
 	for _, group := range groups {
@@ -174,4 +204,23 @@ func replayOperationBucket(op ReplayOperation) (replayBucketKey, bool, error) {
 		}
 	}
 	return out, true, nil
+}
+
+func replayMutationBucket(mutation ReplayMutation) (replayBucketKey, bool, error) {
+	if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
+		return replayBucketKey{}, false, ErrInvalidPerasSegment
+	}
+	parts, ok := fsmeta.InspectKey(mutation.Key)
+	if !ok {
+		return replayBucketKey{}, false, nil
+	}
+	return replayBucketKey{mount: parts.MountKeyID, bucket: parts.Bucket}, true, nil
+}
+
+func cloneReplayMutation(mutation ReplayMutation) ReplayMutation {
+	return ReplayMutation{
+		Key:    cloneBytes(mutation.Key),
+		Value:  cloneBytes(mutation.Value),
+		Delete: mutation.Delete,
+	}
 }
