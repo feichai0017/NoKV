@@ -873,6 +873,7 @@ func validateApplyPerasAuthorityResponse(resp *coordpb.ApplyPerasAuthorityRespon
 			return fmt.Errorf("%w: apply_peras_authority held reply missing active grants", errInvalidWitness)
 		}
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
+	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED:
 	default:
 		return fmt.Errorf("%w: apply_peras_authority invalid status=%d", errInvalidWitness, status)
 	}

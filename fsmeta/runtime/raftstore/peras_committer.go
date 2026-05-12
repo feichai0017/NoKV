@@ -46,6 +46,10 @@ type perasGrantProvider interface {
 	Acquire(context.Context, compile.AuthorityScope) (perasauth.AuthorityGrant, bool, error)
 }
 
+type perasSealPublisher interface {
+	SealPerasSegment(context.Context, perasauth.AuthorityGrant, fsperas.PerasSegment, [32]byte) error
+}
+
 type perasSegmentInstaller interface {
 	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) error
 }
@@ -99,6 +103,7 @@ type RemotePerasCommitter struct {
 	closed    atomic.Bool
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
+	grants    map[uint64]perasauth.AuthorityGrant
 	latches   *fsperas.AdmissionLatches
 
 	overlayMu        sync.RWMutex
@@ -249,6 +254,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		bgBackoff:  bgBackoff,
 		now:        now,
 		holders:    make(map[uint64]*fsperas.Holder),
+		grants:     make(map[uint64]perasauth.AuthorityGrant),
 		latches:    fsperas.NewAdmissionLatches(),
 		overlay:    make(map[string]runtimePerasOverlayEntry),
 		sealed:     make(map[string]runtimePerasOverlayEntry),
@@ -319,6 +325,7 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	}
 	c.holdersMu.Lock()
 	if holder := c.holders[grant.EpochID]; holder != nil {
+		c.grants[grant.EpochID] = grant
 		c.holdersMu.Unlock()
 		return holder, nil
 	}
@@ -349,9 +356,11 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	c.holdersMu.Lock()
 	defer c.holdersMu.Unlock()
 	if current := c.holders[grant.EpochID]; current != nil {
+		c.grants[grant.EpochID] = grant
 		return current, nil
 	}
 	c.holders[grant.EpochID] = holder
+	c.grants[grant.EpochID] = grant
 	return holder, nil
 }
 
@@ -562,8 +571,27 @@ func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *f
 	if err := c.installSegmentWithRetry(ctx, job); err != nil {
 		return c.recordErrorf("install peras segment: %w", err)
 	}
+	if publisher, ok := c.authority.(perasSealPublisher); ok {
+		grant, found := c.grantForEpoch(holder.EpochID())
+		if !found {
+			return c.recordError(errPerasAuthorityNotHeld)
+		}
+		if err := publisher.SealPerasSegment(ctx, grant, job.segment, job.digest); err != nil {
+			return c.recordErrorf("publish peras segment seal: %w", err)
+		}
+	}
 	c.flushTotal.Add(1)
 	return nil
+}
+
+func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (perasauth.AuthorityGrant, bool) {
+	c.holdersMu.Lock()
+	defer c.holdersMu.Unlock()
+	grant, ok := c.grants[epochID]
+	if !ok {
+		return perasauth.AuthorityGrant{}, false
+	}
+	return grant, true
 }
 
 func (c *RemotePerasCommitter) installSegmentWithRetry(ctx context.Context, job runtimePerasFlushJob) error {

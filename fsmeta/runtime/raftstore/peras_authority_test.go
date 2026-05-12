@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	perasauth "github.com/feichai0017/NoKV/fsmeta/runtime/perasauth"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -113,6 +114,33 @@ func TestPerasAuthorityManagerRetireAuthority(t *testing.T) {
 	require.Equal(t, rootproto.PerasAuthorityActRetire, client.last.Kind)
 	require.Equal(t, grant.GrantID, client.last.GrantID)
 	require.Empty(t, table.Snapshot())
+}
+
+func TestPerasAuthorityManagerSealPerasSegmentPublishesRootSeal(t *testing.T) {
+	now := time.Unix(10, 0)
+	scope := testRuntimePerasScope(1)
+	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	client := &fakePerasAuthorityClient{
+		resp: &coordpb.ApplyPerasAuthorityResponse{
+			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED,
+			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+		},
+	}
+	table := perasauth.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]perasauth.AuthorityGrant{grant}))
+	manager, err := NewPerasAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, err)
+	segment := testRuntimePerasSegment(t)
+	var digest [32]byte
+	digest[0] = 99
+
+	require.NoError(t, manager.SealPerasSegment(context.Background(), grant, segment, digest))
+	require.Equal(t, rootproto.PerasAuthorityActSeal, client.last.Kind)
+	require.Equal(t, grant.GrantID, client.last.GrantID)
+	require.Equal(t, segment.Root, client.last.SegmentRoot)
+	require.Equal(t, digest, client.last.SegmentPayloadDigest)
+	require.Equal(t, uint64(1), client.last.OperationCount)
+	require.Equal(t, uint64(2), client.last.EntryCount)
 }
 
 func TestPerasAuthorityManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
@@ -238,4 +266,27 @@ func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expi
 		Scope:           perasauth.AuthorityScopeFromDelta(scope),
 		ExpiresUnixNano: expires.UnixNano(),
 	}
+}
+
+func testRuntimePerasSegment(t *testing.T) fsperas.PerasSegment {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
+	dentry, err := fsmeta.EncodeDentryKey(mount, 99, "a")
+	require.NoError(t, err)
+	inode, err := fsmeta.EncodeInodeKey(mount, 100)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{
+			{
+				OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+				Mutations: []fsperas.ReplayMutation{
+					{Key: dentry, Value: []byte("dentry-value")},
+					{Key: inode, Value: []byte("inode-value")},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return segment
 }

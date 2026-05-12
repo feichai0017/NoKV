@@ -62,6 +62,7 @@ type Snapshot struct {
 	RetiredEraFloor     uint64
 	ActivePerasGrants   []rootproto.PerasAuthorityGrant
 	PerasAuthorityEpoch uint64
+	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
 }
 
 func (s Snapshot) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -120,6 +121,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		RetiredEraFloor:     snapshot.RetiredEraFloor,
 		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.ActivePerasGrants),
 		PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,
+		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.PerasAuthoritySeals),
 	}
 }
 
@@ -149,6 +151,7 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 		out.ActivePerasGrants = clonePerasAuthorityGrants(current.ActivePerasGrants)
 		out.PerasAuthorityEpoch = current.PerasAuthorityEpoch
 	}
+	out.PerasAuthoritySeals = mergePerasAuthoritySeals(out.PerasAuthoritySeals, current.PerasAuthoritySeals)
 	return out
 }
 
@@ -256,6 +259,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		RetiredEraFloor:     snapshot.State.RetiredEraFloor,
 		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.State.ActivePerasGrants),
 		PerasAuthorityEpoch: snapshot.State.PerasAuthorityEpoch,
+		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.State.PerasAuthoritySeals),
 	}
 }
 
@@ -272,6 +276,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 			RetiredEraFloor:     s.RetiredEraFloor,
 			ActivePerasGrants:   clonePerasAuthorityGrants(s.ActivePerasGrants),
 			PerasAuthorityEpoch: s.PerasAuthorityEpoch,
+			PerasAuthoritySeals: clonePerasAuthoritySeals(s.PerasAuthoritySeals),
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),
@@ -310,6 +315,40 @@ func clonePerasAuthorityGrants(grants []rootproto.PerasAuthorityGrant) []rootpro
 	out := make([]rootproto.PerasAuthorityGrant, len(grants))
 	for i, grant := range grants {
 		out[i] = rootproto.ClonePerasAuthorityGrant(grant)
+	}
+	return out
+}
+
+func clonePerasAuthoritySeals(seals []rootproto.PerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
+	if len(seals) == 0 {
+		return nil
+	}
+	out := make([]rootproto.PerasAuthoritySeal, len(seals))
+	for i, seal := range seals {
+		out[i] = rootproto.ClonePerasAuthoritySeal(seal)
+	}
+	return out
+}
+
+func mergePerasAuthoritySeals(base, incoming []rootproto.PerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
+	out := clonePerasAuthoritySeals(base)
+	for _, seal := range incoming {
+		if !seal.Valid() {
+			continue
+		}
+		replaced := false
+		for i, current := range out {
+			if current.GrantID == seal.GrantID {
+				if seal.SealedUnixNano >= current.SealedUnixNano {
+					out[i] = rootproto.ClonePerasAuthoritySeal(seal)
+				}
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, rootproto.ClonePerasAuthoritySeal(seal))
+		}
 	}
 	return out
 }

@@ -45,6 +45,7 @@ type State struct {
 	RetiredEraFloor     uint64
 	ActivePerasGrants   []rootproto.PerasAuthorityGrant
 	PerasAuthorityEpoch uint64
+	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
 }
 
 func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -238,6 +239,7 @@ func CloneState(state State) State {
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	state.ActivePerasGrants = clonePerasAuthorityGrants(state.ActivePerasGrants)
+	state.PerasAuthoritySeals = clonePerasAuthoritySeals(state.PerasAuthoritySeals)
 	return state
 }
 
@@ -466,6 +468,8 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyGrantInheritanceToState(state, cursor, event)
 	case rootevent.KindPerasAuthorityGranted:
 		applyPerasAuthorityGrantedToState(state, event)
+	case rootevent.KindPerasAuthoritySealed:
+		applyPerasAuthoritySealedToState(state, event)
 	case rootevent.KindPerasAuthorityRetired:
 		applyPerasAuthorityRetiredToState(state, event)
 	case rootevent.KindRegionBootstrap,

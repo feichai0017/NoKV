@@ -379,6 +379,8 @@ func (s *Store) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuth
 		return s.acquirePerasAuthorityLocked(ctx, cmd)
 	case rootproto.PerasAuthorityActRetire:
 		return s.retirePerasAuthorityLocked(ctx, cmd)
+	case rootproto.PerasAuthorityActSeal:
+		return s.sealPerasAuthorityLocked(ctx, cmd)
 	default:
 		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
@@ -431,9 +433,14 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 		HolderID:          holderID,
 		Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
 		ExpiresUnixNano:   cmd.ExpiresUnixNano,
-		PredecessorDigest: cmd.PredecessorDigest,
 		QuotaCreditBytes:  cmd.QuotaCreditBytes,
 		QuotaCreditInodes: cmd.QuotaCreditInodes,
+	}
+	grant.PredecessorDigest = cmd.PredecessorDigest
+	if grant.PredecessorDigest == ([32]byte{}) {
+		if predecessor, ok := s.state.LatestPerasAuthoritySealFor(cmd.Scope); ok {
+			grant.PredecessorDigest = predecessor.SegmentRoot
+		}
 	}
 	events = append(events, rootevent.PerasAuthorityGranted(grant))
 	commit, err := s.appendLocked(ctx, events...)
@@ -465,6 +472,40 @@ func (s *Store) retirePerasAuthorityLocked(ctx context.Context, cmd rootproto.Pe
 		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
 	return rootstate.CloneState(commit.State), rootproto.PerasAuthorityGrant{}, nil
+}
+
+func (s *Store) sealPerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	holderID := strings.TrimSpace(cmd.HolderID)
+	grantID := strings.TrimSpace(cmd.GrantID)
+	if holderID == "" || grantID == "" || cmd.NowUnixNano <= 0 {
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	active, ok := activePerasGrantByID(s.state.ActivePerasGrants, grantID)
+	if !ok {
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+	}
+	if active.HolderID != holderID {
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+	}
+	seal := rootproto.PerasAuthoritySeal{
+		GrantID:              active.GrantID,
+		EpochID:              active.EpochID,
+		HolderID:             active.HolderID,
+		Scope:                rootproto.ClonePerasAuthorityScope(active.Scope),
+		SegmentRoot:          cmd.SegmentRoot,
+		SegmentPayloadDigest: cmd.SegmentPayloadDigest,
+		OperationCount:       cmd.OperationCount,
+		EntryCount:           cmd.EntryCount,
+		SealedUnixNano:       cmd.NowUnixNano,
+	}
+	if !seal.Valid() {
+		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	commit, err := s.appendLocked(ctx, rootevent.PerasAuthoritySealed(seal))
+	if err != nil {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+	}
+	return rootstate.CloneState(commit.State), active, nil
 }
 
 func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {

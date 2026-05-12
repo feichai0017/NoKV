@@ -46,14 +46,20 @@ func (s *Service) ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPer
 }
 
 func validCoordinatorPerasAuthorityAct(kind rootproto.PerasAuthorityAct) bool {
-	return kind == rootproto.PerasAuthorityActAcquire || kind == rootproto.PerasAuthorityActRetire
+	return kind == rootproto.PerasAuthorityActAcquire ||
+		kind == rootproto.PerasAuthorityActRetire ||
+		kind == rootproto.PerasAuthorityActSeal
 }
 
 func perasAuthorityStatusFromCommand(cmd rootproto.PerasAuthorityCommand) metapb.RootPerasAuthorityApplyStatus {
-	if cmd.Kind == rootproto.PerasAuthorityActRetire {
+	switch cmd.Kind {
+	case rootproto.PerasAuthorityActRetire:
 		return metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED
+	case rootproto.PerasAuthorityActSeal:
+		return metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED
+	default:
+		return metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED
 	}
-	return metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED
 }
 
 func translatePerasAuthorityError(err error) error {

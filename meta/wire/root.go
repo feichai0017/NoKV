@@ -32,6 +32,7 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		RetiredEraFloor:     state.RetiredEraFloor,
 		ActivePerasGrants:   RootPerasAuthorityGrantsToProto(state.ActivePerasGrants),
 		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
+		PerasAuthoritySeals: RootPerasAuthoritySealsToProto(state.PerasAuthoritySeals),
 	}
 }
 
@@ -51,6 +52,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
 		ActivePerasGrants:   RootPerasAuthorityGrantsFromProto(pbState.GetActivePerasGrants()),
 		PerasAuthorityEpoch: pbState.GetPerasAuthorityEpoch(),
+		PerasAuthoritySeals: RootPerasAuthoritySealsFromProto(pbState.GetPerasAuthoritySeals()),
 	}
 }
 
@@ -300,17 +302,85 @@ func RootPerasAuthorityGrantsFromProto(grants []*metapb.RootPerasAuthorityGrant)
 	return out
 }
 
+func RootPerasAuthoritySealToProto(seal rootproto.PerasAuthoritySeal) *metapb.RootPerasAuthoritySeal {
+	if !seal.Valid() {
+		return nil
+	}
+	return &metapb.RootPerasAuthoritySeal{
+		GrantId:              seal.GrantID,
+		EpochId:              seal.EpochID,
+		HolderId:             seal.HolderID,
+		Scope:                RootPerasAuthorityScopeToProto(seal.Scope),
+		SegmentRoot:          append([]byte(nil), seal.SegmentRoot[:]...),
+		SegmentPayloadDigest: append([]byte(nil), seal.SegmentPayloadDigest[:]...),
+		OperationCount:       seal.OperationCount,
+		EntryCount:           seal.EntryCount,
+		SealedUnixNano:       seal.SealedUnixNano,
+	}
+}
+
+func RootPerasAuthoritySealFromProto(seal *metapb.RootPerasAuthoritySeal) rootproto.PerasAuthoritySeal {
+	if seal == nil {
+		return rootproto.PerasAuthoritySeal{}
+	}
+	var segmentRoot [32]byte
+	var payloadDigest [32]byte
+	copy(segmentRoot[:], seal.GetSegmentRoot())
+	copy(payloadDigest[:], seal.GetSegmentPayloadDigest())
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              seal.GetGrantId(),
+		EpochID:              seal.GetEpochId(),
+		HolderID:             seal.GetHolderId(),
+		Scope:                RootPerasAuthorityScopeFromProto(seal.GetScope()),
+		SegmentRoot:          segmentRoot,
+		SegmentPayloadDigest: payloadDigest,
+		OperationCount:       seal.GetOperationCount(),
+		EntryCount:           seal.GetEntryCount(),
+		SealedUnixNano:       seal.GetSealedUnixNano(),
+	}
+}
+
+func RootPerasAuthoritySealsToProto(seals []rootproto.PerasAuthoritySeal) []*metapb.RootPerasAuthoritySeal {
+	if len(seals) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootPerasAuthoritySeal, 0, len(seals))
+	for _, seal := range seals {
+		if pbSeal := RootPerasAuthoritySealToProto(seal); pbSeal != nil {
+			out = append(out, pbSeal)
+		}
+	}
+	return out
+}
+
+func RootPerasAuthoritySealsFromProto(seals []*metapb.RootPerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
+	if len(seals) == 0 {
+		return nil
+	}
+	out := make([]rootproto.PerasAuthoritySeal, 0, len(seals))
+	for _, seal := range seals {
+		if parsed := RootPerasAuthoritySealFromProto(seal); parsed.Valid() {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
 func RootPerasAuthorityCommandToProto(cmd rootproto.PerasAuthorityCommand) *metapb.RootPerasAuthorityCommand {
 	return &metapb.RootPerasAuthorityCommand{
-		Kind:              RootPerasAuthorityActToProto(cmd.Kind),
-		HolderId:          cmd.HolderID,
-		GrantId:           cmd.GrantID,
-		Scope:             RootPerasAuthorityScopeToProto(cmd.Scope),
-		ExpiresUnixNano:   cmd.ExpiresUnixNano,
-		NowUnixNano:       cmd.NowUnixNano,
-		PredecessorDigest: append([]byte(nil), cmd.PredecessorDigest[:]...),
-		QuotaCreditBytes:  cmd.QuotaCreditBytes,
-		QuotaCreditInodes: cmd.QuotaCreditInodes,
+		Kind:                 RootPerasAuthorityActToProto(cmd.Kind),
+		HolderId:             cmd.HolderID,
+		GrantId:              cmd.GrantID,
+		Scope:                RootPerasAuthorityScopeToProto(cmd.Scope),
+		ExpiresUnixNano:      cmd.ExpiresUnixNano,
+		NowUnixNano:          cmd.NowUnixNano,
+		PredecessorDigest:    append([]byte(nil), cmd.PredecessorDigest[:]...),
+		QuotaCreditBytes:     cmd.QuotaCreditBytes,
+		QuotaCreditInodes:    cmd.QuotaCreditInodes,
+		SegmentRoot:          append([]byte(nil), cmd.SegmentRoot[:]...),
+		SegmentPayloadDigest: append([]byte(nil), cmd.SegmentPayloadDigest[:]...),
+		OperationCount:       cmd.OperationCount,
+		EntryCount:           cmd.EntryCount,
 	}
 }
 
@@ -319,17 +389,25 @@ func RootPerasAuthorityCommandFromProto(cmd *metapb.RootPerasAuthorityCommand) r
 		return rootproto.PerasAuthorityCommand{}
 	}
 	var predecessorDigest [32]byte
+	var segmentRoot [32]byte
+	var segmentPayloadDigest [32]byte
 	copy(predecessorDigest[:], cmd.GetPredecessorDigest())
+	copy(segmentRoot[:], cmd.GetSegmentRoot())
+	copy(segmentPayloadDigest[:], cmd.GetSegmentPayloadDigest())
 	return rootproto.PerasAuthorityCommand{
-		Kind:              RootPerasAuthorityActFromProto(cmd.GetKind()),
-		HolderID:          cmd.GetHolderId(),
-		GrantID:           cmd.GetGrantId(),
-		Scope:             RootPerasAuthorityScopeFromProto(cmd.GetScope()),
-		ExpiresUnixNano:   cmd.GetExpiresUnixNano(),
-		NowUnixNano:       cmd.GetNowUnixNano(),
-		PredecessorDigest: predecessorDigest,
-		QuotaCreditBytes:  cmd.GetQuotaCreditBytes(),
-		QuotaCreditInodes: cmd.GetQuotaCreditInodes(),
+		Kind:                 RootPerasAuthorityActFromProto(cmd.GetKind()),
+		HolderID:             cmd.GetHolderId(),
+		GrantID:              cmd.GetGrantId(),
+		Scope:                RootPerasAuthorityScopeFromProto(cmd.GetScope()),
+		ExpiresUnixNano:      cmd.GetExpiresUnixNano(),
+		NowUnixNano:          cmd.GetNowUnixNano(),
+		PredecessorDigest:    predecessorDigest,
+		QuotaCreditBytes:     cmd.GetQuotaCreditBytes(),
+		QuotaCreditInodes:    cmd.GetQuotaCreditInodes(),
+		SegmentRoot:          segmentRoot,
+		SegmentPayloadDigest: segmentPayloadDigest,
+		OperationCount:       cmd.GetOperationCount(),
+		EntryCount:           cmd.GetEntryCount(),
 	}
 }
 
@@ -339,6 +417,8 @@ func RootPerasAuthorityActToProto(act rootproto.PerasAuthorityAct) metapb.RootPe
 		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_ACQUIRE
 	case rootproto.PerasAuthorityActRetire:
 		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_RETIRE
+	case rootproto.PerasAuthorityActSeal:
+		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_SEAL
 	default:
 		return metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED
 	}
@@ -350,6 +430,8 @@ func RootPerasAuthorityActFromProto(act metapb.RootPerasAuthorityAct) rootproto.
 		return rootproto.PerasAuthorityActAcquire
 	case metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_RETIRE:
 		return rootproto.PerasAuthorityActRetire
+	case metapb.RootPerasAuthorityAct_ROOT_PERAS_AUTHORITY_ACT_SEAL:
+		return rootproto.PerasAuthorityActSeal
 	default:
 		return rootproto.PerasAuthorityActUnknown
 	}
@@ -1308,6 +1390,8 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_GrantInheritance{GrantInheritance: RootGrantInheritanceToProto(*event.GrantInheritance)}
 	case event.PerasGrant != nil:
 		pbEvent.Payload = &metapb.RootEvent_PerasAuthorityGrant{PerasAuthorityGrant: RootPerasAuthorityGrantToProto(*event.PerasGrant)}
+	case event.PerasSeal != nil:
+		pbEvent.Payload = &metapb.RootEvent_PerasAuthoritySeal{PerasAuthoritySeal: RootPerasAuthoritySealToProto(*event.PerasSeal)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.Mount != nil:
@@ -1374,6 +1458,10 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	if body := pbEvent.GetPerasAuthorityGrant(); body != nil {
 		grant := RootPerasAuthorityGrantFromProto(body)
 		event.PerasGrant = &grant
+	}
+	if body := pbEvent.GetPerasAuthoritySeal(); body != nil {
+		seal := RootPerasAuthoritySealFromProto(body)
+		event.PerasSeal = &seal
 	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
@@ -1475,6 +1563,8 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED
 	case rootevent.KindPerasAuthorityRetired:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED
+	case rootevent.KindPerasAuthoritySealed:
+		return metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_SEALED
 	case rootevent.KindSnapshotEpochPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
@@ -1548,6 +1638,8 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindPerasAuthorityGranted
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED:
 		return rootevent.KindPerasAuthorityRetired
+	case metapb.RootEventKind_ROOT_EVENT_KIND_PERAS_AUTHORITY_SEALED:
+		return rootevent.KindPerasAuthoritySealed
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:

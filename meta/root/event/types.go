@@ -44,6 +44,7 @@ const (
 	KindGrantRetired
 	KindGrantInherited
 	KindPerasAuthorityGranted
+	KindPerasAuthoritySealed
 	KindPerasAuthorityRetired
 )
 
@@ -162,6 +163,7 @@ type Event struct {
 	GrantRetirement  *rootproto.GrantRetirement
 	GrantInheritance *rootproto.GrantInheritance
 	PerasGrant       *rootproto.PerasAuthorityGrant
+	PerasSeal        *rootproto.PerasAuthoritySeal
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
@@ -201,6 +203,11 @@ func PerasAuthorityGranted(grant rootproto.PerasAuthorityGrant) Event {
 func PerasAuthorityRetired(grant rootproto.PerasAuthorityGrant) Event {
 	grant = rootproto.ClonePerasAuthorityGrant(grant)
 	return Event{Kind: KindPerasAuthorityRetired, PerasGrant: &grant}
+}
+
+func PerasAuthoritySealed(seal rootproto.PerasAuthoritySeal) Event {
+	seal = rootproto.ClonePerasAuthoritySeal(seal)
+	return Event{Kind: KindPerasAuthoritySealed, PerasSeal: &seal}
 }
 
 func MountRegistered(mountID string, mountKeyID, rootInode uint64, schemaVersion uint32) Event {

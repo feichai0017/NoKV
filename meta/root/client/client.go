@@ -436,7 +436,8 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 func validPerasAuthorityAct(kind rootproto.PerasAuthorityAct) bool {
 	switch kind {
 	case rootproto.PerasAuthorityActAcquire,
-		rootproto.PerasAuthorityActRetire:
+		rootproto.PerasAuthorityActRetire,
+		rootproto.PerasAuthorityActSeal:
 		return true
 	default:
 		return false
