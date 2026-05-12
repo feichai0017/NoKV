@@ -43,6 +43,10 @@ type PerasAuthoritySeal struct {
 	OperationCount       uint64
 	EntryCount           uint64
 	SealedUnixNano       int64
+	InstallRegionID      uint64
+	InstallTerm          uint64
+	InstallIndex         uint64
+	InstallVersion       uint64
 }
 
 type PerasAuthorityAct uint8
@@ -69,6 +73,10 @@ type PerasAuthorityCommand struct {
 	SegmentPayloadDigest [32]byte
 	OperationCount       uint64
 	EntryCount           uint64
+	InstallRegionID      uint64
+	InstallTerm          uint64
+	InstallIndex         uint64
+	InstallVersion       uint64
 }
 
 func (g PerasAuthorityGrant) Valid() bool {
@@ -87,6 +95,10 @@ func (s PerasAuthoritySeal) Valid() bool {
 		s.Scope.Valid() &&
 		s.SegmentRoot != zero &&
 		s.SegmentPayloadDigest != zero &&
+		s.InstallRegionID != 0 &&
+		s.InstallTerm != 0 &&
+		s.InstallIndex != 0 &&
+		s.InstallVersion != 0 &&
 		s.SealedUnixNano > 0
 }
 

@@ -9,12 +9,15 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
-var perasSegmentCatalogMagic = [4]byte{'N', 'P', 'C', 1}
+var (
+	perasSegmentCatalogMagic = [4]byte{'N', 'P', 'C', 1}
+	perasSegmentIndexMagic   = [4]byte{'N', 'P', 'I', 1}
+)
 
-// SegmentCatalogRecord is the single hidden raftstore record written with a
-// durable segment install. It is enough to rebuild the installed segment
-// frontier and operation completion table after restart without replaying
-// per-operation witness records.
+// SegmentCatalogRecord is the hidden segment object written with a durable
+// segment install. Bucket-local index records point to this object so restart
+// can rebuild the installed segment frontier and operation completion table
+// without replaying per-operation witness records.
 type SegmentCatalogRecord struct {
 	EpochID        uint64
 	InstallVersion uint64
@@ -33,22 +36,90 @@ type SegmentCatalogRecord struct {
 	Completions []SegmentCompletion
 }
 
+// SegmentCatalogIndexRecord is the per-bucket discovery record for one sealed
+// segment object.
+type SegmentCatalogIndexRecord struct {
+	EpochID              uint64
+	InstallVersion       uint64
+	Root                 [32]byte
+	SegmentPayloadDigest [32]byte
+	SegmentPayloadSize   uint64
+	ObjectKey            []byte
+}
+
 type SegmentCatalogStore interface {
 	NewInternalIterator(*index.Options) index.Iterator
 }
 
-func PerasSegmentCatalogKey(segment PerasSegment) ([]byte, error) {
+func PerasSegmentCatalogIndexKeys(segment PerasSegment) ([][]byte, error) {
+	buckets, err := perasSegmentCatalogBuckets(segment)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, 0, len(buckets))
+	for _, bucket := range buckets {
+		key, err := fsmeta.EncodePerasSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func PerasSegmentObjectKey(segment PerasSegment) ([]byte, error) {
+	buckets, err := perasSegmentCatalogBuckets(segment)
+	if err != nil {
+		return nil, err
+	}
+	if len(buckets) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	return fsmeta.EncodePerasSegmentObjectKey(buckets[0].mount, buckets[0].bucket, segment.Root)
+}
+
+type perasSegmentCatalogBucket struct {
+	mount  fsmeta.MountKeyID
+	bucket fsmeta.AffinityBucket
+}
+
+func perasSegmentCatalogBuckets(segment PerasSegment) ([]perasSegmentCatalogBucket, error) {
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
 	}
 	if len(segment.entries) == 0 {
 		return nil, ErrInvalidPerasSegment
 	}
-	parts, ok := fsmeta.InspectKey(segment.entries[0].Key)
-	if !ok {
-		return nil, ErrInvalidPerasSegment
+	seen := make(map[perasSegmentCatalogBucket]struct{})
+	out := make([]perasSegmentCatalogBucket, 0)
+	for _, entry := range segment.entries {
+		parts, ok := fsmeta.InspectKey(entry.Key)
+		if !ok {
+			return nil, ErrInvalidPerasSegment
+		}
+		key := perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
 	}
-	return fsmeta.EncodePerasSegmentCatalogKey(parts.MountKeyID, parts.Bucket, segment.Root)
+	slices.SortFunc(out, func(a, b perasSegmentCatalogBucket) int {
+		if a.mount < b.mount {
+			return -1
+		}
+		if a.mount > b.mount {
+			return 1
+		}
+		if a.bucket < b.bucket {
+			return -1
+		}
+		if a.bucket > b.bucket {
+			return 1
+		}
+		return 0
+	})
+	return out, nil
 }
 
 func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord, error) {
@@ -75,6 +146,10 @@ func LoadPerasSegmentCatalogs(store SegmentCatalogStore) ([]SegmentCatalogRecord
 		}
 		parts, ok := fsmeta.InspectKey(userKey)
 		if !ok || parts.Kind != fsmeta.KeyKindPeras {
+			it.Next()
+			continue
+		}
+		if parts.PerasRecord != fsmeta.PerasSegmentRecordObject {
 			it.Next()
 			continue
 		}
@@ -109,7 +184,7 @@ func LoadPerasSegmentCatalog(store SegmentCatalogStore, segment PerasSegment) (S
 	if store == nil {
 		return SegmentCatalogRecord{}, false, ErrReplayStoreRequired
 	}
-	catalogKey, err := PerasSegmentCatalogKey(segment)
+	catalogKey, err := PerasSegmentObjectKey(segment)
 	if err != nil {
 		return SegmentCatalogRecord{}, false, err
 	}
@@ -189,6 +264,70 @@ func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVer
 		writeUint64(&out, uint64(completion.MutationCount))
 	}
 	return out.Bytes(), nil
+}
+
+func EncodePerasSegmentCatalogIndexRecord(record SegmentCatalogRecord, objectKey []byte) ([]byte, error) {
+	if err := validateSegmentCatalogPayload(record); err != nil {
+		return nil, err
+	}
+	if len(objectKey) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	var out bytes.Buffer
+	writeFixed(&out, perasSegmentIndexMagic[:])
+	writeUint64(&out, record.EpochID)
+	writeUint64(&out, record.InstallVersion)
+	writeFixed(&out, record.Root[:])
+	writeFixed(&out, record.SegmentPayloadDigest[:])
+	writeUint64(&out, record.SegmentPayloadSize)
+	writeBytes(&out, objectKey)
+	return out.Bytes(), nil
+}
+
+func DecodePerasSegmentCatalogIndexRecord(payload []byte) (SegmentCatalogIndexRecord, error) {
+	r := witnessReader{buf: payload}
+	if err := r.readMagic(perasSegmentIndexMagic); err != nil {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	epochID, err := r.readUint64()
+	if err != nil {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	installVersion, err := r.readUint64()
+	if err != nil || installVersion == 0 {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	var root [32]byte
+	if err := r.readFixed(root[:]); err != nil {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	var payloadDigest [32]byte
+	if err := r.readFixed(payloadDigest[:]); err != nil {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	payloadSize, err := r.readUint64()
+	if err != nil || payloadSize == 0 {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	objectKey, err := r.readBytes()
+	if err != nil || len(objectKey) == 0 {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	if !r.done() || epochID == 0 || root == ([32]byte{}) || payloadDigest == ([32]byte{}) {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	parts, ok := fsmeta.InspectKey(objectKey)
+	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
+		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
+	}
+	return SegmentCatalogIndexRecord{
+		EpochID:              epochID,
+		InstallVersion:       installVersion,
+		Root:                 root,
+		SegmentPayloadDigest: payloadDigest,
+		SegmentPayloadSize:   payloadSize,
+		ObjectKey:            objectKey,
+	}, nil
 }
 
 func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, error) {

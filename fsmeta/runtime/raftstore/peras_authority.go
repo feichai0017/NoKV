@@ -164,11 +164,14 @@ func (m *PerasAuthorityManager) Retire(ctx context.Context, grant perasauth.Auth
 	return nil
 }
 
-func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte) error {
+func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant perasauth.AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor PerasInstallCursor) error {
 	if m == nil {
 		return errPerasAuthorityClientRequired
 	}
 	if !grant.Valid() {
+		return errPerasAuthorityInvalidResponse
+	}
+	if !cursor.Valid() {
 		return errPerasAuthorityInvalidResponse
 	}
 	if strings.TrimSpace(grant.HolderID) != m.holderID {
@@ -185,6 +188,10 @@ func (m *PerasAuthorityManager) SealPerasSegment(ctx context.Context, grant pera
 		SegmentPayloadDigest: payloadDigest,
 		OperationCount:       stats.OperationCount,
 		EntryCount:           stats.EntryCount,
+		InstallRegionID:      cursor.RegionID,
+		InstallTerm:          cursor.Term,
+		InstallIndex:         cursor.Index,
+		InstallVersion:       cursor.InstallVersion,
 	}
 	resp, err := m.coord.ApplyPerasAuthority(ctx, &coordpb.ApplyPerasAuthorityRequest{
 		Command: metawire.RootPerasAuthorityCommandToProto(cmd),

@@ -133,14 +133,19 @@ func TestPerasAuthorityManagerSealPerasSegmentPublishesRootSeal(t *testing.T) {
 	segment := testRuntimePerasSegment(t)
 	var digest [32]byte
 	digest[0] = 99
+	cursor := PerasInstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1234}
 
-	require.NoError(t, manager.SealPerasSegment(context.Background(), grant, segment, digest))
+	require.NoError(t, manager.SealPerasSegment(context.Background(), grant, segment, digest, cursor))
 	require.Equal(t, rootproto.PerasAuthorityActSeal, client.last.Kind)
 	require.Equal(t, grant.GrantID, client.last.GrantID)
 	require.Equal(t, segment.Root, client.last.SegmentRoot)
 	require.Equal(t, digest, client.last.SegmentPayloadDigest)
 	require.Equal(t, uint64(1), client.last.OperationCount)
 	require.Equal(t, uint64(2), client.last.EntryCount)
+	require.Equal(t, cursor.RegionID, client.last.InstallRegionID)
+	require.Equal(t, cursor.Term, client.last.InstallTerm)
+	require.Equal(t, cursor.Index, client.last.InstallIndex)
+	require.Equal(t, cursor.InstallVersion, client.last.InstallVersion)
 }
 
 func TestPerasAuthorityManagerRetirePerasAuthorityFiltersScope(t *testing.T) {

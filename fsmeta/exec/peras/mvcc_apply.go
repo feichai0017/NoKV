@@ -142,17 +142,17 @@ func BuildMVCCSegmentInstallEntries(segment PerasSegment, version uint64) ([]*en
 		}
 		entries = append(entries, mutationEntries...)
 	}
-	catalogKey, err := PerasSegmentCatalogKey(segment)
-	if err != nil {
-		releaseMVCCReplayEntries(entries)
-		return nil, err
-	}
 	catalogValue, err := EncodePerasSegmentCatalogRecord(segment, version)
 	if err != nil {
 		releaseMVCCReplayEntries(entries)
 		return nil, err
 	}
-	entries = append(entries, entrykv.NewInternalEntry(entrykv.CFDefault, catalogKey, version, catalogValue, 0, 0))
+	catalogEntries, err := buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue)
+	if err != nil {
+		releaseMVCCReplayEntries(entries)
+		return nil, err
+	}
+	entries = append(entries, catalogEntries...)
 	return entries, nil
 }
 
@@ -180,17 +180,36 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment PerasSegment, vers
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err
 	}
-	catalogKey, err := PerasSegmentCatalogKey(segment)
-	if err != nil {
-		return nil, err
-	}
 	catalogValue, err := EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
 	if err != nil {
 		return nil, err
 	}
-	return []*entrykv.Entry{
-		entrykv.NewInternalEntry(entrykv.CFDefault, catalogKey, version, catalogValue, 0, 0),
-	}, nil
+	return buildMVCCSegmentCatalogInstallEntries(segment, version, catalogValue)
+}
+
+func buildMVCCSegmentCatalogInstallEntries(segment PerasSegment, version uint64, objectValue []byte) ([]*entrykv.Entry, error) {
+	objectKey, err := PerasSegmentObjectKey(segment)
+	if err != nil {
+		return nil, err
+	}
+	record, err := DecodePerasSegmentCatalogRecord(objectValue)
+	if err != nil {
+		return nil, err
+	}
+	indexValue, err := EncodePerasSegmentCatalogIndexRecord(record, objectKey)
+	if err != nil {
+		return nil, err
+	}
+	indexKeys, err := PerasSegmentCatalogIndexKeys(segment)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]*entrykv.Entry, 0, len(indexKeys)+1)
+	entries = append(entries, entrykv.NewInternalEntry(entrykv.CFDefault, objectKey, version, objectValue, 0, 0))
+	for _, key := range indexKeys {
+		entries = append(entries, entrykv.NewInternalEntry(entrykv.CFDefault, key, version, indexValue, 0, 0))
+	}
+	return entries, nil
 }
 
 func buildMutationMVCCReplayEntries(mutation ReplayMutation, version uint64) ([]*entrykv.Entry, error) {

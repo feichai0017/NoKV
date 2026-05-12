@@ -113,6 +113,10 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 		SegmentRoot:          root,
 		SegmentPayloadDigest: digest,
 		SealedUnixNano:       10,
+		InstallRegionID:      11,
+		InstallTerm:          12,
+		InstallIndex:         13,
+		InstallVersion:       14,
 	}
 	perasSealed := rootevent.PerasAuthoritySealed(perasSeal)
 	perasSealedClone := rootevent.CloneEvent(perasSealed)

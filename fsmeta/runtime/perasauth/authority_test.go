@@ -232,6 +232,19 @@ func TestActiveAuthoritiesFencesMountWideFsmetaKeys(t *testing.T) {
 	}
 }
 
+func TestActiveAuthoritiesFencesFsmetaKeysFailClosedBeforeSnapshot(t *testing.T) {
+	table := NewActiveAuthorities()
+	key, err := fsmeta.EncodeDentryKey(testMount, fsmeta.RootInode, "artifact")
+	require.NoError(t, err)
+
+	_, _, err = table.FencesKey(key, testNow)
+	require.ErrorIs(t, err, ErrAuthorityViewStale)
+
+	_, ok, err := table.FencesKey([]byte("plain-user-key"), testNow)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestActiveAuthoritiesFencesSpecificParentAndBucket(t *testing.T) {
 	table := NewActiveAuthorities()
 	parent := fsmeta.InodeID(10)
