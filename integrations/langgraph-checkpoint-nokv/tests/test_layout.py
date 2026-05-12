@@ -14,10 +14,14 @@ from langgraph.checkpoint.nokv import (
     checkpoint_name,
     decode_component,
     decode_write_idx,
+    delta_write_checkpoint_id_from_name,
     delta_write_name,
+    delta_write_range_start_after,
+    delta_write_range_stop_after,
     directory_attrs,
     encode_component,
     encode_write_idx,
+    legacy_delta_write_name,
     thread_tombstone_attrs,
     version_name,
     write_name,
@@ -71,6 +75,19 @@ def test_write_idx_encoding_preserves_signed_values():
 
     with pytest.raises(ValueError, match="signed 64-bit"):
         encode_write_idx(1 << 63)
+
+
+def test_delta_write_names_preserve_checkpoint_order_for_range_scans():
+    older = delta_write_name("000001", "task", 0)
+    middle = delta_write_name("000010", "task", 0)
+    newer = delta_write_name("000100", "task", 0)
+
+    assert older < middle < newer
+    assert older.startswith("dw~")
+    assert delta_write_checkpoint_id_from_name(middle) == "000010"
+    assert legacy_delta_write_name("000010", "task", 0).startswith("dw~b64~")
+    assert delta_write_range_start_after("000010") < middle
+    assert delta_write_range_stop_after("000010") > middle
 
 
 def test_checkpoint_attrs_round_trip_and_fit_opaque_limit():

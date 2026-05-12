@@ -33,7 +33,11 @@ from langgraph.checkpoint.nokv._bench_metrics import (
     GET_STATE_PHASE,
     STORAGE_COUNT_PHASE,
     WRITE_PHASE,
+    InstrumentedCheckpointBodyStore,
     InstrumentedFsMetaClient,
+    InstrumentedSaverMetrics,
+    InstrumentedSerde,
+    PhaseTracker,
 )
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import _messages_delta_reducer
@@ -80,6 +84,8 @@ class SaverContext:
     close: Callable[[], None]
     storage: Callable[[], dict[str, Any]]
     extra: Callable[[], dict[str, Any]]
+    phase: Callable[[str], Any]
+    saver_metrics: InstrumentedSaverMetrics | None = None
 
 
 def main() -> int:
@@ -124,6 +130,8 @@ def main() -> int:
                         checkpointer=context.saver,
                         thread_id=thread_id,
                         read_repeats=args.read_repeats,
+                        phase=context.phase,
+                        saver_metrics=context.saver_metrics,
                     )
                     after_metrics = _fetch_json(args.fsmeta_metrics_url)
                     row.update(context.storage())
@@ -207,22 +215,35 @@ def _open_saver(
             close=lambda: None,
             storage=lambda: {"storage_bytes": _inmemory_blob_bytes(saver)},
             extra=lambda: {},
+            phase=lambda _phase: nullcontext(),
         )
 
     if saver_name in {"nokv", "nokv-parent-chain"}:
         enable_delta_index = saver_name == "nokv"
         body_root = args.nokv_body_root / run_id / thread_id
-        client = InstrumentedFsMetaClient(NoKVFsMetaClient(args.nokv_target))
+        phase_tracker = PhaseTracker()
+        client = InstrumentedFsMetaClient(
+            NoKVFsMetaClient(args.nokv_target),
+            phase_tracker=phase_tracker,
+        )
         client.wait_ready(timeout=args.nokv_ready_timeout)
+        body_store = InstrumentedCheckpointBodyStore(
+            CheckpointBodyStore.from_local_path(body_root),
+            phase_tracker=phase_tracker,
+        )
         saver = NoKVCheckpointSaver(
             fsmeta_client=client,  # type: ignore[arg-type]
             mount=args.nokv_mount,
-            body_store=CheckpointBodyStore.from_local_path(body_root),
+            body_store=body_store,  # type: ignore[arg-type]
             enable_delta_index=enable_delta_index,
         )
+        saver.serde = InstrumentedSerde(saver.serde, phase_tracker=phase_tracker)
+        saver_metrics = InstrumentedSaverMetrics(phase_tracker=phase_tracker)
+        saver_metrics.wrap_nokv_saver(saver)
+        saver._benchmark_saver_metrics = saver_metrics
 
         def storage() -> dict[str, Any]:
-            with client.phase(STORAGE_COUNT_PHASE):
+            with phase_tracker.phase(STORAGE_COUNT_PHASE):
                 tree_counts = _count_layout_tree(
                     client=client,
                     mount=args.nokv_mount,
@@ -243,7 +264,12 @@ def _open_saver(
             extra=lambda: {
                 "delta_index_enabled": enable_delta_index,
                 "fsmeta_client": client.to_json(),
+                "body_store_metrics": body_store.to_json(),
+                "serde_metrics": saver.serde.to_json(),
+                "saver_metrics": saver_metrics.to_json(),
             },
+            phase=phase_tracker.phase,
+            saver_metrics=saver_metrics,
         )
 
     if saver_name == "postgres":
@@ -251,6 +277,11 @@ def _open_saver(
             raise SystemExit("postgres saver is not installed")
         postgres_context = PostgresSaver.from_conn_string(args.postgres_uri)
         saver = postgres_context.__enter__()
+        phase_tracker = PhaseTracker()
+        saver.serde = InstrumentedSerde(saver.serde, phase_tracker=phase_tracker)
+        saver_metrics = InstrumentedSaverMetrics(phase_tracker=phase_tracker)
+        saver_metrics.wrap_postgres_saver(saver)
+        saver._benchmark_saver_metrics = saver_metrics
         try:
             saver.setup()
             _clear_postgres_thread(saver, thread_id)
@@ -266,7 +297,12 @@ def _open_saver(
             storage=lambda: {
                 "storage_bytes": _postgres_storage_bytes(saver, thread_id)
             },
-            extra=lambda: {},
+            extra=lambda: {
+                "serde_metrics": saver.serde.to_json(),
+                "saver_metrics": saver_metrics.to_json(),
+            },
+            phase=phase_tracker.phase,
+            saver_metrics=saver_metrics,
         )
 
     raise SystemExit(f"unknown saver {saver_name!r}")
@@ -281,13 +317,15 @@ def _run_scenario(
     checkpointer: Any,
     thread_id: str,
     read_repeats: int,
+    phase: Callable[[str], Any],
+    saver_metrics: InstrumentedSaverMetrics | None = None,
 ) -> dict[str, Any]:
     state_cls = _make_state_cls(freqs)
     graph = _make_graph(state_cls, len(freqs), checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
 
     start = time.perf_counter()
-    with _checkpoint_fsmeta_phase(checkpointer, WRITE_PHASE):
+    with phase(WRITE_PHASE):
         for _ in range(turns):
             graph.invoke({}, config)
     write_elapsed = time.perf_counter() - start
@@ -295,19 +333,21 @@ def _run_scenario(
     gc.collect()
     tracemalloc.start()
     read_start = time.perf_counter()
-    with _checkpoint_fsmeta_phase(checkpointer, GET_STATE_PHASE):
+    with phase(GET_STATE_PHASE):
         for _ in range(read_repeats):
             graph.get_state(config)
     read_elapsed = (time.perf_counter() - read_start) / read_repeats
 
     delta_channels = [f"ch{i}" for i in range(len(freqs))]
     delta_read_start = time.perf_counter()
-    with _checkpoint_fsmeta_phase(checkpointer, DELTA_HISTORY_PHASE):
+    with phase(DELTA_HISTORY_PHASE):
         for _ in range(read_repeats):
-            checkpointer.get_delta_channel_history(
+            history = checkpointer.get_delta_channel_history(
                 config=config,
                 channels=delta_channels,
             )
+            if saver_metrics is not None:
+                saver_metrics.record_delta_history_result(history)
     delta_read_elapsed = (time.perf_counter() - delta_read_start) / read_repeats
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -354,14 +394,6 @@ def _make_graph(state_cls: type, channel_count: int, checkpointer: Any) -> Any:
     graph.set_entry_point("fanout")
     graph.add_edge("fanout", END)
     return graph.compile(checkpointer=checkpointer)
-
-
-def _checkpoint_fsmeta_phase(checkpointer: Any, phase: str) -> Any:
-    fsmeta = getattr(checkpointer, "fsmeta", None)
-    phase_context = getattr(fsmeta, "phase", None)
-    if callable(phase_context):
-        return phase_context(phase)
-    return nullcontext()
 
 
 def _human_content(index: int) -> str:

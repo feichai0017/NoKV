@@ -43,8 +43,8 @@ fit for NoKV-native optimization:
 - `.../blobs/<channel>/v~<version>` stores immutable `ChannelBlobEntryAttrs`.
 - `.../writes/c~<checkpoint_id>/w~<task_id>~<idx>` stores canonical
   `WriteEntryAttrs`.
-- `.../delta_channels/<channel>/dw~<checkpoint_id>~<task_id>~<idx>` stores
-  derived `DeltaWriteEntryAttrs` for channel-first delta reads.
+- `.../delta_channels/<channel>/dw~2~<checkpoint_id_hex>~<task_id>~<idx>`
+  stores derived `DeltaWriteEntryAttrs` for ordered, channel-first delta reads.
 - `.../heads/latest` stores mutable head metadata.
 - `.../thread-tombstone` stores logical delete metadata.
 
@@ -108,15 +108,34 @@ Important edge cases:
 This changed Stage 1 from O(parent-chain length) remote `lookup_plus` calls to a
 small number of `ReadDirPlus` pages.
 
-### Stage 2: materialized delta channel index
+### Stage 2: range-aware materialized delta channel index
 
 `put_writes()` still writes canonical `writes/<checkpoint_id>/...` entries. When
 `enable_delta_index` is true, it also writes per-channel index entries under
 `delta_channels/<channel>/...`.
 
-`_load_delta_index_writes()` scans one directory per requested channel and
-filters by the eligible checkpoint set computed in Stage 1. It sorts by ancestor
-rank, task id, and write idx so the result is oldest-to-newest for replay.
+The delta index name is ordered by checkpoint id:
+
+`dw~2~<checkpoint_id_utf8_hex>~<encoded_task_id>~<idx>`
+
+The hex checkpoint-id component preserves bytewise checkpoint-id ordering under
+normal fsmeta directory sorting. `_load_delta_index_writes()` now computes the
+eligible checkpoint window from Stage 1 and uses `ReadDirPlus(start_after,
+limit)` with a lower/upper name bound so mixed-frequency workloads do not need
+to list the entire `delta_channels/<channel>/` directory and then filter it in
+Python.
+
+Safety behavior:
+
+- the range path is used only when the current saver process knows the ordered
+  index covers every eligible checkpoint/channel pair;
+- old `dw~...` entries and mixed upgraded data fall back to the legacy full
+  directory scan;
+- canonical `writes/<checkpoint_id>/...` remains the source of truth when the
+  derived index is absent or untrusted.
+
+The saver still sorts materialized writes by ancestor rank, task id, and write
+idx so the result is oldest-to-newest for replay.
 
 Crash atomicity note:
 
@@ -232,117 +251,105 @@ future versioned/CAS head or tombstone protocol work.
 This is benchmark-only instrumentation and should not be used in production
 saver code.
 
+The benchmark also wraps payload handling:
+
+- NoKV records external body-store `put_typed` and `get_typed` time and bytes.
+  For NoKV, payload hydrate is the combination of body-store `get_typed` and
+  serde `loads_typed`.
+- Both NoKV and PostgreSQL record serde `dumps_typed` and `loads_typed`. For
+  PostgreSQL there is no separate body-store metric because the payload bytes
+  come from SQL rows, but `loads_typed` is still real payload hydrate and must
+  be counted in comparisons.
+- Saver-level counters record pending write counts for delta history, including
+  seed counts and replay write counts.
+
 ## Latest benchmark runs
 
-### LangGraph official workload after immutable cache
+### Range-aware delta index AB runs with Peras visible commit
 
 Cluster state for this run:
 
 - Docker Compose NoKV cluster already running.
 - `fsmeta-bench` mount registered.
-- fsmeta running with Peras visible commit enabled.
+- fsmeta running with Peras visible commit enabled and witness quorum enabled.
+- local PostgreSQL used the URI
+  `postgres://localhost:5432/postgres?sslmode=disable`.
 
 Command:
 
 ```bash
 uv run --extra bench python bench/delta_channel_benchmark.py \
-  --savers nokv \
-  --scenarios k3_freq_mixed \
-  --turn-counts 100 \
-  --read-repeats 3 \
-  --run-id lg100-immutable-cache-20260512-183013
+  --savers nokv,postgres \
+  --scenarios <scenario> \
+  --turn-counts 500 \
+  --read-repeats 5 \
+  --run-id <run-id> \
+  --postgres-uri 'postgres://localhost:5432/postgres?sslmode=disable'
 ```
 
-Result artifact:
+Artifacts:
 
-`artifacts/langgraph-nokv-bench/delta-channel-lg100-immutable-cache-20260512-183013.json`
+- `artifacts/langgraph-nokv-bench/delta-channel-ab-k3mixed500-range-20260512-120035.json`
+- `artifacts/langgraph-nokv-bench/delta-channel-ab-k8mixed500-range-20260512-120808.json`
 
 Summary:
 
-| saver | scenario | turns | write_ms | read_ms | delta_ms | lookup_plus | read_dir_plus | fsmeta_entries | storage_bytes |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| nokv-delta-index | k3_freq_mixed | 100 | 79.44 | 72.22 | 74.68 | 612 | 633 | 2,017 | 290,831 |
-
-Phase split:
-
-| phase | lookup_plus | read_dir_plus | create | update_inode |
-| --- | ---: | ---: | ---: | ---: |
-| write_phase | 597 | 395 | 2,024 | 299 |
-| get_state_phase | 9 | 9 | 0 | 0 |
-| delta_history_phase | 6 | 12 | 0 | 0 |
-| storage_count_phase | 0 | 217 | 0 | 0 |
-
-Path category split:
-
-| category | lookup_plus | read_dir_plus | create | update_inode |
-| --- | ---: | ---: | ---: | ---: |
-| channel_blob | 0 | 5 | 700 | 0 |
-| checkpoint_attrs | 0 | 106 | 300 | 0 |
-| delta_index | 0 | 315 | 400 | 0 |
-| directory | 0 | 6 | 223 | 0 |
-| head | 405 | 1 | 1 | 299 |
-| tombstone | 207 | 0 | 0 | 0 |
-| write_entry | 0 | 200 | 400 | 0 |
-
-Historical reference from earlier runs:
-
-| run | write_ms | read_ms | delta_ms | lookup_plus | read_dir_plus |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| NoKV baseline | 732.14 | 594.11 | 605.44 | 20,074 | 311 |
-| NoKV + Peras before directory Stage 1 | 349.96 | 558.86 | 551.55 | 20,074 | 311 |
-| NoKV + Peras after directory Stage 1 | 102.47 | 72.49 | 61.77 | 3,424 | 633 |
-| NoKV + Peras + create-first | 81.79 | 78.88 | 66.50 | 1,224 | 633 |
-| NoKV + Peras + create-first + immutable cache | 79.44 | 72.22 | 74.68 | 612 | 633 |
+| scenario | saver | write_ms | read_ms | delta_ms | storage | peak_mem |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| k3_freq_mixed | nokv-delta-index | 152.24 | 185.38 | 196.67 | 2.5 MB | 6.6 MB |
+| k3_freq_mixed | postgres | 25.25 | 130.09 | 167.61 | 3.0 MB | 10.4 MB |
+| k8_freq_mixed | nokv-delta-index | 374.53 | 469.00 | 544.71 | 6.5 MB | 17.4 MB |
+| k8_freq_mixed | postgres | 63.43 | 303.75 | 437.63 | 5.4 MB | 25.0 MB |
 
 Interpretation:
 
-- Peras removed a large part of create/update commit cost.
-- Directory Stage 1 removed the delta-history parent-chain point-read
-  amplification.
-- Create-first removed ordinary write and delta-index pre-read amplification.
-- Immutable metadata cache removed checkpoint attrs and channel blob attrs
-  point reads from the benchmark.
-- The remaining `lookup_plus` calls are almost entirely mutable `head` and
-  logical tombstone checks. A single-run `delta_ms` increase should be treated
-  as latency noise unless repeated runs confirm it; the fsmeta operation shape
-  moved in the intended direction.
+- The range-aware index improved the mixed read shape versus the old full
+  channel-directory scan, but NoKV is still slower than PostgreSQL on these
+  local AB runs: k3 read is 1.43x slower, k3 delta history is 1.17x slower; k8
+  read is 1.54x slower, k8 delta history is 1.24x slower.
+- The largest remaining NoKV write cost is metadata mutation and read-replay
+  during writes, not payload serialization alone.
+- PostgreSQL still pays payload hydrate through `serde.loads_typed`; it is not
+  free just because there is no external body store.
 
-### LangGraph official workload after BatchLookupPlus saver wiring
+Payload hydrate split:
 
-Artifact:
+| scenario | saver | phase | body get count | body get total_ms | serde load count | serde load total_ms |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| k3_freq_mixed | NoKV | get_state | 3,015 | 201.46 | 3,015 | 306.42 |
+| k3_freq_mixed | NoKV | delta_history | 3,260 | 199.77 | 3,260 | 276.45 |
+| k3_freq_mixed | PostgreSQL | get_state | n/a | n/a | 3,010 | 284.76 |
+| k3_freq_mixed | PostgreSQL | delta_history | n/a | n/a | 3,265 | 365.32 |
+| k8_freq_mixed | NoKV | get_state | 8,030 | 503.19 | 8,030 | 773.15 |
+| k8_freq_mixed | NoKV | delta_history | 11,395 | 697.96 | 11,395 | 740.06 |
+| k8_freq_mixed | PostgreSQL | get_state | n/a | n/a | 8,025 | 775.00 |
+| k8_freq_mixed | PostgreSQL | delta_history | n/a | n/a | 11,415 | 1,119.47 |
 
-`artifacts/langgraph-nokv-bench/delta-channel-lg100-500-batchlookup-20260512-195832.json`
+NoKV fsmeta range-read split:
 
-Important caveat: this run was useful for correctness and call-shape validation,
-but the Compose container had `--peras-visible-commit=false`, so do not compare
-its write latency against the Peras-enabled rows above.
+| scenario | phase | delta_index ReadDirPlus count | total_ms | p95_ms |
+| --- | --- | ---: | ---: | ---: |
+| k3_freq_mixed | get_state | 10 | 197.63 | 83.79 |
+| k3_freq_mixed | delta_history | 15 | 257.52 | 18.86 |
+| k8_freq_mixed | get_state | 20 | 462.08 | 87.01 |
+| k8_freq_mixed | delta_history | 40 | 602.67 | 28.63 |
 
-Summary:
+Pending replay counts:
 
-| scenario | turns | write_ms | read_ms | delta_ms | lookup_plus | batch_lookup_plus | read_dir_plus | fsmeta_entries | storage_bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| k1_freq50 | 100 | 377.35 | 10.25 | 35.28 | 398 | 109 | 419 | 1,413 | 202,365 |
-| k1_freq50 | 500 | 433.01 | 32.00 | 142.45 | 1,990 | 509 | 2,164 | 7,013 | 1,817,428 |
-| k3_freq50_uniform | 100 | 546.47 | 16.98 | 59.10 | 398 | 109 | 629 | 2,017 | 409,445 |
-| k3_freq50_uniform | 500 | 598.95 | 68.04 | 245.89 | 1,990 | 509 | 3,158 | 10,017 | 4,447,930 |
-| k3_freq_mixed | 100 | 563.95 | 65.17 | 67.88 | 404 | 109 | 647 | 2,017 | 290,831 |
-| k3_freq_mixed | 500 | 617.53 | 265.45 | 270.12 | 2,004 | 509 | 3,206 | 10,017 | 2,506,850 |
-| k8_freq50_uniform | 100 | 1069.90 | 39.44 | 139.94 | 398 | 109 | 1,154 | 3,527 | 927,145 |
-| k8_freq50_uniform | 500 | 1146.62 | 161.93 | 480.65 | 1,990 | 509 | 5,643 | 17,527 | 11,024,185 |
-| k8_freq_mixed | 100 | 1076.54 | 138.34 | 164.24 | 404 | 109 | 1,189 | 3,527 | 650,481 |
-| k8_freq_mixed | 500 | 1221.47 | 514.09 | 622.80 | 2,004 | 509 | 5,723 | 17,527 | 6,512,849 |
+| scenario | delta_history repeats | avg seeds | avg pending writes |
+| --- | ---: | ---: | ---: |
+| k3_freq_mixed | 5 | 2 | 650 |
+| k8_freq_mixed | 5 | 4 | 2,275 |
 
-Call-shape interpretation:
+PostgreSQL payload hydrate note:
 
-- `batch_lookup_plus` appears as `mixed_lookup` because it batches
-  `thread-tombstone` and `heads/latest`;
-- in turn100 rows, 109 batch calls replaced the remaining latest-target grouped
-  reads; in turn500 rows, the count is 509;
-- delta history phase has `lookup_plus=0` and only five latest-target batch
-  calls per row, with the rest of the read work now dominated by `ReadDirPlus`
-  over checkpoint and delta-index directories;
-- write phase still has `head` `lookup_plus` from mutable head upsert/recovery,
-  which is outside this BatchLookupPlus cut.
+The PostgreSQL saver stores serialized payloads in table rows, so there is no
+separate body-store `get_typed` step in the benchmark. However, every returned
+checkpoint/write/channel payload is still deserialized through
+`serde.loads_typed`. In the k8 mixed 500 run, PostgreSQL spent 775.00 ms in
+`get_state` serde loads and 1,119.47 ms in `delta_history` serde loads across
+the five read repeats. Those numbers are the PostgreSQL payload hydrate cost
+and should be included in future comparisons.
 
 ### fsmeta mixed API benchmark with Peras visible commit
 
@@ -396,12 +403,16 @@ Verified run:
 - latest checkpoint reads batch tombstone and head via `BatchLookupPlus`;
 - unavailable `BatchLookupPlus` falls back to single-entry `LookupPlus`;
 - delta-history latest-target resolution uses the same batch path.
+- ordered delta-index names preserve checkpoint ordering for range scans;
+- delta history uses the ordered delta index to scan only the replay window
+  when the saver knows the index coverage is complete.
 
 `tests/test_bench_metrics.py` covers:
 
 - phase/category metrics for checkpoint attrs;
 - `read_dir_plus` category tagging for delta index directories.
 - `batch_lookup_plus` metrics and mixed path-category tagging.
+- body-store and serde payload instrumentation.
 
 Go tests cover fsmeta `BatchLookupPlus`:
 
@@ -411,39 +422,32 @@ Go tests cover fsmeta `BatchLookupPlus`:
 - missing inode returns a whole-operation `ErrNotFound`;
 - gRPC service and typed client request/response mapping.
 
-Recent verification performed before this note:
+Recent verification for the current Python integration cut:
 
 ```bash
-make proto-check
-go test ./fsmeta/... ./pb/fsmeta
-go test ./...
+uv run pytest -q tests/test_layout.py tests/test_saver_conformance.py
 uv run --extra dev pytest -q
 uv run python -m py_compile \
-  src/langgraph/checkpoint/nokv/fsmeta_client.py \
-  src/langgraph/checkpoint/nokv/_proto/fsmeta_pb2.py \
-  src/langgraph/checkpoint/nokv/_proto/fsmeta_pb2_grpc.py \
+  src/langgraph/checkpoint/nokv/layout.py \
   src/langgraph/checkpoint/nokv/saver.py \
   src/langgraph/checkpoint/nokv/_bench_metrics.py \
   bench/delta_channel_benchmark.py
 git diff --check
-git diff --cached --check
 ```
 
 ## Recommended next steps
 
-1. Re-run LangGraph100 after each step.
-   - Track `write_ms`, `read_ms`, `delta_ms`, `lookup_plus_count`,
-     `read_dir_plus_count`, `fsmeta_entries`, and `storage_bytes`.
-   - Use phase/category splits to verify the intended call sites moved.
+1. Treat PostgreSQL `serde.loads_typed` as payload hydrate in every AB read.
+   It is not an external body-store fetch, but it is still deserializing the
+   serialized checkpoint/write/channel payload returned by PostgreSQL.
 
 2. Decide whether mutable head/tombstone reads are acceptable.
    - Do not cache them blindly; they carry cross-writer/delete semantics.
    - If they become the next bottleneck, consider a versioned/CAS head protocol
      or a carefully bounded negative tombstone strategy.
 
-3. Re-run LangGraph official turn100/turn500 with the Peras benchmark env.
-   - The existing BatchLookupPlus 100/500 run had Peras visible commit disabled,
-     so it validates shape, not final latency.
-   - Use the fsmeta-bench env block above when bringing up the cluster, and
-     confirm `--peras-visible-commit=true` plus witness store/quorum args before
-     running LangGraph.
+3. Investigate NoKV write amplification under mixed high-K.
+   - The k8 mixed run still spends substantial time in write-phase body reads,
+     delta-index range reads, metadata creates, and head updates.
+   - Keep the next cut small and measure it against k3/k8 mixed turn500 AB
+     before broadening the scenario set.
