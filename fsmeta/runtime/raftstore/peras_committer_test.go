@@ -153,6 +153,35 @@ func TestRemotePerasCommitterReturnsInstalledCompletionOnRetry(t *testing.T) {
 	require.Equal(t, 0, committer.Stats()["pending"])
 }
 
+func TestRemotePerasCommitterReturnsPendingAckOnRetry(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	opID := fsperas.OperationID{ClientID: "client", Seq: 9}
+	delta := testRuntimePerasDelta([]byte("dentry/a"), []byte("inode/a"))
+	first, err := committer.CommitPeras(ctx, opID, delta, nil)
+	require.NoError(t, err)
+	second, err := committer.CommitPeras(ctx, opID, delta, func(context.Context, compile.SemanticDelta) (bool, error) {
+		t.Fatal("pending retry should not re-run admission")
+		return false, nil
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["commit_total"])
+	require.Equal(t, 1, stats["pending"])
+	require.Equal(t, 2, stats["overlay_keys"])
+}
+
 func TestRemotePerasCommitterShutdownFlushesPendingSegment(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
