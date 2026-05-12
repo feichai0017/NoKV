@@ -38,6 +38,28 @@ func TestRaftstoreRuntimeExecutorContractOnRealCluster(t *testing.T) {
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
 
+	pair, err := executor.LookupPlus(ctx, fsmeta.LookupRequest{
+		Mount:  req.Mount,
+		Parent: req.Parent,
+		Name:   req.Name,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryAttrPair{
+		Dentry: fsmeta.DentryRecord{
+			Parent: req.Parent,
+			Name:   req.Name,
+			Inode:  created.Inode.Inode,
+			Type:   fsmeta.InodeTypeFile,
+		},
+		Inode: fsmeta.InodeRecord{
+			Inode:     created.Inode.Inode,
+			Type:      fsmeta.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
+	}, pair)
+
 	entries, err := executor.ReadDir(ctx, fsmeta.ReadDirRequest{
 		Mount:  req.Mount,
 		Parent: req.Parent,

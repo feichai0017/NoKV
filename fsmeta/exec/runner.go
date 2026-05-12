@@ -1955,6 +1955,55 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	return fsmeta.DecodeDentryValue(value)
 }
 
+// LookupPlus returns the parent/name dentry and its inode attributes at one
+// MVCC read version. It is the point-read sibling of ReadDirPlus: callers that
+// already know the child name do not need to scan the parent directory just to
+// recover opaque inode attrs.
+func (e *Executor) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	mount := mountRecord.Identity()
+	plan, err := fsmeta.PlanLookup(req, mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if e.negCache != nil && e.negCache.Has(plan.PrimaryKey) {
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+
+	var out fsmeta.DentryAttrPair
+	err = e.withReadRetry(ctx, 0, func(version uint64) error {
+		dentry, err := e.readDentry(ctx, plan.PrimaryKey, version)
+		if err != nil {
+			if errors.Is(err, fsmeta.ErrNotFound) && e.negCache != nil {
+				e.negCache.Remember(plan.PrimaryKey)
+			}
+			return err
+		}
+		inode, ok, err := e.readInode(ctx, mount, dentry.Inode, version)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+		}
+		if inode.Inode != dentry.Inode {
+			return fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+		}
+		if dentry.Type != inode.Type {
+			return fmt.Errorf("%w: dentry type=%s inode type=%s", fsmeta.ErrInvalidValue, dentry.Type, inode.Type)
+		}
+		out = fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode}
+		return nil
+	})
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	return out, nil
+}
+
 // invalidateNegative drops cached "missing" memos for every dentry key that
 // was just mutated, so the next Lookup re-issues against the runner instead
 // of returning a stale ErrNotFound. Safe with a nil cache.

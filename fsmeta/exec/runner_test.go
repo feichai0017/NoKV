@@ -750,6 +750,26 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 		Type:   fsmeta.InodeTypeFile,
 	}, record)
 
+	pair, err := executor.LookupPlus(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryAttrPair{
+		Dentry: fsmeta.DentryRecord{
+			Parent: fsmeta.RootInode,
+			Name:   "file",
+			Inode:  22,
+			Type:   fsmeta.InodeTypeFile,
+		},
+		Inode: fsmeta.InodeRecord{
+			Inode:     22,
+			Type:      fsmeta.InodeTypeFile,
+			LinkCount: 1,
+		},
+	}, pair)
+
 	require.Len(t, runner.mutations, 1)
 	require.Len(t, runner.mutations[0], 2)
 	require.True(t, runner.mutations[0][0].GetAssertionNotExist())
