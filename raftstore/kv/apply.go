@@ -128,6 +128,160 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 	return resp, nil
 }
 
+// ApplyBatch executes a committed apply batch made of independent raft command
+// requests. It preserves one response per input request while fusing the MVCC
+// command bodies across entries when they share a batchable command type.
+func ApplyBatch(db txnstore.Store, latches *latch.Manager, reqs []*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
+	}
+	resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
+	for i := 0; i < len(reqs); {
+		cmdType, ok := singleBatchableCommand(reqs[i])
+		if !ok {
+			resp, err := Apply(db, latches, reqs[i])
+			if err != nil {
+				return nil, err
+			}
+			resps[i] = resp
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(reqs) {
+			nextType, nextOK := singleBatchableCommand(reqs[end])
+			if !nextOK || nextType != cmdType {
+				break
+			}
+			end++
+		}
+		if err := applyBatchRun(db, latches, reqs[i:end], resps[i:end], cmdType); err != nil {
+			return nil, err
+		}
+		i = end
+	}
+	return resps, nil
+}
+
+func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, bool) {
+	if req == nil || len(req.GetRequests()) != 1 {
+		return 0, false
+	}
+	r := req.GetRequests()[0]
+	if r == nil {
+		return 0, false
+	}
+	switch r.GetCmdType() {
+	case raftcmdpb.CmdType_CMD_PREWRITE,
+		raftcmdpb.CmdType_CMD_COMMIT,
+		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
+		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
+		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+		return r.GetCmdType(), true
+	default:
+		return 0, false
+	}
+}
+
+func applyBatchRun(
+	db txnstore.Store,
+	latches *latch.Manager,
+	reqs []*raftcmdpb.RaftCmdRequest,
+	resps []*raftcmdpb.RaftCmdResponse,
+	cmdType raftcmdpb.CmdType,
+) error {
+	switch cmdType {
+	case raftcmdpb.CmdType_CMD_PREWRITE:
+		var batchBuf [64]*kvrpcpb.PrewriteRequest
+		batch := batchBuf[:0]
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetPrewrite())
+		}
+		results := percolator.PrewriteBatch(db, latches, batch)
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_Prewrite{Prewrite: &kvrpcpb.PrewriteResponse{Errors: result}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_COMMIT:
+		var batchBuf [64]*kvrpcpb.CommitRequest
+		batch := batchBuf[:0]
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetCommit())
+		}
+		results := percolator.CommitBatch(db, latches, batch)
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: result}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
+		var batchBuf [64]*kvrpcpb.BatchRollbackRequest
+		batch := batchBuf[:0]
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetBatchRollback())
+		}
+		results := percolator.BatchRollbackBatch(db, latches, batch)
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_BatchRollback{BatchRollback: &kvrpcpb.BatchRollbackResponse{Error: result}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
+		var batchBuf [64]*kvrpcpb.ResolveLockRequest
+		batch := batchBuf[:0]
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetResolveLock())
+		}
+		results := percolator.ResolveLockBatch(db, latches, batch)
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{
+						ResolvedLocks: result.ResolvedLocks,
+						Error:         result.Error,
+					}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+		var batchBuf [64]*kvrpcpb.TryAtomicMutateRequest
+		batch := batchBuf[:0]
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetTryAtomicMutate())
+		}
+		results := percolator.ApplyAtomicMutateBatch(db, latches, batch)
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{
+						Error:                    result.Error,
+						AppliedKeys:              result.AppliedKeys,
+						FallbackToTwoPhaseCommit: result.Fallback,
+					}},
+				}},
+			}
+		}
+	default:
+		return fmt.Errorf("kv: unsupported batch command %v", cmdType)
+	}
+	return nil
+}
+
 func collectCommandRun(reqs []*raftcmdpb.Request, start int, cmdType raftcmdpb.CmdType) int {
 	end := start + 1
 	for end < len(reqs) {
@@ -225,6 +379,16 @@ func NewApplier(db txnstore.Store, latches *latch.Manager) func(*raftcmdpb.RaftC
 	}
 	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 		return Apply(db, latches, req)
+	}
+}
+
+// NewBatchApplier wraps ApplyBatch for store command execution wiring.
+func NewBatchApplier(db txnstore.Store, latches *latch.Manager) func([]*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+	if latches == nil {
+		latches = latch.NewManager(defaultLatchSlots)
+	}
+	return func(reqs []*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+		return ApplyBatch(db, latches, reqs)
 	}
 }
 

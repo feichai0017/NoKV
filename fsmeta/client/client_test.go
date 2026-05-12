@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -467,7 +468,8 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 	require.Equal(t, watcher.sub.ready, stream.ReadyCursor())
 
 	require.Eventually(t, func() bool {
-		return string(watcher.req.KeyPrefix) == "fsm/" && watcher.req.BackPressureWindow == 4
+		req := watcher.request()
+		return string(req.KeyPrefix) == "fsm/" && req.BackPressureWindow == 4
 	}, time.Second, 10*time.Millisecond)
 	evt := fsmeta.WatchEvent{
 		Cursor:        fsmeta.WatchCursor{RegionID: 8, Term: 1, Index: 2},
@@ -481,7 +483,8 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 	require.Equal(t, evt, got)
 	require.NoError(t, stream.Ack(got.Cursor))
 	require.Eventually(t, func() bool {
-		return len(watcher.sub.acks) == 1 && watcher.sub.acks[0] == evt.Cursor
+		acks := watcher.sub.acked()
+		return len(acks) == 1 && acks[0] == evt.Cursor
 	}, time.Second, 10*time.Millisecond)
 	watchStream, ok := stream.(*WatchStream)
 	require.True(t, ok)
@@ -569,16 +572,26 @@ func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token f
 }
 
 type fakeWatcher struct {
+	mu  sync.Mutex
 	req fsmeta.WatchRequest
 	sub *fakeWatchSub
 }
 
 func (w *fakeWatcher) Subscribe(_ context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.req = req
 	return w.sub, nil
 }
 
+func (w *fakeWatcher) request() fsmeta.WatchRequest {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.req
+}
+
 type fakeWatchSub struct {
+	mu     sync.Mutex
 	events chan fsmeta.WatchEvent
 	acks   []fsmeta.WatchCursor
 	ready  fsmeta.WatchCursor
@@ -600,7 +613,15 @@ func (s *fakeWatchSub) ReadyCursor() fsmeta.WatchCursor {
 }
 
 func (s *fakeWatchSub) Ack(cursor fsmeta.WatchCursor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.acks = append(s.acks, cursor)
+}
+
+func (s *fakeWatchSub) acked() []fsmeta.WatchCursor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]fsmeta.WatchCursor(nil), s.acks...)
 }
 
 func (s *fakeWatchSub) Close() {

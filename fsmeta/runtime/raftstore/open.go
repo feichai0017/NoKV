@@ -17,7 +17,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const defaultDialTimeout = 3 * time.Second
+const (
+	defaultDialTimeout             = 3 * time.Second
+	defaultRouteRetryAttempts      = 32
+	defaultRouteUnavailableBackoff = 50 * time.Millisecond
+	defaultRegionErrorRetryBackoff = 10 * time.Millisecond
+	defaultTransportRetryBackoff   = 10 * time.Millisecond
+	defaultLockResolveRetryBackoff = 10 * time.Millisecond
+)
 
 // Options configures the default NoKV-backed fsmeta runtime.
 type Options struct {
@@ -124,6 +131,13 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		StoreResolver:  coord,
 		RegionResolver: coord,
 		DialOptions:    dialOpts,
+		Retry: client.RetryPolicy{
+			MaxAttempts:                 defaultRouteRetryAttempts,
+			RouteUnavailableBackoff:     defaultRouteUnavailableBackoff,
+			TransportUnavailableBackoff: defaultTransportRetryBackoff,
+			RegionErrorBackoff:          defaultRegionErrorRetryBackoff,
+			LockResolveBackoff:          defaultLockResolveRetryBackoff,
+		},
 	})
 	if err != nil {
 		_ = coord.Close()

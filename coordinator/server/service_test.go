@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 )
 
 type fakeStorage struct {
+	mu            sync.Mutex
 	eventCalls    int
 	saveCalls     int
 	loadCalls     int
@@ -189,7 +191,27 @@ func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootpr
 	return grants
 }
 
+func (f *fakeStorage) loadCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loadCalls
+}
+
+func (f *fakeStorage) resetLoadCalls() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadCalls = 0
+}
+
+func (f *fakeStorage) setLoadErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadErr = err
+}
+
 func (f *fakeStorage) Load() (rootview.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.loadCalls++
 	if f.loadErr != nil {
 		return rootview.Snapshot{}, f.loadErr
@@ -198,6 +220,8 @@ func (f *fakeStorage) Load() (rootview.Snapshot, error) {
 }
 
 func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.eventCalls++
 	f.lastEvent = event
 	if f.eventErr != nil {
@@ -230,6 +254,8 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 }
 
 func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
@@ -396,6 +422,8 @@ func dutyGrantsFromAuthorityUsagesForTest(usages []rootproto.AuthorityUsage) []r
 }
 
 func (f *fakeStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.saveCalls++
 	f.lastID = idCurrent
 	f.lastTS = tsCurrent
@@ -420,13 +448,20 @@ func (f *fakeStorage) Refresh() error {
 }
 
 func (f *fakeStorage) CanSubmitRootWrites() bool {
-	return f == nil || f.leader || f.leaderID == 0
+	if f == nil {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.leader || f.leaderID == 0
 }
 
 func (f *fakeStorage) LeaderID() uint64 {
 	if f == nil {
 		return 0
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.leaderID
 }
 
@@ -1129,13 +1164,13 @@ func TestServiceGetRegionByKeyRefreshesCachedRootSnapshotAsync(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
 	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
 	require.NoError(t, svc.ReloadFromStorage())
-	store.loadCalls = 0
+	store.resetLoadCalls()
 
 	time.Sleep(20 * time.Millisecond)
 	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		return store.loadCalls >= 1
+		return store.loadCallCount() >= 1
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -1148,14 +1183,14 @@ func TestServiceGetRegionByKeyBestEffortWithUnavailableRoot(t *testing.T) {
 	svc.ConfigureRootSnapshotRefresh(10 * time.Millisecond)
 	err := publishDescriptorEvent(t, svc, testDescriptor(11, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil), 0)
 	require.NoError(t, err)
-	storage.loadCalls = 0
-	storage.loadErr = errors.New("root unavailable")
+	storage.resetLoadCalls()
+	storage.setLoadErr(errors.New("root unavailable"))
 
 	time.Sleep(20 * time.Millisecond)
 	_, err = svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		return storage.loadCalls >= 1
+		return storage.loadCallCount() >= 1
 	}, time.Second, 10*time.Millisecond)
 
 	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("a")})

@@ -1,23 +1,26 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.26 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 COPY . .
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# BuildKit provides TARGETOS/TARGETARCH from the requested image platform.
+# Do not default TARGETARCH to amd64: on Apple Silicon that silently builds
+# x86-64 binaries into an arm64 image and runs them through emulation.
+ARG TARGETOS
+ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/nokv ./cmd/nokv
+    CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -o /out/nokv ./cmd/nokv
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/nokv-config ./cmd/nokv-config
+    CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -o /out/nokv-config ./cmd/nokv-config
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/nokv-fsmeta ./cmd/nokv-fsmeta
+    CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -o /out/nokv-fsmeta ./cmd/nokv-fsmeta
 
 FROM debian:bookworm-slim
 RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
