@@ -261,32 +261,65 @@ func (t *GRPCTransport) invalidatePeer(id uint64) {
 }
 
 func (t *GRPCTransport) clientFor(id uint64) (*rootTransportClientImpl, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.closed {
-		return nil, errTransportClosed
-	}
-	if client, ok := t.clients[id]; ok {
+	for {
+		t.mu.Lock()
+		if t.closed {
+			t.mu.Unlock()
+			return nil, errTransportClosed
+		}
+		if client, ok := t.clients[id]; ok {
+			t.mu.Unlock()
+			return client, nil
+		}
+		addr, ok := t.peers[id]
+		dialTimeout := t.dialTimeout
+		t.mu.Unlock()
+
+		if !ok || addr == "" {
+			return nil, errPeerAddressUnknown(id)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err == nil {
+			err = waitForTransportReady(ctx, conn)
+		}
+		cancel()
+		if err != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return nil, err
+		}
+		client := &rootTransportClientImpl{cc: conn}
+
+		t.mu.Lock()
+		if t.closed {
+			t.mu.Unlock()
+			_ = conn.Close()
+			return nil, errTransportClosed
+		}
+		if cached, ok := t.clients[id]; ok {
+			t.mu.Unlock()
+			_ = conn.Close()
+			return cached, nil
+		}
+		currentAddr, ok := t.peers[id]
+		if !ok || currentAddr == "" {
+			t.mu.Unlock()
+			_ = conn.Close()
+			return nil, errPeerAddressUnknown(id)
+		}
+		if currentAddr != addr {
+			t.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		t.conns[id] = conn
+		t.clients[id] = client
+		t.mu.Unlock()
 		return client, nil
 	}
-	addr, ok := t.peers[id]
-	if !ok || addr == "" {
-		return nil, errPeerAddressUnknown(id)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), t.dialTimeout)
-	defer cancel()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
-	}
-	if err := waitForTransportReady(ctx, conn); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	client := &rootTransportClientImpl{cc: conn}
-	t.conns[id] = conn
-	t.clients[id] = client
-	return client, nil
 }
 
 func (t *GRPCTransport) Close() error {
