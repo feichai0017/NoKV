@@ -196,7 +196,7 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
-	require.NoError(t, committer.FlushDurable(ctx))
+	require.NoError(t, committer.FlushPublished(ctx))
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -222,6 +222,38 @@ func TestRemotePerasCommitterPublishesRootSealAfterInstall(t *testing.T) {
 	require.Equal(t, uint64(1), stats["flush_jobs_total"])
 	require.Equal(t, uint64(1), stats["flush_jobs_last"])
 	require.Equal(t, uint64(1), stats["flush_jobs_max"])
+}
+
+func TestRemotePerasCommitterCanStopAtDurablePersistence(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+	}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.FlushTo(ctx, fsperas.SegmentPersistenceDurable))
+
+	provider.mu.Lock()
+	require.Equal(t, 0, provider.sealCalls)
+	provider.mu.Unlock()
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, uint64(0), stats["seal_total"])
+	require.NotZero(t, stats["witness_latency_total_nanosecond"])
+	require.NotZero(t, stats["install_latency_total_nanosecond"])
+	require.Zero(t, stats["seal_latency_total_nanosecond"])
+	require.True(t, committer.segmentInstalled(installer.segment.Root))
+	require.Equal(t, 0, stats["pending"])
 }
 
 func TestRemotePerasCommitterAppendsBatchWitnessesBeforeParallelInstall(t *testing.T) {
@@ -1072,7 +1104,7 @@ func TestRemotePerasCommitterFlushChainsBoundedReplayWindows(t *testing.T) {
 		committer.commitMu.Unlock()
 		require.NoError(t, err)
 		require.NotEmpty(t, batches)
-		require.NoError(t, committer.installFlushBatches(context.Background(), batches))
+		require.NoError(t, committer.installFlushBatches(context.Background(), batches, fsperas.SegmentPersistencePublished))
 	}
 	require.Equal(t, uint64(3), committer.Stats()["segment_total"])
 	require.Equal(t, uint64(5), committer.Stats()["segment_operations_total"])

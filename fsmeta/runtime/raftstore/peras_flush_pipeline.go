@@ -11,7 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/utils"
 )
 
-func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope) error {
+func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
 	c.commitMu.Lock()
 	plans, err := c.freezeReplayPlansLocked(scope, 0)
 	c.commitMu.Unlock()
@@ -22,15 +22,15 @@ func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.A
 	if err != nil {
 		return err
 	}
-	return c.installFlushBatches(ctx, batches)
+	return c.installFlushBatches(ctx, batches, level)
 }
 
-func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches []perasFlushBatch) error {
+func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches []perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
 	if len(batches) > 0 && c.installer == nil {
 		return c.recordError(errPerasCommitterInvalid)
 	}
 	for _, batch := range batches {
-		if err := c.installFlushBatchJobs(ctx, batch); err != nil {
+		if err := c.installFlushBatchJobs(ctx, batch, level); err != nil {
 			return err
 		}
 		if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
@@ -45,7 +45,7 @@ func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches 
 	return nil
 }
 
-func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch perasFlushBatch) error {
+func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
 	c.recordFlushBatch(len(batch.jobs))
 	if len(batch.jobs) <= 1 || c.installN <= 1 {
 		jobs := make([]perasFlushJob, 0, len(batch.jobs))
@@ -57,7 +57,11 @@ func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch 
 			jobs = append(jobs, installed)
 		}
 		batch.jobs = jobs
-		return c.publishFlushJobSeals(ctx, batch)
+		if level.RequiresPublish() {
+			return c.publishFlushJobSeals(ctx, batch)
+		}
+		c.flushTotal.Add(uint64(len(batch.jobs)))
+		return nil
 	}
 	started := make([]time.Time, len(batch.jobs))
 	for idx := range started {
@@ -71,7 +75,11 @@ func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch 
 		return err
 	}
 	batch.jobs = jobs
-	return c.publishFlushJobSeals(ctx, batch)
+	if level.RequiresPublish() {
+		return c.publishFlushJobSeals(ctx, batch)
+	}
+	c.flushTotal.Add(uint64(len(batch.jobs)))
+	return nil
 }
 
 func (c *RemotePerasCommitter) appendFlushBatchWitnesses(ctx context.Context, batch perasFlushBatch) error {

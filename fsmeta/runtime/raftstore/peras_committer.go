@@ -464,18 +464,38 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 }
 
 func (c *RemotePerasCommitter) FlushDurable(ctx context.Context) error {
-	return c.flush(ctx, nil)
+	return c.FlushTo(ctx, fsperas.SegmentPersistenceDurable)
+}
+
+func (c *RemotePerasCommitter) FlushPublished(ctx context.Context) error {
+	return c.FlushTo(ctx, fsperas.SegmentPersistencePublished)
+}
+
+func (c *RemotePerasCommitter) FlushTo(ctx context.Context, level fsperas.SegmentPersistenceLevel) error {
+	return c.flush(ctx, nil, level)
 }
 
 func (c *RemotePerasCommitter) FlushAuthority(ctx context.Context, scope compile.AuthorityScope) error {
-	if scope.Mount == "" || scope.MountKeyID == 0 {
-		return c.FlushDurable(ctx)
-	}
-	return c.flush(ctx, &scope)
+	return c.FlushAuthorityTo(ctx, scope, fsperas.SegmentPersistenceDurable)
 }
 
-func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.AuthorityScope) error {
+func (c *RemotePerasCommitter) FlushAuthorityPublished(ctx context.Context, scope compile.AuthorityScope) error {
+	return c.FlushAuthorityTo(ctx, scope, fsperas.SegmentPersistencePublished)
+}
+
+func (c *RemotePerasCommitter) FlushAuthorityTo(ctx context.Context, scope compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
+	if scope.Mount == "" || scope.MountKeyID == 0 {
+		return c.FlushTo(ctx, level)
+	}
+	return c.flush(ctx, &scope, level)
+}
+
+func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
 	if c == nil {
+		return errPerasCommitterInvalid
+	}
+	level = fsperas.NormalizeSegmentPersistence(level)
+	if !level.Valid() {
 		return errPerasCommitterInvalid
 	}
 	if ctx == nil {
@@ -483,7 +503,7 @@ func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.Authori
 	}
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
-	return c.flushLocked(ctx, scope)
+	return c.flushLocked(ctx, scope, level)
 }
 
 func defaultPerasSegmentInstallParallelism() int {
@@ -529,7 +549,7 @@ func (c *RemotePerasCommitter) flushBackground() {
 		batches, err = c.buildFlushBatches(plans, false)
 	}
 	if err == nil {
-		err = c.installFlushBatches(ctx, batches)
+		err = c.installFlushBatches(ctx, batches, fsperas.SegmentPersistencePublished)
 	}
 	if err != nil {
 		c.bgErrorTotal.Add(1)
@@ -584,7 +604,7 @@ func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err := c.FlushDurable(ctx)
+	err := c.FlushPublished(ctx)
 	c.Close()
 	return err
 }

@@ -51,7 +51,7 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 		}
 	}
 	c.commitMu.Unlock()
-	if err := c.installFlushBatches(ctx, batches); err != nil {
+	if err := c.installFlushBatches(ctx, batches, fsperas.SegmentPersistencePublished); err != nil {
 		return err
 	}
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
