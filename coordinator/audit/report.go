@@ -43,7 +43,7 @@ type Report struct {
 	ActiveGrant            rootproto.AuthorityGrant
 	RetiredGrants          []rootproto.GrantRetirement
 	GrantInheritances      []rootproto.GrantInheritance
-	RetiredEraFloor        uint64
+	RetiredEraFloors       []rootproto.AuthorityRetiredEraFloor
 	AuthorityCompletion    AuthorityCompletionState
 	Anomalies              SnapshotAnomalies
 }
@@ -63,11 +63,18 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		ActiveGrant:            active,
 		RetiredGrants:          append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:      append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-		RetiredEraFloor:        snapshot.RetiredEraFloor,
+		RetiredEraFloors:       rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
 	}
 	for _, retirement := range report.RetiredGrants {
-		if retirement.InheritedByGrantID != "" && retirement.Era > report.RetiredEraFloor {
-			report.RetiredEraFloor = retirement.Era
+		// Audit reports reconstruct the same compact finality that root state
+		// stores so diagnostics explain which duty/scope has actually become
+		// final, rather than blaming every duty for an unrelated retirement.
+		if retirement.InheritedByGrantID != "" {
+			report.RetiredEraFloors = rootproto.AdvanceAuthorityRetiredEraFloorsForBounds(
+				report.RetiredEraFloors,
+				retirement.Bounds,
+				retirement.Era,
+			)
 		}
 		if retirement.Present() && retirement.InheritedByGrantID == "" {
 			report.Anomalies.RetiredGrantNotInherited = true
@@ -87,6 +94,12 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 	}
 	report.AuthorityCompletion = evaluateAuthorityCompletion(report.RetiredGrants)
 	return report
+}
+
+// RetiredEraFloorFor returns the audit-visible finality floor for one duty and
+// scope.
+func (r Report) RetiredEraFloorFor(duty rootproto.DutyID, scope rootproto.DutyScope) uint64 {
+	return rootproto.AuthorityRetiredEraFloorFor(r.RetiredEraFloors, duty, scope)
 }
 
 func auditPrimaryGrant(snapshot rootview.Snapshot) rootproto.AuthorityGrant {

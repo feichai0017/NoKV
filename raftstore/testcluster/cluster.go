@@ -295,7 +295,7 @@ func (s *coordinatorRootStorage) protocolStateLocked() rootstate.EunomiaState {
 		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), s.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
-		RetiredEraFloor:   s.snapshot.RetiredEraFloor,
+		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(s.snapshot.RetiredEraFloors),
 	}
 }
 

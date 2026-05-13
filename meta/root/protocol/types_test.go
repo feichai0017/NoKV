@@ -46,3 +46,19 @@ func TestDutyNameAndAuthorityEraConstants(t *testing.T) {
 	require.Equal(t, uint64(0), AuthorityEraAttached)
 	require.Equal(t, ^uint64(0), AuthorityEraSuppressed)
 }
+
+func TestCloneAuthorityRetiredEraFloorsIsIsolated(t *testing.T) {
+	global := DutyScope{Kind: DutyScopeGlobal}
+	original := []AuthorityRetiredEraFloor{{
+		DutyID:          DutyAllocID,
+		Scope:           global,
+		RetiredEraFloor: 7,
+	}}
+
+	cloned := CloneAuthorityRetiredEraFloors(original)
+
+	require.Equal(t, uint64(7), AuthorityRetiredEraFloorFor(cloned, DutyAllocID, global))
+	require.Zero(t, AuthorityRetiredEraFloorFor(cloned, DutyTSO, global))
+	cloned[0].RetiredEraFloor = 100
+	require.Equal(t, uint64(7), original[0].RetiredEraFloor)
+}

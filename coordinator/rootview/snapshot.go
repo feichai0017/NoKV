@@ -59,7 +59,7 @@ type Snapshot struct {
 	ActiveGrants        []rootproto.AuthorityGrant
 	RetiredGrants       []rootproto.GrantRetirement
 	GrantInheritances   []rootproto.GrantInheritance
-	RetiredEraFloor     uint64
+	RetiredEraFloors    []rootproto.AuthorityRetiredEraFloor
 	ActivePerasGrants   []rootproto.PerasAuthorityGrant
 	PerasAuthorityEpoch uint64
 	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
@@ -81,6 +81,12 @@ func (s Snapshot) ActiveGrantByID(grantID string) (rootproto.AuthorityGrant, boo
 		}
 	}
 	return rootproto.AuthorityGrant{}, false
+}
+
+// RetiredEraFloorFor returns the compact finality floor for exactly one service
+// duty and scope.
+func (s Snapshot) RetiredEraFloorFor(duty rootproto.DutyID, scope rootproto.DutyScope) uint64 {
+	return rootproto.AuthorityRetiredEraFloorFor(s.RetiredEraFloors, duty, scope)
 }
 
 func (s Snapshot) ActivePerasGrantFor(scope rootproto.PerasAuthorityScope, nowUnixNano int64) (rootproto.PerasAuthorityGrant, bool) {
@@ -118,7 +124,7 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		ActiveGrants:        cloneAuthorityGrants(snapshot.ActiveGrants),
 		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-		RetiredEraFloor:     snapshot.RetiredEraFloor,
+		RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
 		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.ActivePerasGrants),
 		PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,
 		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.PerasAuthoritySeals),
@@ -131,8 +137,10 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 // authority mirrors are protected against stale replacement.
 func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	out := CloneSnapshot(observed)
+	out.RetiredEraFloors = mergeRetiredEraFloors(out.RetiredEraFloors, current.RetiredEraFloors)
+	out.ActiveGrants = filterActiveGrantsAboveScopedFloors(out.ActiveGrants, out.RetiredEraFloors)
 	for _, currentGrant := range current.ActiveGrants {
-		if !currentGrant.Present() || observedRetiresGrant(observed, currentGrant) {
+		if !currentGrant.Present() || grantRetiredAtAnyFloor(currentGrant, out.RetiredEraFloors) || observedRetiresGrant(observed, currentGrant) {
 			continue
 		}
 		observedGrant, ok := activeGrantOverlapping(out.ActiveGrants, currentGrant)
@@ -144,14 +152,52 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	}
 	out.RetiredGrants = mergeGrantRetirements(out.RetiredGrants, current.RetiredGrants)
 	out.GrantInheritances = mergeGrantInheritances(out.GrantInheritances, current.GrantInheritances)
-	if current.RetiredEraFloor > out.RetiredEraFloor {
-		out.RetiredEraFloor = current.RetiredEraFloor
-	}
 	if current.PerasAuthorityEpoch > out.PerasAuthorityEpoch {
 		out.ActivePerasGrants = clonePerasAuthorityGrants(current.ActivePerasGrants)
 		out.PerasAuthorityEpoch = current.PerasAuthorityEpoch
 	}
 	out.PerasAuthoritySeals = mergePerasAuthoritySeals(out.PerasAuthoritySeals, current.PerasAuthoritySeals)
+	return out
+}
+
+// mergeRetiredEraFloors combines two scoped finality views by taking the maximum
+// floor for every duty/scope pair. It is used when a locally newer grant lifecycle
+// must survive a stale root snapshot reload.
+func mergeRetiredEraFloors(observed, current []rootproto.AuthorityRetiredEraFloor) []rootproto.AuthorityRetiredEraFloor {
+	out := rootproto.CloneAuthorityRetiredEraFloors(observed)
+	for _, floor := range current {
+		out = rootproto.AdvanceAuthorityRetiredEraFloor(out, floor.DutyID, floor.Scope, floor.RetiredEraFloor)
+	}
+	return out
+}
+
+// grantRetiredAtAnyFloor is deliberately conservative for multi-duty grants: if
+// any covered duty has compacted past the grant era, the grant is no longer safe
+// to preserve as an active rootview grant.
+func grantRetiredAtAnyFloor(grant rootproto.AuthorityGrant, floors []rootproto.AuthorityRetiredEraFloor) bool {
+	for _, duty := range grant.Duties {
+		retiredFloor := rootproto.AuthorityRetiredEraFloorFor(floors, duty.DutyID, duty.Scope)
+		if retiredFloor != 0 && grant.Era <= retiredFloor {
+			return true
+		}
+	}
+	return false
+}
+
+// filterActiveGrantsAboveScopedFloors removes active grants that are already
+// known retired by compact finality. This keeps stale observed root snapshots
+// from reintroducing a grant after a local inherit/seal path has retired it.
+func filterActiveGrantsAboveScopedFloors(grants []rootproto.AuthorityGrant, floors []rootproto.AuthorityRetiredEraFloor) []rootproto.AuthorityGrant {
+	if len(floors) == 0 {
+		return grants
+	}
+	out := grants[:0]
+	for _, grant := range grants {
+		if grantRetiredAtAnyFloor(grant, floors) {
+			continue
+		}
+		out = append(out, grant)
+	}
 	return out
 }
 
@@ -256,7 +302,7 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 		ActiveGrants:        cloneAuthorityGrants(snapshot.State.ActiveGrants),
 		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
 		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
-		RetiredEraFloor:     snapshot.State.RetiredEraFloor,
+		RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(snapshot.State.RetiredEraFloors),
 		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.State.ActivePerasGrants),
 		PerasAuthorityEpoch: snapshot.State.PerasAuthorityEpoch,
 		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.State.PerasAuthoritySeals),
@@ -273,7 +319,7 @@ func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 			ActiveGrants:        cloneAuthorityGrants(s.ActiveGrants),
 			RetiredGrants:       append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
 			GrantInheritances:   append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
-			RetiredEraFloor:     s.RetiredEraFloor,
+			RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(s.RetiredEraFloors),
 			ActivePerasGrants:   clonePerasAuthorityGrants(s.ActivePerasGrants),
 			PerasAuthorityEpoch: s.PerasAuthorityEpoch,
 			PerasAuthoritySeals: clonePerasAuthoritySeals(s.PerasAuthoritySeals),

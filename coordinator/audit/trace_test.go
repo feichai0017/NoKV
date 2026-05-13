@@ -72,6 +72,27 @@ func TestEvaluateReplyTraceUsesObservedRetiredFloor(t *testing.T) {
 	require.Equal(t, "accepted_retired_era_reply", anomalies[0].Kind)
 }
 
+// TestEvaluateReplyTraceUsesDutyScopedReportRetiredFloor ensures audit traces do
+// not accuse TSO replies merely because alloc_id has already compacted a higher
+// retired era.
+func TestEvaluateReplyTraceUsesDutyScopedReportRetiredFloor(t *testing.T) {
+	report := coordaudit.BuildReport(rootview.Snapshot{
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 22,
+		}},
+	}, "c1", 1_000)
+
+	anomalies := coordaudit.EvaluateReplyTrace(report, []coordaudit.ReplyTraceRecord{
+		{Source: "nokv", Duty: "tso", Era: 9, EvidencePresent: true, SignatureValid: true, Accepted: true},
+		{Source: "nokv", Duty: "alloc_id", Era: 9, EvidencePresent: true, SignatureValid: true, Accepted: true},
+	})
+	require.Len(t, anomalies, 1)
+	require.Equal(t, "accepted_retired_era_reply", anomalies[0].Kind)
+	require.Equal(t, "alloc_id", anomalies[0].Duty)
+}
+
 func TestEvaluateReplyTraceFlagsAcceptedReplyBehindSuccessor(t *testing.T) {
 	anomalies := coordaudit.EvaluateReplyTrace(coordaudit.Report{}, []coordaudit.ReplyTraceRecord{
 		{

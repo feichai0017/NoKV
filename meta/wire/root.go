@@ -29,7 +29,7 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		ActiveGrants:        RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:       RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances:   RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:     state.RetiredEraFloor,
+		RetiredEraFloors:    RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
 		ActivePerasGrants:   RootPerasAuthorityGrantsToProto(state.ActivePerasGrants),
 		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
 		PerasAuthoritySeals: RootPerasAuthoritySealsToProto(state.PerasAuthoritySeals),
@@ -49,7 +49,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		ActiveGrants:        RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
 		RetiredGrants:       RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
 		GrantInheritances:   RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
+		RetiredEraFloors:    RootAuthorityRetiredEraFloorsFromProto(pbState.GetRetiredEraFloors()),
 		ActivePerasGrants:   RootPerasAuthorityGrantsFromProto(pbState.GetActivePerasGrants()),
 		PerasAuthorityEpoch: pbState.GetPerasAuthorityEpoch(),
 		PerasAuthoritySeals: RootPerasAuthoritySealsFromProto(pbState.GetPerasAuthoritySeals()),
@@ -213,6 +213,62 @@ func RootGrantInheritancesFromProto(inheritances []*metapb.RootGrantInheritance)
 	for _, inheritance := range inheritances {
 		parsed := RootGrantInheritanceFromProto(inheritance)
 		if parsed.PredecessorGrantID != "" && parsed.SuccessorGrantID != "" {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+// RootAuthorityRetiredEraFloorToProto writes one scoped finality floor. Empty
+// duties and zero floors are omitted because they do not carry verifier state.
+func RootAuthorityRetiredEraFloorToProto(floor rootproto.AuthorityRetiredEraFloor) *metapb.RootAuthorityRetiredEraFloor {
+	if floor.DutyID == "" || floor.RetiredEraFloor == 0 {
+		return nil
+	}
+	return &metapb.RootAuthorityRetiredEraFloor{
+		DutyId:          string(floor.DutyID),
+		Scope:           RootDutyScopeToProto(floor.Scope),
+		RetiredEraFloor: floor.RetiredEraFloor,
+	}
+}
+
+// RootAuthorityRetiredEraFloorFromProto decodes one scoped finality floor.
+func RootAuthorityRetiredEraFloorFromProto(floor *metapb.RootAuthorityRetiredEraFloor) rootproto.AuthorityRetiredEraFloor {
+	if floor == nil {
+		return rootproto.AuthorityRetiredEraFloor{}
+	}
+	return rootproto.AuthorityRetiredEraFloor{
+		DutyID:          rootproto.DutyID(floor.GetDutyId()),
+		Scope:           RootDutyScopeFromProto(floor.GetScope()),
+		RetiredEraFloor: floor.GetRetiredEraFloor(),
+	}
+}
+
+// RootAuthorityRetiredEraFloorsToProto serializes scoped compact finality. Nil
+// and empty slices both mean "no scoped floors are present".
+func RootAuthorityRetiredEraFloorsToProto(floors []rootproto.AuthorityRetiredEraFloor) []*metapb.RootAuthorityRetiredEraFloor {
+	if len(floors) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootAuthorityRetiredEraFloor, 0, len(floors))
+	for _, floor := range floors {
+		if pbFloor := RootAuthorityRetiredEraFloorToProto(floor); pbFloor != nil {
+			out = append(out, pbFloor)
+		}
+	}
+	return out
+}
+
+// RootAuthorityRetiredEraFloorsFromProto drops malformed empty entries while
+// preserving all valid duty/scope floors.
+func RootAuthorityRetiredEraFloorsFromProto(floors []*metapb.RootAuthorityRetiredEraFloor) []rootproto.AuthorityRetiredEraFloor {
+	if len(floors) == 0 {
+		return nil
+	}
+	out := make([]rootproto.AuthorityRetiredEraFloor, 0, len(floors))
+	for _, floor := range floors {
+		parsed := RootAuthorityRetiredEraFloorFromProto(floor)
+		if parsed.DutyID != "" && parsed.RetiredEraFloor != 0 {
 			out = append(out, parsed)
 		}
 	}
@@ -483,7 +539,7 @@ func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaSt
 		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:   state.RetiredEraFloor,
+		RetiredEraFloors:  RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
 	}
 }
 
@@ -495,7 +551,7 @@ func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.Eunomia
 		ActiveGrants:      RootAuthorityGrantsFromProto(state.GetActiveGrants()),
 		RetiredGrants:     RootGrantRetirementsFromProto(state.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(state.GetGrantInheritances()),
-		RetiredEraFloor:   state.GetRetiredEraFloor(),
+		RetiredEraFloors:  RootAuthorityRetiredEraFloorsFromProto(state.GetRetiredEraFloors()),
 	}
 }
 

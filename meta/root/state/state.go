@@ -42,7 +42,7 @@ type State struct {
 	ActiveGrants        []rootproto.AuthorityGrant
 	RetiredGrants       []rootproto.GrantRetirement
 	GrantInheritances   []rootproto.GrantInheritance
-	RetiredEraFloor     uint64
+	RetiredEraFloors    []rootproto.AuthorityRetiredEraFloor
 	ActivePerasGrants   []rootproto.PerasAuthorityGrant
 	PerasAuthorityEpoch uint64
 	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
@@ -238,6 +238,7 @@ func CloneState(state State) State {
 	state.ActiveGrants = cloneAuthorityGrants(state.ActiveGrants)
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
+	state.RetiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(state.RetiredEraFloors)
 	state.ActivePerasGrants = clonePerasAuthorityGrants(state.ActivePerasGrants)
 	state.PerasAuthoritySeals = clonePerasAuthoritySeals(state.PerasAuthoritySeals)
 	return state
@@ -577,15 +578,21 @@ func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.E
 	for i := range state.RetiredGrants {
 		if state.RetiredGrants[i].GrantID == inheritance.PredecessorGrantID {
 			state.RetiredGrants[i].InheritedByGrantID = inheritance.SuccessorGrantID
-			if state.RetiredGrants[i].Era > state.RetiredEraFloor {
-				state.RetiredEraFloor = state.RetiredGrants[i].Era
-			}
+			state.RetiredEraFloors = rootproto.AdvanceAuthorityRetiredEraFloorsForBounds(
+				state.RetiredEraFloors,
+				state.RetiredGrants[i].Bounds,
+				state.RetiredGrants[i].Era,
+			)
 		}
 	}
 }
 
+// CompactEunomiaState removes inherited retirement history that is already
+// represented by compact finality floors. It only drops a retirement after every
+// duty/scope in that retirement has reached the same era, preserving the evidence
+// needed by unrelated duties until their own floors advance.
 func CompactEunomiaState(state State) State {
-	if state.RetiredEraFloor == 0 {
+	if len(state.RetiredEraFloors) == 0 {
 		return state
 	}
 	originalRetirements := append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
@@ -599,7 +606,7 @@ func CompactEunomiaState(state State) State {
 	}
 	retirements := make([]rootproto.GrantRetirement, 0, len(originalRetirements))
 	for _, retirement := range originalRetirements {
-		if retirement.InheritedByGrantID != "" && retirement.Era <= state.RetiredEraFloor {
+		if retirement.InheritedByGrantID != "" && retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors) {
 			if _, active := activePredecessors[retirement.GrantID]; !active {
 				continue
 			}
@@ -612,7 +619,7 @@ func CompactEunomiaState(state State) State {
 		for _, retirement := range originalRetirements {
 			if retirement.GrantID == inheritance.PredecessorGrantID &&
 				retirement.InheritedByGrantID != "" &&
-				retirement.Era <= state.RetiredEraFloor {
+				retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors) {
 				if _, active := activePredecessors[retirement.GrantID]; !active {
 					keep = false
 				}
@@ -626,6 +633,23 @@ func CompactEunomiaState(state State) State {
 	state.RetiredGrants = retirements
 	state.GrantInheritances = inheritances
 	return state
+}
+
+// retirementCoveredByRetiredEraFloor reports whether compact scoped floors fully
+// cover one inherited retirement.
+func retirementCoveredByRetiredEraFloor(retirement rootproto.GrantRetirement, floors []rootproto.AuthorityRetiredEraFloor) bool {
+	if retirement.Era == 0 {
+		return false
+	}
+	if len(retirement.Bounds) == 0 {
+		return false
+	}
+	for _, bound := range retirement.Bounds {
+		if rootproto.AuthorityRetiredEraFloorFor(floors, bound.DutyID, bound.Scope) < retirement.Era {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneAuthorityGrant(grant rootproto.AuthorityGrant) rootproto.AuthorityGrant {

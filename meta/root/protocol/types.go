@@ -82,6 +82,16 @@ type AuthorityGrant struct {
 	PredecessorRetirements []GrantRetirement
 }
 
+// AuthorityRetiredEraFloor is the compact finality marker for one coordinator
+// service duty at one scope. Keeping the duty/scope on the floor prevents an ID
+// allocator or region lookup retirement from making an unrelated TSO grant look
+// retired to clients.
+type AuthorityRetiredEraFloor struct {
+	DutyID          DutyID
+	Scope           DutyScope
+	RetiredEraFloor uint64
+}
+
 type GrantRetirementMode uint8
 
 const (

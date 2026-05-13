@@ -123,7 +123,7 @@ func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), f.snapshot.GrantInheritances...),
-		RetiredEraFloor:   f.snapshot.RetiredEraFloor,
+		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(f.snapshot.RetiredEraFloors),
 	}
 }
 
@@ -260,6 +260,9 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			TSOFence:      f.snapshot.Allocator.TSCurrent,
 			ActiveGrants:  append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),
 			RetiredGrants: append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
+			RetiredEraFloors: rootproto.CloneAuthorityRetiredEraFloors(
+				f.snapshot.RetiredEraFloors,
+			),
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
 		Stores:              rootstate.CloneStoreMemberships(f.snapshot.Stores),
@@ -414,6 +417,11 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 			for i := range f.snapshot.RetiredGrants {
 				if f.snapshot.RetiredGrants[i].GrantID == predecessor {
 					f.snapshot.RetiredGrants[i].InheritedByGrantID = successor
+					f.snapshot.RetiredEraFloors = rootproto.AdvanceAuthorityRetiredEraFloorsForBounds(
+						f.snapshot.RetiredEraFloors,
+						f.snapshot.RetiredGrants[i].Bounds,
+						f.snapshot.RetiredGrants[i].Era,
+					)
 					f.snapshot.GrantInheritances = append(f.snapshot.GrantInheritances, rootproto.GrantInheritance{
 						PredecessorGrantID: predecessor,
 						SuccessorGrantID:   successor,
@@ -2826,9 +2834,13 @@ func TestServiceAuthorityEvidenceUsesRetiredFloorInsteadOfInheritedHistory(t *te
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrants:    []rootproto.AuthorityGrant{grant},
-			RetiredGrants:   []rootproto.GrantRetirement{retired},
-			RetiredEraFloor: 1,
+			ActiveGrants:  []rootproto.AuthorityGrant{grant},
+			RetiredGrants: []rootproto.GrantRetirement{retired},
+			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+				DutyID:          rootproto.DutyAllocID,
+				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+				RetiredEraFloor: 1,
+			}},
 		},
 	}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
@@ -2845,6 +2857,139 @@ func TestServiceAuthorityEvidenceUsesRetiredFloorInsteadOfInheritedHistory(t *te
 	evidence := metawire.RootAuthorityEvidenceFromProto(proof.Evidence)
 	require.Equal(t, uint64(1), evidence.ObservedRetiredEraFloor)
 	require.Empty(t, evidence.ObservedRetirements)
+}
+
+// TestServiceTsoEvidenceIgnoresAllocRetiredFloor verifies the serving-side
+// witness payload: a TSO reply must not attach an alloc_id retired floor.
+func TestServiceTsoEvidenceIgnoresAllocRetiredFloor(t *testing.T) {
+	now := time.Unix(0, 200)
+	retired := rootproto.GrantRetirement{
+		GrantID:            "c0/22",
+		HolderID:           "c0",
+		Era:                22,
+		Mode:               rootproto.GrantRetirementExpiredBound,
+		Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 10)},
+		InheritedByGrantID: "c1/23",
+	}
+	grant := rootproto.AuthorityGrant{
+		GrantID:         "c1/9",
+		HolderID:        "c1",
+		Era:             9,
+		ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+		Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100)},
+	}
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants:  []rootproto.AuthorityGrant{grant},
+			RetiredGrants: []rootproto.GrantRetirement{retired},
+			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+				DutyID:          rootproto.DutyAllocID,
+				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+				RetiredEraFloor: 22,
+			}},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+	svc.cacheGrantCertificate(testGrantCertificate(grant))
+
+	admission, err := svc.beginDutyAdmission(context.Background(), rootproto.DutyTSO)
+	require.NoError(t, err)
+	defer admission.Done()
+	proof, err := admission.authorityEvidence(rootproto.DutyBound{Kind: rootproto.DutyBoundMonotone, MonotoneUpper: 20})
+	require.NoError(t, err)
+	evidence := metawire.RootAuthorityEvidenceFromProto(proof.Evidence)
+	require.Zero(t, evidence.ObservedRetiredEraFloor)
+	require.Empty(t, evidence.ObservedRetirements)
+}
+
+// TestServiceRegionLookupEvidenceIgnoresAllocRetiredFloor covers raftstore route
+// lookup witnesses, which are consumed downstream by the KV client route cache.
+func TestServiceRegionLookupEvidenceIgnoresAllocRetiredFloor(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &fakeStorage{
+		leader: true,
+		snapshot: rootview.Snapshot{
+			ActiveGrants: []rootproto.AuthorityGrant{{
+				GrantID:         "c1/region_lookup/9",
+				HolderID:        "c1",
+				Era:             9,
+				ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+				Duties: []rootproto.DutyGrant{
+					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 12, 0),
+				},
+			}},
+			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+				DutyID:          rootproto.DutyAllocID,
+				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+				RetiredEraFloor: 22,
+			}},
+			Descriptors: map[uint64]topology.Descriptor{
+				11: {RegionID: 11, StartKey: []byte("a"), EndKey: []byte("z"), RootEpoch: 7},
+			},
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(10), tso.NewAllocator(100), store)
+	svc.ConfigureAuthorityGrant("c1", time.Hour, 30*time.Minute)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("m")})
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), resp.GetEra())
+	require.Zero(t, resp.GetObservedRetiredEraFloor())
+}
+
+// TestServiceAllocAdmissionRejectsAllocGrantAtScopedRetiredFloor proves Silence
+// still holds for the duty that actually owns the scoped floor.
+func TestServiceAllocAdmissionRejectsAllocGrantAtScopedRetiredFloor(t *testing.T) {
+	now := time.Unix(100, 0)
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.now = func() time.Time { return now }
+	svc.ConfigureAuthorityGrant("coord-1", time.Hour, 10*time.Minute)
+	svc.refreshGrantMirror(rootview.Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/alloc/12",
+			HolderID:        "coord-1",
+			Era:             12,
+			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 100)},
+		}},
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 12,
+		}},
+	})
+
+	_, err := svc.admitDutyFromCachedGrant(rootproto.DutyAllocID)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "silence violated")
+	require.Contains(t, err.Error(), "retired_floor=12")
+}
+
+// TestCoordinatorGrantViewRetiredEraFloorForIsScopedOnly documents the breaking
+// cleanup: only explicit duty/scope floors are authoritative.
+func TestCoordinatorGrantViewRetiredEraFloorForIsScopedOnly(t *testing.T) {
+	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	var view coordinatorGrantView
+	view.Refresh(rootview.Snapshot{})
+
+	require.Zero(t, view.RetiredEraFloorFor(rootproto.DutyTSO, global))
+
+	view.Refresh(rootview.Snapshot{
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           global,
+			RetiredEraFloor: 22,
+		}},
+	})
+	require.Equal(t, uint64(22), view.RetiredEraFloorFor(rootproto.DutyAllocID, global))
+	require.Zero(t, view.RetiredEraFloorFor(rootproto.DutyTSO, global))
 }
 
 func TestServiceGrantAdmissionSurvivesStaleReloadAfterIssue(t *testing.T) {

@@ -785,7 +785,7 @@ func (s *Service) activeOtherGrantError(duty rootproto.DutyID, holderID string, 
 	current := s.currentGrant(duty)
 	currentHolder := strings.TrimSpace(current.HolderID)
 	localHolder := strings.TrimSpace(holderID)
-	if currentHolder == "" || currentHolder == localHolder || !current.ActiveAt(nowUnixNano) {
+	if currentHolder == "" || currentHolder == localHolder || !current.ActiveAt(nowUnixNano) || s.currentGrantRetiredAtFloor(duty, current) {
 		return nil
 	}
 	// A live rooted holder is the authority. Standby coordinators must not
@@ -801,7 +801,8 @@ func (s *Service) coordinatorGrantStillValid(duty rootproto.DutyID, holderID str
 	current := s.currentGrant(duty)
 	if strings.TrimSpace(holderID) == "" ||
 		strings.TrimSpace(current.HolderID) != strings.TrimSpace(holderID) ||
-		!current.ActiveAt(nowUnixNano) {
+		!current.ActiveAt(nowUnixNano) ||
+		s.currentGrantRetiredAtFloor(duty, current) {
 		return false
 	}
 	if current.ExpiresUnixNano <= nowUnixNano+renewIn.Nanoseconds() ||
@@ -812,6 +813,19 @@ func (s *Service) coordinatorGrantStillValid(duty rootproto.DutyID, holderID str
 		return false
 	}
 	return !s.coordinatorGrantNeedsRenewal(current)
+}
+
+// currentGrantRetiredAtFloor checks renewal eligibility against the floor for
+// the duty being renewed. This keeps a retired alloc_id grant from forcing a TSO
+// or region_lookup campaign to abandon an otherwise valid grant.
+func (s *Service) currentGrantRetiredAtFloor(duty rootproto.DutyID, grant rootproto.AuthorityGrant) bool {
+	if s == nil {
+		return false
+	}
+	s.grantMu.RLock()
+	retiredFloor := s.grantView.RetiredEraFloorFor(duty, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	s.grantMu.RUnlock()
+	return authorityGrantRetiredAtFloor(grant, retiredFloor)
 }
 
 func (s *Service) currentGrantCertificateValid(grant rootproto.AuthorityGrant) bool {

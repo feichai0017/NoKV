@@ -247,12 +247,10 @@ func (s *Service) currentReadState() (readState, error) {
 		state.grantExpiresAt = grant.ExpiresUnixNano
 		state.era = s.metadataReplyEra(grant.Era)
 	}
-	state.retiredEraFloor = snapshot.RetiredEraFloor
-	for _, retirement := range snapshot.RetiredGrants {
-		if retirement.Era > state.retiredEraFloor {
-			state.retiredEraFloor = retirement.Era
-		}
-	}
+	// Metadata route witnesses use the region_lookup floor only. Other duty
+	// retirements, such as alloc_id handoffs, must not make route descriptors
+	// look stale to raftstore clients.
+	state.retiredEraFloor = snapshot.RetiredEraFloorFor(rootproto.DutyRegionLookup, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
 	state.currentToken = snapshot.RootToken
 	state.rootLag = rootLag(state.currentToken, state.servedToken)
 	state.catchUpState = snapshot.CatchUpState

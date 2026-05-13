@@ -80,6 +80,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		ActiveGrants:        []rootproto.AuthorityGrant{grant},
 		RetiredGrants:       []rootproto.GrantRetirement{retirement},
 		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
+		RetiredEraFloors:    []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
 		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
 		PerasAuthorityEpoch: perasGrant.EpochID,
 		PerasAuthoritySeals: []rootproto.PerasAuthoritySeal{perasSeal},
@@ -105,6 +106,7 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		ActiveGrants:      state.ActiveGrants,
 		RetiredGrants:     state.RetiredGrants,
 		GrantInheritances: state.GrantInheritances,
+		RetiredEraFloors:  state.RetiredEraFloors,
 	}
 	require.Equal(t, protocolState, RootEunomiaStateFromProto(RootEunomiaStateToProto(protocolState)))
 	require.Equal(t, rootstate.EunomiaState{}, RootEunomiaStateFromProto(nil))

@@ -791,7 +791,16 @@ func (s *Store) inheritGrantLocked(ctx context.Context, cmd rootproto.GrantComma
 }
 
 func nextGrantEra(state rootstate.State) uint64 {
+	// Compaction can remove inherited retirement records after their finality is
+	// represented only by retired-era floors. New grants must still allocate above
+	// those compact floors, otherwise a rebooted root could reuse an era that
+	// clients already consider retired.
 	var era uint64
+	for _, floor := range state.RetiredEraFloors {
+		if floor.RetiredEraFloor > era {
+			era = floor.RetiredEraFloor
+		}
+	}
 	for _, grant := range state.ActiveGrants {
 		if grant.Era > era {
 			era = grant.Era

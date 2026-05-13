@@ -545,7 +545,10 @@ func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *te
 
 	current, err := store.Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), current.RetiredEraFloor)
+	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(current.RetiredEraFloors, rootproto.DutyAllocID, global))
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(current.RetiredEraFloors, rootproto.DutyTSO, global))
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(current.RetiredEraFloors, rootproto.DutyRegionLookup, global))
 	require.Len(t, current.RetiredGrants, 1)
 	require.Equal(t, c2.GrantID, current.RetiredGrants[0].GrantID)
 	require.Empty(t, current.GrantInheritances)
@@ -554,9 +557,33 @@ func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *te
 	require.NoError(t, err)
 	reopenedState, err := reopened.Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), reopenedState.RetiredEraFloor)
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyAllocID, global))
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyTSO, global))
+	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyRegionLookup, global))
 	require.Len(t, reopenedState.RetiredGrants, 1)
 	require.Equal(t, c2.GrantID, reopenedState.RetiredGrants[0].GrantID)
+}
+
+// TestNextGrantEraRespectsCompactedRetiredEraFloors prevents era reuse after
+// old retirement records have been garbage-collected into scoped finality floors.
+func TestNextGrantEraRespectsCompactedRetiredEraFloors(t *testing.T) {
+	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	state := rootstate.State{
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           global,
+			RetiredEraFloor: 22,
+		}},
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/tso/9",
+			HolderID:        "coord-1",
+			Era:             9,
+			ExpiresUnixNano: 1_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100)},
+		}},
+	}
+
+	require.Equal(t, uint64(23), nextGrantEra(state))
 }
 
 func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {

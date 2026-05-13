@@ -62,6 +62,33 @@ func TestServiceValidateGrantRecordsDutyRejectionMetric(t *testing.T) {
 	}, metrics["guarantee_violations_total"])
 }
 
+func TestServiceAdmitDutyRejectsGrantAtRetiredEraFloor(t *testing.T) {
+	now := time.Unix(100, 0)
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
+	svc.now = func() time.Time { return now }
+	svc.ConfigureAuthorityGrant("coord-1", time.Hour, 10*time.Minute)
+	svc.refreshGrantMirror(rootview.Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/tso/12",
+			HolderID:        "coord-1",
+			Era:             12,
+			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100)},
+		}},
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyTSO,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 12,
+		}},
+	})
+
+	_, err := svc.admitDutyFromCachedGrant(rootproto.DutyTSO)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "silence violated")
+	require.Contains(t, err.Error(), "retired_floor=12")
+}
+
 func TestServiceDiagnosticsMarksInheritedGrantFinality(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,

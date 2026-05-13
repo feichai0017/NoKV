@@ -215,6 +215,13 @@ func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission
 		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
 		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: required_duty=%s", rootstate.ErrDuty, rootproto.DutyName(duty)))
 	}
+	scope := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	retiredEraFloor := view.RetiredEraFloorFor(duty, scope)
+	if authorityGrantRetiredAtFloor(grant, retiredEraFloor) {
+		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
+		s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: rooted grant retired era=%d retired_floor=%d", rootstate.ErrSilence, grant.Era, retiredEraFloor))
+	}
 	if err := s.validateGateGrant(gateDutyAdmission, duty, grant); err != nil {
 		return dutyAdmission{}, err
 	}
@@ -233,19 +240,25 @@ func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission
 	return dutyAdmission{
 		grant:           grant,
 		certificate:     cert,
-		retirements:     authorityEvidenceRetirements(view.retirements, view.retiredEraFloor),
-		retiredEraFloor: view.retiredEraFloor,
+		retirements:     authorityEvidenceRetirementsForDuty(view.retirements, duty, scope, retiredEraFloor),
+		retiredEraFloor: retiredEraFloor,
 		duty:            duty,
 		servedUnixNano:  nowUnixNano,
 	}, nil
 }
 
-func authorityEvidenceRetirements(retirements []rootproto.GrantRetirement, retiredEraFloor uint64) []rootproto.GrantRetirement {
+// authorityEvidenceRetirementsForDuty keeps reply evidence scoped to the duty
+// being served. Retirements for other duties are intentionally omitted so an
+// alloc_id handoff cannot raise the apparent finality floor of a TSO response.
+func authorityEvidenceRetirementsForDuty(retirements []rootproto.GrantRetirement, duty rootproto.DutyID, scope rootproto.DutyScope, retiredEraFloor uint64) []rootproto.GrantRetirement {
 	if len(retirements) == 0 {
 		return nil
 	}
 	out := make([]rootproto.GrantRetirement, 0, len(retirements))
 	for _, retirement := range retirements {
+		if !retirementCoversDutyScope(retirement, duty, scope) {
+			continue
+		}
 		// The retired-era floor is the stable verifier contract for inherited
 		// history. Keeping those records in every hot TSO/AllocID reply only
 		// grows the evidence payload without adding a stronger fence.
@@ -255,6 +268,24 @@ func authorityEvidenceRetirements(retirements []rootproto.GrantRetirement, retir
 		out = append(out, retirement)
 	}
 	return out
+}
+
+// retirementCoversDutyScope checks whether a retirement record is relevant to
+// one duty/scope verifier key. Evidence filtering must use this exact key, not
+// just the grant era, because client verifier state is persisted per duty.
+func retirementCoversDutyScope(retirement rootproto.GrantRetirement, duty rootproto.DutyID, scope rootproto.DutyScope) bool {
+	for _, bound := range retirement.Bounds {
+		if bound.DutyID == duty && rootproto.ScopeEqual(bound.Scope, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+// authorityGrantRetiredAtFloor is the Silence gate for one served duty. A grant
+// at or below the duty's compact floor must not produce a detached reply.
+func authorityGrantRetiredAtFloor(grant rootproto.AuthorityGrant, retiredFloor uint64) bool {
+	return retiredFloor != 0 && grant.Era <= retiredFloor
 }
 
 func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {
