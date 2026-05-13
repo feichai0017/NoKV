@@ -96,12 +96,6 @@ NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-gl
 
 <br/>
 
-## 🏗️ Architecture
-
-<p align="center">
-  <img src="./docs/img/architecture.svg" alt="NoKV Architecture" width="100%" />
-</p>
-
 <br/>
 
 ## 🗂️ `fsmeta` — Namespace Metadata Service
