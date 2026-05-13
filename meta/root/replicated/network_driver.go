@@ -135,7 +135,12 @@ func (d *NetworkDriver) Campaign() error {
 	if err != nil {
 		return err
 	}
-	return d.sendMessages(outbound)
+	// Campaign has already advanced the local raft state. Transport sends are
+	// best-effort and will be retried by subsequent ticks; surfacing a transient
+	// send timeout here makes callers observe a failure for an election that may
+	// still legitimately complete.
+	_ = d.sendMessages(outbound)
+	return nil
 }
 
 func (d *NetworkDriver) PauseTicks() {

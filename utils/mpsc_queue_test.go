@@ -133,6 +133,7 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 
 	var (
 		wg       sync.WaitGroup
+		accepted atomic.Int64
 		consumed atomic.Int64
 		seenMu   sync.Mutex
 		seen     = make(map[int]struct{}, total)
@@ -167,6 +168,7 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 				if !q.Push(base + i) {
 					return
 				}
+				accepted.Add(1)
 				if i%97 == 0 {
 					runtime.Gosched()
 				}
@@ -190,8 +192,8 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 	if got := consumed.Load(); got != int64(len(seen)) {
 		t.Fatalf("consumed=%d seen=%d mismatch", got, len(seen))
 	}
-	if len(seen) == 0 {
-		t.Fatalf("expected some drained items")
+	if got, want := consumed.Load(), accepted.Load(); got != want {
+		t.Fatalf("consumed=%d accepted=%d mismatch", got, want)
 	}
 }
 
