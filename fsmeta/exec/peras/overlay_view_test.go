@@ -17,6 +17,17 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	require.NoError(t, err)
 	delta := compile.SemanticDelta{
 		Kind: fsmeta.OperationCreate,
+		Authority: compile.AuthorityScope{
+			Mount:      mount.MountID,
+			MountKeyID: mount.MountKeyID,
+			Buckets: []fsmeta.AffinityBucket{
+				fsmeta.BucketForInodeID(9),
+				fsmeta.BucketForInodeID(10),
+			},
+			Parents: []fsmeta.InodeID{9},
+			Inodes:  []fsmeta.InodeID{10},
+		},
+		Eligibility: compile.EligibilityVisibleCommit,
 		ReadPredicates: []compile.Predicate{
 			{Kind: compile.PredicateNotExists, Key: dentryKey},
 		},

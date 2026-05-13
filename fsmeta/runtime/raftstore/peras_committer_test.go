@@ -1825,14 +1825,26 @@ func testPerasInstallCursor(offset uint64) perasauthority.InstallCursor {
 }
 
 func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.MaterializedOp {
+	scope := compile.AuthorityScope{
+		Mount:      "vol",
+		MountKeyID: 1,
+	}
+	for _, key := range [][]byte{dentryKey, inodeKey} {
+		if parts, ok := fsmeta.InspectKey(key); ok {
+			scope.MountKeyID = parts.MountKeyID
+			scope.Buckets = append(scope.Buckets, parts.Bucket)
+			switch parts.Kind {
+			case fsmeta.KeyKindDentry:
+				scope.Parents = append(scope.Parents, parts.Parent)
+			case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+				scope.Inodes = append(scope.Inodes, parts.Inode)
+			}
+		}
+	}
+	scope.Buckets = uniqueRuntimeBuckets(scope.Buckets)
 	return compile.MaterializeDelta(compile.SemanticDelta{
-		Kind: fsmeta.OperationCreate,
-		Authority: compile.AuthorityScope{
-			Mount:      "vol",
-			MountKeyID: 1,
-			Parents:    []fsmeta.InodeID{1},
-			Inodes:     []fsmeta.InodeID{2},
-		},
+		Kind:      fsmeta.OperationCreate,
+		Authority: scope,
 		ReadPredicates: []compile.Predicate{
 			{Kind: compile.PredicateNotExists, Key: dentryKey},
 			{Kind: compile.PredicateNotExists, Key: inodeKey},
@@ -1853,8 +1865,27 @@ func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.Affin
 	return compile.MaterializeDelta(delta, nil)
 }
 
+func uniqueRuntimeBuckets(in []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fsmeta.AffinityBucket, 0, len(in))
+	seen := make(map[fsmeta.AffinityBucket]struct{}, len(in))
+	for _, bucket := range in {
+		if _, ok := seen[bucket]; ok {
+			continue
+		}
+		seen[bucket] = struct{}{}
+		out = append(out, bucket)
+	}
+	return out
+}
+
 func testRuntimePerasOpWithScope(op compile.MaterializedOp, scope compile.AuthorityScope) compile.MaterializedOp {
 	delta := op.Delta
+	if len(scope.Buckets) == 0 {
+		scope.Buckets = append([]fsmeta.AffinityBucket(nil), delta.Authority.Buckets...)
+	}
 	delta.Authority = scope
 	return compile.MaterializeDelta(delta, nil)
 }

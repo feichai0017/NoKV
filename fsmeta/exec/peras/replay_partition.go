@@ -117,49 +117,6 @@ func SplitReplayPlanForCatalogInstall(plan ReplayPlan) ([]ReplayPlan, error) {
 	return []ReplayPlan{{EpochID: plan.EpochID, Operations: cloneReplayOperations(plan.Operations)}}, nil
 }
 
-// SplitReplayPlanByMutationBudget keeps each segment install under the local
-// write-batch entry budget. The budget is expressed in replay mutations rather
-// than encoded bytes because one replay mutation expands to at most three MVCC
-// entries plus one segment catalog entry.
-func SplitReplayPlanByMutationBudget(plan ReplayPlan, maxMutations int) ([]ReplayPlan, error) {
-	if plan.EpochID == 0 || len(plan.Operations) == 0 || maxMutations <= 0 {
-		return nil, ErrInvalidPerasSegment
-	}
-	if !plan.Versions.Empty() {
-		return nil, ErrReplayVersionRequired
-	}
-	out := make([]ReplayPlan, 0, len(plan.Operations))
-	current := ReplayPlan{EpochID: plan.EpochID}
-	currentMutations := 0
-	flush := func() {
-		if len(current.Operations) == 0 {
-			return
-		}
-		out = append(out, ReplayPlan{
-			EpochID:    current.EpochID,
-			Operations: cloneReplayOperations(current.Operations),
-		})
-		current.Operations = current.Operations[:0]
-		currentMutations = 0
-	}
-	for _, op := range plan.Operations {
-		if !op.OpID.Valid() || len(op.Mutations) == 0 {
-			return nil, ErrInvalidPerasSegment
-		}
-		mutations := len(op.Mutations)
-		if len(current.Operations) > 0 && currentMutations+mutations > maxMutations {
-			flush()
-		}
-		current.Operations = append(current.Operations, cloneReplayOperation(op))
-		currentMutations += mutations
-		if currentMutations >= maxMutations {
-			flush()
-		}
-	}
-	flush()
-	return out, nil
-}
-
 func replayOperationBucket(op ReplayOperation) (replayBucketKey, bool, error) {
 	if !op.OpID.Valid() || len(op.Mutations) == 0 {
 		return replayBucketKey{}, false, ErrInvalidPerasSegment

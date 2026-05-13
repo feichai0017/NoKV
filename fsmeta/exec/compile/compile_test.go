@@ -229,6 +229,9 @@ func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
 
 	require.True(t, materialized.Placement.CanSegment)
 	require.False(t, materialized.Placement.RequiresMaterialize)
+	require.Equal(t, compiled.IntentDigest, materialized.IntentDigest)
+	require.NotEqual(t, compiled.DescriptorDigest, materialized.ReplayDigest)
+	require.Equal(t, materialized.DescriptorDigest, materialized.ReplayDigest)
 	require.Len(t, materialized.Effects, 1)
 	require.True(t, materialized.Effects[0].Concrete)
 	require.Equal(t, DerivationNone, materialized.Effects[0].Derivation)
@@ -270,6 +273,74 @@ func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
 	require.True(t, op.Predicates[0].NeedValue)
 	require.True(t, op.Predicates[0].HasExpectedValue)
 	require.Equal(t, sha256.Sum256(expected), op.Predicates[0].ExpectHash)
+}
+
+func TestMaterializedOpValidationRejectsUncoveredWrite(t *testing.T) {
+	key := mustInodeKey(t, 44)
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+			Inodes:     []fsmeta.InodeID{55},
+		},
+		WriteEffects: []WriteEffect{{
+			Kind:  EffectPut,
+			Key:   key,
+			Value: []byte("new-inode"),
+		}},
+	}
+
+	var validationErr ValidationError
+	op := MaterializeDelta(delta, nil)
+	op.Authority.Scope.Buckets = []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(testParentInDifferentBucket(t, 44))}
+	op.Delta.Authority = op.Authority.Scope
+	err := op.ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationAuthorityMismatch, validationErr.Kind)
+}
+
+func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
+	key := mustInodeKey(t, 44)
+	expected := []byte("old-inode")
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+			Inodes:     []fsmeta.InodeID{44},
+		},
+		ReadPredicates: []Predicate{{
+			Kind:             PredicateObservedValue,
+			Key:              key,
+			ExpectedValue:    expected,
+			HasExpectedValue: true,
+		}},
+		WriteEffects: []WriteEffect{{
+			Kind:  EffectPut,
+			Key:   key,
+			Value: []byte("new-inode"),
+		}},
+	}
+
+	var validationErr ValidationError
+	err := MaterializeDelta(delta, nil).ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationPredicateProofMissing, validationErr.Kind)
+
+	proof := PredicateProof{
+		Key:     key,
+		Present: true,
+		Value:   expected,
+		Version: 9,
+		Source:  ReadSourceBase,
+	}
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	require.NoError(t, MaterializeDelta(delta, []PredicateProof{proof}).ValidateForAdmission())
 }
 
 func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {

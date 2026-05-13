@@ -16,6 +16,8 @@ const segmentFormatVersion uint16 = 1
 type CompiledOp struct {
 	Delta            SemanticDelta
 	DescriptorDigest [32]byte
+	IntentDigest     [32]byte
+	ReplayDigest     [32]byte
 	Authority        AuthorityPlan
 	Placement        PlacementPlan
 	Footprint        KeyFootprint
@@ -261,6 +263,8 @@ func CompileDelta(delta SemanticDelta) CompiledOp {
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
+		IntentDigest:     digest,
+		ReplayDigest:     digest,
 		Authority: AuthorityPlan{
 			Scope:    cloneScope(delta.Authority),
 			Required: delta.Eligibility == EligibilityVisibleCommit,
@@ -287,10 +291,45 @@ func MaterializeCompiledOp(op CompiledOp, effects []WriteEffect, proofs []Predic
 	if effects != nil {
 		delta.WriteEffects = cloneEffects(effects)
 	}
+	delta.Authority = authorityScopeWithDeltaKeys(delta.Authority, delta)
+	compiled := CompileDelta(delta)
+	compiled.IntentDigest = op.IntentDigest
+	compiled.ReplayDigest = compiled.DescriptorDigest
 	return MaterializedOp{
-		CompiledOp:      CompileDelta(delta),
+		CompiledOp:      compiled,
 		PredicateProofs: clonePredicateProofs(proofs),
 	}
+}
+
+func authorityScopeWithDeltaKeys(scope AuthorityScope, delta SemanticDelta) AuthorityScope {
+	out := cloneScope(scope)
+	for _, predicate := range delta.ReadPredicates {
+		out = authorityScopeWithKey(out, predicate.Key)
+	}
+	for _, effect := range delta.WriteEffects {
+		out = authorityScopeWithKey(out, effect.Key)
+	}
+	return out
+}
+
+func authorityScopeWithKey(scope AuthorityScope, key []byte) AuthorityScope {
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok {
+		return scope
+	}
+	if scope.MountKeyID == 0 {
+		scope.MountKeyID = parts.MountKeyID
+	}
+	scope.Buckets = uniqueBuckets(append(scope.Buckets, parts.Bucket))
+	switch parts.Kind {
+	case fsmeta.KeyKindDentry:
+		scope.Parents = uniqueInodes(append(scope.Parents, parts.Parent))
+	case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+		scope.Inodes = uniqueInodes(append(scope.Inodes, parts.Inode))
+	case fsmeta.KeyKindUsage:
+		scope.Parents = uniqueInodes(append(scope.Parents, fsmeta.InodeID(parts.UsageScope)))
+	}
+	return scope
 }
 
 func CanAppendSegment(current, next CompiledOp, budget SegmentBudget) SegmentDecision {

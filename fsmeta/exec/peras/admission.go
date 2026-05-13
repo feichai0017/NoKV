@@ -13,6 +13,9 @@ type AuthorityRetirer interface {
 }
 
 func Admit(ctx context.Context, op compile.MaterializedOp, fn AdmissionFunc) error {
+	if err := op.ValidateForAdmission(); err != nil {
+		return ErrAdmissionRejected
+	}
 	if fn == nil {
 		return nil
 	}

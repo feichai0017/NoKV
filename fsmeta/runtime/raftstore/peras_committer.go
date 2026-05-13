@@ -353,6 +353,9 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
 	}
+	if err := op.ValidateForAdmission(); err != nil {
+		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
+	}
 	if !op.Placement.CanSegment {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
 	}

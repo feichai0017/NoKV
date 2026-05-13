@@ -181,6 +181,11 @@ func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 	delta := compile.SemanticDelta{
 		Kind:        fsmeta.OperationCreate,
 		Eligibility: compile.EligibilityVisibleCommit,
+		Authority: compile.AuthorityScope{
+			Mount:      mount.MountID,
+			MountKeyID: mount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{1, 2},
+		},
 		WriteEffects: []compile.WriteEffect{
 			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("left")},
 			{Kind: compile.EffectPut, Key: rightKey, Value: []byte("right")},

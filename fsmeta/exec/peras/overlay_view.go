@@ -47,6 +47,9 @@ func (v *OverlayView) Add(id OperationID, op compile.MaterializedOp) error {
 	if v == nil {
 		return ErrInvalidPerasSegment
 	}
+	if err := op.ValidateForAdmission(); err != nil {
+		return ErrInvalidPerasSegment
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.initLocked()
