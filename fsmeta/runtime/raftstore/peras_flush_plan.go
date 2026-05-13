@@ -134,6 +134,7 @@ func cloneRuntimeReplayOperation(op fsperas.ReplayOperation) fsperas.ReplayOpera
 		Kind:                 op.Kind,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
+		ExecutionPlanDigest:  op.ExecutionPlanDigest,
 		Segment:              op.Segment,
 		Atomicity:            cloneRuntimeReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,

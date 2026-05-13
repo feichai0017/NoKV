@@ -793,18 +793,63 @@ func GuardProofDigest(guard RuntimeGuard, passed bool) [32]byte {
 	return out
 }
 
+func GuardProofFor(guard RuntimeGuard, passed bool) GuardProof {
+	return GuardProof{
+		Guard:  guard,
+		Passed: passed,
+		Digest: GuardProofDigest(guard, passed),
+	}
+}
+
 func GuardProofsFor(guards []RuntimeGuard) []GuardProof {
 	if len(guards) == 0 {
 		return nil
 	}
 	out := make([]GuardProof, 0, len(guards))
 	for _, guard := range guards {
-		out = append(out, GuardProof{
-			Guard:  guard,
-			Passed: true,
-			Digest: GuardProofDigest(guard, true),
-		})
+		out = append(out, GuardProofFor(guard, true))
 	}
+	return out
+}
+
+func ExecutionPlanDigest(segment SegmentPlan, atomicity AtomicityGroup, durability DurabilityClass) [32]byte {
+	h := sha256.New()
+	writeSegmentMergeKey(h, segment.MergeKey)
+	writeDigestUint64(h, uint64(segment.Install))
+	writeSegmentMergeKey(h, segment.MaterializeMergeKey)
+	writeDigestUint64(h, uint64(segment.MaterializeInstall))
+	if segment.CanAppend {
+		writeDigestUint64(h, 1)
+	} else {
+		writeDigestUint64(h, 0)
+	}
+	if segment.CanMaterialize {
+		writeDigestUint64(h, 1)
+	} else {
+		writeDigestUint64(h, 0)
+	}
+	if segment.RequiresMaterialize {
+		writeDigestUint64(h, 1)
+	} else {
+		writeDigestUint64(h, 0)
+	}
+	writeDigestUint64(h, segment.EstimatedPayloadBytes)
+	writeDigestUint64(h, uint64(segment.OperationCount))
+	writeDigestUint64(h, uint64(segment.MutationCount))
+	writeDigestUint64(h, uint64(atomicity.Recovery))
+	if atomicity.Splittable {
+		writeDigestUint64(h, 1)
+	} else {
+		writeDigestUint64(h, 0)
+	}
+	writeDigestBytes(h, atomicity.Digest[:])
+	writeDigestUint64(h, uint64(len(atomicity.Members)))
+	for _, member := range atomicity.Members {
+		writeDigestUint64(h, uint64(member))
+	}
+	writeDigestUint64(h, uint64(durability))
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
 	return out
 }
 
@@ -872,6 +917,14 @@ func descriptorDigest(delta SemanticDelta) [32]byte {
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+func writeSegmentMergeKey(h interface{ Write([]byte) (int, error) }, key SegmentMergeKey) {
+	writeDigestUint64(h, uint64(key.MountKeyID))
+	writeDigestUint64(h, uint64(key.PrimaryBucket))
+	writeDigestUint64(h, uint64(key.Install))
+	writeDigestUint64(h, uint64(key.Durability))
+	writeDigestUint64(h, uint64(key.FormatVersion))
 }
 
 func writeDigestString(h interface{ Write([]byte) (int, error) }, value string) {

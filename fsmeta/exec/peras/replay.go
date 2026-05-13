@@ -16,6 +16,7 @@ type ReplayOperation struct {
 	Kind                 fsmeta.OperationKind
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
+	ExecutionPlanDigest  [32]byte
 	Segment              compile.SegmentPlan
 	Atomicity            compile.AtomicityGroup
 	Durability           compile.DurabilityClass
@@ -57,6 +58,7 @@ func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 		Kind:                 op.Kind,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
+		ExecutionPlanDigest:  op.ExecutionPlanDigest,
 		Segment:              op.Segment,
 		Atomicity:            cloneReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
@@ -97,11 +99,19 @@ func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) 
 		Kind:                 delta.Kind,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs),
+		ExecutionPlanDigest:  compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability),
 		Segment:              op.Segment,
 		Atomicity:            cloneReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
 		Mutations:            mutations,
 	}, nil
+}
+
+func replayOperationExecutionPlanDigest(op ReplayOperation) [32]byte {
+	if op.ExecutionPlanDigest != ([32]byte{}) {
+		return op.ExecutionPlanDigest
+	}
+	return compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability)
 }
 
 func cloneReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {

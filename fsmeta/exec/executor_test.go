@@ -391,15 +391,11 @@ func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
 	}
-	if admission != nil {
-		ok, err := admission(ctx, op)
-		if err != nil {
-			return fsperas.VisibleAck{}, err
-		}
-		if !ok {
-			return fsperas.VisibleAck{}, fsperas.ErrAdmissionRejected
-		}
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
+	if err != nil {
+		return fsperas.VisibleAck{}, err
 	}
+	op = admitted
 	c.calls++
 	c.ids = append(c.ids, id)
 	c.deltas = append(c.deltas, op.Delta)
@@ -415,9 +411,11 @@ func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := fsperas.Admit(ctx, op, admission); err != nil {
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
+	if err != nil {
 		return fsperas.VisibleAck{}, err
 	}
+	op = admitted
 	ack, err := c.holder.Submit(ctx, id, op)
 	if err != nil {
 		return fsperas.VisibleAck{}, err

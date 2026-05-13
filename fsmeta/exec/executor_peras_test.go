@@ -19,7 +19,7 @@ func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
+	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
@@ -43,7 +43,7 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
 
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
+	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
@@ -74,7 +74,7 @@ func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 	}
 	proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
 	proof.Digest[0] ^= 0xff
-	ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
+	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,

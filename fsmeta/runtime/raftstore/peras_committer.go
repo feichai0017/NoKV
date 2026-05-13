@@ -353,7 +353,7 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, errPerasCommitterClosed
 	}
-	if err := op.ValidateForAdmission(); err != nil {
+	if err := op.ValidateForAdmissionIntent(); err != nil {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
 	}
 	if !op.Placement.CanSegment {
@@ -392,12 +392,14 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	}
 	unlockAdmission := c.latches.Lock(op)
 	defer unlockAdmission()
-	if err := fsperas.Admit(ctx, op, admission); err != nil {
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
+	if err != nil {
 		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isPerasAdmissionTerminalError(err) {
 			c.recordError(err)
 		}
 		return fsperas.VisibleAck{}, err
 	}
+	op = admitted
 	ack, err := holder.Submit(ctx, id, op)
 	if err != nil {
 		c.recordError(err)

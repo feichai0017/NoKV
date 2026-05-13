@@ -310,9 +310,9 @@ func TestRemotePerasCommitterReturnsPendingAckOnRetry(t *testing.T) {
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	first, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
-	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp) (bool, error) {
+	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp) (fsperas.AdmissionResult, bool, error) {
 		t.Fatal("pending retry should not re-run admission")
-		return false, nil
+		return fsperas.AdmissionResult{}, false, nil
 	})
 	require.NoError(t, err)
 

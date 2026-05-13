@@ -184,6 +184,7 @@ func EncodePerasSegmentCatalogRecordWithPayload(segment PerasSegment, installVer
 		writeUint64(&out, uint64(completion.MutationCount))
 		writeFixed(&out, completion.DescriptorDigest[:])
 		writeFixed(&out, completion.PredicateProofDigest[:])
+		writeFixed(&out, completion.ExecutionPlanDigest[:])
 	}
 	return out.Bytes(), nil
 }
@@ -197,7 +198,7 @@ func segmentCatalogRecordEncodedSize(segment PerasSegment, payloadSize int) int 
 		size += stringEncodedSize(completion.OpID.ClientID)
 		size += 8
 		size += stringEncodedSize(string(completion.Kind))
-		size += 8 + 8 + 32 + 32
+		size += 8 + 8 + 32 + 32 + 32
 	}
 	return size
 }
@@ -354,6 +355,10 @@ func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, erro
 		if err := r.readFixed(predicateProofDigest[:]); err != nil {
 			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
 		}
+		var executionPlanDigest [32]byte
+		if err := r.readFixed(executionPlanDigest[:]); err != nil {
+			return SegmentCatalogRecord{}, ErrInvalidPerasSegment
+		}
 		completions = append(completions, SegmentCompletion{
 			OpID:                 opID,
 			Kind:                 fsmeta.OperationKind(kind),
@@ -361,6 +366,7 @@ func DecodePerasSegmentCatalogRecord(payload []byte) (SegmentCatalogRecord, erro
 			MutationCount:        uint32(mutationCount),
 			DescriptorDigest:     descriptorDigest,
 			PredicateProofDigest: predicateProofDigest,
+			ExecutionPlanDigest:  executionPlanDigest,
 		})
 	}
 	if !r.done() || epochID == 0 || root == ([32]byte{}) || operationCount == 0 || completionCount != uint64(len(completions)) {

@@ -99,7 +99,9 @@ func TestBuildPerasSegmentRecordsCompletionAndVersions(t *testing.T) {
 	require.Equal(t, uint32(2), first.MutationCount)
 	require.Equal(t, plan.Operations[0].DescriptorDigest, first.DescriptorDigest)
 	require.Equal(t, plan.Operations[0].PredicateProofDigest, first.PredicateProofDigest)
+	require.Equal(t, plan.Operations[0].ExecutionPlanDigest, first.ExecutionPlanDigest)
 	require.NotZero(t, first.DescriptorDigest)
+	require.NotZero(t, first.ExecutionPlanDigest)
 
 	second, ok := segment.Completion(OperationID{ClientID: "workspace-writer", Seq: 2})
 	require.True(t, ok)

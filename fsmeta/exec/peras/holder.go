@@ -336,6 +336,7 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		left.Kind != right.Kind ||
 		left.DescriptorDigest != right.DescriptorDigest ||
 		left.PredicateProofDigest != right.PredicateProofDigest ||
+		left.ExecutionPlanDigest != right.ExecutionPlanDigest ||
 		left.Segment != right.Segment ||
 		left.Durability != right.Durability ||
 		left.Atomicity.Splittable != right.Atomicity.Splittable ||

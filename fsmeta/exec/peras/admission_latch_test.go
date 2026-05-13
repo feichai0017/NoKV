@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/stretchr/testify/require"
 )
@@ -82,8 +83,34 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 }
 
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
-	err := Admit(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{}, nil), func(context.Context, compile.MaterializedOp) (bool, error) {
-		return false, nil
+	err := Admit(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{}, nil), func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
+		return AdmissionResult{}, false, nil
 	})
 	require.ErrorIs(t, err, ErrAdmissionRejected)
+}
+
+func TestAdmitAndSealBindsGuardProofsAfterAdmission(t *testing.T) {
+	delta := compile.SemanticDelta{
+		Kind:        fsmeta.OperationCreate,
+		Eligibility: compile.EligibilityVisibleCommit,
+		Authority: compile.AuthorityScope{
+			AllowOpaqueKeys: true,
+		},
+		RuntimeGuards: []compile.RuntimeGuard{compile.GuardQuotaCredit},
+		WriteEffects: []compile.WriteEffect{{
+			Kind:  compile.EffectPut,
+			Key:   []byte("k"),
+			Value: []byte("v"),
+		}},
+	}
+	op := compile.MaterializeDelta(delta, nil)
+	require.NoError(t, op.ValidateForAdmissionIntent())
+	require.Error(t, op.ValidateForAdmission())
+
+	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
+		return AdmissionResult{GuardProofs: compile.GuardProofsFor(delta.RuntimeGuards)}, true, nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, sealed.ValidateForAdmission())
+	require.NotEmpty(t, sealed.GuardProofs)
 }

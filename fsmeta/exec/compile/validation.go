@@ -54,7 +54,15 @@ func (e ValidationError) Error() string {
 	return "invalid materialized metadata operation: " + e.Kind.String()
 }
 
+func (op MaterializedOp) ValidateForAdmissionIntent() error {
+	return op.validateForAdmission(false)
+}
+
 func (op MaterializedOp) ValidateForAdmission() error {
+	return op.validateForAdmission(true)
+}
+
+func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 	if !materializedOpIsCanonical(op) {
 		return ValidationError{Kind: ValidationCanonicalMismatch}
 	}
@@ -115,6 +123,9 @@ func (op MaterializedOp) ValidateForAdmission() error {
 	for _, obligation := range op.Guards {
 		proof, ok := guardProofs[obligation.Guard]
 		if !ok {
+			if !requireGuardProofs {
+				continue
+			}
 			return ValidationError{Kind: ValidationGuardProofMissing}
 		}
 		if proof.Digest != obligation.Digest {

@@ -55,6 +55,7 @@ type SegmentCompletion struct {
 	MutationCount        uint32
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
+	ExecutionPlanDigest  [32]byte
 }
 
 type SegmentStats struct {
@@ -129,6 +130,7 @@ func EncodePerasSegment(segment PerasSegment) ([]byte, error) {
 		writeUint64(&out, uint64(completion.MutationCount))
 		writeFixed(&out, completion.DescriptorDigest[:])
 		writeFixed(&out, completion.PredicateProofDigest[:])
+		writeFixed(&out, completion.ExecutionPlanDigest[:])
 	}
 	return out.Bytes(), nil
 }
@@ -223,6 +225,10 @@ func DecodePerasSegment(payload []byte) (PerasSegment, error) {
 		if err := r.readFixed(predicateProofDigest[:]); err != nil {
 			return PerasSegment{}, ErrInvalidPerasSegment
 		}
+		var executionPlanDigest [32]byte
+		if err := r.readFixed(executionPlanDigest[:]); err != nil {
+			return PerasSegment{}, ErrInvalidPerasSegment
+		}
 		completions = append(completions, SegmentCompletion{
 			OpID:                 opID,
 			Kind:                 fsmeta.OperationKind(kind),
@@ -230,6 +236,7 @@ func DecodePerasSegment(payload []byte) (PerasSegment, error) {
 			MutationCount:        uint32(mutationCount),
 			DescriptorDigest:     descriptorDigest,
 			PredicateProofDigest: predicateProofDigest,
+			ExecutionPlanDigest:  executionPlanDigest,
 		})
 	}
 	if !r.done() {
@@ -315,6 +322,7 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 			MutationCount:        uint32(len(op.Mutations)),
 			DescriptorDigest:     op.DescriptorDigest,
 			PredicateProofDigest: op.PredicateProofDigest,
+			ExecutionPlanDigest:  replayOperationExecutionPlanDigest(op),
 		})
 		for _, mutation := range op.Mutations {
 			if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
@@ -508,7 +516,7 @@ func perasSegmentPayloadEncodedSize(segment PerasSegment) int {
 		size += 8 + 4 + len(entry.Key) + 1 + 4 + len(entry.Value)
 	}
 	for _, completion := range segment.Completions {
-		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32
+		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32 + 32
 	}
 	return size
 }
@@ -613,6 +621,7 @@ func segmentRoot(segment PerasSegment) [32]byte {
 		writeUint64(h, uint64(completion.MutationCount))
 		writeFixed(h, completion.DescriptorDigest[:])
 		writeFixed(h, completion.PredicateProofDigest[:])
+		writeFixed(h, completion.ExecutionPlanDigest[:])
 	}
 	return digestFromHash(h.Sum(nil))
 }
