@@ -64,7 +64,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
 	storageMaxBatchCount := fs.Int64("storage-max-batch-count", 0, "maximum internal entries accepted by one local storage batch; zero uses engine default")
 	storageMaxBatchSize := fs.Int64("storage-max-batch-size", 0, "maximum bytes accepted by one local storage batch; zero uses engine default")
-	perasWitnessEnabled := fs.Bool("peras-witness", false, "enable experimental fsmeta Peras witness RPCs backed by the local control WAL")
+	perasWitnessEnabled := fs.Bool("peras-witness", true, "enable fsmeta Peras witness RPCs backed by the local control WAL")
 	perasWitnessDurability := fs.String("peras-witness-durability", "fsync-batched", "peras witness WAL durability: fsync-batched|fsync|flushed|buffered")
 	var storeAddrFlags []string
 	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {

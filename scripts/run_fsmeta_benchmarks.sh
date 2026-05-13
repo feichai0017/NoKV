@@ -27,7 +27,7 @@ plain_pid=""
 cached_pid=""
 profile_pids=()
 
-if [[ "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}" == "true" || "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}" == "1" ]]; then
+if [[ "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-true}" == "true" || "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-true}" == "1" ]]; then
 	export NOKV_PERAS_WITNESS="${NOKV_PERAS_WITNESS:-true}"
 	export NOKV_FSMETA_PERAS_HOLDER_ID="${NOKV_FSMETA_PERAS_HOLDER_ID:-fsmeta-compose-holder}"
 fi
