@@ -446,33 +446,6 @@ func TestExecutorExpireWriteSessionsCountsSessionPerInode(t *testing.T) {
 	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 2}, result)
 }
 
-func TestExecutorExpireWriteSessionsUsesSessionBucketHint(t *testing.T) {
-	runner := newFakeRunner()
-	first := fsmeta.SessionRecord{Session: "writer-first", Inode: 22, ExpiresUnixNs: 50}
-	second := fsmeta.SessionRecord{Session: "writer-second", Inode: testInodeForDifferentBucket(t, first.Inode), ExpiresUnixNs: 50}
-	seedSession(t, runner, "vol", first)
-	seedSession(t, runner, "vol", second)
-	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
-	require.NoError(t, err)
-	executor.rememberSessionBucket(testMountIdentity, first.Inode)
-	plan, err := fsmeta.PlanExpireWriteSessions(fsmeta.ExpireWriteSessionsRequest{Mount: "vol"}, testMountIdentity)
-	require.NoError(t, err)
-	_, hinted := executor.sessionExpirePrefixes(testMountIdentity, plan.ReadPrefixes)
-	require.True(t, hinted)
-
-	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
-	require.NoError(t, err)
-	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
-	require.Len(t, runner.scanVersions, 1)
-
-	firstSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, first.Inode, first.Session)
-	require.NoError(t, err)
-	secondSessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, second.Inode, second.Session)
-	require.NoError(t, err)
-	require.NotContains(t, runner.data, string(firstSessionKey))
-	require.Contains(t, runner.data, string(secondSessionKey))
-}
-
 func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T) {
 	runner := newFakeRunner()
 	expired := fsmeta.SessionRecord{Session: "writer-reused", Inode: 22, ExpiresUnixNs: 50}

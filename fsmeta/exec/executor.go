@@ -7,7 +7,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -182,8 +181,6 @@ type Executor struct {
 	perasVisible            perasVisibleCounters
 	perasSeq                atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
-	sessionBucketsMu        sync.RWMutex
-	sessionBuckets          map[fsmeta.MountKeyID]map[fsmeta.AffinityBucket]struct{}
 }
 
 // Option configures an Executor.
