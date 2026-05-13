@@ -163,6 +163,29 @@ func TestRunCoordinatorCmdRestoresRegionsFromRemoteRoot(t *testing.T) {
 	require.Contains(t, buf.String(), "Coordinator grant holder: id=c1 ttl=15s renew_before=5s")
 }
 
+func TestRunCoordinatorCmdConfiguresAllocatorWindows(t *testing.T) {
+	origNotify := coordinatorNotifyContext
+	coordinatorNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		cancel()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { coordinatorNotifyContext = origNotify })
+
+	targets, _, stop := newReplicatedMetaRoot(t)
+	t.Cleanup(stop)
+
+	var buf bytes.Buffer
+	args := append([]string{
+		"-addr", "127.0.0.1:0",
+		"-coordinator-id", "c1",
+		"-id-window-size", "50000",
+		"-tso-window-size", "1000000",
+	}, rootPeerArgsFromTargets(targets)...)
+	require.NoError(t, runCoordinatorCmd(&buf, args))
+	require.Contains(t, buf.String(), "Coordinator allocator windows: id=50000 tso=1000000")
+}
+
 func TestRunCoordinatorCmdInvalidMetricsAddr(t *testing.T) {
 	origNotify := coordinatorNotifyContext
 	coordinatorNotifyContext = func(parent context.Context, _ ...os.Signal) (context.Context, context.CancelFunc) {

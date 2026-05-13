@@ -47,6 +47,8 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	grantRenewBefore := fs.Duration("grant-renew-before", 3*time.Second, "renew/campaign before grant expiry")
 	grantCandidates := fs.String("grant-candidates", "", "comma-separated coordinator ids eligible for duty grants")
 	grantDuties := fs.String("grant-duties", "alloc_id,tso,region_lookup", "comma-separated duties eligible on this coordinator")
+	idWindowSize := fs.Uint64("id-window-size", 0, "rooted ID allocator refill window size; zero keeps the service default")
+	tsoWindowSize := fs.Uint64("tso-window-size", 0, "rooted TSO allocator refill window size; zero keeps the service default")
 	shutdownGrace := fs.Duration("shutdown-grace", 0, "maximum time to drain and seal coordinator grant before graceful shutdown (default: grant ttl, or 10s when grant ttl is disabled)")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator listen address")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator address: host|docker")
@@ -145,6 +147,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		return err
 	}
 	svc.ConfigureAuthorityGrantDuties(coordinatorIDValue, splitCommaList(*grantCandidates), parsedDuties, *grantTTL, *grantRenewBefore)
+	svc.ConfigureAllocatorWindows(*idWindowSize, *tsoWindowSize)
 	installCoordinatorExpvar(svc)
 
 	grpcServer := grpc.NewServer()
@@ -164,6 +167,9 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 
 	_, _ = fmt.Fprintf(w, "Coordinator restored %d region(s) from remote metadata root\n", loadedRegions)
 	_, _ = fmt.Fprintf(w, "Coordinator allocator starts: id=%d ts=%d\n", *idStart, *tsStart)
+	if *idWindowSize != 0 || *tsoWindowSize != 0 {
+		_, _ = fmt.Fprintf(w, "Coordinator allocator windows: id=%d tso=%d\n", *idWindowSize, *tsoWindowSize)
+	}
 	_, _ = fmt.Fprintf(w, "Coordinator grant holder: id=%s ttl=%s renew_before=%s duties=%s candidates=%s\n", coordinatorIDValue, grantTTL.String(), grantRenewBefore.String(), strings.Join(dutyNames(parsedDuties), ","), strings.Join(splitCommaList(*grantCandidates), ","))
 	_, _ = fmt.Fprintf(w, "Coordinator service listening on %s\n", lis.Addr().String())
 	if metricsLn != nil {

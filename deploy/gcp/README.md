@@ -1,0 +1,377 @@
+# NoKV GCP Benchmark Deployment
+
+This directory deploys NoKV to Google Compute Engine for fsmeta smoke tests and
+formal lab-grade benchmarks.
+
+The deployment is intentionally split into two modes:
+
+| Mode | Goal | Default VM shape | Placement | Output |
+| --- | --- | --- | --- | --- |
+| Smoke | Validate the deployment path end to end | `e2-standard-2` for every role | no compact placement | pass/fail plus a small CSV |
+| Distributed smoke | Validate a small distributed-correctness slice with fault injection | `e2-standard-2` for every role | no compact placement | pass/fail plus per-phase CSVs |
+| Formal benchmark | Produce performance evidence | C4 layout below | same zone, ideally compact or otherwise controlled placement | benchmark CSVs and run metadata |
+
+Smoke results are not performance evidence. They only prove that infra creation,
+image pull, startup scripts, NoKV service wiring, benchmark execution, result
+copyback, and destroy all work.
+
+Distributed smoke is also not performance evidence. It adds active checks for
+meta-root leadership, coordinator grant handoff, store execution restart state,
+and a small workload after selected node faults.
+
+## Topology
+
+The default benchmark topology is 11 VMs:
+
+| Role | Count | Plane | Static IPs | Main process | Formal default |
+| --- | ---: | --- | --- | --- | --- |
+| meta-root | 3 | truth plane | `10.42.0.11-13` | `nokv meta-root` | `c4-standard-2` |
+| coordinator | 3 | coordinator/control plane | `10.42.0.21-23` | `nokv coordinator` | `c4-standard-2` |
+| store | 3 | execution/storage plane | `10.42.0.31-33` | `nokv serve` | `c4-standard-4-lssd` |
+| gateway | 1 | fsmeta API gateway | `10.42.0.41` | `nokv-fsmeta` | `c4-standard-4` |
+| loadgen | 1 | benchmark driver | `10.42.0.51` | benchmark container | `c4-standard-4` |
+
+There are 9 core NoKV control/data-plane service processes: 3 meta-root, 3
+coordinator, and 3 store. Gateway and loadgen are separate VMs by design, but
+they are not counted as core cluster nodes.
+
+## Architecture Notes
+
+- meta-root is the truth plane. It has its own 3-peer raft group and should not
+  be colocated with coordinator VMs in formal evidence runs.
+- coordinator is the grant/control plane. It has 3 grant candidates with duties
+  `alloc_id,tso,region_lookup`.
+- store is the execution/storage plane. Formal runs use local SSD machine types
+  for stores because store latency and disk behavior are part of the evidence.
+- gateway runs only `nokv-fsmeta`. It is isolated so API/cache CPU does not
+  distort store or coordinator measurements.
+- loadgen runs in the same zone as the cluster. Local workstation latency from
+  Sydney, SSH, or IAP does not enter the benchmark data path.
+- VM IPs are static inside `10.42.0.0/24` because raft/store/fsmeta configs are
+  generated before startup.
+- Runtime and benchmark images are pushed to Artifact Registry and then pinned
+  by digest in `deploy/gcp/.last-image.env`. VMs do not pull mutable tags.
+- `deploy/gcp/generated/eunomia-signing-key.txt` is created by
+  `create-cluster.sh`; `run-fsmeta-benchmark.sh` passes that same key to
+  loadgen. If the benchmark uses a different key, coordinator evidence
+  validation fails with `authority evidence signature mismatch`.
+
+## Defaults
+
+| Setting | Default |
+| --- | --- |
+| Project | `nokv-benchmark` |
+| Region | `australia-southeast2` |
+| Zone | `australia-southeast2-b` |
+| Artifact Registry | `australia-southeast2-docker.pkg.dev/nokv-benchmark/nokv-lab` |
+| OS image | `debian-12` from `debian-cloud`, `X86_64` |
+| External VM IPv4 | disabled |
+| Outbound VM access | Cloud NAT |
+| Operator SSH/SCP | IAP tunnel |
+| Boot disk | 30 GB |
+| Compact placement | disabled by default |
+
+Region affects benchmark evidence through in-cloud placement, VM availability,
+quota, and potentially cross-zone/network characteristics. The operator's local
+latency is not part of benchmark measurement because loadgen is inside the same
+zone as the cluster.
+
+## Cold Start Windows
+
+The scripts use bounded readiness windows instead of relying on one fixed sleep.
+These windows are wall-clock guards and are not benchmark measurement time.
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `GCP_BENCHMARK_START_GRACE_SECONDS` | 60 | Wait after VM creation before SSHing to loadgen |
+| smoke override | 90 | e2 smoke allows more time for apt, Docker, and image pull |
+| `GCP_TRANSPORT_RETRIES` | 30 | IAP/SSH/SCP retry attempts |
+| `GCP_TRANSPORT_RETRY_DELAY_SECONDS` | 10 | Delay between transport retries |
+| `GCP_LOADGEN_DOCKER_READY_TIMEOUT_SECONDS` | 600 | Wait for Docker on loadgen |
+| `GCP_SERVICE_READY_TIMEOUT_SECONDS` | 900 | Wait for meta-root, coordinator, store, and gateway ports |
+| `GCP_SERVICE_READY_RETRY_DELAY_SECONDS` | 2 | Delay between service port probes |
+| `NOKV_FSMETA_STABILIZE_SECONDS` | profile-specific | Wait after ports are ready for raft leaders and grants |
+
+Benchmark profile stabilization defaults:
+
+| Profile | Stabilize | Benchmark timeout | Intended use |
+| --- | ---: | --- | --- |
+| smoke | 15s | 5m | deployment path check |
+| median | 60s | 25m | normal formal slice |
+| long | 120s | 120m | longer evidence run |
+
+## Prerequisites
+
+Local tools:
+
+```bash
+gcloud version
+docker version
+docker buildx version
+git --version
+```
+
+GCP requirements:
+
+- Billing enabled on `GCP_PROJECT`.
+- `gcloud auth login` and permission to create Compute Engine resources.
+- Docker authentication to Artifact Registry; `build-push-images.sh` runs
+  `gcloud auth configure-docker`.
+- Enough regional quota for the selected machine families. Smoke uses 11
+  `e2-standard-2` VMs, so it needs 22 E2 vCPUs. The formal C4 plan needs more
+  C4 quota and C4 local-SSD availability.
+
+Check quota before formal runs:
+
+```bash
+gcloud compute regions describe australia-southeast2 \
+  --project=nokv-benchmark \
+  --format="table(quotas.metric,quotas.limit,quotas.usage)"
+```
+
+## Low-Cost Smoke
+
+Build and push immutable images:
+
+```bash
+deploy/gcp/build-push-images.sh
+```
+
+Run smoke and always destroy resources:
+
+```bash
+deploy/gcp/smoke-and-destroy.sh
+```
+
+When no config file argument is passed, `smoke-and-destroy.sh` still reads
+`deploy/gcp/config.env` for project/region overrides if that file exists, but it
+overrides all VM roles to `e2-standard-2` and disables compact placement. This
+keeps smoke cheap and avoids C4 quota/capacity blocking deployment validation.
+
+Use a custom smoke size only when needed:
+
+```bash
+GCP_SMOKE_MACHINE_TYPE=e2-standard-4 deploy/gcp/smoke-and-destroy.sh
+```
+
+Passing an explicit config file to `smoke-and-destroy.sh` means "use that config
+as written". Do that only when you intentionally want a non-default smoke run.
+
+## Distributed Smoke
+
+Run the distributed smoke path and always destroy resources:
+
+```bash
+deploy/gcp/distributed-smoke-and-destroy.sh
+```
+
+When no config file argument is passed, `distributed-smoke-and-destroy.sh` uses
+the same low-cost shape as normal smoke: 11 `e2-standard-2` VMs, no compact
+placement, no external IPv4, Cloud NAT for pulls, and IAP for operator SSH/SCP.
+
+The distributed smoke sequence is intentionally small:
+
+1. Wait for all service and metrics ports.
+2. Assert exactly one meta-root leader through `/debug/vars`.
+3. Assert exactly one active coordinator grant holder and zero Eunomia guarantee
+   violations through `/debug/vars`.
+4. Assert each live store reports `execution -json` restart state `ready`, with
+   non-zero region/raft-group counts and no missing raft pointers.
+5. Run a baseline `mixed` fsmeta smoke workload.
+6. Stop the current meta-root leader, wait for election, assert a new live
+   leader, and run `mixed`.
+7. Stop the current coordinator grant holder, wait for grant handoff, assert one
+   live holder, and run `mixed,negative-lookup` using only live coordinator
+   addresses for benchmark bootstrap.
+8. Stop one store, wait for raft failover, assert the remaining stores, and run
+   `mixed,hotspot-fanin,negative-lookup`.
+9. Restart gateway, run `negative-lookup`, then run final health checks and
+   `mixed`.
+
+This is a distributed-correctness smoke, not a complete Jepsen-style validation.
+It covers the current deployment's expected failure handling path with bounded
+single-node faults. It does not prove arbitrary partitions, clock faults,
+Byzantine behavior, correlated VM failures, or long-running compaction and GC
+interactions.
+
+Useful knobs:
+
+```bash
+NOKV_DISTRIBUTED_SMOKE_STORE_FAULT_ID=2 deploy/gcp/distributed-smoke-and-destroy.sh
+NOKV_DISTRIBUTED_SMOKE_BENCH_STABILIZE_SECONDS=15 deploy/gcp/distributed-smoke-and-destroy.sh
+```
+
+To run against an existing cluster without auto-destroy:
+
+```bash
+deploy/gcp/distributed-smoke.sh deploy/gcp/config.env
+```
+
+If distributed smoke fails after at least one workload phase, the script attempts
+to copy partial results from loadgen before `distributed-smoke-and-destroy.sh`
+destroys the VMs.
+
+## Formal Benchmark
+
+Create a config file:
+
+```bash
+cp deploy/gcp/config.env.example deploy/gcp/config.env
+```
+
+Edit at least:
+
+- `GCP_PROJECT`
+- `GCP_REGION`
+- `GCP_ZONE`
+- role machine types
+- `GCP_USE_COMPACT_PLACEMENT`
+
+Recommended formal baseline:
+
+```bash
+GCP_META_ROOT_MACHINE_TYPE=c4-standard-2
+GCP_COORDINATOR_MACHINE_TYPE=c4-standard-2
+GCP_STORE_MACHINE_TYPE=c4-standard-4-lssd
+GCP_GATEWAY_MACHINE_TYPE=c4-standard-4
+GCP_LOADGEN_MACHINE_TYPE=c4-standard-4
+GCP_USE_COMPACT_PLACEMENT=false
+```
+
+Set `GCP_USE_COMPACT_PLACEMENT=true` only after checking capacity. In previous
+attempts, compact placement could leave VMs waiting in `STAGING`; that burns
+time without producing useful benchmark data. For formal evidence, compact or
+otherwise controlled placement is useful, but only if capacity is available.
+
+Run:
+
+```bash
+deploy/gcp/build-push-images.sh deploy/gcp/config.env
+deploy/gcp/create-cluster.sh deploy/gcp/config.env
+NOKV_FSMETA_PROFILE=median deploy/gcp/run-fsmeta-benchmark.sh deploy/gcp/config.env
+deploy/gcp/destroy-cluster.sh deploy/gcp/config.env --delete-infra
+```
+
+For repeated runs on an already warm cluster:
+
+```bash
+GCP_BENCHMARK_START_GRACE_SECONDS=0 \
+NOKV_FSMETA_PROFILE=median \
+deploy/gcp/run-fsmeta-benchmark.sh deploy/gcp/config.env
+```
+
+Always destroy manually after formal runs:
+
+```bash
+deploy/gcp/destroy-cluster.sh deploy/gcp/config.env --delete-infra
+```
+
+## Artifacts
+
+Ignored local artifacts:
+
+| Path | Meaning |
+| --- | --- |
+| `deploy/gcp/.last-image.env` | pinned runtime and benchmark image digests |
+| `deploy/gcp/generated/raft_config.gcp.json` | generated static cluster config |
+| `deploy/gcp/generated/eunomia-signing-key.txt` | signing key shared by cluster and loadgen |
+| `deploy/gcp/generated/startup-*.sh` | generated VM startup scripts |
+| `deploy/gcp/results/<run_id>/...` | copied benchmark CSVs |
+
+Inspect the latest smoke CSV:
+
+```bash
+find deploy/gcp/results -name 'fsmeta_*.csv' -print | sort | tail -1
+```
+
+## Operational Checks
+
+List benchmark resources:
+
+```bash
+gcloud compute instances list \
+  --project=nokv-benchmark \
+  --filter="name~'nokv-bench'" \
+  --format="table(name,zone,status,machineType.basename(),networkInterfaces[0].networkIP)"
+```
+
+Confirm no leftover resources after smoke:
+
+```bash
+gcloud compute instances list --project=nokv-benchmark --filter="name~'nokv-bench'"
+gcloud compute networks list --project=nokv-benchmark --filter="name~'nokv-bench'"
+gcloud compute routers list --project=nokv-benchmark --regions=australia-southeast2 --filter="name~'nokv-bench'"
+```
+
+Inspect a node:
+
+```bash
+gcloud compute ssh nokv-bench-gateway-1 \
+  --project=nokv-benchmark \
+  --zone=australia-southeast2-b \
+  --tunnel-through-iap \
+  --command='sudo docker ps -a; sudo docker logs --tail=120 nokv-fsmeta 2>&1'
+```
+
+Useful container names:
+
+| VM role | Container |
+| --- | --- |
+| meta-root | `nokv-meta-root` |
+| coordinator | `nokv-coordinator` |
+| store | `nokv-store` |
+| gateway | `nokv-fsmeta` |
+
+Startup script logs:
+
+```bash
+sudo journalctl -u google-startup-scripts.service -n 120 --no-pager
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| IAP SSH says `Failed to lookup instance` right after VM create | GCE/IAP metadata propagation lag | Current scripts retry; increase `GCP_TRANSPORT_RETRIES` if needed |
+| VM stuck in `STAGING` with compact placement | zone capacity cannot satisfy collocation | Disable compact for smoke; choose another zone or wait/request capacity for formal |
+| E2 rejects `onHostMaintenance=TERMINATE` | scheduling flags are valid only for compact/special cases | Current scripts apply those flags only when compact placement is enabled |
+| store bootstrap gets `/mnt/nokv/store-* permission denied` | no local SSD path was root-owned on e2 | Current startup script runs `chmod 0777 /mnt/nokv` for non-local-SSD smoke |
+| gateway logs `dirpage-cache ... permission denied` | cache dirs were root-owned | Current startup script chmods gateway cache dirs |
+| benchmark fails with `authority evidence signature mismatch` | loadgen signing key differs from cluster key | Keep `deploy/gcp/generated/eunomia-signing-key.txt` from `create-cluster.sh`; current run script passes it to loadgen |
+| benchmark copies results but test failed | remote command return code was not propagated | Current retry wrapper returns non-zero for non-transport failures |
+| `nokv execution -json` panics about missing Eunomia key | runtime CLI containers need the same key as services | Distributed smoke passes `NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` into the runtime CLI probe |
+| distributed smoke fails after stopping meta-root leader and remaining peers report `leader_id=0` | meta-root raft did not elect a new leader inside the smoke window | inspect meta-root logs for repeated split votes; treat this as a truth-plane correctness failure, not a benchmark result |
+| readiness times out on `10.42.0.41:8090` | gateway failed or coordinator dependency failed | inspect `nokv-fsmeta` logs, then coordinator logs |
+| readiness times out on `10.42.0.31-33:20160` | store bootstrap or serve failed | inspect `nokv-store` logs and startup logs |
+| C4 formal run fails quota check | region lacks C4 quota | request quota or choose a region/zone with enough C4 quota and capacity |
+
+## Cost Controls
+
+- Prefer `smoke-and-destroy.sh` until the deployment path is stable.
+- Smoke defaults to e2, no compact placement, no external IPv4.
+- `smoke-and-destroy.sh` has an exit trap and calls `destroy-cluster.sh
+  --delete-infra` even when smoke fails.
+- Formal runs do not auto-destroy because humans may need to inspect logs and
+  run multiple profiles. Destroy manually as soon as evidence is collected.
+- Avoid compact placement during smoke. Capacity waits can cost wall-clock time
+  without improving deployment-path validation.
+- No external VM IPv4 is the default. This avoids the 8-address quota limit and
+  reduces exposed surface area. VMs pull images through Cloud NAT and operators
+  connect through IAP.
+
+## Handoff Notes
+
+- Last validated local smoke: 2026-05-13 in `australia-southeast2-b`, 11
+  `e2-standard-2` VMs, no compact placement, no external IPv4, result CSV had
+  31 rows and 0 operation errors.
+- Runtime image digest from that run:
+  `australia-southeast2-docker.pkg.dev/nokv-benchmark/nokv-lab/nokv@sha256:8dfab48421b49598a4fa4e3d961893d78ead5e9cd4071bacd719df56414107f9`
+- Benchmark image digest from that run:
+  `australia-southeast2-docker.pkg.dev/nokv-benchmark/nokv-lab/nokv-bench@sha256:b8606596e810b13728816964c23414e71411a543581ecab9fac4eb0ca4982543`
+- First distributed smoke attempt on 2026-05-13 passed baseline deployment
+  checks and `mixed`, then failed after stopping the meta-root leader. The two
+  remaining meta-root peers repeatedly entered elections and reported
+  `leader_id=0`; logs showed split votes rather than a new leader. Resources
+  were destroyed after the failure.
+- Formal C4 benchmark has not been validated yet in this project. Re-check C4
+  quota and zone capacity before running it.

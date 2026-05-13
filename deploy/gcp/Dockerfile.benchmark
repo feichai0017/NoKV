@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS builder
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+COPY benchmark/go.mod benchmark/go.sum ./benchmark/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd benchmark && go mod download
+
+COPY . .
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd benchmark && CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
+    go test -c -o /out/nokv-fsmeta-bench.test ./fsmeta
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/nokv-fsmeta-bench.test /usr/local/bin/nokv-fsmeta-bench.test
+COPY deploy/gcp/bin/bench-entrypoint.sh /usr/local/bin/bench-entrypoint.sh
+RUN chmod +x /usr/local/bin/nokv-fsmeta-bench.test /usr/local/bin/bench-entrypoint.sh
+WORKDIR /results
+ENTRYPOINT ["/usr/local/bin/bench-entrypoint.sh"]
