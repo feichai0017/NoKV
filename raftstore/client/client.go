@@ -3,15 +3,18 @@ package client
 import (
 	"context"
 	"fmt"
-	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// DefaultMaxMessageBytes sizes StoreKV calls that carry sealed segment payloads.
+const DefaultMaxMessageBytes = 64 << 20
 
 // RegionResolver resolves Region metadata for an arbitrary key. A Coordinator client
 // implementation should satisfy this interface.
@@ -88,10 +91,7 @@ func New(cfg Config) (*Client, error) {
 	if storeRevalidateIn <= 0 {
 		storeRevalidateIn = 30 * time.Second
 	}
-	dialOpts := cfg.DialOptions
-	if len(dialOpts) == 0 {
-		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	}
+	dialOpts := normalizeStoreDialOptions(cfg.DialOptions)
 	retry := cfg.Retry
 	if retry.MaxAttempts <= 0 {
 		retry.MaxAttempts = 5
@@ -111,6 +111,20 @@ func New(cfg Config) (*Client, error) {
 		dialOpts:           append([]grpc.DialOption(nil), dialOpts...),
 		retry:              retry,
 	}, nil
+}
+
+func normalizeStoreDialOptions(opts []grpc.DialOption) []grpc.DialOption {
+	out := make([]grpc.DialOption, 0, len(opts)+2)
+	if len(opts) == 0 {
+		out = append(out, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		out = append(out, opts...)
+	}
+	out = append(out, grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(DefaultMaxMessageBytes),
+		grpc.MaxCallSendMsgSize(DefaultMaxMessageBytes),
+	))
+	return out
 }
 
 // Close terminates outstanding store connections.

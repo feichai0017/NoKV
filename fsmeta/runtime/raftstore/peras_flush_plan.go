@@ -21,7 +21,7 @@ func (c *RemotePerasCommitter) buildFlushBatches(plans []perasFrozenPlan, materi
 			plan:   frozen.plan,
 			jobs:   make([]perasFlushJob, 0, 1),
 		}
-		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replayMutationBudget(materialize))
+		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replaySegmentBudget(materialize))
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 		}
@@ -54,18 +54,25 @@ func (c *RemotePerasCommitter) buildFlushBatches(plans []perasFrozenPlan, materi
 	return batches, nil
 }
 
-func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
+func (c *RemotePerasCommitter) replaySegmentBudget(materialize bool) compile.SegmentBudget {
+	budget := compile.SegmentBudget{
+		MaxOperations:   uint32(c.maxOps),
+		MaxMutations:    uint32(c.maxReplay),
+		MaxPayloadBytes: c.maxPayload,
+	}
 	if !materialize {
-		return c.maxReplay
+		return budget
 	}
 	if c.maxReplay > 0 && c.maxReplay < defaultPerasMaterializeMaxReplayMutations {
-		return c.maxReplay
+		budget.MaxMutations = uint32(c.maxReplay)
+	} else {
+		budget.MaxMutations = defaultPerasMaterializeMaxReplayMutations
 	}
-	return defaultPerasMaterializeMaxReplayMutations
+	return budget
 }
 
-func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, maxMutations int) ([]fsperas.ReplayPlan, error) {
-	if plan.EpochID == 0 || len(plan.Operations) == 0 || maxMutations <= 0 {
+func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, budget compile.SegmentBudget) ([]fsperas.ReplayPlan, error) {
+	if plan.EpochID == 0 || len(plan.Operations) == 0 {
 		return nil, fsperas.ErrInvalidPerasSegment
 	}
 	if !plan.Versions.Empty() {
@@ -94,9 +101,7 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, 
 			return nil, fsperas.ErrInvalidPerasSegment
 		}
 		if len(current.Operations) > 0 {
-			decision := compile.CanAppendSegmentPlans(currentPlan, nextPlan, op.Durability, compile.SegmentBudget{
-				MaxMutations: uint32(maxMutations),
-			})
+			decision := compile.CanAppendSegmentPlans(currentPlan, nextPlan, op.Durability, budget)
 			if decision.Kind != compile.SegmentDecisionAppend {
 				flush()
 			}

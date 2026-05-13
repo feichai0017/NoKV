@@ -2059,15 +2059,20 @@ func (x *TryAtomicMutateResponse) GetFallbackToTwoPhaseCommit() bool {
 }
 
 type PerasInstallSegmentRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RoutingKey           []byte                 `protobuf:"bytes,1,opt,name=routing_key,json=routingKey,proto3" json:"routing_key,omitempty"`
-	SegmentRoot          []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
-	SegmentPayloadDigest []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
-	SegmentPayload       []byte                 `protobuf:"bytes,4,opt,name=segment_payload,json=segmentPayload,proto3" json:"segment_payload,omitempty"`
-	InstallVersion       uint64                 `protobuf:"varint,5,opt,name=install_version,json=installVersion,proto3" json:"install_version,omitempty"`
-	MaterializeMvcc      bool                   `protobuf:"varint,6,opt,name=materialize_mvcc,json=materializeMvcc,proto3" json:"materialize_mvcc,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	RoutingKey            []byte                 `protobuf:"bytes,1,opt,name=routing_key,json=routingKey,proto3" json:"routing_key,omitempty"`
+	SegmentRoot           []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
+	SegmentPayloadDigest  []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
+	SegmentPayload        []byte                 `protobuf:"bytes,4,opt,name=segment_payload,json=segmentPayload,proto3" json:"segment_payload,omitempty"`
+	InstallVersion        uint64                 `protobuf:"varint,5,opt,name=install_version,json=installVersion,proto3" json:"install_version,omitempty"`
+	MaterializeMvcc       bool                   `protobuf:"varint,6,opt,name=materialize_mvcc,json=materializeMvcc,proto3" json:"materialize_mvcc,omitempty"`
+	SegmentEpochId        uint64                 `protobuf:"varint,7,opt,name=segment_epoch_id,json=segmentEpochId,proto3" json:"segment_epoch_id,omitempty"`
+	SegmentOperationCount uint64                 `protobuf:"varint,8,opt,name=segment_operation_count,json=segmentOperationCount,proto3" json:"segment_operation_count,omitempty"`
+	SegmentEntryCount     uint64                 `protobuf:"varint,9,opt,name=segment_entry_count,json=segmentEntryCount,proto3" json:"segment_entry_count,omitempty"`
+	SegmentPayloadSize    uint64                 `protobuf:"varint,10,opt,name=segment_payload_size,json=segmentPayloadSize,proto3" json:"segment_payload_size,omitempty"`
+	CanonicalObjectKey    []byte                 `protobuf:"bytes,11,opt,name=canonical_object_key,json=canonicalObjectKey,proto3" json:"canonical_object_key,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *PerasInstallSegmentRequest) Reset() {
@@ -2140,6 +2145,41 @@ func (x *PerasInstallSegmentRequest) GetMaterializeMvcc() bool {
 		return x.MaterializeMvcc
 	}
 	return false
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentEpochId() uint64 {
+	if x != nil {
+		return x.SegmentEpochId
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentOperationCount() uint64 {
+	if x != nil {
+		return x.SegmentOperationCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentEntryCount() uint64 {
+	if x != nil {
+		return x.SegmentEntryCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetSegmentPayloadSize() uint64 {
+	if x != nil {
+		return x.SegmentPayloadSize
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetCanonicalObjectKey() []byte {
+	if x != nil {
+		return x.CanonicalObjectKey
+	}
+	return nil
 }
 
 type PerasInstallSegmentResponse struct {
@@ -4526,7 +4566,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x17TryAtomicMutateResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fapplied_keys\x18\x02 \x01(\x04R\vappliedKeys\x12>\n" +
-	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\x93\x02\n" +
+	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\x89\x04\n" +
 	"\x1aPerasInstallSegmentRequest\x12\x1f\n" +
 	"\vrouting_key\x18\x01 \x01(\fR\n" +
 	"routingKey\x12!\n" +
@@ -4534,7 +4574,13 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\x12'\n" +
 	"\x0fsegment_payload\x18\x04 \x01(\fR\x0esegmentPayload\x12'\n" +
 	"\x0finstall_version\x18\x05 \x01(\x04R\x0einstallVersion\x12)\n" +
-	"\x10materialize_mvcc\x18\x06 \x01(\bR\x0fmaterializeMvcc\"\xcd\x02\n" +
+	"\x10materialize_mvcc\x18\x06 \x01(\bR\x0fmaterializeMvcc\x12(\n" +
+	"\x10segment_epoch_id\x18\a \x01(\x04R\x0esegmentEpochId\x126\n" +
+	"\x17segment_operation_count\x18\b \x01(\x04R\x15segmentOperationCount\x12.\n" +
+	"\x13segment_entry_count\x18\t \x01(\x04R\x11segmentEntryCount\x120\n" +
+	"\x14segment_payload_size\x18\n" +
+	" \x01(\x04R\x12segmentPayloadSize\x120\n" +
+	"\x14canonical_object_key\x18\v \x01(\fR\x12canonicalObjectKey\"\xcd\x02\n" +
 	"\x1bPerasInstallSegmentResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +

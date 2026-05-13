@@ -141,6 +141,22 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
+func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount fsmeta.MountIdentity, record fsmeta.SessionRecord) (bool, error) {
+	delta, err := compile.CloseWriteSession(fsmeta.CloseWriteSessionRequest{
+		Mount:   mount.MountID,
+		Inode:   record.Inode,
+		Session: record.Session,
+	}, mount)
+	if err != nil {
+		return false, err
+	}
+	return e.tryPerasVisibleCloseWriteSession(ctx, delta, delta.Plan, mount, fsmeta.CloseWriteSessionRequest{
+		Mount:   mount.MountID,
+		Inode:   record.Inode,
+		Session: record.Session,
+	})
+}
+
 func (e *Executor) rememberSessionBucket(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
 	if e == nil || mount.MountKeyID == 0 || inode == 0 {
 		return
@@ -159,16 +175,15 @@ func (e *Executor) rememberSessionBucket(mount fsmeta.MountIdentity, inode fsmet
 	e.sessionBucketsMu.Unlock()
 }
 
-func (e *Executor) sessionExpirePrefixes(mount fsmeta.MountIdentity, prefixes [][]byte) ([][]byte, compile.AuthorityScope, bool) {
-	emptyScope := compile.AuthorityScope{}
+func (e *Executor) sessionExpirePrefixes(mount fsmeta.MountIdentity, prefixes [][]byte) ([][]byte, bool) {
 	if e == nil || mount.MountKeyID == 0 || len(prefixes) == 0 {
-		return prefixes, emptyScope, false
+		return prefixes, false
 	}
 	e.sessionBucketsMu.RLock()
 	buckets := e.sessionBuckets[mount.MountKeyID]
 	if len(buckets) == 0 {
 		e.sessionBucketsMu.RUnlock()
-		return prefixes, emptyScope, false
+		return prefixes, false
 	}
 	hot := make(map[fsmeta.AffinityBucket]struct{}, len(buckets))
 	for bucket := range buckets {
@@ -178,31 +193,44 @@ func (e *Executor) sessionExpirePrefixes(mount fsmeta.MountIdentity, prefixes []
 
 	out := make([][]byte, 0, len(prefixes))
 	cold := make([][]byte, 0, len(prefixes))
-	drainBuckets := make([]fsmeta.AffinityBucket, 0, len(hot))
-	seenDrain := make(map[fsmeta.AffinityBucket]struct{}, len(hot))
 	for _, prefix := range prefixes {
 		bucket, ok := fsmeta.BucketOfKey(prefix)
 		if ok {
 			if _, hit := hot[bucket]; hit {
 				out = append(out, prefix)
-				if _, seen := seenDrain[bucket]; !seen {
-					seenDrain[bucket] = struct{}{}
-					drainBuckets = append(drainBuckets, bucket)
-				}
 				continue
 			}
 		}
 		cold = append(cold, prefix)
 	}
 	if len(out) == 0 {
-		return prefixes, emptyScope, false
+		return prefixes, false
 	}
 	out = append(out, cold...)
-	return out, compile.AuthorityScope{
+	return out, true
+}
+
+func sessionDrainScopeForInodes(mount fsmeta.MountIdentity, inodes map[fsmeta.InodeID]struct{}) compile.AuthorityScope {
+	if mount.MountKeyID == 0 || len(inodes) == 0 {
+		return compile.AuthorityScope{}
+	}
+	out := compile.AuthorityScope{
 		Mount:      mount.MountID,
 		MountKeyID: mount.MountKeyID,
-		Buckets:    drainBuckets,
-	}, true
+		Inodes:     make([]fsmeta.InodeID, 0, len(inodes)),
+	}
+	seenBuckets := make(map[fsmeta.AffinityBucket]struct{}, len(inodes))
+	for inode := range inodes {
+		out.Inodes = append(out.Inodes, inode)
+		bucket := fsmeta.BucketForInodeID(inode)
+		if _, ok := seenBuckets[bucket]; !ok {
+			seenBuckets[bucket] = struct{}{}
+			out.Buckets = append(out.Buckets, bucket)
+		}
+	}
+	sort.Slice(out.Inodes, func(i, j int) bool { return out.Inodes[i] < out.Inodes[j] })
+	sort.Slice(out.Buckets, func(i, j int) bool { return out.Buckets[i] < out.Buckets[j] })
+	return out
 }
 
 // OpenWriteSession records one exclusive writer lease for an inode. It writes
@@ -480,21 +508,15 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
-	scanPrefixes, drainScope, hinted := e.sessionExpirePrefixes(mount, plan.ReadPrefixes)
-	drainScopes := []compile.AuthorityScope{delta.Authority}
-	if hinted && !authorityScopeEmpty(drainScope) {
-		drainScopes = []compile.AuthorityScope{drainScope}
-	}
-	// Expiration is base-LSM maintenance, but it still writes fsmeta session
-	// keys. Drain the active Peras authority before mutating so storage-side
-	// authority fences stay fail-closed for callers that bypass this executor.
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	scanPrefixes, hinted := e.sessionExpirePrefixes(mount, plan.ReadPrefixes)
+	if err := e.withTxnRetryNoPerasFlush(ctx, func(startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   fsmeta.InodeID
 			session fsmeta.SessionID
 		}
 		expiredSessions := make(map[expiredSessionKey]struct{})
+		fallbackInodes := make(map[fsmeta.InodeID]struct{})
 		remaining := plan.Limit
 		for _, scanPrefix := range scanPrefixes {
 			if remaining == 0 {
@@ -504,6 +526,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 			if err != nil {
 				return err
 			}
+			kvs = e.mergePerasOverlayScan(kvs, scanPrefix, remaining)
 			var matched uint32
 			for _, kv := range kvs {
 				if !bytes.HasPrefix(kv.Key, scanPrefix) {
@@ -522,6 +545,16 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 					return err
 				}
 				if sessionLive(record, now) {
+					continue
+				}
+				expiredKey := expiredSessionKey{inode: record.Inode, session: record.Session}
+				if _, seen := expiredSessions[expiredKey]; seen {
+					continue
+				}
+				if committed, err := e.tryPerasVisibleExpireWriteSession(ctx, mount, record); err != nil {
+					return err
+				} else if committed {
+					expiredSessions[expiredKey] = struct{}{}
 					continue
 				}
 				deletes[string(kv.Key)] = cloneBytes(kv.Key)
@@ -544,15 +577,26 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 				} else if ok && bytes.Equal(value, kv.Value) {
 					deletes[string(ownerKey)] = ownerKey
 				}
+				fallbackInodes[record.Inode] = struct{}{}
 			}
 			remaining -= matched
-			if hinted && len(deletes) > 0 {
+			if hinted && (len(expiredSessions) > 0 || len(deletes) > 0) {
 				break
 			}
 		}
 		if len(deletes) == 0 {
-			expired = 0
+			expired = uint64(len(expiredSessions))
 			return nil
+		}
+		drainScope := sessionDrainScopeForInodes(mount, fallbackInodes)
+		if authorityScopeEmpty(drainScope) {
+			drainScope = delta.Authority
+		}
+		// Fallback expiration mutates base LSM session keys. Drain only after
+		// concrete expired keys are known so ordinary visible session updates do
+		// not wait behind speculative maintenance scans.
+		if err := e.drainPerasAuthority(ctx, drainScope); err != nil {
+			return err
 		}
 		keys := make([]string, 0, len(deletes))
 		for key := range deletes {
@@ -569,7 +613,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		}
 		expired = uint64(len(expiredSessions))
 		return nil
-	}, drainScopes...); err != nil {
+	}); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil

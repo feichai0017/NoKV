@@ -366,7 +366,14 @@ func applyMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest
 }
 
 func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
-	segment, digest, keyErr := decodePerasInstallSegmentRequest(req)
+	root, digest, keyErr := decodePerasInstallSegmentIdentity(req)
+	if keyErr != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
+	}
+	if !req.GetMaterializeMvcc() && len(req.GetSegmentPayload()) == 0 {
+		return applyPerasInstallSegmentIndexRoute(db, req, root, digest)
+	}
+	segment, keyErr := decodePerasInstallSegmentPayload(req, root, digest)
 	if keyErr != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
 	}
@@ -409,28 +416,88 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	}, nil
 }
 
-func decodePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) (fsperas.PerasSegment, [32]byte, *kvrpcpb.KeyError) {
-	if req == nil {
-		return fsperas.PerasSegment{}, [32]byte{}, perasInstallAbort("missing request")
+func applyPerasInstallSegmentIndexRoute(db txnstore.Store, req *kvrpcpb.PerasInstallSegmentRequest, root, digest [32]byte) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	if req.GetSegmentEpochId() == 0 || req.GetSegmentOperationCount() == 0 || req.GetSegmentEntryCount() == 0 || req.GetSegmentPayloadSize() == 0 || len(req.GetCanonicalObjectKey()) == 0 {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("missing segment catalog index metadata")}, nil
 	}
-	if len(req.GetRoutingKey()) == 0 || len(req.GetSegmentPayload()) == 0 || req.GetInstallVersion() == 0 {
-		return fsperas.PerasSegment{}, [32]byte{}, perasInstallAbort("missing routing key, segment payload, or install version")
+	if bytes.Equal(req.GetRoutingKey(), req.GetCanonicalObjectKey()) {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("canonical segment route requires payload")}, nil
+	}
+	if ok, err := LoadPerasSegmentCatalogIndexInstall(db, root, req.GetRoutingKey(), req.GetCanonicalObjectKey()); err != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+	} else if ok {
+		return &kvrpcpb.PerasInstallSegmentResponse{
+			SegmentRoot:    append([]byte(nil), root[:]...),
+			OperationCount: req.GetSegmentOperationCount(),
+			EntryCount:     req.GetSegmentEntryCount(),
+			AppliedEntries: 1,
+		}, nil
+	}
+	entries, err := buildMVCCSegmentCatalogIndexInstallEntries(
+		root,
+		digest,
+		req.GetSegmentEpochId(),
+		req.GetInstallVersion(),
+		req.GetSegmentPayloadSize(),
+		req.GetRoutingKey(),
+		req.GetCanonicalObjectKey(),
+	)
+	if err != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+	}
+	defer releaseEntries(entries)
+	if err := db.ApplyInternalEntries(entries); err != nil {
+		return nil, err
+	}
+	return &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), root[:]...),
+		OperationCount: req.GetSegmentOperationCount(),
+		EntryCount:     req.GetSegmentEntryCount(),
+		AppliedEntries: uint64(len(entries)),
+	}, nil
+}
+
+func decodePerasInstallSegmentIdentity(req *kvrpcpb.PerasInstallSegmentRequest) ([32]byte, [32]byte, *kvrpcpb.KeyError) {
+	if req == nil {
+		return [32]byte{}, [32]byte{}, perasInstallAbort("missing request")
+	}
+	if len(req.GetRoutingKey()) == 0 || req.GetInstallVersion() == 0 {
+		return [32]byte{}, [32]byte{}, perasInstallAbort("missing routing key or install version")
 	}
 	var root [32]byte
 	if len(req.GetSegmentRoot()) != len(root) {
-		return fsperas.PerasSegment{}, [32]byte{}, perasInstallAbort("invalid segment root")
+		return [32]byte{}, [32]byte{}, perasInstallAbort("invalid segment root")
 	}
 	copy(root[:], req.GetSegmentRoot())
 	var digest [32]byte
 	if len(req.GetSegmentPayloadDigest()) != len(digest) {
-		return fsperas.PerasSegment{}, [32]byte{}, perasInstallAbort("invalid segment payload digest")
+		return [32]byte{}, [32]byte{}, perasInstallAbort("invalid segment payload digest")
 	}
 	copy(digest[:], req.GetSegmentPayloadDigest())
-	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
-	if err != nil {
-		return fsperas.PerasSegment{}, [32]byte{}, perasInstallAbort(err.Error())
+	return root, digest, nil
+}
+
+func decodePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) (fsperas.PerasSegment, [32]byte, *kvrpcpb.KeyError) {
+	root, digest, keyErr := decodePerasInstallSegmentIdentity(req)
+	if keyErr != nil {
+		return fsperas.PerasSegment{}, [32]byte{}, keyErr
+	}
+	segment, keyErr := decodePerasInstallSegmentPayload(req, root, digest)
+	if keyErr != nil {
+		return fsperas.PerasSegment{}, [32]byte{}, keyErr
 	}
 	return segment, digest, nil
+}
+
+func decodePerasInstallSegmentPayload(req *kvrpcpb.PerasInstallSegmentRequest, root, digest [32]byte) (fsperas.PerasSegment, *kvrpcpb.KeyError) {
+	if len(req.GetSegmentPayload()) == 0 {
+		return fsperas.PerasSegment{}, perasInstallAbort("missing segment payload")
+	}
+	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	if err != nil {
+		return fsperas.PerasSegment{}, perasInstallAbort(err.Error())
+	}
+	return segment, nil
 }
 
 func buildMVCCMaintenanceEntries(req *kvrpcpb.MVCCMaintenanceRequest) ([]*kv.Entry, *kvrpcpb.KeyError) {

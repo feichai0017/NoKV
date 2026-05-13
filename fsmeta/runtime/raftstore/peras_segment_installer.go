@@ -3,6 +3,7 @@ package raftstore
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/utils"
 )
 
 type perasSegmentInstallClient interface {
@@ -256,42 +258,117 @@ func (i *runnerPerasSegmentInstaller) InstallPerasSegment(ctx context.Context, _
 	if err != nil {
 		return perasauthority.InstallCursor{}, err
 	}
-	var firstCursor perasauthority.InstallCursor
-	var firstResp *kvrpcpb.PerasInstallSegmentResponse
-	for _, routingKey := range routingKeys {
-		resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:           runtimeCloneBytes(routingKey),
-			SegmentRoot:          append([]byte(nil), segment.Root[:]...),
-			SegmentPayloadDigest: append([]byte(nil), digest[:]...),
-			SegmentPayload:       append([]byte(nil), payload...),
-			InstallVersion:       installVersion,
-			MaterializeMvcc:      materialize,
+	if len(routingKeys) == 0 {
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
+	}
+	var canonicalObjectKey []byte
+	if !materialize {
+		canonicalObjectKey, err = fsperas.PerasSegmentObjectKey(segment)
+		if err != nil {
+			return perasauthority.InstallCursor{}, err
+		}
+	}
+	results := make([]perasRouteInstallResult, len(routingKeys))
+	parallelism := len(routingKeys)
+	if limit := defaultPerasSegmentInstallParallelism(); limit > 0 && parallelism > limit {
+		parallelism = limit
+	}
+	throttle := utils.NewThrottle(parallelism)
+	for idx, routingKey := range routingKeys {
+		idx := idx
+		routingKey := routingKey
+		err := throttle.Go(func() error {
+			result, err := i.installSegmentRoute(ctx, kv, routingKey, canonicalObjectKey, segment, payload, digest, installVersion, materialize)
+			if err != nil {
+				return fmt.Errorf("peras install segment route %d: %w", idx, err)
+			}
+			results[idx] = result
+			return nil
 		})
 		if err != nil {
 			return perasauthority.InstallCursor{}, err
 		}
-		if resp == nil {
-			return perasauthority.InstallCursor{}, errPerasCommitterInvalid
-		}
-		if keyErr := resp.GetError(); keyErr != nil {
-			return perasauthority.InstallCursor{}, runnerKeyError("peras install segment", keyErr)
-		}
-		if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
-			return perasauthority.InstallCursor{}, err
-		}
-		cursor := perasInstallCursorFromResponse(resp)
-		if !cursor.Valid() {
-			return perasauthority.InstallCursor{}, errPerasCommitterInvalid
-		}
-		if !firstCursor.Valid() {
-			firstCursor = cursor
-			firstResp = resp
+	}
+	if err := throttle.Finish(); err != nil {
+		return perasauthority.InstallCursor{}, err
+	}
+	result := choosePerasInstallResult(routingKeys, results, canonicalObjectKey, materialize)
+	if !result.cursor.Valid() {
+		return perasauthority.InstallCursor{}, errPerasCommitterInvalid
+	}
+	if !materialize && result.resp != nil {
+		i.publishInstalledSegment(segment, result.resp)
+	}
+	return result.cursor, nil
+}
+
+type perasRouteInstallResult struct {
+	cursor perasauthority.InstallCursor
+	resp   *kvrpcpb.PerasInstallSegmentResponse
+}
+
+func choosePerasInstallResult(routingKeys [][]byte, results []perasRouteInstallResult, canonicalObjectKey []byte, materialize bool) perasRouteInstallResult {
+	if !materialize && len(canonicalObjectKey) > 0 {
+		for idx := range results {
+			if bytes.Equal(routingKeys[idx], canonicalObjectKey) && results[idx].cursor.Valid() {
+				return results[idx]
+			}
 		}
 	}
-	if !materialize && firstResp != nil {
-		i.publishInstalledSegment(segment, firstResp)
+	for idx := range results {
+		if results[idx].cursor.Valid() {
+			return results[idx]
+		}
 	}
-	return firstCursor, nil
+	return perasRouteInstallResult{}
+}
+
+func (i *runnerPerasSegmentInstaller) installSegmentRoute(
+	ctx context.Context,
+	kv perasSegmentInstallClient,
+	routingKey []byte,
+	canonicalObjectKey []byte,
+	segment fsperas.PerasSegment,
+	payload []byte,
+	digest [32]byte,
+	installVersion uint64,
+	materialize bool,
+) (perasRouteInstallResult, error) {
+	routePayload := payload
+	if !materialize && len(canonicalObjectKey) > 0 && !bytes.Equal(routingKey, canonicalObjectKey) {
+		routePayload = nil
+	}
+	stats := segment.Stats()
+	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
+		RoutingKey:            runtimeCloneBytes(routingKey),
+		SegmentRoot:           append([]byte(nil), segment.Root[:]...),
+		SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+		SegmentPayload:        routePayload,
+		InstallVersion:        installVersion,
+		MaterializeMvcc:       materialize,
+		SegmentEpochId:        segment.EpochID,
+		SegmentOperationCount: stats.OperationCount,
+		SegmentEntryCount:     stats.EntryCount,
+		SegmentPayloadSize:    uint64(len(payload)),
+		CanonicalObjectKey:    runtimeCloneBytes(canonicalObjectKey),
+	})
+	if err != nil {
+		return perasRouteInstallResult{}, err
+	}
+	if resp == nil {
+		return perasRouteInstallResult{}, errPerasCommitterInvalid
+	}
+	if keyErr := resp.GetError(); keyErr != nil {
+		return perasRouteInstallResult{}, runnerKeyError("peras install segment", keyErr)
+	}
+	if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
+		return perasRouteInstallResult{}, err
+	}
+	cursor := perasInstallCursorFromResponse(resp)
+	if !cursor.Valid() {
+		return perasRouteInstallResult{}, errPerasCommitterInvalid
+	}
+	return perasRouteInstallResult{cursor: cursor, resp: resp}, nil
 }
 
 func perasSegmentInstallRoutingKeys(segment fsperas.PerasSegment, materialize bool) ([][]byte, error) {

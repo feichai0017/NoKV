@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -1334,9 +1335,10 @@ func TestRunnerPerasSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	require.Equal(t, perasauthority.InstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
 
 	require.Equal(t, 0, tso.calls)
-	require.NotNil(t, kv.req)
-	require.Equal(t, uint64(1), kv.req.GetInstallVersion())
-	require.True(t, kv.req.GetMaterializeMvcc())
+	req := kv.lastRequest()
+	require.NotNil(t, req)
+	require.Equal(t, uint64(1), req.GetInstallVersion())
+	require.True(t, req.GetMaterializeMvcc())
 }
 
 func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
@@ -1387,8 +1389,9 @@ func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, false)
 	require.NoError(t, err)
 	require.Equal(t, perasauthority.InstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1}, cursor)
-	require.NotNil(t, kv.req)
-	require.Equal(t, uint64(1), kv.req.GetInstallVersion())
+	req := kv.lastRequest()
+	require.NotNil(t, req)
+	require.Equal(t, uint64(1), req.GetInstallVersion())
 	require.Equal(t, 0, tso.calls)
 
 	select {
@@ -1399,6 +1402,64 @@ func TestRunnerPerasSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for installed segment watch event")
 	}
+}
+
+func TestRunnerPerasSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	rootKey, err := fsmeta.EncodeInodeKey(mount, fsmeta.RootInode)
+	require.NoError(t, err)
+	var otherKey []byte
+	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
+		if fsmeta.BucketForInodeID(inode) == fsmeta.BucketForInodeID(fsmeta.RootInode) {
+			continue
+		}
+		otherKey, err = fsmeta.EncodeInodeKey(mount, inode)
+		require.NoError(t, err)
+		break
+	}
+	require.NotEmpty(t, otherKey)
+
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: rootKey, Value: []byte("root-value")},
+				{Key: otherKey, Value: []byte("other-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	routingKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(routingKeys), 2)
+
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+
+	kv := &parallelRunnerPerasInstallKV{
+		stats: segment.Stats(),
+		root:  segment.Root,
+		delay: 20 * time.Millisecond,
+	}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+
+	installer := newRunnerPerasSegmentInstaller(runner, nil)
+	cursor, err := installer.InstallPerasSegment(context.Background(), compile.AuthorityScope{}, segment, payload, digest, false)
+	require.NoError(t, err)
+	require.True(t, cursor.Valid())
+	require.Equal(t, uint64(1000), cursor.RegionID)
+	require.Equal(t, len(routingKeys), kv.callCount())
+	require.Greater(t, kv.maxInFlight(), int32(1))
+	require.Equal(t, int32(1), kv.payloadRouteCount())
+	require.Equal(t, int32(len(routingKeys)-1), kv.indexOnlyRouteCount())
 }
 
 func BenchmarkRemotePerasCommitterCreate(b *testing.B) {
@@ -1466,6 +1527,9 @@ func BenchmarkRemotePerasCommitterScanPerasOverlay(b *testing.B) {
 		key := []byte(fmt.Sprintf("dentry/%08d", i*16))
 		require.NoError(b, committer.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.MaterializeDelta(compile.SemanticDelta{
 			Eligibility: compile.EligibilityVisibleCommit,
+			Authority: compile.AuthorityScope{
+				AllowOpaqueKeys: true,
+			},
 			WriteEffects: []compile.WriteEffect{
 				{Kind: compile.EffectPut, Key: key, Value: []byte("overlay")},
 			},
@@ -1697,14 +1761,91 @@ func (i *witnessPhaseCheckingRuntimePerasSegmentInstaller) InstallPerasSegment(c
 
 type fakeRunnerPerasInstallKV struct {
 	fakeRunnerKV
+	mu   sync.Mutex
 	req  *kvrpcpb.PerasInstallSegmentRequest
 	resp *kvrpcpb.PerasInstallSegmentResponse
 	err  error
 }
 
 func (f *fakeRunnerPerasInstallKV) InstallPerasSegment(_ context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.req = req
 	return f.resp, f.err
+}
+
+func (f *fakeRunnerPerasInstallKV) lastRequest() *kvrpcpb.PerasInstallSegmentRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.req
+}
+
+type parallelRunnerPerasInstallKV struct {
+	fakeRunnerKV
+	root            [32]byte
+	stats           fsperas.SegmentStats
+	delay           time.Duration
+	active          atomic.Int32
+	max             atomic.Int32
+	calls           atomic.Int32
+	payloadRoutes   atomic.Int32
+	indexOnlyRoutes atomic.Int32
+}
+
+func (f *parallelRunnerPerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	if len(req.GetSegmentPayload()) == 0 {
+		f.indexOnlyRoutes.Add(1)
+	} else {
+		f.payloadRoutes.Add(1)
+	}
+	active := f.active.Add(1)
+	for {
+		current := f.max.Load()
+		if active <= current || f.max.CompareAndSwap(current, active) {
+			break
+		}
+	}
+	defer f.active.Add(-1)
+	if f.delay > 0 {
+		timer := time.NewTimer(f.delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+	call := f.calls.Add(1)
+	regionID := uint64(call)
+	if len(req.GetSegmentPayload()) > 0 {
+		regionID = 1000
+	}
+	return &kvrpcpb.PerasInstallSegmentResponse{
+		SegmentRoot:    append([]byte(nil), f.root[:]...),
+		OperationCount: f.stats.OperationCount,
+		EntryCount:     f.stats.EntryCount,
+		AppliedEntries: 1,
+		RegionId:       regionID,
+		Term:           1,
+		Index:          uint64(call),
+		CommitVersion:  1,
+	}, nil
+}
+
+func (f *parallelRunnerPerasInstallKV) callCount() int {
+	return int(f.calls.Load())
+}
+
+func (f *parallelRunnerPerasInstallKV) maxInFlight() int32 {
+	return f.max.Load()
+}
+
+func (f *parallelRunnerPerasInstallKV) payloadRouteCount() int32 {
+	return f.payloadRoutes.Load()
+}
+
+func (f *parallelRunnerPerasInstallKV) indexOnlyRouteCount() int32 {
+	return f.indexOnlyRoutes.Load()
 }
 
 type fakeRuntimePerasGrantProvider struct {

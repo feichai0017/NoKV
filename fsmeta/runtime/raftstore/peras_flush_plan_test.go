@@ -20,7 +20,7 @@ func TestSplitReplayPlanByCompilerBudgetRequiresStoredSegmentPlan(t *testing.T) 
 			Kind:      fsmeta.OperationUpdateInode,
 			Mutations: []fsperas.ReplayMutation{{Key: key, Value: []byte("inode")}},
 		}},
-	}, false, 16)
+	}, false, compile.SegmentBudget{MaxMutations: 16})
 	require.ErrorIs(t, err, fsperas.ErrInvalidPerasSegment)
 }
 
@@ -48,10 +48,40 @@ func TestSplitReplayPlanByCompilerBudgetUsesStoredSegmentPlan(t *testing.T) {
 			replayOperationWithSegmentPlan("client", 1, leftKey, plan),
 			replayOperationWithSegmentPlan("client", 2, rightKey, plan),
 		},
-	}, false, 16)
+	}, false, compile.SegmentBudget{MaxMutations: 16, MaxPayloadBytes: 64})
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Len(t, out[0].Operations, 2)
+}
+
+func TestSplitReplayPlanByCompilerBudgetCutsByPayload(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	key := fsmetaKeyForBucket(t, mount, 1)
+	plan := compile.SegmentPlan{
+		MergeKey: compile.SegmentMergeKey{
+			MountKeyID:    mount.MountKeyID,
+			Install:       compile.SegmentInstallCatalog,
+			Durability:    compile.DurabilityVisibleOnly,
+			FormatVersion: 1,
+		},
+		Install:               compile.SegmentInstallCatalog,
+		CanAppend:             true,
+		EstimatedPayloadBytes: 40,
+		OperationCount:        1,
+		MutationCount:         1,
+	}
+
+	out, err := splitReplayPlanByCompilerBudget(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{
+			replayOperationWithSegmentPlan("client", 1, key, plan),
+			replayOperationWithSegmentPlan("client", 2, key, plan),
+		},
+	}, false, compile.SegmentBudget{MaxPayloadBytes: 64})
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	require.Len(t, out[0].Operations, 1)
+	require.Len(t, out[1].Operations, 1)
 }
 
 func TestSplitReplayPlanByCompilerBudgetRejectsNonMaterializablePlan(t *testing.T) {
@@ -74,7 +104,7 @@ func TestSplitReplayPlanByCompilerBudgetRejectsNonMaterializablePlan(t *testing.
 	_, err := splitReplayPlanByCompilerBudget(fsperas.ReplayPlan{
 		EpochID:    1,
 		Operations: []fsperas.ReplayOperation{replayOperationWithSegmentPlan("client", 1, key, plan)},
-	}, true, 16)
+	}, true, compile.SegmentBudget{MaxMutations: 16})
 	require.ErrorIs(t, err, fsperas.ErrInvalidPerasSegment)
 }
 

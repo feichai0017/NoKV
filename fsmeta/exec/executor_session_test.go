@@ -455,6 +455,10 @@ func TestExecutorExpireWriteSessionsUsesSessionBucketHint(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return time.Unix(0, 100) }))
 	require.NoError(t, err)
 	executor.rememberSessionBucket(testMountIdentity, first.Inode)
+	plan, err := fsmeta.PlanExpireWriteSessions(fsmeta.ExpireWriteSessionsRequest{Mount: "vol"}, testMountIdentity)
+	require.NoError(t, err)
+	_, hinted := executor.sessionExpirePrefixes(testMountIdentity, plan.ReadPrefixes)
+	require.True(t, hinted)
 
 	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
 	require.NoError(t, err)
@@ -515,6 +519,36 @@ func TestExecutorExpireWriteSessionsFlushesPerasAuthority(t *testing.T) {
 	require.Equal(t, 1, flusher.flushCalls)
 	require.Len(t, flusher.flushScopes, 1)
 	require.Equal(t, fsmeta.MountID("vol"), flusher.flushScopes[0].Mount)
+}
+
+func TestExecutorExpireWriteSessionsUsesPerasVisibleDelete(t *testing.T) {
+	runner := newFakeRunner()
+	expired := fsmeta.SessionRecord{Session: "writer-visible-old", Inode: 22, ExpiresUnixNs: 50}
+	seedSession(t, runner, "vol", expired)
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithClock(func() time.Time { return time.Unix(0, 100) }),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	result, err := executor.ExpireWriteSessions(context.Background(), fsmeta.ExpireWriteSessionsRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.ExpireWriteSessionsResult{Expired: 1}, result)
+	require.Empty(t, runner.mutations)
+
+	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, expired.Inode, expired.Session)
+	require.NoError(t, err)
+	_, deleted, ok := committer.GetPerasOverlay(sessionKey)
+	require.True(t, ok)
+	require.True(t, deleted)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, expired.Inode)
+	require.NoError(t, err)
+	_, deleted, ok = committer.GetPerasOverlay(ownerKey)
+	require.True(t, ok)
+	require.True(t, deleted)
 }
 
 func BenchmarkExecutorOpenWriteSessionDefaultPath(b *testing.B) {

@@ -44,8 +44,9 @@ type VisibleAck struct {
 }
 
 type holderPendingOperation struct {
-	scope compile.AuthorityScope
-	op    ReplayOperation
+	scope        compile.AuthorityScope
+	intentDigest [32]byte
+	op           ReplayOperation
 }
 
 func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.MaterializedOp) (VisibleAck, error) {
@@ -78,8 +79,9 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.Material
 	}
 	h.mu.Lock()
 	h.pending[id] = holderPendingOperation{
-		scope: cloneAuthorityScope(delta.Authority),
-		op:    replay,
+		scope:        cloneAuthorityScope(delta.Authority),
+		intentDigest: op.IntentDigest,
+		op:           replay,
 	}
 	h.mu.Unlock()
 	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
@@ -89,11 +91,29 @@ func (h *Holder) PendingAck(id OperationID, op compile.MaterializedOp) (VisibleA
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, false, ErrHolderConfigInvalid
 	}
+	if !id.Valid() {
+		return VisibleAck{}, false, ErrInvalidOperationID
+	}
+	h.mu.Lock()
+	pending, ok := h.pending[id]
+	h.mu.Unlock()
+	if !ok {
+		return VisibleAck{}, false, nil
+	}
+	if op.IntentDigest != ([32]byte{}) {
+		if pending.intentDigest == op.IntentDigest {
+			return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, true, nil
+		}
+		return VisibleAck{}, false, ErrDuplicateOperation
+	}
 	replay, err := replayOperationFromMaterialized(id, op)
 	if err != nil {
 		return VisibleAck{}, false, err
 	}
-	return h.pendingAckForOperation(id, replay)
+	if !replayOperationsEqual(pending.op, replay) {
+		return VisibleAck{}, false, ErrDuplicateOperation
+	}
+	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, true, nil
 }
 
 func (h *Holder) pendingAckForOperation(id OperationID, op ReplayOperation) (VisibleAck, bool, error) {

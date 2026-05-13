@@ -21,7 +21,9 @@ const (
 	defaultPerasSegmentWitnessRetries      = 3
 	defaultPerasSegmentWitnessRetryBackoff = 20 * time.Millisecond
 	defaultPerasSegmentBatchSize           = 512
+	defaultPerasSegmentMaxReplayOperations = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
+	defaultPerasSegmentMaxPayloadBytes     = 512 << 10
 	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
@@ -69,7 +71,9 @@ type RemotePerasCommitterConfig struct {
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
 	SegmentBatchSize           int
+	SegmentMaxReplayOperations int
 	SegmentMaxReplayMutations  int
+	SegmentMaxPayloadBytes     uint64
 	SegmentFlushEvery          time.Duration
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
@@ -91,7 +95,9 @@ type RemotePerasCommitter struct {
 	retries    int
 	backoff    time.Duration
 	batchSize  int
+	maxOps     int
 	maxReplay  int
+	maxPayload uint64
 	installN   int
 	flushEvery time.Duration
 	bgTimeout  time.Duration
@@ -250,12 +256,23 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	if batchSize < 0 {
 		return nil, errPerasCommitterInvalid
 	}
+	maxOps := cfg.SegmentMaxReplayOperations
+	if maxOps == 0 {
+		maxOps = defaultPerasSegmentMaxReplayOperations
+	}
+	if maxOps < 0 {
+		return nil, errPerasCommitterInvalid
+	}
 	maxReplay := cfg.SegmentMaxReplayMutations
 	if maxReplay == 0 {
 		maxReplay = defaultPerasSegmentMaxReplayMutations
 	}
 	if maxReplay < 0 {
 		return nil, errPerasCommitterInvalid
+	}
+	maxPayload := cfg.SegmentMaxPayloadBytes
+	if maxPayload == 0 {
+		maxPayload = defaultPerasSegmentMaxPayloadBytes
 	}
 	installN := cfg.SegmentInstallParallelism
 	if installN == 0 {
@@ -301,7 +318,9 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		retries:    retries,
 		backoff:    backoff,
 		batchSize:  batchSize,
+		maxOps:     maxOps,
 		maxReplay:  maxReplay,
+		maxPayload: maxPayload,
 		installN:   installN,
 		flushEvery: flushEvery,
 		bgTimeout:  bgTimeout,

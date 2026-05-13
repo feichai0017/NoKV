@@ -710,7 +710,7 @@ func (c *Client) installPerasSegmentRegionOnce(ctx context.Context, region regio
 	}
 	resp, err := cl.PerasInstallSegment(ctx, &kvrpcpb.KvPerasInstallSegmentRequest{
 		Context: header,
-		Request: clonePerasInstallSegmentRequest(req),
+		Request: req,
 	})
 	if err != nil {
 		return nil, nil, normalizeRPCError(err)
@@ -1635,7 +1635,19 @@ func clonePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) *k
 	if req == nil {
 		return nil
 	}
-	return proto.Clone(req).(*kvrpcpb.PerasInstallSegmentRequest)
+	return &kvrpcpb.PerasInstallSegmentRequest{
+		RoutingKey:            append([]byte(nil), req.GetRoutingKey()...),
+		SegmentRoot:           append([]byte(nil), req.GetSegmentRoot()...),
+		SegmentPayloadDigest:  append([]byte(nil), req.GetSegmentPayloadDigest()...),
+		SegmentPayload:        append([]byte(nil), req.GetSegmentPayload()...),
+		InstallVersion:        req.GetInstallVersion(),
+		MaterializeMvcc:       req.GetMaterializeMvcc(),
+		SegmentEpochId:        req.GetSegmentEpochId(),
+		SegmentOperationCount: req.GetSegmentOperationCount(),
+		SegmentEntryCount:     req.GetSegmentEntryCount(),
+		SegmentPayloadSize:    req.GetSegmentPayloadSize(),
+		CanonicalObjectKey:    append([]byte(nil), req.GetCanonicalObjectKey()...),
+	}
 }
 
 func cloneKeys(keys [][]byte) [][]byte {

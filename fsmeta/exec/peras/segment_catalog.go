@@ -62,14 +62,35 @@ func PerasSegmentCatalogIndexKeys(segment PerasSegment) ([][]byte, error) {
 }
 
 func PerasSegmentObjectKey(segment PerasSegment) ([]byte, error) {
-	keys, err := PerasSegmentCatalogObjectKeys(segment)
+	bucket, err := perasSegmentCanonicalCatalogBucket(segment)
 	if err != nil {
 		return nil, err
 	}
-	if len(keys) == 0 {
-		return nil, ErrInvalidPerasSegment
+	return fsmeta.EncodePerasSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
+}
+
+func perasSegmentCanonicalCatalogBucket(segment PerasSegment) (perasSegmentCatalogBucket, error) {
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return perasSegmentCatalogBucket{}, err
 	}
-	return keys[0], nil
+	if len(segment.entries) == 0 {
+		return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
+	}
+	var out perasSegmentCatalogBucket
+	for idx, entry := range segment.entries {
+		parts, ok := fsmeta.InspectKey(entry.Key)
+		if !ok {
+			return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
+		}
+		key := perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}
+		if idx == 0 || key.mount < out.mount || (key.mount == out.mount && key.bucket < out.bucket) {
+			out = key
+		}
+	}
+	if out.mount == 0 {
+		return perasSegmentCatalogBucket{}, ErrInvalidPerasSegment
+	}
+	return out, nil
 }
 
 // PerasSegmentCatalogObjectKeys returns one bucket-local object key per
@@ -208,6 +229,13 @@ func EncodePerasSegmentCatalogIndexRecord(record SegmentCatalogRecord, objectKey
 		return nil, err
 	}
 	return encodePerasSegmentCatalogIndexRecord(record.EpochID, record.InstallVersion, record.Root, record.SegmentPayloadDigest, record.SegmentPayloadSize, objectKey)
+}
+
+// EncodePerasSegmentCatalogIndexRecordFields writes an index record from a
+// caller-verified segment identity. It validates the identity fields and object
+// key shape, but it does not rescan the full segment payload.
+func EncodePerasSegmentCatalogIndexRecordFields(epochID, installVersion uint64, root, payloadDigest [32]byte, payloadSize uint64, objectKey []byte) ([]byte, error) {
+	return encodePerasSegmentCatalogIndexRecord(epochID, installVersion, root, payloadDigest, payloadSize, objectKey)
 }
 
 func encodePerasSegmentCatalogIndexRecord(epochID, installVersion uint64, root, digest [32]byte, payloadSize uint64, objectKey []byte) ([]byte, error) {

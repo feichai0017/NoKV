@@ -405,6 +405,60 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 	require.Equal(t, []byte("attrs"), value)
 }
 
+func TestApplyPerasInstallSegmentInstallsPayloadlessCatalogIndexRoute(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	segment := fsmetaMultiBucketSegmentForTest(t)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(objectKeys), 2)
+	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	require.Equal(t, objectKeys[0], canonicalObjectKey)
+	routeKey := objectKeys[1]
+	stats := segment.Stats()
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				RoutingKey:            routeKey,
+				SegmentRoot:           segment.Root[:],
+				SegmentPayloadDigest:  digest[:],
+				InstallVersion:        99,
+				SegmentEpochId:        segment.EpochID,
+				SegmentOperationCount: stats.OperationCount,
+				SegmentEntryCount:     stats.EntryCount,
+				SegmentPayloadSize:    uint64(len(payload)),
+				CanonicalObjectKey:    canonicalObjectKey,
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	out := resp.GetResponses()[0].GetPerasInstallSegment()
+	require.NotNil(t, out)
+	require.Nil(t, out.GetError())
+	require.Equal(t, stats.OperationCount, out.GetOperationCount())
+	require.Equal(t, stats.EntryCount, out.GetEntryCount())
+	require.Equal(t, uint64(1), out.GetAppliedEntries())
+
+	installed, err := LoadPerasSegmentCatalogIndexInstall(db, segment.Root, routeKey, canonicalObjectKey)
+	require.NoError(t, err)
+	require.True(t, installed)
+	records, err := LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Empty(t, records)
+}
+
 func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

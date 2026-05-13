@@ -195,19 +195,32 @@ func appendCommandApplyVersionedWrite(dst []commandApplyDependency, class comman
 }
 
 func appendCommandApplyPerasInstallSegment(dst []commandApplyDependency, req *kvrpcpb.PerasInstallSegmentRequest) ([]commandApplyDependency, bool) {
-	if req == nil || len(req.GetSegmentRoot()) != 32 || len(req.GetSegmentPayloadDigest()) != 32 || len(req.GetSegmentPayload()) == 0 {
+	if req == nil || len(req.GetSegmentRoot()) != 32 || len(req.GetSegmentPayloadDigest()) != 32 {
 		return nil, false
 	}
 	var root [32]byte
 	copy(root[:], req.GetSegmentRoot())
+	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, root[:], 0, commandApplyDependencyWrite)
+	if !req.GetMaterializeMvcc() {
+		keys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, req.GetRoutingKey())
+		if err != nil {
+			return nil, false
+		}
+		for _, key := range keys {
+			dst = appendCommandApplyUserWrite(dst, key)
+		}
+		return dst, true
+	}
+	if len(req.GetSegmentPayload()) == 0 {
+		return nil, false
+	}
 	var digest [32]byte
 	copy(digest[:], req.GetSegmentPayloadDigest())
 	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
 	if err != nil {
 		return nil, false
 	}
-	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, root[:], 0, commandApplyDependencyWrite)
-	keys, err := fsperas.PerasSegmentInstallKeys(segment, req.GetRoutingKey(), req.GetMaterializeMvcc())
+	keys, err := fsperas.PerasSegmentInstallKeys(segment, req.GetRoutingKey(), true)
 	if err != nil {
 		return nil, false
 	}

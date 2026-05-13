@@ -1266,6 +1266,34 @@ func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T
 	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
 }
 
+func TestValidateRequestKeysAcceptsPayloadlessPerasCatalogIndexRoute(t *testing.T) {
+	meta := localmeta.RegionMeta{ID: 12}
+	root := [32]byte{1}
+	digest := [32]byte{2}
+	canonicalKey, err := fsmeta.EncodePerasSegmentObjectKey(1, 1, root)
+	require.NoError(t, err)
+	routeKey, err := fsmeta.EncodePerasSegmentObjectKey(1, 2, root)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			RoutingKey:            routeKey,
+			SegmentRoot:           append([]byte(nil), root[:]...),
+			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+			InstallVersion:        10,
+			SegmentEpochId:        1,
+			SegmentOperationCount: 1,
+			SegmentEntryCount:     1,
+			SegmentPayloadSize:    128,
+			CanonicalObjectKey:    canonicalKey,
+		}},
+	}}}
+
+	regionErr, reason := validateRequestKeys(meta, req)
+	require.Nil(t, regionErr)
+	require.Equal(t, AdmissionReasonUnknown, reason)
+}
+
 func TestCommandServiceErrorHelpers(t *testing.T) {
 	meta := localmeta.RegionMeta{
 		ID:       88,

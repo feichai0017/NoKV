@@ -2,6 +2,7 @@ package peras
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
@@ -184,7 +185,7 @@ func BenchmarkWitnessNodeAppendSegment(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		record.SegmentRoot[0]++
+		binary.BigEndian.PutUint64(record.SegmentRoot[:8], uint64(i+1))
 		if err := node.AppendSegment(context.Background(), scope, record); err != nil {
 			b.Fatal(err)
 		}

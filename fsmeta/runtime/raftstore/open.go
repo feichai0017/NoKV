@@ -100,11 +100,17 @@ type Options struct {
 	// compressed into one segment before opportunistic background flush starts.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentBatchSize int
+	// PerasSegmentMaxReplayOperations bounds one segment install by logical
+	// operation count. Zero uses the runtime default; negative is rejected.
+	PerasSegmentMaxReplayOperations int
 	// PerasSegmentMaxReplayMutations bounds one segment install by replay
 	// mutation count. Keep this aligned with the store-side internal batch
 	// limit: a replay mutation expands to a small fixed number of MVCC entries.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentMaxReplayMutations int
+	// PerasSegmentMaxPayloadBytes bounds one segment by compiler-estimated
+	// payload bytes. Zero uses the runtime default.
+	PerasSegmentMaxPayloadBytes uint64
 	// PerasSegmentInstallParallelism bounds how many sealed segments from one
 	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
 	// rejected.
@@ -168,7 +174,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, perasauthority.ErrTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, errPerasCommitterInvalid
 	}
@@ -275,7 +281,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
 			SegmentBatchSize:           opts.PerasSegmentBatchSize,
+			SegmentMaxReplayOperations: opts.PerasSegmentMaxReplayOperations,
 			SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
+			SegmentMaxPayloadBytes:     opts.PerasSegmentMaxPayloadBytes,
 			SegmentInstallParallelism:  opts.PerasSegmentInstallParallelism,
 			SegmentFlushEvery:          opts.PerasSegmentFlushEvery,
 			BackgroundFlushTimeout:     opts.PerasBackgroundFlushTimeout,
@@ -421,8 +429,15 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 }
 
 func dialOptions(opts []grpc.DialOption) []grpc.DialOption {
+	out := make([]grpc.DialOption, 0, len(opts)+2)
 	if len(opts) > 0 {
-		return append([]grpc.DialOption(nil), opts...)
+		out = append(out, opts...)
+	} else {
+		out = append(out, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
-	return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	out = append(out, grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(client.DefaultMaxMessageBytes),
+		grpc.MaxCallSendMsgSize(client.DefaultMaxMessageBytes),
+	))
+	return out
 }

@@ -531,6 +531,9 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if !ok {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
+	if !req.GetMaterializeMvcc() && len(req.GetSegmentPayload()) == 0 {
+		return validatePerasCatalogIndexRoute(meta, root, req)
+	}
 	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
@@ -554,6 +557,27 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	for _, entry := range entries {
 		if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
 			return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
+		}
+	}
+	return nil, AdmissionReasonUnknown
+}
+
+func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, root [32]byte, req *kvrpcpb.PerasInstallSegmentRequest) (*errorpb.RegionError, AdmissionReason) {
+	key := req.GetRoutingKey()
+	if req.GetSegmentEpochId() == 0 || req.GetSegmentOperationCount() == 0 || req.GetSegmentEntryCount() == 0 ||
+		req.GetSegmentPayloadSize() == 0 || len(req.GetCanonicalObjectKey()) == 0 || bytes.Equal(key, req.GetCanonicalObjectKey()) {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	keys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, key)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	if _, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, req.GetCanonicalObjectKey()); err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	for _, routeKey := range keys {
+		if len(routeKey) == 0 || !keyInRange(meta, routeKey) {
+			return keyNotInRegionError(meta, routeKey), AdmissionReasonKeyNotInRegion
 		}
 	}
 	return nil, AdmissionReasonUnknown

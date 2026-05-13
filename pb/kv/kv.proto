@@ -229,6 +229,11 @@ message PerasInstallSegmentRequest {
   bytes segment_payload = 4;
   uint64 install_version = 5;
   bool materialize_mvcc = 6;
+  uint64 segment_epoch_id = 7;
+  uint64 segment_operation_count = 8;
+  uint64 segment_entry_count = 9;
+  uint64 segment_payload_size = 10;
+  bytes canonical_object_key = 11;
 }
 
 message PerasInstallSegmentResponse {

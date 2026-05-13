@@ -194,6 +194,111 @@ func BenchmarkBuildMVCCSegmentCatalogInstallEntries1000(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildMVCCSegmentCatalogInstallEntriesForObjectKey1000(b *testing.B) {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(workspaceInstallReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload, err := fsperas.EncodePerasSegment(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		entries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, 99, payload, digest, objectKey)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(entries) != 2 {
+			b.Fatalf("unexpected route entry count %d", len(entries))
+		}
+		releaseMVCCReplayEntries(entries)
+	}
+}
+
+func BenchmarkBuildMVCCSegmentCatalogInstallEntriesForNonCanonicalObjectKey1000(b *testing.B) {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(workspaceInstallReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload, err := fsperas.EncodePerasSegment(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(objectKeys) < 2 {
+		b.Skip("segment did not span multiple buckets")
+	}
+	objectKey := objectKeys[1]
+
+	b.ReportAllocs()
+	for b.Loop() {
+		entries, err := BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, 99, payload, digest, objectKey)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(entries) != 1 {
+			b.Fatalf("unexpected route entry count %d", len(entries))
+		}
+		releaseMVCCReplayEntries(entries)
+	}
+}
+
+func BenchmarkBuildMVCCSegmentCatalogIndexInstallEntries1000(b *testing.B) {
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(workspaceInstallReplayPlan(b, 1000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload, err := fsperas.EncodePerasSegment(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(objectKeys) < 2 {
+		b.Skip("segment did not span multiple buckets")
+	}
+	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	if err != nil {
+		b.Fatal(err)
+	}
+	routeKey := objectKeys[1]
+
+	b.ReportAllocs()
+	for b.Loop() {
+		entries, err := buildMVCCSegmentCatalogIndexInstallEntries(segment.Root, digest, segment.EpochID, 99, uint64(len(payload)), routeKey, canonicalObjectKey)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(entries) != 1 {
+			b.Fatalf("unexpected route entry count %d", len(entries))
+		}
+		releaseMVCCReplayEntries(entries)
+	}
+}
+
 func BenchmarkBuildMVCCSegmentMaterializationEntries1000(b *testing.B) {
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(workspaceInstallReplayPlan(b, 1000))
 	if err != nil {

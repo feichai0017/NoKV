@@ -41,6 +41,20 @@ func TestHolderSubmitReturnsPendingAckForSameOperationID(t *testing.T) {
 	require.Equal(t, []OperationID{id}, []OperationID{plan.Operations[0].OpID})
 }
 
+func TestHolderPendingAckUsesIntentBeforeGuardProofs(t *testing.T) {
+	holder := newTestHolder(t)
+	id := opID("client-a", 1)
+	unsealed := opWithGuardedValueWrite("a", "v1")
+	sealed := compile.WithGuardProofs(unsealed, compile.GuardProofsFor(unsealed.Delta.RuntimeGuards))
+
+	first, err := holder.Submit(context.Background(), id, sealed)
+	require.NoError(t, err)
+	second, ok, err := holder.PendingAck(id, unsealed)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, first, second)
+}
+
 func TestHolderSubmitRejectsSameOperationIDDifferentEffects(t *testing.T) {
 	holder := newTestHolder(t)
 	id := opID("client-a", 1)
@@ -261,6 +275,12 @@ func newTestHolder(t *testing.T) *Holder {
 
 func opWithValueWrites(key, value string) compile.MaterializedOp {
 	return compile.MaterializeDelta(deltaWithValueWrites(key, value), nil)
+}
+
+func opWithGuardedValueWrite(key, value string) compile.MaterializedOp {
+	delta := deltaWithValueWrites(key, value)
+	delta.RuntimeGuards = []compile.RuntimeGuard{compile.GuardSingleLinkInode}
+	return compile.MaterializeDelta(delta, nil)
 }
 
 func deltaWithValueWrites(key, value string) compile.SemanticDelta {

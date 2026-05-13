@@ -121,6 +121,50 @@ func LoadPerasSegmentCatalogInstallForObjectKey(store SegmentCatalogStore, segme
 	return true, nil
 }
 
+func LoadPerasSegmentCatalogIndexInstall(store SegmentCatalogStore, root [32]byte, routingKey, canonicalObjectKey []byte) (bool, error) {
+	if store == nil {
+		return false, fsperas.ErrSegmentCatalogStoreRequired
+	}
+	route, err := inspectPerasSegmentObjectKey(root, routingKey)
+	if err != nil {
+		return false, err
+	}
+	if _, err := inspectPerasSegmentObjectKey(root, canonicalObjectKey); err != nil {
+		return false, fsperas.ErrInvalidPerasSegment
+	}
+	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(route.mount, route.bucket, root)
+	if err != nil {
+		return false, err
+	}
+	it := store.NewInternalIterator(&index.Options{IsAsc: true})
+	if it == nil {
+		return false, fsperas.ErrSegmentCatalogStoreRequired
+	}
+	defer func() { _ = it.Close() }()
+
+	it.Seek(entrykv.InternalKey(entrykv.CFDefault, indexKey, entrykv.MaxVersion))
+	if !it.Valid() {
+		return false, nil
+	}
+	item := it.Item()
+	if item == nil || item.Entry() == nil {
+		return false, nil
+	}
+	entry := item.Entry()
+	cf, userKey, _, ok := entrykv.SplitInternalKey(entry.Key)
+	if !ok || cf != entrykv.CFDefault || !bytes.Equal(userKey, indexKey) {
+		return false, nil
+	}
+	record, err := fsperas.DecodePerasSegmentCatalogIndexRecord(entry.Value)
+	if err != nil {
+		return false, err
+	}
+	if record.Root != root || !bytes.Equal(record.ObjectKey, canonicalObjectKey) {
+		return false, fsperas.ErrInvalidPerasSegment
+	}
+	return true, nil
+}
+
 func LoadPerasSegmentCatalogForObjectKey(store SegmentCatalogStore, segment fsperas.PerasSegment, catalogKey []byte) (fsperas.SegmentCatalogRecord, bool, error) {
 	if store == nil {
 		return fsperas.SegmentCatalogRecord{}, false, fsperas.ErrSegmentCatalogStoreRequired

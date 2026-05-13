@@ -32,7 +32,8 @@ func buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment fsperas.PerasSegm
 	stats := segment.Stats()
 	entries := make([]*entrykv.Entry, 0, int(stats.EntryCount)*3+1)
 	err := segment.ForEachEntry(func(entry fsperas.SegmentKV) error {
-		mutationEntries, err := buildMutationMVCCReplayEntries(fsperas.ReplayMutation{
+		var err error
+		entries, err = appendMutationMVCCReplayEntries(entries, fsperas.ReplayMutation{
 			Key:    entry.Key,
 			Value:  entry.Value,
 			Delete: entry.Delete,
@@ -40,7 +41,6 @@ func buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment fsperas.PerasSegm
 		if err != nil {
 			return err
 		}
-		entries = append(entries, mutationEntries...)
 		return nil
 	})
 	if err != nil {
@@ -108,19 +108,19 @@ func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segmen
 	if version == 0 || version == entrykv.MaxVersion {
 		return nil, fsperas.ErrReplayVersionRequired
 	}
-	bucket, err := perasSegmentObjectBucket(segment, objectKey)
+	routeBucket, canonicalBucket, err := perasSegmentObjectBuckets(segment, objectKey)
 	if err != nil {
 		return nil, err
 	}
-	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	canonicalObjectKey, err := fsmeta.EncodePerasSegmentObjectKey(canonicalBucket.mount, canonicalBucket.bucket, segment.Root)
 	if err != nil {
 		return nil, err
 	}
-	indexValue, err := encodeSegmentCatalogIndexValue(segment, version, payload, digest, canonicalObjectKey)
+	indexValue, err := fsperas.EncodePerasSegmentCatalogIndexRecordFields(segment.EpochID, version, segment.Root, digest, uint64(len(payload)), canonicalObjectKey)
 	if err != nil {
 		return nil, err
 	}
-	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
+	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(routeBucket.mount, routeBucket.bucket, segment.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -138,12 +138,34 @@ func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segmen
 	return entries, nil
 }
 
+func buildMVCCSegmentCatalogIndexInstallEntries(root, digest [32]byte, epochID, version, payloadSize uint64, routingKey, canonicalObjectKey []byte) ([]*entrykv.Entry, error) {
+	if epochID == 0 || version == 0 || version == entrykv.MaxVersion || payloadSize == 0 {
+		return nil, fsperas.ErrInvalidPerasSegment
+	}
+	route, err := inspectPerasSegmentObjectKey(root, routingKey)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := inspectPerasSegmentObjectKey(root, canonicalObjectKey); err != nil {
+		return nil, err
+	}
+	indexValue, err := fsperas.EncodePerasSegmentCatalogIndexRecordFields(epochID, version, root, digest, payloadSize, canonicalObjectKey)
+	if err != nil {
+		return nil, err
+	}
+	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(route.mount, route.bucket, root)
+	if err != nil {
+		return nil, err
+	}
+	return []*entrykv.Entry{entrykv.NewInternalEntry(entrykv.CFDefault, indexKey, version, indexValue, 0, 0)}, nil
+}
+
 func buildMVCCSegmentCatalogInstallEntries(segment fsperas.PerasSegment, version uint64, objectValue []byte, digest [32]byte, payloadSize uint64) ([]*entrykv.Entry, error) {
 	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
 	if err != nil {
 		return nil, err
 	}
-	indexValue, err := encodeSegmentCatalogIndexValue(segment, version, nil, digest, objectKey)
+	indexValue, err := fsperas.EncodePerasSegmentCatalogIndexRecordFields(segment.EpochID, version, segment.Root, digest, payloadSize, objectKey)
 	if err != nil {
 		return nil, err
 	}
@@ -160,48 +182,59 @@ func buildMVCCSegmentCatalogInstallEntries(segment fsperas.PerasSegment, version
 	return entries, nil
 }
 
-func encodeSegmentCatalogIndexValue(segment fsperas.PerasSegment, version uint64, payload []byte, digest [32]byte, objectKey []byte) ([]byte, error) {
-	if payload == nil {
-		var err error
-		payload, err = fsperas.EncodePerasSegment(segment)
-		if err != nil {
-			return nil, err
-		}
-	}
-	recordValue, err := fsperas.EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
-	if err != nil {
-		return nil, err
-	}
-	record, err := fsperas.DecodePerasSegmentCatalogRecord(recordValue)
-	if err != nil {
-		return nil, err
-	}
-	return fsperas.EncodePerasSegmentCatalogIndexRecord(record, objectKey)
-}
-
 type perasSegmentCatalogBucket struct {
 	mount  fsmeta.MountKeyID
 	bucket fsmeta.AffinityBucket
 }
 
-func perasSegmentObjectBucket(segment fsperas.PerasSegment, objectKey []byte) (perasSegmentCatalogBucket, error) {
-	parts, ok := fsmeta.InspectKey(objectKey)
-	if !ok {
+func inspectPerasSegmentObjectKey(root [32]byte, key []byte) (perasSegmentCatalogBucket, error) {
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
 		return perasSegmentCatalogBucket{}, fsperas.ErrInvalidPerasSegment
 	}
-	keys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	return perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}, nil
+}
+
+func perasSegmentObjectBuckets(segment fsperas.PerasSegment, objectKey []byte) (perasSegmentCatalogBucket, perasSegmentCatalogBucket, error) {
+	route, err := inspectPerasSegmentObjectKey(segment.Root, objectKey)
 	if err != nil {
-		return perasSegmentCatalogBucket{}, err
+		return perasSegmentCatalogBucket{}, perasSegmentCatalogBucket{}, err
 	}
-	for _, key := range keys {
-		if bytes.Equal(key, objectKey) {
-			return perasSegmentCatalogBucket{mount: parts.MountKeyID, bucket: parts.Bucket}, nil
+	var canonical perasSegmentCatalogBucket
+	seenRoute := false
+	err = segment.ForEachEntry(func(entry fsperas.SegmentKV) error {
+		entryParts, ok := fsmeta.InspectKey(entry.Key)
+		if !ok {
+			return fsperas.ErrInvalidPerasSegment
 		}
+		key := perasSegmentCatalogBucket{mount: entryParts.MountKeyID, bucket: entryParts.Bucket}
+		if canonical.mount == 0 || key.mount < canonical.mount || (key.mount == canonical.mount && key.bucket < canonical.bucket) {
+			canonical = key
+		}
+		if key == route {
+			seenRoute = true
+		}
+		return nil
+	})
+	if err != nil {
+		return perasSegmentCatalogBucket{}, perasSegmentCatalogBucket{}, err
 	}
-	return perasSegmentCatalogBucket{}, fsperas.ErrInvalidPerasSegment
+	if !seenRoute || canonical.mount == 0 {
+		return perasSegmentCatalogBucket{}, perasSegmentCatalogBucket{}, fsperas.ErrInvalidPerasSegment
+	}
+	return route, canonical, nil
+}
+
+func perasSegmentObjectBucket(segment fsperas.PerasSegment, objectKey []byte) (perasSegmentCatalogBucket, error) {
+	route, _, err := perasSegmentObjectBuckets(segment, objectKey)
+	return route, err
 }
 
 func buildMutationMVCCReplayEntries(mutation fsperas.ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
+	return appendMutationMVCCReplayEntries(nil, mutation, version)
+}
+
+func appendMutationMVCCReplayEntries(entries []*entrykv.Entry, mutation fsperas.ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
 	if len(mutation.Key) == 0 {
 		return nil, fsperas.ErrInvalidPerasSegment
 	}
@@ -210,10 +243,11 @@ func buildMutationMVCCReplayEntries(mutation fsperas.ReplayMutation, version uin
 			return nil, fsperas.ErrInvalidPerasSegment
 		}
 		write := txnmvcc.EncodeWrite(txnmvcc.Write{Kind: kvrpcpb.Mutation_Delete, StartTs: version})
-		return []*entrykv.Entry{
+		entries = append(entries,
 			entrykv.NewInternalEntry(entrykv.CFDefault, mutation.Key, version, nil, entrykv.BitDelete, 0),
 			entrykv.NewInternalEntry(entrykv.CFWrite, mutation.Key, version, write, 0, 0),
-		}, nil
+		)
+		return entries, nil
 	}
 	if mutation.Value == nil {
 		return nil, fsperas.ErrInvalidPerasSegment
@@ -221,15 +255,15 @@ func buildMutationMVCCReplayEntries(mutation fsperas.ReplayMutation, version uin
 	write := txnmvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: version}
 	if txnmvcc.CanInlineShortValue(kvrpcpb.Mutation_Put, mutation.Value) {
 		write.ShortValue = cloneBytes(mutation.Value)
-		return []*entrykv.Entry{
-			entrykv.NewInternalEntry(entrykv.CFWrite, mutation.Key, version, txnmvcc.EncodeWrite(write), 0, 0),
-		}, nil
+		entries = append(entries, entrykv.NewInternalEntry(entrykv.CFWrite, mutation.Key, version, txnmvcc.EncodeWrite(write), 0, 0))
+		return entries, nil
 	}
-	return []*entrykv.Entry{
+	entries = append(entries,
 		entrykv.NewInternalEntry(entrykv.CFDefault, mutation.Key, version, nil, entrykv.BitDelete, 0),
 		entrykv.NewInternalEntry(entrykv.CFDefault, mutation.Key, version, cloneBytes(mutation.Value), 0, 0),
 		entrykv.NewInternalEntry(entrykv.CFWrite, mutation.Key, version, txnmvcc.EncodeWrite(write), 0, 0),
-	}, nil
+	)
+	return entries, nil
 }
 
 func releaseMVCCReplayEntries(entries []*entrykv.Entry) {

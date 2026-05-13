@@ -20,6 +20,29 @@ func PerasSegmentInstallKeys(segment PerasSegment, routingKey []byte, materializ
 	return perasSegmentCatalogInstallKeys(segment, routingKey)
 }
 
+// PerasSegmentCatalogRouteInstallKeys returns the conservative dependency
+// surface for one catalog-only install route without decoding the full segment
+// payload. The route always writes the bucket-local index key. The route object
+// key is included as a false dependency for non-canonical routes so routing and
+// apply admission serialize every route through the same visible key surface.
+func PerasSegmentCatalogRouteInstallKeys(root [32]byte, routingKey []byte) ([][]byte, error) {
+	if root == ([32]byte{}) || len(routingKey) == 0 {
+		return nil, ErrInvalidPerasSegment
+	}
+	parts, ok := fsmeta.InspectKey(routingKey)
+	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
+		return nil, ErrInvalidPerasSegment
+	}
+	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(parts.MountKeyID, parts.Bucket, root)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([][]byte, 0, 2)
+	keys = appendUniquePerasInstallKey(keys, routingKey)
+	keys = appendUniquePerasInstallKey(keys, indexKey)
+	return keys, nil
+}
+
 func perasSegmentMaterializeInstallKeys(segment PerasSegment) ([][]byte, error) {
 	keys := make([][]byte, 0, len(segment.entries)+2)
 	err := segment.ForEachEntry(func(entry SegmentKV) error {

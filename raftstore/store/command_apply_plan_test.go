@@ -113,18 +113,28 @@ func TestCommandApplyDependenciesTrackPerasCatalogInstall(t *testing.T) {
 	segment, payload, digest := testCommandApplyPerasSegment(t)
 	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
 	require.NoError(t, err)
-	indexKeys, err := fsperas.PerasSegmentCatalogIndexKeys(segment)
+	installKeys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(segment.Root, objectKey)
 	require.NoError(t, err)
-	require.NotEmpty(t, indexKeys)
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, payload, digest, objectKey, false)}}
 
 	deps, barrier := commandApplyDependencies(req)
 	require.False(t, barrier)
 	require.Contains(t, deps, testPerasSegment(segment.Root))
-	require.Contains(t, deps, testUserWriteBytes(objectKey))
-	for _, key := range indexKeys {
+	for _, key := range installKeys {
 		require.Contains(t, deps, testUserWriteBytes(key))
 	}
+}
+
+func TestCommandApplyDependenciesCatalogInstallDoesNotDecodePayload(t *testing.T) {
+	segment, _, digest := testCommandApplyPerasSegment(t)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, []byte("not-a-segment-payload"), digest, objectKey, false)}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.False(t, barrier)
+	require.Contains(t, deps, testPerasSegment(segment.Root))
+	require.Contains(t, deps, testUserWriteBytes(objectKey))
 }
 
 func TestCommandApplyDependenciesTrackPerasMaterializeInstall(t *testing.T) {
@@ -290,4 +300,61 @@ func testPerasInstallSegmentRequest(segment fsperas.PerasSegment, payload []byte
 			MaterializeMvcc:      materialize,
 		}},
 	}
+}
+
+func BenchmarkCommandApplyDependenciesPerasCatalogInstall1000(b *testing.B) {
+	segment, payload, digest := benchmarkCommandApplyPerasSegment(b, 1000)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(b, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, payload, digest, objectKey, false)}}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		deps, barrier := commandApplyDependencies(req)
+		if barrier || len(deps) == 0 {
+			b.Fatal("unexpected barrier")
+		}
+	}
+}
+
+func BenchmarkCommandApplyDependenciesPerasMaterializeInstall1000(b *testing.B) {
+	segment, payload, digest := benchmarkCommandApplyPerasSegment(b, 1000)
+	firstKey, err := segment.FirstKey()
+	require.NoError(b, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, payload, digest, firstKey, true)}}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		deps, barrier := commandApplyDependencies(req)
+		if barrier || len(deps) == 0 {
+			b.Fatal("unexpected barrier")
+		}
+	}
+}
+
+func benchmarkCommandApplyPerasSegment(b *testing.B, n int) (fsperas.PerasSegment, []byte, [32]byte) {
+	b.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mutations := make([]fsperas.ReplayMutation, 0, n)
+	for i := 0; i < n; i++ {
+		key, err := fsmeta.EncodeInodeKey(mount, fsmeta.InodeID(i+2))
+		require.NoError(b, err)
+		mutations = append(mutations, fsperas.ReplayMutation{Key: key, Value: []byte("inode")})
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID:      fsperas.OperationID{ClientID: "bench", Seq: 1},
+			Kind:      fsmeta.OperationUpdateInode,
+			Mutations: mutations,
+		}},
+	})
+	require.NoError(b, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(b, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(b, err)
+	return segment, payload, digest
 }
