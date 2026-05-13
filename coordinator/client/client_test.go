@@ -460,6 +460,8 @@ func (s *clientRootStorage) protocolStateLocked() rootstate.EunomiaState {
 		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), s.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.snapshot.GrantInheritances...),
+		RetiredEraFloor:   s.snapshot.RetiredEraFloor,
+		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(s.snapshot.RetiredEraFloors),
 	}
 }
 
@@ -1444,6 +1446,72 @@ func TestFileAuthorityVerifierStorePersistsFloorAcrossRestart(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, IsStaleWitnessEra(err))
 	require.Contains(t, err.Error(), "retired_floor=1")
+}
+
+// TestGRPCClientKeepsRetiredFloorsScopedByDuty protects the durable verifier
+// store layout: each duty advances its own retired floor and never writes into
+// another duty's key.
+func TestGRPCClientKeepsRetiredFloorsScopedByDuty(t *testing.T) {
+	cli := &GRPCClient{verifierStore: NewMemoryAuthorityVerifierStore(), verifierClusterID: "test"}
+	var allocFloor witnessEraFloor
+	var tsoFloor witnessEraFloor
+
+	require.NoError(t, cli.advanceWitnessEraFloor("alloc_id", rootproto.DutyAllocID, 23, 22, &allocFloor))
+	require.NoError(t, cli.advanceWitnessEraFloor("tso", rootproto.DutyTSO, 9, 0, &tsoFloor))
+	require.Equal(t, uint64(22), allocFloor.retiredSeen)
+	require.Zero(t, tsoFloor.retiredSeen)
+}
+
+// TestGRPCClientDoesNotLetAllocRetiredFloorPoisonTSOOrRegionLookup exercises
+// the fsmeta-facing coordinator client path: inode allocation can observe a high
+// alloc_id floor without making later TSO or region lookup witnesses stale.
+func TestGRPCClientDoesNotLetAllocRetiredFloorPoisonTSOOrRegionLookup(t *testing.T) {
+	cli := newScriptedCoordinatorClient(t, []string{"holder"}, map[string]*scriptedCoordinatorServer{
+		"holder": {
+			allocResponses: []*coordpb.AllocIDResponse{{
+				FirstId:                 100,
+				Count:                   1,
+				Era:                     23,
+				ConsumedFrontier:        100,
+				ObservedRetiredEraFloor: 22,
+			}},
+			tsoResponses: []*coordpb.TsoResponse{{
+				Timestamp:        900,
+				Count:            1,
+				Era:              9,
+				ConsumedFrontier: 900,
+			}},
+			getResponses: []*coordpb.GetRegionByKeyResponse{{
+				RegionDescriptor:   &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 9},
+				ServedRootToken:    &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
+				CurrentRootToken:   &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
+				ServedFreshness:    coordpb.Freshness_FRESHNESS_STRONG,
+				CatchUpState:       coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+				DescriptorRevision: 9,
+				Era:                9,
+				ServingClass:       coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+				SyncHealth:         coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+				ServedByLeader:     true,
+			}},
+		},
+	})
+
+	allocResp, err := cli.AllocID(context.Background(), &coordpb.AllocIDRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(23), allocResp.GetEra())
+	require.Equal(t, uint64(22), allocResp.GetObservedRetiredEraFloor())
+
+	tsoResp, err := cli.Tso(context.Background(), &coordpb.TsoRequest{Count: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), tsoResp.GetEra())
+
+	regionResp, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:       []byte("m"),
+		Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), regionResp.GetEra())
+	require.Zero(t, regionResp.GetObservedRetiredEraFloor())
 }
 
 func TestValidateAuthorityEvidenceRejectsMissingServedTime(t *testing.T) {

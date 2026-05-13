@@ -1,6 +1,10 @@
 package audit
 
-import "fmt"
+import (
+	"fmt"
+
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+)
 
 // ReplyTraceRecord is the minimal reply-level input consumed by the audit subsystem.
 // It intentionally keeps the schema small so adapters can project external
@@ -178,7 +182,10 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 				continue
 			}
 		}
-		retiredFloor := maxUint64(report.RetiredEraFloor, record.ObservedRetiredEraFloor)
+		retiredFloor := maxUint64(report.RetiredEraFloorFor(rootprotoDuty(record.Duty), rootprotoGlobalScope()), record.ObservedRetiredEraFloor)
+		// Trace validation uses both root audit state and the floor attached to
+		// the reply. Either source is enough to prove the reply came from an
+		// era that clients should already reject.
 		if retiredFloor != 0 && record.Era <= retiredFloor {
 			anomalies = append(anomalies, ReplyTraceAnomaly{
 				Index:  idx,
@@ -201,6 +208,18 @@ func EvaluateReplyTrace(report Report, records []ReplyTraceRecord) []ReplyTraceA
 		}
 	}
 	return anomalies
+}
+
+// rootprotoDuty converts the trace's text duty name into the protocol key used
+// by scoped retired-floor lookups.
+func rootprotoDuty(duty string) rootproto.DutyID {
+	return rootproto.DutyID(duty)
+}
+
+// rootprotoGlobalScope is the current scope for built-in coordinator duties.
+// Keeping it explicit makes future non-global duties easier to audit.
+func rootprotoGlobalScope() rootproto.DutyScope {
+	return rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 }
 
 func requiresEunomiaEvidence(record ReplyTraceRecord) bool {

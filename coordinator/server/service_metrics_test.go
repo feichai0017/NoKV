@@ -76,6 +76,11 @@ func TestServiceAdmitDutyRejectsGrantAtRetiredEraFloor(t *testing.T) {
 			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100)},
 		}},
 		RetiredEraFloor: 12,
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyTSO,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 12,
+		}},
 	})
 
 	_, err := svc.admitDutyFromCachedGrant(rootproto.DutyTSO)

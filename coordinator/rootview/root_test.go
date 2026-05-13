@@ -708,6 +708,11 @@ func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
 func TestPreserveNewerAuthorityStateDropsGrantBelowRetiredFloor(t *testing.T) {
 	observed := Snapshot{
 		RetiredEraFloor: 23,
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyTSO,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 23,
+		}},
 	}
 	current := Snapshot{
 		ActiveGrants: []rootproto.AuthorityGrant{{
@@ -727,6 +732,29 @@ func TestPreserveNewerAuthorityStateDropsGrantBelowRetiredFloor(t *testing.T) {
 	require.Equal(t, uint64(23), merged.RetiredEraFloor)
 }
 
+// TestPreserveNewerAuthorityStateDropsGrantBelowLegacyRetiredFloor keeps old
+// aggregate checkpoints conservative: if no scoped floors exist, stale grants at
+// or below the legacy floor must not be preserved.
+func TestPreserveNewerAuthorityStateDropsGrantBelowLegacyRetiredFloor(t *testing.T) {
+	observed := Snapshot{RetiredEraFloor: 23}
+	current := Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/tso/12",
+			HolderID:        "coord-1",
+			Era:             12,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 40},
+			ExpiresUnixNano: 4_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40)},
+		}},
+	}
+
+	merged := PreserveNewerAuthorityState(observed, current)
+
+	_, ok := merged.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.False(t, ok)
+	require.Equal(t, uint64(23), merged.RetiredEraFloorFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
+}
+
 func TestPreserveNewerAuthorityStateDropsObservedGrantBelowCurrentRetiredFloor(t *testing.T) {
 	observed := Snapshot{
 		ActiveGrants: []rootproto.AuthorityGrant{{
@@ -740,6 +768,11 @@ func TestPreserveNewerAuthorityStateDropsObservedGrantBelowCurrentRetiredFloor(t
 	}
 	current := Snapshot{
 		RetiredEraFloor: 23,
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyTSO,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 23,
+		}},
 	}
 
 	merged := PreserveNewerAuthorityState(observed, current)
@@ -747,6 +780,55 @@ func TestPreserveNewerAuthorityStateDropsObservedGrantBelowCurrentRetiredFloor(t
 	_, ok := merged.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
 	require.False(t, ok)
 	require.Equal(t, uint64(23), merged.RetiredEraFloor)
+}
+
+// TestPreserveNewerAuthorityStateKeepsGrantAboveItsScopedRetiredFloor is the
+// rootview regression for the original smoke failure: an alloc_id floor must not
+// remove an unrelated TSO grant from the merged view.
+func TestPreserveNewerAuthorityStateKeepsGrantAboveItsScopedRetiredFloor(t *testing.T) {
+	observed := Snapshot{
+		RetiredEraFloor: 23,
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 23,
+		}},
+	}
+	current := Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/tso/12",
+			HolderID:        "coord-1",
+			Era:             12,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 40},
+			ExpiresUnixNano: 4_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40)},
+		}},
+	}
+
+	merged := PreserveNewerAuthorityState(observed, current)
+
+	tso, ok := merged.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.True(t, ok)
+	require.Equal(t, uint64(12), tso.Era)
+	require.Equal(t, uint64(23), merged.RetiredEraFloor)
+	require.Zero(t, merged.RetiredEraFloorFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
+}
+
+// TestSnapshotRetiredEraFloorForFallsBackToLegacyFloorOnlyWithoutScopedFloors
+// documents the migration rule: legacy aggregate floor is used only until the
+// snapshot has explicit scoped floor entries.
+func TestSnapshotRetiredEraFloorForFallsBackToLegacyFloorOnlyWithoutScopedFloors(t *testing.T) {
+	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	snapshot := Snapshot{RetiredEraFloor: 23}
+
+	require.Equal(t, uint64(23), snapshot.RetiredEraFloorFor(rootproto.DutyTSO, global))
+
+	snapshot.RetiredEraFloors = []rootproto.AuthorityRetiredEraFloor{{
+		DutyID:          rootproto.DutyAllocID,
+		Scope:           global,
+		RetiredEraFloor: 23,
+	}}
+	require.Zero(t, snapshot.RetiredEraFloorFor(rootproto.DutyTSO, global))
 }
 
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {

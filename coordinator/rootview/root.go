@@ -417,11 +417,15 @@ func (s *RootStore) applyAndReload(run func() (rootstate.EunomiaState, error)) (
 	return protocolState, nil
 }
 
+// eunomiaStatePresent detects whether an ApplyGrant response carried authority
+// lifecycle state that must be merged into the local rootview before a stale
+// snapshot reload can overwrite it.
 func eunomiaStatePresent(state rootstate.EunomiaState) bool {
 	return len(state.ActiveGrants) > 0 ||
 		len(state.RetiredGrants) > 0 ||
 		len(state.GrantInheritances) > 0 ||
-		state.RetiredEraFloor != 0
+		state.RetiredEraFloor != 0 ||
+		len(state.RetiredEraFloors) > 0
 }
 
 func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
@@ -467,6 +471,7 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
 		RetiredEraFloor:   state.RetiredEraFloor,
+		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(state.RetiredEraFloors),
 	}
 	s.mu.Lock()
 	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
@@ -474,6 +479,7 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), merged.RetiredGrants...)
 	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), merged.GrantInheritances...)
 	s.snapshot.RetiredEraFloor = merged.RetiredEraFloor
+	s.snapshot.RetiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(merged.RetiredEraFloors)
 	s.mu.Unlock()
 }
 

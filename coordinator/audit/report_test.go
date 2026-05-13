@@ -104,6 +104,11 @@ func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
 func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
 		RetiredEraFloor: 3,
+		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
+			DutyID:          rootproto.DutyAllocID,
+			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
+			RetiredEraFloor: 3,
+		}},
 		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID: "g4",
 			Era:     4,
@@ -112,6 +117,8 @@ func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
 	}, "c4", 1_000)
 
 	require.Equal(t, uint64(3), report.RetiredEraFloor)
+	require.Equal(t, uint64(3), report.RetiredEraFloorFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
+	require.Zero(t, report.RetiredEraFloorFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
 

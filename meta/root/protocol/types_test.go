@@ -46,3 +46,37 @@ func TestDutyNameAndAuthorityEraConstants(t *testing.T) {
 	require.Equal(t, uint64(0), AuthorityEraAttached)
 	require.Equal(t, ^uint64(0), AuthorityEraSuppressed)
 }
+
+// TestLegacyRetiredEraFloorExpandsAcrossRegisteredGlobalDuties locks the upgrade
+// contract for old checkpoints: their aggregate floor remains conservative for
+// every currently registered global duty.
+func TestLegacyRetiredEraFloorExpandsAcrossRegisteredGlobalDuties(t *testing.T) {
+	global := DutyScope{Kind: DutyScopeGlobal}
+	floors := AuthorityRetiredEraFloorsFromLegacyFloor(9)
+
+	for _, spec := range RegisteredDutySpecs() {
+		if spec.ScopeKind != DutyScopeGlobal {
+			continue
+		}
+		require.Equal(t, uint64(9), AuthorityRetiredEraFloorFor(floors, spec.ID, global), spec.ID)
+	}
+	require.Zero(t, AuthorityRetiredEraFloorFor(floors, DutyID("unknown"), global))
+}
+
+// TestNormalizeAuthorityRetiredEraFloorsDoesNotOverlayLegacyWhenScopedFloorsExist
+// ensures new scoped states are not polluted by the legacy aggregate floor.
+func TestNormalizeAuthorityRetiredEraFloorsDoesNotOverlayLegacyWhenScopedFloorsExist(t *testing.T) {
+	global := DutyScope{Kind: DutyScopeGlobal}
+	original := []AuthorityRetiredEraFloor{{
+		DutyID:          DutyAllocID,
+		Scope:           global,
+		RetiredEraFloor: 7,
+	}}
+
+	normalized := NormalizeAuthorityRetiredEraFloors(original, 22)
+
+	require.Equal(t, uint64(7), AuthorityRetiredEraFloorFor(normalized, DutyAllocID, global))
+	require.Zero(t, AuthorityRetiredEraFloorFor(normalized, DutyTSO, global))
+	normalized[0].RetiredEraFloor = 100
+	require.Equal(t, uint64(7), original[0].RetiredEraFloor)
+}

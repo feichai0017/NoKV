@@ -80,6 +80,8 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		ActiveGrants:        []rootproto.AuthorityGrant{grant},
 		RetiredGrants:       []rootproto.GrantRetirement{retirement},
 		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
+		RetiredEraFloor:     4,
+		RetiredEraFloors:    []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
 		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
 		PerasAuthorityEpoch: perasGrant.EpochID,
 		PerasAuthoritySeals: []rootproto.PerasAuthoritySeal{perasSeal},
@@ -105,9 +107,25 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		ActiveGrants:      state.ActiveGrants,
 		RetiredGrants:     state.RetiredGrants,
 		GrantInheritances: state.GrantInheritances,
+		RetiredEraFloor:   state.RetiredEraFloor,
+		RetiredEraFloors:  state.RetiredEraFloors,
 	}
 	require.Equal(t, protocolState, RootEunomiaStateFromProto(RootEunomiaStateToProto(protocolState)))
 	require.Equal(t, rootstate.EunomiaState{}, RootEunomiaStateFromProto(nil))
+
+	// Legacy states only have the aggregate floor. Decoding expands it to every
+	// registered global duty so later scoped updates cannot make missing duties
+	// appear to have no retired history.
+	legacyState := RootStateFromProto(&metapb.RootState{RetiredEraFloor: 9})
+	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyState.RetiredEraFloors, rootproto.DutyAllocID, global))
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyState.RetiredEraFloors, rootproto.DutyTSO, global))
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyState.RetiredEraFloors, rootproto.DutyRegionLookup, global))
+
+	legacyProtocolState := RootEunomiaStateFromProto(&metapb.RootEunomiaState{RetiredEraFloor: 9})
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyProtocolState.RetiredEraFloors, rootproto.DutyAllocID, global))
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyProtocolState.RetiredEraFloors, rootproto.DutyTSO, global))
+	require.Equal(t, uint64(9), rootproto.AuthorityRetiredEraFloorFor(legacyProtocolState.RetiredEraFloors, rootproto.DutyRegionLookup, global))
 
 	grantCmd := rootproto.GrantCommand{
 		Kind:                rootproto.GrantActIssue,
