@@ -17,7 +17,7 @@ type KVClient interface {
 	Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
 }
 
-type atomicMutateFastPath interface {
+type atomicMutateOnePhase interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error)
 }
 
@@ -149,7 +149,7 @@ func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations [
 	return commitVersion, nil
 }
 
-// Stats returns runtime-adapter counters. Nested KV stats come from the real
+// Stats returns runtime counters. Nested KV stats come from the real
 // raftstore client when available, keeping fsmeta expvar useful without making
 // optional observability part of KVClient.
 func (r *Runner) Stats() map[string]any {
@@ -170,14 +170,14 @@ func (r *Runner) Stats() map[string]any {
 	return out
 }
 
-// TryAtomicMutate delegates to the region-local 1PC fast path when the
+// TryAtomicMutate delegates to the region-local one-phase mutation path when the
 // underlying KV client supports it. handled=false means callers should keep
 // the regular Percolator 2PC path.
 func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	fast, ok := r.kv.(atomicMutateFastPath)
+	onePhase, ok := r.kv.(atomicMutateOnePhase)
 	if !ok {
 		r.atomicRunnerUnsupportedTotal.Add(1)
 		return false, nil
 	}
-	return fast.TryAtomicMutate(ctx, primary, predicates, mutations, startVersion, commitVersion)
+	return onePhase.TryAtomicMutate(ctx, primary, predicates, mutations, startVersion, commitVersion)
 }

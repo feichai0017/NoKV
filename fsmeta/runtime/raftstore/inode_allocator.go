@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultInodeAllocBatchSize  = 256
+	defaultInodeAllocBatchSize  = fsmeta.DefaultAffinityBucketCount * 256
 	defaultInodeAffinityBuckets = fsmeta.DefaultAffinityBucketCount
 )
 

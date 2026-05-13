@@ -30,11 +30,14 @@ type fakeServiceBackend struct {
 	observeTailErr      error
 	waitTailErr         error
 	applyGrantErr       error
+	applyPerasErr       error
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
 	applyGrantResult    rootstate.EunomiaState
 	applyGrantCert      rootproto.GrantCertificate
+	applyPerasState     rootstate.State
+	applyPerasGrant     rootproto.PerasAuthorityGrant
 	isLeader            bool
 	leaderID            uint64
 	appendCalls         int
@@ -115,6 +118,10 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 
 func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
+}
+
+func (f *fakeServiceBackend) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	return f.applyPerasState, f.applyPerasGrant, f.applyPerasErr
 }
 
 type basicServiceBackend struct {
@@ -504,6 +511,81 @@ func TestServiceApplyGrant(t *testing.T) {
 	})
 }
 
+func TestServiceApplyPerasAuthority(t *testing.T) {
+	grant := testServerPerasAuthorityGrant()
+	state := rootstate.State{
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
+		PerasAuthorityEpoch: grant.EpochID,
+	}
+	cmd := rootproto.PerasAuthorityCommand{
+		Kind:            rootproto.PerasAuthorityActAcquire,
+		HolderID:        grant.HolderID,
+		Scope:           grant.Scope,
+		ExpiresUnixNano: grant.ExpiresUnixNano,
+		NowUnixNano:     100,
+	}
+
+	t.Run("nil service", func(t *testing.T) {
+		var svc *Service
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	})
+
+	t.Run("unimplemented", func(t *testing.T) {
+		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
+		_, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		})
+		require.Equal(t, codes.Unimplemented, status.Code(err))
+	})
+
+	t.Run("held maps to response status", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:        true,
+			applyPerasState: state,
+			applyPerasErr:   rootstate.ErrPrimacy,
+		})
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
+	})
+
+	t.Run("success", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:        true,
+			applyPerasState: state,
+			applyPerasGrant: grant,
+		})
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, grant, metawire.RootPerasAuthorityGrantFromProto(resp.Grant))
+		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
+	})
+
+	t.Run("retire status", func(t *testing.T) {
+		svc := NewService(&fakeServiceBackend{
+			isLeader:        true,
+			applyPerasState: rootstate.State{PerasAuthorityEpoch: grant.EpochID},
+		})
+		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(rootproto.PerasAuthorityCommand{
+				Kind:     rootproto.PerasAuthorityActRetire,
+				HolderID: grant.HolderID,
+				GrantID:  grant.GrantID,
+			}),
+		})
+		require.NoError(t, err)
+		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
+	})
+}
+
 func TestCoordinatorApplyErrorMappings(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInvalidGrant)))
 	require.Equal(t, codes.FailedPrecondition, status.Code(coordinatorGrantApplyRPCError(rootproto.GrantActIssue, rootstate.ErrInheritance)))
@@ -537,5 +619,15 @@ func testServerSnapshot() rootstate.Snapshot {
 		},
 		PendingPeerChanges:  map[uint64]rootstate.PendingPeerChange{},
 		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{},
+	}
+}
+
+func testServerPerasAuthorityGrant() rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
+		GrantID:         "peras-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
+		ExpiresUnixNano: 1_000,
 	}
 }

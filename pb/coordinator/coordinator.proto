@@ -171,6 +171,28 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
+message ListPerasAuthorityGrantsRequest {}
+
+message ListPerasAuthorityGrantsResponse {
+  repeated nokv.meta.v1.RootPerasAuthorityGrant grants = 1;
+}
+
+message ListPerasAuthoritySealsRequest {}
+
+message ListPerasAuthoritySealsResponse {
+  repeated nokv.meta.v1.RootPerasAuthoritySeal seals = 1;
+}
+
+message ApplyPerasAuthorityRequest {
+  nokv.meta.v1.RootPerasAuthorityCommand command = 1;
+}
+
+message ApplyPerasAuthorityResponse {
+  nokv.meta.v1.RootPerasAuthorityGrant grant = 1;
+  nokv.meta.v1.RootPerasAuthorityApplyStatus status = 2;
+  repeated nokv.meta.v1.RootPerasAuthorityGrant active_grants = 3;
+}
+
 message WatchRootEventsRequest {
   nokv.meta.v1.RootTailToken after = 1;
 }
@@ -467,6 +489,9 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
+  rpc ListPerasAuthorityGrants(ListPerasAuthorityGrantsRequest) returns (ListPerasAuthorityGrantsResponse);
+  rpc ListPerasAuthoritySeals(ListPerasAuthoritySealsRequest) returns (ListPerasAuthoritySealsResponse);
+  rpc ApplyPerasAuthority(ApplyPerasAuthorityRequest) returns (ApplyPerasAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);

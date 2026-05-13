@@ -34,15 +34,18 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch      uint64
-	MembershipEpoch   uint64
-	LastCommitted     Cursor
-	IDFence           uint64
-	TSOFence          uint64
-	ActiveGrants      []rootproto.AuthorityGrant
-	RetiredGrants     []rootproto.GrantRetirement
-	GrantInheritances []rootproto.GrantInheritance
-	RetiredEraFloor   uint64
+	ClusterEpoch        uint64
+	MembershipEpoch     uint64
+	LastCommitted       Cursor
+	IDFence             uint64
+	TSOFence            uint64
+	ActiveGrants        []rootproto.AuthorityGrant
+	RetiredGrants       []rootproto.GrantRetirement
+	GrantInheritances   []rootproto.GrantInheritance
+	RetiredEraFloor     uint64
+	ActivePerasGrants   []rootproto.PerasAuthorityGrant
+	PerasAuthorityEpoch uint64
+	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
 }
 
 func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -217,12 +220,8 @@ type CommitInfo struct {
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
-	state := snapshot.State
-	state.ActiveGrants = cloneAuthorityGrants(state.ActiveGrants)
-	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
-	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	out := Snapshot{
-		State:               state,
+		State:               CloneState(snapshot.State),
 		Stores:              CloneStoreMemberships(snapshot.Stores),
 		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
 		Mounts:              CloneMounts(snapshot.Mounts),
@@ -233,6 +232,15 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
 	}
 	return out
+}
+
+func CloneState(state State) State {
+	state.ActiveGrants = cloneAuthorityGrants(state.ActiveGrants)
+	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
+	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
+	state.ActivePerasGrants = clonePerasAuthorityGrants(state.ActivePerasGrants)
+	state.PerasAuthoritySeals = clonePerasAuthoritySeals(state.PerasAuthoritySeals)
+	return state
 }
 
 func CloneMounts(in map[string]MountRecord) map[string]MountRecord {
@@ -458,6 +466,12 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyGrantRetirementToState(state, cursor, event)
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(state, cursor, event)
+	case rootevent.KindPerasAuthorityGranted:
+		applyPerasAuthorityGrantedToState(state, event)
+	case rootevent.KindPerasAuthoritySealed:
+		applyPerasAuthoritySealedToState(state, event)
+	case rootevent.KindPerasAuthorityRetired:
+		applyPerasAuthorityRetiredToState(state, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,

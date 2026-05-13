@@ -8,6 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -21,6 +22,7 @@ type lifecycleSource interface {
 	ListMounts(context.Context, *coordpb.ListMountsRequest) (*coordpb.ListMountsResponse, error)
 	ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	ListQuotaFences(context.Context, *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
+	ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
 	WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -37,13 +39,14 @@ type monitor struct {
 	cache    *mountCache
 	quotas   *quotaCache
 	subtrees fsmetaexec.SubtreeHandoffPublisher
+	peras    *runtimeperas.ActiveAuthorities
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, interval time.Duration) *monitor {
+func startMonitor(ctx context.Context, coord lifecycleSource, router retireRouter, cache *mountCache, quotas *quotaCache, subtrees fsmetaexec.SubtreeHandoffPublisher, peras *runtimeperas.ActiveAuthorities, interval time.Duration) *monitor {
 	if coord == nil || router == nil {
 		return nil
 	}
@@ -56,6 +59,7 @@ func startMonitor(ctx context.Context, coord lifecycleSource, router retireRoute
 		cache:    cache,
 		quotas:   quotas,
 		subtrees: subtrees,
+		peras:    peras,
 		interval: interval,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -108,6 +112,22 @@ func (m *monitor) bootstrap(ctx context.Context) error {
 	if m.quotas != nil {
 		for _, fence := range quotas.GetFences() {
 			m.quotas.markFenceUpdated(fence)
+		}
+	}
+	peras, err := m.coord.ListPerasAuthorityGrants(ctx, &coordpb.ListPerasAuthorityGrantsRequest{})
+	if err != nil {
+		return err
+	}
+	if m.peras != nil {
+		grants := make([]runtimeperas.AuthorityGrant, 0, len(peras.GetGrants()))
+		for _, grant := range peras.GetGrants() {
+			parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
+			if parsed.Valid() {
+				grants = append(grants, parsed)
+			}
+		}
+		if err := m.peras.Replace(grants); err != nil {
+			return err
 		}
 	}
 	subtrees, err := m.coord.ListSubtreeAuthorities(ctx, &coordpb.ListSubtreeAuthoritiesRequest{})
@@ -191,6 +211,13 @@ func (m *monitor) applyRootEvent(ctx context.Context, event rootevent.Event) {
 			return
 		}
 		m.completePendingSubtreeHandoff(ctx, event.SubtreeAuthority.Mount, event.SubtreeAuthority.RootInode, event.SubtreeAuthority.Frontier)
+	case rootevent.KindPerasAuthorityGranted, rootevent.KindPerasAuthorityRetired:
+		if m.peras == nil {
+			return
+		}
+		if err := m.peras.ApplyRootEvent(event); err != nil {
+			log.Printf("fsmeta monitor: apply peras authority event kind=%d: %v", event.Kind, err)
+		}
 	}
 }
 

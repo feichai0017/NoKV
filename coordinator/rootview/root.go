@@ -25,6 +25,7 @@ type RootStorage interface {
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 	Refresh() error
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
@@ -47,6 +48,7 @@ type rootRuntimeBackend interface {
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 	Close() error
 }
 
@@ -68,6 +70,7 @@ type rootSubmitBackend interface {
 
 type rootCoordinatorProtocolBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
 }
 
 type rootCloseBackend interface {
@@ -137,6 +140,13 @@ func (a rootBackendAdapter) ApplyGrant(ctx context.Context, cmd rootproto.GrantC
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, errGrantCommandUnsupported
 	}
 	return a.protocol.ApplyGrant(ctx, cmd)
+}
+
+func (a rootBackendAdapter) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	if a.protocol == nil {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
+	}
+	return a.protocol.ApplyPerasAuthority(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -319,6 +329,23 @@ func (s *RootStore) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) 
 	return state, cert, err
 }
 
+func (s *RootStore) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	if s == nil || s.root == nil {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+	}
+	if !s.supportsProtocol {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
+	}
+	var grant rootproto.PerasAuthorityGrant
+	var state rootstate.State
+	state, err := s.applyPerasAndReload(func() (rootstate.State, error) {
+		var applyErr error
+		state, grant, applyErr = s.root.ApplyPerasAuthority(ctx, cmd)
+		return state, applyErr
+	})
+	return state, grant, err
+}
+
 // Close releases storage resources.
 func (s *RootStore) Close() error {
 	if s == nil {
@@ -397,6 +424,36 @@ func eunomiaStatePresent(state rootstate.EunomiaState) bool {
 		state.RetiredEraFloor != 0
 }
 
+func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
+	if s == nil {
+		return rootstate.State{}, nil
+	}
+	if run == nil {
+		return rootstate.State{}, nil
+	}
+	state, err := run()
+	if perasStatePresent(state) {
+		// The root apply response carries the active Peras grant mirror even
+		// when acquisition loses primacy. Merge it before returning so fsmeta
+		// callers see the current holder instead of repeatedly campaigning.
+		s.mergePerasAuthorityState(state)
+	}
+	if err != nil {
+		return state, err
+	}
+	if err := s.reload(); err != nil {
+		return state, err
+	}
+	if perasStatePresent(state) {
+		s.mergePerasAuthorityState(state)
+	}
+	return state, nil
+}
+
+func perasStatePresent(state rootstate.State) bool {
+	return len(state.ActivePerasGrants) > 0 || state.PerasAuthorityEpoch != 0
+}
+
 // mergeEunomiaState overlays the committed authority grant lifecycle from an
 // authoritative Apply response onto the cached snapshot. Other fields
 // (descriptors, allocator fences) are left untouched — the subsequent reload
@@ -417,6 +474,26 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	s.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), merged.RetiredGrants...)
 	s.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), merged.GrantInheritances...)
 	s.snapshot.RetiredEraFloor = merged.RetiredEraFloor
+	s.mu.Unlock()
+}
+
+// mergePerasAuthorityState overlays the rooted fsmeta Peras authority
+// mirror from an authoritative Apply response onto the cached snapshot.
+// Region descriptors and allocator fences remain owned by root replay/reload.
+func (s *RootStore) mergePerasAuthorityState(state rootstate.State) {
+	if s == nil {
+		return
+	}
+	incoming := Snapshot{
+		ActivePerasGrants:   rootstate.CloneState(state).ActivePerasGrants,
+		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
+		PerasAuthoritySeals: rootstate.CloneState(state).PerasAuthoritySeals,
+	}
+	s.mu.Lock()
+	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
+	s.snapshot.ActivePerasGrants = clonePerasAuthorityGrants(merged.ActivePerasGrants)
+	s.snapshot.PerasAuthorityEpoch = merged.PerasAuthorityEpoch
+	s.snapshot.PerasAuthoritySeals = clonePerasAuthoritySeals(merged.PerasAuthoritySeals)
 	s.mu.Unlock()
 }
 

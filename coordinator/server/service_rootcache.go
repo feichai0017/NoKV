@@ -199,10 +199,12 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 	if s.cluster != nil {
 		s.cluster.ReplaceRootSnapshot(rootstate.Snapshot{
 			State: rootstate.State{
-				ActiveGrants:      snapshot.ActiveGrants,
-				RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
-				GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-				RetiredEraFloor:   snapshot.RetiredEraFloor,
+				ActiveGrants:        snapshot.ActiveGrants,
+				RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+				GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+				RetiredEraFloor:     snapshot.RetiredEraFloor,
+				ActivePerasGrants:   snapshot.ActivePerasGrants,
+				PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,
 			},
 			Stores:              snapshot.Stores,
 			Subtrees:            snapshot.Subtrees,

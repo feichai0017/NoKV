@@ -60,6 +60,7 @@ enum CmdType {
   CMD_MVCC_MAINTENANCE = 8;
   CMD_TXN_HEART_BEAT = 9;
   CMD_TRY_ATOMIC_MUTATE = 10;
+  CMD_PERAS_INSTALL_SEGMENT = 11;
 }
 
 message Request {
@@ -76,6 +77,7 @@ message Request {
     nokv.kv.v1.MVCCMaintenanceRequest mvcc_maintenance = 9;
     nokv.kv.v1.TxnHeartBeatRequest txn_heart_beat = 10;
     nokv.kv.v1.TryAtomicMutateRequest try_atomic_mutate = 11;
+    nokv.kv.v1.PerasInstallSegmentRequest peras_install_segment = 12;
   }
 }
 
@@ -91,6 +93,7 @@ message Response {
     nokv.kv.v1.MVCCMaintenanceResponse mvcc_maintenance = 8;
     nokv.kv.v1.TxnHeartBeatResponse txn_heart_beat = 9;
     nokv.kv.v1.TryAtomicMutateResponse try_atomic_mutate = 10;
+    nokv.kv.v1.PerasInstallSegmentResponse peras_install_segment = 11;
   }
 }
 

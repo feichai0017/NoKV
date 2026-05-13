@@ -56,7 +56,7 @@ func TestMetaRootNodeIsolationElectsNewLeaderAndHeals(t *testing.T) {
 	}, 8*time.Second, 50*time.Millisecond)
 }
 
-func TestMetaRootLeaderChangePreservesClosureLineage(t *testing.T) {
+func TestMetaRootLeaderChangePreservesGrantLineage(t *testing.T) {
 	cluster := roottestcluster.Open(t)
 	leaderID := cluster.WaitLeader()
 

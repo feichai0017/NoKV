@@ -3,6 +3,8 @@ package observer
 import (
 	"testing"
 
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -128,4 +130,77 @@ func TestEventsFromCommandSkipsAtomicMutateFallback(t *testing.T) {
 	}}}
 
 	require.Empty(t, EventsFromCommand(myraft.Entry{Term: 3, Index: 11}, req, resp))
+}
+
+func TestEventsFromCommandExtractsPerasSegmentInstallKeys(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 7,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("dentry-value")},
+				{Key: inodeKey, Value: []byte("inode-value")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: 7},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				SegmentRoot:          append([]byte(nil), segment.Root[:]...),
+				SegmentPayloadDigest: append([]byte(nil), digest[:]...),
+				SegmentPayload:       payload,
+				InstallVersion:       44,
+			}},
+		}},
+	}
+	resp := &raftcmdpb.RaftCmdResponse{Responses: []*raftcmdpb.Response{{
+		Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{}},
+	}}}
+
+	events := EventsFromCommand(myraft.Entry{Term: 3, Index: 11}, req, resp)
+	require.Len(t, events, 1)
+	require.Equal(t, Event{
+		RegionID:      7,
+		Term:          3,
+		Index:         11,
+		Source:        SourceCommit,
+		CommitVersion: 44,
+		Keys:          [][]byte{dentryKey},
+	}, events[0])
+}
+
+func TestAttachCommandCursorAnnotatesPerasInstallResponse(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{
+		Header: &raftcmdpb.CmdHeader{RegionId: 9},
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				InstallVersion: 55,
+			}},
+		}},
+	}
+	perasResp := &kvrpcpb.PerasInstallSegmentResponse{}
+	resp := &raftcmdpb.RaftCmdResponse{Responses: []*raftcmdpb.Response{{
+		Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: perasResp},
+	}}}
+
+	AttachCommandCursor(myraft.Entry{Term: 4, Index: 12}, req, resp)
+
+	require.Equal(t, uint64(9), perasResp.GetRegionId())
+	require.Equal(t, uint64(4), perasResp.GetTerm())
+	require.Equal(t, uint64(12), perasResp.GetIndex())
+	require.Equal(t, uint64(55), perasResp.GetCommitVersion())
 }

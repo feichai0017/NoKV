@@ -222,6 +222,32 @@ message TryAtomicMutateResponse {
   bool fallback_to_two_phase_commit = 3;
 }
 
+message PerasInstallSegmentRequest {
+  bytes routing_key = 1;
+  bytes segment_root = 2;
+  bytes segment_payload_digest = 3;
+  bytes segment_payload = 4;
+  uint64 install_version = 5;
+  bool materialize_mvcc = 6;
+  uint64 segment_epoch_id = 7;
+  uint64 segment_operation_count = 8;
+  uint64 segment_entry_count = 9;
+  uint64 segment_payload_size = 10;
+  bytes canonical_object_key = 11;
+}
+
+message PerasInstallSegmentResponse {
+  KeyError error = 1;
+  bytes segment_root = 2;
+  uint64 operation_count = 3;
+  uint64 entry_count = 4;
+  uint64 applied_entries = 5;
+  uint64 region_id = 6;
+  uint64 term = 7;
+  uint64 index = 8;
+  uint64 commit_version = 9;
+}
+
 message Context {
   uint64 region_id = 1;
   nokv.meta.v1.RegionEpoch region_epoch = 2;
@@ -333,6 +359,16 @@ message KvTryAtomicMutateResponse {
   nokv.error.v1.RegionError region_error = 2;
 }
 
+message KvPerasInstallSegmentRequest {
+  Context context = 1;
+  PerasInstallSegmentRequest request = 2;
+}
+
+message KvPerasInstallSegmentResponse {
+  PerasInstallSegmentResponse response = 1;
+  nokv.error.v1.RegionError region_error = 2;
+}
+
 enum ApplyWatchEventSource {
   APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
   APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
@@ -358,6 +394,42 @@ message ApplyWatchResponse {
   uint64 dropped_events = 2;
 }
 
+message PerasAuthorityScope {
+  string mount = 1;
+  uint64 mount_key_id = 2;
+  repeated uint32 buckets = 3;
+  repeated uint64 parents = 4;
+  repeated uint64 inodes = 5;
+}
+
+message PerasSegmentWitnessRecord {
+  uint64 epoch_id = 1;
+  bytes segment_root = 2;
+  uint64 operation_count = 3;
+  uint64 entry_count = 4;
+  int64 timestamp_unix_nano = 5;
+  string holder_id = 6;
+  bytes segment_payload_digest = 7;
+  uint64 segment_payload_size = 8;
+  string segment_pointer = 9;
+  bytes segment_payload = 10;
+}
+
+message PerasWitnessSegmentRequest {
+  PerasAuthorityScope scope = 1;
+  PerasSegmentWitnessRecord record = 2;
+}
+
+message PerasWitnessSegmentResponse {}
+
+message PerasWitnessProbeRequest {
+  uint64 epoch_id = 1;
+}
+
+message PerasWitnessProbeResponse {
+  repeated PerasSegmentWitnessRecord segments = 1;
+}
+
 service StoreKV {
   rpc Get(KvGetRequest) returns (KvGetResponse);
   rpc BatchGet(KvBatchGetRequest) returns (KvBatchGetResponse);
@@ -369,7 +441,10 @@ service StoreKV {
   rpc CheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
   rpc TxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
   rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
+  rpc PerasInstallSegment(KvPerasInstallSegmentRequest) returns (KvPerasInstallSegmentResponse);
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
+  rpc PerasWitnessSegment(PerasWitnessSegmentRequest) returns (PerasWitnessSegmentResponse);
+  rpc PerasWitnessProbe(PerasWitnessProbeRequest) returns (PerasWitnessProbeResponse);
 }
 
 message KeyError {

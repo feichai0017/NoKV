@@ -70,6 +70,12 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 		applyGrantRetirementToState(&snapshot.State, cursor, event)
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(&snapshot.State, cursor, event)
+	case rootevent.KindPerasAuthorityGranted:
+		applyPerasAuthorityGrantedToState(&snapshot.State, event)
+	case rootevent.KindPerasAuthoritySealed:
+		applyPerasAuthoritySealedToState(&snapshot.State, event)
+	case rootevent.KindPerasAuthorityRetired:
+		applyPerasAuthorityRetiredToState(&snapshot.State, event)
 	case rootevent.KindRegionBootstrap, rootevent.KindRegionDescriptorPublished:
 		snapshot.State.ClusterEpoch++
 		desc := event.RegionDescriptor.Descriptor.Clone()
