@@ -84,7 +84,7 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) 
 	catalogInstall := replayPlanUsesCatalogInstall(plan)
 	out := make([]fsperas.ReplayPlan, 0, len(plan.Operations))
 	current := fsperas.ReplayPlan{EpochID: plan.EpochID}
-	var currentPlan compile.CompiledOp
+	var currentPlan compile.SegmentPlan
 	flush := func() {
 		if len(current.Operations) == 0 {
 			return
@@ -94,18 +94,21 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) 
 			Operations: cloneRuntimeReplayOperations(current.Operations),
 		})
 		current.Operations = current.Operations[:0]
-		currentPlan = compile.CompiledOp{}
+		currentPlan = compile.SegmentPlan{}
 	}
 	for _, op := range plan.Operations {
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
 			return nil, fsperas.ErrInvalidPerasSegment
 		}
-		nextPlan := compiledReplayOperation(op)
+		nextPlan := op.Segment
+		if !nextPlan.CanAppend {
+			return nil, fsperas.ErrInvalidPerasSegment
+		}
 		if catalogInstall {
-			forceCatalogInstallPlan(&nextPlan)
+			nextPlan = compile.CatalogSegmentPlan(nextPlan)
 		}
 		if len(current.Operations) > 0 {
-			decision := compile.CanAppendSegment(currentPlan, nextPlan, compile.SegmentBudget{
+			decision := compile.CanAppendSegmentPlans(currentPlan, nextPlan, op.Durability, compile.SegmentBudget{
 				MaxMutations: uint32(maxMutations),
 			})
 			if decision.Kind != compile.SegmentDecisionAppend {
@@ -116,32 +119,11 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) 
 		if len(current.Operations) == 1 {
 			currentPlan = nextPlan
 		} else {
-			currentPlan = mergeCompilerSegmentPlan(currentPlan, nextPlan)
+			currentPlan = compile.MergeSegmentPlans(currentPlan, nextPlan)
 		}
 	}
 	flush()
 	return out, nil
-}
-
-func compiledReplayOperation(op fsperas.ReplayOperation) compile.CompiledOp {
-	delta := compile.SemanticDelta{
-		Kind:         op.Kind,
-		Eligibility:  compile.EligibilityVisibleCommit,
-		WriteEffects: make([]compile.WriteEffect, 0, len(op.Mutations)),
-	}
-	for _, mutation := range op.Mutations {
-		effect := compile.WriteEffect{
-			Kind:  compile.EffectPut,
-			Key:   mutation.Key,
-			Value: mutation.Value,
-		}
-		if mutation.Delete {
-			effect.Kind = compile.EffectDelete
-			effect.Value = nil
-		}
-		delta.WriteEffects = append(delta.WriteEffects, effect)
-	}
-	return compile.CompileDelta(delta)
 }
 
 func replayPlanUsesCatalogInstall(plan fsperas.ReplayPlan) bool {
@@ -167,26 +149,6 @@ func replayPlanUsesCatalogInstall(plan fsperas.ReplayPlan) bool {
 	return false
 }
 
-func forceCatalogInstallPlan(op *compile.CompiledOp) {
-	if op == nil {
-		return
-	}
-	op.Placement.Install = compile.SegmentInstallCatalog
-	op.Placement.SingleBucket = false
-	op.Placement.MergeKey.PrimaryBucket = 0
-	op.Placement.MergeKey.Install = compile.SegmentInstallCatalog
-	op.Segment.Install = compile.SegmentInstallCatalog
-	op.Segment.MergeKey = op.Placement.MergeKey
-}
-
-func mergeCompilerSegmentPlan(current, next compile.CompiledOp) compile.CompiledOp {
-	out := current
-	out.Segment.OperationCount += next.Segment.OperationCount
-	out.Segment.MutationCount += next.Segment.MutationCount
-	out.Segment.EstimatedPayloadBytes += next.Segment.EstimatedPayloadBytes
-	return out
-}
-
 func cloneRuntimeReplayOperations(ops []fsperas.ReplayOperation) []fsperas.ReplayOperation {
 	out := make([]fsperas.ReplayOperation, 0, len(ops))
 	for _, op := range ops {
@@ -209,8 +171,16 @@ func cloneRuntimeReplayOperation(op fsperas.ReplayOperation) fsperas.ReplayOpera
 		Kind:                 op.Kind,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
+		Segment:              op.Segment,
+		Atomicity:            cloneRuntimeReplayAtomicity(op.Atomicity),
+		Durability:           op.Durability,
 		Mutations:            mutations,
 	}
+}
+
+func cloneRuntimeReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {
+	group.Members = append([]compile.MutationID(nil), group.Members...)
+	return group
 }
 
 func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope, maxOpsPerHolder int) ([]perasFrozenPlan, error) {

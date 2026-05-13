@@ -336,8 +336,19 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		left.Kind != right.Kind ||
 		left.DescriptorDigest != right.DescriptorDigest ||
 		left.PredicateProofDigest != right.PredicateProofDigest ||
+		left.Segment != right.Segment ||
+		left.Durability != right.Durability ||
+		left.Atomicity.Splittable != right.Atomicity.Splittable ||
+		left.Atomicity.Recovery != right.Atomicity.Recovery ||
+		left.Atomicity.Digest != right.Atomicity.Digest ||
+		len(left.Atomicity.Members) != len(right.Atomicity.Members) ||
 		len(left.Mutations) != len(right.Mutations) {
 		return false
+	}
+	for i := range left.Atomicity.Members {
+		if left.Atomicity.Members[i] != right.Atomicity.Members[i] {
+			return false
+		}
 	}
 	for i := range left.Mutations {
 		l := left.Mutations[i]

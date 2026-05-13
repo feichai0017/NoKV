@@ -464,6 +464,38 @@ func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
 	require.Equal(t, SlowReasonDurabilityBarrier, decision.Reason)
 }
 
+func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
+	left, err := Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 8,
+		Name:   "a",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, testParentInDifferentBucket(t, 8))
+	require.NoError(t, err)
+	right, err := Create(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 8,
+		Name:   "b",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, testParentInDifferentBucketAfter(t, 8, 128))
+	require.NoError(t, err)
+
+	leftPlan := CompileDelta(left).Segment
+	rightPlan := CompileDelta(right).Segment
+	decision := CanAppendSegmentPlans(leftPlan, rightPlan, DurabilityVisibleOnly, SegmentBudget{MaxMutations: 4})
+	require.Equal(t, SegmentDecisionAppend, decision.Kind)
+
+	merged := MergeSegmentPlans(leftPlan, rightPlan)
+	require.Equal(t, uint32(2), merged.OperationCount)
+	require.Equal(t, uint32(4), merged.MutationCount)
+	require.Greater(t, merged.EstimatedPayloadBytes, leftPlan.EstimatedPayloadBytes)
+
+	catalog := CatalogSegmentPlan(leftPlan)
+	require.Equal(t, SegmentInstallCatalog, catalog.Install)
+	require.Equal(t, SegmentInstallCatalog, catalog.MergeKey.Install)
+	require.Zero(t, catalog.MergeKey.PrimaryBucket)
+}
+
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
 	sameParent, err := Rename(fsmeta.RenameRequest{
 		Mount:      "vol",

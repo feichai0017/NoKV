@@ -358,25 +358,44 @@ func WithGuardProofs(op MaterializedOp, proofs []GuardProof) MaterializedOp {
 }
 
 func CanAppendSegment(current, next CompiledOp, budget SegmentBudget) SegmentDecision {
-	if next.Durability != DurabilityVisibleOnly {
+	return CanAppendSegmentPlans(current.Segment, next.Segment, next.Durability, budget)
+}
+
+func CanAppendSegmentPlans(current, next SegmentPlan, nextDurability DurabilityClass, budget SegmentBudget) SegmentDecision {
+	if nextDurability != DurabilityVisibleOnly {
 		return SegmentDecision{Kind: SegmentDecisionFlushBeforeAndAfter, Reason: SlowReasonDurabilityBarrier}
 	}
-	if !current.Segment.CanAppend || !next.Segment.CanAppend {
+	if !current.CanAppend || !next.CanAppend {
 		return SegmentDecision{Kind: SegmentDecisionReject, Reason: SlowReasonDynamicWriteSet}
 	}
-	if current.Segment.MergeKey != next.Segment.MergeKey {
+	if current.MergeKey != next.MergeKey {
 		return SegmentDecision{Kind: SegmentDecisionCut, Reason: SlowReasonCrossBucket}
 	}
-	if budget.MaxOperations > 0 && current.Segment.OperationCount+next.Segment.OperationCount > budget.MaxOperations {
+	if budget.MaxOperations > 0 && current.OperationCount+next.OperationCount > budget.MaxOperations {
 		return SegmentDecision{Kind: SegmentDecisionCut}
 	}
-	if budget.MaxMutations > 0 && current.Segment.MutationCount+next.Segment.MutationCount > budget.MaxMutations {
+	if budget.MaxMutations > 0 && current.MutationCount+next.MutationCount > budget.MaxMutations {
 		return SegmentDecision{Kind: SegmentDecisionCut}
 	}
-	if budget.MaxPayloadBytes > 0 && current.Segment.EstimatedPayloadBytes+next.Segment.EstimatedPayloadBytes > budget.MaxPayloadBytes {
+	if budget.MaxPayloadBytes > 0 && current.EstimatedPayloadBytes+next.EstimatedPayloadBytes > budget.MaxPayloadBytes {
 		return SegmentDecision{Kind: SegmentDecisionCut}
 	}
 	return SegmentDecision{Kind: SegmentDecisionAppend}
+}
+
+func MergeSegmentPlans(current, next SegmentPlan) SegmentPlan {
+	out := current
+	out.OperationCount += next.OperationCount
+	out.MutationCount += next.MutationCount
+	out.EstimatedPayloadBytes += next.EstimatedPayloadBytes
+	return out
+}
+
+func CatalogSegmentPlan(plan SegmentPlan) SegmentPlan {
+	plan.Install = SegmentInstallCatalog
+	plan.MergeKey.PrimaryBucket = 0
+	plan.MergeKey.Install = SegmentInstallCatalog
+	return plan
 }
 
 func fenceMode(delta SemanticDelta) FenceMode {
