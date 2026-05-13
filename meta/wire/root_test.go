@@ -68,16 +68,21 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		SuccessorGrantID:   "grant-1",
 		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
 	}
+	perasGrant := testWirePerasAuthorityGrant()
+	perasSeal := testWirePerasAuthoritySeal(perasGrant)
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:      7,
-		MembershipEpoch:   3,
-		LastCommitted:     rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:           100,
-		TSOFence:          200,
-		ActiveGrants:      []rootproto.AuthorityGrant{grant},
-		RetiredGrants:     []rootproto.GrantRetirement{retirement},
-		GrantInheritances: []rootproto.GrantInheritance{inheritance},
+		ClusterEpoch:        7,
+		MembershipEpoch:     3,
+		LastCommitted:       rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:             100,
+		TSOFence:            200,
+		ActiveGrants:        []rootproto.AuthorityGrant{grant},
+		RetiredGrants:       []rootproto.GrantRetirement{retirement},
+		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
+		PerasAuthorityEpoch: perasGrant.EpochID,
+		PerasAuthoritySeals: []rootproto.PerasAuthoritySeal{perasSeal},
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -91,6 +96,10 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, retirement, RootGrantRetirementFromProto(RootGrantRetirementToProto(retirement)))
 	require.Nil(t, RootGrantInheritanceToProto(rootproto.GrantInheritance{}))
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
+	require.Nil(t, RootPerasAuthorityGrantToProto(rootproto.PerasAuthorityGrant{}))
+	require.Equal(t, perasGrant, RootPerasAuthorityGrantFromProto(RootPerasAuthorityGrantToProto(perasGrant)))
+	require.Nil(t, RootPerasAuthoritySealToProto(rootproto.PerasAuthoritySeal{}))
+	require.Equal(t, perasSeal, RootPerasAuthoritySealFromProto(RootPerasAuthoritySealToProto(perasSeal)))
 
 	protocolState := rootstate.EunomiaState{
 		ActiveGrants:      state.ActiveGrants,
@@ -111,6 +120,24 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	}
 	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
+
+	perasCmd := rootproto.PerasAuthorityCommand{
+		Kind:                 rootproto.PerasAuthorityActAcquire,
+		HolderID:             perasGrant.HolderID,
+		GrantID:              perasGrant.GrantID,
+		Scope:                perasGrant.Scope,
+		ExpiresUnixNano:      perasGrant.ExpiresUnixNano,
+		NowUnixNano:          321,
+		PredecessorDigest:    [32]byte{1, 2, 3},
+		QuotaCreditBytes:     4096,
+		QuotaCreditInodes:    128,
+		SegmentRoot:          perasSeal.SegmentRoot,
+		SegmentPayloadDigest: perasSeal.SegmentPayloadDigest,
+		OperationCount:       perasSeal.OperationCount,
+		EntryCount:           perasSeal.EntryCount,
+	}
+	require.Equal(t, perasCmd, RootPerasAuthorityCommandFromProto(RootPerasAuthorityCommandToProto(perasCmd)))
+	require.Equal(t, rootproto.PerasAuthorityCommand{}, RootPerasAuthorityCommandFromProto(nil))
 
 	cert := rootproto.GrantCertificate{
 		Grant:       grant,
@@ -294,6 +321,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.GrantIssued(grant),
 		rootevent.GrantSealed(retirement),
 		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
+		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
+		rootevent.PerasAuthoritySealed(testWirePerasAuthoritySeal(testWirePerasAuthorityGrant())),
+		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
 		rootevent.SnapshotEpochPublished("vol", 1, 42, 99),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
@@ -357,6 +387,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindGrantSealed,
 		rootevent.KindGrantRetired,
 		rootevent.KindGrantInherited,
+		rootevent.KindPerasAuthorityGranted,
+		rootevent.KindPerasAuthoritySealed,
+		rootevent.KindPerasAuthorityRetired,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
@@ -376,6 +409,49 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Equal(t, rootstate.PendingPeerChangeUnknown, rootPendingPeerChangeKindFromProto(metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED))
 	require.Equal(t, rootstate.PendingRangeChangeMerge, rootPendingRangeChangeKindFromProto(rootPendingRangeChangeKindToProto(rootstate.PendingRangeChangeMerge)))
 	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
+}
+
+func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
+	var predecessor [32]byte
+	predecessor[0] = 7
+	return rootproto.PerasAuthorityGrant{
+		GrantID:  "peras-1",
+		EpochID:  11,
+		HolderID: "fsmeta-holder-a",
+		Scope: rootproto.PerasAuthorityScope{
+			MountID:    "vol",
+			MountKeyID: 42,
+			Buckets:    []uint16{1, 2},
+			Parents:    []uint64{10},
+			Inodes:     []uint64{20},
+		},
+		ExpiresUnixNano:   12345,
+		PredecessorDigest: predecessor,
+		QuotaCreditBytes:  4096,
+		QuotaCreditInodes: 8,
+	}
+}
+
+func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.PerasAuthoritySeal {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = 9
+	digest[0] = 8
+	return rootproto.PerasAuthoritySeal{
+		GrantID:              grant.GrantID,
+		EpochID:              grant.EpochID,
+		HolderID:             grant.HolderID,
+		Scope:                grant.Scope,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+		OperationCount:       10,
+		EntryCount:           20,
+		SealedUnixNano:       30,
+		InstallRegionID:      7,
+		InstallTerm:          3,
+		InstallIndex:         99,
+		InstallVersion:       1234,
+	}
 }
 
 func testWireDescriptor(id uint64, start, end []byte) topology.Descriptor {

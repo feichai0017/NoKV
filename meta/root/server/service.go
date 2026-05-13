@@ -44,6 +44,10 @@ type leaseBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
+type perasAuthorityBackend interface {
+	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
+}
+
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
 type Service struct {
 	metapb.UnimplementedMetadataRootServer
@@ -162,6 +166,42 @@ func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyG
 		State:       metawire.RootEunomiaStateToProto(protocolState),
 		Status:      applyStatus,
 		Certificate: metawire.RootGrantCertificateToProto(cert),
+	}, nil
+}
+
+func (s *Service) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataRootApplyPerasAuthorityRequest) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+	if s == nil || s.backend == nil {
+		return &metapb.MetadataRootApplyPerasAuthorityResponse{}, nil
+	}
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
+	backend, ok := s.backend.(perasAuthorityBackend)
+	if !ok {
+		return nil, statusUnimplemented("metadata root backend does not implement Peras authority protocol")
+	}
+	cmd := metawire.RootPerasAuthorityCommandFromProto(req.GetCommand())
+	state, grant, err := backend.ApplyPerasAuthority(ctx, cmd)
+	if err != nil {
+		if errors.Is(err, rootstate.ErrPrimacy) {
+			return &metapb.MetadataRootApplyPerasAuthorityResponse{
+				State:  metawire.RootStateToProto(state),
+				Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
+			}, nil
+		}
+		return nil, rpcError(err)
+	}
+	applyStatus := metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED
+	switch cmd.Kind {
+	case rootproto.PerasAuthorityActRetire:
+		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED
+	case rootproto.PerasAuthorityActSeal:
+		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED
+	}
+	return &metapb.MetadataRootApplyPerasAuthorityResponse{
+		State:  metawire.RootStateToProto(state),
+		Status: applyStatus,
+		Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
 	}, nil
 }
 

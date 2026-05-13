@@ -104,6 +104,25 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listMountsResp.GetMounts(), 1)
 
+	now := time.Now()
+	perasResp, err := cli.ApplyPerasAuthority(context.Background(), &coordpb.ApplyPerasAuthorityRequest{
+		Command: metawire.RootPerasAuthorityCommandToProto(rootproto.PerasAuthorityCommand{
+			Kind:            rootproto.PerasAuthorityActAcquire,
+			HolderID:        "fsmeta-holder",
+			NowUnixNano:     now.UnixNano(),
+			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
+			Scope: rootproto.PerasAuthorityScope{
+				MountID:    "vol",
+				MountKeyID: 1,
+				Buckets:    []uint16{1},
+			},
+		}),
+	})
+	require.NoError(t, err)
+	require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED, perasResp.GetStatus())
+	require.Equal(t, "fsmeta-holder/1", perasResp.GetGrant().GetGrantId())
+	require.Len(t, perasResp.GetActiveGrants(), 1)
+
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 2,
@@ -239,6 +258,9 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
+func (f *followerStorage) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+}
 func (f *followerStorage) Refresh() error            { return nil }
 func (f *followerStorage) Close() error              { return nil }
 func (f *followerStorage) CanSubmitRootWrites() bool { return false }
@@ -372,6 +394,53 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	}
 }
 
+func (s *clientRootStorage) ApplyPerasAuthority(_ context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	holderID := strings.TrimSpace(cmd.HolderID)
+	switch cmd.Kind {
+	case rootproto.PerasAuthorityActAcquire:
+		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		}
+		if active, ok := s.snapshot.RootSnapshot().State.ActivePerasGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
+				return rootstate.CloneState(s.snapshot.RootSnapshot().State), active, nil
+			}
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		epoch := s.snapshot.PerasAuthorityEpoch + 1
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
+		}
+		grant := rootproto.PerasAuthorityGrant{
+			GrantID:           grantID,
+			EpochID:           epoch,
+			HolderID:          holderID,
+			Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
+			ExpiresUnixNano:   cmd.ExpiresUnixNano,
+			PredecessorDigest: cmd.PredecessorDigest,
+			QuotaCreditBytes:  cmd.QuotaCreditBytes,
+			QuotaCreditInodes: cmd.QuotaCreditInodes,
+		}
+		s.applyEventLocked(rootevent.PerasAuthorityGranted(grant))
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), grant, nil
+	case rootproto.PerasAuthorityActRetire:
+		active, ok := s.snapshot.ActivePerasGrantByID(strings.TrimSpace(cmd.GrantID))
+		if !ok {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, nil
+		}
+		if active.HolderID != holderID {
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		s.applyEventLocked(rootevent.PerasAuthorityRetired(active))
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, nil
+	default:
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+}
+
 func (s *clientRootStorage) Refresh() error            { return nil }
 func (s *clientRootStorage) Close() error              { return nil }
 func (s *clientRootStorage) CanSubmitRootWrites() bool { return s.leader }
@@ -468,6 +537,90 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.False(t, IsGrantNotHeld(errEmptyAddress))
 	_, ok := LeaderHint(errEmptyAddress)
 	require.False(t, ok)
+}
+
+func TestValidateListPerasAuthorityGrantsResponse(t *testing.T) {
+	grant := rootproto.PerasAuthorityGrant{
+		GrantID:         "peras-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
+	require.NoError(t, validateListPerasAuthorityGrantsResponse(&coordpb.ListPerasAuthorityGrantsResponse{
+		Grants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	}))
+
+	require.Error(t, validateListPerasAuthorityGrantsResponse(nil))
+	require.Error(t, validateListPerasAuthorityGrantsResponse(&coordpb.ListPerasAuthorityGrantsResponse{
+		Grants: []*metapb.RootPerasAuthorityGrant{
+			metawire.RootPerasAuthorityGrantToProto(grant),
+			metawire.RootPerasAuthorityGrantToProto(grant),
+		},
+	}))
+}
+
+func TestValidateListPerasAuthoritySealsResponse(t *testing.T) {
+	seal := rootproto.PerasAuthoritySeal{
+		GrantID:              "peras-1",
+		EpochID:              1,
+		HolderID:             "holder-a",
+		Scope:                rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		SegmentRoot:          [32]byte{1},
+		SegmentPayloadDigest: [32]byte{2},
+		OperationCount:       3,
+		EntryCount:           4,
+		SealedUnixNano:       time.Now().UnixNano(),
+		InstallRegionID:      5,
+		InstallTerm:          6,
+		InstallIndex:         7,
+		InstallVersion:       8,
+	}
+	require.NoError(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
+		Seals: []*metapb.RootPerasAuthoritySeal{metawire.RootPerasAuthoritySealToProto(seal)},
+	}))
+
+	require.Error(t, validateListPerasAuthoritySealsResponse(nil))
+	require.Error(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
+		Seals: []*metapb.RootPerasAuthoritySeal{
+			metawire.RootPerasAuthoritySealToProto(seal),
+			metawire.RootPerasAuthoritySealToProto(seal),
+		},
+	}))
+}
+
+func TestValidateApplyPerasAuthorityResponse(t *testing.T) {
+	grant := rootproto.PerasAuthorityGrant{
+		GrantID:         "peras-1",
+		EpochID:         1,
+		HolderID:        "holder-a",
+		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
+	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
+		Grant:        metawire.RootPerasAuthorityGrantToProto(grant),
+		ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	}))
+	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
+		ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	}))
+	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED,
+	}))
+
+	require.Error(t, validateApplyPerasAuthorityResponse(nil))
+	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
+	}))
+	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
+		Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
+	}))
+	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
+		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED,
+	}))
 }
 
 func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {

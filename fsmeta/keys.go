@@ -24,6 +24,7 @@ import (
 //	  chunk   'c' : inode be64 | chunk index be64
 //	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
+//	  peras   'p' : record-kind byte | sealed segment root sha256
 //
 // Big-endian integer fields preserve numeric order inside each key family.
 var keyMagic = []byte{'f', 's', 'm', 0}
@@ -49,7 +50,24 @@ const (
 	KeyKindChunk   KeyKind = 'c'
 	KeyKindSession KeyKind = 's'
 	KeyKindUsage   KeyKind = 'u'
+	KeyKindPeras   KeyKind = 'p'
 )
+
+const (
+	PerasSegmentRecordObject byte = 'o'
+	PerasSegmentRecordIndex  byte = 'i'
+)
+
+type KeyParts struct {
+	MountKeyID  MountKeyID
+	Bucket      AffinityBucket
+	Kind        KeyKind
+	Parent      InodeID
+	Inode       InodeID
+	UsageScope  InodeID
+	PerasRecord byte
+	PerasRoot   [32]byte
+}
 
 func (k KeyKind) String() string {
 	switch k {
@@ -65,6 +83,8 @@ func (k KeyKind) String() string {
 		return "session"
 	case KeyKindUsage:
 		return "usage"
+	case KeyKindPeras:
+		return "peras"
 	default:
 		return fmt.Sprintf("unknown(%d)", byte(k))
 	}
@@ -195,6 +215,48 @@ func EncodeUsageKey(mount MountIdentity, scope InodeID) ([]byte, error) {
 	return encodeKey(mount, BucketForInodeID(scope), KeyKindUsage, body[:])
 }
 
+// EncodePerasSegmentCatalogIndexKey returns the hidden per-bucket catalog key
+// that points reads at one durable Peras segment object. It deliberately takes
+// the rooted mount key id rather than a human mount name because recovery
+// reconstructs it from already-encoded fsmeta keys.
+func EncodePerasSegmentCatalogIndexKey(mountKeyID MountKeyID, bucket AffinityBucket, root [32]byte) ([]byte, error) {
+	return encodePerasSegmentKey(mountKeyID, bucket, PerasSegmentRecordIndex, root)
+}
+
+// EncodePerasSegmentObjectKey returns the hidden segment-object key that stores
+// one copy of a sealed segment payload. Per-bucket catalog keys point at this
+// object so multi-bucket segments do not duplicate payload bytes.
+func EncodePerasSegmentObjectKey(mountKeyID MountKeyID, bucket AffinityBucket, root [32]byte) ([]byte, error) {
+	return encodePerasSegmentKey(mountKeyID, bucket, PerasSegmentRecordObject, root)
+}
+
+func encodePerasSegmentKey(mountKeyID MountKeyID, bucket AffinityBucket, record byte, root [32]byte) ([]byte, error) {
+	if err := validateMountKeyID(mountKeyID); err != nil {
+		return nil, err
+	}
+	if root == ([32]byte{}) {
+		return nil, ErrInvalidKey
+	}
+	switch record {
+	case PerasSegmentRecordObject, PerasSegmentRecordIndex:
+	default:
+		return nil, ErrInvalidKey
+	}
+	body := make([]byte, 1+len(root))
+	body[0] = record
+	copy(body[1:], root[:])
+	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, body), nil
+}
+
+// EncodePerasSegmentCatalogIndexPrefix returns the hidden catalog scan prefix
+// for durable Peras segment indexes in one mount-local affinity bucket.
+func EncodePerasSegmentCatalogIndexPrefix(mountKeyID MountKeyID, bucket AffinityBucket) ([]byte, error) {
+	if err := validateMountKeyID(mountKeyID); err != nil {
+		return nil, err
+	}
+	return encodeKeyForMountKeyID(mountKeyID, bucket, KeyKindPeras, []byte{PerasSegmentRecordIndex}), nil
+}
+
 // KeyKindOf returns the kind byte encoded in a fsmeta key.
 func KeyKindOf(key []byte) (KeyKind, error) {
 	_, pos, err := decodeHeaderParts(key)
@@ -206,7 +268,7 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 	kind := KeyKind(key[pos])
 	switch kind {
-	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage:
+	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindPeras:
 		return kind, nil
 	default:
 		return 0, ErrInvalidKeyKind
@@ -246,6 +308,69 @@ func BucketOfKey(key []byte) (AffinityBucket, bool) {
 	return AffinityBucket(binary.BigEndian.Uint16(key[pos : pos+encodedBucketBytes])), true
 }
 
+func InspectKey(key []byte) (KeyParts, bool) {
+	mount, bucketPos, err := decodeMountPrefix(key)
+	if err != nil || len(key)-bucketPos < encodedBucketBytes+1 {
+		return KeyParts{}, false
+	}
+	kindPos := bucketPos + encodedBucketBytes
+	kind := KeyKind(key[kindPos])
+	parts := KeyParts{
+		MountKeyID: mount,
+		Bucket:     AffinityBucket(binary.BigEndian.Uint16(key[bucketPos:kindPos])),
+		Kind:       kind,
+	}
+	body := key[kindPos+1:]
+	switch kind {
+	case KeyKindMount:
+		return parts, len(body) == 0
+	case KeyKindDentry:
+		if len(body) <= 8 {
+			return KeyParts{}, false
+		}
+		parts.Parent = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindInode:
+		if len(body) != 8 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindChunk:
+		if len(body) != 16 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindSession:
+		if len(body) < 9 {
+			return KeyParts{}, false
+		}
+		parts.Inode = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindUsage:
+		if len(body) != 8 {
+			return KeyParts{}, false
+		}
+		parts.UsageScope = InodeID(binary.BigEndian.Uint64(body[:8]))
+		return parts, true
+	case KeyKindPeras:
+		if len(body) != 1+len(parts.PerasRoot) {
+			return KeyParts{}, false
+		}
+		switch body[0] {
+		case PerasSegmentRecordObject, PerasSegmentRecordIndex:
+			parts.PerasRecord = body[0]
+		default:
+			return KeyParts{}, false
+		}
+		copy(parts.PerasRoot[:], body[1:])
+		return parts, true
+	default:
+		return KeyParts{}, false
+	}
+}
+
 // MountKeyResolver adapts fsmeta keys to raftstore MVCC GC mount-scoped
 // retention policy.
 func MountKeyResolver(key []byte) (uint64, bool) {
@@ -278,6 +403,11 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 			return localdb.UserKeyShape{}
 		}
 		shape.BloomPrefix = key[:bodyPos+8]
+	case KeyKindPeras:
+		if len(key) < bodyPos+33 {
+			return localdb.UserKeyShape{}
+		}
+		shape.BloomPrefix = key[:bodyPos+33]
 	default:
 		return localdb.UserKeyShape{}
 	}
@@ -322,14 +452,23 @@ func ChooseWorkspaceBucket(mount MountIdentity, name string) AffinityBucket {
 }
 
 func encodeKey(mount MountIdentity, bucket AffinityBucket, kind KeyKind, body []byte) ([]byte, error) {
-	out, err := encodeMountPrefix(mount, encodedBucketBytes+1+len(body))
-	if err != nil {
+	if err := validateMountIdentity(mount); err != nil {
 		return nil, err
 	}
+	return encodeKeyForMountKeyID(mount.MountKeyID, bucket, kind, body), nil
+}
+
+func encodeKeyForMountKeyID(mountKeyID MountKeyID, bucket AffinityBucket, kind KeyKind, body []byte) []byte {
+	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+encodedBucketBytes+1+len(body))
+	out = append(out, keyMagic...)
+	out = append(out, keySchemaVersion)
+	var mountBuf [encodedMountKeyBytes]byte
+	binary.BigEndian.PutUint64(mountBuf[:], uint64(mountKeyID))
+	out = append(out, mountBuf[:]...)
 	out = appendBucket(out, bucket)
 	out = append(out, byte(kind))
 	out = append(out, body...)
-	return out, nil
+	return out
 }
 
 func encodeMountPrefix(mount MountIdentity, suffixLen int) ([]byte, error) {

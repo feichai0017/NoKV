@@ -171,6 +171,10 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 	}
 }
 
+func (s *protocolMatrixStorage) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+}
+
 func (s *protocolMatrixStorage) advanceRootToken() {
 	if s.snapshot.RootToken.Cursor.Term == 0 {
 		s.snapshot.RootToken.Cursor.Term = 1

@@ -5,6 +5,7 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 // EventsFromCommand inspects one applied raft command (entry + paired
@@ -76,9 +77,59 @@ func EventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *
 				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
 				AtomicMutate:  true,
 			})
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			install := request.GetPerasInstallSegment()
+			if install == nil || install.GetInstallVersion() == 0 || response == nil || response.GetPerasInstallSegment() == nil {
+				continue
+			}
+			if response.GetPerasInstallSegment().GetError() != nil {
+				continue
+			}
+			keys := perasSegmentKeys(install)
+			if len(keys) == 0 {
+				continue
+			}
+			out = append(out, Event{
+				RegionID:      regionID,
+				Term:          entry.Term,
+				Index:         entry.Index,
+				Source:        SourceCommit,
+				CommitVersion: install.GetInstallVersion(),
+				Keys:          keys,
+			})
 		}
 	}
 	return out
+}
+
+// AttachCommandCursor copies the raft apply cursor into response payloads that
+// need to publish from the submitter process after apply completes.
+func AttachCommandCursor(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *raftcmdpb.RaftCmdResponse) {
+	if req == nil || resp == nil {
+		return
+	}
+	regionID := req.GetHeader().GetRegionId()
+	responses := resp.GetResponses()
+	for i, request := range req.GetRequests() {
+		if request == nil || request.GetCmdType() != raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+			continue
+		}
+		install := request.GetPerasInstallSegment()
+		if install == nil {
+			continue
+		}
+		if i >= len(responses) || responses[i] == nil {
+			continue
+		}
+		peras := responses[i].GetPerasInstallSegment()
+		if peras == nil || peras.GetError() != nil {
+			continue
+		}
+		peras.RegionId = regionID
+		peras.Term = entry.Term
+		peras.Index = entry.Index
+		peras.CommitVersion = install.GetInstallVersion()
+	}
 }
 
 func cloneKeys(keys [][]byte) [][]byte {
@@ -108,4 +159,12 @@ func cloneMutationKeys(mutations []*kvrpcpb.Mutation) [][]byte {
 		out = append(out, kv.SafeCopy(nil, mut.GetKey()))
 	}
 	return out
+}
+
+func perasSegmentKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {
+	keys := rsperas.WatchKeys(req)
+	for idx := range keys {
+		keys[idx] = kv.SafeCopy(nil, keys[idx])
+	}
+	return keys
 }

@@ -31,24 +31,27 @@ import (
 )
 
 type fakeStorage struct {
-	mu            sync.Mutex
-	eventCalls    int
-	saveCalls     int
-	loadCalls     int
-	campaignCalls int
-	sealCalls     int
-	reattachCalls int
-	eventErr      error
-	saveErr       error
-	loadErr       error
-	campaignErr   error
-	sealErr       error
-	lastID        uint64
-	lastTS        uint64
-	leader        bool
-	leaderID      uint64
-	lastEvent     rootevent.Event
-	snapshot      rootview.Snapshot
+	mu               sync.Mutex
+	eventCalls       int
+	saveCalls        int
+	loadCalls        int
+	campaignCalls    int
+	sealCalls        int
+	reattachCalls    int
+	eventErr         error
+	saveErr          error
+	loadErr          error
+	campaignErr      error
+	sealErr          error
+	applyPerasErr    error
+	lastID           uint64
+	lastTS           uint64
+	leader           bool
+	leaderID         uint64
+	lastEvent        rootevent.Event
+	lastPerasCommand rootproto.PerasAuthorityCommand
+	applyPerasCalls  int
+	snapshot         rootview.Snapshot
 }
 
 func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
@@ -182,6 +185,26 @@ func upsertTestGrant(grants []rootproto.AuthorityGrant, grant rootproto.Authorit
 }
 
 func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootproto.AuthorityGrant {
+	for i := 0; i < len(grants); i++ {
+		if grants[i].GrantID == grantID {
+			grants = append(grants[:i], grants[i+1:]...)
+			i--
+		}
+	}
+	return grants
+}
+
+func upsertTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grant rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
+	for i := range grants {
+		if grants[i].GrantID == grant.GrantID {
+			grants[i] = rootproto.ClonePerasAuthorityGrant(grant)
+			return grants
+		}
+	}
+	return append(grants, rootproto.ClonePerasAuthorityGrant(grant))
+}
+
+func removeTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grantID string) []rootproto.PerasAuthorityGrant {
 	for i := 0; i < len(grants); i++ {
 		if grants[i].GrantID == grantID {
 			grants = append(grants[:i], grants[i+1:]...)
@@ -403,6 +426,69 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	default:
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
+}
+
+func (f *fakeStorage) ApplyPerasAuthority(_ context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applyPerasCalls++
+	f.lastPerasCommand = cmd
+	if f.applyPerasErr != nil {
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, f.applyPerasErr
+	}
+	switch cmd.Kind {
+	case rootproto.PerasAuthorityActAcquire:
+		holderID := strings.TrimSpace(cmd.HolderID)
+		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		}
+		if active, ok := f.perasState().ActivePerasGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
+				return f.perasState(), active, nil
+			}
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		epoch := f.snapshot.PerasAuthorityEpoch + 1
+		grantID := strings.TrimSpace(cmd.GrantID)
+		if grantID == "" {
+			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
+		}
+		grant := rootproto.PerasAuthorityGrant{
+			GrantID:           grantID,
+			EpochID:           epoch,
+			HolderID:          holderID,
+			Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
+			ExpiresUnixNano:   cmd.ExpiresUnixNano,
+			PredecessorDigest: cmd.PredecessorDigest,
+			QuotaCreditBytes:  cmd.QuotaCreditBytes,
+			QuotaCreditInodes: cmd.QuotaCreditInodes,
+		}
+		f.snapshot.ActivePerasGrants = upsertTestPerasGrant(f.snapshot.ActivePerasGrants, grant)
+		if grant.EpochID > f.snapshot.PerasAuthorityEpoch {
+			f.snapshot.PerasAuthorityEpoch = grant.EpochID
+		}
+		f.advanceRootToken()
+		return f.perasState(), grant, nil
+	case rootproto.PerasAuthorityActRetire:
+		grantID := strings.TrimSpace(cmd.GrantID)
+		holderID := strings.TrimSpace(cmd.HolderID)
+		active, ok := f.snapshot.ActivePerasGrantByID(grantID)
+		if !ok {
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
+		}
+		if active.HolderID != holderID {
+			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		}
+		f.snapshot.ActivePerasGrants = removeTestPerasGrant(f.snapshot.ActivePerasGrants, grantID)
+		f.advanceRootToken()
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
+	default:
+		return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+}
+
+func (f *fakeStorage) perasState() rootstate.State {
+	return rootstate.CloneState(f.snapshot.RootSnapshot().State)
 }
 
 func (f *fakeStorage) advanceRootToken() {

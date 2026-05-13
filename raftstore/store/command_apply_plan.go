@@ -4,9 +4,11 @@ import (
 	"fmt"
 
 	xxhash "github.com/cespare/xxhash/v2"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 type commandApplyPlan struct {
@@ -31,6 +33,7 @@ const (
 	commandApplyDependencyUserKey commandApplyDependencyClass = iota + 1
 	commandApplyDependencyTxnPrimary
 	commandApplyDependencyTxnIntent
+	commandApplyDependencyPerasSegment
 )
 
 type commandApplyDependencyKey struct {
@@ -146,6 +149,13 @@ func commandApplyDependencies(req *raftcmdpb.RaftCmdRequest) ([]commandApplyDepe
 				return nil, true
 			}
 			return nil, true
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			install := r.GetPerasInstallSegment()
+			var ok bool
+			deps, ok = appendCommandApplyPerasInstallSegment(deps, install)
+			if !ok {
+				return nil, true
+			}
 		case raftcmdpb.CmdType_CMD_GET, raftcmdpb.CmdType_CMD_SCAN:
 			return nil, true
 		default:
@@ -182,6 +192,22 @@ func appendCommandApplyUserWrite(dst []commandApplyDependency, key []byte) []com
 
 func appendCommandApplyVersionedWrite(dst []commandApplyDependency, class commandApplyDependencyClass, key []byte, version uint64) []commandApplyDependency {
 	return appendCommandApplyDependency(dst, class, key, version, commandApplyDependencyWrite)
+}
+
+func appendCommandApplyPerasInstallSegment(dst []commandApplyDependency, req *kvrpcpb.PerasInstallSegmentRequest) ([]commandApplyDependency, bool) {
+	info, err := rsperas.InspectInstallRequest(req)
+	if err != nil {
+		return nil, false
+	}
+	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, info.Root[:], 0, commandApplyDependencyWrite)
+	keys, err := rsperas.InstallKeys(req)
+	if err != nil {
+		return nil, false
+	}
+	for _, key := range keys {
+		dst = appendCommandApplyUserWrite(dst, key)
+	}
+	return dst, true
 }
 
 func appendCommandApplyDependency(dst []commandApplyDependency, class commandApplyDependencyClass, key []byte, version uint64, mode commandApplyDependencyMode) []commandApplyDependency {

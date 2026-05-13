@@ -15,6 +15,7 @@ import (
 const (
 	defaultWriteCommandBatchMaxSize = 64
 	defaultWriteCommandBatchMaxWait = 200 * time.Microsecond
+	perasInstallSegmentBatchMaxSize = 4
 )
 
 var batchedWriteCommandTypes = []raftcmdpb.CmdType{
@@ -23,6 +24,7 @@ var batchedWriteCommandTypes = []raftcmdpb.CmdType{
 	raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 	raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 	raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+	raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 }
 
 type writeCommandProposer func(context.Context, *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
@@ -57,6 +59,7 @@ type writeCommandCounters struct {
 type writeCommandBatch struct {
 	header  *raftcmdpb.CmdHeader
 	cmdType raftcmdpb.CmdType
+	maxSize int
 	items   []*writeCommandBatchItem
 	timer   *time.Timer
 }
@@ -117,10 +120,12 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 	b.mu.Lock()
 	batch := b.batches[key]
 	if batch == nil {
+		maxSize := writeCommandBatchMaxSize(cmdType, b.maxSize)
 		batch = &writeCommandBatch{
 			header:  cloneCmdHeader(header),
 			cmdType: cmdType,
-			items:   make([]*writeCommandBatchItem, 0, b.maxSize),
+			maxSize: maxSize,
+			items:   make([]*writeCommandBatchItem, 0, maxSize),
 		}
 		b.batches[key] = batch
 		batch.timer = time.AfterFunc(b.maxWait, func() {
@@ -128,7 +133,7 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 		})
 	}
 	batch.items = append(batch.items, item)
-	if len(batch.items) >= b.maxSize {
+	if len(batch.items) >= batch.maxSize {
 		delete(b.batches, key)
 		if batch.timer != nil {
 			batch.timer.Stop()
@@ -147,6 +152,13 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 	case <-ctx.Done():
 		return nil, nil, rpcStatus(ctx.Err())
 	}
+}
+
+func writeCommandBatchMaxSize(cmdType raftcmdpb.CmdType, fallback int) int {
+	if cmdType == raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT && fallback > perasInstallSegmentBatchMaxSize {
+		return perasInstallSegmentBatchMaxSize
+	}
+	return fallback
 }
 
 func (b *writeCommandBatcher) flushKey(key writeCommandBatchKey) {
@@ -317,6 +329,8 @@ func writeCommandName(cmdType raftcmdpb.CmdType) string {
 		return "resolve_lock"
 	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
 		return "atomic_mutate"
+	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		return "peras_install_segment"
 	default:
 		return "unknown"
 	}

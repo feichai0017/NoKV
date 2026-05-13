@@ -17,6 +17,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/fsmeta"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	local "github.com/feichai0017/NoKV/local"
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -61,6 +62,10 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCResolveBatchLocks := fs.Int("mvcc-gc-resolve-batch-locks", 0, "maximum expired locks resolved per replicated maintenance batch")
 	mvccGCResolveMaxLocks := fs.Uint64("mvcc-gc-resolve-max-locks", 0, "maximum MVCC locks scanned by one lock-resolution pass; zero means unlimited")
 	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
+	storageMaxBatchCount := fs.Int64("storage-max-batch-count", 0, "maximum internal entries accepted by one local storage batch; zero uses engine default")
+	storageMaxBatchSize := fs.Int64("storage-max-batch-size", 0, "maximum bytes accepted by one local storage batch; zero uses engine default")
+	perasWitnessEnabled := fs.Bool("peras-witness", false, "enable experimental fsmeta Peras witness RPCs backed by the local control WAL")
+	perasWitnessDurability := fs.String("peras-witness-durability", "fsync-batched", "peras witness WAL durability: fsync-batched|fsync|flushed|buffered")
 	var storeAddrFlags []string
 	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -123,6 +128,13 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 	if *mvccGCBatchEntries < 0 || *mvccGCResolveBatchLocks < 0 {
 		return fmt.Errorf("mvcc-gc batch limits must be non-negative")
+	}
+	if *storageMaxBatchCount < 0 || *storageMaxBatchSize < 0 {
+		return fmt.Errorf("storage batch limits must be non-negative")
+	}
+	perasDurability, err := parsePerasWitnessDurability(*perasWitnessDurability)
+	if err != nil {
+		return err
 	}
 	explicitStoreAddrs := make(map[uint64]string, len(storeAddrFlags))
 	for _, mapping := range storeAddrFlags {
@@ -199,6 +211,12 @@ func runServeCmd(w io.Writer, args []string) error {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = *workDir
 	opt.MemTableEngine = local.MemTableEngineART
+	if *storageMaxBatchCount > 0 {
+		opt.MaxBatchCount = *storageMaxBatchCount
+	}
+	if *storageMaxBatchSize > 0 {
+		opt.MaxBatchSize = *storageMaxBatchSize
+	}
 	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
 	opt.UserKeyShapeExtractor = fsmeta.UserKeyShape
 	opt.AllowedModes = []workdirmode.Mode{
@@ -213,6 +231,19 @@ func runServeCmd(w io.Writer, args []string) error {
 	defer func() {
 		_ = db.Close()
 	}()
+
+	var perasWitness kv.PerasWitness
+	var perasAuthorityTable *runtimeperas.ActiveAuthorities
+	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
+	if *perasWitnessEnabled {
+		perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+		if err != nil {
+			return err
+		}
+		if perasAuthorityFeed != nil {
+			defer func() { _ = perasAuthorityFeed.Close() }()
+		}
+	}
 
 	coordScheduler := storecontrol.NewClient(storecontrol.Config{
 		Coordinator: coordCli,
@@ -297,7 +328,9 @@ func runServeCmd(w io.Writer, args []string) error {
 			},
 			Mount: fsmeta.MountKeyResolver,
 		},
-		TransportAddr: *listenAddr,
+		TransportAddr:       *listenAddr,
+		PerasWitness:        perasWitness,
+		PerasAuthorityFence: perasAuthorityTable,
 	})
 	if err != nil {
 		return err
@@ -363,6 +396,9 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "StoreKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
+	if perasWitness != nil {
+		_, _ = fmt.Fprintf(w, "Peras witness enabled (durability=%s)\n", strings.TrimSpace(*perasWitnessDurability))
+	}
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())
 	}

@@ -5,8 +5,10 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/kv"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/raftstore/raftlog"
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	"github.com/feichai0017/NoKV/raftstore/store"
@@ -43,6 +45,13 @@ type Config struct {
 	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
+	// PerasWitness enables StoreKV's experimental fsmeta Peras witness RPCs.
+	// Nil keeps the wire surface registered but returns FailedPrecondition.
+	PerasWitness kv.PerasWitness
+	// PerasAuthorityFence enables storage-side admission fencing for ordinary
+	// fsmeta writes that target an active Peras authority. Nil leaves raftstore
+	// apply behaviour unchanged.
+	PerasAuthorityFence rsperas.AuthorityFence
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore

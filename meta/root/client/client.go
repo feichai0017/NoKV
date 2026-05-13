@@ -221,6 +221,26 @@ func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (ro
 	return protocolState, cert, nil
 }
 
+func (c *Client) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	if !validPerasAuthorityAct(cmd.Kind) {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	}
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+		return rpc.ApplyPerasAuthority(ctx, &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		})
+	})
+	if err != nil {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+	}
+	state := metawire.RootStateFromProto(resp.GetState())
+	grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
+	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
+		return state, grant, rootstate.ErrPrimacy
+	}
+	return state, grant, nil
+}
+
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
 		return rpc.ObserveCommitted(ctx, &metapb.MetadataRootObserveCommittedRequest{})
@@ -407,6 +427,17 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 		rootproto.GrantActSeal,
 		rootproto.GrantActRetireExpired,
 		rootproto.GrantActInherit:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPerasAuthorityAct(kind rootproto.PerasAuthorityAct) bool {
+	switch kind {
+	case rootproto.PerasAuthorityActAcquire,
+		rootproto.PerasAuthorityActRetire,
+		rootproto.PerasAuthorityActSeal:
 		return true
 	default:
 		return false

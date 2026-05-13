@@ -643,6 +643,87 @@ func (c *Client) tryAtomicMutateRegionOnce(ctx context.Context, region regionSna
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
+func (c *Client) InstallPerasSegment(ctx context.Context, routingKey []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	if len(routingKey) == 0 {
+		return nil, &ProtocolError{Operation: "peras install segment", Detail: "routing key required"}
+	}
+	cleaned := clonePerasInstallSegmentRequest(req)
+	if cleaned == nil {
+		return nil, &ProtocolError{Operation: "peras install segment", Detail: "request required"}
+	}
+	cleaned.RoutingKey = append(cleaned.RoutingKey[:0], routingKey...)
+	var lastErr error
+	var lastRetryDetail string
+	for attempt := 0; attempt < c.retry.MaxAttempts; attempt++ {
+		region, err := c.routeKeyWithRetry(ctx, routingKey)
+		if err != nil {
+			return nil, err
+		}
+		resp, regionErr, err := c.installPerasSegmentRegionOnce(ctx, region, cleaned)
+		if err != nil {
+			if isTransportUnavailable(err) {
+				lastErr = err
+				if err := c.waitRetry(ctx, attempt, retryTransportUnavailable); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, err
+		}
+		if regionErr != nil {
+			lastRetryDetail = fmt.Sprintf("region %d returned %v", region.desc.RegionID, regionErr)
+			lastErr = c.handleRegionError(region.desc.RegionID, regionErr)
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			if err := c.waitRetry(ctx, attempt, retryRegionError); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := txnKeyError(resp.GetError()); err != nil {
+			return nil, err
+		}
+		return resp, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, &RetryExhaustedError{
+		Operation: "peras install segment",
+		Key:       append([]byte(nil), routingKey...),
+		Detail:    lastRetryDetail,
+	}
+}
+
+func (c *Client) installPerasSegmentRegionOnce(ctx context.Context, region regionSnapshot, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, *errorpb.RegionError, error) {
+	cl, err := c.storeClient(ctx, region.leader)
+	if err != nil {
+		return nil, nil, err
+	}
+	header, err := buildContext(region)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := cl.PerasInstallSegment(ctx, &kvrpcpb.KvPerasInstallSegmentRequest{
+		Context: header,
+		Request: req,
+	})
+	if err != nil {
+		return nil, nil, normalizeRPCError(err)
+	}
+	if resp == nil {
+		return nil, nil, kvPayloadProtocolError("peras install segment", region.desc.RegionID, "nil kv response")
+	}
+	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
+		return nil, nil, kvPayloadProtocolError("peras install segment", region.desc.RegionID, "missing install payload")
+	}
+	return resp.GetResponse(), resp.GetRegionError(), nil
+}
+
 // Put performs a single-key Put using the two-phase commit path.
 func (c *Client) Put(ctx context.Context, key, value []byte, startVersion, commitVersion, lockTTL uint64) error {
 	mut := &kvrpcpb.Mutation{
@@ -1548,6 +1629,25 @@ func cloneAtomicPredicates(predicates []*kvrpcpb.AtomicPredicate) []*kvrpcpb.Ato
 		out = append(out, cloneAtomicPredicate(pred))
 	}
 	return out
+}
+
+func clonePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) *kvrpcpb.PerasInstallSegmentRequest {
+	if req == nil {
+		return nil
+	}
+	return &kvrpcpb.PerasInstallSegmentRequest{
+		RoutingKey:            append([]byte(nil), req.GetRoutingKey()...),
+		SegmentRoot:           append([]byte(nil), req.GetSegmentRoot()...),
+		SegmentPayloadDigest:  append([]byte(nil), req.GetSegmentPayloadDigest()...),
+		SegmentPayload:        append([]byte(nil), req.GetSegmentPayload()...),
+		InstallVersion:        req.GetInstallVersion(),
+		MaterializeMvcc:       req.GetMaterializeMvcc(),
+		SegmentEpochId:        req.GetSegmentEpochId(),
+		SegmentOperationCount: req.GetSegmentOperationCount(),
+		SegmentEntryCount:     req.GetSegmentEntryCount(),
+		SegmentPayloadSize:    req.GetSegmentPayloadSize(),
+		CanonicalObjectKey:    append([]byte(nil), req.GetCanonicalObjectKey()...),
+	}
 }
 
 func cloneKeys(keys [][]byte) [][]byte {

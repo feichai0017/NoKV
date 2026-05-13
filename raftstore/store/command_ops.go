@@ -12,6 +12,7 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -503,9 +504,64 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			if err, reason := validatePerasSegmentRequestKeys(meta, r.GetPerasInstallSegment()); err != nil {
+				return err, reason
+			}
 		default:
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
+	}
+	return nil, AdmissionReasonUnknown
+}
+
+func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.PerasInstallSegmentRequest) (*errorpb.RegionError, AdmissionReason) {
+	if req == nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	routingKey := req.GetRoutingKey()
+	if len(routingKey) == 0 || !keyInRange(meta, routingKey) {
+		return keyNotInRegionError(meta, routingKey), AdmissionReasonKeyNotInRegion
+	}
+	info, err := rsperas.InspectInstallRequest(req)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	if info.MaterializeMVCC && info.HasPayload {
+		segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
+		if err != nil {
+			return epochNotMatchError(&meta), AdmissionReasonInvalid
+		}
+		for _, entry := range segment.EntriesView() {
+			if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
+				return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
+			}
+		}
+	}
+	keys, err := rsperas.InstallKeys(req)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	if !info.MaterializeMVCC && !info.HasPayload {
+		if err, reason := validatePerasCatalogIndexRoute(meta, info); err != nil {
+			return err, reason
+		}
+	}
+	for _, key := range keys {
+		if len(key) == 0 || !keyInRange(meta, key) {
+			return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+		}
+	}
+	return nil, AdmissionReasonUnknown
+}
+
+func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, info rsperas.InstallRequestInfo) (*errorpb.RegionError, AdmissionReason) {
+	if info.SegmentEpochID == 0 || info.SegmentOperationCount == 0 || info.SegmentEntryCount == 0 ||
+		info.SegmentPayloadSize == 0 || len(info.CanonicalObjectKey) == 0 || bytes.Equal(info.RoutingKey, info.CanonicalObjectKey) {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	if _, err := rsperas.CatalogRouteInstallKeys(info.Root, info.CanonicalObjectKey); err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
 	return nil, AdmissionReasonUnknown
 }

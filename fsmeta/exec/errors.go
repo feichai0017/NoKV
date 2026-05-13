@@ -7,4 +7,5 @@ var (
 	errInodeAllocatorRequired        = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: inode allocator required")
 	errAuditorRunnerRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: auditor runner required")
 	errSubtreeHandoffWithoutFrontier = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec: subtree handoff started without committed frontier")
+	errPerasAuthorityNotHeld         = nokverrors.New(nokverrors.KindNotLeader, "fsmeta/exec: peras authority is held by another holder")
 )

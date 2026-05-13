@@ -27,7 +27,7 @@ type Source uint8
 
 const (
 	// SourceCommit covers regular write commits (CMD_COMMIT and the
-	// fast-path CMD_TRY_ATOMIC_MUTATE that skipped two-phase commit).
+	// CMD_TRY_ATOMIC_MUTATE one-phase commit that skipped two-phase commit).
 	SourceCommit Source = iota + 1
 	// SourceResolveLock covers commits that materialise via lock
 	// resolution (CMD_RESOLVE_LOCK).

@@ -68,11 +68,15 @@ func NewNode(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("raftstore/server: StoreID must be set")
 	}
 	storeCfg := cfg.Store
+	applyOpts := []kv.ApplyOption(nil)
+	if cfg.PerasAuthorityFence != nil {
+		applyOpts = append(applyOpts, kv.WithPerasAuthorityFence(cfg.PerasAuthorityFence))
+	}
 	if storeCfg.CommandApplier == nil {
-		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil)
+		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil, applyOpts...)
 	}
 	if storeCfg.CommandBatchApplier == nil {
-		storeCfg.CommandBatchApplier = kv.NewBatchApplier(cfg.Storage.MVCC, nil)
+		storeCfg.CommandBatchApplier = kv.NewBatchApplier(cfg.Storage.MVCC, nil, applyOpts...)
 	}
 	rt := storeCfg.Router
 	if rt == nil {
@@ -100,7 +104,11 @@ func NewNode(cfg Config) (*Node, error) {
 	storeCfg.PeerBuilder = builder
 
 	st := store.NewStore(storeCfg)
-	kvService := kv.NewService(st)
+	kvOpts := []kv.ServiceOption(nil)
+	if cfg.PerasWitness != nil {
+		kvOpts = append(kvOpts, kv.WithPerasWitness(cfg.PerasWitness))
+	}
+	kvService := kv.NewService(st, kvOpts...)
 	adminService := admin.NewServiceWithSnapshot(st, cfg.Storage.Snapshot)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		kvrpcpb.RegisterStoreKVServer(reg, kvService)
