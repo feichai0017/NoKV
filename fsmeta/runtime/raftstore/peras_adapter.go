@@ -5,14 +5,20 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
+	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/utils"
+	"google.golang.org/grpc"
 )
 
 type perasSegmentInstallClient interface {
@@ -239,4 +245,197 @@ func runtimeCloneBytes(in []byte) []byte {
 	out := make([]byte, len(in))
 	copy(out, in)
 	return out
+}
+
+type raftstoreSegmentCatalogScanner struct {
+	runner *Runner
+}
+
+func (s raftstoreSegmentCatalogScanner) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]runtimeperas.KV, error) {
+	if s.runner == nil {
+		return nil, runtimeperas.ErrRuntimeInvalid
+	}
+	rows, err := s.runner.Scan(ctx, startKey, limit, version)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]runtimeperas.KV, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, runtimeperas.KV{
+			Key:   runtimeCloneBytes(row.Key),
+			Value: runtimeCloneBytes(row.Value),
+		})
+	}
+	return out, nil
+}
+
+type remotePerasWitness struct {
+	id     string
+	client kvrpcpb.StoreKVClient
+}
+
+func newRemotePerasWitness(id string, client kvrpcpb.StoreKVClient) (*remotePerasWitness, error) {
+	if id == "" || client == nil {
+		return nil, runtimeperas.ErrRuntimeInvalid
+	}
+	return &remotePerasWitness{id: id, client: client}, nil
+}
+
+func (w *remotePerasWitness) ID() string {
+	if w == nil {
+		return ""
+	}
+	return w.id
+}
+
+func (w *remotePerasWitness) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+	if w == nil || w.client == nil {
+		return runtimeperas.ErrRuntimeInvalid
+	}
+	_, err := w.client.PerasWitnessSegment(ctx, &kvrpcpb.PerasWitnessSegmentRequest{
+		Scope:  rsperas.ScopeToProto(scope),
+		Record: rsperas.SegmentWitnessRecordToProto(record),
+	})
+	return err
+}
+
+func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+	if w == nil || w.client == nil {
+		return fsperas.WitnessSnapshot{}, runtimeperas.ErrRuntimeInvalid
+	}
+	resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{EpochId: epochID})
+	if err != nil {
+		return fsperas.WitnessSnapshot{}, err
+	}
+	return rsperas.SnapshotFromProto(resp)
+}
+
+const (
+	perasWitnessDiscoveryTimeout = 45 * time.Second
+	perasWitnessDiscoveryBackoff = 100 * time.Millisecond
+)
+
+type witnessStoreLister interface {
+	ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
+}
+
+type witnessConnections struct {
+	witnesses []fsperas.WitnessReplica
+	conns     []*grpc.ClientConn
+}
+
+func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, storeIDs []uint64) (*witnessConnections, error) {
+	if lister == nil {
+		return nil, errStoreListerRequired
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, perasWitnessDiscoveryTimeout)
+	defer cancel()
+
+	allowed := make(map[uint64]struct{}, len(storeIDs))
+	for _, id := range storeIDs {
+		if id != 0 {
+			allowed[id] = struct{}{}
+		}
+	}
+	for {
+		out, complete, err := tryBuildWitnessConnections(ctx, lister, dialOpts, allowed)
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			return out, nil
+		}
+		if out != nil {
+			_ = out.Close()
+		}
+		timer := time.NewTimer(perasWitnessDiscoveryBackoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, runtimeperas.ErrRuntimeInvalid
+		case <-timer.C:
+		}
+	}
+}
+
+func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*witnessConnections, bool, error) {
+	resp, err := lister.ListStores(ctx, &coordpb.ListStoresRequest{})
+	if err != nil {
+		return nil, false, err
+	}
+	out := &witnessConnections{}
+	seen := make(map[uint64]struct{}, len(allowed))
+	for _, store := range resp.GetStores() {
+		if !witnessStoreSelected(store, allowed) {
+			continue
+		}
+		if len(allowed) > 0 {
+			seen[store.GetStoreId()] = struct{}{}
+		}
+		conn, err := grpc.NewClient(store.GetClientAddr(), dialOpts...)
+		if err != nil {
+			_ = out.Close()
+			return nil, false, fmt.Errorf("dial peras witness store %d: %w", store.GetStoreId(), err)
+		}
+		witness, err := newRemotePerasWitness(
+			fmt.Sprintf("store-%d", store.GetStoreId()),
+			kvrpcpb.NewStoreKVClient(conn),
+		)
+		if err != nil {
+			_ = conn.Close()
+			_ = out.Close()
+			return nil, false, err
+		}
+		out.conns = append(out.conns, conn)
+		out.witnesses = append(out.witnesses, witness)
+	}
+	complete := len(out.witnesses) > 0
+	if len(allowed) > 0 {
+		complete = len(seen) == len(allowed)
+	}
+	if !complete {
+		return out, false, nil
+	}
+	slices.SortFunc(out.witnesses, func(left, right fsperas.WitnessReplica) int {
+		if left.ID() < right.ID() {
+			return -1
+		}
+		if left.ID() > right.ID() {
+			return 1
+		}
+		return 0
+	})
+	return out, true, nil
+}
+
+func witnessStoreSelected(store *coordpb.StoreInfo, allowed map[uint64]struct{}) bool {
+	if store == nil || store.GetState() != coordpb.StoreState_STORE_STATE_UP || store.GetClientAddr() == "" {
+		return false
+	}
+	if len(allowed) == 0 {
+		return true
+	}
+	_, ok := allowed[store.GetStoreId()]
+	return ok
+}
+
+func (c *witnessConnections) Close() error {
+	if c == nil {
+		return nil
+	}
+	var first error
+	for _, conn := range c.conns {
+		if conn == nil {
+			continue
+		}
+		if err := conn.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	c.conns = nil
+	c.witnesses = nil
+	return first
 }

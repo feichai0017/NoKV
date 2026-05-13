@@ -1,4 +1,4 @@
-package client
+package raftstore
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/stretchr/testify/require"
@@ -43,7 +44,7 @@ func TestRemotePerasWitnessRoundTrip(t *testing.T) {
 	stub := &remotePerasWitnessStub{}
 	conn, closeServer := startPerasWitnessServer(t, stub)
 	defer closeServer()
-	remote, err := NewRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
+	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
 	require.NoError(t, err)
 
 	require.NoError(t, remote.AppendSegment(context.Background(), scope, record))
@@ -67,7 +68,7 @@ func BenchmarkRemotePerasWitnessAppendSegment(b *testing.B) {
 	stub := &remotePerasWitnessStub{}
 	conn, closeServer := startPerasWitnessServer(b, stub)
 	defer closeServer()
-	remote, err := NewRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
+	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -78,8 +79,8 @@ func BenchmarkRemotePerasWitnessAppendSegment(b *testing.B) {
 }
 
 func TestRemotePerasWitnessRequiresClient(t *testing.T) {
-	_, err := NewRemotePerasWitness("store-1", nil)
-	require.ErrorIs(t, err, ErrPerasWitnessClientInvalid)
+	_, err := newRemotePerasWitness("store-1", nil)
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }
 
 func startPerasWitnessServer(tb testing.TB, witness kv.PerasWitness) (*grpc.ClientConn, func()) {
