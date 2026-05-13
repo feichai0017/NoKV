@@ -14,6 +14,21 @@ func BuildMVCCSegmentInstallEntries(segment fsperas.PerasSegment, version uint64
 	if version == 0 || version == entrykv.MaxVersion {
 		return nil, fsperas.ErrReplayVersionRequired
 	}
+	payload, err := fsperas.EncodePerasSegment(segment)
+	if err != nil {
+		return nil, err
+	}
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	if err != nil {
+		return nil, err
+	}
+	return buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment, version, payload, digest)
+}
+
+func buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment fsperas.PerasSegment, version uint64, payload []byte, digest [32]byte) ([]*entrykv.Entry, error) {
+	if version == 0 || version == entrykv.MaxVersion {
+		return nil, fsperas.ErrReplayVersionRequired
+	}
 	stats := segment.Stats()
 	entries := make([]*entrykv.Entry, 0, int(stats.EntryCount)*3+1)
 	err := segment.ForEachEntry(func(entry fsperas.SegmentKV) error {
@@ -28,16 +43,6 @@ func BuildMVCCSegmentInstallEntries(segment fsperas.PerasSegment, version uint64
 		entries = append(entries, mutationEntries...)
 		return nil
 	})
-	if err != nil {
-		releaseMVCCReplayEntries(entries)
-		return nil, err
-	}
-	payload, err := fsperas.EncodePerasSegment(segment)
-	if err != nil {
-		releaseMVCCReplayEntries(entries)
-		return nil, err
-	}
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	if err != nil {
 		releaseMVCCReplayEntries(entries)
 		return nil, err
@@ -75,6 +80,13 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayload(segment fsperas.PerasSegme
 	if _, err := fsperas.VerifyPerasSegmentPayload(payload, segment.Root, digest); err != nil {
 		return nil, err
 	}
+	return buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayload(segment, version, payload, digest)
+}
+
+func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayload(segment fsperas.PerasSegment, version uint64, payload []byte, digest [32]byte) ([]*entrykv.Entry, error) {
+	if version == 0 || version == entrykv.MaxVersion {
+		return nil, fsperas.ErrReplayVersionRequired
+	}
 	catalogValue, err := fsperas.EncodePerasSegmentCatalogRecordWithPayload(segment, version, payload, digest)
 	if err != nil {
 		return nil, err
@@ -88,6 +100,13 @@ func BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment fspera
 	}
 	if _, err := fsperas.VerifyPerasSegmentPayload(payload, segment.Root, digest); err != nil {
 		return nil, err
+	}
+	return buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment, version, payload, digest, objectKey)
+}
+
+func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment fsperas.PerasSegment, version uint64, payload []byte, digest [32]byte, objectKey []byte) ([]*entrykv.Entry, error) {
+	if version == 0 || version == entrykv.MaxVersion {
+		return nil, fsperas.ErrReplayVersionRequired
 	}
 	bucket, err := perasSegmentObjectBucket(segment, objectKey)
 	if err != nil {

@@ -210,7 +210,8 @@ func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, b
 		raftcmdpb.CmdType_CMD_COMMIT,
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
-		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 		return r.GetCmdType(), true
 	default:
 		return 0, false
@@ -307,6 +308,19 @@ func applyBatchRun(
 				}},
 			}
 		}
+	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		for i, req := range reqs {
+			result, err := applyPerasInstallSegment(db, req.GetRequests()[0].GetPerasInstallSegment())
+			if err != nil {
+				return err
+			}
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: req.GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result},
+				}},
+			}
+		}
 	default:
 		return fmt.Errorf("kv: unsupported batch command %v", cmdType)
 	}
@@ -373,9 +387,9 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	var entries []*kv.Entry
 	var err error
 	if materialize {
-		entries, err = BuildMVCCSegmentInstallEntries(segment, req.GetInstallVersion())
+		entries, err = buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest)
 	} else {
-		entries, err = BuildMVCCSegmentCatalogInstallEntriesWithPayloadForObjectKey(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest, req.GetRoutingKey())
+		entries, err = buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest, req.GetRoutingKey())
 	}
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil

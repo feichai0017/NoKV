@@ -224,6 +224,48 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.Equal(t, []byte("attrs"), value)
 }
 
+func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	segment := fsmetaSegmentForTest(t)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+
+	request := func(version uint64) *raftcmdpb.RaftCmdRequest {
+		return &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				RoutingKey:           objectKey,
+				SegmentRoot:          segment.Root[:],
+				SegmentPayloadDigest: digest[:],
+				SegmentPayload:       payload,
+				InstallVersion:       version,
+			}},
+		}}}
+	}
+
+	resps, err := ApplyBatch(db, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
+	require.NoError(t, err)
+	require.Len(t, resps, 2)
+	for _, resp := range resps {
+		install := resp.GetResponses()[0].GetPerasInstallSegment()
+		require.NotNil(t, install)
+		require.Nil(t, install.GetError())
+		require.Equal(t, segment.Root[:], install.GetSegmentRoot())
+	}
+	records, err := LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+}
+
 func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()

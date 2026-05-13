@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 )
@@ -107,6 +109,67 @@ func TestCommandApplyDependenciesTrackTxnPrimaryOperations(t *testing.T) {
 	}, deps)
 }
 
+func TestCommandApplyDependenciesTrackPerasCatalogInstall(t *testing.T) {
+	segment, payload, digest := testCommandApplyPerasSegment(t)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	indexKeys, err := fsperas.PerasSegmentCatalogIndexKeys(segment)
+	require.NoError(t, err)
+	require.NotEmpty(t, indexKeys)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, payload, digest, objectKey, false)}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.False(t, barrier)
+	require.Contains(t, deps, testPerasSegment(segment.Root))
+	require.Contains(t, deps, testUserWriteBytes(objectKey))
+	for _, key := range indexKeys {
+		require.Contains(t, deps, testUserWriteBytes(key))
+	}
+}
+
+func TestCommandApplyDependenciesTrackPerasMaterializeInstall(t *testing.T) {
+	segment, payload, digest := testCommandApplyPerasSegment(t)
+	firstKey, err := segment.FirstKey()
+	require.NoError(t, err)
+	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequest(segment, payload, digest, firstKey, true)}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.False(t, barrier)
+	require.Contains(t, deps, testPerasSegment(segment.Root))
+	require.Contains(t, deps, testUserWriteBytes(objectKey))
+	for _, entry := range segment.EntriesView() {
+		require.Contains(t, deps, testUserWriteBytes(entry.Key))
+	}
+}
+
+func TestCommandApplyDependenciesTreatsInvalidPerasInstallAsBarrier(t *testing.T) {
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			SegmentRoot:          make([]byte, 32),
+			SegmentPayloadDigest: make([]byte, 32),
+			SegmentPayload:       []byte("invalid"),
+		}},
+	}}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.True(t, barrier)
+	require.Nil(t, deps)
+}
+
+func TestCommandApplyDependenciesTreatsInvalidPerasInstallRouteAsBarrier(t *testing.T) {
+	segment, payload, digest := testCommandApplyPerasSegment(t)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{
+		testPerasInstallSegmentRequest(segment, payload, digest, []byte("not-a-segment-object"), false),
+	}}
+
+	deps, barrier := commandApplyDependencies(req)
+	require.True(t, barrier)
+	require.Nil(t, deps)
+}
+
 func testUserRead(key string) commandApplyDependency {
 	return commandApplyDependency{
 		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, hash: commandApplyDependencyHash([]byte(key))},
@@ -114,9 +177,23 @@ func testUserRead(key string) commandApplyDependency {
 	}
 }
 
+func testUserWriteBytes(key []byte) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, hash: commandApplyDependencyHash(key)},
+		mode: commandApplyDependencyWrite,
+	}
+}
+
 func testUserWrite(key string) commandApplyDependency {
 	return commandApplyDependency{
 		key:  commandApplyDependencyKey{class: commandApplyDependencyUserKey, hash: commandApplyDependencyHash([]byte(key))},
+		mode: commandApplyDependencyWrite,
+	}
+}
+
+func testPerasSegment(root [32]byte) commandApplyDependency {
+	return commandApplyDependency{
+		key:  commandApplyDependencyKey{class: commandApplyDependencyPerasSegment, hash: commandApplyDependencyHash(root[:])},
 		mode: commandApplyDependencyWrite,
 	}
 }
@@ -171,6 +248,46 @@ func testAtomicMutateRequest(predicateKey, mutationKey []byte) *raftcmdpb.Reques
 				Op:  kvrpcpb.Mutation_Put,
 				Key: mutationKey,
 			}},
+		}},
+	}
+}
+
+func testCommandApplyPerasSegment(t *testing.T) (fsperas.PerasSegment, []byte, [32]byte) {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: dentryKey, Value: []byte("dentry")},
+				{Key: inodeKey, Value: []byte("inode")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	return segment, payload, digest
+}
+
+func testPerasInstallSegmentRequest(segment fsperas.PerasSegment, payload []byte, digest [32]byte, routingKey []byte, materialize bool) *raftcmdpb.Request {
+	return &raftcmdpb.Request{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			RoutingKey:           routingKey,
+			SegmentRoot:          segment.Root[:],
+			SegmentPayloadDigest: digest[:],
+			SegmentPayload:       payload,
+			InstallVersion:       1,
+			MaterializeMvcc:      materialize,
 		}},
 	}
 }
