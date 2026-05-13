@@ -1,5 +1,5 @@
-// Package perasauthority adapts root-issued Peras authority grants to fsmeta runtime scopes.
-package perasauthority
+// Package peras adapts root-issued Peras authority grants to fsmeta runtime scopes.
+package peras
 
 import (
 	"errors"

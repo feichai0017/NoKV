@@ -2,12 +2,10 @@ package raftstore
 
 import (
 	"context"
-	"slices"
 
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 )
 
 type perasAuthorityUse struct {
@@ -25,14 +23,14 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	drainScopes := normalizeAuthorityDrainScopes(scopes)
+	drainScopes := runtimeperas.NormalizeScopes(scopes)
 	endDrain := c.beginAuthorityDrain(drainScopes)
 	defer endDrain()
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
 	c.commitMu.Lock()
 	var batches []perasFlushBatch
-	if len(drainScopes) == 1 && perasauthority.ScopeEmpty(drainScopes[0]) {
+	if len(drainScopes) == 1 && runtimeperas.ScopeEmpty(drainScopes[0]) {
 		var err error
 		batches, err = c.freezeFlushBatchesLocked(nil, true, 0)
 		if err != nil {
@@ -76,7 +74,7 @@ func (c *RemotePerasCommitter) enterAuthority(scope compile.AuthorityScope) func
 	id := c.drainNextID
 	c.drainUses = append(c.drainUses, perasAuthorityUse{
 		id:    id,
-		scope: cloneRuntimeAuthorityScope(scope),
+		scope: runtimeperas.CloneScope(scope),
 	})
 	c.drainMu.Unlock()
 	return func() {
@@ -106,7 +104,7 @@ func (c *RemotePerasCommitter) beginAuthorityDrain(scopes []compile.AuthoritySco
 	if c == nil || c.drainCond == nil {
 		return func() {}
 	}
-	drainScopes := cloneRuntimeAuthorityScopes(scopes)
+	drainScopes := runtimeperas.CloneScopes(scopes)
 	c.drainMu.Lock()
 	c.drainScopes = append(c.drainScopes, drainScopes...)
 	for c.authorityDrainHasActiveUseLocked(drainScopes) {
@@ -132,7 +130,7 @@ func (c *RemotePerasCommitter) endAuthorityDrain(scopes []compile.AuthorityScope
 
 func (c *RemotePerasCommitter) authorityDrainBlocksLocked(scope compile.AuthorityScope) bool {
 	for _, drain := range c.drainScopes {
-		if authorityDrainScopesOverlap(scope, drain) {
+		if runtimeperas.ScopesOverlap(scope, drain) {
 			return true
 		}
 	}
@@ -142,7 +140,7 @@ func (c *RemotePerasCommitter) authorityDrainBlocksLocked(scope compile.Authorit
 func (c *RemotePerasCommitter) authorityDrainHasActiveUseLocked(scopes []compile.AuthorityScope) bool {
 	for _, use := range c.drainUses {
 		for _, scope := range scopes {
-			if authorityDrainScopesOverlap(use.scope, scope) {
+			if runtimeperas.ScopesOverlap(use.scope, scope) {
 				return true
 			}
 		}
@@ -152,7 +150,7 @@ func (c *RemotePerasCommitter) authorityDrainHasActiveUseLocked(scopes []compile
 
 func (c *RemotePerasCommitter) removeAuthorityDrainScopeLocked(scope compile.AuthorityScope) {
 	for i, current := range c.drainScopes {
-		if !authorityScopesEqual(current, scope) {
+		if !runtimeperas.ScopesEqual(current, scope) {
 			continue
 		}
 		copy(c.drainScopes[i:], c.drainScopes[i+1:])
@@ -160,50 +158,4 @@ func (c *RemotePerasCommitter) removeAuthorityDrainScopeLocked(scope compile.Aut
 		c.drainScopes = c.drainScopes[:len(c.drainScopes)-1]
 		return
 	}
-}
-
-func normalizeAuthorityDrainScopes(scopes []compile.AuthorityScope) []compile.AuthorityScope {
-	if len(scopes) == 0 {
-		return []compile.AuthorityScope{{}}
-	}
-	out := make([]compile.AuthorityScope, 0, len(scopes))
-	for _, scope := range scopes {
-		if perasauthority.ScopeEmpty(scope) {
-			return []compile.AuthorityScope{{}}
-		}
-		out = append(out, cloneRuntimeAuthorityScope(scope))
-	}
-	return out
-}
-
-func authorityDrainScopesOverlap(left, right compile.AuthorityScope) bool {
-	if perasauthority.ScopeEmpty(left) || perasauthority.ScopeEmpty(right) {
-		return true
-	}
-	return fsperas.AuthorityScopesOverlap(left, right)
-}
-
-func authorityScopesEqual(left, right compile.AuthorityScope) bool {
-	if left.Mount != right.Mount || left.MountKeyID != right.MountKeyID {
-		return false
-	}
-	return slices.Equal(left.Buckets, right.Buckets) &&
-		slices.Equal(left.Parents, right.Parents) &&
-		slices.Equal(left.Inodes, right.Inodes)
-}
-
-func cloneRuntimeAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {
-	out := scope
-	out.Buckets = append([]fsmeta.AffinityBucket(nil), scope.Buckets...)
-	out.Parents = append([]fsmeta.InodeID(nil), scope.Parents...)
-	out.Inodes = append([]fsmeta.InodeID(nil), scope.Inodes...)
-	return out
-}
-
-func cloneRuntimeAuthorityScopes(scopes []compile.AuthorityScope) []compile.AuthorityScope {
-	out := make([]compile.AuthorityScope, len(scopes))
-	for i, scope := range scopes {
-		out[i] = cloneRuntimeAuthorityScope(scope)
-	}
-	return out
 }

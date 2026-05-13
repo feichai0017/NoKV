@@ -1,4 +1,4 @@
-package perasauthority
+package peras
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func TestManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 		},
 	}
 	table := NewActiveAuthorities()
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	got, owned, err := manager.Acquire(context.Background(), scope)
@@ -75,7 +75,7 @@ func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
 	client := &fakePerasAuthorityClient{}
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	got, owned, err := manager.Acquire(context.Background(), scope)
@@ -97,7 +97,7 @@ func TestManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
 	client := &fakePerasAuthorityClient{}
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	got, owned, err := manager.Acquire(context.Background(), scope)
@@ -118,7 +118,7 @@ func TestManagerAcquireHeldUpdatesActiveAuthorityView(t *testing.T) {
 		},
 	}
 	table := NewActiveAuthorities()
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	got, owned, err := manager.Acquire(context.Background(), scope)
@@ -139,7 +139,7 @@ func TestManagerRetireAuthority(t *testing.T) {
 	}
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.Retire(context.Background(), grant))
@@ -160,7 +160,7 @@ func TestManagerPublishesSegmentSeal(t *testing.T) {
 	}
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 	segment := testRuntimePerasSegment(t)
 	var digest [32]byte
@@ -192,7 +192,7 @@ func TestManagerListsMatchingRootSeals(t *testing.T) {
 			metawire.RootPerasAuthoritySealToProto(other),
 		},
 	}
-	manager, err := NewManager(client, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	seals, err := manager.ListPerasAuthoritySeals(context.Background(), scope)
@@ -215,7 +215,7 @@ func TestManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
 	}
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grantA, grantB}))
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scopeA))
@@ -232,7 +232,7 @@ func TestManagerMountRetireScopeMatchesBucketGrants(t *testing.T) {
 	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grantA, grantB}))
-	manager, err := NewManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	grants := manager.ownedGrantsForScopes(compile.AuthorityScope{Mount: "vol", MountKeyID: 7})
@@ -246,7 +246,7 @@ func TestManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
 	client := &fakePerasAuthorityClient{}
 	table := NewActiveAuthorities()
 	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
-	manager, err := NewManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scope))
@@ -255,16 +255,16 @@ func TestManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
 }
 
 func TestManagerRejectsInvalidConfigAndResponses(t *testing.T) {
-	_, err := NewManager(nil, NewActiveAuthorities(), "holder-a", time.Minute, nil)
+	_, err := NewAuthorityManager(nil, NewActiveAuthorities(), "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, ErrClientRequired)
-	_, err = NewManager(&fakePerasAuthorityClient{}, nil, "holder-a", time.Minute, nil)
+	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, nil, "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, ErrTableRequired)
-	_, err = NewManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "", time.Minute, nil)
+	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "", time.Minute, nil)
 	require.ErrorIs(t, err, ErrHolderRequired)
-	_, err = NewManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", -time.Second, nil)
+	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", -time.Second, nil)
 	require.ErrorIs(t, err, ErrTTLInvalid)
 
-	manager, err := NewManager(&fakePerasAuthorityClient{
+	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{
 		resp: &coordpb.ApplyPerasAuthorityResponse{Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED},
 	}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return time.Unix(10, 0) })
 	require.NoError(t, err)
@@ -276,7 +276,7 @@ func TestManagerRetireRejectsForeignGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
 	grant := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
-	manager, err := NewManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	err = manager.Retire(context.Background(), grant)
@@ -292,7 +292,7 @@ func BenchmarkManagerAcquireLocalHeld(b *testing.B) {
 	if err := table.Replace([]AuthorityGrant{grant}); err != nil {
 		b.Fatal(err)
 	}
-	manager, err := NewManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
 	if err != nil {
 		b.Fatal(err)
 	}

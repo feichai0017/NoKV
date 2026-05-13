@@ -11,7 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -22,7 +22,7 @@ import (
 func TestStartServePerasWitnessUsesRootAuthorityFeed(t *testing.T) {
 	scope := servePerasAuthorityScope()
 	source := &servePerasAuthoritySource{
-		grants: []perasauthority.AuthorityGrant{servePerasAuthorityGrant(scope)},
+		grants: []runtimeperas.AuthorityGrant{servePerasAuthorityGrant(scope)},
 	}
 	opener := &servePerasTestWALOpener{dir: t.TempDir()}
 	defer opener.close(t)
@@ -62,7 +62,7 @@ func (o *servePerasTestWALOpener) close(t *testing.T) {
 }
 
 type servePerasAuthoritySource struct {
-	grants []perasauthority.AuthorityGrant
+	grants []runtimeperas.AuthorityGrant
 }
 
 func (s *servePerasAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
@@ -97,12 +97,12 @@ func servePerasAuthorityScope() compile.AuthorityScope {
 	}
 }
 
-func servePerasAuthorityGrant(scope compile.AuthorityScope) perasauthority.AuthorityGrant {
-	return perasauthority.AuthorityGrant{
+func servePerasAuthorityGrant(scope compile.AuthorityScope) runtimeperas.AuthorityGrant {
+	return runtimeperas.AuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           perasauthority.AuthorityScopeFromDelta(scope),
+		Scope:           runtimeperas.AuthorityScopeFromDelta(scope),
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}
 }

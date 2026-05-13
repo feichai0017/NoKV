@@ -9,7 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	"github.com/feichai0017/NoKV/txn/latch"
@@ -24,11 +24,11 @@ const defaultLatchSlots = 512
 type ApplyOption func(*applyConfig)
 
 type applyConfig struct {
-	perasAuthorityTable *perasauthority.ActiveAuthorities
+	perasAuthorityTable *runtimeperas.ActiveAuthorities
 	now                 func() time.Time
 }
 
-func WithPerasAuthorityFence(authorityTable *perasauthority.ActiveAuthorities) ApplyOption {
+func WithPerasAuthorityFence(authorityTable *runtimeperas.ActiveAuthorities) ApplyOption {
 	return func(cfg *applyConfig) {
 		cfg.perasAuthorityTable = authorityTable
 	}

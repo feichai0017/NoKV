@@ -10,7 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -499,7 +499,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasauthority.NewActiveAuthorities()))
+	applier := NewApplier(db, nil, WithPerasAuthorityFence(runtimeperas.NewActiveAuthorities()))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -834,10 +834,10 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 	return nil, nil
 }
 
-func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *perasauthority.ActiveAuthorities {
+func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *runtimeperas.ActiveAuthorities {
 	t.Helper()
-	table := perasauthority.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]perasauthority.AuthorityGrant{{
+	table := runtimeperas.NewActiveAuthorities()
+	require.NoError(t, table.Replace([]runtimeperas.AuthorityGrant{{
 		GrantID:         "grant-apply-test",
 		EpochID:         1,
 		HolderID:        "holder-a",

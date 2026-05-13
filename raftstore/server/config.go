@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -51,7 +51,7 @@ type Config struct {
 	// PerasAuthorityTable enables storage-side admission fencing for ordinary
 	// fsmeta writes that target an active Peras authority. Nil leaves raftstore
 	// apply behaviour unchanged.
-	PerasAuthorityTable *perasauthority.ActiveAuthorities
+	PerasAuthorityTable *runtimeperas.ActiveAuthorities
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore

@@ -12,7 +12,7 @@ import (
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/utils"
 )
@@ -42,11 +42,11 @@ const (
 
 type perasGrantProvider interface {
 	HolderID() string
-	Acquire(context.Context, compile.AuthorityScope) (perasauthority.AuthorityGrant, bool, error)
+	Acquire(context.Context, compile.AuthorityScope) (runtimeperas.AuthorityGrant, bool, error)
 }
 
 type perasSealPublisher interface {
-	PublishSegmentSeal(context.Context, perasauthority.AuthorityGrant, fsperas.PerasSegment, [32]byte, perasauthority.InstallCursor) error
+	PublishSegmentSeal(context.Context, runtimeperas.AuthorityGrant, fsperas.PerasSegment, [32]byte, runtimeperas.InstallCursor) error
 }
 
 type perasSealProvider interface {
@@ -54,7 +54,7 @@ type perasSealProvider interface {
 }
 
 type perasSegmentInstaller interface {
-	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (perasauthority.InstallCursor, error)
+	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (runtimeperas.InstallCursor, error)
 }
 
 type perasSegmentCatalogScanner interface {
@@ -128,7 +128,7 @@ type RemotePerasCommitter struct {
 
 	holdersMu sync.Mutex
 	holders   map[uint64]*fsperas.Holder
-	grants    map[uint64]perasauthority.AuthorityGrant
+	grants    map[uint64]runtimeperas.AuthorityGrant
 	latches   *fsperas.AdmissionLatches
 
 	overlayMu sync.RWMutex
@@ -197,7 +197,7 @@ type perasFlushJob struct {
 	payload     []byte
 	digest      [32]byte
 	materialize bool
-	cursor      perasauthority.InstallCursor
+	cursor      runtimeperas.InstallCursor
 }
 
 type perasFlushBatch struct {
@@ -328,7 +328,7 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		now:        now,
 		closer:     utils.NewCloser(),
 		holders:    make(map[uint64]*fsperas.Holder),
-		grants:     make(map[uint64]perasauthority.AuthorityGrant),
+		grants:     make(map[uint64]runtimeperas.AuthorityGrant),
 		latches:    fsperas.NewAdmissionLatches(),
 		overlay:    fsperas.NewOverlayView(),
 		sealed:     fsperas.NewOverlayView(),
@@ -395,8 +395,8 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 		return fsperas.VisibleAck{}, err
 	}
 	if !owned {
-		c.recordError(perasauthority.ErrNotHeld)
-		return fsperas.VisibleAck{}, perasauthority.ErrNotHeld
+		c.recordError(runtimeperas.ErrNotHeld)
+		return fsperas.VisibleAck{}, runtimeperas.ErrNotHeld
 	}
 	holder, err := c.holderForGrant(ctx, grant, delta.Authority)
 	if err != nil {
@@ -437,7 +437,7 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	return ack, nil
 }
 
-func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasauthority.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
+func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant runtimeperas.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
 		return nil, errPerasCommitterInvalid
 	}
@@ -450,15 +450,15 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant perasau
 	c.holdersMu.Unlock()
 
 	recoveryScope := scope
-	if grantHasPredecessor(grant) {
-		if grantScope := perasauthority.ScopeFromGrant(grant); !perasauthority.ScopeEmpty(grantScope) {
+	if runtimeperas.GrantHasPredecessor(grant) {
+		if grantScope := runtimeperas.ScopeFromGrant(grant); !runtimeperas.ScopeEmpty(grantScope) {
 			recoveryScope = grantScope
 		}
 	}
 	if err := c.LoadRootSealedSegments(ctx, recoveryScope); err != nil {
 		return nil, err
 	}
-	if grantHasPredecessor(grant) && c.installer != nil {
+	if runtimeperas.GrantHasPredecessor(grant) && c.installer != nil {
 		if err := c.RecoverWitnessSegments(ctx, recoveryScope, grant.EpochID-1); err != nil {
 			return nil, err
 		}

@@ -11,7 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +47,7 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 	defer func() { require.NoError(t, manager.Close()) }()
 	log, err := NewWALWitnessLog(manager, wal.DurabilityFsync)
 	require.NoError(t, err)
-	authorities := perasauthority.NewActiveAuthorities()
+	authorities := runtimeperas.NewActiveAuthorities()
 	refreshed := false
 	node, err := NewWitnessNode(WitnessNodeConfig{
 		NodeID:         "store-1",
@@ -55,7 +55,7 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 		AuthorityTable: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			refreshed = true
-			return authorities.Replace([]perasauthority.AuthorityGrant{testAuthorityGrant()})
+			return authorities.Replace([]runtimeperas.AuthorityGrant{testAuthorityGrant()})
 		},
 		Now: func() time.Time { return now },
 	})
@@ -72,7 +72,7 @@ func TestWitnessNodeRefreshFailureIsFatal(t *testing.T) {
 	defer func() { require.NoError(t, manager.Close()) }()
 	log, err := NewWALWitnessLog(manager, wal.DurabilityFsync)
 	require.NoError(t, err)
-	authorities := perasauthority.NewActiveAuthorities()
+	authorities := runtimeperas.NewActiveAuthorities()
 	refreshErr := errors.New("refresh failed")
 	node, err := NewWitnessNode(WitnessNodeConfig{
 		NodeID:         "store-1",
@@ -109,7 +109,7 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	defer cleanup()
 	expired := testAuthorityGrant()
 	expired.ExpiresUnixNano = now.Add(-time.Nanosecond).UnixNano()
-	require.NoError(t, node.authorityTable.Replace([]perasauthority.AuthorityGrant{expired}))
+	require.NoError(t, node.authorityTable.Replace([]runtimeperas.AuthorityGrant{expired}))
 
 	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
@@ -231,21 +231,21 @@ func openBenchWitnessNode(b *testing.B) (*WitnessNode, func()) {
 	return node, func() { require.NoError(b, manager.Close()) }
 }
 
-func testActiveAuthorities(tb testing.TB, now time.Time) *perasauthority.ActiveAuthorities {
+func testActiveAuthorities(tb testing.TB, now time.Time) *runtimeperas.ActiveAuthorities {
 	tb.Helper()
-	table := perasauthority.NewActiveAuthorities()
+	table := runtimeperas.NewActiveAuthorities()
 	grant := testAuthorityGrant()
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(tb, table.Replace([]perasauthority.AuthorityGrant{grant}))
+	require.NoError(tb, table.Replace([]runtimeperas.AuthorityGrant{grant}))
 	return table
 }
 
-func testAuthorityGrant() perasauthority.AuthorityGrant {
+func testAuthorityGrant() runtimeperas.AuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           perasauthority.AuthorityScopeFromDelta(testAuthorityScope()),
+		Scope:           runtimeperas.AuthorityScopeFromDelta(testAuthorityScope()),
 		ExpiresUnixNano: time.Unix(101, 0).UnixNano(),
 	}
 }

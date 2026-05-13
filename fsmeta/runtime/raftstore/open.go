@@ -13,7 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -138,8 +138,8 @@ type Runtime struct {
 	QuotaResolver         fsmetaexec.QuotaResolver
 	SessionCleaner        interface{ Stats() map[string]any }
 	PerasCommitter        interface{ Stats() map[string]any }
-	PerasAuthorityTable   *perasauthority.ActiveAuthorities
-	PerasAuthorityManager *perasauthority.Manager
+	PerasAuthorityTable   *runtimeperas.ActiveAuthorities
+	PerasAuthorityManager *runtimeperas.AuthorityManager
 
 	close func() error
 	once  sync.Once
@@ -172,14 +172,14 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, errLockTTLInvalid
 	}
 	if opts.PerasAuthorityTTL < 0 {
-		return nil, perasauthority.ErrTTLInvalid
+		return nil, runtimeperas.ErrTTLInvalid
 	}
 	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, errPerasCommitterInvalid
 	}
 	if opts.PerasVisibleCommit && strings.TrimSpace(opts.PerasHolderID) == "" {
-		return nil, perasauthority.ErrHolderRequired
+		return nil, runtimeperas.ErrHolderRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -240,10 +240,10 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
-	peras := perasauthority.NewActiveAuthorities()
-	var perasAuthorityManager *perasauthority.Manager
+	peras := runtimeperas.NewActiveAuthorities()
+	var perasAuthorityManager *runtimeperas.AuthorityManager
 	if holderID := strings.TrimSpace(opts.PerasHolderID); holderID != "" {
-		perasAuthorityManager, err = perasauthority.NewManager(coord, peras, holderID, opts.PerasAuthorityTTL, nil)
+		perasAuthorityManager, err = runtimeperas.NewAuthorityManager(coord, peras, holderID, opts.PerasAuthorityTTL, nil)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()

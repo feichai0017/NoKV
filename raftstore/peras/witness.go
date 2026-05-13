@@ -9,7 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 )
 
 var (
@@ -21,7 +21,7 @@ var (
 type WitnessNodeConfig struct {
 	NodeID           string
 	Log              *WALWitnessLog
-	AuthorityTable   *perasauthority.ActiveAuthorities
+	AuthorityTable   *runtimeperas.ActiveAuthorities
 	AuthorityRefresh func(context.Context) error
 	Now              func() time.Time
 }
@@ -29,7 +29,7 @@ type WitnessNodeConfig struct {
 type WitnessNode struct {
 	nodeID         string
 	log            *WALWitnessLog
-	authorityTable *perasauthority.ActiveAuthorities
+	authorityTable *runtimeperas.ActiveAuthorities
 	refresh        func(context.Context) error
 	now            func() time.Time
 

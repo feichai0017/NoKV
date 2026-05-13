@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -116,13 +116,13 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 func TestMonitorRefreshesPerasAuthorityTable(t *testing.T) {
 	grant := testMonitorPerasGrant("peras-1", 1)
 	list := &fakeMountList{peras: []*rootproto.PerasAuthorityGrant{&grant}}
-	table := perasauthority.NewActiveAuthorities()
+	table := runtimeperas.NewActiveAuthorities()
 
 	mon := &monitor{coord: list, router: &fakeRetireRouter{}, peras: table}
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, 1, list.perasCalls)
-	require.Equal(t, []perasauthority.AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []runtimeperas.AuthorityGrant{grant}, table.Snapshot())
 
 	retired := rootevent.PerasAuthorityRetired(grant)
 	mon.applyRootEvent(context.Background(), retired)
@@ -130,7 +130,7 @@ func TestMonitorRefreshesPerasAuthorityTable(t *testing.T) {
 
 	next := testMonitorPerasGrant("peras-2", 2)
 	mon.applyRootEvent(context.Background(), rootevent.PerasAuthorityGranted(next))
-	require.Equal(t, []perasauthority.AuthorityGrant{next}, table.Snapshot())
+	require.Equal(t, []runtimeperas.AuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {

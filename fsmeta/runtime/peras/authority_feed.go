@@ -1,4 +1,4 @@
-package perasauthority
+package peras
 
 import (
 	"context"

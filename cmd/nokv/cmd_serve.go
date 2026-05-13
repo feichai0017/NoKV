@@ -17,7 +17,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	local "github.com/feichai0017/NoKV/local"
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -233,8 +233,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	}()
 
 	var perasWitness kv.PerasWitness
-	var perasAuthorityTable *perasauthority.ActiveAuthorities
-	var perasAuthorityFeed *perasauthority.RootAuthorityFeed
+	var perasAuthorityTable *runtimeperas.ActiveAuthorities
+	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
 	if *perasWitnessEnabled {
 		perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
 		if err != nil {

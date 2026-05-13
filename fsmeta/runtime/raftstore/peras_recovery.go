@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 )
 
 func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope compile.AuthorityScope, epochID uint64) error {
@@ -36,7 +37,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		if err != nil {
 			return c.recordErrorf("decode peras witness segment: %w", err)
 		}
-		if !perasSegmentWithinScope(segment, scope) {
+		if !runtimeperas.SegmentWithinScope(segment, scope) {
 			continue
 		}
 		stats := segment.Stats()
@@ -79,7 +80,7 @@ func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope 
 		if err != nil {
 			return c.recordErrorf("decode peras segment catalog: %w", err)
 		}
-		if !perasSegmentWithinScope(segment, scope) {
+		if !runtimeperas.SegmentWithinScope(segment, scope) {
 			continue
 		}
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
@@ -125,7 +126,7 @@ func (c *RemotePerasCommitter) LoadRootSealedSegments(ctx context.Context, scope
 }
 
 func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
-	buckets := perasCatalogBuckets(scope)
+	buckets := runtimeperas.CatalogBuckets(scope)
 	if len(buckets) == 0 {
 		return nil, nil
 	}

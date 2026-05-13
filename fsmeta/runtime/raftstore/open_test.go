@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +31,7 @@ func TestOpenRejectsNegativePerasAuthorityTTL(t *testing.T) {
 		CoordinatorAddr:   "127.0.0.1:1",
 		PerasAuthorityTTL: -time.Millisecond,
 	})
-	require.ErrorIs(t, err, perasauthority.ErrTTLInvalid)
+	require.ErrorIs(t, err, runtimeperas.ErrTTLInvalid)
 }
 
 func TestOpenRejectsNegativePerasSegmentMutationBudget(t *testing.T) {

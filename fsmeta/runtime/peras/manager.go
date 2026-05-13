@@ -1,4 +1,4 @@
-package perasauthority
+package peras
 
 import (
 	"context"
@@ -33,10 +33,10 @@ func (c InstallCursor) Valid() bool {
 	return c.RegionID != 0 && c.Term != 0 && c.Index != 0 && c.InstallVersion != 0
 }
 
-// Manager is the fsmeta holder adapter for root-issued Peras authority. It
-// talks only to coordinator; meta/root remains hidden behind the coordinator
+// AuthorityManager is the fsmeta holder adapter for root-issued Peras authority.
+// It talks only to coordinator; meta/root remains hidden behind the coordinator
 // service boundary.
-type Manager struct {
+type AuthorityManager struct {
 	coord    Client
 	table    *ActiveAuthorities
 	holderID string
@@ -54,7 +54,7 @@ type acquireCall struct {
 	err   error
 }
 
-func NewManager(coord Client, table *ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*Manager, error) {
+func NewAuthorityManager(coord Client, table *ActiveAuthorities, holderID string, ttl time.Duration, now func() time.Time) (*AuthorityManager, error) {
 	holderID = strings.TrimSpace(holderID)
 	if coord == nil {
 		return nil, ErrClientRequired
@@ -74,7 +74,7 @@ func NewManager(coord Client, table *ActiveAuthorities, holderID string, ttl tim
 	if now == nil {
 		now = time.Now
 	}
-	return &Manager{
+	return &AuthorityManager{
 		coord:    coord,
 		table:    table,
 		holderID: holderID,
@@ -83,19 +83,19 @@ func NewManager(coord Client, table *ActiveAuthorities, holderID string, ttl tim
 	}, nil
 }
 
-func (m *Manager) HolderID() string {
+func (m *AuthorityManager) HolderID() string {
 	if m == nil {
 		return ""
 	}
 	return m.holderID
 }
 
-func (m *Manager) AcquirePerasAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
+func (m *AuthorityManager) AcquirePerasAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
 	_, owned, err := m.Acquire(ctx, scope)
 	return owned, err
 }
 
-func (m *Manager) Acquire(ctx context.Context, scope compile.AuthorityScope) (AuthorityGrant, bool, error) {
+func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (AuthorityGrant, bool, error) {
 	if m == nil {
 		return AuthorityGrant{}, false, ErrClientRequired
 	}
@@ -157,7 +157,7 @@ func (m *Manager) Acquire(ctx context.Context, scope compile.AuthorityScope) (Au
 	return grant, owned, err
 }
 
-func (m *Manager) beginAcquire(key string) (*acquireCall, bool) {
+func (m *AuthorityManager) beginAcquire(key string) (*acquireCall, bool) {
 	m.acquireMu.Lock()
 	defer m.acquireMu.Unlock()
 	if m.acquires == nil {
@@ -171,7 +171,7 @@ func (m *Manager) beginAcquire(key string) (*acquireCall, bool) {
 	return call, true
 }
 
-func (m *Manager) finishAcquire(key string, grant AuthorityGrant, owned bool, err error) {
+func (m *AuthorityManager) finishAcquire(key string, grant AuthorityGrant, owned bool, err error) {
 	m.acquireMu.Lock()
 	call := m.acquires[key]
 	if call != nil {
@@ -208,7 +208,7 @@ func acquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	return rootScope
 }
 
-func (m *Manager) Retire(ctx context.Context, grant AuthorityGrant) error {
+func (m *AuthorityManager) Retire(ctx context.Context, grant AuthorityGrant) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -243,7 +243,7 @@ func (m *Manager) Retire(ctx context.Context, grant AuthorityGrant) error {
 	return nil
 }
 
-func (m *Manager) PublishSegmentSeal(ctx context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
+func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -290,7 +290,7 @@ func (m *Manager) PublishSegmentSeal(ctx context.Context, grant AuthorityGrant, 
 	return nil
 }
 
-func (m *Manager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
+func (m *AuthorityManager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
 	if m == nil {
 		return nil, ErrClientRequired
 	}
@@ -329,7 +329,7 @@ func sealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityS
 	return grant.Covers(AuthorityScopeFromDelta(scope), 0)
 }
 
-func (m *Manager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+func (m *AuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -342,7 +342,7 @@ func (m *Manager) RetirePerasAuthority(ctx context.Context, scopes ...compile.Au
 	return nil
 }
 
-func (m *Manager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []AuthorityGrant {
+func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []AuthorityGrant {
 	if m == nil || m.table == nil || strings.TrimSpace(m.holderID) == "" {
 		return nil
 	}
@@ -380,7 +380,7 @@ func grantMatchesRetireScope(grant AuthorityGrant, scope compile.AuthorityScope,
 	return GrantCoversDelta(grant, scope, now)
 }
 
-func (m *Manager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
+func (m *AuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
 	if m == nil || m.table == nil {
 		return ErrTableRequired
 	}

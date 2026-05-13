@@ -7,7 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -212,7 +212,7 @@ func (c *RemotePerasCommitter) publishSegmentSeal(ctx context.Context, holder *f
 		}
 		grant, found := c.grantForEpoch(holder.EpochID())
 		if !found {
-			return c.recordError(perasauthority.ErrNotHeld)
+			return c.recordError(runtimeperas.ErrNotHeld)
 		}
 		sealStart := time.Now()
 		if err := publisher.PublishSegmentSeal(ctx, grant, job.segment, job.digest, job.cursor); err != nil {
@@ -225,12 +225,12 @@ func (c *RemotePerasCommitter) publishSegmentSeal(ctx context.Context, holder *f
 	return nil
 }
 
-func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (perasauthority.AuthorityGrant, bool) {
+func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (runtimeperas.AuthorityGrant, bool) {
 	c.holdersMu.Lock()
 	defer c.holdersMu.Unlock()
 	grant, ok := c.grants[epochID]
 	if !ok {
-		return perasauthority.AuthorityGrant{}, false
+		return runtimeperas.AuthorityGrant{}, false
 	}
 	return grant, true
 }

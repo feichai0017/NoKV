@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
-	"github.com/feichai0017/NoKV/fsmeta/runtime/perasauthority"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/raftstore/kv"
 	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
@@ -18,7 +18,7 @@ type controlWALOpener interface {
 	OpenControlWAL(uint64) (*wal.Manager, error)
 }
 
-func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauthority.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *perasauthority.ActiveAuthorities, *perasauthority.RootAuthorityFeed, error) {
+func startServePerasWitness(ctx context.Context, storeID uint64, coord runtimeperas.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *runtimeperas.ActiveAuthorities, *runtimeperas.RootAuthorityFeed, error) {
 	if storeID == 0 || coord == nil || db == nil {
 		return nil, nil, nil, fmt.Errorf("serve: peras witness requires store id, coordinator, and db")
 	}
@@ -30,8 +30,8 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord perasauth
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("serve: open peras witness log: %w", err)
 	}
-	authorities := perasauthority.NewActiveAuthorities()
-	feed := perasauthority.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
+	authorities := runtimeperas.NewActiveAuthorities()
+	feed := runtimeperas.StartRootAuthorityFeed(ctx, coord, authorities, time.Second)
 	witness, err := rsperas.NewWitnessNode(rsperas.WitnessNodeConfig{
 		NodeID:           fmt.Sprintf("store-%d", storeID),
 		Log:              log,
