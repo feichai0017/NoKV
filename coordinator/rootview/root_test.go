@@ -612,6 +612,28 @@ func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
 	require.Equal(t, "coord-2", tso.HolderID)
 }
 
+func TestPreserveNewerAuthorityStateDropsGrantBelowRetiredFloor(t *testing.T) {
+	observed := Snapshot{
+		RetiredEraFloor: 23,
+	}
+	current := Snapshot{
+		ActiveGrants: []rootproto.AuthorityGrant{{
+			GrantID:         "coord-1/tso/12",
+			HolderID:        "coord-1",
+			Era:             12,
+			IssuedAt:        rootstate.Cursor{Term: 1, Index: 40},
+			ExpiresUnixNano: 4_000,
+			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 40)},
+		}},
+	}
+
+	merged := PreserveNewerAuthorityState(observed, current)
+
+	_, ok := merged.ActiveGrantFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal})
+	require.False(t, ok)
+	require.Equal(t, uint64(23), merged.RetiredEraFloor)
+}
+
 func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	store, err := OpenRootStore(fakeBasicRoot{
 		snapshot: rootstate.Snapshot{Descriptors: map[uint64]topology.Descriptor{}},

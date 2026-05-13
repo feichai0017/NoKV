@@ -107,8 +107,12 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 // Eunomia authority mirror is protected against stale replacement.
 func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	out := CloneSnapshot(observed)
+	retiredFloor := observed.RetiredEraFloor
+	if current.RetiredEraFloor > retiredFloor {
+		retiredFloor = current.RetiredEraFloor
+	}
 	for _, currentGrant := range current.ActiveGrants {
-		if !currentGrant.Present() || observedRetiresGrant(observed, currentGrant) {
+		if !currentGrant.Present() || grantRetiredAtFloor(currentGrant, retiredFloor) || observedRetiresGrant(observed, currentGrant) {
 			continue
 		}
 		observedGrant, ok := activeGrantOverlapping(out.ActiveGrants, currentGrant)
@@ -124,6 +128,10 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 		out.RetiredEraFloor = current.RetiredEraFloor
 	}
 	return out
+}
+
+func grantRetiredAtFloor(grant rootproto.AuthorityGrant, retiredFloor uint64) bool {
+	return retiredFloor != 0 && grant.Era <= retiredFloor
 }
 
 func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) bool {

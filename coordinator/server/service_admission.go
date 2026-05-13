@@ -215,6 +215,11 @@ func (s *Service) admitDutyFromCachedGrant(duty rootproto.DutyID) (dutyAdmission
 		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
 		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: required_duty=%s", rootstate.ErrDuty, rootproto.DutyName(duty)))
 	}
+	if authorityGrantRetiredAtFloor(grant, view.retiredEraFloor) {
+		s.eunomiaMetrics.recordGateRejection(gateDutyAdmission)
+		s.eunomiaMetrics.recordGuaranteeViolation(guaranteeSilence)
+		return dutyAdmission{}, statusGrant(fmt.Errorf("%w: rooted grant retired era=%d retired_floor=%d", rootstate.ErrSilence, grant.Era, view.retiredEraFloor))
+	}
 	if err := s.validateGateGrant(gateDutyAdmission, duty, grant); err != nil {
 		return dutyAdmission{}, err
 	}
@@ -255,6 +260,10 @@ func authorityEvidenceRetirements(retirements []rootproto.GrantRetirement, retir
 		out = append(out, retirement)
 	}
 	return out
+}
+
+func authorityGrantRetiredAtFloor(grant rootproto.AuthorityGrant, retiredFloor uint64) bool {
+	return retiredFloor != 0 && grant.Era <= retiredFloor
 }
 
 func (s *Service) validateGateGrant(kind gateKind, duty rootproto.DutyID, grant rootproto.AuthorityGrant) error {
