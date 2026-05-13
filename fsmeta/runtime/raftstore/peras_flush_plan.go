@@ -1,7 +1,6 @@
 package raftstore
 
 import (
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
@@ -17,45 +16,36 @@ func (c *RemotePerasCommitter) freezeFlushBatchesLocked(target *compile.Authorit
 func (c *RemotePerasCommitter) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
 	batches := make([]perasFlushBatch, 0, len(plans))
 	for _, frozen := range plans {
-		installPlans, err := fsperas.SplitReplayPlanByFSMetaBucket(frozen.plan)
-		if !materialize {
-			installPlans, err = fsperas.SplitReplayPlanForCatalogInstall(frozen.plan)
-		}
-		if err != nil {
-			return nil, c.recordErrorf("split peras replay plan: %w", err)
-		}
 		batch := perasFlushBatch{
 			holder: frozen.holder,
 			plan:   frozen.plan,
-			jobs:   make([]perasFlushJob, 0, len(installPlans)),
+			jobs:   make([]perasFlushJob, 0, 1),
 		}
-		for _, installPlan := range installPlans {
-			sized, err := splitReplayPlanByCompilerBudget(installPlan, c.replayMutationBudget(materialize))
+		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replayMutationBudget(materialize))
+		if err != nil {
+			return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
+		}
+		for _, plan := range sized {
+			segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
 			if err != nil {
-				return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
+				return nil, c.recordErrorf("build peras segment: %w", err)
 			}
-			for _, plan := range sized {
-				segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
-				if err != nil {
-					return nil, c.recordErrorf("build peras segment: %w", err)
-				}
-				payload, err := fsperas.EncodePerasSegment(segment)
-				if err != nil {
-					return nil, c.recordErrorf("encode peras segment: %w", err)
-				}
-				digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-				if err != nil {
-					return nil, c.recordErrorf("digest peras segment: %w", err)
-				}
-				batch.jobs = append(batch.jobs, perasFlushJob{
-					scope:       frozen.scope,
-					plan:        plan,
-					segment:     segment,
-					payload:     payload,
-					digest:      digest,
-					materialize: materialize,
-				})
+			payload, err := fsperas.EncodePerasSegment(segment)
+			if err != nil {
+				return nil, c.recordErrorf("encode peras segment: %w", err)
 			}
+			digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+			if err != nil {
+				return nil, c.recordErrorf("digest peras segment: %w", err)
+			}
+			batch.jobs = append(batch.jobs, perasFlushJob{
+				scope:       frozen.scope,
+				plan:        plan,
+				segment:     segment,
+				payload:     payload,
+				digest:      digest,
+				materialize: materialize,
+			})
 		}
 		if len(batch.jobs) > 0 {
 			batches = append(batches, batch)
@@ -74,14 +64,13 @@ func (c *RemotePerasCommitter) replayMutationBudget(materialize bool) int {
 	return defaultPerasMaterializeMaxReplayMutations
 }
 
-func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) ([]fsperas.ReplayPlan, error) {
+func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, maxMutations int) ([]fsperas.ReplayPlan, error) {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 || maxMutations <= 0 {
 		return nil, fsperas.ErrInvalidPerasSegment
 	}
 	if !plan.Versions.Empty() {
 		return nil, fsperas.ErrReplayVersionRequired
 	}
-	catalogInstall := replayPlanUsesCatalogInstall(plan)
 	out := make([]fsperas.ReplayPlan, 0, len(plan.Operations))
 	current := fsperas.ReplayPlan{EpochID: plan.EpochID}
 	var currentPlan compile.SegmentPlan
@@ -100,12 +89,9 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) 
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
 			return nil, fsperas.ErrInvalidPerasSegment
 		}
-		nextPlan := op.Segment
-		if !nextPlan.CanAppend {
+		nextPlan, ok := compile.SegmentPlanForInstall(op.Segment, materialize)
+		if !ok {
 			return nil, fsperas.ErrInvalidPerasSegment
-		}
-		if catalogInstall {
-			nextPlan = compile.CatalogSegmentPlan(nextPlan)
 		}
 		if len(current.Operations) > 0 {
 			decision := compile.CanAppendSegmentPlans(currentPlan, nextPlan, op.Durability, compile.SegmentBudget{
@@ -124,29 +110,6 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, maxMutations int) 
 	}
 	flush()
 	return out, nil
-}
-
-func replayPlanUsesCatalogInstall(plan fsperas.ReplayPlan) bool {
-	var mount fsmeta.MountKeyID
-	buckets := make(map[fsmeta.AffinityBucket]struct{})
-	for _, op := range plan.Operations {
-		for _, mutation := range op.Mutations {
-			parts, ok := fsmeta.InspectKey(mutation.Key)
-			if !ok {
-				return false
-			}
-			if mount == 0 {
-				mount = parts.MountKeyID
-			} else if mount != parts.MountKeyID {
-				return false
-			}
-			buckets[parts.Bucket] = struct{}{}
-			if len(buckets) > 1 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func cloneRuntimeReplayOperations(ops []fsperas.ReplayOperation) []fsperas.ReplayOperation {

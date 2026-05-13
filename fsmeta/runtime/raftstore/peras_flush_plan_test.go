@@ -20,7 +20,7 @@ func TestSplitReplayPlanByCompilerBudgetRequiresStoredSegmentPlan(t *testing.T) 
 			Kind:      fsmeta.OperationUpdateInode,
 			Mutations: []fsperas.ReplayMutation{{Key: key, Value: []byte("inode")}},
 		}},
-	}, 16)
+	}, false, 16)
 	require.ErrorIs(t, err, fsperas.ErrInvalidPerasSegment)
 }
 
@@ -48,10 +48,34 @@ func TestSplitReplayPlanByCompilerBudgetUsesStoredSegmentPlan(t *testing.T) {
 			replayOperationWithSegmentPlan("client", 1, leftKey, plan),
 			replayOperationWithSegmentPlan("client", 2, rightKey, plan),
 		},
-	}, 16)
+	}, false, 16)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Len(t, out[0].Operations, 2)
+}
+
+func TestSplitReplayPlanByCompilerBudgetRejectsNonMaterializablePlan(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	key := fsmetaKeyForBucket(t, mount, 1)
+	plan := compile.SegmentPlan{
+		MergeKey: compile.SegmentMergeKey{
+			MountKeyID:    mount.MountKeyID,
+			Install:       compile.SegmentInstallCatalog,
+			Durability:    compile.DurabilityVisibleOnly,
+			FormatVersion: 1,
+		},
+		Install:               compile.SegmentInstallCatalog,
+		CanAppend:             true,
+		EstimatedPayloadBytes: 16,
+		OperationCount:        1,
+		MutationCount:         1,
+	}
+
+	_, err := splitReplayPlanByCompilerBudget(fsperas.ReplayPlan{
+		EpochID:    1,
+		Operations: []fsperas.ReplayOperation{replayOperationWithSegmentPlan("client", 1, key, plan)},
+	}, true, 16)
+	require.ErrorIs(t, err, fsperas.ErrInvalidPerasSegment)
 }
 
 func replayOperationWithSegmentPlan(client string, seq uint64, key []byte, segment compile.SegmentPlan) fsperas.ReplayOperation {

@@ -236,7 +236,10 @@ type CompletionPlan struct {
 type SegmentPlan struct {
 	MergeKey              SegmentMergeKey
 	Install               SegmentInstallMode
+	MaterializeMergeKey   SegmentMergeKey
+	MaterializeInstall    SegmentInstallMode
 	CanAppend             bool
+	CanMaterialize        bool
 	RequiresMaterialize   bool
 	EstimatedPayloadBytes uint64
 	OperationCount        uint32
@@ -391,11 +394,18 @@ func MergeSegmentPlans(current, next SegmentPlan) SegmentPlan {
 	return out
 }
 
-func CatalogSegmentPlan(plan SegmentPlan) SegmentPlan {
-	plan.Install = SegmentInstallCatalog
-	plan.MergeKey.PrimaryBucket = 0
-	plan.MergeKey.Install = SegmentInstallCatalog
-	return plan
+func SegmentPlanForInstall(plan SegmentPlan, materialize bool) (SegmentPlan, bool) {
+	if !materialize {
+		return plan, plan.CanAppend && plan.Install != SegmentInstallNone
+	}
+	if !plan.CanMaterialize || plan.MaterializeInstall == SegmentInstallNone {
+		return SegmentPlan{}, false
+	}
+	out := plan
+	out.Install = plan.MaterializeInstall
+	out.MergeKey = plan.MaterializeMergeKey
+	out.CanAppend = true
+	return out, true
 }
 
 func fenceMode(delta SemanticDelta) FenceMode {
@@ -490,12 +500,7 @@ func placementPlan(delta SemanticDelta, durability DurabilityClass) PlacementPla
 	out.Buckets = uniqueBuckets(buckets)
 	out.SingleBucket = len(out.Buckets) == 1
 	out.CanSegment = true
-	if out.SingleBucket {
-		out.Install = SegmentInstallSingleBucket
-		out.MergeKey.PrimaryBucket = out.Buckets[0]
-	} else {
-		out.Install = SegmentInstallCatalog
-	}
+	out.Install = SegmentInstallCatalog
 	out.MergeKey.MountKeyID = mount
 	out.MergeKey.Install = out.Install
 	out.MergeKey.Durability = durability
@@ -629,7 +634,7 @@ func keyRef(mode KeyAccessMode, key []byte) KeyRef {
 }
 
 func segmentPlan(placement PlacementPlan, footprint KeyFootprint, mutations uint32) SegmentPlan {
-	return SegmentPlan{
+	plan := SegmentPlan{
 		MergeKey:              placement.MergeKey,
 		Install:               placement.Install,
 		CanAppend:             placement.CanSegment,
@@ -638,6 +643,23 @@ func segmentPlan(placement PlacementPlan, footprint KeyFootprint, mutations uint
 		OperationCount:        1,
 		MutationCount:         mutations,
 	}
+	switch {
+	case placement.Install == SegmentInstallSingleBucket:
+		plan.CanMaterialize = placement.CanSegment
+		plan.MaterializeInstall = SegmentInstallSingleBucket
+		plan.MaterializeMergeKey = placement.MergeKey
+	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
+		plan.CanMaterialize = placement.CanSegment
+		plan.MaterializeInstall = SegmentInstallSingleBucket
+		plan.MaterializeMergeKey = SegmentMergeKey{
+			MountKeyID:    placement.MountKeyID,
+			PrimaryBucket: placement.Buckets[0],
+			Install:       SegmentInstallSingleBucket,
+			Durability:    placement.MergeKey.Durability,
+			FormatVersion: placement.MergeKey.FormatVersion,
+		}
+	}
+	return plan
 }
 
 func completionPlan(delta SemanticDelta, mutations uint32, digest [32]byte) CompletionPlan {

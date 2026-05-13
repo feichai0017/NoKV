@@ -278,6 +278,20 @@ func deltaWithValueWrites(key, value string) compile.SemanticDelta {
 	}
 }
 
+func fsmetaInodeKeyForBucket(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) []byte {
+	t.Helper()
+	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
+		if fsmeta.BucketForInodeID(inode) != bucket {
+			continue
+		}
+		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		require.NoError(t, err)
+		return key
+	}
+	t.Fatalf("no inode found for bucket %d", bucket)
+	return nil
+}
+
 func mustHolderForBench(b *testing.B) *Holder {
 	b.Helper()
 	holder, err := NewHolder(HolderConfig{

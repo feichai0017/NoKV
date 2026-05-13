@@ -437,7 +437,7 @@ func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
 		Parent: 8,
 		Name:   "a",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInDifferentBucket(t, 8))
+	}, testMount, testParentInSameBucket(t, 8))
 	require.NoError(t, err)
 	right, err := Create(fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -470,7 +470,7 @@ func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
 		Parent: 8,
 		Name:   "a",
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInDifferentBucket(t, 8))
+	}, testMount, testParentInSameBucket(t, 8))
 	require.NoError(t, err)
 	right, err := Create(fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -490,10 +490,14 @@ func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
 	require.Equal(t, uint32(4), merged.MutationCount)
 	require.Greater(t, merged.EstimatedPayloadBytes, leftPlan.EstimatedPayloadBytes)
 
-	catalog := CatalogSegmentPlan(leftPlan)
-	require.Equal(t, SegmentInstallCatalog, catalog.Install)
-	require.Equal(t, SegmentInstallCatalog, catalog.MergeKey.Install)
-	require.Zero(t, catalog.MergeKey.PrimaryBucket)
+	installPlan, ok := SegmentPlanForInstall(leftPlan, false)
+	require.True(t, ok)
+	require.Equal(t, SegmentInstallCatalog, installPlan.Install)
+
+	materializePlan, ok := SegmentPlanForInstall(leftPlan, true)
+	require.True(t, ok)
+	require.Equal(t, SegmentInstallSingleBucket, materializePlan.Install)
+	require.NotZero(t, materializePlan.MergeKey.PrimaryBucket)
 }
 
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
