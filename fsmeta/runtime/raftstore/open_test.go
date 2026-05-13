@@ -39,7 +39,7 @@ func TestOpenRejectsNegativePerasSegmentMutationBudget(t *testing.T) {
 		CoordinatorAddr:                "127.0.0.1:1",
 		PerasSegmentMaxReplayMutations: -1,
 	})
-	require.ErrorIs(t, err, errPerasCommitterInvalid)
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }
 
 func TestOpenRejectsNegativePerasSegmentInstallParallelism(t *testing.T) {
@@ -47,5 +47,5 @@ func TestOpenRejectsNegativePerasSegmentInstallParallelism(t *testing.T) {
 		CoordinatorAddr:                "127.0.0.1:1",
 		PerasSegmentInstallParallelism: -1,
 	})
-	require.ErrorIs(t, err, errPerasCommitterInvalid)
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }

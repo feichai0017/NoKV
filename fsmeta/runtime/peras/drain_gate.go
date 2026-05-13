@@ -1,11 +1,10 @@
-package raftstore
+package peras
 
 import (
 	"context"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 )
 
 type perasAuthorityUse struct {
@@ -13,9 +12,9 @@ type perasAuthorityUse struct {
 	scope compile.AuthorityScope
 }
 
-func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
+func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
 	if c == nil || retirer == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -23,14 +22,14 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	drainScopes := runtimeperas.NormalizeScopes(scopes)
+	drainScopes := NormalizeScopes(scopes)
 	endDrain := c.beginAuthorityDrain(drainScopes)
 	defer endDrain()
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
 	c.commitMu.Lock()
 	var batches []perasFlushBatch
-	if len(drainScopes) == 1 && runtimeperas.ScopeEmpty(drainScopes[0]) {
+	if len(drainScopes) == 1 && ScopeEmpty(drainScopes[0]) {
 		var err error
 		batches, err = c.freezeFlushBatchesLocked(nil, true, 0)
 		if err != nil {
@@ -55,14 +54,14 @@ func (c *RemotePerasCommitter) DrainAuthority(ctx context.Context, retirer fsper
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
 }
 
-func (c *RemotePerasCommitter) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
+func (c *Runtime) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
 	if err := retirer.RetirePerasAuthority(ctx, scopes...); err != nil {
 		return c.recordErrorf("retire peras authority: %w", err)
 	}
 	return nil
 }
 
-func (c *RemotePerasCommitter) enterAuthority(scope compile.AuthorityScope) func() {
+func (c *Runtime) enterAuthority(scope compile.AuthorityScope) func() {
 	if c == nil || c.drainCond == nil {
 		return func() {}
 	}
@@ -74,7 +73,7 @@ func (c *RemotePerasCommitter) enterAuthority(scope compile.AuthorityScope) func
 	id := c.drainNextID
 	c.drainUses = append(c.drainUses, perasAuthorityUse{
 		id:    id,
-		scope: runtimeperas.CloneScope(scope),
+		scope: CloneScope(scope),
 	})
 	c.drainMu.Unlock()
 	return func() {
@@ -82,7 +81,7 @@ func (c *RemotePerasCommitter) enterAuthority(scope compile.AuthorityScope) func
 	}
 }
 
-func (c *RemotePerasCommitter) leaveAuthority(id uint64) {
+func (c *Runtime) leaveAuthority(id uint64) {
 	if c == nil || c.drainCond == nil || id == 0 {
 		return
 	}
@@ -100,11 +99,11 @@ func (c *RemotePerasCommitter) leaveAuthority(id uint64) {
 	c.drainMu.Unlock()
 }
 
-func (c *RemotePerasCommitter) beginAuthorityDrain(scopes []compile.AuthorityScope) func() {
+func (c *Runtime) beginAuthorityDrain(scopes []compile.AuthorityScope) func() {
 	if c == nil || c.drainCond == nil {
 		return func() {}
 	}
-	drainScopes := runtimeperas.CloneScopes(scopes)
+	drainScopes := CloneScopes(scopes)
 	c.drainMu.Lock()
 	c.drainScopes = append(c.drainScopes, drainScopes...)
 	for c.authorityDrainHasActiveUseLocked(drainScopes) {
@@ -116,7 +115,7 @@ func (c *RemotePerasCommitter) beginAuthorityDrain(scopes []compile.AuthoritySco
 	}
 }
 
-func (c *RemotePerasCommitter) endAuthorityDrain(scopes []compile.AuthorityScope) {
+func (c *Runtime) endAuthorityDrain(scopes []compile.AuthorityScope) {
 	if c == nil || c.drainCond == nil {
 		return
 	}
@@ -128,19 +127,19 @@ func (c *RemotePerasCommitter) endAuthorityDrain(scopes []compile.AuthorityScope
 	c.drainMu.Unlock()
 }
 
-func (c *RemotePerasCommitter) authorityDrainBlocksLocked(scope compile.AuthorityScope) bool {
+func (c *Runtime) authorityDrainBlocksLocked(scope compile.AuthorityScope) bool {
 	for _, drain := range c.drainScopes {
-		if runtimeperas.ScopesOverlap(scope, drain) {
+		if ScopesOverlap(scope, drain) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *RemotePerasCommitter) authorityDrainHasActiveUseLocked(scopes []compile.AuthorityScope) bool {
+func (c *Runtime) authorityDrainHasActiveUseLocked(scopes []compile.AuthorityScope) bool {
 	for _, use := range c.drainUses {
 		for _, scope := range scopes {
-			if runtimeperas.ScopesOverlap(use.scope, scope) {
+			if ScopesOverlap(use.scope, scope) {
 				return true
 			}
 		}
@@ -148,9 +147,9 @@ func (c *RemotePerasCommitter) authorityDrainHasActiveUseLocked(scopes []compile
 	return false
 }
 
-func (c *RemotePerasCommitter) removeAuthorityDrainScopeLocked(scope compile.AuthorityScope) {
+func (c *Runtime) removeAuthorityDrainScopeLocked(scope compile.AuthorityScope) {
 	for i, current := range c.drainScopes {
-		if !runtimeperas.ScopesEqual(current, scope) {
+		if !ScopesEqual(current, scope) {
 			continue
 		}
 		copy(c.drainScopes[i:], c.drainScopes[i+1:])

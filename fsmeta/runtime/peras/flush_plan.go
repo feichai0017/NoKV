@@ -1,11 +1,11 @@
-package raftstore
+package peras
 
 import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
 
-func (c *RemotePerasCommitter) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]perasFlushBatch, error) {
+func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]perasFlushBatch, error) {
 	plans, err := c.freezeReplayPlansLocked(target, maxOpsPerHolder)
 	if err != nil {
 		return nil, err
@@ -13,7 +13,7 @@ func (c *RemotePerasCommitter) freezeFlushBatchesLocked(target *compile.Authorit
 	return c.buildFlushBatches(plans, materialize)
 }
 
-func (c *RemotePerasCommitter) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
+func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
 	batches := make([]perasFlushBatch, 0, len(plans))
 	for _, frozen := range plans {
 		batch := perasFlushBatch{
@@ -54,7 +54,7 @@ func (c *RemotePerasCommitter) buildFlushBatches(plans []perasFrozenPlan, materi
 	return batches, nil
 }
 
-func (c *RemotePerasCommitter) replaySegmentBudget(materialize bool) compile.SegmentBudget {
+func (c *Runtime) replaySegmentBudget(materialize bool) compile.SegmentBudget {
 	budget := compile.SegmentBudget{
 		MaxOperations:   uint32(c.maxOps),
 		MaxMutations:    uint32(c.maxReplay),
@@ -152,7 +152,7 @@ func cloneRuntimeReplayAtomicity(group compile.AtomicityGroup) compile.Atomicity
 	return group
 }
 
-func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.AuthorityScope, maxOpsPerHolder int) ([]perasFrozenPlan, error) {
+func (c *Runtime) freezeReplayPlansLocked(target *compile.AuthorityScope, maxOpsPerHolder int) ([]perasFrozenPlan, error) {
 	holders := c.holderSnapshot()
 	plans := make([]perasFrozenPlan, 0, len(holders))
 	for _, holder := range holders {
@@ -172,7 +172,7 @@ func (c *RemotePerasCommitter) freezeReplayPlansLocked(target *compile.Authority
 	return plans, nil
 }
 
-func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *compile.AuthorityScope, maxOps int) (fsperas.ReplayPlan, compile.AuthorityScope, bool, error) {
+func (c *Runtime) buildFlushPlan(holder *fsperas.Holder, target *compile.AuthorityScope, maxOps int) (fsperas.ReplayPlan, compile.AuthorityScope, bool, error) {
 	if target != nil {
 		plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(0, *target)
 		if err != nil {
@@ -194,12 +194,9 @@ func (c *RemotePerasCommitter) buildFlushPlan(holder *fsperas.Holder, target *co
 	return plan, scope, true, nil
 }
 
-func (c *RemotePerasCommitter) holderSnapshot() []*fsperas.Holder {
-	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
-	out := make([]*fsperas.Holder, 0, len(c.holders))
-	for _, holder := range c.holders {
-		out = append(out, holder)
+func (c *Runtime) holderSnapshot() []*fsperas.Holder {
+	if c == nil || c.epochs == nil {
+		return nil
 	}
-	return out
+	return c.epochs.holderSnapshot()
 }

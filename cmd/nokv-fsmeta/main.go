@@ -140,8 +140,8 @@ func main() {
 		if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
 			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
 		}
-		if rt.PerasCommitter != nil {
-			publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.PerasCommitter.Stats() }))
+		if rt.Peras != nil {
+			publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
 		}
 		if rt.SessionCleaner != nil {
 			publishExpvarOnce("nokv_fsmeta_sessions", expvar.Func(func() any { return rt.SessionCleaner.Stats() }))

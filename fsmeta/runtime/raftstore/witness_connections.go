@@ -7,6 +7,7 @@ import (
 	"time"
 
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
@@ -18,16 +19,16 @@ const (
 	perasWitnessDiscoveryBackoff = 100 * time.Millisecond
 )
 
-type perasStoreLister interface {
+type witnessStoreLister interface {
 	ListStores(context.Context, *coordpb.ListStoresRequest) (*coordpb.ListStoresResponse, error)
 }
 
-type perasWitnessConnections struct {
+type witnessConnections struct {
 	witnesses []fsperas.WitnessReplica
 	conns     []*grpc.ClientConn
 }
 
-func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dialOpts []grpc.DialOption, storeIDs []uint64) (*perasWitnessConnections, error) {
+func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, storeIDs []uint64) (*witnessConnections, error) {
 	if lister == nil {
 		return nil, errStoreListerRequired
 	}
@@ -44,7 +45,7 @@ func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dia
 		}
 	}
 	for {
-		out, complete, err := tryBuildRemotePerasWitnesses(ctx, lister, dialOpts, allowed)
+		out, complete, err := tryBuildWitnessConnections(ctx, lister, dialOpts, allowed)
 		if err != nil {
 			return nil, err
 		}
@@ -58,21 +59,21 @@ func buildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dia
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, errPerasCommitterInvalid
+			return nil, runtimeperas.ErrRuntimeInvalid
 		case <-timer.C:
 		}
 	}
 }
 
-func tryBuildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*perasWitnessConnections, bool, error) {
+func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*witnessConnections, bool, error) {
 	resp, err := lister.ListStores(ctx, &coordpb.ListStoresRequest{})
 	if err != nil {
 		return nil, false, err
 	}
-	out := &perasWitnessConnections{}
+	out := &witnessConnections{}
 	seen := make(map[uint64]struct{}, len(allowed))
 	for _, store := range resp.GetStores() {
-		if !perasWitnessStoreSelected(store, allowed) {
+		if !witnessStoreSelected(store, allowed) {
 			continue
 		}
 		if len(allowed) > 0 {
@@ -114,7 +115,7 @@ func tryBuildRemotePerasWitnesses(ctx context.Context, lister perasStoreLister, 
 	return out, true, nil
 }
 
-func perasWitnessStoreSelected(store *coordpb.StoreInfo, allowed map[uint64]struct{}) bool {
+func witnessStoreSelected(store *coordpb.StoreInfo, allowed map[uint64]struct{}) bool {
 	if store == nil || store.GetState() != coordpb.StoreState_STORE_STATE_UP || store.GetClientAddr() == "" {
 		return false
 	}
@@ -125,7 +126,7 @@ func perasWitnessStoreSelected(store *coordpb.StoreInfo, allowed map[uint64]stru
 	return ok
 }
 
-func (c *perasWitnessConnections) Close() error {
+func (c *witnessConnections) Close() error {
 	if c == nil {
 		return nil
 	}

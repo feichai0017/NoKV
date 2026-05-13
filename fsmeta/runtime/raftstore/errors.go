@@ -1,11 +1,9 @@
 package raftstore
 
 import (
-	"errors"
 	"fmt"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
-	"github.com/feichai0017/NoKV/fsmeta"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -13,8 +11,6 @@ var (
 	errCoordinatorAddrRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: coordinator addr is required")
 	errSessionCleanupLimitExceeded = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: session cleanup limit exceeds maximum")
 	errLockTTLInvalid              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: lock ttl must be non-negative")
-	errPerasCommitterInvalid       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: peras committer config is invalid")
-	errPerasCommitterClosed        = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/runtime/raftstore: peras committer is closed")
 	errMountCacheNotConfigured     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: mount cache is not configured")
 	errRootPublisherNotConfigured  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: root publisher is not configured")
 	errStoreListerRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: store lister is required")
@@ -44,26 +40,4 @@ func runnerKeyError(op string, keyErr *kvrpcpb.KeyError) error {
 		return nil
 	}
 	return fmt.Errorf("fsmeta/runtime/raftstore: %s: %w", op, nokverrors.NewTxnKeyError(keyErr))
-}
-
-func (c *RemotePerasCommitter) recordErrorf(format string, args ...any) error {
-	return c.recordError(fmt.Errorf(format, args...))
-}
-
-func isPerasAdmissionTerminalError(err error) bool {
-	return errors.Is(err, fsmeta.ErrExists) ||
-		errors.Is(err, fsmeta.ErrNotFound) ||
-		errors.Is(err, fsmeta.ErrInvalidRequest) ||
-		errors.Is(err, fsmeta.ErrInvalidValue)
-}
-
-func (c *RemotePerasCommitter) recordError(err error) error {
-	if c == nil || err == nil {
-		return err
-	}
-	c.errorTotal.Add(1)
-	c.statsMu.Lock()
-	c.lastError = err.Error()
-	c.statsMu.Unlock()
-	return err
 }

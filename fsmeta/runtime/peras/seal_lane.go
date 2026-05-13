@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 )
 
 type perasSealLane struct {
-	owner  *RemotePerasCommitter
+	owner  *Runtime
 	jobs   chan perasSealRequest
 	closed chan struct{}
 	once   sync.Once
@@ -22,7 +22,7 @@ type perasSealRequest struct {
 	done   chan error
 }
 
-func newPerasSealLane(owner *RemotePerasCommitter, workers int) *perasSealLane {
+func newPerasSealLane(owner *Runtime, workers int) *perasSealLane {
 	if workers <= 0 {
 		workers = 1
 	}
@@ -40,14 +40,14 @@ func newPerasSealLane(owner *RemotePerasCommitter, workers int) *perasSealLane {
 
 func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
 	if l == nil || l.owner == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case <-l.closed:
-		return errPerasCommitterClosed
+		return ErrRuntimeClosed
 	default:
 	}
 	done := make(chan error, 1)
@@ -57,7 +57,7 @@ func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-l.closed:
-		return errPerasCommitterClosed
+		return ErrRuntimeClosed
 	}
 	select {
 	case err := <-done:
@@ -65,7 +65,7 @@ func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-l.closed:
-		return errPerasCommitterClosed
+		return ErrRuntimeClosed
 	}
 }
 

@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"context"
@@ -7,11 +7,10 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/utils"
 )
 
-func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) flushLocked(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
 	c.commitMu.Lock()
 	plans, err := c.freezeReplayPlansLocked(scope, 0)
 	c.commitMu.Unlock()
@@ -25,9 +24,9 @@ func (c *RemotePerasCommitter) flushLocked(ctx context.Context, scope *compile.A
 	return c.installFlushBatches(ctx, batches, level)
 }
 
-func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches []perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) installFlushBatches(ctx context.Context, batches []perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
 	if len(batches) > 0 && c.installer == nil {
-		return c.recordError(errPerasCommitterInvalid)
+		return c.recordError(ErrRuntimeInvalid)
 	}
 	for _, batch := range batches {
 		if err := c.installFlushBatchJobs(ctx, batch, level); err != nil {
@@ -45,7 +44,7 @@ func (c *RemotePerasCommitter) installFlushBatches(ctx context.Context, batches 
 	return nil
 }
 
-func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) installFlushBatchJobs(ctx context.Context, batch perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
 	c.recordFlushBatch(len(batch.jobs))
 	if len(batch.jobs) <= 1 || c.installN <= 1 {
 		jobs := make([]perasFlushJob, 0, len(batch.jobs))
@@ -60,7 +59,7 @@ func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch 
 		if level.RequiresPublish() {
 			return c.publishFlushJobSeals(ctx, batch)
 		}
-		c.flushTotal.Add(uint64(len(batch.jobs)))
+		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 		return nil
 	}
 	started := make([]time.Time, len(batch.jobs))
@@ -78,11 +77,11 @@ func (c *RemotePerasCommitter) installFlushBatchJobs(ctx context.Context, batch 
 	if level.RequiresPublish() {
 		return c.publishFlushJobSeals(ctx, batch)
 	}
-	c.flushTotal.Add(uint64(len(batch.jobs)))
+	c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	return nil
 }
 
-func (c *RemotePerasCommitter) appendFlushBatchWitnesses(ctx context.Context, batch perasFlushBatch) error {
+func (c *Runtime) appendFlushBatchWitnesses(ctx context.Context, batch perasFlushBatch) error {
 	return c.runFlushBatchJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
 		witnessStart := time.Now()
 		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, batch.holder, job.segment, job.payload, job.digest); err != nil {
@@ -93,7 +92,7 @@ func (c *RemotePerasCommitter) appendFlushBatchWitnesses(ctx context.Context, ba
 	})
 }
 
-func (c *RemotePerasCommitter) installFlushBatchSegments(ctx context.Context, batch perasFlushBatch, started []time.Time) ([]perasFlushJob, error) {
+func (c *Runtime) installFlushBatchSegments(ctx context.Context, batch perasFlushBatch, started []time.Time) ([]perasFlushJob, error) {
 	jobs := make([]perasFlushJob, len(batch.jobs))
 	copy(jobs, batch.jobs)
 	if err := c.runFlushBatchJobs(ctx, jobs, func(ctx context.Context, idx int, job perasFlushJob) error {
@@ -112,7 +111,7 @@ func (c *RemotePerasCommitter) installFlushBatchSegments(ctx context.Context, ba
 	return jobs, nil
 }
 
-func (c *RemotePerasCommitter) runFlushBatchJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {
+func (c *Runtime) runFlushBatchJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {
 	workers := c.installN
 	if workers > len(jobs) {
 		workers = len(jobs)
@@ -168,7 +167,7 @@ func (c *RemotePerasCommitter) runFlushBatchJobs(ctx context.Context, jobs []per
 	return nil
 }
 
-func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) (perasFlushJob, error) {
+func (c *Runtime) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) (perasFlushJob, error) {
 	flushStart := time.Now()
 	defer func() {
 		c.recordFlushLatency(time.Since(flushStart))
@@ -186,7 +185,7 @@ func (c *RemotePerasCommitter) installOneFlushJob(ctx context.Context, holder *f
 	return job, nil
 }
 
-func (c *RemotePerasCommitter) publishFlushJobSeals(ctx context.Context, batch perasFlushBatch) error {
+func (c *Runtime) publishFlushJobSeals(ctx context.Context, batch perasFlushBatch) error {
 	for _, job := range batch.jobs {
 		if err := c.submitSealJob(ctx, batch.holder, job); err != nil {
 			return err
@@ -195,9 +194,9 @@ func (c *RemotePerasCommitter) publishFlushJobSeals(ctx context.Context, batch p
 	return nil
 }
 
-func (c *RemotePerasCommitter) submitSealJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
+func (c *Runtime) submitSealJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
 	if c == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if c.sealQ != nil {
 		return c.sealQ.publish(ctx, holder, job)
@@ -205,32 +204,29 @@ func (c *RemotePerasCommitter) submitSealJob(ctx context.Context, holder *fspera
 	return c.publishSegmentSeal(ctx, holder, job)
 }
 
-func (c *RemotePerasCommitter) publishSegmentSeal(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
-	if publisher, ok := c.authority.(perasSealPublisher); ok {
+func (c *Runtime) publishSegmentSeal(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
+	if publisher, ok := c.authority.(SealPublisher); ok {
 		if !job.cursor.Valid() {
-			return c.recordError(errPerasCommitterInvalid)
+			return c.recordError(ErrRuntimeInvalid)
 		}
 		grant, found := c.grantForEpoch(holder.EpochID())
 		if !found {
-			return c.recordError(runtimeperas.ErrNotHeld)
+			return c.recordError(ErrNotHeld)
 		}
 		sealStart := time.Now()
 		if err := publisher.PublishSegmentSeal(ctx, grant, job.segment, job.digest, job.cursor); err != nil {
 			return c.recordErrorf("publish peras segment seal: %w", err)
 		}
 		c.recordSealLatency(time.Since(sealStart))
-		c.sealTotal.Add(1)
+		c.metrics.sealTotal.Add(1)
 	}
-	c.flushTotal.Add(1)
+	c.metrics.flushTotal.Add(1)
 	return nil
 }
 
-func (c *RemotePerasCommitter) grantForEpoch(epochID uint64) (runtimeperas.AuthorityGrant, bool) {
-	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
-	grant, ok := c.grants[epochID]
-	if !ok {
-		return runtimeperas.AuthorityGrant{}, false
+func (c *Runtime) grantForEpoch(epochID uint64) (AuthorityGrant, bool) {
+	if c == nil || c.epochs == nil {
+		return AuthorityGrant{}, false
 	}
-	return grant, true
+	return c.epochs.grant(epochID)
 }

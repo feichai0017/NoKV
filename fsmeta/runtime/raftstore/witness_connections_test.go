@@ -10,21 +10,21 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestTryBuildRemotePerasWitnessesRequiresConfiguredStores(t *testing.T) {
+func TestTryBuildWitnessConnectionsRequiresConfiguredStores(t *testing.T) {
 	lister := &fakePerasStoreLister{stores: []*coordpb.StoreInfo{
 		{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_UP},
 		{StoreId: 2, ClientAddr: "127.0.0.1:2", State: coordpb.StoreState_STORE_STATE_UP},
 	}}
 	allowed := map[uint64]struct{}{1: {}, 2: {}, 3: {}}
 
-	conns, complete, err := tryBuildRemotePerasWitnesses(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
+	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
 	require.NoError(t, err)
 	require.False(t, complete)
 	require.NotNil(t, conns)
 	require.NoError(t, conns.Close())
 }
 
-func TestTryBuildRemotePerasWitnessesAcceptsConfiguredStoresOnceAllUp(t *testing.T) {
+func TestTryBuildWitnessConnectionsAcceptsConfiguredStoresOnceAllUp(t *testing.T) {
 	lister := &fakePerasStoreLister{stores: []*coordpb.StoreInfo{
 		{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_UP},
 		{StoreId: 2, ClientAddr: "127.0.0.1:2", State: coordpb.StoreState_STORE_STATE_UP},
@@ -33,7 +33,7 @@ func TestTryBuildRemotePerasWitnessesAcceptsConfiguredStoresOnceAllUp(t *testing
 	}}
 	allowed := map[uint64]struct{}{1: {}, 2: {}, 3: {}}
 
-	conns, complete, err := tryBuildRemotePerasWitnesses(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
+	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
 	require.NoError(t, err)
 	require.True(t, complete)
 	require.Len(t, conns.witnesses, 3)
@@ -45,11 +45,11 @@ func TestTryBuildRemotePerasWitnessesAcceptsConfiguredStoresOnceAllUp(t *testing
 
 func TestPerasWitnessStoreSelectedIgnoresUnavailableStores(t *testing.T) {
 	allowed := map[uint64]struct{}{1: {}}
-	require.False(t, perasWitnessStoreSelected(nil, allowed))
-	require.False(t, perasWitnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, State: coordpb.StoreState_STORE_STATE_UP}, allowed))
-	require.False(t, perasWitnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_TOMBSTONE}, allowed))
-	require.False(t, perasWitnessStoreSelected(&coordpb.StoreInfo{StoreId: 2, ClientAddr: "127.0.0.1:2", State: coordpb.StoreState_STORE_STATE_UP}, allowed))
-	require.True(t, perasWitnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_UP}, allowed))
+	require.False(t, witnessStoreSelected(nil, allowed))
+	require.False(t, witnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, State: coordpb.StoreState_STORE_STATE_UP}, allowed))
+	require.False(t, witnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_TOMBSTONE}, allowed))
+	require.False(t, witnessStoreSelected(&coordpb.StoreInfo{StoreId: 2, ClientAddr: "127.0.0.1:2", State: coordpb.StoreState_STORE_STATE_UP}, allowed))
+	require.True(t, witnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, ClientAddr: "127.0.0.1:1", State: coordpb.StoreState_STORE_STATE_UP}, allowed))
 }
 
 type fakePerasStoreLister struct {

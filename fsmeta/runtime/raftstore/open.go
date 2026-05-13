@@ -137,7 +137,7 @@ type Runtime struct {
 	MountResolver         fsmetaexec.MountResolver
 	QuotaResolver         fsmetaexec.QuotaResolver
 	SessionCleaner        interface{ Stats() map[string]any }
-	PerasCommitter        interface{ Stats() map[string]any }
+	Peras                 interface{ Stats() map[string]any }
 	PerasAuthorityTable   *runtimeperas.ActiveAuthorities
 	PerasAuthorityManager *runtimeperas.AuthorityManager
 
@@ -176,7 +176,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, runtimeperas.ErrRuntimeInvalid
 	}
 	if opts.PerasVisibleCommit && strings.TrimSpace(opts.PerasHolderID) == "" {
 		return nil, runtimeperas.ErrHolderRequired
@@ -262,20 +262,20 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if perasAuthorityManager != nil {
 		execOpts = append(execOpts, fsmetaexec.WithPerasAuthorityAdmitter(perasAuthorityManager))
 	}
-	var perasWitnesses *perasWitnessConnections
-	var perasCommitter *RemotePerasCommitter
+	var witnessConns *witnessConnections
+	var perasRuntime *runtimeperas.Runtime
 	if opts.PerasVisibleCommit {
-		perasWitnesses, err = buildRemotePerasWitnesses(ctx, coord, dialOpts, opts.PerasWitnessStoreIDs)
+		witnessConns, err = buildWitnessConnections(ctx, coord, dialOpts, opts.PerasWitnessStoreIDs)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init peras witnesses: %w", err)
 		}
-		perasCommitter, err = NewRemotePerasCommitter(RemotePerasCommitterConfig{
+		perasRuntime, err = runtimeperas.NewRuntime(runtimeperas.Config{
 			Authority:                  perasAuthorityManager,
-			Witnesses:                  perasWitnesses.witnesses,
-			Installer:                  newRunnerPerasSegmentInstaller(runner, router),
-			CatalogScanner:             runner,
+			Witnesses:                  witnessConns.witnesses,
+			Installer:                  newRaftstoreSegmentInstaller(runner, router),
+			CatalogScanner:             raftstoreSegmentCatalogScanner{runner: runner},
 			WatchPublisher:             router,
 			Quorum:                     opts.PerasWitnessQuorum,
 			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
@@ -290,12 +290,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			BackgroundErrorBackoff:     opts.PerasBackgroundErrorBackoff,
 		})
 		if err != nil {
-			_ = perasWitnesses.Close()
+			_ = witnessConns.Close()
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init peras committer: %w", err)
 		}
-		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasCommitter))
+		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasRuntime))
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
@@ -311,8 +311,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			},
 		)
 		if err != nil {
-			if perasWitnesses != nil {
-				_ = perasWitnesses.Close()
+			if witnessConns != nil {
+				_ = witnessConns.Close()
 			}
 			_ = kv.Close()
 			_ = coord.Close()
@@ -327,8 +327,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			Dir: opts.DirPageCacheDir,
 		})
 		if err != nil {
-			if perasWitnesses != nil {
-				_ = perasWitnesses.Close()
+			if witnessConns != nil {
+				_ = witnessConns.Close()
 			}
 			_ = kv.Close()
 			_ = coord.Close()
@@ -341,8 +341,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if perasWitnesses != nil {
-			_ = perasWitnesses.Close()
+		if witnessConns != nil {
+			_ = witnessConns.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -354,8 +354,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if perasWitnesses != nil {
-			_ = perasWitnesses.Close()
+		if witnessConns != nil {
+			_ = witnessConns.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -378,7 +378,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		MountResolver:         mounts,
 		QuotaResolver:         quotas,
 		SessionCleaner:        sessions,
-		PerasCommitter:        perasCommitter,
+		Peras:                 perasRuntime,
 		PerasAuthorityTable:   peras,
 		PerasAuthorityManager: perasAuthorityManager,
 	}
@@ -407,13 +407,13 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 				first = err
 			}
 		}
-		if perasCommitter != nil {
-			if err := perasCommitter.Shutdown(context.Background()); err != nil && first == nil {
+		if perasRuntime != nil {
+			if err := perasRuntime.Shutdown(context.Background()); err != nil && first == nil {
 				first = err
 			}
 		}
-		if perasWitnesses != nil {
-			if err := perasWitnesses.Close(); err != nil && first == nil {
+		if witnessConns != nil {
+			if err := witnessConns.Close(); err != nil && first == nil {
 				first = err
 			}
 		}

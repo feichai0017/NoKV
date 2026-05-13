@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"bytes"
@@ -8,12 +8,11 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 )
 
-func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope compile.AuthorityScope, epochID uint64) error {
+func (c *Runtime) RecoverWitnessSegments(ctx context.Context, scope compile.AuthorityScope, epochID uint64) error {
 	if c == nil || epochID == 0 || c.installer == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -27,7 +26,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 	}
 	for _, record := range records {
 		if c.segmentInstalled(record.SegmentRoot) {
-			c.recoverySkipTotal.Add(1)
+			c.metrics.recoverySkipTotal.Add(1)
 			continue
 		}
 		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
@@ -37,7 +36,7 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		if err != nil {
 			return c.recordErrorf("decode peras witness segment: %w", err)
 		}
-		if !runtimeperas.SegmentWithinScope(segment, scope) {
+		if !SegmentWithinScope(segment, scope) {
 			continue
 		}
 		stats := segment.Stats()
@@ -56,12 +55,12 @@ func (c *RemotePerasCommitter) RecoverWitnessSegments(ctx context.Context, scope
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
 			return err
 		}
-		c.recoveryInstallTotal.Add(1)
+		c.metrics.recoveryInstallTotal.Add(1)
 	}
 	return nil
 }
 
-func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope compile.AuthorityScope) error {
+func (c *Runtime) LoadInstalledSegments(ctx context.Context, scope compile.AuthorityScope) error {
 	if c == nil || c.catalog == nil || scope.MountKeyID == 0 {
 		return nil
 	}
@@ -80,20 +79,20 @@ func (c *RemotePerasCommitter) LoadInstalledSegments(ctx context.Context, scope 
 		if err != nil {
 			return c.recordErrorf("decode peras segment catalog: %w", err)
 		}
-		if !runtimeperas.SegmentWithinScope(segment, scope) {
+		if !SegmentWithinScope(segment, scope) {
 			continue
 		}
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
 			return err
 		}
-		c.catalogLoadTotal.Add(1)
+		c.metrics.catalogLoadTotal.Add(1)
 	}
 	return nil
 }
 
-func (c *RemotePerasCommitter) LoadRootSealedSegments(ctx context.Context, scope compile.AuthorityScope) error {
+func (c *Runtime) LoadRootSealedSegments(ctx context.Context, scope compile.AuthorityScope) error {
 	if c == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -115,18 +114,18 @@ func (c *RemotePerasCommitter) LoadRootSealedSegments(ctx context.Context, scope
 		if !seal.Valid() {
 			return c.recordError(fsperas.ErrInvalidPerasSegment)
 		}
-		c.rootSealTotal.Add(1)
+		c.metrics.rootSealTotal.Add(1)
 		if c.segmentInstalled(seal.SegmentRoot) {
 			continue
 		}
-		c.rootSealMissingTotal.Add(1)
+		c.metrics.rootSealMissingTotal.Add(1)
 		return c.recordErrorf("rooted peras segment seal missing installed catalog: %w", fsperas.ErrInvalidPerasSegment)
 	}
 	return nil
 }
 
-func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
-	buckets := runtimeperas.CatalogBuckets(scope)
+func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
+	buckets := CatalogBuckets(scope)
 	if len(buckets) == 0 {
 		return nil, nil
 	}
@@ -137,7 +136,7 @@ func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
-		next := runtimeCloneBytes(prefix)
+		next := cloneBytes(prefix)
 		for {
 			kvs, err := c.catalog.Scan(ctx, next, defaultPerasSegmentCatalogScanLimit, 0)
 			if err != nil {
@@ -189,7 +188,7 @@ func (c *RemotePerasCommitter) scanInstalledSegmentCatalogs(ctx context.Context,
 	return records, nil
 }
 
-func (c *RemotePerasCommitter) loadInstalledSegmentObject(ctx context.Context, index fsperas.SegmentCatalogIndexRecord) (fsperas.SegmentCatalogRecord, error) {
+func (c *Runtime) loadInstalledSegmentObject(ctx context.Context, index fsperas.SegmentCatalogIndexRecord) (fsperas.SegmentCatalogRecord, error) {
 	kvs, err := c.catalog.Scan(ctx, index.ObjectKey, 1, 0)
 	if err != nil {
 		return fsperas.SegmentCatalogRecord{}, err

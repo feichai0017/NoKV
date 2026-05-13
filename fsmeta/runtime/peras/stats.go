@@ -1,23 +1,75 @@
-package raftstore
+package peras
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
+
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
 
-func (c *RemotePerasCommitter) recordFlushLatency(d time.Duration) {
-	recordPerasDuration(&c.flushLatencyTotal, &c.flushLatencyLast, &c.flushLatencyMax, d)
+type runtimeMetrics struct {
+	commitTotal          atomic.Uint64
+	flushTotal           atomic.Uint64
+	segmentTotal         atomic.Uint64
+	segmentOpsTotal      atomic.Uint64
+	segmentEntryTotal    atomic.Uint64
+	sealTotal            atomic.Uint64
+	flushLatencyTotal    atomic.Uint64
+	flushLatencyLast     atomic.Uint64
+	flushLatencyMax      atomic.Uint64
+	witnessLatencyTotal  atomic.Uint64
+	witnessLatencyLast   atomic.Uint64
+	witnessLatencyMax    atomic.Uint64
+	installLatencyTotal  atomic.Uint64
+	installLatencyLast   atomic.Uint64
+	installLatencyMax    atomic.Uint64
+	installPayloadTotal  atomic.Uint64
+	installPayloadLast   atomic.Uint64
+	installPayloadMax    atomic.Uint64
+	installRoutesTotal   atomic.Uint64
+	installRoutesLast    atomic.Uint64
+	installRoutesMax     atomic.Uint64
+	sealLatencyTotal     atomic.Uint64
+	sealLatencyLast      atomic.Uint64
+	sealLatencyMax       atomic.Uint64
+	flushBatchTotal      atomic.Uint64
+	flushJobTotal        atomic.Uint64
+	flushJobLast         atomic.Uint64
+	flushJobMax          atomic.Uint64
+	errorTotal           atomic.Uint64
+	retryTotal           atomic.Uint64
+	retryUnavailable     atomic.Uint64
+	retryRouting         atomic.Uint64
+	retryStaleEpoch      atomic.Uint64
+	retryOther           atomic.Uint64
+	bgSkipTotal          atomic.Uint64
+	bgErrorTotal         atomic.Uint64
+	catalogLoadTotal     atomic.Uint64
+	rootSealTotal        atomic.Uint64
+	rootSealMissingTotal atomic.Uint64
+	recoveryInstallTotal atomic.Uint64
+	recoverySkipTotal    atomic.Uint64
+
+	statsMu          sync.RWMutex
+	lastSegmentStats fsperas.SegmentStats
+	lastSegmentRoot  [32]byte
+	lastError        string
 }
 
-func (c *RemotePerasCommitter) recordWitnessLatency(d time.Duration) {
-	recordPerasDuration(&c.witnessLatencyTotal, &c.witnessLatencyLast, &c.witnessLatencyMax, d)
+func (c *Runtime) recordFlushLatency(d time.Duration) {
+	recordPerasDuration(&c.metrics.flushLatencyTotal, &c.metrics.flushLatencyLast, &c.metrics.flushLatencyMax, d)
 }
 
-func (c *RemotePerasCommitter) recordInstallLatency(d time.Duration) {
-	recordPerasDuration(&c.installLatencyTotal, &c.installLatencyLast, &c.installLatencyMax, d)
+func (c *Runtime) recordWitnessLatency(d time.Duration) {
+	recordPerasDuration(&c.metrics.witnessLatencyTotal, &c.metrics.witnessLatencyLast, &c.metrics.witnessLatencyMax, d)
 }
 
-func (c *RemotePerasCommitter) recordInstallShape(payloadBytes, routeKeys int) {
+func (c *Runtime) recordInstallLatency(d time.Duration) {
+	recordPerasDuration(&c.metrics.installLatencyTotal, &c.metrics.installLatencyLast, &c.metrics.installLatencyMax, d)
+}
+
+func (c *Runtime) recordInstallShape(payloadBytes, routeKeys int) {
 	if c == nil {
 		return
 	}
@@ -29,27 +81,27 @@ func (c *RemotePerasCommitter) recordInstallShape(payloadBytes, routeKeys int) {
 	}
 	payload := uint64(payloadBytes)
 	routes := uint64(routeKeys)
-	c.installPayloadTotal.Add(payload)
-	c.installPayloadLast.Store(payload)
-	recordPerasMax(&c.installPayloadMax, payload)
-	c.installRoutesTotal.Add(routes)
-	c.installRoutesLast.Store(routes)
-	recordPerasMax(&c.installRoutesMax, routes)
+	c.metrics.installPayloadTotal.Add(payload)
+	c.metrics.installPayloadLast.Store(payload)
+	recordPerasMax(&c.metrics.installPayloadMax, payload)
+	c.metrics.installRoutesTotal.Add(routes)
+	c.metrics.installRoutesLast.Store(routes)
+	recordPerasMax(&c.metrics.installRoutesMax, routes)
 }
 
-func (c *RemotePerasCommitter) recordSealLatency(d time.Duration) {
-	recordPerasDuration(&c.sealLatencyTotal, &c.sealLatencyLast, &c.sealLatencyMax, d)
+func (c *Runtime) recordSealLatency(d time.Duration) {
+	recordPerasDuration(&c.metrics.sealLatencyTotal, &c.metrics.sealLatencyLast, &c.metrics.sealLatencyMax, d)
 }
 
-func (c *RemotePerasCommitter) recordFlushBatch(jobs int) {
+func (c *Runtime) recordFlushBatch(jobs int) {
 	if jobs <= 0 {
 		return
 	}
 	n := uint64(jobs)
-	c.flushBatchTotal.Add(1)
-	c.flushJobTotal.Add(n)
-	c.flushJobLast.Store(n)
-	recordPerasMax(&c.flushJobMax, n)
+	c.metrics.flushBatchTotal.Add(1)
+	c.metrics.flushJobTotal.Add(n)
+	c.metrics.flushJobLast.Store(n)
+	recordPerasMax(&c.metrics.flushJobMax, n)
 }
 
 func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {
@@ -84,7 +136,7 @@ func averagePerasDuration(total, count uint64) uint64 {
 	return total / count
 }
 
-func (c *RemotePerasCommitter) Stats() map[string]any {
+func (c *Runtime) Stats() map[string]any {
 	if c == nil {
 		return map[string]any{
 			"commit_total":                       uint64(0),
@@ -155,20 +207,21 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 			"quorum":                             0,
 		}
 	}
-	overlayKeys, knownKeys, emptyDirs, emptySessions := c.overlay.Stats()
-	segmentKeys, _, _, _ := c.sealed.Stats()
-	c.holdersMu.Lock()
-	holders := len(c.holders)
-	pending := 0
-	for _, holder := range c.holders {
-		pending += holder.Pending()
+	var overlayKeys, knownKeys, emptyDirs, emptySessions int
+	var segmentKeys int
+	if c.read != nil {
+		overlayKeys, knownKeys, emptyDirs, emptySessions = c.read.overlay.Stats()
+		segmentKeys, _, _, _ = c.read.sealed.Stats()
 	}
-	c.holdersMu.Unlock()
-	c.statsMu.RLock()
-	lastSegmentStats := c.lastSegmentStats
-	lastSegmentRoot := c.lastSegmentRoot
-	lastError := c.lastError
-	c.statsMu.RUnlock()
+	holders, pending := 0, 0
+	if c.epochs != nil {
+		holders, pending = c.epochs.stats()
+	}
+	c.metrics.statsMu.RLock()
+	lastSegmentStats := c.metrics.lastSegmentStats
+	lastSegmentRoot := c.metrics.lastSegmentRoot
+	lastError := c.metrics.lastError
+	c.metrics.statsMu.RUnlock()
 	installQueueDepth := 0
 	installQueueCapacity := 0
 	if c.installQ != nil {
@@ -181,45 +234,45 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		sealQueueDepth = c.sealQ.depth()
 		sealQueueCapacity = c.sealQ.capacity()
 	}
-	flushTotal := c.flushTotal.Load()
-	sealTotal := c.sealTotal.Load()
-	flushLatencyTotal := c.flushLatencyTotal.Load()
-	witnessLatencyTotal := c.witnessLatencyTotal.Load()
-	installLatencyTotal := c.installLatencyTotal.Load()
-	sealLatencyTotal := c.sealLatencyTotal.Load()
+	flushTotal := c.metrics.flushTotal.Load()
+	sealTotal := c.metrics.sealTotal.Load()
+	flushLatencyTotal := c.metrics.flushLatencyTotal.Load()
+	witnessLatencyTotal := c.metrics.witnessLatencyTotal.Load()
+	installLatencyTotal := c.metrics.installLatencyTotal.Load()
+	sealLatencyTotal := c.metrics.sealLatencyTotal.Load()
 	return map[string]any{
-		"commit_total":                       c.commitTotal.Load(),
+		"commit_total":                       c.metrics.commitTotal.Load(),
 		"flush_total":                        flushTotal,
-		"segment_total":                      c.segmentTotal.Load(),
+		"segment_total":                      c.metrics.segmentTotal.Load(),
 		"seal_total":                         sealTotal,
-		"segment_operations_total":           c.segmentOpsTotal.Load(),
-		"segment_entries_total":              c.segmentEntryTotal.Load(),
+		"segment_operations_total":           c.metrics.segmentOpsTotal.Load(),
+		"segment_entries_total":              c.metrics.segmentEntryTotal.Load(),
 		"flush_latency_total_nanosecond":     flushLatencyTotal,
-		"flush_latency_last_nanosecond":      c.flushLatencyLast.Load(),
-		"flush_latency_max_nanosecond":       c.flushLatencyMax.Load(),
+		"flush_latency_last_nanosecond":      c.metrics.flushLatencyLast.Load(),
+		"flush_latency_max_nanosecond":       c.metrics.flushLatencyMax.Load(),
 		"flush_latency_average_nanosecond":   averagePerasDuration(flushLatencyTotal, flushTotal),
 		"witness_latency_total_nanosecond":   witnessLatencyTotal,
-		"witness_latency_last_nanosecond":    c.witnessLatencyLast.Load(),
-		"witness_latency_max_nanosecond":     c.witnessLatencyMax.Load(),
+		"witness_latency_last_nanosecond":    c.metrics.witnessLatencyLast.Load(),
+		"witness_latency_max_nanosecond":     c.metrics.witnessLatencyMax.Load(),
 		"witness_latency_average_nanosecond": averagePerasDuration(witnessLatencyTotal, flushTotal),
 		"install_latency_total_nanosecond":   installLatencyTotal,
-		"install_latency_last_nanosecond":    c.installLatencyLast.Load(),
-		"install_latency_max_nanosecond":     c.installLatencyMax.Load(),
+		"install_latency_last_nanosecond":    c.metrics.installLatencyLast.Load(),
+		"install_latency_max_nanosecond":     c.metrics.installLatencyMax.Load(),
 		"install_latency_average_nanosecond": averagePerasDuration(installLatencyTotal, flushTotal),
-		"install_payload_bytes_total":        c.installPayloadTotal.Load(),
-		"install_payload_bytes_last":         c.installPayloadLast.Load(),
-		"install_payload_bytes_max":          c.installPayloadMax.Load(),
-		"install_route_keys_total":           c.installRoutesTotal.Load(),
-		"install_route_keys_last":            c.installRoutesLast.Load(),
-		"install_route_keys_max":             c.installRoutesMax.Load(),
+		"install_payload_bytes_total":        c.metrics.installPayloadTotal.Load(),
+		"install_payload_bytes_last":         c.metrics.installPayloadLast.Load(),
+		"install_payload_bytes_max":          c.metrics.installPayloadMax.Load(),
+		"install_route_keys_total":           c.metrics.installRoutesTotal.Load(),
+		"install_route_keys_last":            c.metrics.installRoutesLast.Load(),
+		"install_route_keys_max":             c.metrics.installRoutesMax.Load(),
 		"seal_latency_total_nanosecond":      sealLatencyTotal,
-		"seal_latency_last_nanosecond":       c.sealLatencyLast.Load(),
-		"seal_latency_max_nanosecond":        c.sealLatencyMax.Load(),
+		"seal_latency_last_nanosecond":       c.metrics.sealLatencyLast.Load(),
+		"seal_latency_max_nanosecond":        c.metrics.sealLatencyMax.Load(),
 		"seal_latency_average_nanosecond":    averagePerasDuration(sealLatencyTotal, sealTotal),
-		"flush_batch_total":                  c.flushBatchTotal.Load(),
-		"flush_jobs_total":                   c.flushJobTotal.Load(),
-		"flush_jobs_last":                    c.flushJobLast.Load(),
-		"flush_jobs_max":                     c.flushJobMax.Load(),
+		"flush_batch_total":                  c.metrics.flushBatchTotal.Load(),
+		"flush_jobs_total":                   c.metrics.flushJobTotal.Load(),
+		"flush_jobs_last":                    c.metrics.flushJobLast.Load(),
+		"flush_jobs_max":                     c.metrics.flushJobMax.Load(),
 		"last_segment_operations":            lastSegmentStats.OperationCount,
 		"last_segment_input_mutations":       lastSegmentStats.InputMutationCount,
 		"last_segment_entries":               lastSegmentStats.EntryCount,
@@ -227,19 +280,19 @@ func (c *RemotePerasCommitter) Stats() map[string]any {
 		"last_segment_compression_x100":      uint64(lastSegmentStats.CompressionRatio * 100),
 		"last_segment_root":                  lastSegmentRoot,
 		"last_error":                         lastError,
-		"error_total":                        c.errorTotal.Load(),
-		"retry_total":                        c.retryTotal.Load(),
-		"retry_unavailable_total":            c.retryUnavailable.Load(),
-		"retry_routing_total":                c.retryRouting.Load(),
-		"retry_stale_epoch_total":            c.retryStaleEpoch.Load(),
-		"retry_other_total":                  c.retryOther.Load(),
-		"background_skip_total":              c.bgSkipTotal.Load(),
-		"background_error_total":             c.bgErrorTotal.Load(),
-		"segment_catalog_load_total":         c.catalogLoadTotal.Load(),
-		"root_sealed_segment_total":          c.rootSealTotal.Load(),
-		"root_sealed_segment_missing_total":  c.rootSealMissingTotal.Load(),
-		"segment_recovery_install_total":     c.recoveryInstallTotal.Load(),
-		"segment_recovery_skip_total":        c.recoverySkipTotal.Load(),
+		"error_total":                        c.metrics.errorTotal.Load(),
+		"retry_total":                        c.metrics.retryTotal.Load(),
+		"retry_unavailable_total":            c.metrics.retryUnavailable.Load(),
+		"retry_routing_total":                c.metrics.retryRouting.Load(),
+		"retry_stale_epoch_total":            c.metrics.retryStaleEpoch.Load(),
+		"retry_other_total":                  c.metrics.retryOther.Load(),
+		"background_skip_total":              c.metrics.bgSkipTotal.Load(),
+		"background_error_total":             c.metrics.bgErrorTotal.Load(),
+		"segment_catalog_load_total":         c.metrics.catalogLoadTotal.Load(),
+		"root_sealed_segment_total":          c.metrics.rootSealTotal.Load(),
+		"root_sealed_segment_missing_total":  c.metrics.rootSealMissingTotal.Load(),
+		"segment_recovery_install_total":     c.metrics.recoveryInstallTotal.Load(),
+		"segment_recovery_skip_total":        c.metrics.recoverySkipTotal.Load(),
 		"overlay_keys":                       overlayKeys,
 		"segment_keys":                       segmentKeys,
 		"predicate_known_keys":               knownKeys,

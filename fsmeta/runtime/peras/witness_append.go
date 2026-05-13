@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
 
-func (c *RemotePerasCommitter) appendSegmentWitnessesWithRetry(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
+func (c *Runtime) appendSegmentWitnessesWithRetry(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
 	var last error
 	attempts := c.retries + 1
 	for attempt := range attempts {
@@ -23,7 +23,7 @@ func (c *RemotePerasCommitter) appendSegmentWitnessesWithRetry(ctx context.Conte
 		if !errors.Is(err, fsperas.ErrSegmentWitnessQuorumUnavailable) || attempt == attempts-1 {
 			break
 		}
-		c.retryTotal.Add(1)
+		c.metrics.retryTotal.Add(1)
 		if !sleepContext(ctx, c.backoff) {
 			return ctx.Err()
 		}
@@ -31,7 +31,7 @@ func (c *RemotePerasCommitter) appendSegmentWitnessesWithRetry(ctx context.Conte
 	return last
 }
 
-func (c *RemotePerasCommitter) appendSegmentWitnesses(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
+func (c *Runtime) appendSegmentWitnesses(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func (c *RemotePerasCommitter) appendSegmentWitnesses(ctx context.Context, scope
 		SegmentRoot:          segment.Root,
 		SegmentPayloadDigest: digest,
 		SegmentPayloadSize:   uint64(len(payload)),
-		SegmentPayload:       runtimeCloneBytes(payload),
+		SegmentPayload:       cloneBytes(payload),
 		OperationCount:       stats.OperationCount,
 		EntryCount:           stats.EntryCount,
 		TimestampUnixNano:    c.now().UnixNano(),
@@ -81,7 +81,7 @@ func (c *RemotePerasCommitter) appendSegmentWitnesses(ctx context.Context, scope
 	return errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
 }
 
-func (c *RemotePerasCommitter) collectWitnessSegments(ctx context.Context, epochID uint64) ([]fsperas.SegmentWitnessRecord, error) {
+func (c *Runtime) collectWitnessSegments(ctx context.Context, epochID uint64) ([]fsperas.SegmentWitnessRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -10,7 +10,7 @@ type perasWatchPublisher interface {
 	Publish(fsmeta.WatchEvent)
 }
 
-func (c *RemotePerasCommitter) publishVisibleWatch(op compile.MaterializedOp, ack fsperas.VisibleAck) {
+func (c *Runtime) publishVisibleWatch(op compile.MaterializedOp, ack fsperas.VisibleAck) {
 	if c == nil || c.watch == nil {
 		return
 	}
@@ -34,7 +34,7 @@ func (c *RemotePerasCommitter) publishVisibleWatch(op compile.MaterializedOp, ac
 		evt := fsmeta.WatchEvent{
 			Cursor: cursor,
 			Source: fsmeta.WatchEventSourcePerasVisible,
-			Key:    runtimeCloneBytes(projection.Key),
+			Key:    cloneBytes(projection.Key),
 		}
 		if c.watchQueue != nil && c.watchQueue.TryPush(evt) {
 			continue
@@ -43,7 +43,7 @@ func (c *RemotePerasCommitter) publishVisibleWatch(op compile.MaterializedOp, ac
 	}
 }
 
-func (c *RemotePerasCommitter) visibleWatchLoop() {
+func (c *Runtime) visibleWatchLoop() {
 	if c == nil || c.closer == nil {
 		return
 	}

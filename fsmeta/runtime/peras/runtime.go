@@ -1,4 +1,4 @@
-package raftstore
+package peras
 
 import (
 	"context"
@@ -9,11 +9,8 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -40,32 +37,11 @@ const (
 	defaultPerasVisibleWatchQueue             = 65536
 )
 
-type perasGrantProvider interface {
-	HolderID() string
-	Acquire(context.Context, compile.AuthorityScope) (runtimeperas.AuthorityGrant, bool, error)
-}
-
-type perasSealPublisher interface {
-	PublishSegmentSeal(context.Context, runtimeperas.AuthorityGrant, fsperas.PerasSegment, [32]byte, runtimeperas.InstallCursor) error
-}
-
-type perasSealProvider interface {
-	ListPerasAuthoritySeals(context.Context, compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error)
-}
-
-type perasSegmentInstaller interface {
-	InstallPerasSegment(context.Context, compile.AuthorityScope, fsperas.PerasSegment, []byte, [32]byte, bool) (runtimeperas.InstallCursor, error)
-}
-
-type perasSegmentCatalogScanner interface {
-	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]fsmetaexec.KV, error)
-}
-
-type RemotePerasCommitterConfig struct {
-	Authority                  perasGrantProvider
+type Config struct {
+	Authority                  GrantProvider
 	Witnesses                  []fsperas.WitnessReplica
-	Installer                  perasSegmentInstaller
-	CatalogScanner             perasSegmentCatalogScanner
+	Installer                  SegmentInstaller
+	CatalogScanner             SegmentCatalogScanner
 	WatchPublisher             perasWatchPublisher
 	Quorum                     int
 	SegmentWitnessRetries      int
@@ -81,15 +57,15 @@ type RemotePerasCommitterConfig struct {
 	Now                        func() time.Time
 }
 
-// RemotePerasCommitter is the fsmeta runtime bridge from compiler deltas to
+// Runtime is the fsmeta runtime bridge from compiler deltas to
 // remote durable witnesses. It keeps an in-process read overlay until segment
 // apply lands.
-type RemotePerasCommitter struct {
-	authority  perasGrantProvider
-	seals      perasSealProvider
+type Runtime struct {
+	authority  GrantProvider
+	seals      SealProvider
 	witnesses  []fsperas.WitnessReplica
-	installer  perasSegmentInstaller
-	catalog    perasSegmentCatalogScanner
+	installer  SegmentInstaller
+	catalog    SegmentCatalogScanner
 	watch      perasWatchPublisher
 	quorum     int
 	retries    int
@@ -118,7 +94,7 @@ type RemotePerasCommitter struct {
 	sealQ      *perasSealLane
 
 	// Lock order for multi-lock paths:
-	// commitMu -> flushMu -> drainMu -> holdersMu -> overlayMu -> statsMu.
+	// commitMu -> flushMu -> drainMu -> epochTable.mu -> readState.mu -> runtimeMetrics.statsMu.
 	// Lane workers communicate through queues and must not take commitMu.
 	drainMu     sync.Mutex
 	drainCond   *sync.Cond
@@ -126,63 +102,12 @@ type RemotePerasCommitter struct {
 	drainUses   []perasAuthorityUse
 	drainScopes []compile.AuthorityScope
 
-	holdersMu sync.Mutex
-	holders   map[uint64]*fsperas.Holder
-	grants    map[uint64]runtimeperas.AuthorityGrant
-	latches   *fsperas.AdmissionLatches
+	epochs  *epochTable
+	latches *fsperas.AdmissionLatches
 
-	overlayMu sync.RWMutex
-	overlay   *fsperas.OverlayView
-	sealed    *fsperas.OverlayView
-	segments  []fsperas.PerasSegment
-	completed map[fsperas.OperationID]perasCompletion
+	read *readState
 
-	commitTotal          atomic.Uint64
-	flushTotal           atomic.Uint64
-	segmentTotal         atomic.Uint64
-	segmentOpsTotal      atomic.Uint64
-	segmentEntryTotal    atomic.Uint64
-	sealTotal            atomic.Uint64
-	flushLatencyTotal    atomic.Uint64
-	flushLatencyLast     atomic.Uint64
-	flushLatencyMax      atomic.Uint64
-	witnessLatencyTotal  atomic.Uint64
-	witnessLatencyLast   atomic.Uint64
-	witnessLatencyMax    atomic.Uint64
-	installLatencyTotal  atomic.Uint64
-	installLatencyLast   atomic.Uint64
-	installLatencyMax    atomic.Uint64
-	installPayloadTotal  atomic.Uint64
-	installPayloadLast   atomic.Uint64
-	installPayloadMax    atomic.Uint64
-	installRoutesTotal   atomic.Uint64
-	installRoutesLast    atomic.Uint64
-	installRoutesMax     atomic.Uint64
-	sealLatencyTotal     atomic.Uint64
-	sealLatencyLast      atomic.Uint64
-	sealLatencyMax       atomic.Uint64
-	flushBatchTotal      atomic.Uint64
-	flushJobTotal        atomic.Uint64
-	flushJobLast         atomic.Uint64
-	flushJobMax          atomic.Uint64
-	errorTotal           atomic.Uint64
-	retryTotal           atomic.Uint64
-	retryUnavailable     atomic.Uint64
-	retryRouting         atomic.Uint64
-	retryStaleEpoch      atomic.Uint64
-	retryOther           atomic.Uint64
-	bgSkipTotal          atomic.Uint64
-	bgErrorTotal         atomic.Uint64
-	catalogLoadTotal     atomic.Uint64
-	rootSealTotal        atomic.Uint64
-	rootSealMissingTotal atomic.Uint64
-	recoveryInstallTotal atomic.Uint64
-	recoverySkipTotal    atomic.Uint64
-
-	statsMu          sync.RWMutex
-	lastSegmentStats fsperas.SegmentStats
-	lastSegmentRoot  [32]byte
-	lastError        string
+	metrics runtimeMetrics
 }
 
 type perasCompletion struct {
@@ -197,7 +122,7 @@ type perasFlushJob struct {
 	payload     []byte
 	digest      [32]byte
 	materialize bool
-	cursor      runtimeperas.InstallCursor
+	cursor      InstallCursor
 }
 
 type perasFlushBatch struct {
@@ -212,18 +137,18 @@ type perasFrozenPlan struct {
 	plan   fsperas.ReplayPlan
 }
 
-func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommitter, error) {
+func NewRuntime(cfg Config) (*Runtime, error) {
 	if cfg.Authority == nil || cfg.Authority.HolderID() == "" || len(cfg.Witnesses) == 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	witnesses := make([]fsperas.WitnessReplica, 0, len(cfg.Witnesses))
 	seen := make(map[string]struct{}, len(cfg.Witnesses))
 	for _, witness := range cfg.Witnesses {
 		if witness == nil || witness.ID() == "" {
-			return nil, errPerasCommitterInvalid
+			return nil, ErrRuntimeInvalid
 		}
 		if _, ok := seen[witness.ID()]; ok {
-			return nil, errPerasCommitterInvalid
+			return nil, ErrRuntimeInvalid
 		}
 		seen[witness.ID()] = struct{}{}
 		witnesses = append(witnesses, witness)
@@ -233,42 +158,42 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		quorum = len(witnesses)/2 + 1
 	}
 	if quorum <= 0 || quorum > len(witnesses) {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	retries := cfg.SegmentWitnessRetries
 	if retries == 0 {
 		retries = defaultPerasSegmentWitnessRetries
 	}
 	if retries < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	backoff := cfg.SegmentWitnessRetryBackoff
 	if backoff == 0 {
 		backoff = defaultPerasSegmentWitnessRetryBackoff
 	}
 	if backoff < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	batchSize := cfg.SegmentBatchSize
 	if batchSize == 0 {
 		batchSize = defaultPerasSegmentBatchSize
 	}
 	if batchSize < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	maxOps := cfg.SegmentMaxReplayOperations
 	if maxOps == 0 {
 		maxOps = defaultPerasSegmentMaxReplayOperations
 	}
 	if maxOps < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	maxReplay := cfg.SegmentMaxReplayMutations
 	if maxReplay == 0 {
 		maxReplay = defaultPerasSegmentMaxReplayMutations
 	}
 	if maxReplay < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	maxPayload := cfg.SegmentMaxPayloadBytes
 	if maxPayload == 0 {
@@ -279,35 +204,35 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		installN = defaultPerasSegmentInstallParallelism()
 	}
 	if installN < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	flushEvery := cfg.SegmentFlushEvery
 	if flushEvery == 0 {
 		flushEvery = defaultPerasSegmentFlushEvery
 	}
 	if flushEvery < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	bgTimeout := cfg.BackgroundFlushTimeout
 	if bgTimeout == 0 {
 		bgTimeout = defaultPerasBackgroundFlushTimeout
 	}
 	if bgTimeout < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	bgBackoff := cfg.BackgroundErrorBackoff
 	if bgBackoff == 0 {
 		bgBackoff = defaultPerasBackgroundErrorBackoff
 	}
 	if bgBackoff < 0 {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
-	seals, _ := cfg.Authority.(perasSealProvider)
-	c := &RemotePerasCommitter{
+	seals, _ := cfg.Authority.(SealProvider)
+	c := &Runtime{
 		authority:  cfg.Authority,
 		seals:      seals,
 		witnesses:  witnesses,
@@ -327,18 +252,15 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 		bgBackoff:  bgBackoff,
 		now:        now,
 		closer:     utils.NewCloser(),
-		holders:    make(map[uint64]*fsperas.Holder),
-		grants:     make(map[uint64]runtimeperas.AuthorityGrant),
+		epochs:     newEpochTable(),
 		latches:    fsperas.NewAdmissionLatches(),
-		overlay:    fsperas.NewOverlayView(),
-		sealed:     fsperas.NewOverlayView(),
-		completed:  make(map[fsperas.OperationID]perasCompletion),
+		read:       newReadState(),
 	}
 	c.drainCond = sync.NewCond(&c.drainMu)
 	if c.installer != nil {
 		c.installQ = newPerasInstallLane(c, c.installN)
 	}
-	if _, ok := c.authority.(perasSealPublisher); ok {
+	if _, ok := c.authority.(SealPublisher); ok {
 		c.sealQ = newPerasSealLane(c, c.installN)
 	}
 	if c.watch != nil {
@@ -365,12 +287,12 @@ func NewRemotePerasCommitter(cfg RemotePerasCommitterConfig) (*RemotePerasCommit
 	return c, nil
 }
 
-func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
-		return fsperas.VisibleAck{}, errPerasCommitterInvalid
+		return fsperas.VisibleAck{}, ErrRuntimeInvalid
 	}
 	if c.closed.Load() {
-		return fsperas.VisibleAck{}, errPerasCommitterClosed
+		return fsperas.VisibleAck{}, ErrRuntimeClosed
 	}
 	if err := op.ValidateForAdmissionIntent(); err != nil {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
@@ -384,7 +306,7 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	c.commitMu.RLock()
 	defer c.commitMu.RUnlock()
 	if c.closed.Load() {
-		return fsperas.VisibleAck{}, errPerasCommitterClosed
+		return fsperas.VisibleAck{}, ErrRuntimeClosed
 	}
 	if completion, ok := c.completionForOperation(id); ok {
 		return fsperas.VisibleAck{EpochID: completion.epochID, OpID: id, HolderID: c.authority.HolderID()}, nil
@@ -395,8 +317,8 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 		return fsperas.VisibleAck{}, err
 	}
 	if !owned {
-		c.recordError(runtimeperas.ErrNotHeld)
-		return fsperas.VisibleAck{}, runtimeperas.ErrNotHeld
+		c.recordError(ErrNotHeld)
+		return fsperas.VisibleAck{}, ErrNotHeld
 	}
 	holder, err := c.holderForGrant(ctx, grant, delta.Authority)
 	if err != nil {
@@ -413,7 +335,7 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 	defer unlockAdmission()
 	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
 	if err != nil {
-		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isPerasAdmissionTerminalError(err) {
+		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isAdmissionTerminalError(err) {
 			c.recordError(err)
 		}
 		return fsperas.VisibleAck{}, err
@@ -430,35 +352,31 @@ func (c *RemotePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Ope
 		return fsperas.VisibleAck{}, err
 	}
 	c.publishVisibleWatch(op, ack)
-	c.commitTotal.Add(1)
+	c.metrics.commitTotal.Add(1)
 	if c.batchSize > 0 && holder.Pending() >= c.batchSize {
 		c.triggerBackgroundFlush()
 	}
 	return ack, nil
 }
 
-func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant runtimeperas.AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
+func (c *Runtime) holderForGrant(ctx context.Context, grant AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
-		return nil, errPerasCommitterInvalid
+		return nil, ErrRuntimeInvalid
 	}
-	c.holdersMu.Lock()
-	if holder := c.holders[grant.EpochID]; holder != nil {
-		c.grants[grant.EpochID] = grant
-		c.holdersMu.Unlock()
+	if holder, ok := c.epochs.holder(grant); ok {
 		return holder, nil
 	}
-	c.holdersMu.Unlock()
 
 	recoveryScope := scope
-	if runtimeperas.GrantHasPredecessor(grant) {
-		if grantScope := runtimeperas.ScopeFromGrant(grant); !runtimeperas.ScopeEmpty(grantScope) {
+	if GrantHasPredecessor(grant) {
+		if grantScope := ScopeFromGrant(grant); !ScopeEmpty(grantScope) {
 			recoveryScope = grantScope
 		}
 	}
 	if err := c.LoadRootSealedSegments(ctx, recoveryScope); err != nil {
 		return nil, err
 	}
-	if runtimeperas.GrantHasPredecessor(grant) && c.installer != nil {
+	if GrantHasPredecessor(grant) && c.installer != nil {
 		if err := c.RecoverWitnessSegments(ctx, recoveryScope, grant.EpochID-1); err != nil {
 			return nil, err
 		}
@@ -471,51 +389,43 @@ func (c *RemotePerasCommitter) holderForGrant(ctx context.Context, grant runtime
 	if err != nil {
 		return nil, err
 	}
-	c.holdersMu.Lock()
-	defer c.holdersMu.Unlock()
-	if current := c.holders[grant.EpochID]; current != nil {
-		c.grants[grant.EpochID] = grant
-		return current, nil
-	}
-	c.holders[grant.EpochID] = holder
-	c.grants[grant.EpochID] = grant
-	return holder, nil
+	return c.epochs.installHolder(grant, holder), nil
 }
 
-func (c *RemotePerasCommitter) FlushDurable(ctx context.Context) error {
+func (c *Runtime) FlushDurable(ctx context.Context) error {
 	return c.FlushTo(ctx, fsperas.SegmentPersistenceDurable)
 }
 
-func (c *RemotePerasCommitter) FlushPublished(ctx context.Context) error {
+func (c *Runtime) FlushPublished(ctx context.Context) error {
 	return c.FlushTo(ctx, fsperas.SegmentPersistencePublished)
 }
 
-func (c *RemotePerasCommitter) FlushTo(ctx context.Context, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) FlushTo(ctx context.Context, level fsperas.SegmentPersistenceLevel) error {
 	return c.flush(ctx, nil, level)
 }
 
-func (c *RemotePerasCommitter) FlushAuthority(ctx context.Context, scope compile.AuthorityScope) error {
+func (c *Runtime) FlushAuthority(ctx context.Context, scope compile.AuthorityScope) error {
 	return c.FlushAuthorityTo(ctx, scope, fsperas.SegmentPersistenceDurable)
 }
 
-func (c *RemotePerasCommitter) FlushAuthorityPublished(ctx context.Context, scope compile.AuthorityScope) error {
+func (c *Runtime) FlushAuthorityPublished(ctx context.Context, scope compile.AuthorityScope) error {
 	return c.FlushAuthorityTo(ctx, scope, fsperas.SegmentPersistencePublished)
 }
 
-func (c *RemotePerasCommitter) FlushAuthorityTo(ctx context.Context, scope compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) FlushAuthorityTo(ctx context.Context, scope compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
 	if scope.Mount == "" || scope.MountKeyID == 0 {
 		return c.FlushTo(ctx, level)
 	}
 	return c.flush(ctx, &scope, level)
 }
 
-func (c *RemotePerasCommitter) flush(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
+func (c *Runtime) flush(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
 	if c == nil {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	level = fsperas.NormalizeSegmentPersistence(level)
 	if !level.Valid() {
-		return errPerasCommitterInvalid
+		return ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -533,7 +443,7 @@ func defaultPerasSegmentInstallParallelism() int {
 	return n
 }
 
-func (c *RemotePerasCommitter) flushBackground() {
+func (c *Runtime) flushBackground() {
 	if c == nil {
 		return
 	}
@@ -546,11 +456,11 @@ func (c *RemotePerasCommitter) flushBackground() {
 	}()
 	now := c.now().UnixNano()
 	if until := c.bgNext.Load(); until > now {
-		c.bgSkipTotal.Add(1)
+		c.metrics.bgSkipTotal.Add(1)
 		return
 	}
 	if !c.flushMu.TryLock() {
-		c.bgSkipTotal.Add(1)
+		c.metrics.bgSkipTotal.Add(1)
 		return
 	}
 	defer c.flushMu.Unlock()
@@ -571,7 +481,7 @@ func (c *RemotePerasCommitter) flushBackground() {
 		err = c.installFlushBatches(ctx, batches, fsperas.SegmentPersistencePublished)
 	}
 	if err != nil {
-		c.bgErrorTotal.Add(1)
+		c.metrics.bgErrorTotal.Add(1)
 		if c.bgBackoff > 0 {
 			c.bgNext.Store(c.now().Add(c.bgBackoff).UnixNano())
 		}
@@ -581,7 +491,7 @@ func (c *RemotePerasCommitter) flushBackground() {
 	reschedule = c.pendingOperations() > 0
 }
 
-func (c *RemotePerasCommitter) pendingOperations() int {
+func (c *Runtime) pendingOperations() int {
 	if c == nil {
 		return 0
 	}
@@ -592,7 +502,7 @@ func (c *RemotePerasCommitter) pendingOperations() int {
 	return total
 }
 
-func (c *RemotePerasCommitter) Close() {
+func (c *Runtime) Close() {
 	if c == nil {
 		return
 	}
@@ -616,7 +526,7 @@ func (c *RemotePerasCommitter) Close() {
 	}
 }
 
-func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
+func (c *Runtime) Shutdown(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
@@ -628,7 +538,7 @@ func (c *RemotePerasCommitter) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (c *RemotePerasCommitter) triggerBackgroundFlush() {
+func (c *Runtime) triggerBackgroundFlush() {
 	if c == nil {
 		return
 	}
@@ -638,7 +548,7 @@ func (c *RemotePerasCommitter) triggerBackgroundFlush() {
 		return
 	}
 	if !c.bgRunning.CompareAndSwap(false, true) {
-		c.bgSkipTotal.Add(1)
+		c.metrics.bgSkipTotal.Add(1)
 		return
 	}
 	if c.closer != nil {
@@ -652,27 +562,4 @@ func (c *RemotePerasCommitter) triggerBackgroundFlush() {
 		}()
 		c.flushBackground()
 	}()
-}
-
-func sleepContext(ctx context.Context, delay time.Duration) bool {
-	if delay <= 0 {
-		return ctx.Err() == nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-func runtimeCloneBytes(in []byte) []byte {
-	if in == nil {
-		return nil
-	}
-	out := make([]byte, len(in))
-	copy(out, in)
-	return out
 }
