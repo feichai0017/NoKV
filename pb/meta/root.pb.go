@@ -833,22 +833,19 @@ func (x *RootCursor) GetIndex() uint64 {
 }
 
 type RootState struct {
-	state             protoimpl.MessageState  `protogen:"open.v1"`
-	ClusterEpoch      uint64                  `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
-	MembershipEpoch   uint64                  `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
-	LastCommitted     *RootCursor             `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
-	IdFence           uint64                  `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
-	TsoFence          uint64                  `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
-	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
-	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
-	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
-	// Legacy aggregate finality floor kept for old checkpoints and readers.
-	RetiredEraFloor     uint64                     `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
+	state               protoimpl.MessageState     `protogen:"open.v1"`
+	ClusterEpoch        uint64                     `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
+	MembershipEpoch     uint64                     `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
+	LastCommitted       *RootCursor                `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
+	IdFence             uint64                     `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
+	TsoFence            uint64                     `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
+	ActiveGrants        []*RootAuthorityGrant      `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
+	RetiredGrants       []*RootGrantRetirement     `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
+	GrantInheritances   []*RootGrantInheritance    `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
 	ActivePerasGrants   []*RootPerasAuthorityGrant `protobuf:"bytes,11,rep,name=active_peras_grants,json=activePerasGrants,proto3" json:"active_peras_grants,omitempty"`
 	PerasAuthorityEpoch uint64                     `protobuf:"varint,12,opt,name=peras_authority_epoch,json=perasAuthorityEpoch,proto3" json:"peras_authority_epoch,omitempty"`
 	PerasAuthoritySeals []*RootPerasAuthoritySeal  `protobuf:"bytes,13,rep,name=peras_authority_seals,json=perasAuthoritySeals,proto3" json:"peras_authority_seals,omitempty"`
-	// Scoped finality floors keyed by coordinator duty and duty scope. New
-	// serving paths must prefer this over the aggregate floor when present.
+	// Scoped finality floors keyed by coordinator duty and duty scope.
 	RetiredEraFloors []*RootAuthorityRetiredEraFloor `protobuf:"bytes,14,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -938,13 +935,6 @@ func (x *RootState) GetGrantInheritances() []*RootGrantInheritance {
 		return x.GrantInheritances
 	}
 	return nil
-}
-
-func (x *RootState) GetRetiredEraFloor() uint64 {
-	if x != nil {
-		return x.RetiredEraFloor
-	}
-	return 0
 }
 
 func (x *RootState) GetActivePerasGrants() []*RootPerasAuthorityGrant {
@@ -4519,9 +4509,7 @@ type RootEunomiaState struct {
 	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,1,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
 	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,2,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
 	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,3,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
-	// Legacy aggregate finality floor kept for upgrade compatibility.
-	RetiredEraFloor uint64 `protobuf:"varint,4,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
-	// Scoped finality floors used by new Eunomia serving and audit code.
+	// Scoped finality floors used by Eunomia serving and audit code.
 	RetiredEraFloors []*RootAuthorityRetiredEraFloor `protobuf:"bytes,5,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -4576,13 +4564,6 @@ func (x *RootEunomiaState) GetGrantInheritances() []*RootGrantInheritance {
 		return x.GrantInheritances
 	}
 	return nil
-}
-
-func (x *RootEunomiaState) GetRetiredEraFloor() uint64 {
-	if x != nil {
-		return x.RetiredEraFloor
-	}
-	return 0
 }
 
 func (x *RootEunomiaState) GetRetiredEraFloors() []*RootAuthorityRetiredEraFloor {
@@ -5408,7 +5389,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\n" +
 	"RootCursor\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x14\n" +
-	"\x05index\x18\x02 \x01(\x04R\x05index\"\xa3\x06\n" +
+	"\x05index\x18\x02 \x01(\x04R\x05index\"\x90\x06\n" +
 	"\tRootState\x12#\n" +
 	"\rcluster_epoch\x18\x01 \x01(\x04R\fclusterEpoch\x12)\n" +
 	"\x10membership_epoch\x18\x02 \x01(\x04R\x0fmembershipEpoch\x12?\n" +
@@ -5417,13 +5398,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"\ttso_fence\x18\x06 \x01(\x04R\btsoFence\x12E\n" +
 	"\ractive_grants\x18\a \x03(\v2 .nokv.meta.v1.RootAuthorityGrantR\factiveGrants\x12H\n" +
 	"\x0eretired_grants\x18\b \x03(\v2!.nokv.meta.v1.RootGrantRetirementR\rretiredGrants\x12Q\n" +
-	"\x12grant_inheritances\x18\t \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12*\n" +
-	"\x11retired_era_floor\x18\n" +
-	" \x01(\x04R\x0fretiredEraFloor\x12U\n" +
+	"\x12grant_inheritances\x18\t \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12U\n" +
 	"\x13active_peras_grants\x18\v \x03(\v2%.nokv.meta.v1.RootPerasAuthorityGrantR\x11activePerasGrants\x122\n" +
 	"\x15peras_authority_epoch\x18\f \x01(\x04R\x13perasAuthorityEpoch\x12X\n" +
 	"\x15peras_authority_seals\x18\r \x03(\v2$.nokv.meta.v1.RootPerasAuthoritySealR\x13perasAuthoritySeals\x12X\n" +
-	"\x12retired_era_floors\x18\x0e \x03(\v2*.nokv.meta.v1.RootAuthorityRetiredEraFloorR\x10retiredEraFloors\"\xf5\x04\n" +
+	"\x12retired_era_floors\x18\x0e \x03(\v2*.nokv.meta.v1.RootAuthorityRetiredEraFloorR\x10retiredEraFloorsJ\x04\b\n" +
+	"\x10\vR\x11retired_era_floor\"\xf5\x04\n" +
 	"\x0eRootCheckpoint\x12-\n" +
 	"\x05state\x18\x01 \x01(\v2\x17.nokv.meta.v1.RootStateR\x05state\x12@\n" +
 	"\vdescriptors\x18\x02 \x03(\v2\x1e.nokv.meta.v1.RegionDescriptorR\vdescriptors\x12\x1f\n" +
@@ -5726,13 +5706,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x19MetadataRootStatusRequest\"V\n" +
 	"\x1aMetadataRootStatusResponse\x12\x1b\n" +
 	"\tis_leader\x18\x01 \x01(\bR\bisLeader\x12\x1b\n" +
-	"\tleader_id\x18\x02 \x01(\x04R\bleaderId\"\xfc\x02\n" +
+	"\tleader_id\x18\x02 \x01(\x04R\bleaderId\"\xe9\x02\n" +
 	"\x10RootEunomiaState\x12E\n" +
 	"\ractive_grants\x18\x01 \x03(\v2 .nokv.meta.v1.RootAuthorityGrantR\factiveGrants\x12H\n" +
 	"\x0eretired_grants\x18\x02 \x03(\v2!.nokv.meta.v1.RootGrantRetirementR\rretiredGrants\x12Q\n" +
-	"\x12grant_inheritances\x18\x03 \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12*\n" +
-	"\x11retired_era_floor\x18\x04 \x01(\x04R\x0fretiredEraFloor\x12X\n" +
-	"\x12retired_era_floors\x18\x05 \x03(\v2*.nokv.meta.v1.RootAuthorityRetiredEraFloorR\x10retiredEraFloors\"\x8b\x03\n" +
+	"\x12grant_inheritances\x18\x03 \x03(\v2\".nokv.meta.v1.RootGrantInheritanceR\x11grantInheritances\x12X\n" +
+	"\x12retired_era_floors\x18\x05 \x03(\v2*.nokv.meta.v1.RootAuthorityRetiredEraFloorR\x10retiredEraFloorsJ\x04\b\x04\x10\x05R\x11retired_era_floor\"\x8b\x03\n" +
 	"\x10RootGrantCommand\x12.\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1a.nokv.meta.v1.RootGrantActR\x04kind\x12\x1b\n" +
 	"\tholder_id\x18\x02 \x01(\tR\bholderId\x12\x19\n" +

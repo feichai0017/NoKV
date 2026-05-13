@@ -42,7 +42,6 @@ type State struct {
 	ActiveGrants        []rootproto.AuthorityGrant
 	RetiredGrants       []rootproto.GrantRetirement
 	GrantInheritances   []rootproto.GrantInheritance
-	RetiredEraFloor     uint64
 	RetiredEraFloors    []rootproto.AuthorityRetiredEraFloor
 	ActivePerasGrants   []rootproto.PerasAuthorityGrant
 	PerasAuthorityEpoch uint64
@@ -579,12 +578,6 @@ func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.E
 	for i := range state.RetiredGrants {
 		if state.RetiredGrants[i].GrantID == inheritance.PredecessorGrantID {
 			state.RetiredGrants[i].InheritedByGrantID = inheritance.SuccessorGrantID
-			if state.RetiredGrants[i].Era > state.RetiredEraFloor {
-				state.RetiredEraFloor = state.RetiredGrants[i].Era
-			}
-			// The legacy aggregate floor is kept for old readers, but new serving
-			// and verifier paths use duty/scope floors so one duty cannot retire
-			// another duty's still-valid grant.
 			state.RetiredEraFloors = rootproto.AdvanceAuthorityRetiredEraFloorsForBounds(
 				state.RetiredEraFloors,
 				state.RetiredGrants[i].Bounds,
@@ -599,7 +592,7 @@ func applyGrantInheritanceToState(state *State, cursor Cursor, event rootevent.E
 // duty/scope in that retirement has reached the same era, preserving the evidence
 // needed by unrelated duties until their own floors advance.
 func CompactEunomiaState(state State) State {
-	if state.RetiredEraFloor == 0 && len(state.RetiredEraFloors) == 0 {
+	if len(state.RetiredEraFloors) == 0 {
 		return state
 	}
 	originalRetirements := append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
@@ -613,7 +606,7 @@ func CompactEunomiaState(state State) State {
 	}
 	retirements := make([]rootproto.GrantRetirement, 0, len(originalRetirements))
 	for _, retirement := range originalRetirements {
-		if retirement.InheritedByGrantID != "" && retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors, state.RetiredEraFloor) {
+		if retirement.InheritedByGrantID != "" && retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors) {
 			if _, active := activePredecessors[retirement.GrantID]; !active {
 				continue
 			}
@@ -626,7 +619,7 @@ func CompactEunomiaState(state State) State {
 		for _, retirement := range originalRetirements {
 			if retirement.GrantID == inheritance.PredecessorGrantID &&
 				retirement.InheritedByGrantID != "" &&
-				retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors, state.RetiredEraFloor) {
+				retirementCoveredByRetiredEraFloor(retirement, state.RetiredEraFloors) {
 				if _, active := activePredecessors[retirement.GrantID]; !active {
 					keep = false
 				}
@@ -642,15 +635,11 @@ func CompactEunomiaState(state State) State {
 	return state
 }
 
-// retirementCoveredByRetiredEraFloor reports whether compact floors fully cover
-// one inherited retirement. Scoped floors must cover every bound in the retired
-// grant; the legacy aggregate floor is only accepted when no scoped floors exist.
-func retirementCoveredByRetiredEraFloor(retirement rootproto.GrantRetirement, floors []rootproto.AuthorityRetiredEraFloor, legacyFloor uint64) bool {
+// retirementCoveredByRetiredEraFloor reports whether compact scoped floors fully
+// cover one inherited retirement.
+func retirementCoveredByRetiredEraFloor(retirement rootproto.GrantRetirement, floors []rootproto.AuthorityRetiredEraFloor) bool {
 	if retirement.Era == 0 {
 		return false
-	}
-	if len(floors) == 0 {
-		return legacyFloor != 0 && retirement.Era <= legacyFloor
 	}
 	if len(retirement.Bounds) == 0 {
 		return false

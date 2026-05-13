@@ -29,7 +29,6 @@ func RootStateToProto(state rootstate.State) *metapb.RootState {
 		ActiveGrants:        RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:       RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances:   RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:     state.RetiredEraFloor,
 		RetiredEraFloors:    RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
 		ActivePerasGrants:   RootPerasAuthorityGrantsToProto(state.ActivePerasGrants),
 		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
@@ -41,7 +40,7 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 	if pbState == nil {
 		return rootstate.State{}
 	}
-	state := rootstate.State{
+	return rootstate.State{
 		ClusterEpoch:        pbState.ClusterEpoch,
 		MembershipEpoch:     pbState.MembershipEpoch,
 		LastCommitted:       RootCursorFromProto(pbState.LastCommitted),
@@ -50,17 +49,11 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		ActiveGrants:        RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
 		RetiredGrants:       RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
 		GrantInheritances:   RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloor:     pbState.GetRetiredEraFloor(),
 		RetiredEraFloors:    RootAuthorityRetiredEraFloorsFromProto(pbState.GetRetiredEraFloors()),
 		ActivePerasGrants:   RootPerasAuthorityGrantsFromProto(pbState.GetActivePerasGrants()),
 		PerasAuthorityEpoch: pbState.GetPerasAuthorityEpoch(),
 		PerasAuthoritySeals: RootPerasAuthoritySealsFromProto(pbState.GetPerasAuthoritySeals()),
 	}
-	// Older checkpoints only carried one aggregate retired_era_floor. Normalize
-	// at decode time so every in-memory root state uses the scoped representation
-	// before rootview, coordinator serving, or client verifier logic reads it.
-	state.RetiredEraFloors = rootproto.NormalizeAuthorityRetiredEraFloors(state.RetiredEraFloors, state.RetiredEraFloor)
-	return state
 }
 
 func RootAuthorityGrantToProto(grant rootproto.AuthorityGrant) *metapb.RootAuthorityGrant {
@@ -239,9 +232,7 @@ func RootAuthorityRetiredEraFloorToProto(floor rootproto.AuthorityRetiredEraFloo
 	}
 }
 
-// RootAuthorityRetiredEraFloorFromProto decodes one scoped finality floor
-// without applying legacy aggregate fallback; callers normalize whole states
-// once they know whether the scoped list was present.
+// RootAuthorityRetiredEraFloorFromProto decodes one scoped finality floor.
 func RootAuthorityRetiredEraFloorFromProto(floor *metapb.RootAuthorityRetiredEraFloor) rootproto.AuthorityRetiredEraFloor {
 	if floor == nil {
 		return rootproto.AuthorityRetiredEraFloor{}
@@ -254,8 +245,7 @@ func RootAuthorityRetiredEraFloorFromProto(floor *metapb.RootAuthorityRetiredEra
 }
 
 // RootAuthorityRetiredEraFloorsToProto serializes scoped compact finality. Nil
-// and empty slices both mean "no scoped floors are present"; the legacy scalar
-// field remains the upgrade fallback for older states.
+// and empty slices both mean "no scoped floors are present".
 func RootAuthorityRetiredEraFloorsToProto(floors []rootproto.AuthorityRetiredEraFloor) []*metapb.RootAuthorityRetiredEraFloor {
 	if len(floors) == 0 {
 		return nil
@@ -270,8 +260,7 @@ func RootAuthorityRetiredEraFloorsToProto(floors []rootproto.AuthorityRetiredEra
 }
 
 // RootAuthorityRetiredEraFloorsFromProto drops malformed empty entries while
-// preserving all valid duty/scope floors. Legacy aggregate migration is handled
-// by RootStateFromProto and RootEunomiaStateFromProto after this raw decode.
+// preserving all valid duty/scope floors.
 func RootAuthorityRetiredEraFloorsFromProto(floors []*metapb.RootAuthorityRetiredEraFloor) []rootproto.AuthorityRetiredEraFloor {
 	if len(floors) == 0 {
 		return nil
@@ -550,7 +539,6 @@ func RootEunomiaStateToProto(state rootstate.EunomiaState) *metapb.RootEunomiaSt
 		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
 		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
 		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloor:   state.RetiredEraFloor,
 		RetiredEraFloors:  RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
 	}
 }
@@ -559,17 +547,12 @@ func RootEunomiaStateFromProto(state *metapb.RootEunomiaState) rootstate.Eunomia
 	if state == nil {
 		return rootstate.EunomiaState{}
 	}
-	out := rootstate.EunomiaState{
+	return rootstate.EunomiaState{
 		ActiveGrants:      RootAuthorityGrantsFromProto(state.GetActiveGrants()),
 		RetiredGrants:     RootGrantRetirementsFromProto(state.GetRetiredGrants()),
 		GrantInheritances: RootGrantInheritancesFromProto(state.GetGrantInheritances()),
-		RetiredEraFloor:   state.GetRetiredEraFloor(),
 		RetiredEraFloors:  RootAuthorityRetiredEraFloorsFromProto(state.GetRetiredEraFloors()),
 	}
-	// The Eunomia projection is also a persistence boundary, so apply the same
-	// conservative old-checkpoint migration used for full RootState.
-	out.RetiredEraFloors = rootproto.NormalizeAuthorityRetiredEraFloors(out.RetiredEraFloors, out.RetiredEraFloor)
-	return out
 }
 
 func RootGrantCommandToProto(cmd rootproto.GrantCommand) *metapb.RootGrantCommand {

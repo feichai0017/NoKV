@@ -136,7 +136,7 @@ func (s *Service) refreshCurrentRootSnapshot(snapshot rootview.Snapshot) bool {
 }
 
 // currentAuthoritySnapshot exposes only the grant lifecycle mirror needed for
-// Eunomia serving decisions. It includes both legacy and scoped retired floors so
+// Eunomia serving decisions. Scoped retired floors are part of that mirror so
 // stale root reloads can be merged without losing finality.
 func (s *Service) currentAuthoritySnapshot() rootview.Snapshot {
 	if s == nil {
@@ -148,7 +148,6 @@ func (s *Service) currentAuthoritySnapshot() rootview.Snapshot {
 		ActiveGrants:      s.grantView.Grants(),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), s.grantView.retirements...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), s.grantView.inheritances...),
-		RetiredEraFloor:   s.grantView.retiredEraFloor,
 		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(s.grantView.retiredEraFloors),
 	}
 }
@@ -176,7 +175,6 @@ func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 		ActiveGrants:      state.ActiveGrants,
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), state.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), state.GrantInheritances...),
-		RetiredEraFloor:   state.RetiredEraFloor,
 		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(state.RetiredEraFloors),
 	}
 	s.refreshGrantMirror(snapshot)
@@ -185,7 +183,6 @@ func (s *Service) publishEunomiaState(state rootstate.EunomiaState) {
 		s.rootView.snapshot.ActiveGrants = snapshot.ActiveGrants
 		s.rootView.snapshot.RetiredGrants = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
 		s.rootView.snapshot.GrantInheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
-		s.rootView.snapshot.RetiredEraFloor = snapshot.RetiredEraFloor
 		s.rootView.snapshot.RetiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors)
 	}
 	s.rootViewMu.Unlock()
@@ -197,7 +194,6 @@ func serviceEunomiaStatePresent(state rootstate.EunomiaState) bool {
 	return len(state.ActiveGrants) > 0 ||
 		len(state.RetiredGrants) > 0 ||
 		len(state.GrantInheritances) > 0 ||
-		state.RetiredEraFloor != 0 ||
 		len(state.RetiredEraFloors) > 0
 }
 
@@ -214,7 +210,6 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 				ActiveGrants:        snapshot.ActiveGrants,
 				RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 				GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-				RetiredEraFloor:     snapshot.RetiredEraFloor,
 				RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
 				ActivePerasGrants:   snapshot.ActivePerasGrants,
 				PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,

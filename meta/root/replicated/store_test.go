@@ -545,7 +545,6 @@ func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *te
 
 	current, err := store.Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), current.RetiredEraFloor)
 	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(current.RetiredEraFloors, rootproto.DutyAllocID, global))
 	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(current.RetiredEraFloors, rootproto.DutyTSO, global))
@@ -558,7 +557,6 @@ func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *te
 	require.NoError(t, err)
 	reopenedState, err := reopened.Current()
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), reopenedState.RetiredEraFloor)
 	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyAllocID, global))
 	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyTSO, global))
 	require.Equal(t, uint64(1), rootproto.AuthorityRetiredEraFloorFor(reopenedState.RetiredEraFloors, rootproto.DutyRegionLookup, global))
@@ -571,7 +569,6 @@ func TestReplicatedStoreCompactsInheritedRetirementButKeepsFloorAndPending(t *te
 func TestNextGrantEraRespectsCompactedRetiredEraFloors(t *testing.T) {
 	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 	state := rootstate.State{
-		RetiredEraFloor: 22,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           global,

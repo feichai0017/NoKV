@@ -43,7 +43,6 @@ type Report struct {
 	ActiveGrant            rootproto.AuthorityGrant
 	RetiredGrants          []rootproto.GrantRetirement
 	GrantInheritances      []rootproto.GrantInheritance
-	RetiredEraFloor        uint64
 	RetiredEraFloors       []rootproto.AuthorityRetiredEraFloor
 	AuthorityCompletion    AuthorityCompletionState
 	Anomalies              SnapshotAnomalies
@@ -64,13 +63,9 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 		ActiveGrant:            active,
 		RetiredGrants:          append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
 		GrantInheritances:      append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-		RetiredEraFloor:        snapshot.RetiredEraFloor,
 		RetiredEraFloors:       rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
 	}
 	for _, retirement := range report.RetiredGrants {
-		if retirement.InheritedByGrantID != "" && retirement.Era > report.RetiredEraFloor {
-			report.RetiredEraFloor = retirement.Era
-		}
 		// Audit reports reconstruct the same compact finality that root state
 		// stores so diagnostics explain which duty/scope has actually become
 		// final, rather than blaming every duty for an unrelated retirement.
@@ -102,12 +97,8 @@ func BuildReport(snapshot rootview.Snapshot, holderID string, nowUnixNano int64)
 }
 
 // RetiredEraFloorFor returns the audit-visible finality floor for one duty and
-// scope. Legacy aggregate fallback is retained only for snapshots that predate
-// scoped floors.
+// scope.
 func (r Report) RetiredEraFloorFor(duty rootproto.DutyID, scope rootproto.DutyScope) uint64 {
-	if len(r.RetiredEraFloors) == 0 {
-		return r.RetiredEraFloor
-	}
 	return rootproto.AuthorityRetiredEraFloorFor(r.RetiredEraFloors, duty, scope)
 }
 

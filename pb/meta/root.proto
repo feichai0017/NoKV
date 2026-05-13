@@ -59,13 +59,12 @@ message RootState {
   repeated RootAuthorityGrant active_grants = 7;
   repeated RootGrantRetirement retired_grants = 8;
   repeated RootGrantInheritance grant_inheritances = 9;
-  // Legacy aggregate finality floor kept for old checkpoints and readers.
-  uint64 retired_era_floor = 10;
+  reserved 10;
+  reserved "retired_era_floor";
   repeated RootPerasAuthorityGrant active_peras_grants = 11;
   uint64 peras_authority_epoch = 12;
   repeated RootPerasAuthoritySeal peras_authority_seals = 13;
-  // Scoped finality floors keyed by coordinator duty and duty scope. New
-  // serving paths must prefer this over the aggregate floor when present.
+  // Scoped finality floors keyed by coordinator duty and duty scope.
   repeated RootAuthorityRetiredEraFloor retired_era_floors = 14;
 }
 
@@ -494,9 +493,9 @@ message RootEunomiaState {
   repeated RootAuthorityGrant active_grants = 1;
   repeated RootGrantRetirement retired_grants = 2;
   repeated RootGrantInheritance grant_inheritances = 3;
-  // Legacy aggregate finality floor kept for upgrade compatibility.
-  uint64 retired_era_floor = 4;
-  // Scoped finality floors used by new Eunomia serving and audit code.
+  reserved 4;
+  reserved "retired_era_floor";
+  // Scoped finality floors used by Eunomia serving and audit code.
   repeated RootAuthorityRetiredEraFloor retired_era_floors = 5;
 }
 

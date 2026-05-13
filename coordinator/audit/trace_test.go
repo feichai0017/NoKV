@@ -77,7 +77,6 @@ func TestEvaluateReplyTraceUsesObservedRetiredFloor(t *testing.T) {
 // retired era.
 func TestEvaluateReplyTraceUsesDutyScopedReportRetiredFloor(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		RetiredEraFloor: 22,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},

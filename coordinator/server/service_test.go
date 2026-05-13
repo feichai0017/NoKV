@@ -123,7 +123,6 @@ func (f *fakeStorage) protocolState() rootstate.EunomiaState {
 		ActiveGrants:      append([]rootproto.AuthorityGrant(nil), f.snapshot.ActiveGrants...),
 		RetiredGrants:     append([]rootproto.GrantRetirement(nil), f.snapshot.RetiredGrants...),
 		GrantInheritances: append([]rootproto.GrantInheritance(nil), f.snapshot.GrantInheritances...),
-		RetiredEraFloor:   f.snapshot.RetiredEraFloor,
 		RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(f.snapshot.RetiredEraFloors),
 	}
 }
@@ -418,9 +417,6 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 			for i := range f.snapshot.RetiredGrants {
 				if f.snapshot.RetiredGrants[i].GrantID == predecessor {
 					f.snapshot.RetiredGrants[i].InheritedByGrantID = successor
-					if f.snapshot.RetiredGrants[i].Era > f.snapshot.RetiredEraFloor {
-						f.snapshot.RetiredEraFloor = f.snapshot.RetiredGrants[i].Era
-					}
 					f.snapshot.RetiredEraFloors = rootproto.AdvanceAuthorityRetiredEraFloorsForBounds(
 						f.snapshot.RetiredEraFloors,
 						f.snapshot.RetiredGrants[i].Bounds,
@@ -2838,9 +2834,8 @@ func TestServiceAuthorityEvidenceUsesRetiredFloorInsteadOfInheritedHistory(t *te
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrants:    []rootproto.AuthorityGrant{grant},
-			RetiredGrants:   []rootproto.GrantRetirement{retired},
-			RetiredEraFloor: 1,
+			ActiveGrants:  []rootproto.AuthorityGrant{grant},
+			RetiredGrants: []rootproto.GrantRetirement{retired},
 			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 				DutyID:          rootproto.DutyAllocID,
 				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
@@ -2886,9 +2881,8 @@ func TestServiceTsoEvidenceIgnoresAllocRetiredFloor(t *testing.T) {
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ActiveGrants:    []rootproto.AuthorityGrant{grant},
-			RetiredGrants:   []rootproto.GrantRetirement{retired},
-			RetiredEraFloor: 22,
+			ActiveGrants:  []rootproto.AuthorityGrant{grant},
+			RetiredGrants: []rootproto.GrantRetirement{retired},
 			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 				DutyID:          rootproto.DutyAllocID,
 				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
@@ -2928,7 +2922,6 @@ func TestServiceRegionLookupEvidenceIgnoresAllocRetiredFloor(t *testing.T) {
 					rootproto.NewGlobalVersionDuty(rootproto.DutyRegionLookup, rootproto.AuthorityRootToken{}, 12, 0),
 				},
 			}},
-			RetiredEraFloor: 22,
 			RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 				DutyID:          rootproto.DutyAllocID,
 				Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
@@ -2965,7 +2958,6 @@ func TestServiceAllocAdmissionRejectsAllocGrantAtScopedRetiredFloor(t *testing.T
 			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
 			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyAllocID, 100)},
 		}},
-		RetiredEraFloor: 12,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
@@ -2980,18 +2972,16 @@ func TestServiceAllocAdmissionRejectsAllocGrantAtScopedRetiredFloor(t *testing.T
 	require.Contains(t, err.Error(), "retired_floor=12")
 }
 
-// TestCoordinatorGrantViewRetiredEraFloorForFallsBackToLegacyFloorOnlyWithoutScopedFloors
-// keeps coordinator serving compatible with old root snapshots while preserving
-// duty isolation once scoped floors are present.
-func TestCoordinatorGrantViewRetiredEraFloorForFallsBackToLegacyFloorOnlyWithoutScopedFloors(t *testing.T) {
+// TestCoordinatorGrantViewRetiredEraFloorForIsScopedOnly documents the breaking
+// cleanup: only explicit duty/scope floors are authoritative.
+func TestCoordinatorGrantViewRetiredEraFloorForIsScopedOnly(t *testing.T) {
 	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 	var view coordinatorGrantView
-	view.Refresh(rootview.Snapshot{RetiredEraFloor: 22})
+	view.Refresh(rootview.Snapshot{})
 
-	require.Equal(t, uint64(22), view.RetiredEraFloorFor(rootproto.DutyTSO, global))
+	require.Zero(t, view.RetiredEraFloorFor(rootproto.DutyTSO, global))
 
 	view.Refresh(rootview.Snapshot{
-		RetiredEraFloor: 22,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           global,

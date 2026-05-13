@@ -75,7 +75,6 @@ func TestServiceAdmitDutyRejectsGrantAtRetiredEraFloor(t *testing.T) {
 			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
 			Duties:          []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 100)},
 		}},
-		RetiredEraFloor: 12,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyTSO,
 			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},

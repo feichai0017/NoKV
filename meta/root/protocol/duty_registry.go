@@ -1,9 +1,6 @@
 package protocol
 
-import (
-	"bytes"
-	"sort"
-)
+import "bytes"
 
 type DutySpec struct {
 	ID        DutyID
@@ -13,7 +10,7 @@ type DutySpec struct {
 
 // builtinDutySpecs is the single registry for coordinator service duties that
 // may receive root-issued AuthorityGrants. Any new duty must be registered here
-// so validation, legacy floor migration, and verifier keys stay in lockstep.
+// so validation and verifier keys stay in lockstep.
 var builtinDutySpecs = map[DutyID]DutySpec{
 	DutyAllocID: {
 		ID:        DutyAllocID,
@@ -35,20 +32,6 @@ var builtinDutySpecs = map[DutyID]DutySpec{
 func LookupDutySpec(duty DutyID) (DutySpec, bool) {
 	spec, ok := builtinDutySpecs[duty]
 	return spec, ok
-}
-
-// RegisteredDutySpecs returns the duty registry in deterministic order. The
-// order is intentionally stable because legacy aggregate retired floors are
-// expanded from this list during checkpoint decode.
-func RegisteredDutySpecs() []DutySpec {
-	specs := make([]DutySpec, 0, len(builtinDutySpecs))
-	for _, spec := range builtinDutySpecs {
-		specs = append(specs, spec)
-	}
-	sort.Slice(specs, func(i, j int) bool {
-		return specs[i].ID < specs[j].ID
-	})
-	return specs
 }
 
 func ValidateDutyGrant(grant DutyGrant) bool {
@@ -85,9 +68,7 @@ func CloneDutyScope(scope DutyScope) DutyScope {
 }
 
 // AuthorityRetiredEraFloorFor finds the strongest finality floor for exactly
-// one duty/scope pair. A missing entry means this duty has no compact floor in
-// the scoped model; callers that read old checkpoints must apply legacy fallback
-// before asking this helper.
+// one duty/scope pair. A missing entry means this duty has no compact floor.
 func AuthorityRetiredEraFloorFor(floors []AuthorityRetiredEraFloor, duty DutyID, scope DutyScope) uint64 {
 	var floor uint64
 	for _, entry := range floors {
@@ -145,40 +126,6 @@ func CloneAuthorityRetiredEraFloors(floors []AuthorityRetiredEraFloor) []Authori
 		out[i] = floor
 	}
 	return out
-}
-
-// AuthorityRetiredEraFloorsFromLegacyFloor conservatively expands a pre-scoped
-// aggregate floor into all currently registered global duties. This preserves
-// Silence across upgrades from old checkpoints, even though it may keep an
-// intentionally conservative floor until newer scoped root history replaces it.
-func AuthorityRetiredEraFloorsFromLegacyFloor(retiredEra uint64) []AuthorityRetiredEraFloor {
-	if retiredEra == 0 {
-		return nil
-	}
-	floors := make([]AuthorityRetiredEraFloor, 0, len(RegisteredDutySpecs()))
-	for _, spec := range RegisteredDutySpecs() {
-		if spec.ScopeKind != DutyScopeGlobal {
-			continue
-		}
-		floors = AdvanceAuthorityRetiredEraFloor(
-			floors,
-			spec.ID,
-			DutyScope{Kind: DutyScopeGlobal},
-			retiredEra,
-		)
-	}
-	return floors
-}
-
-// NormalizeAuthorityRetiredEraFloors is the checkpoint migration boundary. New
-// states keep their explicit scoped floors untouched; old states with only the
-// aggregate retired_era_floor are expanded once so later scoped updates cannot
-// make a missing duty silently fall back to zero.
-func NormalizeAuthorityRetiredEraFloors(floors []AuthorityRetiredEraFloor, legacyFloor uint64) []AuthorityRetiredEraFloor {
-	if len(floors) != 0 {
-		return CloneAuthorityRetiredEraFloors(floors)
-	}
-	return AuthorityRetiredEraFloorsFromLegacyFloor(legacyFloor)
 }
 
 func DutyBoundCovers(grant, usage DutyBound) bool {

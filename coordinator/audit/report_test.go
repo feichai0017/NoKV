@@ -41,7 +41,7 @@ func TestBuildReportSurfacesSealedExactCompleted(t *testing.T) {
 	require.Equal(t, "fresh", report.CatchUpState)
 	require.Equal(t, "c2", report.CurrentHolderID)
 	require.Equal(t, uint64(2), report.CurrentEra)
-	require.Equal(t, uint64(1), report.RetiredEraFloor)
+	require.Equal(t, uint64(1), report.RetiredEraFloorFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
 	require.Equal(t, coordaudit.AuthorityCompletionSealedExactCompleted, report.AuthorityCompletion)
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)
 }
@@ -75,7 +75,7 @@ func TestBuildReportSurfacesRetiredNotInherited(t *testing.T) {
 	require.Equal(t, coordaudit.AuthorityCompletionRetiredNotInherited, report.AuthorityCompletion)
 	require.True(t, report.Anomalies.RetiredGrantNotInherited)
 	require.Equal(t, coordaudit.FinalityDefectRetiredNotInherited, report.Anomalies.FinalityDefect)
-	require.Zero(t, report.RetiredEraFloor)
+	require.Zero(t, report.RetiredEraFloorFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
 }
 
 func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
@@ -101,9 +101,8 @@ func TestBuildReportSurfacesInvalidSuccessorBound(t *testing.T) {
 	require.Equal(t, coordaudit.FinalityDefectInvalidSuccessorBound, report.Anomalies.FinalityDefect)
 }
 
-func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
+func TestBuildReportPreservesCompactedScopedRetiredEraFloor(t *testing.T) {
 	report := coordaudit.BuildReport(rootview.Snapshot{
-		RetiredEraFloor: 3,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal},
@@ -116,7 +115,6 @@ func TestBuildReportPreservesCompactedRetiredEraFloor(t *testing.T) {
 		}},
 	}, "c4", 1_000)
 
-	require.Equal(t, uint64(3), report.RetiredEraFloor)
 	require.Equal(t, uint64(3), report.RetiredEraFloorFor(rootproto.DutyAllocID, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
 	require.Zero(t, report.RetiredEraFloorFor(rootproto.DutyTSO, rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}))
 	require.Equal(t, coordaudit.FinalityDefectNone, report.Anomalies.FinalityDefect)

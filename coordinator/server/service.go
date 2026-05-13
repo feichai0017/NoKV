@@ -109,7 +109,6 @@ type coordinatorGrantView struct {
 	certificates     map[string]rootproto.GrantCertificate
 	retirements      []rootproto.GrantRetirement
 	inheritances     []rootproto.GrantInheritance
-	retiredEraFloor  uint64
 	retiredEraFloors []rootproto.AuthorityRetiredEraFloor
 }
 
@@ -128,7 +127,6 @@ func (v *coordinatorGrantView) Reset() {
 	v.certificates = nil
 	v.retirements = nil
 	v.inheritances = nil
-	v.retiredEraFloor = 0
 	v.retiredEraFloors = nil
 }
 
@@ -150,7 +148,6 @@ func (v *coordinatorGrantView) Refresh(snapshot rootview.Snapshot) {
 	v.certificates = nextCerts
 	v.retirements = append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...)
 	v.inheritances = append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...)
-	v.retiredEraFloor = snapshot.RetiredEraFloor
 	v.retiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors)
 }
 
@@ -191,13 +188,8 @@ func (v coordinatorGrantView) Retirements() []rootproto.GrantRetirement {
 	return append([]rootproto.GrantRetirement(nil), v.retirements...)
 }
 
-// RetiredEraFloorFor reads the finality floor for one served duty. The legacy
-// scalar floor is used only for snapshots that have no scoped floors, matching
-// the root/wire migration rule and avoiding cross-duty poisoning in new states.
+// RetiredEraFloorFor reads the finality floor for one served duty.
 func (v coordinatorGrantView) RetiredEraFloorFor(duty rootproto.DutyID, scope rootproto.DutyScope) uint64 {
-	if len(v.retiredEraFloors) == 0 {
-		return v.retiredEraFloor
-	}
 	return rootproto.AuthorityRetiredEraFloorFor(v.retiredEraFloors, duty, scope)
 }
 

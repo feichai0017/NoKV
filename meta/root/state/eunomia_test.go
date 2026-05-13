@@ -61,7 +61,6 @@ func TestGrantInheritanceAdvancesRetiredEraFloorByDuty(t *testing.T) {
 	}))
 
 	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
-	require.Equal(t, uint64(22), state.RetiredEraFloor)
 	require.Equal(t, uint64(22), rootproto.AuthorityRetiredEraFloorFor(state.RetiredEraFloors, rootproto.DutyAllocID, global))
 	require.Zero(t, rootproto.AuthorityRetiredEraFloorFor(state.RetiredEraFloors, rootproto.DutyTSO, global))
 	require.Equal(t, state.RetiredEraFloors, state.Eunomia().RetiredEraFloors)
@@ -114,7 +113,6 @@ func TestCompactEunomiaStateUsesScopedFinalityFloors(t *testing.T) {
 		InheritedByGrantID: "tso/22",
 	}
 	state := rootstate.State{
-		RetiredEraFloor: 22,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           global,
@@ -156,7 +154,6 @@ func TestCompactEunomiaStateKeepsMultiDutyRetirementUntilAllScopedFloorsCoverIt(
 		InheritedByGrantID: "multi/10",
 	}
 	state := rootstate.State{
-		RetiredEraFloor: 9,
 		RetiredEraFloors: []rootproto.AuthorityRetiredEraFloor{{
 			DutyID:          rootproto.DutyAllocID,
 			Scope:           global,
@@ -185,9 +182,9 @@ func TestCompactEunomiaStateKeepsMultiDutyRetirementUntilAllScopedFloorsCoverIt(
 	require.Empty(t, compacted.GrantInheritances)
 }
 
-// TestCompactEunomiaStateUsesScopedFloorsWithoutLegacyAggregate ensures the new
-// scoped model can compact final history even when the legacy scalar is absent.
-func TestCompactEunomiaStateUsesScopedFloorsWithoutLegacyAggregate(t *testing.T) {
+// TestCompactEunomiaStateUsesScopedFloors ensures scoped floors alone compact
+// final history.
+func TestCompactEunomiaStateUsesScopedFloors(t *testing.T) {
 	global := rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}
 	retirement := rootproto.GrantRetirement{
 		GrantID:            "alloc/7",
@@ -204,32 +201,6 @@ func TestCompactEunomiaStateUsesScopedFloorsWithoutLegacyAggregate(t *testing.T)
 			RetiredEraFloor: 7,
 		}},
 		RetiredGrants: []rootproto.GrantRetirement{retirement},
-		GrantInheritances: []rootproto.GrantInheritance{{
-			PredecessorGrantID: retirement.GrantID,
-			SuccessorGrantID:   retirement.InheritedByGrantID,
-		}},
-	}
-
-	compacted := rootstate.CompactEunomiaState(state)
-
-	require.Empty(t, compacted.RetiredGrants)
-	require.Empty(t, compacted.GrantInheritances)
-}
-
-// TestCompactEunomiaStatePreservesLegacyAggregateFallback keeps pre-scoped root
-// state compactable until it has been normalized into scoped floors.
-func TestCompactEunomiaStatePreservesLegacyAggregateFallback(t *testing.T) {
-	retirement := rootproto.GrantRetirement{
-		GrantID:            "legacy/8",
-		HolderID:           "coord-a",
-		Era:                8,
-		Mode:               rootproto.GrantRetirementExpiredBound,
-		Bounds:             []rootproto.DutyGrant{rootproto.NewGlobalMonotoneDuty(rootproto.DutyTSO, 200)},
-		InheritedByGrantID: "legacy/9",
-	}
-	state := rootstate.State{
-		RetiredEraFloor: 8,
-		RetiredGrants:   []rootproto.GrantRetirement{retirement},
 		GrantInheritances: []rootproto.GrantInheritance{{
 			PredecessorGrantID: retirement.GrantID,
 			SuccessorGrantID:   retirement.InheritedByGrantID,
