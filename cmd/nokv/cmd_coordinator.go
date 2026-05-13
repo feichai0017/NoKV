@@ -47,8 +47,6 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	grantRenewBefore := fs.Duration("grant-renew-before", 3*time.Second, "renew/campaign before grant expiry")
 	grantCandidates := fs.String("grant-candidates", "", "comma-separated coordinator ids eligible for duty grants")
 	grantDuties := fs.String("grant-duties", "alloc_id,tso,region_lookup", "comma-separated duties eligible on this coordinator")
-	idWindowSize := fs.Uint64("id-window-size", 0, "rooted ID allocator refill window size; zero keeps the service default")
-	tsoWindowSize := fs.Uint64("tso-window-size", 0, "rooted TSO allocator refill window size; zero keeps the service default")
 	shutdownGrace := fs.Duration("shutdown-grace", 0, "maximum time to drain and seal coordinator grant before graceful shutdown (default: grant ttl, or 10s when grant ttl is disabled)")
 	configPath := fs.String("config", "", "optional raft configuration file used to resolve coordinator listen address")
 	scope := fs.String("scope", "host", "scope for config-resolved coordinator address: host|docker")
@@ -147,7 +145,6 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 		return err
 	}
 	svc.ConfigureAuthorityGrantDuties(coordinatorIDValue, splitCommaList(*grantCandidates), parsedDuties, *grantTTL, *grantRenewBefore)
-	svc.ConfigureAllocatorWindows(*idWindowSize, *tsoWindowSize)
 	installCoordinatorExpvar(svc)
 
 	grpcServer := grpc.NewServer()
