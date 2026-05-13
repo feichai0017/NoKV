@@ -1097,7 +1097,7 @@ func TestRuntimeFlushChainsBoundedReplayWindows(t *testing.T) {
 		committer.commitMu.Unlock()
 		require.NoError(t, err)
 		require.NotEmpty(t, batches)
-		require.NoError(t, committer.installFlushBatches(context.Background(), batches, fsperas.SegmentPersistencePublished))
+		require.NoError(t, (flushPipeline{runtime: committer, level: fsperas.SegmentPersistencePublished}).run(context.Background(), batches))
 	}
 	require.Equal(t, uint64(3), committer.Stats()["segment_total"])
 	require.Equal(t, uint64(5), committer.Stats()["segment_operations_total"])

@@ -478,7 +478,7 @@ func (c *Runtime) flushBackground() {
 		batches, err = c.buildFlushBatches(plans, false)
 	}
 	if err == nil {
-		err = c.installFlushBatches(ctx, batches, fsperas.SegmentPersistencePublished)
+		err = (flushPipeline{runtime: c, level: fsperas.SegmentPersistencePublished}).run(ctx, batches)
 	}
 	if err != nil {
 		c.metrics.bgErrorTotal.Add(1)

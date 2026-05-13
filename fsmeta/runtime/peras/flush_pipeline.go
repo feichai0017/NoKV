@@ -11,78 +11,75 @@ import (
 )
 
 func (c *Runtime) flushLocked(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
+	pipeline := flushPipeline{runtime: c, level: level}
+	batches, err := pipeline.freeze(scope)
+	if err != nil {
+		return err
+	}
+	return pipeline.run(ctx, batches)
+}
+
+type flushPipeline struct {
+	runtime *Runtime
+	level   fsperas.SegmentPersistenceLevel
+}
+
+func (p flushPipeline) freeze(scope *compile.AuthorityScope) ([]perasFlushBatch, error) {
+	c := p.runtime
 	c.commitMu.Lock()
 	plans, err := c.freezeReplayPlansLocked(scope, 0)
 	c.commitMu.Unlock()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	batches, err := c.buildFlushBatches(plans, false)
-	if err != nil {
-		return err
-	}
-	return c.installFlushBatches(ctx, batches, level)
+	return c.buildFlushBatches(plans, false)
 }
 
-func (c *Runtime) installFlushBatches(ctx context.Context, batches []perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
+func (p flushPipeline) run(ctx context.Context, batches []perasFlushBatch) error {
+	c := p.runtime
 	if len(batches) > 0 && c.installer == nil {
 		return c.recordError(ErrRuntimeInvalid)
 	}
 	for _, batch := range batches {
-		if err := c.installFlushBatchJobs(ctx, batch, level); err != nil {
+		installed, err := p.runBatch(ctx, batch)
+		if err != nil {
 			return err
 		}
-		if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
-			return c.recordErrorf("mark peras plan applied: %w", err)
-		}
-		for _, job := range batch.jobs {
-			if err := c.installSegment(job.plan, job.segment); err != nil {
-				return err
-			}
+		if err := p.commitBatch(installed); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (c *Runtime) installFlushBatchJobs(ctx context.Context, batch perasFlushBatch, level fsperas.SegmentPersistenceLevel) error {
+func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (perasFlushBatch, error) {
+	c := p.runtime
 	c.recordFlushBatch(len(batch.jobs))
-	if len(batch.jobs) <= 1 || c.installN <= 1 {
-		jobs := make([]perasFlushJob, 0, len(batch.jobs))
-		for _, job := range batch.jobs {
-			installed, err := c.installOneFlushJob(ctx, batch.holder, job)
-			if err != nil {
-				return err
-			}
-			jobs = append(jobs, installed)
-		}
-		batch.jobs = jobs
-		if level.RequiresPublish() {
-			return c.publishFlushJobSeals(ctx, batch)
-		}
-		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
-		return nil
-	}
 	started := make([]time.Time, len(batch.jobs))
 	for idx := range started {
 		started[idx] = time.Now()
 	}
-	if err := c.appendFlushBatchWitnesses(ctx, batch); err != nil {
-		return err
+	if err := p.witnessBatch(ctx, batch); err != nil {
+		return perasFlushBatch{}, err
 	}
-	jobs, err := c.installFlushBatchSegments(ctx, batch, started)
+	jobs, err := p.installBatch(ctx, batch, started)
 	if err != nil {
-		return err
+		return perasFlushBatch{}, err
 	}
 	batch.jobs = jobs
-	if level.RequiresPublish() {
-		return c.publishFlushJobSeals(ctx, batch)
+	if p.level.RequiresPublish() {
+		if err := p.sealBatch(ctx, batch); err != nil {
+			return perasFlushBatch{}, err
+		}
+	} else {
+		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	}
-	c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
-	return nil
+	return batch, nil
 }
 
-func (c *Runtime) appendFlushBatchWitnesses(ctx context.Context, batch perasFlushBatch) error {
-	return c.runFlushBatchJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
+func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
+	c := p.runtime
+	return p.runJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
 		witnessStart := time.Now()
 		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, batch.holder, job.segment, job.payload, job.digest); err != nil {
 			return c.recordErrorf("append peras segment witness: %w", err)
@@ -92,10 +89,11 @@ func (c *Runtime) appendFlushBatchWitnesses(ctx context.Context, batch perasFlus
 	})
 }
 
-func (c *Runtime) installFlushBatchSegments(ctx context.Context, batch perasFlushBatch, started []time.Time) ([]perasFlushJob, error) {
+func (p flushPipeline) installBatch(ctx context.Context, batch perasFlushBatch, started []time.Time) ([]perasFlushJob, error) {
+	c := p.runtime
 	jobs := make([]perasFlushJob, len(batch.jobs))
 	copy(jobs, batch.jobs)
-	if err := c.runFlushBatchJobs(ctx, jobs, func(ctx context.Context, idx int, job perasFlushJob) error {
+	if err := p.runJobs(ctx, jobs, func(ctx context.Context, idx int, job perasFlushJob) error {
 		cursor, err := c.submitInstallJob(ctx, job)
 		if err != nil {
 			return c.recordErrorf("install peras segment: %w", err)
@@ -111,10 +109,38 @@ func (c *Runtime) installFlushBatchSegments(ctx context.Context, batch perasFlus
 	return jobs, nil
 }
 
-func (c *Runtime) runFlushBatchJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {
-	workers := c.installN
+func (p flushPipeline) sealBatch(ctx context.Context, batch perasFlushBatch) error {
+	for _, job := range batch.jobs {
+		if err := p.submitSeal(ctx, batch.holder, job); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p flushPipeline) commitBatch(batch perasFlushBatch) error {
+	c := p.runtime
+	if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
+		return c.recordErrorf("mark peras plan applied: %w", err)
+	}
+	for _, job := range batch.jobs {
+		if err := c.installSegment(job.plan, job.segment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	workers := p.runtime.installN
 	if workers > len(jobs) {
 		workers = len(jobs)
+	}
+	if workers <= 0 {
+		workers = 1
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -167,34 +193,8 @@ func (c *Runtime) runFlushBatchJobs(ctx context.Context, jobs []perasFlushJob, r
 	return nil
 }
 
-func (c *Runtime) installOneFlushJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) (perasFlushJob, error) {
-	flushStart := time.Now()
-	defer func() {
-		c.recordFlushLatency(time.Since(flushStart))
-	}()
-	witnessStart := time.Now()
-	if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, holder, job.segment, job.payload, job.digest); err != nil {
-		return job, c.recordErrorf("append peras segment witness: %w", err)
-	}
-	c.recordWitnessLatency(time.Since(witnessStart))
-	cursor, err := c.submitInstallJob(ctx, job)
-	if err != nil {
-		return job, c.recordErrorf("install peras segment: %w", err)
-	}
-	job.cursor = cursor
-	return job, nil
-}
-
-func (c *Runtime) publishFlushJobSeals(ctx context.Context, batch perasFlushBatch) error {
-	for _, job := range batch.jobs {
-		if err := c.submitSealJob(ctx, batch.holder, job); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Runtime) submitSealJob(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
+func (p flushPipeline) submitSeal(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
+	c := p.runtime
 	if c == nil {
 		return ErrRuntimeInvalid
 	}

@@ -48,7 +48,7 @@ func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityR
 		}
 	}
 	c.commitMu.Unlock()
-	if err := c.installFlushBatches(ctx, batches, fsperas.SegmentPersistencePublished); err != nil {
+	if err := (flushPipeline{runtime: c, level: fsperas.SegmentPersistencePublished}).run(ctx, batches); err != nil {
 		return err
 	}
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
