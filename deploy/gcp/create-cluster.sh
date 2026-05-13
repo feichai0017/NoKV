@@ -120,6 +120,21 @@ ARTIFACT_HOST="$ARTIFACT_HOST"
 SIGNING_KEY="$signing_key"
 COORDINATOR_ADDR="10.42.0.21:2379,10.42.0.22:2379,10.42.0.23:2379"
 FSMETA_ADDR="10.42.0.41:8090"
+NOKV_PERAS_WITNESS="$NOKV_PERAS_WITNESS"
+NOKV_PERAS_WITNESS_DURABILITY="$NOKV_PERAS_WITNESS_DURABILITY"
+NOKV_FSMETA_PERAS_HOLDER_ID="$NOKV_FSMETA_PERAS_HOLDER_ID"
+NOKV_FSMETA_PERAS_AUTHORITY_TTL="$NOKV_FSMETA_PERAS_AUTHORITY_TTL"
+NOKV_FSMETA_PERAS_VISIBLE_COMMIT="$NOKV_FSMETA_PERAS_VISIBLE_COMMIT"
+NOKV_FSMETA_PERAS_WITNESS_STORES="$NOKV_FSMETA_PERAS_WITNESS_STORES"
+NOKV_FSMETA_PERAS_WITNESS_QUORUM="$NOKV_FSMETA_PERAS_WITNESS_QUORUM"
+NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES="$NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES"
+NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRY_BACKOFF="$NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRY_BACKOFF"
+NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE="$NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE"
+NOKV_FSMETA_PERAS_SEGMENT_MAX_REPLAY_MUTATIONS="$NOKV_FSMETA_PERAS_SEGMENT_MAX_REPLAY_MUTATIONS"
+NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM="$NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM"
+NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY="$NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY"
+NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT="$NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT"
+NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF="$NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -199,7 +214,9 @@ case "\$ROLE" in
       "\$NOKV_IMAGE" \\
       serve --config=/etc/nokv/raft_config.json --scope=host --store-id="\$ORDINAL" \\
         --coordinator-addr="\$COORDINATOR_ADDR" --metrics-addr=0.0.0.0:9200 \\
-        --storage-max-batch-count=1024
+        --storage-max-batch-count=1024 \\
+        --peras-witness="\$NOKV_PERAS_WITNESS" \\
+        --peras-witness-durability="\$NOKV_PERAS_WITNESS_DURABILITY"
     ;;
   gateway)
     docker rm -f "nokv-fsmeta" >/dev/null 2>&1 || true
@@ -211,7 +228,20 @@ case "\$ROLE" in
       --entrypoint /usr/local/bin/nokv-fsmeta \\
       "\$NOKV_IMAGE" \\
       --addr=0.0.0.0:8090 --coordinator-addr="\$COORDINATOR_ADDR" \\
-        --metrics-addr=0.0.0.0:9400 --negative-cache-dir=/mnt/nokv/negative-cache --dirpage-cache-dir=/mnt/nokv/dirpage-cache
+        --metrics-addr=0.0.0.0:9400 --negative-cache-dir=/mnt/nokv/negative-cache --dirpage-cache-dir=/mnt/nokv/dirpage-cache \\
+        --peras-holder-id="\$NOKV_FSMETA_PERAS_HOLDER_ID" \\
+        --peras-authority-ttl="\$NOKV_FSMETA_PERAS_AUTHORITY_TTL" \\
+        --peras-visible-commit="\$NOKV_FSMETA_PERAS_VISIBLE_COMMIT" \\
+        --peras-witness-stores="\$NOKV_FSMETA_PERAS_WITNESS_STORES" \\
+        --peras-witness-quorum="\$NOKV_FSMETA_PERAS_WITNESS_QUORUM" \\
+        --peras-segment-witness-retries="\$NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES" \\
+        --peras-segment-witness-retry-backoff="\$NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRY_BACKOFF" \\
+        --peras-segment-batch-size="\$NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE" \\
+        --peras-segment-max-replay-mutations="\$NOKV_FSMETA_PERAS_SEGMENT_MAX_REPLAY_MUTATIONS" \\
+        --peras-segment-install-parallelism="\$NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM" \\
+        --peras-segment-flush-every="\$NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY" \\
+        --peras-background-flush-timeout="\$NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT" \\
+        --peras-background-error-backoff="\$NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF"
     ;;
   loadgen)
     docker pull "\$NOKV_BENCH_IMAGE"
