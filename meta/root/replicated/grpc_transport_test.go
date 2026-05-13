@@ -1,6 +1,7 @@
 package replicated
 
 import (
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -62,4 +63,90 @@ func TestGRPCTransportRejectsUnknownPeer(t *testing.T) {
 
 	err = t1.Send(myraft.Message{From: 1, To: 2, Type: myraft.MsgHeartbeat})
 	require.Error(t, err)
+}
+
+func TestGRPCTransportUnreachableDialDoesNotBlockLivePeer(t *testing.T) {
+	deadAddr, deadAccepted := startBlackholeListener(t)
+
+	t1, err := NewGRPCTransport(1, "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = t1.Close() })
+	t1.dialTimeout = 1200 * time.Millisecond
+
+	t3, err := NewGRPCTransport(3, "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = t3.Close() })
+
+	t1.SetPeer(2, deadAddr)
+	t1.SetPeer(3, t3.Addr())
+
+	deadDone := make(chan error, 1)
+	go func() {
+		_, err := t1.clientFor(2)
+		deadDone <- err
+	}()
+
+	select {
+	case <-deadAccepted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for unreachable peer dial to start")
+	}
+
+	sendDone := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		sendDone <- t1.Send(myraft.Message{From: 1, To: 3, Type: myraft.MsgHeartbeat, Term: 7})
+	}()
+
+	select {
+	case err := <-sendDone:
+		require.NoError(t, err)
+		require.Less(t, time.Since(start), 300*time.Millisecond)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("live peer send was blocked behind unreachable peer dial")
+	}
+
+	select {
+	case err := <-deadDone:
+		require.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for unreachable peer dial to fail")
+	}
+}
+
+func startBlackholeListener(t *testing.T) (string, <-chan struct{}) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	accepted := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			select {
+			case accepted <- struct{}{}:
+			default:
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				<-stop
+			}()
+		}
+	}()
+
+	t.Cleanup(func() {
+		close(stop)
+		_ = ln.Close()
+		<-done
+	})
+
+	return ln.Addr().String(), accepted
 }
