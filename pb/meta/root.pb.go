@@ -833,22 +833,25 @@ func (x *RootCursor) GetIndex() uint64 {
 }
 
 type RootState struct {
-	state               protoimpl.MessageState          `protogen:"open.v1"`
-	ClusterEpoch        uint64                          `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
-	MembershipEpoch     uint64                          `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
-	LastCommitted       *RootCursor                     `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
-	IdFence             uint64                          `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
-	TsoFence            uint64                          `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
-	ActiveGrants        []*RootAuthorityGrant           `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
-	RetiredGrants       []*RootGrantRetirement          `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
-	GrantInheritances   []*RootGrantInheritance         `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
-	RetiredEraFloor     uint64                          `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
-	ActivePerasGrants   []*RootPerasAuthorityGrant      `protobuf:"bytes,11,rep,name=active_peras_grants,json=activePerasGrants,proto3" json:"active_peras_grants,omitempty"`
-	PerasAuthorityEpoch uint64                          `protobuf:"varint,12,opt,name=peras_authority_epoch,json=perasAuthorityEpoch,proto3" json:"peras_authority_epoch,omitempty"`
-	PerasAuthoritySeals []*RootPerasAuthoritySeal       `protobuf:"bytes,13,rep,name=peras_authority_seals,json=perasAuthoritySeals,proto3" json:"peras_authority_seals,omitempty"`
-	RetiredEraFloors    []*RootAuthorityRetiredEraFloor `protobuf:"bytes,14,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	ClusterEpoch      uint64                  `protobuf:"varint,1,opt,name=cluster_epoch,json=clusterEpoch,proto3" json:"cluster_epoch,omitempty"`
+	MembershipEpoch   uint64                  `protobuf:"varint,2,opt,name=membership_epoch,json=membershipEpoch,proto3" json:"membership_epoch,omitempty"`
+	LastCommitted     *RootCursor             `protobuf:"bytes,4,opt,name=last_committed,json=lastCommitted,proto3" json:"last_committed,omitempty"`
+	IdFence           uint64                  `protobuf:"varint,5,opt,name=id_fence,json=idFence,proto3" json:"id_fence,omitempty"`
+	TsoFence          uint64                  `protobuf:"varint,6,opt,name=tso_fence,json=tsoFence,proto3" json:"tso_fence,omitempty"`
+	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,7,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
+	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,8,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
+	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,9,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
+	// Legacy aggregate finality floor kept for old checkpoints and readers.
+	RetiredEraFloor     uint64                     `protobuf:"varint,10,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
+	ActivePerasGrants   []*RootPerasAuthorityGrant `protobuf:"bytes,11,rep,name=active_peras_grants,json=activePerasGrants,proto3" json:"active_peras_grants,omitempty"`
+	PerasAuthorityEpoch uint64                     `protobuf:"varint,12,opt,name=peras_authority_epoch,json=perasAuthorityEpoch,proto3" json:"peras_authority_epoch,omitempty"`
+	PerasAuthoritySeals []*RootPerasAuthoritySeal  `protobuf:"bytes,13,rep,name=peras_authority_seals,json=perasAuthoritySeals,proto3" json:"peras_authority_seals,omitempty"`
+	// Scoped finality floors keyed by coordinator duty and duty scope. New
+	// serving paths must prefer this over the aggregate floor when present.
+	RetiredEraFloors []*RootAuthorityRetiredEraFloor `protobuf:"bytes,14,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RootState) Reset() {
@@ -2379,10 +2382,13 @@ func (x *RootGrantInheritance) GetInheritedAt() *RootCursor {
 }
 
 type RootAuthorityRetiredEraFloor struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	DutyId          string                 `protobuf:"bytes,1,opt,name=duty_id,json=dutyId,proto3" json:"duty_id,omitempty"`
-	Scope           *RootDutyScope         `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
-	RetiredEraFloor uint64                 `protobuf:"varint,3,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Coordinator duty, such as alloc_id, tso, or region_lookup.
+	DutyId string `protobuf:"bytes,1,opt,name=duty_id,json=dutyId,proto3" json:"duty_id,omitempty"`
+	// Scope of that duty. Current built-in duties use global scope.
+	Scope *RootDutyScope `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	// Highest inherited retired era that is final for this duty/scope only.
+	RetiredEraFloor uint64 `protobuf:"varint,3,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4509,14 +4515,16 @@ func (x *MetadataRootStatusResponse) GetLeaderId() uint64 {
 }
 
 type RootEunomiaState struct {
-	state             protoimpl.MessageState          `protogen:"open.v1"`
-	ActiveGrants      []*RootAuthorityGrant           `protobuf:"bytes,1,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
-	RetiredGrants     []*RootGrantRetirement          `protobuf:"bytes,2,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
-	GrantInheritances []*RootGrantInheritance         `protobuf:"bytes,3,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
-	RetiredEraFloor   uint64                          `protobuf:"varint,4,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
-	RetiredEraFloors  []*RootAuthorityRetiredEraFloor `protobuf:"bytes,5,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	ActiveGrants      []*RootAuthorityGrant   `protobuf:"bytes,1,rep,name=active_grants,json=activeGrants,proto3" json:"active_grants,omitempty"`
+	RetiredGrants     []*RootGrantRetirement  `protobuf:"bytes,2,rep,name=retired_grants,json=retiredGrants,proto3" json:"retired_grants,omitempty"`
+	GrantInheritances []*RootGrantInheritance `protobuf:"bytes,3,rep,name=grant_inheritances,json=grantInheritances,proto3" json:"grant_inheritances,omitempty"`
+	// Legacy aggregate finality floor kept for upgrade compatibility.
+	RetiredEraFloor uint64 `protobuf:"varint,4,opt,name=retired_era_floor,json=retiredEraFloor,proto3" json:"retired_era_floor,omitempty"`
+	// Scoped finality floors used by new Eunomia serving and audit code.
+	RetiredEraFloors []*RootAuthorityRetiredEraFloor `protobuf:"bytes,5,rep,name=retired_era_floors,json=retiredEraFloors,proto3" json:"retired_era_floors,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RootEunomiaState) Reset() {
