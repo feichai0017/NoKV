@@ -107,10 +107,8 @@ func CloneSnapshot(snapshot Snapshot) Snapshot {
 // Eunomia authority mirror is protected against stale replacement.
 func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	out := CloneSnapshot(observed)
-	retiredFloor := observed.RetiredEraFloor
-	if current.RetiredEraFloor > retiredFloor {
-		retiredFloor = current.RetiredEraFloor
-	}
+	retiredFloor := max(current.RetiredEraFloor, observed.RetiredEraFloor)
+	out.ActiveGrants = filterActiveGrantsAboveRetiredFloor(out.ActiveGrants, retiredFloor)
 	for _, currentGrant := range current.ActiveGrants {
 		if !currentGrant.Present() || grantRetiredAtFloor(currentGrant, retiredFloor) || observedRetiresGrant(observed, currentGrant) {
 			continue
@@ -132,6 +130,20 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 
 func grantRetiredAtFloor(grant rootproto.AuthorityGrant, retiredFloor uint64) bool {
 	return retiredFloor != 0 && grant.Era <= retiredFloor
+}
+
+func filterActiveGrantsAboveRetiredFloor(grants []rootproto.AuthorityGrant, retiredFloor uint64) []rootproto.AuthorityGrant {
+	if retiredFloor == 0 {
+		return grants
+	}
+	out := grants[:0]
+	for _, grant := range grants {
+		if grantRetiredAtFloor(grant, retiredFloor) {
+			continue
+		}
+		out = append(out, grant)
+	}
+	return out
 }
 
 func observedRetiresGrant(observed Snapshot, grant rootproto.AuthorityGrant) bool {
