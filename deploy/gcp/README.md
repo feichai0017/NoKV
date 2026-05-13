@@ -341,6 +341,7 @@ sudo journalctl -u google-startup-scripts.service -n 120 --no-pager
 | benchmark copies results but test failed | remote command return code was not propagated | Current retry wrapper returns non-zero for non-transport failures |
 | `nokv execution -json` panics about missing Eunomia key | runtime CLI containers need the same key as services | Distributed smoke passes `NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` into the runtime CLI probe |
 | distributed smoke fails after stopping meta-root leader and remaining peers report `leader_id=0` | meta-root raft did not elect a new leader inside the smoke window | inspect meta-root logs for repeated split votes; treat this as a truth-plane correctness failure, not a benchmark result |
+| distributed smoke fails in `meta-root-leader-down` with `stale witness era` | meta-root re-elected, but coordinator/client witness era state became stale after the leader fault | inspect coordinator TSO/grant logs, root event propagation, and client witness-era refresh around the leader stop; this is not an image pull or bootstrap failure |
 | readiness times out on `10.42.0.41:8090` | gateway failed or coordinator dependency failed | inspect `nokv-fsmeta` logs, then coordinator logs |
 | readiness times out on `10.42.0.31-33:20160` | store bootstrap or serve failed | inspect `nokv-store` logs and startup logs |
 | C4 formal run fails quota check | region lacks C4 quota | request quota or choose a region/zone with enough C4 quota and capacity |
@@ -373,5 +374,49 @@ sudo journalctl -u google-startup-scripts.service -n 120 --no-pager
   remaining meta-root peers repeatedly entered elections and reported
   `leader_id=0`; logs showed split votes rather than a new leader. Resources
   were destroyed after the failure.
+- Distributed Peras fault-smoke handoff, 2026-05-13 UTC:
+  - Branch: `gcp-benchmark` at `d3fa59ba` (`feat(deploy): enable Peras smoke
+    defaults`).
+  - Peras was intentionally enabled by default for both local Compose and GCP:
+    store witnesses use `--peras-witness=true`; fsmeta uses
+    `--peras-visible-commit=true`, holder `fsmeta-holder-1`, witness stores
+    `1,2,3`, and witness quorum `2`.
+  - Runtime image:
+    `australia-southeast2-docker.pkg.dev/nokv-benchmark/nokv-lab/nokv@sha256:9a135af52837cb53b64780a3fe4c20e2b6a57c96ef9de2edce242d819aa340d3`.
+  - Benchmark image:
+    `australia-southeast2-docker.pkg.dev/nokv-benchmark/nokv-lab/nokv-bench@sha256:84f779c683c7c1a06debd8ddd3953d869b2efd25da90464ae15b418b9709a164`.
+  - Before this run, a previous warm 11-VM smoke cluster was still running. It
+    was destroyed first with `destroy-cluster.sh --delete-infra`, including
+    instances, firewalls, router/NAT, subnet, and network.
+  - The fresh run used `distributed-smoke-and-destroy.sh` with no explicit
+    config, so it created 11 `e2-standard-2` VMs in
+    `australia-southeast2-b`, no compact placement, no external IPv4, Cloud NAT
+    for pulls, and IAP for operator SSH/SCP.
+  - Initial GCP deployment checks passed: loadgen pulled the digest-pinned
+    runtime and benchmark images, all service and metrics ports became ready,
+    meta-root had exactly one leader, coordinator grant had exactly one holder
+    with zero Eunomia guarantee violations, and all three stores reported
+    `execution -json` restart state `ready` with 35 regions and 35 raft groups.
+  - Baseline `mixed` workload passed. The copied CSV is
+    `deploy/gcp/results/distributed-20260513T151915Z/distributed-20260513T151915Z/baseline/fsmeta_baseline_20260513T152117Z.csv`
+    and contains 27 operation rows with zero operation errors.
+  - The meta-root leader before fault injection was `meta-root-2`. After
+    stopping it, the first post-fault assertion briefly observed two live peers
+    self-reporting as leaders: `meta-root-1` with `leader_id=1` and
+    `meta-root-3` with `leader_id=3`. A retry 2 seconds later converged to one
+    live leader, `meta-root-1`.
+  - The next workload, `meta-root-leader-down`, failed after 96.94 seconds with:
+    `run mixed: rpc error: code = OutOfRange desc = nokv: stale_epoch:
+    coordinator client: stale witness era: tso era=11 retired_floor=21`.
+    No `meta-root-leader-down` CSV was produced; only the successful baseline
+    CSV was copied back before cleanup.
+  - The destroy trap ran after failure and deleted all new smoke VMs and network
+    resources. A final `gcloud compute instances/networks/firewall-rules list`
+    check for `nokv-bench` returned no residual resources.
+  - Suggested next investigation: collect coordinator and gateway logs around
+    the `meta-root-2` stop/re-election window before another run. The failure
+    is after successful deployment and baseline traffic, so focus on
+    TSO/witness-era advancement, root event propagation, and client refresh
+    behavior under meta-root leader replacement.
 - Formal C4 benchmark has not been validated yet in this project. Re-check C4
   quota and zone capacity before running it.
