@@ -22,6 +22,11 @@ const (
 	raftServiceName    = "nokv.raft.Transport"
 	raftStepMethod     = "Step"
 	raftStepFullMethod = "/" + raftServiceName + "/" + raftStepMethod
+	// StoreKV shares the raftstore transport. Peras segment install and
+	// witness recovery carry sealed segment payloads, so the transport message
+	// limit must be sized for data-plane segment records rather than tiny
+	// control-plane RPCs.
+	defaultMaxRPCMessageBytes = 64 << 20
 )
 
 type GRPCOption func(*grpcTransportConfig)
@@ -201,7 +206,10 @@ func NewUnstartedGRPCTransport(localID uint64, listenAddr string, opts ...GRPCOp
 	if clientCreds == nil {
 		clientCreds = insecure.NewCredentials()
 	}
-	serverOpts := make([]grpc.ServerOption, 0, 1)
+	serverOpts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(defaultMaxRPCMessageBytes),
+		grpc.MaxSendMsgSize(defaultMaxRPCMessageBytes),
+	}
 	if cfg.serverCreds != nil {
 		serverOpts = append(serverOpts, grpc.Creds(cfg.serverCreds))
 	}
@@ -481,7 +489,13 @@ func (t *GRPCTransport) getClient(ctx context.Context, id uint64) (raftServiceCl
 	defer cancel()
 	metrics := grpcMetrics()
 	metrics.recordDialAttempt()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(t.clientCreds))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(t.clientCreds),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(defaultMaxRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(defaultMaxRPCMessageBytes),
+		),
+	)
 	if err != nil {
 		metrics.recordDialFailure(err)
 		return nil, err

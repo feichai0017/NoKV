@@ -1695,7 +1695,7 @@ func TestClientRouteDescriptorFloorIsRangeScoped(t *testing.T) {
 	resolver.mu.Unlock()
 }
 
-func TestClientHandleRegionErrorDropsIndexedCacheWhenLeaderUnknown(t *testing.T) {
+func TestClientHandleRegionErrorRotatesPeerWhenLeaderUnknown(t *testing.T) {
 	cli := &Client{
 		regions: make(map[uint64]*regionState),
 	}
@@ -1717,10 +1717,10 @@ func TestClientHandleRegionErrorDropsIndexedCacheWhenLeaderUnknown(t *testing.T)
 		},
 	})
 	require.NoError(t, err)
-	require.NotContains(t, cli.regions, uint64(1))
-	require.Empty(t, cli.regionIndex)
-	_, ok := cli.regionForKeyFromCache([]byte("bravo"))
-	require.False(t, ok)
+	got, ok := cli.regionForKeyFromCache([]byte("bravo"))
+	require.True(t, ok)
+	require.Equal(t, uint64(2), got.leader)
+	require.NotEmpty(t, cli.regionIndex)
 }
 
 // Utility helpers

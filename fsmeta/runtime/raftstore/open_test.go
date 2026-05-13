@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,4 +24,28 @@ func TestOpenRejectsNegativeLockTTL(t *testing.T) {
 		LockTTL:         -time.Millisecond,
 	})
 	require.ErrorIs(t, err, errLockTTLInvalid)
+}
+
+func TestOpenRejectsNegativePerasAuthorityTTL(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:   "127.0.0.1:1",
+		PerasAuthorityTTL: -time.Millisecond,
+	})
+	require.ErrorIs(t, err, runtimeperas.ErrTTLInvalid)
+}
+
+func TestOpenRejectsNegativePerasSegmentMutationBudget(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:                "127.0.0.1:1",
+		PerasSegmentMaxReplayMutations: -1,
+	})
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
+}
+
+func TestOpenRejectsNegativePerasSegmentInstallParallelism(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:                "127.0.0.1:1",
+		PerasSegmentInstallParallelism: -1,
+	})
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }

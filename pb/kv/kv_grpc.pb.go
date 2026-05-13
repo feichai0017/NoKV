@@ -21,17 +21,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StoreKV_Get_FullMethodName             = "/nokv.kv.v1.StoreKV/Get"
-	StoreKV_BatchGet_FullMethodName        = "/nokv.kv.v1.StoreKV/BatchGet"
-	StoreKV_Scan_FullMethodName            = "/nokv.kv.v1.StoreKV/Scan"
-	StoreKV_Prewrite_FullMethodName        = "/nokv.kv.v1.StoreKV/Prewrite"
-	StoreKV_Commit_FullMethodName          = "/nokv.kv.v1.StoreKV/Commit"
-	StoreKV_BatchRollback_FullMethodName   = "/nokv.kv.v1.StoreKV/BatchRollback"
-	StoreKV_ResolveLock_FullMethodName     = "/nokv.kv.v1.StoreKV/ResolveLock"
-	StoreKV_CheckTxnStatus_FullMethodName  = "/nokv.kv.v1.StoreKV/CheckTxnStatus"
-	StoreKV_TxnHeartBeat_FullMethodName    = "/nokv.kv.v1.StoreKV/TxnHeartBeat"
-	StoreKV_TryAtomicMutate_FullMethodName = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
-	StoreKV_WatchApply_FullMethodName      = "/nokv.kv.v1.StoreKV/WatchApply"
+	StoreKV_Get_FullMethodName                 = "/nokv.kv.v1.StoreKV/Get"
+	StoreKV_BatchGet_FullMethodName            = "/nokv.kv.v1.StoreKV/BatchGet"
+	StoreKV_Scan_FullMethodName                = "/nokv.kv.v1.StoreKV/Scan"
+	StoreKV_Prewrite_FullMethodName            = "/nokv.kv.v1.StoreKV/Prewrite"
+	StoreKV_Commit_FullMethodName              = "/nokv.kv.v1.StoreKV/Commit"
+	StoreKV_BatchRollback_FullMethodName       = "/nokv.kv.v1.StoreKV/BatchRollback"
+	StoreKV_ResolveLock_FullMethodName         = "/nokv.kv.v1.StoreKV/ResolveLock"
+	StoreKV_CheckTxnStatus_FullMethodName      = "/nokv.kv.v1.StoreKV/CheckTxnStatus"
+	StoreKV_TxnHeartBeat_FullMethodName        = "/nokv.kv.v1.StoreKV/TxnHeartBeat"
+	StoreKV_TryAtomicMutate_FullMethodName     = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
+	StoreKV_PerasInstallSegment_FullMethodName = "/nokv.kv.v1.StoreKV/PerasInstallSegment"
+	StoreKV_WatchApply_FullMethodName          = "/nokv.kv.v1.StoreKV/WatchApply"
+	StoreKV_PerasWitnessSegment_FullMethodName = "/nokv.kv.v1.StoreKV/PerasWitnessSegment"
+	StoreKV_PerasWitnessProbe_FullMethodName   = "/nokv.kv.v1.StoreKV/PerasWitnessProbe"
 )
 
 // StoreKVClient is the client API for StoreKV service.
@@ -48,7 +51,10 @@ type StoreKVClient interface {
 	CheckTxnStatus(ctx context.Context, in *KvCheckTxnStatusRequest, opts ...grpc.CallOption) (*KvCheckTxnStatusResponse, error)
 	TxnHeartBeat(ctx context.Context, in *KvTxnHeartBeatRequest, opts ...grpc.CallOption) (*KvTxnHeartBeatResponse, error)
 	TryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
+	PerasInstallSegment(ctx context.Context, in *KvPerasInstallSegmentRequest, opts ...grpc.CallOption) (*KvPerasInstallSegmentResponse, error)
 	WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
+	PerasWitnessSegment(ctx context.Context, in *PerasWitnessSegmentRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentResponse, error)
+	PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error)
 }
 
 type storeKVClient struct {
@@ -159,6 +165,16 @@ func (c *storeKVClient) TryAtomicMutate(ctx context.Context, in *KvTryAtomicMuta
 	return out, nil
 }
 
+func (c *storeKVClient) PerasInstallSegment(ctx context.Context, in *KvPerasInstallSegmentRequest, opts ...grpc.CallOption) (*KvPerasInstallSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KvPerasInstallSegmentResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasInstallSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storeKVClient) WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &StoreKV_ServiceDesc.Streams[0], StoreKV_WatchApply_FullMethodName, cOpts...)
@@ -178,6 +194,26 @@ func (c *storeKVClient) WatchApply(ctx context.Context, in *ApplyWatchRequest, o
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
 
+func (c *storeKVClient) PerasWitnessSegment(ctx context.Context, in *PerasWitnessSegmentRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PerasWitnessSegmentResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeKVClient) PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PerasWitnessProbeResponse)
+	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessProbe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StoreKVServer is the server API for StoreKV service.
 // All implementations should embed UnimplementedStoreKVServer
 // for forward compatibility.
@@ -192,7 +228,10 @@ type StoreKVServer interface {
 	CheckTxnStatus(context.Context, *KvCheckTxnStatusRequest) (*KvCheckTxnStatusResponse, error)
 	TxnHeartBeat(context.Context, *KvTxnHeartBeatRequest) (*KvTxnHeartBeatResponse, error)
 	TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
+	PerasInstallSegment(context.Context, *KvPerasInstallSegmentRequest) (*KvPerasInstallSegmentResponse, error)
 	WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
+	PerasWitnessSegment(context.Context, *PerasWitnessSegmentRequest) (*PerasWitnessSegmentResponse, error)
+	PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error)
 }
 
 // UnimplementedStoreKVServer should be embedded to have
@@ -232,8 +271,17 @@ func (UnimplementedStoreKVServer) TxnHeartBeat(context.Context, *KvTxnHeartBeatR
 func (UnimplementedStoreKVServer) TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TryAtomicMutate not implemented")
 }
+func (UnimplementedStoreKVServer) PerasInstallSegment(context.Context, *KvPerasInstallSegmentRequest) (*KvPerasInstallSegmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasInstallSegment not implemented")
+}
 func (UnimplementedStoreKVServer) WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchApply not implemented")
+}
+func (UnimplementedStoreKVServer) PerasWitnessSegment(context.Context, *PerasWitnessSegmentRequest) (*PerasWitnessSegmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessSegment not implemented")
+}
+func (UnimplementedStoreKVServer) PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessProbe not implemented")
 }
 func (UnimplementedStoreKVServer) testEmbeddedByValue() {}
 
@@ -435,6 +483,24 @@ func _StoreKV_TryAtomicMutate_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreKV_PerasInstallSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KvPerasInstallSegmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreKVServer).PerasInstallSegment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreKV_PerasInstallSegment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreKVServer).PerasInstallSegment(ctx, req.(*KvPerasInstallSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StoreKV_WatchApply_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ApplyWatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -445,6 +511,42 @@ func _StoreKV_WatchApply_Handler(srv interface{}, stream grpc.ServerStream) erro
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
+
+func _StoreKV_PerasWitnessSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessSegmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreKVServer).PerasWitnessSegment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreKV_PerasWitnessSegment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreKVServer).PerasWitnessSegment(ctx, req.(*PerasWitnessSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreKV_PerasWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessProbeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreKVServer).PerasWitnessProbe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreKV_PerasWitnessProbe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreKVServer).PerasWitnessProbe(ctx, req.(*PerasWitnessProbeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 // StoreKV_ServiceDesc is the grpc.ServiceDesc for StoreKV service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -492,6 +594,18 @@ var StoreKV_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TryAtomicMutate",
 			Handler:    _StoreKV_TryAtomicMutate_Handler,
+		},
+		{
+			MethodName: "PerasInstallSegment",
+			Handler:    _StoreKV_PerasInstallSegment_Handler,
+		},
+		{
+			MethodName: "PerasWitnessSegment",
+			Handler:    _StoreKV_PerasWitnessSegment_Handler,
+		},
+		{
+			MethodName: "PerasWitnessProbe",
+			Handler:    _StoreKV_PerasWitnessProbe_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

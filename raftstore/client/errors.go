@@ -50,19 +50,24 @@ type RetryExhaustedError struct {
 	Operation string
 	RegionID  uint64
 	Key       []byte
+	Detail    string
 }
 
 func (e *RetryExhaustedError) Error() string {
 	if e == nil {
 		return "client: retries exhausted"
 	}
+	detail := ""
+	if e.Detail != "" {
+		detail = ": " + e.Detail
+	}
 	switch {
 	case e.RegionID != 0:
-		return fmt.Sprintf("client: %s retries exhausted for region %d", e.Operation, e.RegionID)
+		return fmt.Sprintf("client: %s retries exhausted for region %d%s", e.Operation, e.RegionID, detail)
 	case len(e.Key) > 0:
-		return fmt.Sprintf("client: %s retries exhausted for key %q", e.Operation, e.Key)
+		return fmt.Sprintf("client: %s retries exhausted for key %q%s", e.Operation, e.Key, detail)
 	default:
-		return fmt.Sprintf("client: %s retries exhausted", e.Operation)
+		return fmt.Sprintf("client: %s retries exhausted%s", e.Operation, detail)
 	}
 }
 

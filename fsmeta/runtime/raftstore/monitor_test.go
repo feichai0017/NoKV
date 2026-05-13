@@ -6,7 +6,12 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -15,9 +20,11 @@ type fakeMountList struct {
 	mountCalls   int
 	quotaCalls   int
 	subtreeCalls int
+	perasCalls   int
 	mounts       []*coordpb.MountInfo
 	quotas       []*coordpb.QuotaFenceInfo
 	subtrees     []*coordpb.SubtreeAuthorityInfo
+	peras        []*rootproto.PerasAuthorityGrant
 	err          error
 }
 
@@ -34,6 +41,15 @@ func (c *fakeMountList) ListQuotaFences(context.Context, *coordpb.ListQuotaFence
 func (c *fakeMountList) ListSubtreeAuthorities(context.Context, *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error) {
 	c.subtreeCalls++
 	return &coordpb.ListSubtreeAuthoritiesResponse{Subtrees: c.subtrees}, c.err
+}
+
+func (c *fakeMountList) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+	c.perasCalls++
+	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(c.peras))
+	for _, grant := range c.peras {
+		out = append(out, metawire.RootPerasAuthorityGrantToProto(*grant))
+	}
+	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, c.err
 }
 
 func (c *fakeMountList) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -89,11 +105,32 @@ func TestMonitorRetiresWatchersAndCache(t *testing.T) {
 	require.Equal(t, 1, list.mountCalls)
 	require.Equal(t, 1, list.quotaCalls)
 	require.Equal(t, 1, list.subtreeCalls)
+	require.Equal(t, 1, list.perasCalls)
 	require.Equal(t, []fsmeta.MountID{"vol"}, router.retired)
 
 	entry, ok := cache.entries["vol"]
 	require.True(t, ok)
 	require.True(t, entry.record.Retired)
+}
+
+func TestMonitorRefreshesPerasAuthorityTable(t *testing.T) {
+	grant := testMonitorPerasGrant("peras-1", 1)
+	list := &fakeMountList{peras: []*rootproto.PerasAuthorityGrant{&grant}}
+	table := runtimeperas.NewActiveAuthorities()
+
+	mon := &monitor{coord: list, router: &fakeRetireRouter{}, peras: table}
+	require.NoError(t, mon.bootstrap(context.Background()))
+
+	require.Equal(t, 1, list.perasCalls)
+	require.Equal(t, []runtimeperas.AuthorityGrant{grant}, table.Snapshot())
+
+	retired := rootevent.PerasAuthorityRetired(grant)
+	mon.applyRootEvent(context.Background(), retired)
+	require.Empty(t, table.Snapshot())
+
+	next := testMonitorPerasGrant("peras-2", 2)
+	mon.applyRootEvent(context.Background(), rootevent.PerasAuthorityGranted(next))
+	require.Equal(t, []runtimeperas.AuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
@@ -112,6 +149,20 @@ func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: 1, frontier: 42}}, pub.completes)
+}
+
+func testMonitorPerasGrant(grantID string, bucket uint16) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
+		GrantID:  grantID,
+		EpochID:  1,
+		HolderID: "holder-a",
+		Scope: rootproto.PerasAuthorityScope{
+			MountID:    "vol",
+			MountKeyID: 7,
+			Buckets:    []uint16{bucket},
+		},
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+	}
 }
 
 func TestMonitorRefreshesQuotaFences(t *testing.T) {

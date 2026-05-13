@@ -33,6 +33,49 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
+func TestPerasSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
+	var root [32]byte
+	root[0] = 7
+	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindPeras, kind)
+	require.Equal(t, "peras", kind.String())
+
+	parts, ok := InspectKey(key)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, AffinityBucket(3), parts.Bucket)
+	require.Equal(t, PerasSegmentRecordIndex, parts.PerasRecord)
+	require.Equal(t, root, parts.PerasRoot)
+
+	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	parts, ok = InspectKey(object)
+	require.True(t, ok)
+	require.Equal(t, PerasSegmentRecordObject, parts.PerasRecord)
+	require.Equal(t, root, parts.PerasRoot)
+}
+
+func TestPerasSegmentCatalogIndexPrefixCoversCatalogKeys(t *testing.T) {
+	var root [32]byte
+	root[0] = 7
+	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	prefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 3)
+	require.NoError(t, err)
+
+	require.True(t, bytes.HasPrefix(key, prefix))
+	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	require.NoError(t, err)
+	require.False(t, bytes.HasPrefix(object, prefix))
+	otherBucketPrefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 4)
+	require.NoError(t, err)
+	require.False(t, bytes.HasPrefix(key, otherBucketPrefix))
+}
+
 func TestAuxiliaryKeyEncoders(t *testing.T) {
 	mount, err := EncodeMountKey(testMount)
 	require.NoError(t, err)
@@ -101,6 +144,48 @@ func TestMountPrefixAndRangeCoverOnlyOneMount(t *testing.T) {
 	require.Equal(t, "name", name)
 
 	_, ok = MountKeyIDOfKey(start)
+	require.False(t, ok)
+}
+
+func TestInspectKeyExtractsAuthorityParts(t *testing.T) {
+	dentry, err := EncodeDentryKey(testMount, 7, "file")
+	require.NoError(t, err)
+	parts, ok := InspectKey(dentry)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, BucketForInodeID(7), parts.Bucket)
+	require.Equal(t, KeyKindDentry, parts.Kind)
+	require.Equal(t, InodeID(7), parts.Parent)
+
+	inode, err := EncodeInodeKey(testMount, 42)
+	require.NoError(t, err)
+	parts, ok = InspectKey(inode)
+	require.True(t, ok)
+	require.Equal(t, KeyKindInode, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	chunk, err := EncodeChunkKey(testMount, 42, 3)
+	require.NoError(t, err)
+	parts, ok = InspectKey(chunk)
+	require.True(t, ok)
+	require.Equal(t, KeyKindChunk, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	session, err := EncodeSessionKey(testMount, 42, "writer")
+	require.NoError(t, err)
+	parts, ok = InspectKey(session)
+	require.True(t, ok)
+	require.Equal(t, KeyKindSession, parts.Kind)
+	require.Equal(t, InodeID(42), parts.Inode)
+
+	usage, err := EncodeUsageKey(testMount, 9)
+	require.NoError(t, err)
+	parts, ok = InspectKey(usage)
+	require.True(t, ok)
+	require.Equal(t, KeyKindUsage, parts.Kind)
+	require.Equal(t, InodeID(9), parts.UsageScope)
+
+	_, ok = InspectKey([]byte("bad"))
 	require.False(t, ok)
 }
 

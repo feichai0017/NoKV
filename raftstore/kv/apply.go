@@ -10,6 +10,10 @@ import (
 	"github.com/feichai0017/NoKV/engine/kv"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/peer"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/txn/percolator"
@@ -18,6 +22,29 @@ import (
 )
 
 const defaultLatchSlots = 512
+
+type ApplyOption func(*applyConfig)
+
+type applyConfig struct {
+	perasAuthorityFence rsperas.AuthorityFence
+	now                 func() time.Time
+}
+
+func WithPerasAuthorityFence(authorityFence rsperas.AuthorityFence) ApplyOption {
+	return func(cfg *applyConfig) {
+		cfg.perasAuthorityFence = authorityFence
+	}
+}
+
+func newApplyConfig(opts []ApplyOption) applyConfig {
+	cfg := applyConfig{now: time.Now}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return cfg
+}
 
 // Apply executes a RaftCmdRequest against the provided DB. The returned
 // response mirrors the request ordering. Mutation commands are expected to
@@ -115,6 +142,12 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 				return nil, err
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
+		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+			result, err := applyPerasInstallSegment(db, r.GetPerasInstallSegment())
+			if err != nil {
+				return nil, err
+			}
+			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
 		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
@@ -179,7 +212,8 @@ func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, b
 		raftcmdpb.CmdType_CMD_COMMIT,
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
-		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
+		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 		return r.GetCmdType(), true
 	default:
 		return 0, false
@@ -273,6 +307,19 @@ func applyBatchRun(
 						AppliedKeys:              result.AppliedKeys,
 						FallbackToTwoPhaseCommit: result.Fallback,
 					}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		for i, req := range reqs {
+			result, err := applyPerasInstallSegment(db, req.GetRequests()[0].GetPerasInstallSegment())
+			if err != nil {
+				return err
+			}
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: req.GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result},
 				}},
 			}
 		}
@@ -373,22 +420,52 @@ func maintenanceAbort(msg string) *kvrpcpb.KeyError {
 
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
-func NewApplier(db txnstore.Store, latches *latch.Manager) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+func NewApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOption) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
 	if latches == nil {
 		latches = latch.NewManager(defaultLatchSlots)
 	}
+	cfg := newApplyConfig(opts)
 	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		if resp, fenced := rejectPerasFencedRequest(cfg, req); fenced {
+			return resp, nil
+		}
 		return Apply(db, latches, req)
 	}
 }
 
 // NewBatchApplier wraps ApplyBatch for store command execution wiring.
-func NewBatchApplier(db txnstore.Store, latches *latch.Manager) func([]*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
+func NewBatchApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOption) func([]*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
 	if latches == nil {
 		latches = latch.NewManager(defaultLatchSlots)
 	}
+	cfg := newApplyConfig(opts)
 	return func(reqs []*raftcmdpb.RaftCmdRequest) ([]*raftcmdpb.RaftCmdResponse, error) {
-		return ApplyBatch(db, latches, reqs)
+		return applyBatchWithFence(db, latches, cfg, reqs)
+	}
+}
+
+// NewEntryApplier returns an ApplyFunc that decodes raft log entries and
+// applies them to the provided DB using the MVCC helpers.
+func NewEntryApplier(db txnstore.Store) peer.ApplyFunc {
+	latches := latch.NewManager(defaultLatchSlots)
+	return func(entries []myraft.Entry) error {
+		for _, entry := range entries {
+			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
+				continue
+			}
+			req, ok, err := command.Decode(entry.Data)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if _, err := Apply(db, latches, req); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("raftstore/kv: unsupported unframed raft payload")
+		}
+		return nil
 	}
 }
 

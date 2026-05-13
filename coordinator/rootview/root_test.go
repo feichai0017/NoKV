@@ -27,6 +27,9 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
+func (f fakeLoadStore) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+}
 func (f fakeLoadStore) Refresh() error            { return nil }
 func (f fakeLoadStore) CanSubmitRootWrites() bool { return true }
 func (f fakeLoadStore) LeaderID() uint64          { return 1 }
@@ -55,6 +58,9 @@ type fakeRootBackend struct {
 	tailNotifyCh        chan struct{}
 	applyGrantResult    rootstate.EunomiaState
 	applyGrantCert      rootproto.GrantCertificate
+	applyPerasErr       error
+	applyPerasResult    rootstate.State
+	applyPerasGrant     rootproto.PerasAuthorityGrant
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -158,6 +164,18 @@ func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
 	return f.applyGrantResult, f.applyGrantCert, nil
+}
+
+func (f *fakeRootBackend) ApplyPerasAuthority(_ context.Context, _ rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	if f.applyPerasErr != nil {
+		return f.applyPerasResult, rootproto.PerasAuthorityGrant{}, f.applyPerasErr
+	}
+	f.snapshot.State.ActivePerasGrants = clonePerasAuthorityGrants(f.applyPerasResult.ActivePerasGrants)
+	f.snapshot.State.PerasAuthorityEpoch = f.applyPerasResult.PerasAuthorityEpoch
+	if f.useObserved {
+		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
+	}
+	return f.applyPerasResult, f.applyPerasGrant, nil
 }
 
 func (f *fakeRootBackend) Close() error {
@@ -581,6 +599,81 @@ func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *test
 	require.Equal(t, uint64(3), loaded.ActiveGrants[0].Era)
 }
 
+func TestRootStoreMergesPerasAuthorityStateFromHeldRejection(t *testing.T) {
+	stale := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
+			ActivePerasGrants: []rootproto.PerasAuthorityGrant{
+				testRootviewPerasGrant("peras-stale", 1),
+			},
+			PerasAuthorityEpoch: 1,
+		},
+	}
+	authoritativeGrant := testRootviewPerasGrant("peras-held", 2)
+	authoritativeGrant.EpochID = 2
+	authoritativeGrant.HolderID = "holder-b"
+	authoritative := rootstate.State{
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{authoritativeGrant},
+		PerasAuthorityEpoch: authoritativeGrant.EpochID,
+	}
+	fake := &fakeRootBackend{
+		snapshot:         stale,
+		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:      true,
+		isLeader:         true,
+		applyPerasErr:    rootstate.ErrPrimacy,
+		applyPerasResult: authoritative,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, _, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{Kind: rootproto.PerasAuthorityActAcquire})
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
+	require.Equal(t, authoritative, state)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "holder-b", loaded.ActivePerasGrants[0].HolderID)
+	require.Equal(t, uint64(2), loaded.PerasAuthorityEpoch)
+}
+
+func TestRootStorePreservesAppliedPerasAuthorityAcrossStaleObservedReload(t *testing.T) {
+	staleGrant := testRootviewPerasGrant("peras-stale", 1)
+	staleGrant.EpochID = 1
+	stale := rootstate.Snapshot{
+		State: rootstate.State{
+			LastCommitted:       rootstate.Cursor{Term: 1, Index: 10},
+			ActivePerasGrants:   []rootproto.PerasAuthorityGrant{staleGrant},
+			PerasAuthorityEpoch: staleGrant.EpochID,
+		},
+	}
+	appliedGrant := testRootviewPerasGrant("peras-applied", 3)
+	appliedGrant.EpochID = 3
+	appliedGrant.HolderID = "holder-c"
+	applied := rootstate.State{
+		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{appliedGrant},
+		PerasAuthorityEpoch: appliedGrant.EpochID,
+	}
+	fake := &fakeRootBackend{
+		snapshot:         stale,
+		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:      true,
+		isLeader:         true,
+		applyPerasResult: applied,
+		applyPerasGrant:  appliedGrant,
+	}
+	store, err := OpenRootStore(fake)
+	require.NoError(t, err)
+
+	state, grant, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{Kind: rootproto.PerasAuthorityActAcquire})
+	require.NoError(t, err)
+	require.Equal(t, applied, state)
+	require.Equal(t, appliedGrant, grant)
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	require.Equal(t, "holder-c", loaded.ActivePerasGrants[0].HolderID)
+	require.Equal(t, uint64(3), loaded.PerasAuthorityEpoch)
+}
+
 func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
 	observed := Snapshot{
 		ActiveGrants: []rootproto.AuthorityGrant{{
@@ -619,6 +712,9 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
+	require.ErrorIs(t, err, errGrantCommandUnsupported)
+
+	_, _, err = store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{})
 	require.ErrorIs(t, err, errGrantCommandUnsupported)
 }
 

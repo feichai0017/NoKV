@@ -25,7 +25,7 @@ type quotaCache struct {
 	ttl   time.Duration
 	now   func() time.Time
 
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	fences map[quotaSubject]quotaEntry
 	misses map[quotaSubject]time.Time
 
@@ -82,6 +82,39 @@ func (c *quotaCache) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRunn
 		}
 	}
 	return mutations, nil
+}
+
+func (c *quotaCache) AllowPerasVisibleQuota(ctx context.Context, changes []fsmetaexec.QuotaChange) (bool, error) {
+	if c == nil || c.coord == nil || len(changes) == 0 {
+		return true, nil
+	}
+	for _, change := range changes {
+		if change.Mount == "" || change.MountKeyID == 0 {
+			return false, fsmeta.ErrInvalidMountID
+		}
+		if change.Bytes == 0 && change.Inodes == 0 {
+			continue
+		}
+		ok, err := c.allowPerasVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID})
+		if err != nil || !ok {
+			return ok, err
+		}
+		if change.Scope != 0 {
+			ok, err = c.allowPerasVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID, scope: change.Scope})
+			if err != nil || !ok {
+				return ok, err
+			}
+		}
+	}
+	return true, nil
+}
+
+func (c *quotaCache) allowPerasVisibleQuotaSubject(ctx context.Context, subject quotaSubject) (bool, error) {
+	_, ok, err := c.resolve(ctx, subject)
+	if err != nil {
+		return false, err
+	}
+	return !ok, nil
 }
 
 func (c *quotaCache) aggregate(changes []fsmetaexec.QuotaChange) (map[quotaSubject]quotaDelta, error) {
@@ -196,8 +229,8 @@ func (c *quotaCache) lookup(subject quotaSubject, now time.Time) (quotaFence, bo
 	if c.ttl <= 0 {
 		return quotaFence{}, false, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if entry, ok := c.fences[subject]; ok && now.Before(entry.expiresAt) {
 		return entry.fence, true, true
 	}

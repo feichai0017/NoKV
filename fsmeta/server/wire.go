@@ -289,6 +289,8 @@ func watchEventSourceToProto(source fsmeta.WatchEventSource) fsmetapb.WatchEvent
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_COMMIT
 	case fsmeta.WatchEventSourceResolveLock:
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK
+	case fsmeta.WatchEventSourcePerasVisible:
+		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_PERAS_VISIBLE
 	default:
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED
 	}

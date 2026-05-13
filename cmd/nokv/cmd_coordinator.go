@@ -39,6 +39,8 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	addr := fs.String("addr", "127.0.0.1:2379", "listen address for coordinator gRPC service")
 	idStart := fs.Uint64("id-start", 1, "initial ID allocator value (used only when the meta-root cluster has no allocator state)")
 	tsStart := fs.Uint64("ts-start", 1, "initial TSO value (used only when the meta-root cluster has no allocator state)")
+	idWindowSize := fs.Uint64("id-window-size", 0, "ID authority window size before coordinator must renew its grant (0 uses default)")
+	tsoWindowSize := fs.Uint64("tso-window-size", 0, "TSO authority window size before coordinator must renew its grant (0 uses default)")
 	rootRefresh := fs.Duration("root-refresh", 200*time.Millisecond, "refresh interval for rooted coordinator state")
 	coordinatorID := fs.String("coordinator-id", "", "stable coordinator owner id for grant-gated control plane (required)")
 	grantTTL := fs.Duration("grant-ttl", 10*time.Second, "coordinator grant ttl")
@@ -130,6 +132,7 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	ids := idalloc.NewIDAllocator(*idStart)
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
+	svc.ConfigureAllocatorWindows(*idWindowSize, *tsoWindowSize)
 	if cfg != nil && cfg.FSMetaRegionBootstrap != nil {
 		boundaries, err := fsmetaBootstrapSplitBoundaries(cfg.FSMetaRegionBootstrap)
 		if err != nil {

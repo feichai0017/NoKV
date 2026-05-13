@@ -43,7 +43,7 @@ var (
 	fsmetaArtifactsPerRun = flag.Int("fsmeta_artifacts_per_entry", 4, "mixed workload artifact file count per entry; minimum 4")
 	fsmetaWorkspaces      = flag.Int("fsmeta_workspaces", 4, "multi-workspace-autoscale workspace count")
 	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 5*time.Minute, "mixed writer session TTL")
-	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 2*time.Second, "mixed stale-session cleanup TTL")
+	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 20*time.Millisecond, "mixed stale-session cleanup TTL; keep short for throughput runs, override for long-TTL cleanup drills")
 	fsmetaLookupCache     = flag.Int("fsmeta_lookup_cache_entries", 4096, "client-side positive Lookup cache entries; 0 disables")
 	fsmetaLookupCacheTTL  = flag.Duration("fsmeta_lookup_cache_ttl", time.Second, "client-side positive Lookup cache TTL")
 	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")

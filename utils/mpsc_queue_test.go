@@ -101,6 +101,28 @@ func TestMPSCQueueCloseUnblocksFullProducer(t *testing.T) {
 	}
 }
 
+func TestMPSCQueueTryPushDoesNotBlockOnFullQueue(t *testing.T) {
+	q := NewMPSCQueue[int](2)
+	if !q.TryPush(1) || !q.TryPush(2) {
+		t.Fatalf("try-push should fill empty queue")
+	}
+	if q.TryPush(3) {
+		t.Fatalf("try-push should fail on full queue")
+	}
+	consumer := q.AcquireConsumer()
+	if consumer == nil {
+		t.Fatalf("expected consumer")
+	}
+	defer consumer.Close()
+	got, ok := consumer.Pop()
+	if !ok || got != 1 {
+		t.Fatalf("pop got %d %v, want 1 true", got, ok)
+	}
+	if !q.TryPush(3) {
+		t.Fatalf("try-push should succeed after one pop")
+	}
+}
+
 func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 	q := NewMPSCQueue[int](64)
 	const (
@@ -111,6 +133,7 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 
 	var (
 		wg       sync.WaitGroup
+		accepted atomic.Int64
 		consumed atomic.Int64
 		seenMu   sync.Mutex
 		seen     = make(map[int]struct{}, total)
@@ -145,6 +168,7 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 				if !q.Push(base + i) {
 					return
 				}
+				accepted.Add(1)
 				if i%97 == 0 {
 					runtime.Gosched()
 				}
@@ -168,8 +192,8 @@ func TestMPSCQueueCloseRaceDrainsExactlyOnce(t *testing.T) {
 	if got := consumed.Load(); got != int64(len(seen)) {
 		t.Fatalf("consumed=%d seen=%d mismatch", got, len(seen))
 	}
-	if len(seen) == 0 {
-		t.Fatalf("expected some drained items")
+	if got, want := consumed.Load(), accepted.Load(); got != want {
+		t.Fatalf("consumed=%d accepted=%d mismatch", got, want)
 	}
 }
 

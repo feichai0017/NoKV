@@ -117,3 +117,59 @@ func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mutations, 2, "mount-wide zero delta should be elided")
 }
+
+func TestQuotaAllowsPerasVisibleWhenNoFenceExists(t *testing.T) {
+	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{}}
+	cache := &quotaCache{coord: lookup, ttl: time.Minute}
+
+	ok, err := cache.AllowPerasVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Scope:      7,
+		Bytes:      1024,
+		Inodes:     1,
+	}})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, lookup.calls, "mount-wide and scoped quota subjects are both checked")
+}
+
+func TestQuotaBlocksPerasVisibleWhenFenceExists(t *testing.T) {
+	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
+		{mount: "vol"}: {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 8192, LimitInodes: 10, Era: 1},
+	}}
+	cache := &quotaCache{coord: lookup, ttl: time.Minute}
+
+	ok, err := cache.AllowPerasVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Scope:      7,
+		Bytes:      1024,
+		Inodes:     1,
+	}})
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func BenchmarkQuotaAllowPerasVisibleNoFenceCached(b *testing.B) {
+	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{}}
+	cache := &quotaCache{coord: lookup, ttl: time.Minute}
+	changes := []fsmetaexec.QuotaChange{{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Scope:      7,
+		Bytes:      4096,
+		Inodes:     1,
+	}}
+	ok, err := cache.AllowPerasVisibleQuota(context.Background(), changes)
+	require.NoError(b, err)
+	require.True(b, ok)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		ok, err := cache.AllowPerasVisibleQuota(context.Background(), changes)
+		if err != nil || !ok {
+			b.Fatalf("AllowPerasVisibleQuota() = %v, %v", ok, err)
+		}
+	}
+}

@@ -120,6 +120,35 @@ retry:
 	}
 }
 
+// TryPush enqueues v only when a slot is immediately available. It returns
+// false when the queue is closed or full.
+func (q *MPSCQueue[T]) TryPush(v T) bool {
+	if q == nil || q.closed.Load() {
+		return false
+	}
+	for range mpscQueueSpinCount {
+		pos := q.tail.Load()
+		slot := &q.buf[pos&q.mask]
+		seq := slot.seq.Load()
+		diff := int64(seq) - int64(pos)
+		if diff == 0 {
+			if q.tail.CompareAndSwap(pos, pos+1) {
+				slot.val = v
+				slot.seq.Store(pos + 1)
+				q.signalNotEmpty()
+				return true
+			}
+			runtime.Gosched()
+			continue
+		}
+		if diff < 0 {
+			return false
+		}
+		runtime.Gosched()
+	}
+	return false
+}
+
 // TryPop returns the next published item without blocking.
 func (q *MPSCQueue[T]) TryPop() (T, bool) {
 	var zero T
