@@ -22,6 +22,7 @@ type CompiledOp struct {
 	Placement        PlacementPlan
 	Footprint        KeyFootprint
 	Predicates       []PredicateObligation
+	Guards           []GuardObligation
 	Effects          []EffectPlan
 	Atomicity        AtomicityGroup
 	Durability       DurabilityClass
@@ -36,6 +37,7 @@ type CompiledOp struct {
 type MaterializedOp struct {
 	CompiledOp
 	PredicateProofs []PredicateProof
+	GuardProofs     []GuardProof
 }
 
 type FenceMode uint8
@@ -132,6 +134,17 @@ type PredicateProof struct {
 	Version uint64
 	Source  ReadSource
 	Digest  [32]byte
+}
+
+type GuardObligation struct {
+	Guard  RuntimeGuard
+	Digest [32]byte
+}
+
+type GuardProof struct {
+	Guard  RuntimeGuard
+	Passed bool
+	Digest [32]byte
 }
 
 type DerivationKind uint8
@@ -256,6 +269,7 @@ func CompileDelta(delta SemanticDelta) CompiledOp {
 	placement := placementPlan(delta, durability)
 	footprint := keyFootprint(delta)
 	predicates := predicateObligations(delta)
+	guards := guardObligations(delta)
 	effects := effectPlans(delta)
 	digest := descriptorDigest(delta)
 	atomicity := atomicityGroup(delta, digest)
@@ -273,6 +287,7 @@ func CompileDelta(delta SemanticDelta) CompiledOp {
 		Placement:  placement,
 		Footprint:  footprint,
 		Predicates: predicates,
+		Guards:     guards,
 		Effects:    effects,
 		Atomicity:  atomicity,
 		Durability: durability,
@@ -287,6 +302,10 @@ func MaterializeDelta(delta SemanticDelta, proofs []PredicateProof) Materialized
 }
 
 func MaterializeCompiledOp(op CompiledOp, effects []WriteEffect, proofs []PredicateProof) MaterializedOp {
+	return MaterializeCompiledOpWithGuardProofs(op, effects, proofs, nil)
+}
+
+func MaterializeCompiledOpWithGuardProofs(op CompiledOp, effects []WriteEffect, proofs []PredicateProof, guardProofs []GuardProof) MaterializedOp {
 	delta := op.Delta
 	if effects != nil {
 		delta.WriteEffects = cloneEffects(effects)
@@ -298,6 +317,7 @@ func MaterializeCompiledOp(op CompiledOp, effects []WriteEffect, proofs []Predic
 	return MaterializedOp{
 		CompiledOp:      compiled,
 		PredicateProofs: clonePredicateProofs(proofs),
+		GuardProofs:     cloneGuardProofs(guardProofs),
 	}
 }
 
@@ -332,6 +352,11 @@ func authorityScopeWithKey(scope AuthorityScope, key []byte) AuthorityScope {
 	return scope
 }
 
+func WithGuardProofs(op MaterializedOp, proofs []GuardProof) MaterializedOp {
+	op.GuardProofs = cloneGuardProofs(proofs)
+	return op
+}
+
 func CanAppendSegment(current, next CompiledOp, budget SegmentBudget) SegmentDecision {
 	if next.Durability != DurabilityVisibleOnly {
 		return SegmentDecision{Kind: SegmentDecisionFlushBeforeAndAfter, Reason: SlowReasonDurabilityBarrier}
@@ -362,6 +387,9 @@ func fenceMode(delta SemanticDelta) FenceMode {
 }
 
 func durabilityClass(delta SemanticDelta) DurabilityClass {
+	if delta.Kind == fsmeta.OperationCloseSession {
+		return DurabilityNeedsCloseSession
+	}
 	if !delta.DurabilityBarrier {
 		return DurabilityVisibleOnly
 	}
@@ -478,6 +506,17 @@ func predicateObligations(delta SemanticDelta) []PredicateObligation {
 	return out
 }
 
+func guardObligations(delta SemanticDelta) []GuardObligation {
+	out := make([]GuardObligation, 0, len(delta.RuntimeGuards))
+	for _, guard := range delta.RuntimeGuards {
+		out = append(out, GuardObligation{
+			Guard:  guard,
+			Digest: GuardProofDigest(guard, true),
+		})
+	}
+	return out
+}
+
 func effectPlans(delta SemanticDelta) []EffectPlan {
 	out := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -586,9 +625,13 @@ func completionPlan(delta SemanticDelta, mutations uint32, digest [32]byte) Comp
 	if delta.Eligibility != EligibilityVisibleCommit || mutations == 0 {
 		return CompletionPlan{}
 	}
+	kind := CompletionVisible
+	if durabilityClass(delta) != DurabilityVisibleOnly {
+		kind = CompletionDurable
+	}
 	return CompletionPlan{
 		RetainCompletion: true,
-		Kind:             CompletionVisible,
+		Kind:             kind,
 		MutationCount:    mutations,
 		DescriptorDigest: digest,
 	}
@@ -696,6 +739,65 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	return out
 }
 
+func GuardProofDigest(guard RuntimeGuard, passed bool) [32]byte {
+	h := sha256.New()
+	writeDigestString(h, string(guard))
+	if passed {
+		writeDigestUint64(h, 1)
+	} else {
+		writeDigestUint64(h, 0)
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func GuardProofsFor(guards []RuntimeGuard) []GuardProof {
+	if len(guards) == 0 {
+		return nil
+	}
+	out := make([]GuardProof, 0, len(guards))
+	for _, guard := range guards {
+		out = append(out, GuardProof{
+			Guard:  guard,
+			Passed: true,
+			Digest: GuardProofDigest(guard, true),
+		})
+	}
+	return out
+}
+
+func GuardProofSetDigest(proofs []GuardProof) [32]byte {
+	if len(proofs) == 0 {
+		return [32]byte{}
+	}
+	h := sha256.New()
+	writeDigestUint64(h, uint64(len(proofs)))
+	for _, proof := range proofs {
+		writeDigestString(h, string(proof.Guard))
+		if proof.Passed {
+			writeDigestUint64(h, 1)
+		} else {
+			writeDigestUint64(h, 0)
+		}
+		writeDigestBytes(h, proof.Digest[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func AdmissionProofSetDigest(predicates []PredicateProof, guards []GuardProof) [32]byte {
+	h := sha256.New()
+	predicateDigest := PredicateProofSetDigest(predicates)
+	guardDigest := GuardProofSetDigest(guards)
+	writeDigestBytes(h, predicateDigest[:])
+	writeDigestBytes(h, guardDigest[:])
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
 func descriptorDigest(delta SemanticDelta) [32]byte {
 	h := sha256.New()
 	writeDigestString(h, string(delta.Kind))
@@ -776,5 +878,14 @@ func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
 			Digest:  proof.Digest,
 		}
 	}
+	return out
+}
+
+func cloneGuardProofs(proofs []GuardProof) []GuardProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]GuardProof, len(proofs))
+	copy(out, proofs)
 	return out
 }

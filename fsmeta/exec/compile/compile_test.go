@@ -294,12 +294,36 @@ func TestMaterializedOpValidationRejectsUncoveredWrite(t *testing.T) {
 	}
 
 	var validationErr ValidationError
-	op := MaterializeDelta(delta, nil)
-	op.Authority.Scope.Buckets = []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(testParentInDifferentBucket(t, 44))}
-	op.Delta.Authority = op.Authority.Scope
+	op := MaterializedOp{CompiledOp: CompileDelta(delta)}
 	err := op.ValidateForAdmission()
 	require.ErrorAs(t, err, &validationErr)
 	require.Equal(t, ValidationAuthorityMismatch, validationErr.Kind)
+}
+
+func TestMaterializedOpValidationRejectsNonCanonicalDescriptor(t *testing.T) {
+	key := mustInodeKey(t, 44)
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+			Inodes:     []fsmeta.InodeID{44},
+		},
+		WriteEffects: []WriteEffect{{
+			Kind:  EffectPut,
+			Key:   key,
+			Value: []byte("new-inode"),
+		}},
+	}
+	op := MaterializeDelta(delta, nil)
+	op.Placement.CanSegment = false
+
+	var validationErr ValidationError
+	err := op.ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationCanonicalMismatch, validationErr.Kind)
 }
 
 func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
@@ -341,6 +365,70 @@ func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
 	}
 	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
 	require.NoError(t, MaterializeDelta(delta, []PredicateProof{proof}).ValidateForAdmission())
+}
+
+func TestMaterializedOpValidationRejectsBadPredicateProofContract(t *testing.T) {
+	key := mustInodeKey(t, 44)
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+			Inodes:     []fsmeta.InodeID{44},
+		},
+		ReadPredicates: []Predicate{{
+			Kind:             PredicateObservedValue,
+			Key:              key,
+			ExpectedValue:    []byte("old-inode"),
+			HasExpectedValue: true,
+		}},
+		WriteEffects: []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}},
+	}
+	proof := PredicateProof{
+		Key:     key,
+		Present: true,
+		Value:   []byte("old-inode"),
+		Source:  ReadSourceUnknown,
+	}
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+
+	var validationErr ValidationError
+	err := MaterializeDelta(delta, []PredicateProof{proof}).ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
+
+	proof.Source = ReadSourceBase
+	proof.Version = 9
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	err = MaterializeDelta(delta, []PredicateProof{proof, proof}).ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
+}
+
+func TestMaterializedOpValidationRequiresGuardProof(t *testing.T) {
+	key := mustInodeKey(t, 44)
+	delta := SemanticDelta{
+		Kind:        fsmeta.OperationUpdateInode,
+		Eligibility: EligibilityVisibleCommit,
+		Authority: AuthorityScope{
+			Mount:      testMount.MountID,
+			MountKeyID: testMount.MountKeyID,
+			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(44)},
+			Inodes:     []fsmeta.InodeID{44},
+		},
+		RuntimeGuards: []RuntimeGuard{GuardLiveSession},
+		WriteEffects:  []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}},
+	}
+
+	var validationErr ValidationError
+	err := MaterializeDelta(delta, nil).ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationGuardProofMissing, validationErr.Kind)
+
+	op := WithGuardProofs(MaterializeDelta(delta, nil), GuardProofsFor(delta.RuntimeGuards))
+	require.NoError(t, op.ValidateForAdmission())
 }
 
 func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
@@ -503,6 +591,7 @@ func TestSessionOperationsCompileVisibleCommitDeltas(t *testing.T) {
 	}, testMount)
 	require.NoError(t, err)
 	require.Equal(t, EligibilityVisibleCommit, closeDelta.Eligibility)
+	require.Equal(t, DurabilityNeedsCloseSession, CompileDelta(closeDelta).Durability)
 	require.Contains(t, closeDelta.RuntimeGuards, GuardLiveSession)
 	require.Len(t, closeDelta.ReadPredicates, 2)
 	require.Len(t, closeDelta.WriteEffects, 2)

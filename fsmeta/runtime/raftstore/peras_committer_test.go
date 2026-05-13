@@ -155,6 +155,9 @@ func TestRemotePerasCommitterScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	require.NoError(t, committer.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/d"), []byte("sealed-d"))))
 	require.NoError(t, committer.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, compile.MaterializeDelta(compile.SemanticDelta{
 		Eligibility: compile.EligibilityVisibleCommit,
+		Authority: compile.AuthorityScope{
+			AllowOpaqueKeys: true,
+		},
 		WriteEffects: []compile.WriteEffect{
 			{Kind: compile.EffectDelete, Key: []byte("k/b")},
 			{Kind: compile.EffectPut, Key: []byte("k/c"), Value: []byte("overlay-c")},
@@ -843,16 +846,18 @@ func TestRemotePerasCommitterFlushAuthorityFlushesOnlyOverlappingPendingOps(t *t
 	defer committer.Close()
 
 	scopeA := compile.AuthorityScope{
-		Mount:      "vol",
-		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{2},
+		Mount:           "vol",
+		MountKeyID:      1,
+		Parents:         []fsmeta.InodeID{1},
+		Inodes:          []fsmeta.InodeID{2},
+		AllowOpaqueKeys: true,
 	}
 	scopeB := compile.AuthorityScope{
-		Mount:      "vol",
-		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{2},
-		Inodes:     []fsmeta.InodeID{3},
+		Mount:           "vol",
+		MountKeyID:      1,
+		Parents:         []fsmeta.InodeID{2},
+		Inodes:          []fsmeta.InodeID{3},
+		AllowOpaqueKeys: true,
 	}
 	deltaA := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	deltaA = testRuntimePerasOpWithScope(deltaA, scopeA)
@@ -1826,8 +1831,9 @@ func testPerasInstallCursor(offset uint64) perasauthority.InstallCursor {
 
 func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.MaterializedOp {
 	scope := compile.AuthorityScope{
-		Mount:      "vol",
-		MountKeyID: 1,
+		Mount:           "vol",
+		MountKeyID:      1,
+		AllowOpaqueKeys: true,
 	}
 	for _, key := range [][]byte{dentryKey, inodeKey} {
 		if parts, ok := fsmeta.InspectKey(key); ok {
@@ -1885,6 +1891,12 @@ func testRuntimePerasOpWithScope(op compile.MaterializedOp, scope compile.Author
 	delta := op.Delta
 	if len(scope.Buckets) == 0 {
 		scope.Buckets = append([]fsmeta.AffinityBucket(nil), delta.Authority.Buckets...)
+	}
+	if op.Footprint.HasOpaqueKeys {
+		scope.AllowOpaqueKeys = true
+	}
+	if len(scope.Parents) == 0 && len(scope.Inodes) == 0 {
+		scope.Broad = true
 	}
 	delta.Authority = scope
 	return compile.MaterializeDelta(delta, nil)

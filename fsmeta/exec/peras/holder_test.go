@@ -96,16 +96,18 @@ func TestHolderBuildPendingReplayPlanLimitKeepsLaterOperationsPending(t *testing
 func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing.T) {
 	holder := newTestHolder(t)
 	firstScope := compile.AuthorityScope{
-		Mount:      "vol",
-		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{10},
+		Mount:           "vol",
+		MountKeyID:      1,
+		Parents:         []fsmeta.InodeID{1},
+		Inodes:          []fsmeta.InodeID{10},
+		AllowOpaqueKeys: true,
 	}
 	secondScope := compile.AuthorityScope{
-		Mount:      "vol",
-		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{2},
-		Inodes:     []fsmeta.InodeID{20},
+		Mount:           "vol",
+		MountKeyID:      1,
+		Parents:         []fsmeta.InodeID{2},
+		Inodes:          []fsmeta.InodeID{20},
+		AllowOpaqueKeys: true,
 	}
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
@@ -265,6 +267,9 @@ func deltaWithValueWrites(key, value string) compile.SemanticDelta {
 	return compile.SemanticDelta{
 		Kind:        fsmeta.OperationCreate,
 		Eligibility: compile.EligibilityVisibleCommit,
+		Authority: compile.AuthorityScope{
+			AllowOpaqueKeys: true,
+		},
 		WriteEffects: []compile.WriteEffect{{
 			Kind:  compile.EffectPut,
 			Key:   []byte(key),

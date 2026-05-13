@@ -90,7 +90,7 @@ func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) 
 		OpID:                 id,
 		Kind:                 delta.Kind,
 		DescriptorDigest:     op.DescriptorDigest,
-		PredicateProofDigest: compile.PredicateProofSetDigest(op.PredicateProofs),
+		PredicateProofDigest: compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs),
 		Mutations:            mutations,
 	}, nil
 }

@@ -102,11 +102,13 @@ type WriteEffect struct {
 // AuthorityScope is the mount-local scope a holder grant must cover. It is a
 // runtime contract, not persisted root truth.
 type AuthorityScope struct {
-	Mount      fsmeta.MountID
-	MountKeyID fsmeta.MountKeyID
-	Buckets    []fsmeta.AffinityBucket
-	Parents    []fsmeta.InodeID
-	Inodes     []fsmeta.InodeID
+	Mount           fsmeta.MountID
+	MountKeyID      fsmeta.MountKeyID
+	Buckets         []fsmeta.AffinityBucket
+	Parents         []fsmeta.InodeID
+	Inodes          []fsmeta.InodeID
+	Broad           bool
+	AllowOpaqueKeys bool
 }
 
 // SemanticDelta is the static lowering result produced from one fsmeta request.
@@ -482,11 +484,13 @@ func clonePlan(plan fsmeta.OperationPlan) fsmeta.OperationPlan {
 
 func cloneScope(scope AuthorityScope) AuthorityScope {
 	return AuthorityScope{
-		Mount:      scope.Mount,
-		MountKeyID: scope.MountKeyID,
-		Buckets:    append([]fsmeta.AffinityBucket(nil), scope.Buckets...),
-		Parents:    append([]fsmeta.InodeID(nil), scope.Parents...),
-		Inodes:     append([]fsmeta.InodeID(nil), scope.Inodes...),
+		Mount:           scope.Mount,
+		MountKeyID:      scope.MountKeyID,
+		Buckets:         append([]fsmeta.AffinityBucket(nil), scope.Buckets...),
+		Parents:         append([]fsmeta.InodeID(nil), scope.Parents...),
+		Inodes:          append([]fsmeta.InodeID(nil), scope.Inodes...),
+		Broad:           scope.Broad,
+		AllowOpaqueKeys: scope.AllowOpaqueKeys,
 	}
 }
 

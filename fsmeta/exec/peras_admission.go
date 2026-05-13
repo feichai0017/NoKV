@@ -59,6 +59,7 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, op compile.Materia
 		e.perasVisible.skipPlacementTotal.Add(1)
 		return false, nil
 	}
+	op = compile.WithGuardProofs(op, compile.GuardProofsFor(op.Delta.RuntimeGuards))
 	id := e.nextPerasOperationID(delta.Kind)
 	e.perasVisible.attemptTotal.Add(1)
 	start := time.Now()
