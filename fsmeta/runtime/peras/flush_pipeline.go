@@ -135,10 +135,7 @@ func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run fu
 	if len(jobs) == 0 {
 		return nil
 	}
-	workers := p.runtime.installN
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
+	workers := min(p.runtime.installN, len(jobs))
 	if workers <= 0 {
 		workers = 1
 	}

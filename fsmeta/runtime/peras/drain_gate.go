@@ -38,7 +38,6 @@ func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityR
 		}
 	} else {
 		for _, scope := range drainScopes {
-			scope := scope
 			part, err := c.freezeFlushBatchesLocked(&scope, true, 0)
 			if err != nil {
 				c.commitMu.Unlock()

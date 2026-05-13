@@ -402,10 +402,7 @@ func (s PerasSegment) ScanView(start []byte, limit uint32) []SegmentKV {
 	if i >= len(s.entries) {
 		return nil
 	}
-	end := i + int(limit)
-	if end > len(s.entries) {
-		end = len(s.entries)
-	}
+	end := min(i+int(limit), len(s.entries))
 	return s.entries[i:end]
 }
 

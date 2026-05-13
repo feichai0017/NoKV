@@ -230,10 +230,6 @@ func perasSegmentObjectBucket(segment fsperas.PerasSegment, objectKey []byte) (p
 	return route, err
 }
 
-func buildMutationMVCCReplayEntries(mutation fsperas.ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
-	return appendMutationMVCCReplayEntries(nil, mutation, version)
-}
-
 func appendMutationMVCCReplayEntries(entries []*entrykv.Entry, mutation fsperas.ReplayMutation, version uint64) ([]*entrykv.Entry, error) {
 	if len(mutation.Key) == 0 {
 		return nil, fsperas.ErrInvalidPerasSegment

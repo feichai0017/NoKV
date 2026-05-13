@@ -108,7 +108,7 @@ func TestReplicatedStoreApplyPerasAuthorityExpandsSameHolderGrant(t *testing.T) 
 	store := stores[leaderID]
 
 	first := testPerasAcquireCommand("holder-a", 1)
-	state, grant, err := store.ApplyPerasAuthority(context.Background(), first)
+	_, grant, err := store.ApplyPerasAuthority(context.Background(), first)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), grant.EpochID)
 

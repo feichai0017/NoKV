@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"maps"
 	"sort"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -335,9 +336,7 @@ func (e *Executor) batchGetMergedValues(ctx context.Context, keys [][]byte, vers
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range base {
-		values[key] = value
-	}
+	maps.Copy(values, base)
 	return values, nil
 }
 

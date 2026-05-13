@@ -2,10 +2,10 @@ package observer
 
 import (
 	"github.com/feichai0017/NoKV/engine/kv"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 // EventsFromCommand inspects one applied raft command (entry + paired
@@ -162,27 +162,9 @@ func cloneMutationKeys(mutations []*kvrpcpb.Mutation) [][]byte {
 }
 
 func perasSegmentKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {
-	if req == nil {
-		return nil
+	keys := rsperas.WatchKeys(req)
+	for idx := range keys {
+		keys[idx] = kv.SafeCopy(nil, keys[idx])
 	}
-	var root [32]byte
-	if len(req.GetSegmentRoot()) != len(root) {
-		return nil
-	}
-	copy(root[:], req.GetSegmentRoot())
-	var digest [32]byte
-	if len(req.GetSegmentPayloadDigest()) != len(digest) {
-		return nil
-	}
-	copy(digest[:], req.GetSegmentPayloadDigest())
-	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
-	if err != nil {
-		return nil
-	}
-	dentries := segment.Dentries
-	out := make([][]byte, 0, len(dentries))
-	for _, entry := range dentries {
-		out = append(out, kv.SafeCopy(nil, entry.Key))
-	}
-	return out
+	return keys
 }

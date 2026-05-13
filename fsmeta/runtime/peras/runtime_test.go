@@ -990,7 +990,7 @@ func TestRuntimeDrainAuthorityUsesMaterializeBudget(t *testing.T) {
 	defer committer.Close()
 
 	ctx := context.Background()
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		seq := uint64(i + 1)
 		require.NoError(t, commitRuntimePeras(ctx, committer, seq, appendUvarintKey("dentry/", seq), appendUvarintKey("inode/", seq)))
 	}
@@ -1308,12 +1308,12 @@ func BenchmarkRuntimeScanPerasOverlay(b *testing.B) {
 	committer := &Runtime{
 		read: newReadState(),
 	}
-	for i := 0; i < 100_000; i++ {
-		key := []byte(fmt.Sprintf("dentry/%08d", i))
+	for i := range 100_000 {
+		key := fmt.Appendf(nil, "dentry/%08d", i)
 		require.NoError(b, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(key, []byte("sealed"))))
 	}
-	for i := 0; i < 1024; i++ {
-		key := []byte(fmt.Sprintf("dentry/%08d", i*16))
+	for i := range 1024 {
+		key := fmt.Appendf(nil, "dentry/%08d", i*16)
 		require.NoError(b, committer.read.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.MaterializeDelta(compile.SemanticDelta{
 			Eligibility: compile.EligibilityVisibleCommit,
 			Authority: compile.AuthorityScope{

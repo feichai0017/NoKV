@@ -303,7 +303,7 @@ func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 	tb.Helper()
 	mount := fsmeta.MountIdentity{MountID: "workspace", MountKeyID: 42}
 	ops := make([]ReplayOperation, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name := fmt.Sprintf("checkpoint-%06d", i)
 		delta, err := compile.Create(fsmeta.CreateRequest{
 			Mount:  mount.MountID,

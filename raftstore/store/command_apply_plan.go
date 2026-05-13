@@ -4,11 +4,11 @@ import (
 	"fmt"
 
 	xxhash "github.com/cespare/xxhash/v2"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 type commandApplyPlan struct {
@@ -195,32 +195,12 @@ func appendCommandApplyVersionedWrite(dst []commandApplyDependency, class comman
 }
 
 func appendCommandApplyPerasInstallSegment(dst []commandApplyDependency, req *kvrpcpb.PerasInstallSegmentRequest) ([]commandApplyDependency, bool) {
-	if req == nil || len(req.GetSegmentRoot()) != 32 || len(req.GetSegmentPayloadDigest()) != 32 {
-		return nil, false
-	}
-	var root [32]byte
-	copy(root[:], req.GetSegmentRoot())
-	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, root[:], 0, commandApplyDependencyWrite)
-	if !req.GetMaterializeMvcc() {
-		keys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, req.GetRoutingKey())
-		if err != nil {
-			return nil, false
-		}
-		for _, key := range keys {
-			dst = appendCommandApplyUserWrite(dst, key)
-		}
-		return dst, true
-	}
-	if len(req.GetSegmentPayload()) == 0 {
-		return nil, false
-	}
-	var digest [32]byte
-	copy(digest[:], req.GetSegmentPayloadDigest())
-	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	info, err := rsperas.InspectInstallRequest(req)
 	if err != nil {
 		return nil, false
 	}
-	keys, err := fsperas.PerasSegmentInstallKeys(segment, req.GetRoutingKey(), true)
+	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, info.Root[:], 0, commandApplyDependencyWrite)
+	keys, err := rsperas.InstallKeys(req)
 	if err != nil {
 		return nil, false
 	}

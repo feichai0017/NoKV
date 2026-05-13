@@ -8,10 +8,12 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	myraft "github.com/feichai0017/NoKV/raft"
+	"github.com/feichai0017/NoKV/raftstore/command"
+	"github.com/feichai0017/NoKV/raftstore/peer"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/txn/percolator"
@@ -24,13 +26,13 @@ const defaultLatchSlots = 512
 type ApplyOption func(*applyConfig)
 
 type applyConfig struct {
-	perasAuthorityTable *runtimeperas.ActiveAuthorities
+	perasAuthorityFence rsperas.AuthorityFence
 	now                 func() time.Time
 }
 
-func WithPerasAuthorityFence(authorityTable *runtimeperas.ActiveAuthorities) ApplyOption {
+func WithPerasAuthorityFence(authorityFence rsperas.AuthorityFence) ApplyOption {
 	return func(cfg *applyConfig) {
-		cfg.perasAuthorityTable = authorityTable
+		cfg.perasAuthorityFence = authorityFence
 	}
 }
 
@@ -365,141 +367,6 @@ func applyMVCCMaintenance(db txnstore.Store, req *kvrpcpb.MVCCMaintenanceRequest
 	return &kvrpcpb.MVCCMaintenanceResponse{AppliedEntries: uint64(len(entries))}, nil
 }
 
-func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
-	root, digest, keyErr := decodePerasInstallSegmentIdentity(req)
-	if keyErr != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
-	}
-	if !req.GetMaterializeMvcc() && len(req.GetSegmentPayload()) == 0 {
-		return applyPerasInstallSegmentIndexRoute(db, req, root, digest)
-	}
-	segment, keyErr := decodePerasInstallSegmentPayload(req, root, digest)
-	if keyErr != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}, nil
-	}
-	materialize := req.GetMaterializeMvcc()
-	if !materialize {
-		if ok, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, req.GetRoutingKey()); err != nil {
-			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
-		} else if ok {
-			stats := segment.Stats()
-			return &kvrpcpb.PerasInstallSegmentResponse{
-				SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-				OperationCount: stats.OperationCount,
-				EntryCount:     stats.EntryCount,
-				AppliedEntries: 1,
-			}, nil
-		}
-	}
-	var entries []*kv.Entry
-	var err error
-	if materialize {
-		entries, err = buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest)
-	} else {
-		entries, err = buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment, req.GetInstallVersion(), req.GetSegmentPayload(), digest, req.GetRoutingKey())
-	}
-	if err != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
-	}
-	defer releaseEntries(entries)
-	if len(entries) > 0 {
-		if err := db.ApplyInternalEntries(entries); err != nil {
-			return nil, err
-		}
-	}
-	stats := segment.Stats()
-	return &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-		OperationCount: stats.OperationCount,
-		EntryCount:     stats.EntryCount,
-		AppliedEntries: uint64(len(entries)),
-	}, nil
-}
-
-func applyPerasInstallSegmentIndexRoute(db txnstore.Store, req *kvrpcpb.PerasInstallSegmentRequest, root, digest [32]byte) (*kvrpcpb.PerasInstallSegmentResponse, error) {
-	if req.GetSegmentEpochId() == 0 || req.GetSegmentOperationCount() == 0 || req.GetSegmentEntryCount() == 0 || req.GetSegmentPayloadSize() == 0 || len(req.GetCanonicalObjectKey()) == 0 {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("missing segment catalog index metadata")}, nil
-	}
-	if bytes.Equal(req.GetRoutingKey(), req.GetCanonicalObjectKey()) {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("canonical segment route requires payload")}, nil
-	}
-	if ok, err := LoadPerasSegmentCatalogIndexInstall(db, root, req.GetRoutingKey(), req.GetCanonicalObjectKey()); err != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
-	} else if ok {
-		return &kvrpcpb.PerasInstallSegmentResponse{
-			SegmentRoot:    append([]byte(nil), root[:]...),
-			OperationCount: req.GetSegmentOperationCount(),
-			EntryCount:     req.GetSegmentEntryCount(),
-			AppliedEntries: 1,
-		}, nil
-	}
-	entries, err := buildMVCCSegmentCatalogIndexInstallEntries(
-		root,
-		digest,
-		req.GetSegmentEpochId(),
-		req.GetInstallVersion(),
-		req.GetSegmentPayloadSize(),
-		req.GetRoutingKey(),
-		req.GetCanonicalObjectKey(),
-	)
-	if err != nil {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
-	}
-	defer releaseEntries(entries)
-	if err := db.ApplyInternalEntries(entries); err != nil {
-		return nil, err
-	}
-	return &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), root[:]...),
-		OperationCount: req.GetSegmentOperationCount(),
-		EntryCount:     req.GetSegmentEntryCount(),
-		AppliedEntries: uint64(len(entries)),
-	}, nil
-}
-
-func decodePerasInstallSegmentIdentity(req *kvrpcpb.PerasInstallSegmentRequest) ([32]byte, [32]byte, *kvrpcpb.KeyError) {
-	if req == nil {
-		return [32]byte{}, [32]byte{}, perasInstallAbort("missing request")
-	}
-	if len(req.GetRoutingKey()) == 0 || req.GetInstallVersion() == 0 {
-		return [32]byte{}, [32]byte{}, perasInstallAbort("missing routing key or install version")
-	}
-	var root [32]byte
-	if len(req.GetSegmentRoot()) != len(root) {
-		return [32]byte{}, [32]byte{}, perasInstallAbort("invalid segment root")
-	}
-	copy(root[:], req.GetSegmentRoot())
-	var digest [32]byte
-	if len(req.GetSegmentPayloadDigest()) != len(digest) {
-		return [32]byte{}, [32]byte{}, perasInstallAbort("invalid segment payload digest")
-	}
-	copy(digest[:], req.GetSegmentPayloadDigest())
-	return root, digest, nil
-}
-
-func decodePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) (fsperas.PerasSegment, [32]byte, *kvrpcpb.KeyError) {
-	root, digest, keyErr := decodePerasInstallSegmentIdentity(req)
-	if keyErr != nil {
-		return fsperas.PerasSegment{}, [32]byte{}, keyErr
-	}
-	segment, keyErr := decodePerasInstallSegmentPayload(req, root, digest)
-	if keyErr != nil {
-		return fsperas.PerasSegment{}, [32]byte{}, keyErr
-	}
-	return segment, digest, nil
-}
-
-func decodePerasInstallSegmentPayload(req *kvrpcpb.PerasInstallSegmentRequest, root, digest [32]byte) (fsperas.PerasSegment, *kvrpcpb.KeyError) {
-	if len(req.GetSegmentPayload()) == 0 {
-		return fsperas.PerasSegment{}, perasInstallAbort("missing segment payload")
-	}
-	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
-	if err != nil {
-		return fsperas.PerasSegment{}, perasInstallAbort(err.Error())
-	}
-	return segment, nil
-}
-
 func buildMVCCMaintenanceEntries(req *kvrpcpb.MVCCMaintenanceRequest) ([]*kv.Entry, *kvrpcpb.KeyError) {
 	if req == nil || len(req.GetTombstones()) == 0 {
 		return nil, nil
@@ -551,10 +418,6 @@ func maintenanceAbort(msg string) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Abort: msg}
 }
 
-func perasInstallAbort(msg string) *kvrpcpb.KeyError {
-	return &kvrpcpb.KeyError{Abort: msg}
-}
-
 // NewApplier wraps Apply into a reusable function suitable for store command
 // execution wiring.
 func NewApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOption) func(*raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
@@ -581,200 +444,28 @@ func NewBatchApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOpt
 	}
 }
 
-func applyBatchWithFence(
-	db txnstore.Store,
-	latches *latch.Manager,
-	cfg applyConfig,
-	reqs []*raftcmdpb.RaftCmdRequest,
-) ([]*raftcmdpb.RaftCmdResponse, error) {
-	if len(reqs) == 0 {
-		return nil, nil
-	}
-	if cfg.perasAuthorityTable == nil {
-		return ApplyBatch(db, latches, reqs)
-	}
-	resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
-	for i := 0; i < len(reqs); {
-		if resp, fenced := rejectPerasFencedRequest(cfg, reqs[i]); fenced {
-			resps[i] = resp
-			i++
-			continue
-		}
-		end := i + 1
-		for end < len(reqs) {
-			if _, fenced := rejectPerasFencedRequest(cfg, reqs[end]); fenced {
-				break
-			}
-			end++
-		}
-		run, err := ApplyBatch(db, latches, reqs[i:end])
-		if err != nil {
-			return nil, err
-		}
-		copy(resps[i:end], run)
-		i = end
-	}
-	return resps, nil
-}
-
-func rejectPerasFencedRequest(cfg applyConfig, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, bool) {
-	if cfg.perasAuthorityTable == nil || req == nil {
-		return nil, false
-	}
-	var keyErr *kvrpcpb.KeyError
-	for _, r := range req.GetRequests() {
-		if err := perasFenceErrorForCommand(cfg, r); err != nil {
-			keyErr = err
-			break
-		}
-	}
-	if keyErr == nil {
-		return nil, false
-	}
-	resp := &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}
-	for _, r := range req.GetRequests() {
-		resp.Responses = append(resp.Responses, perasFenceResponseForCommand(r, keyErr))
-	}
-	return resp, true
-}
-
-func perasFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.KeyError {
-	if r == nil {
-		return nil
-	}
-	check := func(key []byte) *kvrpcpb.KeyError {
-		return perasFenceErrorForKey(cfg, key)
-	}
-	switch r.GetCmdType() {
-	case raftcmdpb.CmdType_CMD_GET,
-		raftcmdpb.CmdType_CMD_SCAN,
-		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		return nil
-	case raftcmdpb.CmdType_CMD_PREWRITE:
-		req := r.GetPrewrite()
-		if req == nil {
-			return nil
-		}
-		if err := check(req.GetPrimaryLock()); err != nil {
-			return err
-		}
-		for _, mutation := range req.GetMutations() {
-			if mutation == nil {
+// NewEntryApplier returns an ApplyFunc that decodes raft log entries and
+// applies them to the provided DB using the MVCC helpers.
+func NewEntryApplier(db txnstore.Store) peer.ApplyFunc {
+	latches := latch.NewManager(defaultLatchSlots)
+	return func(entries []myraft.Entry) error {
+		for _, entry := range entries {
+			if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
 				continue
 			}
-			if err := check(mutation.GetKey()); err != nil {
+			req, ok, err := command.Decode(entry.Data)
+			if err != nil {
 				return err
 			}
-		}
-	case raftcmdpb.CmdType_CMD_COMMIT:
-		return firstPerasFenceError(cfg, r.GetCommit().GetKeys())
-	case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
-		return firstPerasFenceError(cfg, r.GetBatchRollback().GetKeys())
-	case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
-		return firstPerasFenceError(cfg, r.GetResolveLock().GetKeys())
-	case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
-		return check(r.GetCheckTxnStatus().GetPrimaryKey())
-	case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
-		return check(r.GetTxnHeartBeat().GetPrimaryKey())
-	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
-		req := r.GetTryAtomicMutate()
-		if req == nil {
-			return nil
-		}
-		for _, predicate := range req.GetPredicates() {
-			if predicate == nil {
+			if ok {
+				if _, err := Apply(db, latches, req); err != nil {
+					return err
+				}
 				continue
 			}
-			if err := check(predicate.GetKey()); err != nil {
-				return err
-			}
+			return fmt.Errorf("raftstore/kv: unsupported unframed raft payload")
 		}
-		for _, mutation := range req.GetMutations() {
-			if mutation == nil {
-				continue
-			}
-			if err := check(mutation.GetKey()); err != nil {
-				return err
-			}
-		}
-	case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
-		req := r.GetMvccMaintenance()
-		if req == nil {
-			return nil
-		}
-		for _, tombstone := range req.GetTombstones() {
-			if tombstone == nil {
-				continue
-			}
-			if err := check(tombstone.GetKey()); err != nil {
-				return err
-			}
-		}
-	default:
 		return nil
-	}
-	return nil
-}
-
-func firstPerasFenceError(cfg applyConfig, keys [][]byte) *kvrpcpb.KeyError {
-	for _, key := range keys {
-		if err := perasFenceErrorForKey(cfg, key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func perasFenceErrorForKey(cfg applyConfig, key []byte) *kvrpcpb.KeyError {
-	if len(key) == 0 || cfg.perasAuthorityTable == nil {
-		return nil
-	}
-	now := time.Now
-	if cfg.now != nil {
-		now = cfg.now
-	}
-	grant, ok, err := cfg.perasAuthorityTable.FencesKey(key, now())
-	if err != nil {
-		return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + err.Error()}
-	}
-	if !ok {
-		return nil
-	}
-	if grant.GrantID == "" {
-		return &kvrpcpb.KeyError{Retryable: "peras authority fence"}
-	}
-	return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + grant.GrantID}
-}
-
-func perasFenceResponseForCommand(r *raftcmdpb.Request, keyErr *kvrpcpb.KeyError) *raftcmdpb.Response {
-	if r == nil {
-		return &raftcmdpb.Response{}
-	}
-	switch r.GetCmdType() {
-	case raftcmdpb.CmdType_CMD_GET:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Get{Get: &kvrpcpb.GetResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_PREWRITE:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Prewrite{Prewrite: &kvrpcpb.PrewriteResponse{Errors: []*kvrpcpb.KeyError{keyErr}}}}
-	case raftcmdpb.CmdType_CMD_COMMIT:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Commit{Commit: &kvrpcpb.CommitResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_BatchRollback{BatchRollback: &kvrpcpb.BatchRollbackResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_CheckTxnStatus{CheckTxnStatus: &kvrpcpb.CheckTxnStatusResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TxnHeartBeat{TxnHeartBeat: &kvrpcpb.TxnHeartBeatResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_SCAN:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_Scan{Scan: &kvrpcpb.ScanResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceResponse{Error: keyErr}}}
-	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}}}
-	default:
-		return &raftcmdpb.Response{}
 	}
 }
 

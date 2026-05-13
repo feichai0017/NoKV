@@ -32,9 +32,11 @@ func TestWitnessNodeAppendSegmentAndProbe(t *testing.T) {
 }
 
 func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
-	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	require.NoError(t, authorities.Replace(nil))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
-	require.NoError(t, node.authorityTable.Replace(nil))
 
 	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
@@ -50,9 +52,9 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 	authorities := runtimeperas.NewActiveAuthorities()
 	refreshed := false
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            log,
-		AuthorityTable: authorities,
+		NodeID:        "store-1",
+		Log:           log,
+		AuthorityView: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			refreshed = true
 			return authorities.Replace([]runtimeperas.AuthorityGrant{testAuthorityGrant()})
@@ -75,9 +77,9 @@ func TestWitnessNodeRefreshFailureIsFatal(t *testing.T) {
 	authorities := runtimeperas.NewActiveAuthorities()
 	refreshErr := errors.New("refresh failed")
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            log,
-		AuthorityTable: authorities,
+		NodeID:        "store-1",
+		Log:           log,
+		AuthorityView: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			return refreshErr
 		},
@@ -105,11 +107,12 @@ func TestWitnessNodeRejectsWrongHolderAndEpoch(t *testing.T) {
 
 func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	now := time.Unix(100, 0)
-	node, cleanup := openTestWitnessNodeWithNow(t, wal.DurabilityFsync, func() time.Time { return now })
-	defer cleanup()
+	authorities := runtimeperas.NewActiveAuthorities()
 	expired := testAuthorityGrant()
 	expired.ExpiresUnixNano = now.Add(-time.Nanosecond).UnixNano()
-	require.NoError(t, node.authorityTable.Replace([]runtimeperas.AuthorityGrant{expired}))
+	require.NoError(t, authorities.Replace([]runtimeperas.AuthorityGrant{expired}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
 
 	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
@@ -138,10 +141,10 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	require.NoError(t, err)
 	authorities := testActiveAuthorities(t, now)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            log,
-		AuthorityTable: authorities,
-		Now:            func() time.Time { return now },
+		NodeID:        "store-1",
+		Log:           log,
+		AuthorityView: authorities,
+		Now:           func() time.Time { return now },
 	})
 	require.NoError(t, err)
 	record := testSegmentRecord()
@@ -154,10 +157,10 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	reopenedLog, err := NewWALWitnessLog(reopened, wal.DurabilityFsync)
 	require.NoError(t, err)
 	reopenedNode, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            reopenedLog,
-		AuthorityTable: authorities,
-		Now:            func() time.Time { return now },
+		NodeID:        "store-1",
+		Log:           reopenedLog,
+		AuthorityView: authorities,
+		Now:           func() time.Time { return now },
 	})
 	require.NoError(t, err)
 
@@ -200,15 +203,20 @@ func openTestWitnessNode(t *testing.T, durability wal.DurabilityPolicy) (*Witnes
 
 func openTestWitnessNodeWithNow(t *testing.T, durability wal.DurabilityPolicy, now func() time.Time) (*WitnessNode, func()) {
 	t.Helper()
+	return openTestWitnessNodeWithAuthorityView(t, durability, testActiveAuthorities(t, now()), now)
+}
+
+func openTestWitnessNodeWithAuthorityView(t *testing.T, durability wal.DurabilityPolicy, authorities AuthorityView, now func() time.Time) (*WitnessNode, func()) {
+	t.Helper()
 	manager, err := wal.Open(wal.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	log, err := NewWALWitnessLog(manager, durability)
 	require.NoError(t, err)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            log,
-		AuthorityTable: testActiveAuthorities(t, now()),
-		Now:            now,
+		NodeID:        "store-1",
+		Log:           log,
+		AuthorityView: authorities,
+		Now:           now,
 	})
 	require.NoError(t, err)
 	return node, func() { require.NoError(t, manager.Close()) }
@@ -222,10 +230,10 @@ func openBenchWitnessNode(b *testing.B) (*WitnessNode, func()) {
 	log, err := NewWALWitnessLog(manager, wal.DurabilityBuffered)
 	require.NoError(b, err)
 	node, err := NewWitnessNode(WitnessNodeConfig{
-		NodeID:         "store-1",
-		Log:            log,
-		AuthorityTable: testActiveAuthorities(b, now),
-		Now:            func() time.Time { return now },
+		NodeID:        "store-1",
+		Log:           log,
+		AuthorityView: testActiveAuthorities(b, now),
+		Now:           func() time.Time { return now },
 	})
 	require.NoError(b, err)
 	return node, func() { require.NoError(b, manager.Close()) }

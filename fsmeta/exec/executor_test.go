@@ -957,7 +957,7 @@ func benchmarkExecutorCheckpointStorm(b *testing.B, executor *Executor, flusher 
 		if err != nil {
 			b.Fatal(err)
 		}
-		for i := 0; i < files; i++ {
+		for i := range files {
 			if _, err := executor.Create(ctx, fsmeta.CreateRequest{
 				Mount:  "vol",
 				Parent: dir.Inode.Inode,

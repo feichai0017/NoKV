@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -229,12 +230,7 @@ func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.O
 }
 
 func perasDeltaAllowsAbsentObservedValue(delta compile.SemanticDelta) bool {
-	for _, guard := range delta.RuntimeGuards {
-		if guard == compile.GuardExpiredSessionOwner {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(delta.RuntimeGuards, compile.GuardExpiredSessionOwner)
 }
 
 func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compile.Predicate, index fsperas.PredicateIndex) bool {

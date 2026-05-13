@@ -330,7 +330,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		},
 		TransportAddr:       *listenAddr,
 		PerasWitness:        perasWitness,
-		PerasAuthorityTable: perasAuthorityTable,
+		PerasAuthorityFence: perasAuthorityTable,
 	})
 	if err != nil {
 		return err

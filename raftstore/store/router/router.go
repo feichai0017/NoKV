@@ -189,15 +189,13 @@ func (r *Router) BroadcastTick() error {
 	var once sync.Once
 	var firstErr error
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for p := range work {
 				if err := p.Tick(); err != nil {
 					once.Do(func() { firstErr = err })
 				}
 			}
-		}()
+		})
 	}
 	for _, p := range peers {
 		work <- p

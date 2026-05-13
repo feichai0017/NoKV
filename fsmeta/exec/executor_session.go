@@ -6,6 +6,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"slices"
 	"sort"
 	"time"
 )
@@ -228,8 +229,8 @@ func sessionDrainScopeForInodes(mount fsmeta.MountIdentity, inodes map[fsmeta.In
 			out.Buckets = append(out.Buckets, bucket)
 		}
 	}
-	sort.Slice(out.Inodes, func(i, j int) bool { return out.Inodes[i] < out.Inodes[j] })
-	sort.Slice(out.Buckets, func(i, j int) bool { return out.Buckets[i] < out.Buckets[j] })
+	slices.Sort(out.Inodes)
+	slices.Sort(out.Buckets)
 	return out
 }
 

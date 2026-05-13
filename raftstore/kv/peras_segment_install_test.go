@@ -435,7 +435,7 @@ func workspaceInstallReplayPlan(tb testing.TB, count int) fsperas.ReplayPlan {
 	tb.Helper()
 	mount := fsmeta.MountIdentity{MountID: "workspace", MountKeyID: 42}
 	ops := make([]fsperas.ReplayOperation, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name := fmt.Sprintf("checkpoint-%06d", i)
 		dentry, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, name)
 		require.NoError(tb, err)

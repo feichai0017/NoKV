@@ -257,9 +257,7 @@ func (r *fakeWitnessReplica) snapshot() WitnessSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	segments := make([]SegmentWitnessRecord, 0, len(r.segments))
-	for _, segment := range r.segments {
-		segments = append(segments, segment)
-	}
+	segments = append(segments, r.segments...)
 	return WitnessSnapshot{Segments: segments}
 }
 

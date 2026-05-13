@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"time"
 
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
+	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -519,77 +519,51 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if req == nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	key := req.GetRoutingKey()
-	if len(key) == 0 || !keyInRange(meta, key) {
-		return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+	routingKey := req.GetRoutingKey()
+	if len(routingKey) == 0 || !keyInRange(meta, routingKey) {
+		return keyNotInRegionError(meta, routingKey), AdmissionReasonKeyNotInRegion
 	}
-	root, ok := bytes32(req.GetSegmentRoot())
-	if !ok {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	digest, ok := bytes32(req.GetSegmentPayloadDigest())
-	if !ok {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	if !req.GetMaterializeMvcc() && len(req.GetSegmentPayload()) == 0 {
-		return validatePerasCatalogIndexRoute(meta, root, req)
-	}
-	segment, err := fsperas.VerifyPerasSegmentPayload(req.GetSegmentPayload(), root, digest)
+	info, err := rsperas.InspectInstallRequest(req)
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	if !req.GetMaterializeMvcc() {
-		objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	if info.MaterializeMVCC && info.HasPayload {
+		segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
 		if err != nil {
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
-		for _, objectKey := range objectKeys {
-			if bytes.Equal(objectKey, key) {
-				return nil, AdmissionReasonUnknown
+		for _, entry := range segment.EntriesView() {
+			if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
+				return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
 			}
 		}
-		return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 	}
-	entries := segment.EntriesView()
-	if len(entries) == 0 {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	for _, entry := range entries {
-		if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
-			return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
-		}
-	}
-	return nil, AdmissionReasonUnknown
-}
-
-func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, root [32]byte, req *kvrpcpb.PerasInstallSegmentRequest) (*errorpb.RegionError, AdmissionReason) {
-	key := req.GetRoutingKey()
-	if req.GetSegmentEpochId() == 0 || req.GetSegmentOperationCount() == 0 || req.GetSegmentEntryCount() == 0 ||
-		req.GetSegmentPayloadSize() == 0 || len(req.GetCanonicalObjectKey()) == 0 || bytes.Equal(key, req.GetCanonicalObjectKey()) {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	keys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, key)
+	keys, err := rsperas.InstallKeys(req)
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	if _, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, req.GetCanonicalObjectKey()); err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	if !info.MaterializeMVCC && !info.HasPayload {
+		if err, reason := validatePerasCatalogIndexRoute(meta, info); err != nil {
+			return err, reason
+		}
 	}
-	for _, routeKey := range keys {
-		if len(routeKey) == 0 || !keyInRange(meta, routeKey) {
-			return keyNotInRegionError(meta, routeKey), AdmissionReasonKeyNotInRegion
+	for _, key := range keys {
+		if len(key) == 0 || !keyInRange(meta, key) {
+			return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 		}
 	}
 	return nil, AdmissionReasonUnknown
 }
 
-func bytes32(in []byte) ([32]byte, bool) {
-	var out [32]byte
-	if len(in) != len(out) {
-		return out, false
+func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, info rsperas.InstallRequestInfo) (*errorpb.RegionError, AdmissionReason) {
+	if info.SegmentEpochID == 0 || info.SegmentOperationCount == 0 || info.SegmentEntryCount == 0 ||
+		info.SegmentPayloadSize == 0 || len(info.CanonicalObjectKey) == 0 || bytes.Equal(info.RoutingKey, info.CanonicalObjectKey) {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	copy(out[:], in)
-	return out, true
+	if _, err := rsperas.CatalogRouteInstallKeys(info.Root, info.CanonicalObjectKey); err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	return nil, AdmissionReasonUnknown
 }
 
 func keyInRange(meta localmeta.RegionMeta, key []byte) bool {

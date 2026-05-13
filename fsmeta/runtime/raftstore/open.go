@@ -265,35 +265,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	var witnessConns *witnessConnections
 	var perasRuntime *runtimeperas.Runtime
 	if opts.PerasVisibleCommit {
-		witnessConns, err = buildWitnessConnections(ctx, coord, dialOpts, opts.PerasWitnessStoreIDs)
+		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
 		if err != nil {
 			_ = kv.Close()
 			_ = coord.Close()
-			return nil, fmt.Errorf("init peras witnesses: %w", err)
-		}
-		perasRuntime, err = runtimeperas.NewRuntime(runtimeperas.Config{
-			Authority:                  perasAuthorityManager,
-			Witnesses:                  witnessConns.witnesses,
-			Installer:                  newRaftstoreSegmentInstaller(runner, router),
-			CatalogScanner:             raftstoreSegmentCatalogScanner{runner: runner},
-			WatchPublisher:             router,
-			Quorum:                     opts.PerasWitnessQuorum,
-			SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
-			SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
-			SegmentBatchSize:           opts.PerasSegmentBatchSize,
-			SegmentMaxReplayOperations: opts.PerasSegmentMaxReplayOperations,
-			SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
-			SegmentMaxPayloadBytes:     opts.PerasSegmentMaxPayloadBytes,
-			SegmentInstallParallelism:  opts.PerasSegmentInstallParallelism,
-			SegmentFlushEvery:          opts.PerasSegmentFlushEvery,
-			BackgroundFlushTimeout:     opts.PerasBackgroundFlushTimeout,
-			BackgroundErrorBackoff:     opts.PerasBackgroundErrorBackoff,
-		})
-		if err != nil {
-			_ = witnessConns.Close()
-			_ = kv.Close()
-			_ = coord.Close()
-			return nil, fmt.Errorf("init peras committer: %w", err)
+			return nil, err
 		}
 		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasRuntime))
 	}

@@ -174,10 +174,7 @@ func perasSegmentInstallRetryDelay(err error, attempt int) time.Duration {
 		base = defaultPerasSegmentInstallStaleBackoff
 		maxDelay = defaultPerasSegmentInstallStaleMaxBackoff
 	}
-	delay := base << attempt
-	if delay > maxDelay {
-		delay = maxDelay
-	}
+	delay := min(base<<attempt, maxDelay)
 	return delay
 }
 

@@ -933,13 +933,13 @@ func writeDigestString(h interface{ Write([]byte) (int, error) }, value string) 
 
 func writeDigestBytes(h interface{ Write([]byte) (int, error) }, value []byte) {
 	writeDigestUint64(h, uint64(len(value)))
-	h.Write(value)
+	_, _ = h.Write(value)
 }
 
 func writeDigestUint64(h interface{ Write([]byte) (int, error) }, value uint64) {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], value)
-	h.Write(buf[:])
+	_, _ = h.Write(buf[:])
 }
 
 func cloneDelta(delta SemanticDelta) SemanticDelta {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -666,13 +667,7 @@ func mergePerasAuthorityScopes(left, right rootproto.PerasAuthorityScope) rootpr
 
 func appendMissingUint16(out []uint16, values []uint16) []uint16 {
 	for _, value := range values {
-		seen := false
-		for _, current := range out {
-			if current == value {
-				seen = true
-				break
-			}
-		}
+		seen := slices.Contains(out, value)
 		if !seen {
 			out = append(out, value)
 		}
@@ -682,13 +677,7 @@ func appendMissingUint16(out []uint16, values []uint16) []uint16 {
 
 func appendMissingUint64(out []uint64, values []uint64) []uint64 {
 	for _, value := range values {
-		seen := false
-		for _, current := range out {
-			if current == value {
-				seen = true
-				break
-			}
-		}
+		seen := slices.Contains(out, value)
 		if !seen {
 			out = append(out, value)
 		}

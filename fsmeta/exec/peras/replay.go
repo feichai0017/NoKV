@@ -33,17 +33,6 @@ func ReplayPlanOperationCount(plan ReplayPlan) uint64 {
 	return uint64(len(plan.Operations))
 }
 
-func cloneReplayOperations(ops []ReplayOperation) []ReplayOperation {
-	if len(ops) == 0 {
-		return nil
-	}
-	out := make([]ReplayOperation, 0, len(ops))
-	for _, op := range ops {
-		out = append(out, cloneReplayOperation(op))
-	}
-	return out
-}
-
 func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 	mutations := make([]ReplayMutation, 0, len(op.Mutations))
 	for _, mutation := range op.Mutations {

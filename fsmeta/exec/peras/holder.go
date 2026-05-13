@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -294,10 +295,8 @@ func bucketsOverlap(left, right []fsmeta.AffinityBucket) bool {
 		return true
 	}
 	for _, l := range left {
-		for _, r := range right {
-			if l == r {
-				return true
-			}
+		if slices.Contains(right, l) {
+			return true
 		}
 	}
 	return false
@@ -308,10 +307,8 @@ func inodesOverlap(left, right []fsmeta.InodeID) bool {
 		return true
 	}
 	for _, l := range left {
-		for _, r := range right {
-			if l == r {
-				return true
-			}
+		if slices.Contains(right, l) {
+			return true
 		}
 	}
 	return false
@@ -320,13 +317,7 @@ func inodesOverlap(left, right []fsmeta.InodeID) bool {
 func unionBuckets(left, right []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
 	out := append([]fsmeta.AffinityBucket(nil), left...)
 	for _, candidate := range right {
-		seen := false
-		for _, current := range out {
-			if current == candidate {
-				seen = true
-				break
-			}
-		}
+		seen := slices.Contains(out, candidate)
 		if !seen {
 			out = append(out, candidate)
 		}
@@ -337,13 +328,7 @@ func unionBuckets(left, right []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
 func unionInodes(left, right []fsmeta.InodeID) []fsmeta.InodeID {
 	out := append([]fsmeta.InodeID(nil), left...)
 	for _, candidate := range right {
-		seen := false
-		for _, current := range out {
-			if current == candidate {
-				seen = true
-				break
-			}
-		}
+		seen := slices.Contains(out, candidate)
 		if !seen {
 			out = append(out, candidate)
 		}

@@ -313,43 +313,38 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	}
 	grant, owned, err := c.authority.Acquire(ctx, delta.Authority)
 	if err != nil {
-		c.recordError(err)
-		return fsperas.VisibleAck{}, err
+		return fsperas.VisibleAck{}, c.recordError(err)
 	}
 	if !owned {
-		c.recordError(ErrNotHeld)
-		return fsperas.VisibleAck{}, ErrNotHeld
+		return fsperas.VisibleAck{}, c.recordError(ErrNotHeld)
 	}
 	holder, err := c.holderForGrant(ctx, grant, delta.Authority)
 	if err != nil {
-		c.recordError(err)
-		return fsperas.VisibleAck{}, err
+		return fsperas.VisibleAck{}, c.recordError(err)
 	}
 	if ack, ok, err := holder.PendingAck(id, op); ok || err != nil {
 		if err != nil {
-			c.recordError(err)
+			return ack, c.recordError(err)
 		}
-		return ack, err
+		return ack, nil
 	}
 	unlockAdmission := c.latches.Lock(op)
 	defer unlockAdmission()
 	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
 	if err != nil {
 		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isAdmissionTerminalError(err) {
-			c.recordError(err)
+			return fsperas.VisibleAck{}, c.recordError(err)
 		}
 		return fsperas.VisibleAck{}, err
 	}
 	op = admitted
 	ack, err := holder.Submit(ctx, id, op)
 	if err != nil {
-		c.recordError(err)
-		return fsperas.VisibleAck{}, err
+		return fsperas.VisibleAck{}, c.recordError(err)
 	}
 	if err := c.addOverlay(id, op); err != nil {
 		holder.MarkAppliedIDs(id)
-		c.recordError(err)
-		return fsperas.VisibleAck{}, err
+		return fsperas.VisibleAck{}, c.recordError(err)
 	}
 	c.publishVisibleWatch(op, ack)
 	c.metrics.commitTotal.Add(1)
@@ -520,9 +515,10 @@ func (c *Runtime) Close() {
 		c.sealQ.close()
 	}
 	c.bgLaunchMu.Lock()
+	closer := c.closer
 	c.bgLaunchMu.Unlock()
-	if c.closer != nil {
-		c.closer.Close()
+	if closer != nil {
+		closer.Close()
 	}
 }
 

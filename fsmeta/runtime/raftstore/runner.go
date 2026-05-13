@@ -149,7 +149,7 @@ func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations [
 	return commitVersion, nil
 }
 
-// Stats returns runtime-adapter counters. Nested KV stats come from the real
+// Stats returns runtime counters. Nested KV stats come from the real
 // raftstore client when available, keeping fsmeta expvar useful without making
 // optional observability part of KVClient.
 func (r *Runner) Stats() map[string]any {

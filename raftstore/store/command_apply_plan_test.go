@@ -338,7 +338,7 @@ func benchmarkCommandApplyPerasSegment(b *testing.B, n int) (fsperas.PerasSegmen
 	b.Helper()
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
 	mutations := make([]fsperas.ReplayMutation, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key, err := fsmeta.EncodeInodeKey(mount, fsmeta.InodeID(i+2))
 		require.NoError(b, err)
 		mutations = append(mutations, fsperas.ReplayMutation{Key: key, Value: []byte("inode")})

@@ -35,7 +35,7 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord runtimepe
 	witness, err := rsperas.NewWitnessNode(rsperas.WitnessNodeConfig{
 		NodeID:           fmt.Sprintf("store-%d", storeID),
 		Log:              log,
-		AuthorityTable:   authorities,
+		AuthorityView:    authorities,
 		AuthorityRefresh: feed.Refresh,
 	})
 	if err != nil {
