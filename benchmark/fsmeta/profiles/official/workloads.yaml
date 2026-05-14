@@ -1,0 +1,162 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# This file records normalized fsmeta projections of public benchmark workload
+# definitions. It does not vendor third-party benchmark source files; it records
+# source URLs, the official shape, and the NoKV metadata-service projection used
+# to make each run reproducible.
+
+profiles:
+  mdtest-easy:
+    source: IO500 mdtest-easy
+    source_url: https://io500.org/about
+    shape: one private directory per process; zero-byte files; create/stat/delete phases
+    projection: fsmeta Create directory/file, Lookup stat, ReadDirPlus namespace scan, Unlink
+    official:
+      source_detail: IO500 MDEasy metadata/small-object workload.
+      directory_model: private_per_process
+      file_size_bytes: "0"
+      phases: create, stat, delete
+      stonewall_seconds: "300"
+      reference_command: mdtest -n 1000000 -u -L -F -N 1 -C -W 1
+    scale:
+      median:
+        clients: 12
+        directories: 16
+        files_per_directory: 256
+        page_limit: 256
+      long:
+        clients: 16
+        directories: 32
+        files_per_directory: 512
+        page_limit: 512
+      official:
+        clients: 16
+        directories: 16
+        files_per_directory: 1000000
+        page_limit: 1024
+
+  mdtest-hard:
+    source: IO500 mdtest-hard
+    source_url: https://io500.org/about
+    shape: single shared directory; 3901-byte files; create/stat/read/delete phases
+    projection: fsmeta shared-directory Create, Lookup stat, ReadDirPlus metadata read, Unlink; file-body read is outside fsmeta
+    official:
+      source_detail: IO500 MDHard small-file workload.
+      directory_model: shared_directory
+      file_size_bytes: "3901"
+      phases: create, stat, read, delete
+      stonewall_seconds: "300"
+      reference_command: mdtest -n 1000000 -t -w 3901 -e 3901 -N 1 -F -C -W 1
+    scale:
+      median:
+        clients: 12
+        directories: 1
+        files_per_directory: 256
+        page_limit: 256
+      long:
+        clients: 16
+        directories: 1
+        files_per_directory: 512
+        page_limit: 512
+      official:
+        clients: 16
+        directories: 1
+        files_per_directory: 1000000
+        page_limit: 1024
+
+  filebench-varmail:
+    source: Filebench varmail.f
+    source_url: https://github.com/filebench/filebench/blob/master/workloads/varmail.f
+    shape: mail-spool personality with create, append, fsync, close, open/read, append/fsync, close
+    projection: fsmeta Create, UpdateInode, writer session open/heartbeat/close, ReadDirPlus, Unlink
+    official:
+      source_detail: Filebench upstream workloads/varmail.f.
+      nfiles: "1000"
+      nthreads: "16"
+      mean_file_size_bytes: "16384"
+      mean_append_size_bytes: "16384"
+      mean_dir_width: "1000000"
+      prealloc_percent: "80"
+      run_seconds: "60"
+    scale:
+      median:
+        clients: 12
+        users: 16
+        messages_per_user: 128
+        page_limit: 128
+        session_ttl: 5m
+      long:
+        clients: 16
+        users: 32
+        messages_per_user: 512
+        page_limit: 512
+        session_ttl: 5m
+      official:
+        clients: 16
+        users: 16
+        messages_per_user: 63
+        page_limit: 128
+        session_ttl: 5m
+
+  mimesis-namespace:
+    source: MimesisBench namespace model
+    source_url: https://www.usenix.org/conference/icac14/technical-sessions/presentation/abad
+    shape: model-based namespace metadata benchmark for HDFS and big-data storage systems
+    projection: fsmeta Create, Rename, UpdateInode, Lookup, ReadDirPlus, Unlink namespace churn
+    official:
+      source_detail: MimesisBench models namespace metadata behavior from large Yahoo Big Data clusters.
+      operations: create, delete, rename, open/stat-like metadata accesses
+      model: type-aware synthetic namespace metadata generator
+    scale:
+      median:
+        clients: 12
+        directories: 16
+        files_per_directory: 256
+        page_limit: 256
+      long:
+        clients: 16
+        directories: 32
+        files_per_directory: 512
+        page_limit: 512
+      official:
+        clients: 16
+        directories: 32
+        files_per_directory: 1000000
+        page_limit: 1024
+
+  ai-checkpoint-agent:
+    source: MLPerf Storage checkpointing
+    source_url: https://mlcommons.org/2025/08/storage-2-checkpointing/
+    shape: LLM checkpoint save/load workload with 8B, 70B, 405B, and 1T model scales
+    projection: metadata-only checkpoint publish; artifact fan-out, manifest update/rename, watch, snapshot read, snapshot retire
+    official:
+      source_detail: MLPerf Storage v2.0 checkpointing workload.
+      save_operations: "10"
+      load_operations: "10"
+      model_scales: 8B, 70B, 405B, 1T
+      process_counts: 8, 64, 512, 1024
+      checkpoint_sizes: 105GB, 912GB, 5.29TB, 15TB
+      subset_processes: "8"
+    scale:
+      median:
+        clients: 12
+        workspaces: 4
+        checkpoints_per_workspace: 64
+        files_per_checkpoint: 8
+        page_limit: 9
+        session_ttl: 5m
+      long:
+        clients: 16
+        workspaces: 8
+        checkpoints_per_workspace: 128
+        files_per_checkpoint: 10
+        page_limit: 11
+        session_ttl: 5m
+      official:
+        clients: 16
+        workspaces: 8
+        checkpoints_per_workspace: 10
+        files_per_checkpoint: 8
+        page_limit: 9
+        session_ttl: 5m

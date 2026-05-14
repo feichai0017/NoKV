@@ -239,18 +239,26 @@ Nightly policy:
    `make test-history-smoke` and `make test-model-smoke`.
 2. PR benchmark CI also runs the median `make fsmeta-bench` profile as an
    isolated Docker Compose matrix across all fsmeta workloads. Each workload gets
-   its own CSV, and the script also emits a combined `_isolated.csv` summary so
-   durable-barrier workloads do not absorb earlier visible-commit backlog. CSVs
+   a fresh Compose data volume, its own CSV, and the script also emits a
+   combined `_isolated.csv` summary so durable-barrier workloads do not absorb
+   earlier visible-commit backlog. CSVs
    report both wall-clock `throughput_ops_sec` and per-operation
-   `active_ops_per_sec` to keep mixed-workload waits from hiding the real active
-   operation cost.
+   `active_ops_per_sec` to keep watch and snapshot waits from hiding the real
+   active operation cost. The median, long, and official fsmeta scales are read
+   from `benchmark/fsmeta/profiles/official/workloads.yaml`, and each run emits
+   a manifest with the selected scale and official workload provenance. The
+   default CI idle check waits for install and seal queues, not Peras `pending`;
+   set `NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING=1` only for explicit durable-drain
+   experiments.
 3. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
    and steps, replays raftstore/fsmeta contract/history schedules with longer
    bounds, repeats crash-matrix boundaries, replays deterministic split-region
    fault simulation, and repeats failpoint-heavy coordinator/meta/raftstore suites.
 4. Scheduled fsmeta benchmark CI runs `NOKV_FSMETA_PROFILE=long make fsmeta-bench`
    with the same isolated matrix shape, larger data volumes, and longer timeout,
-   then uploads the same artifacts.
+   then uploads the same artifacts. Manual dispatch can select
+   `NOKV_FSMETA_PROFILE=official`, but use it only when the runner budget can
+   absorb the official-size profile.
 5. A nightly-only failure should still be triaged as a correctness issue unless
    the failure is clearly in the test harness.
 

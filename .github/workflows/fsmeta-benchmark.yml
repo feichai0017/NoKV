@@ -41,6 +41,7 @@ on:
         options:
           - median
           - long
+          - official
   schedule:
     - cron: "19 17 * * 0"
 
@@ -65,6 +66,8 @@ jobs:
         env:
           NOKV_FSMETA_PROFILE: median
           NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+          NOKV_FSMETA_RESET_BETWEEN_WORKLOADS: "1"
+          NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING: "0"
         run: make fsmeta-bench
 
       - name: Collect Docker diagnostics
@@ -83,6 +86,7 @@ jobs:
           name: fsmeta-median-${{ github.run_id }}
           path: |
             benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/results/*.manifest.txt
             benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log
@@ -95,7 +99,7 @@ jobs:
 
   fsmeta-long:
     name: Benchmark / fsmeta long
-    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'long')
+    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.profile == 'long' || github.event.inputs.profile == 'official'))
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -108,10 +112,12 @@ jobs:
 
       - name: Run long fsmeta workload matrix
         env:
-          NOKV_FSMETA_PROFILE: long
+          NOKV_FSMETA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.profile || 'long' }}
           NOKV_FSMETA_CAPTURE_PROFILES: "1"
           NOKV_FSMETA_PROFILE_SECONDS: "60"
           NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+          NOKV_FSMETA_RESET_BETWEEN_WORKLOADS: "1"
+          NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING: "0"
           NOKV_FSMETA_PERAS_IDLE_TIMEOUT_SECONDS: "600"
         run: make fsmeta-bench
 
@@ -131,6 +137,7 @@ jobs:
           name: fsmeta-long-${{ github.run_id }}
           path: |
             benchmark/data/fsmeta/results/*.csv
+            benchmark/data/fsmeta/results/*.manifest.txt
             benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log

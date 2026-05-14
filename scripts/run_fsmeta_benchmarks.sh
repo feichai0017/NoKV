@@ -30,59 +30,43 @@ cache_tmp_dir=""
 plain_pid=""
 cached_pid=""
 profile_pids=()
+profile_root_dir=""
+compose_built=0
 
 case "$profile" in
 	median)
-		default_clients=12
-		default_dirs=16
-		default_files_per_dir=256
-		default_files=4096
-		default_reads=512
-		default_groups=8
-		default_entries_per_group=64
-		default_artifacts_per_entry=8
-		default_workspaces=4
-		default_session_ttl=5m
-		default_stale_session_ttl=20ms
 		default_timeout=25m
 		default_stabilize_seconds=20
 		;;
 	long)
-		default_clients=16
-		default_dirs=32
-		default_files_per_dir=512
-		default_files=16384
-		default_reads=1024
-		default_groups=16
-		default_entries_per_group=128
-		default_artifacts_per_entry=10
-		default_workspaces=8
-		default_session_ttl=5m
-		default_stale_session_ttl=100ms
+		default_timeout=120m
+		default_stabilize_seconds=45
+		;;
+	official)
 		default_timeout=120m
 		default_stabilize_seconds=45
 		;;
 	*)
-		echo "unknown NOKV_FSMETA_PROFILE=$profile; use median or long" >&2
+		echo "unknown NOKV_FSMETA_PROFILE=$profile; use median, long, or official" >&2
 		exit 2
 		;;
 esac
 
-clients="${NOKV_FSMETA_CLIENTS:-$default_clients}"
-dirs="${NOKV_FSMETA_DIRS:-$default_dirs}"
-files_per_dir="${NOKV_FSMETA_FILES_PER_DIR:-$default_files_per_dir}"
-files="${NOKV_FSMETA_FILES:-$default_files}"
-reads="${NOKV_FSMETA_READS_PER_CLIENT:-$default_reads}"
-groups="${NOKV_FSMETA_GROUPS:-$default_groups}"
-entries_per_group="${NOKV_FSMETA_ENTRIES_PER_GROUP:-$default_entries_per_group}"
-artifacts_per_entry="${NOKV_FSMETA_ARTIFACTS_PER_ENTRY:-$default_artifacts_per_entry}"
-workspaces="${NOKV_FSMETA_WORKSPACES:-$default_workspaces}"
-session_ttl="${NOKV_FSMETA_SESSION_TTL:-$default_session_ttl}"
-stale_session_ttl="${NOKV_FSMETA_STALE_SESSION_TTL:-$default_stale_session_ttl}"
+clients="${NOKV_FSMETA_CLIENTS:-0}"
+dirs="${NOKV_FSMETA_DIRS:-0}"
+files_per_dir="${NOKV_FSMETA_FILES_PER_DIR:-0}"
+users="${NOKV_FSMETA_USERS:-0}"
+messages_per_user="${NOKV_FSMETA_MESSAGES_PER_USER:-0}"
+workspaces="${NOKV_FSMETA_WORKSPACES:-0}"
+checkpoints_per_workspace="${NOKV_FSMETA_CHECKPOINTS_PER_WORKSPACE:-0}"
+files_per_checkpoint="${NOKV_FSMETA_FILES_PER_CHECKPOINT:-0}"
+session_ttl="${NOKV_FSMETA_SESSION_TTL:-0}"
 lookup_cache_entries="${NOKV_FSMETA_LOOKUP_CACHE_ENTRIES:-4096}"
 lookup_cache_ttl="${NOKV_FSMETA_LOOKUP_CACHE_TTL:-1s}"
 timeout="${NOKV_FSMETA_TIMEOUT:-$default_timeout}"
 stabilize_seconds="${NOKV_FSMETA_STABILIZE_SECONDS:-$default_stabilize_seconds}"
+reset_between_workloads="${NOKV_FSMETA_RESET_BETWEEN_WORKLOADS:-1}"
+idle_require_pending="${NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING:-0}"
 
 case "$output_dir" in
 	/*) ;;
@@ -94,6 +78,14 @@ case "$profile_dir" in
 	/*) ;;
 	*) profile_dir="$ROOT/$profile_dir" ;;
 esac
+profile_root_dir="$profile_dir"
+
+enabled() {
+	case "$1" in
+		1|true|TRUE|yes|YES) return 0 ;;
+		*) return 1 ;;
+	esac
+}
 
 wait_port() {
 	local addr="$1"
@@ -111,7 +103,8 @@ wait_port() {
 
 peras_idle_snapshot() {
 	local metrics_url="http://${fsmeta_metrics_addr%%,*}/debug/vars"
-	python3 - "$metrics_url" <<'PY'
+	local require_pending="${1:-0}"
+	python3 - "$metrics_url" "$require_pending" <<'PY'
 import json
 import sys
 import urllib.request
@@ -142,7 +135,11 @@ state = {
 	"seal_total": number("seal_total"),
 }
 print(json.dumps(state, sort_keys=True, separators=(",", ":")))
-if state["pending"] == 0 and state["install_queue_depth"] == 0 and state["seal_queue_depth"] == 0:
+require_pending = sys.argv[2] in ("1", "true", "TRUE", "yes", "YES")
+idle = state["install_queue_depth"] == 0 and state["seal_queue_depth"] == 0
+if require_pending:
+	idle = idle and state["pending"] == 0
+if idle:
 	sys.exit(0)
 sys.exit(1)
 PY
@@ -159,7 +156,7 @@ wait_fsmeta_peras_idle() {
 	local status=0
 
 	while (( SECONDS < deadline )); do
-		if snapshot="$(peras_idle_snapshot 2>/dev/null)"; then
+		if snapshot="$(peras_idle_snapshot "$idle_require_pending" 2>/dev/null)"; then
 			status=0
 		else
 			status=$?
@@ -198,17 +195,16 @@ run_bench() {
 			-fsmeta_coordinator_addr "$coord_addr" \
 			-fsmeta_mount "$mount" \
 			-fsmeta_workloads "$workloads" \
+			-fsmeta_scale_profile "$profile" \
 			-fsmeta_clients "$clients" \
 			-fsmeta_dirs "$dirs" \
 			-fsmeta_files_per_dir "$files_per_dir" \
-			-fsmeta_files "$files" \
-			-fsmeta_reads_per_client "$reads" \
-			-fsmeta_groups "$groups" \
-			-fsmeta_entries_per_group "$entries_per_group" \
-			-fsmeta_artifacts_per_entry "$artifacts_per_entry" \
+			-fsmeta_users "$users" \
+			-fsmeta_messages_per_user "$messages_per_user" \
 			-fsmeta_workspaces "$workspaces" \
+			-fsmeta_checkpoints_per_workspace "$checkpoints_per_workspace" \
+			-fsmeta_files_per_checkpoint "$files_per_checkpoint" \
 			-fsmeta_session_ttl "$session_ttl" \
-			-fsmeta_stale_session_ttl "$stale_session_ttl" \
 			-fsmeta_lookup_cache_entries "$lookup_cache_entries" \
 			-fsmeta_lookup_cache_ttl "$lookup_cache_ttl" \
 			-fsmeta_timeout "$timeout" \
@@ -217,10 +213,7 @@ run_bench() {
 }
 
 profiles_enabled() {
-	case "$capture_profiles" in
-		1|true|TRUE|yes|YES) return 0 ;;
-		*) return 1 ;;
-	esac
+	enabled "$capture_profiles"
 }
 
 write_profile_manifest() {
@@ -228,22 +221,49 @@ write_profile_manifest() {
 	cat >"$profile_dir/manifest.txt" <<EOF
 run_id=$run_id
 benchmark_profile=$profile
+profile_file=benchmark/fsmeta/profiles/official/workloads.yaml
 workloads=$workloads
-clients=$clients
-dirs=$dirs
-files_per_dir=$files_per_dir
-files=$files
-reads_per_client=$reads
-groups=$groups
-entries_per_group=$entries_per_group
-artifacts_per_entry=$artifacts_per_entry
-workspaces=$workspaces
-session_ttl=$session_ttl
-stale_session_ttl=$stale_session_ttl
+clients_override=$clients
+dirs_override=$dirs
+files_per_dir_override=$files_per_dir
+users_override=$users
+messages_per_user_override=$messages_per_user
+workspaces_override=$workspaces
+checkpoints_per_workspace_override=$checkpoints_per_workspace
+files_per_checkpoint_override=$files_per_checkpoint
+session_ttl_override=$session_ttl
+reset_between_workloads=$reset_between_workloads
+peras_idle_require_pending=$idle_require_pending
 lookup_cache_entries=$lookup_cache_entries
 lookup_cache_ttl=$lookup_cache_ttl
 profile_seconds=$profile_seconds
 targets=$profile_targets
+EOF
+}
+
+write_benchmark_manifest() {
+	local output="$1"
+	local workloads="$2"
+	cat >"${output}.manifest.txt" <<EOF
+run_id=$run_id
+scale_profile=$profile
+profile_file=benchmark/fsmeta/profiles/official/workloads.yaml
+workloads=$workloads
+clients_override=$clients
+dirs_override=$dirs
+files_per_dir_override=$files_per_dir
+users_override=$users
+messages_per_user_override=$messages_per_user
+workspaces_override=$workspaces
+checkpoints_per_workspace_override=$checkpoints_per_workspace
+files_per_checkpoint_override=$files_per_checkpoint
+session_ttl_override=$session_ttl
+reset_between_workloads=$reset_between_workloads
+peras_idle_require_pending=$idle_require_pending
+lookup_cache_entries=$lookup_cache_entries
+lookup_cache_ttl=$lookup_cache_ttl
+timeout=$timeout
+note=exact resolved per-workload scales are emitted by the Go benchmark manifests next to each workload CSV
 EOF
 }
 
@@ -320,37 +340,54 @@ print_bench_summary() {
 	sed -n '1,120p' "$output"
 }
 
+start_compose_cluster() {
+	if [[ "${NOKV_FSMETA_COMPOSE:-1}" != "1" ]]; then
+		return
+	fi
+	# The benchmark mount must exist before the fsmeta gateway starts.
+	# Otherwise the run depends on asynchronous root watch catch-up during
+	# the benchmark bootstrap window, which makes long/profiled CI runs flaky.
+	export NOKV_MOUNT_IDS="${NOKV_MOUNT_IDS:-default,$mount}"
+	if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" && "$compose_built" == "0" ]]; then
+		echo "starting Docker Compose NoKV cluster with local build"
+		docker compose up -d --build
+		compose_built=1
+	else
+		echo "starting Docker Compose NoKV cluster"
+		docker compose up -d
+	fi
+	wait_port "${fsmeta_addr%%,*}"
+	wait_port "${coord_addr%%,*}"
+	if [[ "$stabilize_seconds" != "0" ]]; then
+		# A listening gRPC port is not enough for a fair storage benchmark:
+		# freshly started Compose clusters can still be electing Raft leaders
+		# and publishing coordinator duty grants.
+		echo "waiting ${stabilize_seconds}s for raft leaders and coordinator grants to settle"
+		sleep "$stabilize_seconds"
+	fi
+}
+
+reset_compose_cluster() {
+	if [[ "${NOKV_FSMETA_COMPOSE:-1}" != "1" ]]; then
+		return
+	fi
+	docker compose down -v
+}
+
 run_compose_benchmarks() {
-	local workloads="${NOKV_FSMETA_WORKLOADS:-multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
+	local workloads="${NOKV_FSMETA_WORKLOADS:-mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}_isolated.csv}"
 	case "$output" in
 		/*) ;;
 		*) output="$ROOT/$output" ;;
 	esac
-	if [[ "${NOKV_FSMETA_COMPOSE:-1}" == "1" ]]; then
-		# The benchmark mount must exist before the fsmeta gateway starts.
-		# Otherwise the run depends on asynchronous root watch catch-up during
-		# the benchmark bootstrap window, which makes long/profiled CI runs flaky.
-		export NOKV_MOUNT_IDS="${NOKV_MOUNT_IDS:-default,$mount}"
-		if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" ]]; then
-			echo "starting Docker Compose NoKV cluster with local build"
-			docker compose up -d --build
-		else
-			echo "starting Docker Compose NoKV cluster"
-			docker compose up -d
-		fi
-		wait_port "${fsmeta_addr%%,*}"
-		wait_port "${coord_addr%%,*}"
-		if [[ "$stabilize_seconds" != "0" ]]; then
-			# A listening gRPC port is not enough for a fair storage benchmark:
-			# freshly started Compose clusters can still be electing Raft leaders
-			# and publishing coordinator duty grants.
-			echo "waiting ${stabilize_seconds}s for raft leaders and coordinator grants to settle"
-			sleep "$stabilize_seconds"
-		fi
+	if ! enabled "$reset_between_workloads"; then
+		start_compose_cluster
+		wait_fsmeta_peras_idle
+		profile_dir="$profile_root_dir"
+		profile_pids=()
+		start_profile_capture "$workloads"
 	fi
-	wait_fsmeta_peras_idle
-	start_profile_capture "$workloads"
 	local combined_tmp="$output.tmp"
 	local wrote_header=0
 	local bench_status=0
@@ -364,10 +401,21 @@ run_compose_benchmarks() {
 		local safe_workload="${workload//[^A-Za-z0-9_-]/_}"
 		local workload_output="$output_dir/fsmeta_compose_${profile}_${run_id}_${safe_workload}.csv"
 		echo "running isolated fsmeta workload: $workload"
+		if enabled "$reset_between_workloads"; then
+			reset_compose_cluster
+			start_compose_cluster
+			wait_fsmeta_peras_idle
+			profile_dir="$profile_root_dir/$safe_workload"
+			profile_pids=()
+			start_profile_capture "$workload"
+		fi
 		set +e
 		run_bench "$fsmeta_addr" "$workload" "$workload_output"
 		bench_status=$?
 		set -e
+		if enabled "$reset_between_workloads"; then
+			finish_profile_capture
+		fi
 		if [[ "$bench_status" -ne 0 ]]; then
 			break
 		fi
@@ -378,9 +426,13 @@ run_compose_benchmarks() {
 			tail -n +2 "$workload_output" >>"$combined_tmp"
 		fi
 		print_bench_summary "$workload_output"
-		wait_fsmeta_peras_idle
+		if ! enabled "$reset_between_workloads"; then
+			wait_fsmeta_peras_idle
+		fi
 	done
-	finish_profile_capture
+	if ! enabled "$reset_between_workloads"; then
+		finish_profile_capture
+	fi
 	if [[ "$bench_status" -ne 0 ]]; then
 		rm -f "$combined_tmp"
 		exit "$bench_status"
@@ -391,6 +443,7 @@ run_compose_benchmarks() {
 		exit 2
 	fi
 	mv "$combined_tmp" "$output"
+	write_benchmark_manifest "$output" "$workloads"
 	print_bench_summary "$output"
 	echo "wrote isolated fsmeta benchmark summary: $output"
 	if [[ "${NOKV_FSMETA_COMPOSE_DOWN:-0}" == "1" ]]; then
@@ -441,10 +494,12 @@ run_derived_cache_benchmarks() {
 
 	local plain_output="$output_dir/fsmeta_derived_cache_${profile}_off_${run_id}.csv"
 	local cached_output="$output_dir/fsmeta_derived_cache_${profile}_on_${run_id}.csv"
-	run_bench "$plain_addr" "hotspot-fanin,negative-lookup" "$plain_output"
+	run_bench "$plain_addr" "mdtest-hard,mimesis-namespace" "$plain_output"
 	print_bench_summary "$plain_output"
-	run_bench "$cached_addr" "hotspot-fanin,negative-lookup" "$cached_output"
+	run_bench "$cached_addr" "mdtest-hard,mimesis-namespace" "$cached_output"
 	print_bench_summary "$cached_output"
+	write_benchmark_manifest "$plain_output" "mdtest-hard,mimesis-namespace"
+	write_benchmark_manifest "$cached_output" "mdtest-hard,mimesis-namespace"
 	echo "done"
 }
 

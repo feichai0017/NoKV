@@ -83,14 +83,22 @@ Key components:
 The fsmeta benchmark drives the native `nokv-fsmeta` gateway against a running
 NoKV cluster. It is a service benchmark for fsmeta's server-side API surface:
 
-- `mixed`: combined fsmeta API workload, including staged publication,
-  artifact creation, checkpoint publish, writer sessions, snapshots, watch
-  delivery, quota reads, links, unlinks, and directory reads.
-- `checkpoint-storm`: dense checkpoint or artifact creation.
-- `hotspot-fanin`: many files under one directory plus repeated `ReadDir` /
-  `ReadDirPlus`.
-- `watch-subtree`: notification latency after namespace mutations.
-- `negative-lookup`: repeated missing dentry probes.
+- `mdtest-easy`: IO500/mdtest easy metadata projection. Each client owns a
+  private directory, creates zero-byte files, stats them, scans with
+  `ReadDirPlus`, and unlinks them.
+- `mdtest-hard`: IO500/mdtest hard metadata projection. All clients contend on
+  one shared directory and create 3901-byte metadata records before stat, scan,
+  and unlink.
+- `filebench-varmail`: Filebench `workloads/varmail.f` projection. The official
+  personality defaults to `nfiles=1000`, `nthreads=16`, mean file size 16 KiB,
+  and mean append size 16 KiB; the fsmeta projection maps file-body work to
+  inode-size updates and writer-session lifecycle operations.
+- `mimesis-namespace`: MimesisBench namespace-model projection. It exercises
+  create, rename, setattr, lookup, directory scan, and unlink churn.
+- `ai-checkpoint-agent`: MLPerf Storage checkpointing-inspired metadata
+  projection. MLPerf v2.0 defines Llama-style 8B/70B/405B/1T checkpoint scales;
+  this benchmark measures the metadata side of checkpoint publication: artifact
+  fan-out, manifest update/rename, watch, snapshot read, and snapshot retire.
 
 Prerequisites:
 
@@ -108,24 +116,44 @@ make fsmeta-bench
 The helper starts Docker Compose with a local image build, waits for fsmeta and
 coordinator ports, then writes a CSV under `benchmark/data/fsmeta/results/`.
 Compose enables both `--negative-cache-dir` and `--dirpage-cache-dir` on the
-fsmeta gateway. Default scale is the PR-oriented median service run: 12 clients,
-16 checkpoint directories x 256 files, 4096 hotspot/watch/negative keys, and a
-mixed workload with 8 groups x 64 entries x 8 artifacts. Override scale with environment
-variables such as `NOKV_FSMETA_CLIENTS`, `NOKV_FSMETA_GROUPS`,
-`NOKV_FSMETA_ENTRIES_PER_GROUP`, `NOKV_FSMETA_ARTIFACTS_PER_ENTRY`, and
-`NOKV_FSMETA_WORKLOADS`. The default writer-session TTL is 10 seconds so
-session cleanup measures stale lease behavior without racing ordinary
-open/heartbeat/close tails on shared CI runners. The script also waits 20
-seconds after ports open so a
+fsmeta gateway. The workload source of truth is
+`benchmark/fsmeta/profiles/official/workloads.yaml`: it records the public
+IO500/mdtest, Filebench varmail, MimesisBench, and MLPerf Storage
+checkpointing source links, the official shape, and NoKV's metadata-service
+projection. It does not vendor third-party benchmark code or claim a certified
+IO500/Filebench/MLPerf score.
+
+Default scale is the PR-oriented `median` service run from that profile: 12
+clients, 16 mdtest/mimesis directories x 256 files, 16 varmail users x 128
+messages, and 4 AI workspaces x 64 checkpoint publishes x 8 artifact files.
+Use `NOKV_FSMETA_PROFILE=long` for the scheduled larger profile or
+`NOKV_FSMETA_PROFILE=official` for the profile's official-size shape. Override
+scale with environment variables such as `NOKV_FSMETA_CLIENTS`,
+`NOKV_FSMETA_DIRS`, `NOKV_FSMETA_FILES_PER_DIR`, `NOKV_FSMETA_USERS`,
+`NOKV_FSMETA_MESSAGES_PER_USER`, `NOKV_FSMETA_WORKSPACES`,
+`NOKV_FSMETA_CHECKPOINTS_PER_WORKSPACE`, `NOKV_FSMETA_FILES_PER_CHECKPOINT`,
+and `NOKV_FSMETA_WORKLOADS`. The default writer-session TTL is 5 minutes so
+session leases do not dominate throughput measurements. The script also waits
+20 seconds after ports open so a
 fresh Compose cluster can finish Raft leader election and coordinator grant
 publication; set `NOKV_FSMETA_STABILIZE_SECONDS=0` for an already-warm cluster.
 The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
-`NOKV_FSMETA_PROFILE=long` for the scheduled large-data profile, or set
 `NOKV_FSMETA_BENCH_MODE=derived-cache` to run the cache on/off slice with two
 temporary fsmeta gateways.
-`NOKV_FSMETA_ARTIFACTS_PER_ENTRY` has an effective minimum of 4 because the
-mixed workload always creates `prompt.md`, `plan.json`, `state.bin`, and
-`checkpoint.tmp` to exercise update, writer-session, and unlink paths.
+
+By default the Compose matrix resets Docker volumes between workloads
+(`NOKV_FSMETA_RESET_BETWEEN_WORKLOADS=1`). This keeps each workload from
+measuring the previous workload's Peras overlay, recovery state, or background
+segment backlog. For same-cluster soak profiling, set it to `0`; in that mode
+the idle gate waits for install and seal queues to drain. Set
+`NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING=1` only when the run is explicitly
+measuring synchronous durable drain, because `pending` counts visible
+operations that may remain in the holder overlay.
+
+The Go benchmark writes both the CSV and a sibling `.manifest.txt` file. The CSV
+contains `source`, `source_url`, and `projection` columns; the manifest records
+the exact resolved scale parameters, the selected profile, and official
+workload provenance used for the run.
 
 For server-side profiling, set `NOKV_FSMETA_CAPTURE_PROFILES=1`. The helper
 captures concurrent CPU profiles from fsmeta, stores, coordinators, and
@@ -144,8 +172,8 @@ cd benchmark
 NOKV_FSMETA_BENCH=1 go test ./fsmeta -run TestBenchmarkFSMeta -count=1 -v -args \
   -fsmeta_addr 127.0.0.1:8090 \
   -fsmeta_coordinator_addr 127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392 \
-  -fsmeta_workloads mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup \
-  -fsmeta_readdirplus=true
+  -fsmeta_scale_profile median \
+  -fsmeta_workloads mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent
 ```
 
 Native fsmeta now assigns Create inode IDs inside the fsmeta service using the
@@ -159,10 +187,10 @@ nokv-fsmeta \
   --dirpage-cache-dir /tmp/nokv-fsmeta-dirpage
 ```
 
-Then compare:
+Then compare the read-heavy official-aligned slices:
 
-- `hotspot-fanin` with `-fsmeta_readdirplus=true` for the DirPage cache path.
-- `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
+- `mdtest-hard` for a shared-directory ReadDirPlus path after metadata writes.
+- `mimesis-namespace` for mixed rename/setattr/lookup/ReadDirPlus churn.
 
 For a fixed on/off comparison, run the helper from the repository root after
 the coordinator and stores are already up:
