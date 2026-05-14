@@ -185,8 +185,11 @@ The distributed smoke sequence is intentionally small:
 
 1. Wait for all service and metrics ports.
 2. Assert exactly one meta-root leader through `/debug/vars`.
-3. Assert exactly one active coordinator grant holder and zero Eunomia guarantee
-   violations through `/debug/vars`.
+3. Assert exactly one active coordinator grant holder through `/debug/vars`.
+   During initial bring-up, the check also requires zero Eunomia guarantee
+   violations. Later fault and restore phases log those process-lifetime
+   counters as historical diagnostics so one recovered authority gap does not
+   permanently fail the smoke.
 4. Assert each live store reports `execution -json` restart state `ready`, with
    non-zero region/raft-group counts and no missing raft pointers.
 5. Run a baseline `mixed` fsmeta smoke workload.

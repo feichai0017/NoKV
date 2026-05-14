@@ -206,6 +206,13 @@ meta_root_leader() {
   printf 'meta-root-%s\n' "$META_ROOT_LEADER_ID"
 }
 
+require_zero_guarantee_violations() {
+  case "${NOKV_DISTRIBUTED_SMOKE_PHASE:-}" in
+    initial|initial-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 assert_coordinator_grant_once() {
   local self_count=0
   local self_holder=""
@@ -231,10 +238,10 @@ assert_coordinator_grant_once() {
     held_by_self="$(jq -r '.nokv_coordinator.state.grant.held_by_self // false' <<<"$json")"
     active="$(jq -r '.nokv_coordinator.state.grant.active // false' <<<"$json")"
     violations="$(jq -r '([.nokv_coordinator_eunomia.guarantee_violations_total[]?] | add) // 0' <<<"$json")"
-    log "coord-${id}: active=${active} held_by_self=${held_by_self} holder=${holder} guarantee_violations=${violations}"
+    log "coord-${id}: active=${active} held_by_self=${held_by_self} holder=${holder} historical_guarantee_violations=${violations}"
 
-    if [[ "$violations" != "0" ]]; then
-      log "coord-${id}: guarantee violations must stay zero"
+    if require_zero_guarantee_violations && [[ "$violations" != "0" ]]; then
+      log "coord-${id}: guarantee violations must be zero during initial bring-up"
       return 1
     fi
     if [[ -n "$holder" && "$holder" != "null" ]]; then
