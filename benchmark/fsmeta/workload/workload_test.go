@@ -6,212 +6,179 @@ package workload
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"io"
-	"sync"
 	"testing"
+	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 )
 
-type fakeClient struct {
-	mu       sync.RWMutex
-	dentries map[string]fsmeta.DentryRecord
-	next     fsmeta.InodeID
-}
-
-func newFakeClient() *fakeClient {
-	return &fakeClient{dentries: make(map[string]fsmeta.DentryRecord), next: 100}
-}
-
-func (c *fakeClient) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	inode := req.Attrs.InodeRecord(c.next)
-	c.next++
-	dentry := fsmeta.DentryRecord{
-		Parent: req.Parent,
-		Name:   req.Name,
-		Inode:  inode.Inode,
-		Type:   inode.Type,
-	}
-	c.dentries[dentryID(req.Parent, req.Name)] = fsmeta.DentryRecord{
-		Parent: req.Parent,
-		Name:   req.Name,
-		Inode:  inode.Inode,
-		Type:   inode.Type,
-	}
-	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
-}
-
-func (c *fakeClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
-	if !ok {
-		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
-	}
-	return entry, nil
-}
-
-func (c *fakeClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
-	return c.readDir(req), nil
-}
-
-func (c *fakeClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
-	entries := c.readDir(req)
-	out := make([]fsmeta.DentryAttrPair, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, fsmeta.DentryAttrPair{
-			Dentry: entry,
-			Inode:  fsmeta.InodeRecord{Inode: entry.Inode, Type: entry.Type, LinkCount: 1},
-		})
-	}
-	return out, nil
-}
-
-func (c *fakeClient) readDir(req fsmeta.ReadDirRequest) []fsmeta.DentryRecord {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := make([]fsmeta.DentryRecord, 0)
-	for _, entry := range c.dentries {
-		if entry.Parent == req.Parent {
-			out = append(out, entry)
-		}
-	}
-	return out
-}
-
-func TestRunCheckpointStorm(t *testing.T) {
-	result, err := RunCheckpointStorm(context.Background(), newFakeClient(), CheckpointStormConfig{
+func TestRunMDTestEasy(t *testing.T) {
+	result, err := RunMDTestEasy(context.Background(), newFakeMetadataClient(), MDTestConfig{
 		Mount:             "vol",
-		RunID:             "test",
+		RunID:             "easy",
 		Clients:           2,
 		Directories:       2,
 		FilesPerDirectory: 3,
+		PageLimit:         8,
 	})
 	require.NoError(t, err)
-	require.Equal(t, CheckpointStorm, result.Name)
-	result.Driver = DriverNativeFSMetadata
-	require.Equal(t, 8, result.Ops)
+	require.Equal(t, MDTestEasy, result.Name)
 	require.Zero(t, result.Errors)
-	rows := SummaryRows(result)
-	require.NotEmpty(t, rows)
-	require.Equal(t, DriverNativeFSMetadata, rows[0].Driver)
+	requireOperations(t, result, "mdtest-easy_mkdir", "mdtest-easy_create", "mdtest-easy_stat", "mdtest-easy_readdirplus", "mdtest-easy_unlink")
 }
 
-func TestRunHotspotFanIn(t *testing.T) {
-	result, err := RunHotspotFanIn(context.Background(), newFakeClient(), HotspotFanInConfig{
-		Mount:          "vol",
-		RunID:          "test",
-		Clients:        2,
-		Files:          3,
-		ReadsPerClient: 4,
-		ReadDirPlus:    true,
+func TestRunMDTestHard(t *testing.T) {
+	result, err := RunMDTestHard(context.Background(), newFakeMetadataClient(), MDTestConfig{
+		Mount:             "vol",
+		RunID:             "hard",
+		Clients:           2,
+		Directories:       4,
+		FilesPerDirectory: 3,
+		PageLimit:         8,
 	})
 	require.NoError(t, err)
-	require.Equal(t, HotspotFanIn, result.Name)
-	require.Equal(t, 12, result.Ops)
+	require.Equal(t, MDTestHard, result.Name)
 	require.Zero(t, result.Errors)
+	requireOperations(t, result, "mdtest-hard_mkdir_shared", "mdtest-hard_create", "mdtest-hard_stat", "mdtest-hard_readdirplus", "mdtest-hard_unlink")
 }
 
-func TestRunWatchSubtree(t *testing.T) {
-	result, err := RunWatchSubtree(context.Background(), newFakeWatchClient(), WatchSubtreeConfig{
-		Mount:              "vol",
-		RunID:              "test",
-		Clients:            2,
-		Files:              3,
-		BackPressureWindow: 8,
+func TestRunFilebenchVarmail(t *testing.T) {
+	result, err := RunFilebenchVarmail(context.Background(), newFakeMetadataClient(), FilebenchVarmailConfig{
+		Mount:           "vol",
+		RunID:           "varmail",
+		Clients:         2,
+		Users:           2,
+		MessagesPerUser: 2,
+		PageLimit:       8,
+		SessionTTL:      time.Hour,
 	})
 	require.NoError(t, err)
-	require.Equal(t, WatchSubtree, result.Name)
-	require.Equal(t, 7, result.Ops)
+	require.Equal(t, FilebenchVarmail, result.Name)
 	require.Zero(t, result.Errors)
-	rows := SummaryRows(result)
-	var sawNotify bool
-	for _, row := range rows {
-		if row.Operation == "watch_notify" {
-			sawNotify = true
-			require.Equal(t, 3, row.Count)
-		}
-	}
-	require.True(t, sawNotify)
+	requireOperations(t, result,
+		"filebench_varmail_mkdir_root",
+		"filebench_varmail_mkdir_user",
+		"filebench_varmail_create",
+		"filebench_varmail_open_session",
+		"filebench_varmail_update",
+		"filebench_varmail_heartbeat",
+		"filebench_varmail_close_session",
+		"filebench_varmail_readdirplus",
+		"filebench_varmail_unlink",
+	)
 }
 
-func TestRunNegativeLookup(t *testing.T) {
-	result, err := RunNegativeLookup(context.Background(), newFakeClient(), NegativeLookupConfig{
-		Mount:          "vol",
-		RunID:          "test",
-		Clients:        2,
-		Keys:           3,
-		ReadsPerClient: 4,
-		Parent:         fsmeta.RootInode,
+func TestRunMimesisNamespace(t *testing.T) {
+	result, err := RunMimesisNamespace(context.Background(), newFakeMetadataClient(), MimesisNamespaceConfig{
+		Mount:             "vol",
+		RunID:             "mimesis",
+		Clients:           2,
+		Directories:       2,
+		FilesPerDirectory: 2,
+		PageLimit:         8,
 	})
 	require.NoError(t, err)
-	require.Equal(t, NegativeLookup, result.Name)
-	require.Equal(t, 8, result.Ops)
+	require.Equal(t, MimesisNamespace, result.Name)
 	require.Zero(t, result.Errors)
-	rows := SummaryRows(result)
-	require.Len(t, rows, 1)
-	require.Equal(t, "lookup_missing", rows[0].Operation)
+	requireOperations(t, result,
+		"mimesis_mkdir_root",
+		"mimesis_mkdir",
+		"mimesis_create",
+		"mimesis_rename",
+		"mimesis_lookup",
+		"mimesis_setattr",
+		"mimesis_readdirplus",
+		"mimesis_unlink",
+	)
 }
 
-func TestRunDurableSnapshot(t *testing.T) {
-	cli := newFakeSnapshotClient()
-	result, err := RunDurableSnapshot(context.Background(), cli, DurableSnapshotConfig{
-		Mount:     "vol",
-		RunID:     "test",
-		Files:     3,
-		Snapshots: 2,
-		PageLimit: 8,
+func TestRunAICheckpointAgent(t *testing.T) {
+	cli := newFakeMetadataClient()
+	result, err := RunAICheckpointAgent(context.Background(), cli, AICheckpointAgentConfig{
+		Mount:                   "vol",
+		RunID:                   "agent",
+		Clients:                 2,
+		Workspaces:              2,
+		CheckpointsPerWorkspace: 2,
+		FilesPerCheckpoint:      2,
+		PageLimit:               8,
+		WatchWindow:             16,
+		SessionTTL:              time.Hour,
 	})
 	require.NoError(t, err)
-	require.Equal(t, DurableSnapshot, result.Name)
+	require.Equal(t, AICheckpointAgent, result.Name)
 	require.Zero(t, result.Errors)
-	rows := SummaryRows(result)
-	ops := make(map[string]int, len(rows))
-	for _, row := range rows {
-		ops[row.Operation] = row.Count
-	}
-	require.Equal(t, 1, ops["mkdir"])
-	require.Equal(t, 3, ops["seed_create"])
-	require.Equal(t, 2, ops["snapshot_subtree"])
-	require.Equal(t, 2, ops["snapshot_readdirplus"])
-	require.Equal(t, 2, ops["retire_snapshot_subtree"])
-	cli.mu.RLock()
+	requireOperations(t, result,
+		"ai_checkpoint_mkdir_root",
+		"ai_checkpoint_mkdir_workspace",
+		"ai_checkpoint_mkdir_checkpoint",
+		"ai_checkpoint_create_artifact",
+		"ai_checkpoint_create_manifest",
+		"ai_checkpoint_open_session",
+		"ai_checkpoint_update_manifest",
+		"ai_checkpoint_heartbeat",
+		"ai_checkpoint_close_session",
+		"ai_checkpoint_publish_manifest",
+		"ai_checkpoint_watch_notify",
+		"ai_checkpoint_readdirplus",
+		"ai_checkpoint_snapshot",
+		"ai_checkpoint_snapshot_readdirplus",
+		"ai_checkpoint_retire_snapshot",
+	)
+	cli.mu.Lock()
 	snapshots := len(cli.snapshots)
-	retired := make(map[uint64]fsmeta.SnapshotSubtreeToken, len(cli.retired))
-	for version, token := range cli.retired {
-		retired[version] = token
-	}
-	readVersions := append([]uint64(nil), cli.readVersions...)
-	cli.mu.RUnlock()
+	cli.mu.Unlock()
 	require.Zero(t, snapshots)
-	require.Len(t, retired, 2)
-	require.Len(t, readVersions, 2)
-	for _, version := range readVersions {
-		require.NotZero(t, version)
-		require.Contains(t, retired, version)
-	}
 }
 
 func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteSummaryCSV(&buf, []SummaryRow{{
-		Workload:  CheckpointStorm,
-		Driver:    DriverNativeFSMetadata,
-		RunID:     "run-1",
-		Operation: "create_checkpoint",
-		Count:     1,
+		Workload:   MDTestEasy,
+		Driver:     DriverNativeFSMetadata,
+		RunID:      "run-1",
+		Source:     ProfileFor(MDTestEasy).Source,
+		SourceURL:  ProfileFor(MDTestEasy).SourceURL,
+		Projection: ProfileFor(MDTestEasy).Projection,
+		Operation:  "mdtest-easy_create",
+		Count:      1,
 	}})
 	require.NoError(t, err)
-	require.Contains(t, buf.String(), "workload,driver,run_id,operation")
+	require.Contains(t, buf.String(), "workload,driver,run_id,source,source_url,projection,operation")
 	require.Contains(t, buf.String(), "throughput_ops_sec,active_ops_per_sec,active_duration_sec")
-	require.Contains(t, buf.String(), "checkpoint-storm,native-fsmeta,run-1,create_checkpoint")
+	require.Contains(t, buf.String(), "mdtest-easy,native-fsmeta,run-1,IO500 mdtest-easy,https://io500.org/about")
+}
+
+func TestProfileForDocumentsOfficialSources(t *testing.T) {
+	for _, name := range []string{MDTestEasy, MDTestHard, FilebenchVarmail, MimesisNamespace, AICheckpointAgent} {
+		profile := ProfileFor(name)
+		require.Equal(t, name, profile.Workload)
+		require.NotEmpty(t, profile.Source)
+		require.NotEmpty(t, profile.SourceURL)
+		require.NotEmpty(t, profile.Shape)
+		require.NotEmpty(t, profile.Projection)
+	}
+}
+
+func TestScaleForLoadsOfficialProfileFile(t *testing.T) {
+	require.FileExists(t, OfficialProfilePath())
+	require.Equal(t, uint64(3901), mdtestFileSize(true))
+
+	hard := ProfileFor(MDTestHard)
+	require.Equal(t, "3901", hard.Official["file_size_bytes"])
+	require.Equal(t, 1000000, ScaleFor(MDTestHard, "official").FilesPerDirectory)
+
+	varmail := ProfileFor(FilebenchVarmail)
+	require.Equal(t, "1000", varmail.Official["nfiles"])
+	require.Equal(t, "16", varmail.Official["nthreads"])
+	require.Equal(t, 63, ScaleFor(FilebenchVarmail, "official").MessagesPerUser)
+
+	mlperf := ProfileFor(AICheckpointAgent)
+	require.Equal(t, "10", mlperf.Official["save_operations"])
+	require.Equal(t, 10, ScaleFor(AICheckpointAgent, "official").CheckpointsPerWorkspace)
 }
 
 func TestTimeCallRetriesStableRetryableOperationError(t *testing.T) {
@@ -248,136 +215,52 @@ func TestTimeCallDoesNotRetryPermanentOrCanceledError(t *testing.T) {
 	require.Equal(t, 1, attempts)
 }
 
-func dentryID(parent fsmeta.InodeID, name string) string {
-	return fmt.Sprintf("%d/%s", parent, name)
+func TestOpenSessionUsesFreshLeaseIDAcrossRetry(t *testing.T) {
+	base := newFakeMetadataClient()
+	created, err := base.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 1,
+		Name:   "state.bin",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	})
+	require.NoError(t, err)
+	cli := &retryOpenClient{fakeMetadataClient: base}
+	rec := newRecorder()
+
+	session, ok := openSession(context.Background(), cli, "vol", created.Inode.Inode, "retry-session", time.Second, "open_retry_session", rec)
+
+	require.True(t, ok)
+	require.NotEmpty(t, session)
+	require.Equal(t, 2, cli.attempts)
+	require.NotEqual(t, cli.firstSession, cli.secondSession)
+	require.False(t, hasRecordedErrors(rec.snapshot()))
 }
 
-type fakeWatchClient struct {
-	*fakeClient
-	stream *fakeWatchStream
+type retryOpenClient struct {
+	*fakeMetadataClient
+	attempts      int
+	firstSession  fsmeta.SessionID
+	secondSession fsmeta.SessionID
 }
 
-func newFakeWatchClient() *fakeWatchClient {
-	return &fakeWatchClient{
-		fakeClient: newFakeClient(),
-		stream:     newFakeWatchStream(16),
+func (c *retryOpenClient) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+	c.attempts++
+	if c.attempts == 1 {
+		c.firstSession = req.Session
+		return fsmeta.SessionRecord{}, nokverrors.RPCStatusError(nokverrors.KindLockConflict, codes.Aborted, "live lock", nil)
 	}
+	c.secondSession = req.Session
+	return c.fakeMetadataClient.OpenWriteSession(ctx, req)
 }
 
-func testMountIdentity(mount fsmeta.MountID) fsmeta.MountIdentity {
-	return fsmeta.MountIdentity{MountID: mount, MountKeyID: 1}
-}
-
-func (c *fakeWatchClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
-	result, err := c.fakeClient.Create(ctx, req)
-	if err != nil {
-		return fsmeta.CreateResult{}, err
+func requireOperations(t *testing.T, result Result, names ...string) {
+	t.Helper()
+	rows := SummaryRows(result)
+	ops := make(map[string]int, len(rows))
+	for _, row := range rows {
+		ops[row.Operation] = row.Count
 	}
-	if c.stream == nil {
-		return result, nil
+	for _, name := range names {
+		require.Positive(t, ops[name], "missing operation %s", name)
 	}
-	key, err := fsmeta.EncodeDentryKey(testMountIdentity(req.Mount), req.Parent, req.Name)
-	if err != nil {
-		return fsmeta.CreateResult{}, err
-	}
-	c.stream.mu.Lock()
-	defer c.stream.mu.Unlock()
-	if len(c.stream.prefix) > 0 && !bytes.HasPrefix(key, c.stream.prefix) {
-		return result, nil
-	}
-	if c.stream.closed {
-		return result, nil
-	}
-	c.stream.events <- fsmeta.WatchEvent{
-		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: uint64(len(c.stream.events) + 1)},
-		CommitVersion: uint64(len(c.stream.events) + 1),
-		Source:        fsmeta.WatchEventSourceCommit,
-		Key:           key,
-	}
-	return result, nil
-}
-
-func (c *fakeWatchClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
-	c.stream.mu.Lock()
-	defer c.stream.mu.Unlock()
-	c.stream.prefix = append([]byte(nil), req.KeyPrefix...)
-	return c.stream, nil
-}
-
-type fakeSnapshotClient struct {
-	*fakeClient
-	nextVersion  uint64
-	snapshots    map[uint64]fsmeta.SnapshotSubtreeToken
-	retired      map[uint64]fsmeta.SnapshotSubtreeToken
-	readVersions []uint64
-}
-
-func newFakeSnapshotClient() *fakeSnapshotClient {
-	return &fakeSnapshotClient{
-		fakeClient:  newFakeClient(),
-		nextVersion: 1,
-		snapshots:   make(map[uint64]fsmeta.SnapshotSubtreeToken),
-		retired:     make(map[uint64]fsmeta.SnapshotSubtreeToken),
-	}
-}
-
-func (c *fakeSnapshotClient) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
-	c.mu.Lock()
-	c.readVersions = append(c.readVersions, req.SnapshotVersion)
-	c.mu.Unlock()
-	return c.fakeClient.ReadDirPlus(ctx, req)
-}
-
-func (c *fakeSnapshotClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.nextVersion++
-	token := fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: c.nextVersion}
-	c.snapshots[token.ReadVersion] = token
-	return token, nil
-}
-
-func (c *fakeSnapshotClient) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.snapshots, token.ReadVersion)
-	c.retired[token.ReadVersion] = token
-	return nil
-}
-
-type fakeWatchStream struct {
-	mu     sync.Mutex
-	prefix []byte
-	events chan fsmeta.WatchEvent
-	closed bool
-}
-
-func newFakeWatchStream(size int) *fakeWatchStream {
-	return &fakeWatchStream{events: make(chan fsmeta.WatchEvent, size)}
-}
-
-func (s *fakeWatchStream) Recv() (fsmeta.WatchEvent, error) {
-	evt, ok := <-s.events
-	if !ok {
-		return fsmeta.WatchEvent{}, io.EOF
-	}
-	return evt, nil
-}
-
-func (s *fakeWatchStream) ReadyCursor() fsmeta.WatchCursor {
-	return fsmeta.WatchCursor{}
-}
-
-func (s *fakeWatchStream) Ack(fsmeta.WatchCursor) error {
-	return nil
-}
-
-func (s *fakeWatchStream) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed {
-		close(s.events)
-		s.closed = true
-	}
-	return nil
 }

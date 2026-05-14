@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -18,20 +19,24 @@ import (
 
 func main() {
 	var (
-		addr           = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
-		workloadName   = flag.String("workload", workload.CheckpointStorm, "workload: checkpoint-storm|hotspot-fanin|watch-subtree|negative-lookup")
-		mount          = flag.String("mount", "fsmeta-demo", "fsmeta mount id")
-		runID          = flag.String("run-id", "", "run id suffix; defaults to current UTC timestamp")
-		clients        = flag.Int("clients", 4, "concurrent clients")
-		dirs           = flag.Int("dirs", 8, "checkpoint-storm directory count")
-		filesPerDir    = flag.Int("files-per-dir", 128, "checkpoint-storm files per directory")
-		files          = flag.Int("files", 1024, "hotspot-fanin file count")
-		readsPerClient = flag.Int("reads-per-client", 64, "hotspot-fanin reads per client")
-		pageLimit      = flag.Uint("page-limit", 0, "readdir page limit; 0 uses workload default")
-		watchWindow    = flag.Uint("watch-window", 0, "watch-subtree back-pressure window; 0 uses workload default")
-		useReadDirPlus = flag.Bool("readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
-		timeout        = flag.Duration("timeout", 2*time.Minute, "overall workload timeout")
-		printCSV       = flag.Bool("csv", false, "print summary as CSV instead of a table")
+		addr                    = flag.String("addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
+		workloadName            = flag.String("workload", workload.MDTestEasy, "workload: "+workload.DefaultWorkloadSuite)
+		scaleProfile            = flag.String("scale-profile", workload.DefaultScaleProfile, "scale profile from benchmark/fsmeta/profiles/official/workloads.yaml: median,long,official")
+		mount                   = flag.String("mount", "fsmeta-demo", "fsmeta mount id")
+		runID                   = flag.String("run-id", "", "run id suffix; defaults to current UTC timestamp")
+		clients                 = flag.Int("clients", 0, "concurrent clients; 0 uses selected scale profile")
+		dirs                    = flag.Int("dirs", 0, "mdtest/mimesis directory count; 0 uses selected scale profile")
+		filesPerDir             = flag.Int("files-per-dir", 0, "mdtest/mimesis files per directory; 0 uses selected scale profile")
+		pageLimit               = flag.Uint("page-limit", 0, "ReadDirPlus page limit; 0 uses selected scale profile")
+		users                   = flag.Int("users", 0, "filebench-varmail user mailbox count; 0 uses selected scale profile")
+		messagesPerUser         = flag.Int("messages-per-user", 0, "filebench-varmail messages per user; 0 uses selected scale profile")
+		workspaces              = flag.Int("workspaces", 0, "AI checkpoint workspace count; 0 uses selected scale profile")
+		checkpointsPerWorkspace = flag.Int("checkpoints-per-workspace", 0, "AI checkpoints per workspace; 0 uses selected scale profile")
+		filesPerCheckpoint      = flag.Int("files-per-checkpoint", 0, "AI checkpoint artifact files per checkpoint; 0 uses selected scale profile")
+		watchWindow             = flag.Uint("watch-window", 0, "AI checkpoint watch back-pressure window; 0 uses selected scale profile")
+		sessionTTL              = flag.Duration("session-ttl", 0, "writer session TTL for varmail and AI checkpoint workloads; 0 uses selected scale profile")
+		timeout                 = flag.Duration("timeout", 2*time.Minute, "overall workload timeout")
+		printCSV                = flag.Bool("csv", false, "print summary as CSV instead of a table")
 	)
 	flag.Parse()
 
@@ -50,17 +55,21 @@ func main() {
 		id = workload.NewRunID()
 	}
 	result, err := run(ctx, cli, runConfig{
-		name:           *workloadName,
-		mount:          fsmeta.MountID(*mount),
-		runID:          id,
-		clients:        *clients,
-		dirs:           *dirs,
-		filesPerDir:    *filesPerDir,
-		files:          *files,
-		readsPerClient: *readsPerClient,
-		pageLimit:      uint32(*pageLimit),
-		watchWindow:    uint32(*watchWindow),
-		readDirPlus:    *useReadDirPlus,
+		name:                    *workloadName,
+		scaleProfile:            *scaleProfile,
+		mount:                   fsmeta.MountID(*mount),
+		runID:                   id,
+		clients:                 *clients,
+		dirs:                    *dirs,
+		filesPerDir:             *filesPerDir,
+		pageLimit:               uint32(*pageLimit),
+		users:                   *users,
+		messagesPerUser:         *messagesPerUser,
+		workspaces:              *workspaces,
+		checkpointsPerWorkspace: *checkpointsPerWorkspace,
+		filesPerCheckpoint:      *filesPerCheckpoint,
+		watchWindow:             uint32(*watchWindow),
+		sessionTTL:              *sessionTTL,
 	})
 	if *printCSV {
 		_ = workload.WriteSummaryCSV(os.Stdout, workload.SummaryRows(result))
@@ -74,59 +83,114 @@ func main() {
 }
 
 type runConfig struct {
-	name           string
-	mount          fsmeta.MountID
-	runID          string
-	clients        int
-	dirs           int
-	filesPerDir    int
-	files          int
-	readsPerClient int
-	pageLimit      uint32
-	watchWindow    uint32
-	readDirPlus    bool
+	name                    string
+	scaleProfile            string
+	mount                   fsmeta.MountID
+	runID                   string
+	clients                 int
+	dirs                    int
+	filesPerDir             int
+	pageLimit               uint32
+	users                   int
+	messagesPerUser         int
+	workspaces              int
+	checkpointsPerWorkspace int
+	filesPerCheckpoint      int
+	watchWindow             uint32
+	sessionTTL              time.Duration
 }
 
-func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Result, error) {
+func run(ctx context.Context, cli workload.MetadataClient, cfg runConfig) (workload.Result, error) {
 	switch cfg.name {
-	case workload.CheckpointStorm:
-		return workload.RunCheckpointStorm(ctx, cli, workload.CheckpointStormConfig{
+	case workload.MDTestEasy:
+		scale := resolvedScale(cfg, workload.MDTestEasy)
+		return workload.RunMDTestEasy(ctx, cli, workload.MDTestConfig{
 			Mount:             cfg.mount,
 			RunID:             cfg.runID,
-			Clients:           cfg.clients,
-			Directories:       cfg.dirs,
-			FilesPerDirectory: cfg.filesPerDir,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
 		})
-	case workload.HotspotFanIn:
-		return workload.RunHotspotFanIn(ctx, cli, workload.HotspotFanInConfig{
-			Mount:          cfg.mount,
-			RunID:          cfg.runID,
-			Clients:        cfg.clients,
-			Files:          cfg.files,
-			ReadsPerClient: cfg.readsPerClient,
-			PageLimit:      cfg.pageLimit,
-			ReadDirPlus:    cfg.readDirPlus,
+	case workload.MDTestHard:
+		scale := resolvedScale(cfg, workload.MDTestHard)
+		return workload.RunMDTestHard(ctx, cli, workload.MDTestConfig{
+			Mount:             cfg.mount,
+			RunID:             cfg.runID,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
 		})
-	case workload.WatchSubtree:
-		return workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
-			Mount:              cfg.mount,
-			RunID:              cfg.runID,
-			Clients:            cfg.clients,
-			Files:              cfg.files,
-			BackPressureWindow: cfg.watchWindow,
+	case workload.FilebenchVarmail:
+		scale := resolvedScale(cfg, workload.FilebenchVarmail)
+		return workload.RunFilebenchVarmail(ctx, cli, workload.FilebenchVarmailConfig{
+			Mount:           cfg.mount,
+			RunID:           cfg.runID,
+			Clients:         scale.Clients,
+			Users:           scale.Users,
+			MessagesPerUser: scale.MessagesPerUser,
+			PageLimit:       scale.PageLimit,
+			SessionTTL:      scale.SessionTTLDuration(0),
 		})
-	case workload.NegativeLookup:
-		return workload.RunNegativeLookup(ctx, cli, workload.NegativeLookupConfig{
-			Mount:          cfg.mount,
-			RunID:          cfg.runID,
-			Clients:        cfg.clients,
-			Keys:           cfg.files,
-			ReadsPerClient: cfg.readsPerClient,
-			Parent:         fsmeta.RootInode,
+	case workload.MimesisNamespace:
+		scale := resolvedScale(cfg, workload.MimesisNamespace)
+		return workload.RunMimesisNamespace(ctx, cli, workload.MimesisNamespaceConfig{
+			Mount:             cfg.mount,
+			RunID:             cfg.runID,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
+		})
+	case workload.AICheckpointAgent:
+		scale := resolvedScale(cfg, workload.AICheckpointAgent)
+		return workload.RunAICheckpointAgent(ctx, cli, workload.AICheckpointAgentConfig{
+			Mount:                   cfg.mount,
+			RunID:                   cfg.runID,
+			Clients:                 scale.Clients,
+			Workspaces:              scale.Workspaces,
+			CheckpointsPerWorkspace: scale.CheckpointsPerWorkspace,
+			FilesPerCheckpoint:      scale.FilesPerCheckpoint,
+			PageLimit:               scale.PageLimit,
+			WatchWindow:             scale.WatchWindow,
+			SessionTTL:              scale.SessionTTLDuration(0),
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", cfg.name)
 	}
+}
+
+func resolvedScale(cfg runConfig, name string) workload.OfficialScale {
+	scale := workload.ScaleFor(name, strings.TrimSpace(cfg.scaleProfile))
+	scale.Clients = chooseInt(cfg.clients, scale.Clients)
+	scale.Directories = chooseInt(cfg.dirs, scale.Directories)
+	scale.FilesPerDirectory = chooseInt(cfg.filesPerDir, scale.FilesPerDirectory)
+	scale.Users = chooseInt(cfg.users, scale.Users)
+	scale.MessagesPerUser = chooseInt(cfg.messagesPerUser, scale.MessagesPerUser)
+	scale.Workspaces = chooseInt(cfg.workspaces, scale.Workspaces)
+	scale.CheckpointsPerWorkspace = chooseInt(cfg.checkpointsPerWorkspace, scale.CheckpointsPerWorkspace)
+	scale.FilesPerCheckpoint = chooseInt(cfg.filesPerCheckpoint, scale.FilesPerCheckpoint)
+	scale.PageLimit = chooseUint32(cfg.pageLimit, scale.PageLimit)
+	scale.WatchWindow = chooseUint32(cfg.watchWindow, scale.WatchWindow)
+	if cfg.sessionTTL > 0 {
+		scale.SessionTTL = cfg.sessionTTL.String()
+	}
+	return scale
+}
+
+func chooseInt(override, profile int) int {
+	if override > 0 {
+		return override
+	}
+	return profile
+}
+
+func chooseUint32(override, profile uint32) uint32 {
+	if override > 0 {
+		return override
+	}
+	return profile
 }
 
 func printSummary(result workload.Result) {

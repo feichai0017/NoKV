@@ -12,6 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	gonum.org/v1/plot v0.16.0
 	google.golang.org/grpc v1.81.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -63,7 +64,6 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/feichai0017/NoKV => ..
