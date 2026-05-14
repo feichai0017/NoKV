@@ -107,6 +107,22 @@ func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
 	}, merged)
 }
 
+func TestExecutorPerasOperationIDIsExecutorScoped(t *testing.T) {
+	first, err := New(newFakeRunner())
+	require.NoError(t, err)
+	second, err := New(newFakeRunner())
+	require.NoError(t, err)
+
+	firstID := first.nextPerasOperationID(fsmeta.OperationCreate)
+	secondID := second.nextPerasOperationID(fsmeta.OperationCreate)
+
+	require.Equal(t, uint64(1), firstID.Seq)
+	require.Equal(t, uint64(1), secondID.Seq)
+	require.Contains(t, firstID.ClientID, "fsmeta-exec/create")
+	require.Contains(t, secondID.ClientID, "fsmeta-exec/create")
+	require.NotEqual(t, firstID.ClientID, secondID.ClientID)
+}
+
 func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {
 	executor, err := New(newFakeRunner(), WithPerasAuthorityAdmitter(ownedPerasAdmitter{}))
 	if err != nil {

@@ -71,6 +71,19 @@ func (c *Runtime) completionForOperation(id fsperas.OperationID) (perasCompletio
 	return completion, ok
 }
 
+func completionMatchesOperation(completion fsperas.SegmentCompletion, op compile.MaterializedOp) bool {
+	if completion.Kind != op.Delta.Kind {
+		return false
+	}
+	if completion.MutationCount != uint32(len(op.Effects)) {
+		return false
+	}
+	if completion.DescriptorDigest != op.DescriptorDigest {
+		return false
+	}
+	return completion.ExecutionPlanDigest == compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability)
+}
+
 func (c *Runtime) segmentInstalled(root [32]byte) bool {
 	if c == nil || c.read == nil {
 		return false
