@@ -190,25 +190,20 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 			out = []fsmeta.DentryAttrPair{}
 			return nil
 		}
-		inodeKeys := make([][]byte, 0, len(dentries))
-		for _, dentry := range dentries {
-			key, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
-			if err != nil {
-				return err
-			}
-			inodeKeys = append(inodeKeys, key)
+		inodeKeys, err := compile.CompileReadDirPlusInodeKeys(mount, dentries)
+		if err != nil {
+			return err
 		}
-		inodeValues, err := e.batchGetMergedValues(ctx, inodeKeys, version, includeOverlay)
+		inodeValues, inodePresent, err := e.batchGetMergedValuesOrdered(ctx, inodeKeys, version, includeOverlay)
 		if err != nil {
 			return err
 		}
 		pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
 		for i, dentry := range dentries {
-			value, ok := inodeValues[string(inodeKeys[i])]
-			if !ok {
+			if !inodePresent[i] {
 				return fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
 			}
-			inode, err := fsmeta.DecodeInodeValue(value)
+			inode, err := fsmeta.DecodeInodeValue(inodeValues[i])
 			if err != nil {
 				return err
 			}
@@ -250,13 +245,17 @@ func (e *Executor) readDirPlusFromPerasView(mount fsmeta.MountIdentity, dentries
 	if len(dentries) == 0 {
 		return []fsmeta.DentryAttrPair{}, true, nil
 	}
+	inodeKeys, err := compile.CompileReadDirPlusInodeKeys(mount, dentries)
+	if err != nil {
+		return nil, false, err
+	}
+	overlay := e.perasOverlay()
+	if overlay == nil {
+		return nil, false, nil
+	}
 	pairs := make([]fsmeta.DentryAttrPair, 0, len(dentries))
-	for _, dentry := range dentries {
-		program, err := compile.CompileGetAttrReadProgram(mount, dentry.Inode)
-		if err != nil {
-			return nil, false, err
-		}
-		value, deleted, ok := e.readPerasProgram(program)
+	for i, dentry := range dentries {
+		value, deleted, ok := overlay.GetPerasOverlayView(inodeKeys[i])
 		if !ok || deleted {
 			return nil, false, nil
 		}

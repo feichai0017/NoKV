@@ -6,7 +6,6 @@ package exec
 import (
 	"bytes"
 	"context"
-	"maps"
 	"sort"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -303,31 +302,56 @@ func (v *perasReadView) readSession(key []byte) (fsmeta.SessionRecord, bool, err
 	return session, true, nil
 }
 
-func (e *Executor) batchGetMergedValues(ctx context.Context, keys [][]byte, version uint64, includeOverlay bool) (map[string][]byte, error) {
-	if !includeOverlay || e.perasOverlay() == nil {
-		return e.runner.BatchGet(ctx, keys, version)
+func (e *Executor) batchGetMergedValuesOrdered(ctx context.Context, keys [][]byte, version uint64, includeOverlay bool) ([][]byte, []bool, error) {
+	values := make([][]byte, len(keys))
+	present := make([]bool, len(keys))
+
+	overlay := e.perasOverlay()
+	if !includeOverlay || overlay == nil {
+		base, err := e.runner.BatchGet(ctx, keys, version)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i, key := range keys {
+			value, ok := base[string(key)]
+			if ok {
+				values[i] = value
+				present[i] = true
+			}
+		}
+		return values, present, nil
 	}
-	values := make(map[string][]byte, len(keys))
+
 	missing := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		value, deleted, ok := e.perasOverlayGet(key)
+	missingIndexes := make([]int, 0, len(keys))
+	for i, key := range keys {
+		value, deleted, ok := overlay.GetPerasOverlayView(key)
 		switch {
 		case ok && !deleted:
-			values[string(key)] = value
+			values[i] = value
+			present[i] = true
 		case ok && deleted:
 		default:
 			missing = append(missing, key)
+			missingIndexes = append(missingIndexes, i)
 		}
 	}
 	if len(missing) == 0 {
-		return values, nil
+		return values, present, nil
 	}
 	base, err := e.runner.BatchGet(ctx, missing, version)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	maps.Copy(values, base)
-	return values, nil
+	for i, key := range missing {
+		value, ok := base[string(key)]
+		if ok {
+			index := missingIndexes[i]
+			values[index] = value
+			present[index] = true
+		}
+	}
+	return values, present, nil
 }
 
 func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) []KV {

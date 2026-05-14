@@ -24,6 +24,11 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, op.Effects[0].Value, value)
+	value[0] ^= 0xff
+	viewValue, deleted, ok := view.GetView(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, op.Effects[0].Value, viewValue)
 	present, known := view.KeyState(dentryKey)
 	require.True(t, present)
 	require.True(t, known)

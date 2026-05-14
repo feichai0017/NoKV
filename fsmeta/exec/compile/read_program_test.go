@@ -63,6 +63,24 @@ func TestGeneratedReadSessionKeyProgramValidatesMountAndKeyShape(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
 }
 
+func TestGeneratedReadDirPlusInodeKeysPreserveDentryOrder(t *testing.T) {
+	dentries := []fsmeta.DentryRecord{
+		{Parent: 7, Name: "b", Inode: 44},
+		{Parent: 7, Name: "a", Inode: 42},
+	}
+
+	keys, err := CompileReadDirPlusInodeKeys(testMount, dentries)
+	require.NoError(t, err)
+	require.Len(t, keys, len(dentries))
+
+	first, err := fsmeta.EncodeInodeKey(testMount, 44)
+	require.NoError(t, err)
+	second, err := fsmeta.EncodeInodeKey(testMount, 42)
+	require.NoError(t, err)
+	require.Equal(t, first, keys[0])
+	require.Equal(t, second, keys[1])
+}
+
 func TestGeneratedDirectoryReadPlanNormalizesPerasSource(t *testing.T) {
 	base, err := CompileDirectoryReadPlan(fsmeta.ReadDirRequest{Mount: "vol", Parent: 7, Limit: 16}, testMount, false, false)
 	require.NoError(t, err)

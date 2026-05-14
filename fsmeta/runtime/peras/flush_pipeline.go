@@ -162,12 +162,9 @@ func (p flushPipeline) installBatch(ctx context.Context, batch perasFlushBatch, 
 }
 
 func (p flushPipeline) sealBatch(ctx context.Context, batch perasFlushBatch) error {
-	for _, job := range batch.jobs {
-		if err := p.submitSeal(ctx, batch.holder, job); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p.runJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
+		return p.submitSeal(ctx, batch.holder, job)
+	})
 }
 
 func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) error {

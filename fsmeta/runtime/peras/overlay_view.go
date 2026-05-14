@@ -102,13 +102,21 @@ func (c *Runtime) segmentInstalled(root [32]byte) bool {
 }
 
 func (c *Runtime) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetPerasOverlayView(key)
+	if !ok {
+		return nil, false, false
+	}
+	return cloneBytes(value), deleted, true
+}
+
+func (c *Runtime) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
 	if c == nil || c.read == nil {
 		return nil, false, false
 	}
-	if value, deleted, ok := c.read.overlay.Get(key); ok {
+	if value, deleted, ok := c.read.overlay.GetView(key); ok {
 		return value, deleted, true
 	}
-	return c.read.sealed.Get(key)
+	return c.read.sealed.GetView(key)
 }
 
 func (c *Runtime) KeyState(key []byte) (present bool, known bool) {

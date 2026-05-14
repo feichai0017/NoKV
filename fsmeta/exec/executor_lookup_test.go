@@ -5,6 +5,7 @@ package exec
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -754,4 +755,43 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 	require.Len(t, out, 1, "create must invalidate the cached empty page set")
 	require.Greater(t, len(runner.scanVersions), scansBefore,
 		"epoch bump must force a runner scan on the next ReadDirPlus")
+}
+
+func BenchmarkExecutorReadDirPlusFromPerasView100(b *testing.B) {
+	const entries = 100
+	mount := testMountIdentityFor("vol")
+	dentries := make([]fsmeta.DentryRecord, entries)
+	overlayRows := make([]fsperas.OverlayKV, 0, entries)
+	for i := range entries {
+		inode := fsmeta.InodeID(1_000 + i)
+		dentries[i] = fsmeta.DentryRecord{
+			Parent: fsmeta.RootInode,
+			Name:   "file-" + strconv.Itoa(i),
+			Inode:  inode,
+			Type:   fsmeta.InodeTypeFile,
+		}
+		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		require.NoError(b, err)
+		value, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{
+			Inode:     inode,
+			Type:      fsmeta.InodeTypeFile,
+			LinkCount: 1,
+		})
+		require.NoError(b, err)
+		overlayRows = append(overlayRows, overlayValueForTest(key, value))
+	}
+	executor := &Executor{perasCommitter: scanOverlayCommitter{
+		values: overlayMapForTest(overlayRows...),
+	}}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		pairs, ok, err := executor.readDirPlusFromPerasView(mount, dentries)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok || len(pairs) != entries {
+			b.Fatalf("unexpected Peras view result: ok=%v entries=%d", ok, len(pairs))
+		}
+	}
 }

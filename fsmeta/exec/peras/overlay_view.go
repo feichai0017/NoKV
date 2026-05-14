@@ -147,6 +147,16 @@ func (v *OverlayView) AddSegment(segment PerasSegment) error {
 }
 
 func (v *OverlayView) Get(key []byte) (value []byte, deleted bool, ok bool) {
+	value, deleted, ok = v.GetView(key)
+	if !ok {
+		return nil, false, false
+	}
+	return cloneBytes(value), deleted, true
+}
+
+// GetView returns overlay-owned value bytes. Callers must not mutate the
+// returned slice.
+func (v *OverlayView) GetView(key []byte) (value []byte, deleted bool, ok bool) {
 	if v == nil {
 		return nil, false, false
 	}
@@ -156,7 +166,7 @@ func (v *OverlayView) Get(key []byte) (value []byte, deleted bool, ok bool) {
 	if !ok {
 		return nil, false, false
 	}
-	return cloneBytes(entry.value), entry.delete, true
+	return entry.value, entry.delete, true
 }
 
 func (v *OverlayView) KeyState(key []byte) (present bool, known bool) {

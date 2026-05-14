@@ -124,6 +124,9 @@ type PerasCommitter interface {
 
 type PerasOverlayReader interface {
 	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
+	// GetPerasOverlayView returns overlay-owned bytes. Callers must not mutate
+	// the returned value.
+	GetPerasOverlayView(key []byte) (value []byte, deleted bool, ok bool)
 	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
 }
 

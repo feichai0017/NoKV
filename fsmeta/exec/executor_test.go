@@ -474,6 +474,13 @@ func (c *testPerasCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
 	return c.view.Get(key)
 }
 
+func (c *testPerasCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
+	if c == nil || c.view == nil {
+		return nil, false, false
+	}
+	return c.view.GetView(key)
+}
+
 func (c *testPerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
 	if c == nil || c.view == nil {
 		return nil
@@ -556,6 +563,14 @@ func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationI
 }
 
 func (c scanOverlayCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetPerasOverlayView(key)
+	if !ok {
+		return nil, false, false
+	}
+	return append([]byte(nil), value...), deleted, true
+}
+
+func (c scanOverlayCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
 	if c.values == nil {
 		return nil, false, false
 	}
@@ -563,7 +578,7 @@ func (c scanOverlayCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
 	if !ok {
 		return nil, false, false
 	}
-	return append([]byte(nil), row.Value...), row.Delete, true
+	return row.Value, row.Delete, true
 }
 
 func overlayValueForTest(key, value []byte) fsperas.OverlayKV {

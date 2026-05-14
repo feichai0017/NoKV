@@ -25,6 +25,18 @@ func CompileGetAttrReadProgram(mount fsmeta.MountIdentity, inode fsmeta.InodeID)
 	return ReadProgram{Kind: ReadProgramGetAttr, Plan: fsmeta.OperationPlan{Kind: fsmeta.OperationGetAttr, Mount: mount.MountID, PrimaryKey: cloneBytes(key), ReadKeys: [][]byte{cloneBytes(key)}, ReadPrefixes: emptyKeySet, MutateKeys: emptyKeySet}, Authority: AuthorityPlan{Scope: scopeFor(mount, nil, []fsmeta.InodeID{inode}), Required: true, Fence: FenceActiveAuthority}, Footprint: KeyFootprint{Reads: []KeyRef{ref}, ConflictKeys: []KeyRef{ref}, EstimatedBytes: uint64(len(key))}, Key: cloneBytes(key)}, nil
 }
 
+func CompileReadDirPlusInodeKeys(mount fsmeta.MountIdentity, dentries []fsmeta.DentryRecord) ([][]byte, error) {
+	keys := make([][]byte, len(dentries))
+	for i, dentry := range dentries {
+		key, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
+		if err != nil {
+			return nil, err
+		}
+		keys[i] = key
+	}
+	return keys, nil
+}
+
 func CompileReadSessionProgram(mount fsmeta.MountIdentity, inode fsmeta.InodeID, session fsmeta.SessionID) (ReadProgram, error) {
 	key, err := fsmeta.EncodeSessionKey(mount, inode, session)
 	if err != nil {
