@@ -176,6 +176,9 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\tEligibility: EligibilityVisibleCommit,\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\tdelta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)\n")
+	b.WriteString("\tif !validateCreateLoweredDelta(delta) {\n")
+	fmt.Fprintf(&b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
+	b.WriteString("\t}\n")
 	b.WriteString("\tcompiled, err := compileCreateCompiledOp(delta)\n")
 	b.WriteString("\tif err != nil {\n")
 	fmt.Fprintf(&b, "\t\treturn %s{}, err\n", spec.ProgramType)
@@ -206,6 +209,9 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\treturn MaterializedOp{CompiledOp: materialized}, nil\n")
 	b.WriteString("}\n")
 	b.WriteString("\n")
+	if err := emitLoweredDeltaValidator(&b, spec); err != nil {
+		return nil, err
+	}
 	b.WriteString("func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {\n")
 	b.WriteString("\tif delta.Kind != fsmeta.OperationCreate || len(delta.ReadPredicates) != 2 || len(delta.WriteEffects) != 2 {\n")
 	b.WriteString("\t\treturn CompiledOp{}, fsmeta.ErrInvalidRequest\n")
@@ -292,7 +298,7 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {\n")
 	b.WriteString("\tout := make([]GuardObligation, 0, len(guards))\n")
 	b.WriteString("\tfor _, guard := range guards {\n")
-	b.WriteString("\t\tout = append(out, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})\n")
+	b.WriteString("\t\tout = append(out, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn out\n")
 	b.WriteString("}\n\n")
@@ -342,6 +348,11 @@ func emitOperationFile(specs []specdsl.OpSpec) ([]byte, error) {
 		}
 	}
 	for _, spec := range specs {
+		if err := emitLoweredDeltaValidator(&b, spec); err != nil {
+			return nil, err
+		}
+	}
+	for _, spec := range specs {
 		if err := emitCompiledOpFunction(&b, spec); err != nil {
 			return nil, err
 		}
@@ -359,9 +370,9 @@ func emitValuesType(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	case "":
 		return nil
 	case "session_put":
-		fmt.Fprintf(b, "type %s struct {\n\tSessionValue []byte\n\tPredicateProofs []PredicateProof\n\tKnownAbsent [][]byte\n}\n\n", spec.ValuesType)
+		fmt.Fprintf(b, "type %s struct {\n\tSessionValue []byte\n\tPredicateProofs []PredicateProof\n}\n\n", spec.ValuesType)
 	case "session_close":
-		fmt.Fprintf(b, "type %s struct {\n\tDeleteOwner bool\n\tPredicateProofs []PredicateProof\n\tKnownAbsent [][]byte\n}\n\n", spec.ValuesType)
+		fmt.Fprintf(b, "type %s struct {\n\tDeleteOwner bool\n\tPredicateProofs []PredicateProof\n}\n\n", spec.ValuesType)
 	default:
 		return fmt.Errorf("unsupported materializer %q for %s", spec.Materializer, spec.Name)
 	}
@@ -382,6 +393,9 @@ func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	b.WriteString("\tif err != nil {\n")
 	fmt.Fprintf(b, "\t\treturn %s{}, err\n", spec.ProgramType)
 	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tif !%s(delta) {\n", loweredDeltaValidatorName(spec))
+	fmt.Fprintf(b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
+	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\tcompiled, err := %s(delta)\n", compiledOpFuncName(spec))
 	b.WriteString("\tif err != nil {\n")
 	fmt.Fprintf(b, "\t\treturn %s{}, err\n", spec.ProgramType)
@@ -389,6 +403,144 @@ func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	fmt.Fprintf(b, "\treturn %s{Compiled: compiled}, nil\n", spec.ProgramType)
 	b.WriteString("}\n\n")
 	return nil
+}
+
+func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
+	if spec.OperationKind == "" || spec.Eligibility == "" {
+		return fmt.Errorf("%s missing semantic validator fields", spec.Name)
+	}
+	repeatablePredicate := -1
+	for i, predicate := range spec.Predicates {
+		if predicate.Repeatable {
+			repeatablePredicate = i
+		}
+	}
+	if repeatablePredicate >= 0 && len(spec.Predicates) != 1 {
+		return fmt.Errorf("%s repeatable predicate specs must be the only predicate", spec.Name)
+	}
+
+	fmt.Fprintf(b, "func %s(delta SemanticDelta) bool {\n", loweredDeltaValidatorName(spec))
+	fmt.Fprintf(b, "\tif delta.Kind != %s {\n", spec.OperationKind)
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+	emitEligibilityValidator(b, spec)
+	emitBoolValidator(b, "delta.DurabilityBarrier", spec.DurabilityBarrier)
+	emitBoolValidator(b, "delta.WatchAtSeal", spec.WatchAtSeal)
+	emitAuthorityCountValidator(b, "Parents", len(spec.Authority.Parents))
+	emitAuthorityCountValidator(b, "Inodes", len(spec.Authority.Inodes))
+	emitBoolValidator(b, "delta.Authority.Broad", spec.Authority.Broad)
+	emitBoolValidator(b, "delta.Authority.AllowOpaqueKeys", spec.Authority.AllowOpaqueKeys)
+
+	if repeatablePredicate >= 0 {
+		predicate := spec.Predicates[repeatablePredicate]
+		fmt.Fprintf(b, "\tif len(delta.ReadPredicates) == 0 {\n")
+		b.WriteString("\t\treturn false\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tfor _, predicate := range delta.ReadPredicates {\n")
+		fmt.Fprintf(b, "\t\tif predicate.Kind != %s {\n", predicate.Kind)
+		b.WriteString("\t\t\treturn false\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	} else {
+		fmt.Fprintf(b, "\tif len(delta.ReadPredicates) != %d {\n", len(spec.Predicates))
+		b.WriteString("\t\treturn false\n")
+		b.WriteString("\t}\n")
+		for i, predicate := range spec.Predicates {
+			fmt.Fprintf(b, "\tif delta.ReadPredicates[%d].Kind != %s {\n", i, predicate.Kind)
+			b.WriteString("\t\treturn false\n")
+			b.WriteString("\t}\n")
+		}
+	}
+
+	fmt.Fprintf(b, "\tif len(delta.WriteEffects) != %d {\n", len(spec.Effects))
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+	for i, effect := range spec.Effects {
+		fmt.Fprintf(b, "\tif delta.WriteEffects[%d].Kind != %s {\n", i, effect.Kind)
+		b.WriteString("\t\treturn false\n")
+		b.WriteString("\t}\n")
+	}
+
+	requiredGuards := len(spec.Guards)
+	optionalGuards := len(spec.OptionalGuards)
+	switch {
+	case requiredGuards == 0 && optionalGuards == 0:
+		b.WriteString("\tif len(delta.RuntimeGuards) != 0 {\n")
+	case requiredGuards == 0:
+		fmt.Fprintf(b, "\tif len(delta.RuntimeGuards) > %d {\n", optionalGuards)
+	case optionalGuards == 0:
+		fmt.Fprintf(b, "\tif len(delta.RuntimeGuards) != %d {\n", requiredGuards)
+	default:
+		fmt.Fprintf(b, "\tif len(delta.RuntimeGuards) < %d || len(delta.RuntimeGuards) > %d {\n", requiredGuards, requiredGuards+optionalGuards)
+	}
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+	for i, guard := range spec.Guards {
+		fmt.Fprintf(b, "\tif delta.RuntimeGuards[%d] != %s {\n", i, guard.Guard)
+		b.WriteString("\t\treturn false\n")
+		b.WriteString("\t}\n")
+	}
+	if optionalGuards > 0 {
+		if requiredGuards == 0 {
+			b.WriteString("\tfor _, guard := range delta.RuntimeGuards {\n")
+		} else {
+			fmt.Fprintf(b, "\tfor _, guard := range delta.RuntimeGuards[%d:] {\n", requiredGuards)
+		}
+		b.WriteString("\t\tswitch guard {\n")
+		for _, guard := range spec.OptionalGuards {
+			fmt.Fprintf(b, "\t\tcase %s:\n", guard.Guard)
+		}
+		b.WriteString("\t\tdefault:\n")
+		b.WriteString("\t\t\treturn false\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+	}
+
+	b.WriteString("\treturn true\n")
+	b.WriteString("}\n\n")
+	return nil
+}
+
+func emitAuthorityCountValidator(b *bytes.Buffer, field string, declared int) {
+	if declared == 0 {
+		fmt.Fprintf(b, "\tif len(delta.Authority.%s) != 0 {\n", field)
+	} else {
+		fmt.Fprintf(b, "\tif len(delta.Authority.%s) == 0 || len(delta.Authority.%s) > %d {\n", field, field, declared)
+	}
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+}
+
+func emitBoolValidator(b *bytes.Buffer, expr string, want bool) {
+	if want {
+		fmt.Fprintf(b, "\tif !%s {\n", expr)
+	} else {
+		fmt.Fprintf(b, "\tif %s {\n", expr)
+	}
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+}
+
+func emitEligibilityValidator(b *bytes.Buffer, spec specdsl.OpSpec) {
+	slowReason := spec.SlowReason
+	if slowReason == "" {
+		slowReason = "SlowReasonNone"
+	}
+	b.WriteString("\tswitch {\n")
+	fmt.Fprintf(b, "\tcase delta.Eligibility == %s && delta.SlowReason == %s:\n", spec.Eligibility, slowReason)
+	for _, fallback := range spec.SlowFallbacks {
+		fmt.Fprintf(b, "\tcase delta.Eligibility == EligibilitySlowPath && delta.SlowReason == %s:\n", fallback)
+	}
+	b.WriteString("\tdefault:\n")
+	b.WriteString("\t\treturn false\n")
+	b.WriteString("\t}\n")
+}
+
+func loweredDeltaValidatorName(spec specdsl.OpSpec) string {
+	if spec.Name == "" {
+		return ""
+	}
+	return "validate" + spec.Name + "LoweredDelta"
 }
 
 func emitCompiledOpFunction(b *bytes.Buffer, spec specdsl.OpSpec) error {
@@ -506,6 +658,8 @@ func emitAOTCompiledOpBody(b *bytes.Buffer) {
 	b.WriteString("\t\t\tobligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)\n")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t\tswitch predicate.Kind {\n")
+	b.WriteString("\t\tcase PredicateExists:\n")
+	b.WriteString("\t\t\tobligation.NeedValue = true\n")
 	b.WriteString("\t\tcase PredicateNotExists:\n")
 	b.WriteString("\t\t\tobligation.NeedAbsent = true\n")
 	b.WriteString("\t\tcase PredicateObservedValue:\n")
@@ -515,7 +669,7 @@ func emitAOTCompiledOpBody(b *bytes.Buffer) {
 	b.WriteString("\t}\n")
 	b.WriteString("\tguards := make([]GuardObligation, 0, len(delta.RuntimeGuards))\n")
 	b.WriteString("\tfor _, guard := range delta.RuntimeGuards {\n")
-	b.WriteString("\t\tguards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})\n")
+	b.WriteString("\t\tguards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\teffects := make([]EffectPlan, 0, len(delta.WriteEffects))\n")
 	b.WriteString("\tfor i, effect := range delta.WriteEffects {\n")
@@ -639,7 +793,6 @@ func emitSessionPutMaterializer(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{\n")
 	b.WriteString("\t\tProofs: values.PredicateProofs,\n")
-	b.WriteString("\t\tKnownAbsent: values.KnownAbsent,\n")
 	b.WriteString("\t}, nil)\n")
 	b.WriteString("}\n\n")
 	return nil
@@ -660,7 +813,6 @@ func emitSessionCloseMaterializer(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{\n")
 	b.WriteString("\t\tProofs: values.PredicateProofs,\n")
-	b.WriteString("\t\tKnownAbsent: values.KnownAbsent,\n")
 	b.WriteString("\t}, nil)\n")
 	b.WriteString("}\n\n")
 	return nil

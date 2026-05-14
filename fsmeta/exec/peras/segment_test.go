@@ -320,6 +320,7 @@ func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 		require.NoError(tb, err)
 		materialized, err := compile.MaterializeCreate(program, compile.CreateValues{})
 		require.NoError(tb, err)
+		materialized = sealTestMaterializedOp(materialized)
 		op, err := replayOperationFromMaterialized(OperationID{ClientID: "workspace-writer", Seq: uint64(i + 1)}, materialized)
 		require.NoError(tb, err)
 		ops = append(ops, op)

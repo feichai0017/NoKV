@@ -224,7 +224,7 @@ func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) c
 	}
 	index := v.executor.perasPredicateIndex()
 	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
-	knownAbsent := make([][]byte, 0)
+	proofs := v.predicateProofs()
 	for _, predicate := range delta.ReadPredicates {
 		if predicate.Kind == compile.PredicatePrefixScan {
 			continue
@@ -235,12 +235,11 @@ func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) c
 		if allowAbsentDowngrade &&
 			predicate.Kind == compile.PredicateObservedValue &&
 			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
-			knownAbsent = append(knownAbsent, cloneBytes(predicate.Key))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
 		}
 	}
 	return compile.PredicateEvidence{
-		Proofs:      v.predicateProofs(),
-		KnownAbsent: knownAbsent,
+		Proofs: proofs,
 	}
 }
 

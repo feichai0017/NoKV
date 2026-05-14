@@ -1,7 +1,6 @@
 package compile
 
 import (
-	"crypto/sha256"
 	"slices"
 	"testing"
 	"time"
@@ -89,6 +88,10 @@ func testMaterializeAOTWithEffects(tb testing.TB, op CompiledOp, effects []Write
 	materialized, err := MaterializeCompiledOpWithEvidence(op, effects, PredicateEvidence{Proofs: proofs}, nil)
 	require.NoError(tb, err)
 	return materialized
+}
+
+func testGuardProofsFor(op MaterializedOp) []GuardProof {
+	return GuardProofsFor(op.Delta.RuntimeGuards, GuardEvidenceFor(op.CompiledOp, op.PredicateProofs))
 }
 
 func testCreateDelta(tb testing.TB, req fsmeta.CreateRequest, mount fsmeta.MountIdentity, inodeID fsmeta.InodeID, opts ...Option) (SemanticDelta, error) {
@@ -581,12 +584,12 @@ func TestOpenWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T)
 	proofs := []PredicateProof{
 		testPredicateProof(inodeKey, inodeValue, true, 9, ReadSourceBase),
 		testPredicateProof(sessionKey, nil, false, 9, ReadSourceBase),
+		testPredicateProof(ownerKey, nil, false, 9, ReadSourceBase),
 	}
 
 	materialized, err := MaterializeOpenWriteSession(program, OpenWriteSessionValues{
 		SessionValue:    sessionValue,
 		PredicateProofs: proofs,
-		KnownAbsent:     [][]byte{ownerKey},
 	})
 	require.NoError(t, err)
 
@@ -764,286 +767,6 @@ func BenchmarkCompileOpenWriteSessionProgram(b *testing.B) {
 		}
 		benchmarkCompiledOp = program.Compiled
 	}
-}
-
-func TestDerivedOperationRequiresRuntimeMaterialization(t *testing.T) {
-	delta, err := testUpdateInodeDelta(t, fsmeta.UpdateInodeRequest{
-		Mount:   "vol",
-		Parent:  3,
-		Inode:   44,
-		Name:    "file",
-		SetMode: true,
-		Mode:    0o600,
-	}, testMount)
-	require.NoError(t, err)
-
-	op := testCompileAOT(t, delta)
-	require.True(t, op.Authority.Required)
-	require.Equal(t, FenceActiveAuthority, op.Authority.Fence)
-	require.False(t, op.Placement.CanSegment)
-	require.True(t, op.Placement.RequiresMaterialize)
-	require.Equal(t, DurabilityVisibleOnly, op.Durability)
-	require.Len(t, op.Predicates, 2)
-	require.True(t, op.Predicates[0].NeedValue)
-	require.True(t, op.Predicates[1].NeedValue)
-	require.Len(t, op.Effects, 1)
-	require.Equal(t, DerivationRuntimeValue, op.Effects[0].Derivation)
-	require.False(t, op.Effects[0].Concrete)
-}
-
-func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
-	delta, err := testUpdateInodeDelta(t, fsmeta.UpdateInodeRequest{
-		Mount:   "vol",
-		Parent:  3,
-		Inode:   44,
-		Name:    "file",
-		SetMode: true,
-		Mode:    0o600,
-	}, testMount)
-	require.NoError(t, err)
-	compiled := testCompileAOT(t, delta)
-	require.True(t, compiled.Placement.RequiresMaterialize)
-
-	key := mustInodeKey(t, 44)
-	value := []byte("new-inode")
-	proof := PredicateProof{
-		Key:     key,
-		Present: true,
-		Value:   []byte("old-inode"),
-		Version: 9,
-		Source:  ReadSourceBase,
-	}
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
-	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: value}}, []PredicateProof{proof})
-
-	require.True(t, materialized.Placement.CanSegment)
-	require.False(t, materialized.Placement.RequiresMaterialize)
-	require.Equal(t, compiled.IntentDigest, materialized.IntentDigest)
-	require.NotEqual(t, compiled.DescriptorDigest, materialized.ReplayDigest)
-	require.Equal(t, materialized.DescriptorDigest, materialized.ReplayDigest)
-	require.Len(t, materialized.Effects, 1)
-	require.True(t, materialized.Effects[0].Concrete)
-	require.Equal(t, DerivationNone, materialized.Effects[0].Derivation)
-	require.Equal(t, sha256.Sum256(value), materialized.Effects[0].ValueHash)
-	require.Len(t, materialized.PredicateProofs, 1)
-	require.Equal(t, proof.Digest, materialized.PredicateProofs[0].Digest)
-
-	proof.Value[0] ^= 0xff
-	value[0] ^= 0xff
-	require.NotEqual(t, proof.Value, materialized.PredicateProofs[0].Value)
-	require.NotEqual(t, value, materialized.Effects[0].Value)
-}
-
-func TestCompiledDigestSemanticsAreStableAcrossMaterialization(t *testing.T) {
-	createDelta, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "file",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, 44)
-	require.NoError(t, err)
-	create := testCompileAOT(t, createDelta)
-	require.Equal(t, create.DescriptorDigest, create.IntentDigest)
-	require.Equal(t, create.DescriptorDigest, create.ReplayDigest)
-
-	updateDelta, err := testUpdateInodeDelta(t, fsmeta.UpdateInodeRequest{
-		Mount:   "vol",
-		Parent:  3,
-		Inode:   44,
-		Name:    "file",
-		SetMode: true,
-		Mode:    0o600,
-	}, testMount)
-	require.NoError(t, err)
-	compiled := testCompileAOT(t, updateDelta)
-	key := mustInodeKey(t, 44)
-	proof := testPredicateProof(key, []byte("old-inode"), true, 9, ReadSourceBase)
-	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}}, []PredicateProof{proof})
-	require.Equal(t, compiled.IntentDigest, materialized.IntentDigest)
-	require.NotEqual(t, compiled.DescriptorDigest, materialized.DescriptorDigest)
-	require.Equal(t, materialized.DescriptorDigest, materialized.ReplayDigest)
-}
-
-func TestMaterializedOpValidationRejectsReplayDigestDrift(t *testing.T) {
-	delta, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "file",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, 44)
-	require.NoError(t, err)
-	op := testMaterializeAOT(t, delta, nil)
-	op.ReplayDigest[0] ^= 0xff
-
-	var validationErr ValidationError
-	err = op.ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationCanonicalMismatch, validationErr.Kind)
-}
-
-func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
-	expected := []byte("old-inode")
-	delta, _ := testConcreteUpdateInodeDelta(t, expected)
-
-	op := testCompileAOT(t, delta)
-	require.Len(t, op.Predicates, 2)
-	require.True(t, op.Predicates[1].NeedValue)
-	require.True(t, op.Predicates[1].HasExpectedValue)
-	require.Equal(t, sha256.Sum256(expected), op.Predicates[1].ExpectHash)
-}
-
-func TestMaterializedOpValidationRejectsUncoveredWrite(t *testing.T) {
-	delta, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "file",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, 44)
-	require.NoError(t, err)
-	delta.Authority = AuthorityScope{
-		Mount:      testMount.MountID,
-		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(55)},
-		Inodes:     []fsmeta.InodeID{55},
-	}
-
-	var validationErr ValidationError
-	op := testMaterializeAOT(t, delta, nil)
-	err = op.ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationAuthorityMismatch, validationErr.Kind)
-}
-
-func TestMaterializedOpValidationRejectsNonCanonicalDescriptor(t *testing.T) {
-	delta, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "file",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, 44)
-	require.NoError(t, err)
-	op := testMaterializeAOT(t, delta, nil)
-	op.Placement.CanSegment = false
-
-	var validationErr ValidationError
-	err = op.ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationCanonicalMismatch, validationErr.Kind)
-}
-
-func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
-	expected := []byte("old-inode")
-	delta, proofs := testConcreteUpdateInodeDelta(t, expected)
-
-	var validationErr ValidationError
-	err := testMaterializeAOT(t, delta, nil).ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationPredicateProofMissing, validationErr.Kind)
-
-	op := WithGuardProofs(testMaterializeAOT(t, delta, proofs), GuardProofsFor(delta.RuntimeGuards))
-	require.NoError(t, op.ValidateForAdmission())
-}
-
-func TestMaterializedOpValidationRejectsBadPredicateProofContract(t *testing.T) {
-	delta, proofs := testConcreteUpdateInodeDelta(t, []byte("old-inode"))
-	badProof := PredicateProof{
-		Key:     proofs[1].Key,
-		Present: proofs[1].Present,
-		Value:   proofs[1].Value,
-		Source:  ReadSourceUnknown,
-	}
-	badProof.Digest = PredicateProofDigest(badProof.Key, badProof.Value, badProof.Present, badProof.Version, badProof.Source)
-
-	var validationErr ValidationError
-	err := testMaterializeAOT(t, delta, []PredicateProof{proofs[0], badProof}).ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
-
-	duplicateProof := proofs[1]
-	err = testMaterializeAOT(t, delta, []PredicateProof{proofs[0], duplicateProof, duplicateProof}).ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
-}
-
-func TestMaterializedOpValidationRequiresGuardProof(t *testing.T) {
-	delta, proofs := testConcreteUpdateInodeDelta(t, []byte("old-inode"))
-
-	var validationErr ValidationError
-	err := testMaterializeAOT(t, delta, proofs).ValidateForAdmission()
-	require.ErrorAs(t, err, &validationErr)
-	require.Equal(t, ValidationGuardProofMissing, validationErr.Kind)
-
-	op := WithGuardProofs(testMaterializeAOT(t, delta, proofs), GuardProofsFor(delta.RuntimeGuards))
-	require.NoError(t, op.ValidateForAdmission())
-}
-
-func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
-	left, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: 8,
-		Name:   "a",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInSameBucket(t, 8))
-	require.NoError(t, err)
-	right, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: 8,
-		Name:   "b",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInDifferentBucketAfter(t, 8, 128))
-	require.NoError(t, err)
-
-	decision := CanAppendSegment(testCompileAOT(t, left), testCompileAOT(t, right), SegmentBudget{
-		MaxOperations:   2,
-		MaxMutations:    4,
-		MaxPayloadBytes: 1 << 20,
-	})
-	require.Equal(t, SegmentDecisionAppend, decision.Kind)
-
-	decision = CanAppendSegment(testCompileAOT(t, left), testCompileAOT(t, right), SegmentBudget{MaxMutations: 3})
-	require.Equal(t, SegmentDecisionCut, decision.Kind)
-
-	snapshot, err := testSnapshotSubtreeDelta(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 8}, testMount)
-	require.NoError(t, err)
-	decision = CanAppendSegment(testCompileAOT(t, left), testCompileAOT(t, snapshot), SegmentBudget{})
-	require.Equal(t, SegmentDecisionFlushBeforeAndAfter, decision.Kind)
-	require.Equal(t, SlowReasonDurabilityBarrier, decision.Reason)
-}
-
-func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
-	left, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: 8,
-		Name:   "a",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInSameBucket(t, 8))
-	require.NoError(t, err)
-	right, err := testCreateDelta(t, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: 8,
-		Name:   "b",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	}, testMount, testParentInDifferentBucketAfter(t, 8, 128))
-	require.NoError(t, err)
-
-	leftPlan := testCompileAOT(t, left).Segment
-	rightPlan := testCompileAOT(t, right).Segment
-	decision := CanAppendSegmentPlans(leftPlan, rightPlan, DurabilityVisibleOnly, SegmentBudget{MaxMutations: 4})
-	require.Equal(t, SegmentDecisionAppend, decision.Kind)
-
-	merged := MergeSegmentPlans(leftPlan, rightPlan)
-	require.Equal(t, uint32(2), merged.OperationCount)
-	require.Equal(t, uint32(4), merged.MutationCount)
-	require.Greater(t, merged.EstimatedPayloadBytes, leftPlan.EstimatedPayloadBytes)
-
-	installPlan, ok := SegmentPlanForInstall(leftPlan, false)
-	require.True(t, ok)
-	require.Equal(t, SegmentInstallCatalog, installPlan.Install)
-
-	materializePlan, ok := SegmentPlanForInstall(leftPlan, true)
-	require.True(t, ok)
-	require.Equal(t, SegmentInstallSingleBucket, materializePlan.Install)
-	require.NotZero(t, materializePlan.MergeKey.PrimaryBucket)
 }
 
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {

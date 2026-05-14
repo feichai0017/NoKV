@@ -51,8 +51,7 @@ type MaterializedOp struct {
 // PredicateEvidence carries runtime reads that turn a generated program with
 // symbolic predicates into the proof-carrying descriptor admitted by Peras.
 type PredicateEvidence struct {
-	Proofs      []PredicateProof
-	KnownAbsent [][]byte
+	Proofs []PredicateProof
 }
 
 type FenceMode uint8
@@ -156,10 +155,17 @@ type GuardObligation struct {
 	Digest [32]byte
 }
 
+type GuardEvidence struct {
+	DescriptorDigest     [32]byte
+	PredicateProofDigest [32]byte
+	FootprintDigest      [32]byte
+}
+
 type GuardProof struct {
-	Guard  RuntimeGuard
-	Passed bool
-	Digest [32]byte
+	Guard    RuntimeGuard
+	Passed   bool
+	Evidence GuardEvidence
+	Digest   [32]byte
 }
 
 type DerivationKind uint8
@@ -327,13 +333,6 @@ func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (Se
 	if err != nil {
 		return SemanticDelta{}, err
 	}
-	knownAbsent := make(map[string]struct{}, len(evidence.KnownAbsent))
-	for _, key := range evidence.KnownAbsent {
-		if len(key) == 0 {
-			return SemanticDelta{}, fsmeta.ErrInvalidRequest
-		}
-		knownAbsent[string(key)] = struct{}{}
-	}
 	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(proofs))
 	for i := range delta.ReadPredicates {
 		predicate := &delta.ReadPredicates[i]
@@ -348,12 +347,6 @@ func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (Se
 		if proof, ok := proofs[key]; ok {
 			applyPredicateProof(predicate, proof)
 			continue
-		}
-		if _, ok := knownAbsent[key]; ok {
-			predicate.Kind = PredicateNotExists
-			predicate.ExpectedValue = nil
-			predicate.HasExpectedValue = false
-			predicate.RuntimeChecked = true
 		}
 	}
 	extraKeys := make([]string, 0, len(proofs))
@@ -419,6 +412,17 @@ func authorityScopeWithKey(scope AuthorityScope, key []byte) AuthorityScope {
 
 func WithGuardProofs(op MaterializedOp, proofs []GuardProof) MaterializedOp {
 	op.GuardProofs = cloneGuardProofs(proofs)
+	return op
+}
+
+func WithPredicateProofs(op MaterializedOp, proofs []PredicateProof) MaterializedOp {
+	op.PredicateProofs = clonePredicateProofs(proofs)
+	return op
+}
+
+func WithAdmissionProofs(op MaterializedOp, predicateProofs []PredicateProof, guardProofs []GuardProof) MaterializedOp {
+	op.PredicateProofs = clonePredicateProofs(predicateProofs)
+	op.GuardProofs = cloneGuardProofs(guardProofs)
 	return op
 }
 
@@ -532,6 +536,18 @@ func PredicateProofDigest(key, value []byte, present bool, version uint64, sourc
 	return h.sum()
 }
 
+func PredicateProofFor(key, value []byte, present bool, version uint64, source ReadSource) PredicateProof {
+	proof := PredicateProof{
+		Key:     cloneBytes(key),
+		Present: present,
+		Value:   cloneBytes(value),
+		Version: version,
+		Source:  source,
+	}
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	return proof
+}
+
 func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	if len(proofs) == 0 {
 		return [32]byte{}
@@ -549,31 +565,68 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	return h.sum()
 }
 
-// GuardProofDigest commits to the generated guard identity and boolean result.
-// The holder/admission path still owns the evidence check for that guard; this
-// digest is the replay-stable statement that the closed descriptor consumed.
-func GuardProofDigest(guard RuntimeGuard, passed bool) [32]byte {
+func GuardObligationDigest(guard RuntimeGuard) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))
-	h.writeBool(passed)
 	return h.sum()
 }
 
-func GuardProofFor(guard RuntimeGuard, passed bool) GuardProof {
-	return GuardProof{
-		Guard:  guard,
-		Passed: passed,
-		Digest: GuardProofDigest(guard, passed),
+func GuardEvidenceFor(op CompiledOp, predicateProofs []PredicateProof) GuardEvidence {
+	return GuardEvidence{
+		DescriptorDigest:     op.DescriptorDigest,
+		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
+		FootprintDigest:      KeyFootprintDigest(op.Footprint),
 	}
 }
 
-func GuardProofsFor(guards []RuntimeGuard) []GuardProof {
+func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
+	h := newDigestBuilder()
+	h.writeUint64(uint64(len(footprint.Reads)))
+	for _, ref := range footprint.Reads {
+		h.writeKeyRef(ref)
+	}
+	h.writeUint64(uint64(len(footprint.Writes)))
+	for _, ref := range footprint.Writes {
+		h.writeKeyRef(ref)
+	}
+	h.writeUint64(uint64(len(footprint.ConflictKeys)))
+	for _, ref := range footprint.ConflictKeys {
+		h.writeKeyRef(ref)
+	}
+	h.writeBool(footprint.HasPrefixRead)
+	h.writeBool(footprint.HasOpaqueKeys)
+	h.writeUint64(footprint.EstimatedBytes)
+	return h.sum()
+}
+
+// GuardProofDigest commits to the generated guard identity, boolean result,
+// and the predicate/effect descriptor evidence the holder used for admission.
+func GuardProofDigest(guard RuntimeGuard, passed bool, evidence GuardEvidence) [32]byte {
+	h := newDigestBuilder()
+	h.writeString(string(guard))
+	h.writeBool(passed)
+	h.writeBytes(evidence.DescriptorDigest[:])
+	h.writeBytes(evidence.PredicateProofDigest[:])
+	h.writeBytes(evidence.FootprintDigest[:])
+	return h.sum()
+}
+
+func GuardProofFor(guard RuntimeGuard, passed bool, evidence GuardEvidence) GuardProof {
+	return GuardProof{
+		Guard:    guard,
+		Passed:   passed,
+		Evidence: evidence,
+		Digest:   GuardProofDigest(guard, passed, evidence),
+	}
+}
+
+func GuardProofsFor(guards []RuntimeGuard, evidence GuardEvidence) []GuardProof {
 	if len(guards) == 0 {
 		return nil
 	}
 	out := make([]GuardProof, 0, len(guards))
 	for _, guard := range guards {
-		out = append(out, GuardProofFor(guard, true))
+		out = append(out, GuardProofFor(guard, true, evidence))
 	}
 	return out
 }
@@ -610,6 +663,9 @@ func GuardProofSetDigest(proofs []GuardProof) [32]byte {
 	for _, proof := range proofs {
 		h.writeString(string(proof.Guard))
 		h.writeBool(proof.Passed)
+		h.writeBytes(proof.Evidence.DescriptorDigest[:])
+		h.writeBytes(proof.Evidence.PredicateProofDigest[:])
+		h.writeBytes(proof.Evidence.FootprintDigest[:])
 		h.writeBytes(proof.Digest[:])
 	}
 	return h.sum()
@@ -673,6 +729,17 @@ func (b *digestBuilder) writeSegmentMergeKey(key SegmentMergeKey) {
 	b.writeUint64(uint64(key.Install))
 	b.writeUint64(uint64(key.Durability))
 	b.writeUint64(uint64(key.FormatVersion))
+}
+
+func (b *digestBuilder) writeKeyRef(ref KeyRef) {
+	b.writeUint64(uint64(ref.Mode))
+	b.writeBytes(ref.Key)
+	b.writeBool(ref.Opaque)
+	b.writeUint64(uint64(ref.MountKeyID))
+	b.writeUint64(uint64(ref.Bucket))
+	b.writeUint64(uint64(ref.Kind))
+	b.writeUint64(uint64(ref.Parent))
+	b.writeUint64(uint64(ref.Inode))
 }
 
 func (b *digestBuilder) writeString(value string) {

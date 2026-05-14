@@ -7,7 +7,8 @@ import (
 )
 
 type AdmissionResult struct {
-	GuardProofs []compile.GuardProof
+	PredicateProofs []compile.PredicateProof
+	GuardProofs     []compile.GuardProof
 }
 
 type AdmissionFunc func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error)
@@ -33,7 +34,7 @@ func Admit(ctx context.Context, op compile.MaterializedOp, fn AdmissionFunc) err
 	if !ok {
 		return ErrAdmissionRejected
 	}
-	if err := compile.WithGuardProofs(op, result.GuardProofs).ValidateForAdmission(); err != nil {
+	if err := compile.WithAdmissionProofs(op, result.PredicateProofs, result.GuardProofs).ValidateForAdmission(); err != nil {
 		return ErrAdmissionRejected
 	}
 	return nil
@@ -56,7 +57,7 @@ func AdmitAndSeal(ctx context.Context, op compile.MaterializedOp, fn AdmissionFu
 	if !ok {
 		return compile.MaterializedOp{}, ErrAdmissionRejected
 	}
-	op = compile.WithGuardProofs(op, result.GuardProofs)
+	op = compile.WithAdmissionProofs(op, result.PredicateProofs, result.GuardProofs)
 	if err := op.ValidateForAdmission(); err != nil {
 		return compile.MaterializedOp{}, ErrAdmissionRejected
 	}

@@ -37,6 +37,11 @@ jobs:
         make fmt
         git diff --exit-code
 
+    - name: Generated code
+      run: |
+        go generate ./fsmeta/exec/compile
+        git diff --exit-code -- fsmeta/exec/compile
+
     - name: Lint
       run: make lint
 

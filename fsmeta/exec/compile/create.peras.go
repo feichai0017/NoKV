@@ -73,6 +73,9 @@ func CompileCreateProgram(req fsmeta.CreateRequest, mount fsmeta.MountIdentity, 
 		Eligibility: EligibilityVisibleCommit,
 	}
 	delta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)
+	if !validateCreateLoweredDelta(delta) {
+		return CreateProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileCreateCompiledOp(delta)
 	if err != nil {
 		return CreateProgram{}, err
@@ -102,6 +105,65 @@ func MaterializeCreate(program CreateProgram, values CreateValues) (Materialized
 	materialized.IntentDigest = compiled.IntentDigest
 	materialized.ReplayDigest = materialized.DescriptorDigest
 	return MaterializedOp{CompiledOp: materialized}, nil
+}
+
+func validateCreateLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationCreate {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilityVisibleCommit && delta.SlowReason == SlowReasonNone:
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonSharedQuota:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) == 0 || len(delta.Authority.Parents) > 1 {
+		return false
+	}
+	if len(delta.Authority.Inodes) == 0 || len(delta.Authority.Inodes) > 1 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 2 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateNotExists {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateNotExists {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectPut {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectPut {
+		return false
+	}
+	if len(delta.RuntimeGuards) > 1 {
+		return false
+	}
+	for _, guard := range delta.RuntimeGuards {
+		switch guard {
+		case GuardQuotaCredit:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {
@@ -192,7 +254,7 @@ func compileCreatePlacementPlan(delta SemanticDelta, durability DurabilityClass)
 func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {
 	out := make([]GuardObligation, 0, len(guards))
 	for _, guard := range guards {
-		out = append(out, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		out = append(out, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	return out
 }

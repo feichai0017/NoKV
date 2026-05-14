@@ -17,11 +17,56 @@ func CompileReadDirProgram(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity
 	if err != nil {
 		return ReadDirProgram{}, err
 	}
+	if !validateReadDirLoweredDelta(delta) {
+		return ReadDirProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileReadDirCompiledOp(delta)
 	if err != nil {
 		return ReadDirProgram{}, err
 	}
 	return ReadDirProgram{Compiled: compiled}, nil
+}
+
+func validateReadDirLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationReadDir {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonRangeRead:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) == 0 || len(delta.Authority.Parents) > 1 {
+		return false
+	}
+	if len(delta.Authority.Inodes) != 0 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 1 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicatePrefixScan {
+		return false
+	}
+	if len(delta.WriteEffects) != 0 {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 0 {
+		return false
+	}
+	return true
 }
 
 func compileReadDirCompiledOp(delta SemanticDelta) (CompiledOp, error) {
@@ -123,6 +168,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -132,7 +179,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {

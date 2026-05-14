@@ -105,7 +105,11 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 		return err
 	}
 	for _, obligation := range op.Predicates {
-		if obligation.Kind != PredicateObservedValue {
+		requireProof := obligation.Kind == PredicateObservedValue
+		if requireGuardProofs && (obligation.NeedValue || obligation.NeedAbsent) {
+			requireProof = true
+		}
+		if !requireProof {
 			continue
 		}
 		proof, ok := proofs[string(obligation.Key)]
@@ -120,6 +124,7 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 	if err != nil {
 		return err
 	}
+	guardEvidence := GuardEvidenceFor(op.CompiledOp, op.PredicateProofs)
 	for _, obligation := range op.Guards {
 		proof, ok := guardProofs[obligation.Guard]
 		if !ok {
@@ -128,7 +133,7 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 			}
 			return ValidationError{Kind: ValidationGuardProofMissing}
 		}
-		if proof.Digest != obligation.Digest {
+		if proof.Evidence != guardEvidence || proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
 			return ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 	}
@@ -362,7 +367,7 @@ func guardProofMap(proofs []GuardProof) (map[RuntimeGuard]GuardProof, error) {
 		if proof.Guard == "" || !proof.Passed {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed) {
+		if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 		if _, ok := out[proof.Guard]; ok {

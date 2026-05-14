@@ -64,7 +64,6 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 	concrete, err := compile.MaterializeOpenWriteSession(program, compile.OpenWriteSessionValues{
 		SessionValue:    value,
 		PredicateProofs: evidence.Proofs,
-		KnownAbsent:     evidence.KnownAbsent,
 	})
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
@@ -115,7 +114,6 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, pro
 	concrete, err := compile.MaterializeHeartbeatWriteSession(program, compile.HeartbeatWriteSessionValues{
 		SessionValue:    value,
 		PredicateProofs: evidence.Proofs,
-		KnownAbsent:     evidence.KnownAbsent,
 	})
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
@@ -158,7 +156,6 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program
 	concrete, err := compile.MaterializeCloseWriteSession(program, compile.CloseWriteSessionValues{
 		DeleteOwner:     deleteOwner,
 		PredicateProofs: evidence.Proofs,
-		KnownAbsent:     evidence.KnownAbsent,
 	})
 	if err != nil {
 		return false, err

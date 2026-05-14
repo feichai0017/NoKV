@@ -21,6 +21,9 @@ func CompileRenameProgram(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) 
 	if err != nil {
 		return RenameProgram{}, err
 	}
+	if !validateRenameLoweredDelta(delta) {
+		return RenameProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileRenameCompiledOp(delta)
 	if err != nil {
 		return RenameProgram{}, err
@@ -33,11 +36,117 @@ func CompileRenameSubtreeProgram(req fsmeta.RenameSubtreeRequest, mount fsmeta.M
 	if err != nil {
 		return RenameSubtreeProgram{}, err
 	}
+	if !validateRenameSubtreeLoweredDelta(delta) {
+		return RenameSubtreeProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileRenameSubtreeCompiledOp(delta)
 	if err != nil {
 		return RenameSubtreeProgram{}, err
 	}
 	return RenameSubtreeProgram{Compiled: compiled}, nil
+}
+
+func validateRenameLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationRename {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilityVisibleCommit && delta.SlowReason == SlowReasonNone:
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonCrossBucket:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) == 0 || len(delta.Authority.Parents) > 2 {
+		return false
+	}
+	if len(delta.Authority.Inodes) != 0 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 2 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateExists {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateNotExists {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectDelete {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 0 {
+		return false
+	}
+	return true
+}
+
+func validateRenameSubtreeLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationRenameSubtree {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonDurabilityBarrier:
+	default:
+		return false
+	}
+	if !delta.DurabilityBarrier {
+		return false
+	}
+	if !delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) == 0 || len(delta.Authority.Parents) > 2 {
+		return false
+	}
+	if len(delta.Authority.Inodes) != 0 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 2 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateExists {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateNotExists {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectDelete {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 0 {
+		return false
+	}
+	return true
 }
 
 func compileRenameCompiledOp(delta SemanticDelta) (CompiledOp, error) {
@@ -139,6 +248,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -148,7 +259,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -335,6 +446,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -344,7 +457,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {

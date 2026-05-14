@@ -89,12 +89,18 @@ func TestAdmitRejectsFalseAdmission(t *testing.T) {
 }
 
 func TestAdmitAndSealBindsGuardProofsAfterAdmission(t *testing.T) {
-	op := testGeneratedCreateOp(t, "guarded", "v", compile.WithQuotaMode(compile.QuotaModeEscrow))
+	op, err := generatedCreateIntentOp("guarded", "v", compile.WithQuotaMode(compile.QuotaModeEscrow))
+	require.NoError(t, err)
 	require.NoError(t, op.ValidateForAdmissionIntent())
 	require.Error(t, op.ValidateForAdmission())
 
 	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
-		return AdmissionResult{GuardProofs: compile.GuardProofsFor(op.Delta.RuntimeGuards)}, true, nil
+		proofs := testPredicateProofsForMaterializedOp(op)
+		evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
+		return AdmissionResult{
+			PredicateProofs: proofs,
+			GuardProofs:     compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence),
+		}, true, nil
 	})
 	require.NoError(t, err)
 	require.NoError(t, sealed.ValidateForAdmission())

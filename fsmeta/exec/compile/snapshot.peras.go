@@ -17,11 +17,56 @@ func CompileSnapshotSubtreeProgram(req fsmeta.SnapshotSubtreeRequest, mount fsme
 	if err != nil {
 		return SnapshotSubtreeProgram{}, err
 	}
+	if !validateSnapshotSubtreeLoweredDelta(delta) {
+		return SnapshotSubtreeProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileSnapshotSubtreeCompiledOp(delta)
 	if err != nil {
 		return SnapshotSubtreeProgram{}, err
 	}
 	return SnapshotSubtreeProgram{Compiled: compiled}, nil
+}
+
+func validateSnapshotSubtreeLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationSnapshotSubtree {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonDurabilityBarrier:
+	default:
+		return false
+	}
+	if !delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) == 0 || len(delta.Authority.Parents) > 1 {
+		return false
+	}
+	if len(delta.Authority.Inodes) != 0 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 1 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicatePrefixScan {
+		return false
+	}
+	if len(delta.WriteEffects) != 0 {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 0 {
+		return false
+	}
+	return true
 }
 
 func compileSnapshotSubtreeCompiledOp(delta SemanticDelta) (CompiledOp, error) {
@@ -123,6 +168,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -132,7 +179,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {

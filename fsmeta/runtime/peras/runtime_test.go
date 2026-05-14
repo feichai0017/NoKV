@@ -1822,7 +1822,31 @@ func testRuntimeCreateOp(mount fsmeta.MountIdentity, parent fsmeta.InodeID, name
 	if err != nil {
 		panic(err)
 	}
-	return op
+	return testRuntimeSealMaterializedOp(op)
+}
+
+func testRuntimeSealMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
+	proofs := testRuntimePredicateProofsForOp(op)
+	evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
+	return compile.WithAdmissionProofs(op, proofs, compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence))
+}
+
+func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []compile.PredicateProof {
+	if len(op.Delta.ReadPredicates) == 0 {
+		return nil
+	}
+	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
+	for _, predicate := range op.Delta.ReadPredicates {
+		switch predicate.Kind {
+		case compile.PredicateExists:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay))
+		case compile.PredicateNotExists:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
+		case compile.PredicateObservedValue:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay))
+		}
+	}
+	return proofs
 }
 
 func testRuntimeCreateArgs(dentryKey, inodeKey []byte) (fsmeta.MountIdentity, fsmeta.InodeID, string, fsmeta.InodeID) {
@@ -1923,7 +1947,7 @@ func testRuntimeRenameDentryOp(fromName, toName string, toValue []byte) compile.
 	if err != nil {
 		panic(err)
 	}
-	return op
+	return testRuntimeSealMaterializedOp(op)
 }
 
 func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.MaterializedOp {

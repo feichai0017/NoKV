@@ -27,25 +27,25 @@ type ExpireWriteSessionsProgram struct {
 type OpenWriteSessionValues struct {
 	SessionValue    []byte
 	PredicateProofs []PredicateProof
-	KnownAbsent     [][]byte
 }
 
 type HeartbeatWriteSessionValues struct {
 	SessionValue    []byte
 	PredicateProofs []PredicateProof
-	KnownAbsent     [][]byte
 }
 
 type CloseWriteSessionValues struct {
 	DeleteOwner     bool
 	PredicateProofs []PredicateProof
-	KnownAbsent     [][]byte
 }
 
 func CompileOpenWriteSessionProgram(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (OpenWriteSessionProgram, error) {
 	delta, err := lowerOpenWriteSession(req, mount)
 	if err != nil {
 		return OpenWriteSessionProgram{}, err
+	}
+	if !validateOpenWriteSessionLoweredDelta(delta) {
+		return OpenWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileOpenWriteSessionCompiledOp(delta)
 	if err != nil {
@@ -59,6 +59,9 @@ func CompileHeartbeatWriteSessionProgram(req fsmeta.HeartbeatWriteSessionRequest
 	if err != nil {
 		return HeartbeatWriteSessionProgram{}, err
 	}
+	if !validateHeartbeatWriteSessionLoweredDelta(delta) {
+		return HeartbeatWriteSessionProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileHeartbeatWriteSessionCompiledOp(delta)
 	if err != nil {
 		return HeartbeatWriteSessionProgram{}, err
@@ -70,6 +73,9 @@ func CompileCloseWriteSessionProgram(req fsmeta.CloseWriteSessionRequest, mount 
 	delta, err := lowerCloseWriteSession(req, mount)
 	if err != nil {
 		return CloseWriteSessionProgram{}, err
+	}
+	if !validateCloseWriteSessionLoweredDelta(delta) {
+		return CloseWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileCloseWriteSessionCompiledOp(delta)
 	if err != nil {
@@ -83,11 +89,226 @@ func CompileExpireWriteSessionsProgram(req fsmeta.ExpireWriteSessionsRequest, mo
 	if err != nil {
 		return ExpireWriteSessionsProgram{}, err
 	}
+	if !validateExpireWriteSessionsLoweredDelta(delta) {
+		return ExpireWriteSessionsProgram{}, fsmeta.ErrInvalidRequest
+	}
 	compiled, err := compileExpireWriteSessionsCompiledOp(delta)
 	if err != nil {
 		return ExpireWriteSessionsProgram{}, err
 	}
 	return ExpireWriteSessionsProgram{Compiled: compiled}, nil
+}
+
+func validateOpenWriteSessionLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationOpenWriteSession {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilityVisibleCommit && delta.SlowReason == SlowReasonNone:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) != 0 {
+		return false
+	}
+	if len(delta.Authority.Inodes) == 0 || len(delta.Authority.Inodes) > 1 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 3 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
+		return false
+	}
+	if delta.ReadPredicates[2].Kind != PredicateObservedValue {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectDerivedPut {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 2 {
+		return false
+	}
+	if delta.RuntimeGuards[0] != GuardNonDirectoryInode {
+		return false
+	}
+	if delta.RuntimeGuards[1] != GuardExpiredSessionOwner {
+		return false
+	}
+	return true
+}
+
+func validateHeartbeatWriteSessionLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationHeartbeatSession {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilityVisibleCommit && delta.SlowReason == SlowReasonNone:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) != 0 {
+		return false
+	}
+	if len(delta.Authority.Inodes) == 0 || len(delta.Authority.Inodes) > 1 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 2 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectDerivedPut {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 1 {
+		return false
+	}
+	if delta.RuntimeGuards[0] != GuardLiveSession {
+		return false
+	}
+	return true
+}
+
+func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationCloseSession {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilityVisibleCommit && delta.SlowReason == SlowReasonNone:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) != 0 {
+		return false
+	}
+	if len(delta.Authority.Inodes) == 0 || len(delta.Authority.Inodes) > 1 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) != 2 {
+		return false
+	}
+	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
+		return false
+	}
+	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
+		return false
+	}
+	if len(delta.WriteEffects) != 2 {
+		return false
+	}
+	if delta.WriteEffects[0].Kind != EffectDelete {
+		return false
+	}
+	if delta.WriteEffects[1].Kind != EffectDerivedDelete {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 1 {
+		return false
+	}
+	if delta.RuntimeGuards[0] != GuardLiveSession {
+		return false
+	}
+	return true
+}
+
+func validateExpireWriteSessionsLoweredDelta(delta SemanticDelta) bool {
+	if delta.Kind != fsmeta.OperationExpireSessions {
+		return false
+	}
+	switch {
+	case delta.Eligibility == EligibilitySlowPath && delta.SlowReason == SlowReasonMaintenanceScan:
+	default:
+		return false
+	}
+	if delta.DurabilityBarrier {
+		return false
+	}
+	if delta.WatchAtSeal {
+		return false
+	}
+	if len(delta.Authority.Parents) != 0 {
+		return false
+	}
+	if len(delta.Authority.Inodes) != 0 {
+		return false
+	}
+	if delta.Authority.Broad {
+		return false
+	}
+	if delta.Authority.AllowOpaqueKeys {
+		return false
+	}
+	if len(delta.ReadPredicates) == 0 {
+		return false
+	}
+	for _, predicate := range delta.ReadPredicates {
+		if predicate.Kind != PredicatePrefixScan {
+			return false
+		}
+	}
+	if len(delta.WriteEffects) != 0 {
+		return false
+	}
+	if len(delta.RuntimeGuards) != 0 {
+		return false
+	}
+	return true
 }
 
 func compileOpenWriteSessionCompiledOp(delta SemanticDelta) (CompiledOp, error) {
@@ -189,6 +410,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -198,7 +421,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -385,6 +608,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -394,7 +619,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -581,6 +806,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -590,7 +817,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -777,6 +1004,8 @@ placementDone:
 			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
 		}
 		switch predicate.Kind {
+		case PredicateExists:
+			obligation.NeedValue = true
 		case PredicateNotExists:
 			obligation.NeedAbsent = true
 		case PredicateObservedValue:
@@ -786,7 +1015,7 @@ placementDone:
 	}
 	guards := make([]GuardObligation, 0, len(delta.RuntimeGuards))
 	for _, guard := range delta.RuntimeGuards {
-		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardProofDigest(guard, true)})
+		guards = append(guards, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	effects := make([]EffectPlan, 0, len(delta.WriteEffects))
 	for i, effect := range delta.WriteEffects {
@@ -884,8 +1113,7 @@ func MaterializeOpenWriteSession(program OpenWriteSessionProgram, values OpenWri
 		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[1].Key, Value: values.SessionValue},
 	}
 	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs:      values.PredicateProofs,
-		KnownAbsent: values.KnownAbsent,
+		Proofs: values.PredicateProofs,
 	}, nil)
 }
 
@@ -899,8 +1127,7 @@ func MaterializeHeartbeatWriteSession(program HeartbeatWriteSessionProgram, valu
 		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[1].Key, Value: values.SessionValue},
 	}
 	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs:      values.PredicateProofs,
-		KnownAbsent: values.KnownAbsent,
+		Proofs: values.PredicateProofs,
 	}, nil)
 }
 
@@ -914,7 +1141,6 @@ func MaterializeCloseWriteSession(program CloseWriteSessionProgram, values Close
 		effects = append(effects, WriteEffect{Kind: EffectDelete, Key: compiled.Delta.WriteEffects[1].Key})
 	}
 	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs:      values.PredicateProofs,
-		KnownAbsent: values.KnownAbsent,
+		Proofs: values.PredicateProofs,
 	}, nil)
 }

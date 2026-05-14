@@ -45,8 +45,9 @@ func TestHolderSubmitReturnsPendingAckForSameOperationID(t *testing.T) {
 func TestHolderPendingAckUsesIntentBeforeGuardProofs(t *testing.T) {
 	holder := newTestHolder(t)
 	id := opID("client-a", 1)
-	unsealed := opWithGuardedValueWrite("a", "v1")
-	sealed := compile.WithGuardProofs(unsealed, compile.GuardProofsFor(unsealed.Delta.RuntimeGuards))
+	unsealed, err := generatedCreateIntentOp("a", "v1", compile.WithQuotaMode(compile.QuotaModeEscrow))
+	require.NoError(t, err)
+	sealed := sealTestMaterializedOp(unsealed)
 
 	first, err := holder.Submit(context.Background(), id, sealed)
 	require.NoError(t, err)
@@ -259,6 +260,14 @@ func testGeneratedCreateOp(tb testing.TB, name, value string, opts ...compile.Op
 }
 
 func generatedCreateOp(name, value string, opts ...compile.Option) (compile.MaterializedOp, error) {
+	op, err := generatedCreateIntentOp(name, value, opts...)
+	if err != nil {
+		return compile.MaterializedOp{}, err
+	}
+	return sealTestMaterializedOp(op), nil
+}
+
+func generatedCreateIntentOp(name, value string, opts ...compile.Option) (compile.MaterializedOp, error) {
 	name = strings.NewReplacer("/", "-", "\x00", "-").Replace(name)
 	if name == "" || name == "." || name == ".." {
 		name = "entry"
@@ -298,7 +307,7 @@ func testGeneratedCreateOpForInodes(tb testing.TB, parent, inode fsmeta.InodeID,
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return op
+	return sealTestMaterializedOp(op)
 }
 
 func opWithValueWrites(key, value string) compile.MaterializedOp {
@@ -309,12 +318,28 @@ func opWithValueWrites(key, value string) compile.MaterializedOp {
 	return op
 }
 
-func opWithGuardedValueWrite(key, value string) compile.MaterializedOp {
-	op, err := generatedCreateOp(key, value, compile.WithQuotaMode(compile.QuotaModeEscrow))
-	if err != nil {
-		panic(err)
+func sealTestMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
+	proofs := testPredicateProofsForMaterializedOp(op)
+	evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
+	return compile.WithAdmissionProofs(op, proofs, compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence))
+}
+
+func testPredicateProofsForMaterializedOp(op compile.MaterializedOp) []compile.PredicateProof {
+	if len(op.Delta.ReadPredicates) == 0 {
+		return nil
 	}
-	return op
+	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
+	for _, predicate := range op.Delta.ReadPredicates {
+		switch predicate.Kind {
+		case compile.PredicateExists:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay))
+		case compile.PredicateNotExists:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
+		case compile.PredicateObservedValue:
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay))
+		}
+	}
+	return proofs
 }
 
 func fsmetaInodeKeyForBucket(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) []byte {
