@@ -331,7 +331,10 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	}
 	unlockAdmission := c.latches.Lock(op)
 	defer unlockAdmission()
-	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission)
+	admissionCtx := fsperas.AdmissionContext{
+		ProofFrontier: compile.ProofFrontier{EpochID: holder.EpochID(), Sequence: id.Seq},
+	}
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, admissionCtx)
 	if err != nil {
 		if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isAdmissionTerminalError(err) {
 			return fsperas.VisibleAck{}, c.recordError(err)

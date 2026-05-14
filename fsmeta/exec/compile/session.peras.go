@@ -132,10 +132,19 @@ func validateOpenWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "read[0]") {
+		return false
+	}
 	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "read[1]") {
+		return false
+	}
 	if delta.ReadPredicates[2].Kind != PredicateObservedValue {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[2].Key, "read[2]") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -144,7 +153,13 @@ func validateOpenWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[0].Kind != EffectDerivedPut {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "mutate[1]") {
 		return false
 	}
 	if len(delta.RuntimeGuards) != 2 {
@@ -192,7 +207,13 @@ func validateHeartbeatWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "read[0]") {
+		return false
+	}
 	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "read[1]") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -201,7 +222,13 @@ func validateHeartbeatWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[0].Kind != EffectDerivedPut {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "mutate[1]") {
 		return false
 	}
 	if len(delta.RuntimeGuards) != 1 {
@@ -246,7 +273,13 @@ func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "read[0]") {
+		return false
+	}
 	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "runtime") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -255,7 +288,13 @@ func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[0].Kind != EffectDelete {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectDerivedDelete {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "predicate[1]") {
 		return false
 	}
 	if len(delta.RuntimeGuards) != 1 {
@@ -297,8 +336,11 @@ func validateExpireWriteSessionsLoweredDelta(delta SemanticDelta) bool {
 	if len(delta.ReadPredicates) == 0 {
 		return false
 	}
-	for _, predicate := range delta.ReadPredicates {
+	for i, predicate := range delta.ReadPredicates {
 		if predicate.Kind != PredicatePrefixScan {
+			return false
+		}
+		if !semanticIndexedKeyBindingMatches(delta, predicate.Key, "read_prefix", i) {
 			return false
 		}
 	}

@@ -145,11 +145,41 @@ func cloneRuntimeReplayOperation(op fsperas.ReplayOperation) fsperas.ReplayOpera
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
 		ExecutionPlanDigest:  op.ExecutionPlanDigest,
+		PredicateProofs:      cloneRuntimePredicateProofs(op.PredicateProofs),
+		GuardProofs:          cloneRuntimeGuardProofs(op.GuardProofs),
 		Segment:              op.Segment,
 		Atomicity:            cloneRuntimeReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
 		Mutations:            mutations,
 	}
+}
+
+func cloneRuntimePredicateProofs(proofs []compile.PredicateProof) []compile.PredicateProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]compile.PredicateProof, len(proofs))
+	for i, proof := range proofs {
+		out[i] = compile.PredicateProof{
+			Key:           append([]byte(nil), proof.Key...),
+			Present:       proof.Present,
+			Value:         append([]byte(nil), proof.Value...),
+			Version:       proof.Version,
+			Source:        proof.Source,
+			ProofFrontier: proof.ProofFrontier,
+			Digest:        proof.Digest,
+		}
+	}
+	return out
+}
+
+func cloneRuntimeGuardProofs(proofs []compile.GuardProof) []compile.GuardProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]compile.GuardProof, len(proofs))
+	copy(out, proofs)
+	return out
 }
 
 func cloneRuntimeReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {

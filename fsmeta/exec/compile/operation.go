@@ -1,9 +1,12 @@
 package compile
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"slices"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -142,12 +145,13 @@ const (
 )
 
 type PredicateProof struct {
-	Key     []byte
-	Present bool
-	Value   []byte
-	Version uint64
-	Source  ReadSource
-	Digest  [32]byte
+	Key           []byte
+	Present       bool
+	Value         []byte
+	Version       uint64
+	Source        ReadSource
+	ProofFrontier ProofFrontier
+	Digest        [32]byte
 }
 
 type GuardObligation struct {
@@ -155,10 +159,36 @@ type GuardObligation struct {
 	Digest [32]byte
 }
 
+type ProofFrontier struct {
+	EpochID  uint64
+	Sequence uint64
+}
+
+func (f ProofFrontier) Valid() bool {
+	return f.EpochID != 0 && f.Sequence != 0
+}
+
+type GuardEvidenceKind uint8
+
+const (
+	GuardEvidenceUnknown GuardEvidenceKind = iota
+	GuardEvidenceSingleLinkInode
+	GuardEvidenceSameAuthority
+	GuardEvidenceNonDirectoryInode
+	GuardEvidenceLiveSession
+	GuardEvidenceExpiredSessionOwner
+	GuardEvidenceQuotaCredit
+)
+
 type GuardEvidence struct {
+	Guard                RuntimeGuard
+	Kind                 GuardEvidenceKind
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
 	FootprintDigest      [32]byte
+	EffectDigest         [32]byte
+	SubjectDigest        [32]byte
+	ProofFrontier        ProofFrontier
 }
 
 type GuardProof struct {
@@ -499,6 +529,84 @@ func keyRef(mode KeyAccessMode, key []byte) KeyRef {
 	return out
 }
 
+func semanticKeyBindingMatches(delta SemanticDelta, actual []byte, binding string) bool {
+	if binding == "" || binding == "runtime" {
+		return true
+	}
+	expected, ok := semanticKeyBinding(delta, binding)
+	if !ok {
+		return false
+	}
+	return bytes.Equal(actual, expected)
+}
+
+func semanticIndexedKeyBindingMatches(delta SemanticDelta, actual []byte, family string, index int) bool {
+	if family == "" || family == "runtime" || index < 0 {
+		return true
+	}
+	var expected []byte
+	switch family {
+	case "read":
+		if index >= len(delta.Plan.ReadKeys) {
+			return false
+		}
+		expected = delta.Plan.ReadKeys[index]
+	case "read_prefix":
+		if index >= len(delta.Plan.ReadPrefixes) {
+			return false
+		}
+		expected = delta.Plan.ReadPrefixes[index]
+	case "mutate":
+		if index >= len(delta.Plan.MutateKeys) {
+			return false
+		}
+		expected = delta.Plan.MutateKeys[index]
+	default:
+		return false
+	}
+	return len(expected) != 0 && bytes.Equal(actual, expected)
+}
+
+func semanticKeyBinding(delta SemanticDelta, binding string) ([]byte, bool) {
+	switch binding {
+	case "primary":
+		return delta.Plan.PrimaryKey, len(delta.Plan.PrimaryKey) != 0
+	}
+	if prefix, ok := strings.CutSuffix(binding, "]"); ok {
+		name, indexText, ok := strings.Cut(prefix, "[")
+		if !ok {
+			return nil, false
+		}
+		index, err := strconv.Atoi(indexText)
+		if err != nil || index < 0 {
+			return nil, false
+		}
+		switch name {
+		case "read":
+			if index >= len(delta.Plan.ReadKeys) {
+				return nil, false
+			}
+			return delta.Plan.ReadKeys[index], len(delta.Plan.ReadKeys[index]) != 0
+		case "read_prefix":
+			if index >= len(delta.Plan.ReadPrefixes) {
+				return nil, false
+			}
+			return delta.Plan.ReadPrefixes[index], len(delta.Plan.ReadPrefixes[index]) != 0
+		case "mutate":
+			if index >= len(delta.Plan.MutateKeys) {
+				return nil, false
+			}
+			return delta.Plan.MutateKeys[index], len(delta.Plan.MutateKeys[index]) != 0
+		case "predicate":
+			if index >= len(delta.ReadPredicates) {
+				return nil, false
+			}
+			return delta.ReadPredicates[index].Key, len(delta.ReadPredicates[index].Key) != 0
+		}
+	}
+	return nil, false
+}
+
 func watchEventKind(delta SemanticDelta, effect WriteEffect) WatchEventKind {
 	switch delta.Kind {
 	case fsmeta.OperationCreate:
@@ -526,25 +634,36 @@ func dentryName(key []byte) string {
 	return unsafe.String(&name[0], len(name))
 }
 
-func PredicateProofDigest(key, value []byte, present bool, version uint64, source ReadSource) [32]byte {
+func PredicateProofDigest(key, value []byte, present bool, version uint64, source ReadSource, frontiers ...ProofFrontier) [32]byte {
+	var frontier ProofFrontier
+	if len(frontiers) > 0 {
+		frontier = frontiers[0]
+	}
 	h := newDigestBuilder()
 	h.writeRaw(key)
 	h.writeBoolByte(present)
 	h.writeRaw(value)
 	h.writeByte(byte(source))
 	h.writeUint64(version)
+	h.writeUint64(frontier.EpochID)
+	h.writeUint64(frontier.Sequence)
 	return h.sum()
 }
 
-func PredicateProofFor(key, value []byte, present bool, version uint64, source ReadSource) PredicateProof {
-	proof := PredicateProof{
-		Key:     cloneBytes(key),
-		Present: present,
-		Value:   cloneBytes(value),
-		Version: version,
-		Source:  source,
+func PredicateProofFor(key, value []byte, present bool, version uint64, source ReadSource, frontiers ...ProofFrontier) PredicateProof {
+	var frontier ProofFrontier
+	if len(frontiers) > 0 {
+		frontier = frontiers[0]
 	}
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	proof := PredicateProof{
+		Key:           cloneBytes(key),
+		Present:       present,
+		Value:         cloneBytes(value),
+		Version:       version,
+		Source:        source,
+		ProofFrontier: frontier,
+	}
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 	return proof
 }
 
@@ -560,6 +679,8 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 		h.writeBytes(proof.Value)
 		h.writeUint64(proof.Version)
 		h.writeUint64(uint64(proof.Source))
+		h.writeUint64(proof.ProofFrontier.EpochID)
+		h.writeUint64(proof.ProofFrontier.Sequence)
 		h.writeBytes(proof.Digest[:])
 	}
 	return h.sum()
@@ -573,9 +694,11 @@ func GuardObligationDigest(guard RuntimeGuard) [32]byte {
 
 func GuardEvidenceFor(op CompiledOp, predicateProofs []PredicateProof) GuardEvidence {
 	return GuardEvidence{
+		Kind:                 GuardEvidenceUnknown,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
 		FootprintDigest:      KeyFootprintDigest(op.Footprint),
+		EffectDigest:         EffectPlanDigest(op.Effects),
 	}
 }
 
@@ -600,14 +723,21 @@ func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
 }
 
 // GuardProofDigest commits to the generated guard identity, boolean result,
-// and the predicate/effect descriptor evidence the holder used for admission.
+// and the guard-specific predicate/effect descriptor evidence the holder used
+// for admission.
 func GuardProofDigest(guard RuntimeGuard, passed bool, evidence GuardEvidence) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))
 	h.writeBool(passed)
+	h.writeString(string(evidence.Guard))
+	h.writeUint64(uint64(evidence.Kind))
 	h.writeBytes(evidence.DescriptorDigest[:])
 	h.writeBytes(evidence.PredicateProofDigest[:])
 	h.writeBytes(evidence.FootprintDigest[:])
+	h.writeBytes(evidence.EffectDigest[:])
+	h.writeBytes(evidence.SubjectDigest[:])
+	h.writeUint64(evidence.ProofFrontier.EpochID)
+	h.writeUint64(evidence.ProofFrontier.Sequence)
 	return h.sum()
 }
 
@@ -620,15 +750,254 @@ func GuardProofFor(guard RuntimeGuard, passed bool, evidence GuardEvidence) Guar
 	}
 }
 
-func GuardProofsFor(guards []RuntimeGuard, evidence GuardEvidence) []GuardProof {
+func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []RuntimeGuard) ([]GuardProof, error) {
 	if len(guards) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]GuardProof, 0, len(guards))
 	for _, guard := range guards {
+		evidence, err := GuardEvidenceForGuard(op, predicateProofs, guard)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, GuardProofFor(guard, true, evidence))
 	}
-	return out
+	return out, nil
+}
+
+func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guard RuntimeGuard) (GuardEvidence, error) {
+	evidence := GuardEvidence{
+		Guard:                guard,
+		DescriptorDigest:     op.DescriptorDigest,
+		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
+		FootprintDigest:      KeyFootprintDigest(op.Footprint),
+		EffectDigest:         EffectPlanDigest(op.Effects),
+		ProofFrontier:        proofSetFrontier(predicateProofs),
+	}
+	var subject [32]byte
+	var ok bool
+	switch guard {
+	case GuardSingleLinkInode:
+		evidence.Kind = GuardEvidenceSingleLinkInode
+		subject, ok = singleLinkInodeGuardSubject(predicateProofs)
+	case GuardSameAuthority:
+		evidence.Kind = GuardEvidenceSameAuthority
+		subject, ok = sameAuthorityGuardSubject(op)
+	case GuardNonDirectoryInode:
+		evidence.Kind = GuardEvidenceNonDirectoryInode
+		subject, ok = nonDirectoryGuardSubject(predicateProofs)
+	case GuardLiveSession:
+		evidence.Kind = GuardEvidenceLiveSession
+		subject, ok = liveSessionGuardSubject(predicateProofs)
+	case GuardExpiredSessionOwner:
+		evidence.Kind = GuardEvidenceExpiredSessionOwner
+		subject, ok = expiredSessionOwnerGuardSubject(predicateProofs)
+	case GuardQuotaCredit:
+		evidence.Kind = GuardEvidenceQuotaCredit
+		subject, ok = quotaCreditGuardSubject(op)
+	default:
+		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+	}
+	if !ok {
+		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+	}
+	evidence.SubjectDigest = subject
+	return evidence, nil
+}
+
+func EffectPlanDigest(effects []EffectPlan) [32]byte {
+	if len(effects) == 0 {
+		return [32]byte{}
+	}
+	h := newDigestBuilder()
+	h.writeUint64(uint64(len(effects)))
+	for _, effect := range effects {
+		h.writeUint64(uint64(effect.ID))
+		h.writeUint64(uint64(effect.Kind))
+		h.writeBytes(effect.Key)
+		h.writeBytes(effect.Value)
+		h.writeBool(effect.Concrete)
+		h.writeBool(effect.Opaque)
+		h.writeUint64(uint64(effect.MountKeyID))
+		h.writeUint64(uint64(effect.Bucket))
+		h.writeUint64(uint64(effect.RecordKind))
+		h.writeBytes(effect.ValueHash[:])
+		h.writeUint64(uint64(effect.Derivation))
+	}
+	return h.sum()
+}
+
+func proofSetFrontier(proofs []PredicateProof) ProofFrontier {
+	for _, proof := range proofs {
+		if proof.ProofFrontier.Valid() {
+			return proof.ProofFrontier
+		}
+	}
+	return ProofFrontier{}
+}
+
+func singleLinkInodeGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+	for _, proof := range proofs {
+		if !proof.Present {
+			continue
+		}
+		parts, ok := fsmeta.InspectKey(proof.Key)
+		if !ok || parts.Kind != fsmeta.KeyKindInode {
+			continue
+		}
+		inode, err := fsmeta.DecodeInodeValue(proof.Value)
+		if err != nil || inode.LinkCount != 1 {
+			return [32]byte{}, false
+		}
+		return inodeGuardSubjectDigest(GuardSingleLinkInode, proof, inode), true
+	}
+	return [32]byte{}, false
+}
+
+func nonDirectoryGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+	for _, proof := range proofs {
+		if !proof.Present {
+			continue
+		}
+		parts, ok := fsmeta.InspectKey(proof.Key)
+		if !ok {
+			continue
+		}
+		switch parts.Kind {
+		case fsmeta.KeyKindInode:
+			inode, err := fsmeta.DecodeInodeValue(proof.Value)
+			if err != nil {
+				return [32]byte{}, false
+			}
+			if inode.Type == fsmeta.InodeTypeDirectory {
+				return [32]byte{}, false
+			}
+			return inodeGuardSubjectDigest(GuardNonDirectoryInode, proof, inode), true
+		case fsmeta.KeyKindDentry:
+			dentry, err := fsmeta.DecodeDentryValue(proof.Value)
+			if err != nil {
+				return [32]byte{}, false
+			}
+			if dentry.Type == fsmeta.InodeTypeDirectory {
+				return [32]byte{}, false
+			}
+			return dentryGuardSubjectDigest(GuardNonDirectoryInode, proof, dentry), true
+		}
+	}
+	return [32]byte{}, false
+}
+
+func liveSessionGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+	for _, proof := range proofs {
+		if !proof.Present {
+			continue
+		}
+		parts, ok := fsmeta.InspectKey(proof.Key)
+		if !ok || parts.Kind != fsmeta.KeyKindSession {
+			continue
+		}
+		session, err := fsmeta.DecodeSessionValue(proof.Value)
+		if err != nil || session.Session == "" || session.Inode == 0 {
+			return [32]byte{}, false
+		}
+		return sessionGuardSubjectDigest(GuardLiveSession, proof, session), true
+	}
+	return [32]byte{}, false
+}
+
+func expiredSessionOwnerGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+	h := newDigestBuilder()
+	h.writeString(string(GuardExpiredSessionOwner))
+	count := uint64(0)
+	for _, proof := range proofs {
+		parts, ok := fsmeta.InspectKey(proof.Key)
+		if !ok || parts.Kind != fsmeta.KeyKindSession {
+			continue
+		}
+		if proof.Present {
+			return [32]byte{}, false
+		}
+		h.writeBytes(proof.Key)
+		h.writeBytes(proof.Digest[:])
+		count++
+	}
+	if count == 0 {
+		return [32]byte{}, false
+	}
+	h.writeUint64(count)
+	return h.sum(), true
+}
+
+func sameAuthorityGuardSubject(op CompiledOp) ([32]byte, bool) {
+	if op.Footprint.HasPrefixRead || op.Footprint.HasOpaqueKeys {
+		return [32]byte{}, false
+	}
+	scope := op.Authority.Scope
+	if scope.MountKeyID == 0 || !authorityScopeCoversBuckets(scope, op.Placement.Buckets) {
+		return [32]byte{}, false
+	}
+	for _, ref := range op.Footprint.Reads {
+		if !authorityScopeCoversKey(scope, ref) {
+			return [32]byte{}, false
+		}
+	}
+	for _, ref := range op.Footprint.Writes {
+		if !authorityScopeCoversKey(scope, ref) {
+			return [32]byte{}, false
+		}
+	}
+	h := newDigestBuilder()
+	h.writeString(string(GuardSameAuthority))
+	h.writeAuthorityScope(scope)
+	footprintDigest := KeyFootprintDigest(op.Footprint)
+	h.writeBytes(footprintDigest[:])
+	return h.sum(), true
+}
+
+func quotaCreditGuardSubject(op CompiledOp) ([32]byte, bool) {
+	if len(op.Effects) == 0 || op.Footprint.HasPrefixRead || !op.Placement.CanSegment {
+		return [32]byte{}, false
+	}
+	h := newDigestBuilder()
+	h.writeString(string(GuardQuotaCredit))
+	h.writeAuthorityScope(op.Authority.Scope)
+	effectDigest := EffectPlanDigest(op.Effects)
+	h.writeBytes(effectDigest[:])
+	return h.sum(), true
+}
+
+func inodeGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, inode fsmeta.InodeRecord) [32]byte {
+	h := newDigestBuilder()
+	h.writeString(string(guard))
+	h.writeBytes(proof.Key)
+	h.writeBytes(proof.Digest[:])
+	h.writeUint64(uint64(inode.Inode))
+	h.writeString(string(inode.Type))
+	h.writeUint64(uint64(inode.LinkCount))
+	return h.sum()
+}
+
+func dentryGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, dentry fsmeta.DentryRecord) [32]byte {
+	h := newDigestBuilder()
+	h.writeString(string(guard))
+	h.writeBytes(proof.Key)
+	h.writeBytes(proof.Digest[:])
+	h.writeUint64(uint64(dentry.Parent))
+	h.writeString(dentry.Name)
+	h.writeUint64(uint64(dentry.Inode))
+	h.writeString(string(dentry.Type))
+	return h.sum()
+}
+
+func sessionGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, session fsmeta.SessionRecord) [32]byte {
+	h := newDigestBuilder()
+	h.writeString(string(guard))
+	h.writeBytes(proof.Key)
+	h.writeBytes(proof.Digest[:])
+	h.writeString(string(session.Session))
+	h.writeUint64(uint64(session.Inode))
+	h.writeUint64(uint64(session.ExpiresUnixNs))
+	return h.sum()
 }
 
 func ExecutionPlanDigest(segment SegmentPlan, atomicity AtomicityGroup, durability DurabilityClass) [32]byte {
@@ -663,9 +1032,15 @@ func GuardProofSetDigest(proofs []GuardProof) [32]byte {
 	for _, proof := range proofs {
 		h.writeString(string(proof.Guard))
 		h.writeBool(proof.Passed)
+		h.writeString(string(proof.Evidence.Guard))
+		h.writeUint64(uint64(proof.Evidence.Kind))
 		h.writeBytes(proof.Evidence.DescriptorDigest[:])
 		h.writeBytes(proof.Evidence.PredicateProofDigest[:])
 		h.writeBytes(proof.Evidence.FootprintDigest[:])
+		h.writeBytes(proof.Evidence.EffectDigest[:])
+		h.writeBytes(proof.Evidence.SubjectDigest[:])
+		h.writeUint64(proof.Evidence.ProofFrontier.EpochID)
+		h.writeUint64(proof.Evidence.ProofFrontier.Sequence)
 		h.writeBytes(proof.Digest[:])
 	}
 	return h.sum()
@@ -740,6 +1115,25 @@ func (b *digestBuilder) writeKeyRef(ref KeyRef) {
 	b.writeUint64(uint64(ref.Kind))
 	b.writeUint64(uint64(ref.Parent))
 	b.writeUint64(uint64(ref.Inode))
+}
+
+func (b *digestBuilder) writeAuthorityScope(scope AuthorityScope) {
+	b.writeString(string(scope.Mount))
+	b.writeUint64(uint64(scope.MountKeyID))
+	b.writeBool(scope.Broad)
+	b.writeBool(scope.AllowOpaqueKeys)
+	b.writeUint64(uint64(len(scope.Buckets)))
+	for _, bucket := range scope.Buckets {
+		b.writeUint64(uint64(bucket))
+	}
+	b.writeUint64(uint64(len(scope.Parents)))
+	for _, parent := range scope.Parents {
+		b.writeUint64(uint64(parent))
+	}
+	b.writeUint64(uint64(len(scope.Inodes)))
+	for _, inode := range scope.Inodes {
+		b.writeUint64(uint64(inode))
+	}
 }
 
 func (b *digestBuilder) writeString(value string) {
@@ -860,12 +1254,13 @@ func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
 	out := make([]PredicateProof, len(proofs))
 	for i, proof := range proofs {
 		out[i] = PredicateProof{
-			Key:     cloneBytes(proof.Key),
-			Present: proof.Present,
-			Value:   cloneBytes(proof.Value),
-			Version: proof.Version,
-			Source:  proof.Source,
-			Digest:  proof.Digest,
+			Key:           cloneBytes(proof.Key),
+			Present:       proof.Present,
+			Value:         cloneBytes(proof.Value),
+			Version:       proof.Version,
+			Source:        proof.Source,
+			ProofFrontier: proof.ProofFrontier,
+			Digest:        proof.Digest,
 		}
 	}
 	return out

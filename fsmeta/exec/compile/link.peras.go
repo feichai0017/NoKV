@@ -61,7 +61,13 @@ func validateLinkLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "read[0]") {
+		return false
+	}
 	if delta.ReadPredicates[1].Kind != PredicateNotExists {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "read[1]") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -70,7 +76,13 @@ func validateLinkLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[0].Kind != EffectDerivedPut {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "runtime") {
 		return false
 	}
 	if len(delta.RuntimeGuards) < 2 || len(delta.RuntimeGuards) > 3 {

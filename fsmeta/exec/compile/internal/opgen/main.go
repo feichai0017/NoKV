@@ -436,10 +436,15 @@ func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
 		fmt.Fprintf(b, "\tif len(delta.ReadPredicates) == 0 {\n")
 		b.WriteString("\t\treturn false\n")
 		b.WriteString("\t}\n")
-		b.WriteString("\tfor _, predicate := range delta.ReadPredicates {\n")
+		b.WriteString("\tfor i, predicate := range delta.ReadPredicates {\n")
 		fmt.Fprintf(b, "\t\tif predicate.Kind != %s {\n", predicate.Kind)
 		b.WriteString("\t\t\treturn false\n")
 		b.WriteString("\t\t}\n")
+		if predicate.Key != "" {
+			fmt.Fprintf(b, "\t\tif !semanticIndexedKeyBindingMatches(delta, predicate.Key, %q, i) {\n", repeatableBindingFamily(predicate.Key))
+			b.WriteString("\t\t\treturn false\n")
+			b.WriteString("\t\t}\n")
+		}
 		b.WriteString("\t}\n")
 	} else {
 		fmt.Fprintf(b, "\tif len(delta.ReadPredicates) != %d {\n", len(spec.Predicates))
@@ -449,6 +454,11 @@ func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
 			fmt.Fprintf(b, "\tif delta.ReadPredicates[%d].Kind != %s {\n", i, predicate.Kind)
 			b.WriteString("\t\treturn false\n")
 			b.WriteString("\t}\n")
+			if predicate.Key != "" {
+				fmt.Fprintf(b, "\tif !semanticKeyBindingMatches(delta, delta.ReadPredicates[%d].Key, %q) {\n", i, predicate.Key)
+				b.WriteString("\t\treturn false\n")
+				b.WriteString("\t}\n")
+			}
 		}
 	}
 
@@ -459,6 +469,11 @@ func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
 		fmt.Fprintf(b, "\tif delta.WriteEffects[%d].Kind != %s {\n", i, effect.Kind)
 		b.WriteString("\t\treturn false\n")
 		b.WriteString("\t}\n")
+		if effect.Key != "" {
+			fmt.Fprintf(b, "\tif !semanticKeyBindingMatches(delta, delta.WriteEffects[%d].Key, %q) {\n", i, effect.Key)
+			b.WriteString("\t\treturn false\n")
+			b.WriteString("\t}\n")
+		}
 	}
 
 	requiredGuards := len(spec.Guards)
@@ -519,6 +534,13 @@ func emitBoolValidator(b *bytes.Buffer, expr string, want bool) {
 	}
 	b.WriteString("\t\treturn false\n")
 	b.WriteString("\t}\n")
+}
+
+func repeatableBindingFamily(binding string) string {
+	if prefix, _, ok := strings.Cut(binding, "["); ok {
+		return prefix
+	}
+	return binding
 }
 
 func emitEligibilityValidator(b *bytes.Buffer, spec specdsl.OpSpec) {

@@ -26,7 +26,7 @@ func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
 			ExpectedValue:    value,
 			HasExpectedValue: true,
 		}},
-	}}})
+	}}}, fsperas.AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), runner.nextTS, "overlay predicate admission must not reserve a read timestamp")
@@ -51,7 +51,7 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 			HasExpectedValue: true,
 			RuntimeChecked:   true,
 		}},
-	}}})
+	}}}, fsperas.AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")
@@ -72,7 +72,7 @@ func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 		Version: 7,
 		Source:  compile.ReadSourceBase,
 	}
-	proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 	proof.Digest[0] ^= 0xff
 	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializedOp{
 		CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
@@ -84,7 +84,7 @@ func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 			}},
 		}},
 		PredicateProofs: []compile.PredicateProof{proof},
-	})
+	}, fsperas.AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
 
 	require.NoError(t, err)
 	require.False(t, ok)

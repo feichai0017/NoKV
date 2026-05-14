@@ -20,12 +20,12 @@ var Create = specdsl.OpSpec{
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"parent"}, Inodes: []string{"inode"}},
 	SlowFallbacks:  []string{"SlowReasonSharedQuota"},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "dentry_absent", Kind: "PredicateNotExists"},
-		{Name: "inode_absent", Kind: "PredicateNotExists"},
+		{Name: "dentry_absent", Kind: "PredicateNotExists", Key: "mutate[0]"},
+		{Name: "inode_absent", Kind: "PredicateNotExists", Key: "mutate[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "dentry", Kind: "EffectPut", ValueName: "DentryValue"},
-		{Name: "inode", Kind: "EffectPut", ValueName: "InodeValue"},
+		{Name: "dentry", Kind: "EffectPut", Key: "mutate[0]", ValueName: "DentryValue"},
+		{Name: "inode", Kind: "EffectPut", Key: "mutate[1]", ValueName: "InodeValue"},
 	},
 	OptionalGuards: []specdsl.GuardSpec{
 		{Name: "quota_credit", Guard: "GuardQuotaCredit", Condition: "quota_escrow"},
@@ -49,11 +49,11 @@ var UpdateInode = specdsl.OpSpec{
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"parent"}, Inodes: []string{"inode"}},
 	SlowFallbacks:  []string{"SlowReasonSharedQuota"},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "dentry_observed", Kind: "PredicateObservedValue"},
-		{Name: "inode_observed", Kind: "PredicateObservedValue"},
+		{Name: "dentry_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
+		{Name: "inode_observed", Kind: "PredicateObservedValue", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "inode", Kind: "EffectDerivedPut"},
+		{Name: "inode", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "single_link_inode", Guard: "GuardSingleLinkInode"},
@@ -79,7 +79,7 @@ var Lookup = specdsl.OpSpec{
 	Emitter:        "operation",
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"parent"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "dentry_exists", Kind: "PredicateExists"},
+		{Name: "dentry_exists", Kind: "PredicateExists", Key: "primary"},
 	},
 }
 
@@ -99,7 +99,7 @@ var ReadDir = specdsl.OpSpec{
 	Emitter:        "operation",
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"parent"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "dentry_prefix", Kind: "PredicatePrefixScan"},
+		{Name: "dentry_prefix", Kind: "PredicatePrefixScan", Key: "read_prefix[0]"},
 	},
 }
 
@@ -120,7 +120,7 @@ var SnapshotSubtree = specdsl.OpSpec{
 	Emitter:           "operation",
 	Authority:         specdsl.AuthoritySpec{Parents: []string{"root"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "subtree_prefix", Kind: "PredicatePrefixScan"},
+		{Name: "subtree_prefix", Kind: "PredicatePrefixScan", Key: "read_prefix[0]"},
 	},
 }
 
@@ -140,12 +140,12 @@ var Rename = specdsl.OpSpec{
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"from_parent", "to_parent"}},
 	SlowFallbacks:  []string{"SlowReasonCrossBucket"},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "from_dentry_exists", Kind: "PredicateExists"},
-		{Name: "to_dentry_absent", Kind: "PredicateNotExists"},
+		{Name: "from_dentry_exists", Kind: "PredicateExists", Key: "read[0]"},
+		{Name: "to_dentry_absent", Kind: "PredicateNotExists", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "from_dentry", Kind: "EffectDelete"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut"},
+		{Name: "from_dentry", Kind: "EffectDelete", Key: "mutate[0]"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
 	},
 }
 
@@ -167,12 +167,12 @@ var RenameSubtree = specdsl.OpSpec{
 	Emitter:           "operation",
 	Authority:         specdsl.AuthoritySpec{Parents: []string{"from_parent", "to_parent"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "from_dentry_exists", Kind: "PredicateExists"},
-		{Name: "to_dentry_absent", Kind: "PredicateNotExists"},
+		{Name: "from_dentry_exists", Kind: "PredicateExists", Key: "read[0]"},
+		{Name: "to_dentry_absent", Kind: "PredicateNotExists", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "from_dentry", Kind: "EffectDelete"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut"},
+		{Name: "from_dentry", Kind: "EffectDelete", Key: "mutate[0]"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
 	},
 }
 
@@ -193,12 +193,12 @@ var Link = specdsl.OpSpec{
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"from_parent", "to_parent"}},
 	SlowFallbacks:  []string{"SlowReasonSharedQuota"},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "from_dentry_observed", Kind: "PredicateObservedValue"},
-		{Name: "to_dentry_absent", Kind: "PredicateNotExists"},
+		{Name: "from_dentry_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
+		{Name: "to_dentry_absent", Kind: "PredicateNotExists", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "from_inode", Kind: "EffectDerivedPut"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
+		{Name: "from_inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
@@ -226,11 +226,11 @@ var Unlink = specdsl.OpSpec{
 	Authority:      specdsl.AuthoritySpec{Parents: []string{"parent"}},
 	SlowFallbacks:  []string{"SlowReasonSharedQuota"},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "dentry_observed", Kind: "PredicateObservedValue"},
+		{Name: "dentry_observed", Kind: "PredicateObservedValue", Key: "primary"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "dentry", Kind: "EffectDelete"},
-		{Name: "inode", Kind: "EffectDerivedPut"},
+		{Name: "dentry", Kind: "EffectDelete", Key: "mutate[0]"},
+		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
@@ -258,13 +258,13 @@ var OpenWriteSession = specdsl.OpSpec{
 	Materializer:   "session_put",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "inode_observed", Kind: "PredicateObservedValue"},
-		{Name: "session_observed", Kind: "PredicateObservedValue"},
-		{Name: "owner_observed", Kind: "PredicateObservedValue"},
+		{Name: "inode_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
+		{Name: "session_observed", Kind: "PredicateObservedValue", Key: "read[1]"},
+		{Name: "owner_observed", Kind: "PredicateObservedValue", Key: "read[2]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "session", Kind: "EffectDerivedPut"},
-		{Name: "owner", Kind: "EffectDerivedPut"},
+		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
+		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
@@ -290,12 +290,12 @@ var HeartbeatWriteSession = specdsl.OpSpec{
 	Materializer:   "session_put",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "session_observed", Kind: "PredicateObservedValue"},
-		{Name: "owner_observed", Kind: "PredicateObservedValue"},
+		{Name: "session_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
+		{Name: "owner_observed", Kind: "PredicateObservedValue", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "session", Kind: "EffectDerivedPut"},
-		{Name: "owner", Kind: "EffectDerivedPut"},
+		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
+		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "live_session", Guard: "GuardLiveSession"},
@@ -320,12 +320,12 @@ var CloseWriteSession = specdsl.OpSpec{
 	Materializer:   "session_close",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "session_observed", Kind: "PredicateObservedValue"},
-		{Name: "owner_observed", Kind: "PredicateObservedValue"},
+		{Name: "session_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
+		{Name: "owner_observed", Kind: "PredicateObservedValue", Key: "runtime"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "session", Kind: "EffectDelete"},
-		{Name: "owner", Kind: "EffectDerivedDelete"},
+		{Name: "session", Kind: "EffectDelete", Key: "mutate[0]"},
+		{Name: "owner", Kind: "EffectDerivedDelete", Key: "predicate[1]", ValueSource: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "live_session", Guard: "GuardLiveSession"},
@@ -347,7 +347,7 @@ var ExpireWriteSessions = specdsl.OpSpec{
 	EffectCount:    0,
 	Emitter:        "operation",
 	Predicates: []specdsl.PredicateSpec{
-		{Name: "session_prefix", Kind: "PredicatePrefixScan", Repeatable: true},
+		{Name: "session_prefix", Kind: "PredicatePrefixScan", Key: "read_prefix[0]", Repeatable: true},
 	},
 }
 

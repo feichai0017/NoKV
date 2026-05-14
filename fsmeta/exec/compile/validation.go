@@ -119,12 +119,14 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 		if !predicateProofMatches(obligation, proof) {
 			return ValidationError{Kind: ValidationPredicateProofMismatch, Key: obligation.Key}
 		}
+		if requireGuardProofs && obligation.NeedAbsent && !durableAbsenceProof(proof) {
+			return ValidationError{Kind: ValidationPredicateProofMismatch, Key: obligation.Key}
+		}
 	}
 	guardProofs, err := guardProofMap(op.GuardProofs)
 	if err != nil {
 		return err
 	}
-	guardEvidence := GuardEvidenceFor(op.CompiledOp, op.PredicateProofs)
 	for _, obligation := range op.Guards {
 		proof, ok := guardProofs[obligation.Guard]
 		if !ok {
@@ -132,6 +134,10 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 				continue
 			}
 			return ValidationError{Kind: ValidationGuardProofMissing}
+		}
+		guardEvidence, err := GuardEvidenceForGuard(op.CompiledOp, op.PredicateProofs, obligation.Guard)
+		if err != nil {
+			return ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 		if proof.Evidence != guardEvidence || proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
 			return ValidationError{Kind: ValidationGuardProofMismatch}
@@ -273,7 +279,7 @@ func predicateProofMap(proofs []PredicateProof) (map[string]PredicateProof, erro
 		if !predicateProofSourceValid(proof) {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
 		}
-		digest := PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+		digest := PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		if digest != proof.Digest {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
 		}
@@ -285,10 +291,24 @@ func predicateProofMap(proofs []PredicateProof) (map[string]PredicateProof, erro
 	return out, nil
 }
 
+func durableAbsenceProof(proof PredicateProof) bool {
+	if proof.Present {
+		return true
+	}
+	switch proof.Source {
+	case ReadSourceBase, ReadSourceSegment:
+		return proof.Version != 0
+	case ReadSourceOverlay:
+		return proof.ProofFrontier.Valid()
+	default:
+		return false
+	}
+}
+
 func predicateProofSourceValid(proof PredicateProof) bool {
 	switch proof.Source {
 	case ReadSourceUnknown:
-		return !proof.Present && len(proof.Value) == 0 && proof.Version == 0
+		return !proof.Present && len(proof.Value) == 0 && proof.Version == 0 && proof.ProofFrontier == (ProofFrontier{})
 	case ReadSourceOverlay:
 		return proof.Version == 0
 	case ReadSourceBase, ReadSourceSegment:
@@ -365,6 +385,9 @@ func guardProofMap(proofs []GuardProof) (map[RuntimeGuard]GuardProof, error) {
 	out := make(map[RuntimeGuard]GuardProof, len(proofs))
 	for _, proof := range proofs {
 		if proof.Guard == "" || !proof.Passed {
+			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
+		}
+		if proof.Evidence.Guard != proof.Guard {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 		if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {

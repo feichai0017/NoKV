@@ -141,7 +141,13 @@ func validateCreateLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateNotExists {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.ReadPredicates[1].Kind != PredicateNotExists {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "mutate[1]") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -150,7 +156,13 @@ func validateCreateLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[0].Kind != EffectPut {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectPut {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "mutate[1]") {
 		return false
 	}
 	if len(delta.RuntimeGuards) > 1 {

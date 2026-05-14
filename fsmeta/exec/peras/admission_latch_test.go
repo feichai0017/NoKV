@@ -82,9 +82,9 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 }
 
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
-	err := Admit(context.Background(), testGeneratedCreateOp(t, "admit", "value"), func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
+	err := Admit(context.Background(), testGeneratedCreateOp(t, "admit", "value"), func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error) {
 		return AdmissionResult{}, false, nil
-	})
+	}, AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.ErrorIs(t, err, ErrAdmissionRejected)
 }
 
@@ -94,14 +94,15 @@ func TestAdmitAndSealBindsGuardProofsAfterAdmission(t *testing.T) {
 	require.NoError(t, op.ValidateForAdmissionIntent())
 	require.Error(t, op.ValidateForAdmission())
 
-	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
+	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error) {
 		proofs := testPredicateProofsForMaterializedOp(op)
-		evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
+		guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
+		require.NoError(t, err)
 		return AdmissionResult{
 			PredicateProofs: proofs,
-			GuardProofs:     compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence),
+			GuardProofs:     guardProofs,
 		}, true, nil
-	})
+	}, AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.NoError(t, sealed.ValidateForAdmission())
 	require.NotEmpty(t, sealed.GuardProofs)

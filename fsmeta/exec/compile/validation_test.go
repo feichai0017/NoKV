@@ -26,18 +26,18 @@ func TestMaterializedOpValidationRequiresAbsentProof(t *testing.T) {
 	require.Equal(t, ValidationPredicateProofMissing, validationErr.Kind)
 
 	proofs := []PredicateProof{
-		PredicateProofFor(op.Delta.ReadPredicates[0].Key, nil, false, 0, ReadSourceOverlay),
-		PredicateProofFor(op.Delta.ReadPredicates[1].Key, nil, false, 0, ReadSourceOverlay),
+		PredicateProofFor(op.Delta.ReadPredicates[0].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 1, Sequence: 1}),
+		PredicateProofFor(op.Delta.ReadPredicates[1].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 1, Sequence: 1}),
 	}
 	op = WithPredicateProofs(op, proofs)
 	require.NoError(t, op.ValidateForAdmission())
 }
 
 func TestMaterializedOpValidationBindsGuardProofEvidence(t *testing.T) {
-	delta, proofs := testConcreteUpdateInodeDelta(t, []byte("old-inode"))
+	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 	op := testMaterializeAOT(t, delta, proofs)
 	wrongEvidence := GuardEvidenceFor(op.CompiledOp, nil)
-	op = WithGuardProofs(op, GuardProofsFor(op.Delta.RuntimeGuards, wrongEvidence))
+	op = WithGuardProofs(op, []GuardProof{GuardProofFor(op.Delta.RuntimeGuards[0], true, wrongEvidence)})
 
 	var validationErr ValidationError
 	err := op.ValidateForAdmission()
@@ -67,7 +67,8 @@ func TestMaterializedOpValidationRejectsReplayDigestDrift(t *testing.T) {
 }
 
 func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
-	expected := []byte("old-inode")
+	expected, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{Inode: 44, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	require.NoError(t, err)
 	delta, _ := testConcreteUpdateInodeDelta(t, expected)
 
 	op := testCompileAOT(t, delta)
@@ -117,8 +118,7 @@ func TestMaterializedOpValidationRejectsNonCanonicalDescriptor(t *testing.T) {
 }
 
 func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
-	expected := []byte("old-inode")
-	delta, proofs := testConcreteUpdateInodeDelta(t, expected)
+	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 
 	var validationErr ValidationError
 	err := testMaterializeAOT(t, delta, nil).ValidateForAdmission()
@@ -131,14 +131,14 @@ func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
 }
 
 func TestMaterializedOpValidationRejectsBadPredicateProofContract(t *testing.T) {
-	delta, proofs := testConcreteUpdateInodeDelta(t, []byte("old-inode"))
+	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 	badProof := PredicateProof{
 		Key:     proofs[1].Key,
 		Present: proofs[1].Present,
 		Value:   proofs[1].Value,
 		Source:  ReadSourceUnknown,
 	}
-	badProof.Digest = PredicateProofDigest(badProof.Key, badProof.Value, badProof.Present, badProof.Version, badProof.Source)
+	badProof.Digest = PredicateProofDigest(badProof.Key, badProof.Value, badProof.Present, badProof.Version, badProof.Source, badProof.ProofFrontier)
 
 	var validationErr ValidationError
 	err := testMaterializeAOT(t, delta, []PredicateProof{proofs[0], badProof}).ValidateForAdmission()
@@ -152,7 +152,7 @@ func TestMaterializedOpValidationRejectsBadPredicateProofContract(t *testing.T) 
 }
 
 func TestMaterializedOpValidationRequiresGuardProof(t *testing.T) {
-	delta, proofs := testConcreteUpdateInodeDelta(t, []byte("old-inode"))
+	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 
 	var validationErr ValidationError
 	err := testMaterializeAOT(t, delta, proofs).ValidateForAdmission()

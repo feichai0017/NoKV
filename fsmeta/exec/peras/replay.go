@@ -17,6 +17,8 @@ type ReplayOperation struct {
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
 	ExecutionPlanDigest  [32]byte
+	PredicateProofs      []compile.PredicateProof
+	GuardProofs          []compile.GuardProof
 	Segment              compile.SegmentPlan
 	Atomicity            compile.AtomicityGroup
 	Durability           compile.DurabilityClass
@@ -48,6 +50,8 @@ func cloneReplayOperation(op ReplayOperation) ReplayOperation {
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
 		ExecutionPlanDigest:  op.ExecutionPlanDigest,
+		PredicateProofs:      clonePredicateProofs(op.PredicateProofs),
+		GuardProofs:          cloneGuardProofs(op.GuardProofs),
 		Segment:              op.Segment,
 		Atomicity:            cloneReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
@@ -89,6 +93,8 @@ func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) 
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs),
 		ExecutionPlanDigest:  compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability),
+		PredicateProofs:      clonePredicateProofs(op.PredicateProofs),
+		GuardProofs:          cloneGuardProofs(op.GuardProofs),
 		Segment:              op.Segment,
 		Atomicity:            cloneReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
@@ -106,4 +112,32 @@ func replayOperationExecutionPlanDigest(op ReplayOperation) [32]byte {
 func cloneReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {
 	group.Members = append([]compile.MutationID(nil), group.Members...)
 	return group
+}
+
+func clonePredicateProofs(proofs []compile.PredicateProof) []compile.PredicateProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]compile.PredicateProof, len(proofs))
+	for i, proof := range proofs {
+		out[i] = compile.PredicateProof{
+			Key:           cloneBytes(proof.Key),
+			Present:       proof.Present,
+			Value:         cloneBytes(proof.Value),
+			Version:       proof.Version,
+			Source:        proof.Source,
+			ProofFrontier: proof.ProofFrontier,
+			Digest:        proof.Digest,
+		}
+	}
+	return out
+}
+
+func cloneGuardProofs(proofs []compile.GuardProof) []compile.GuardProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]compile.GuardProof, len(proofs))
+	copy(out, proofs)
+	return out
 }

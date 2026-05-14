@@ -3,9 +3,11 @@ package peras
 import (
 	"bytes"
 	"crypto/sha256"
+	"io"
 	"slices"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
 var perasSegmentMagic = [4]byte{'N', 'P', 'S', 2}
@@ -56,6 +58,8 @@ type SegmentCompletion struct {
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
 	ExecutionPlanDigest  [32]byte
+	PredicateProofs      []compile.PredicateProof
+	GuardProofs          []compile.GuardProof
 }
 
 type SegmentStats struct {
@@ -124,13 +128,7 @@ func EncodePerasSegment(segment PerasSegment) ([]byte, error) {
 	}
 	writeUint64(&out, uint64(len(segment.Completions)))
 	for _, completion := range segment.Completions {
-		writeOperationID(&out, completion.OpID)
-		writeString(&out, string(completion.Kind))
-		writeUint64(&out, completion.Version)
-		writeUint64(&out, uint64(completion.MutationCount))
-		writeFixed(&out, completion.DescriptorDigest[:])
-		writeFixed(&out, completion.PredicateProofDigest[:])
-		writeFixed(&out, completion.ExecutionPlanDigest[:])
+		writeSegmentCompletion(&out, completion)
 	}
 	return out.Bytes(), nil
 }
@@ -201,43 +199,11 @@ func DecodePerasSegment(payload []byte) (PerasSegment, error) {
 	}
 	completions := make([]SegmentCompletion, 0, completionCount)
 	for range completionCount {
-		opID, err := r.readOperationID()
+		completion, err := readSegmentCompletion(&r)
 		if err != nil {
 			return PerasSegment{}, ErrInvalidPerasSegment
 		}
-		kind, err := r.readString()
-		if err != nil {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		version, err := r.readUint64()
-		if err != nil {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		mutationCount, err := r.readUint64()
-		if err != nil || mutationCount > uint64(^uint32(0)) {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		var descriptorDigest [32]byte
-		if err := r.readFixed(descriptorDigest[:]); err != nil {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		var predicateProofDigest [32]byte
-		if err := r.readFixed(predicateProofDigest[:]); err != nil {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		var executionPlanDigest [32]byte
-		if err := r.readFixed(executionPlanDigest[:]); err != nil {
-			return PerasSegment{}, ErrInvalidPerasSegment
-		}
-		completions = append(completions, SegmentCompletion{
-			OpID:                 opID,
-			Kind:                 fsmeta.OperationKind(kind),
-			Version:              version,
-			MutationCount:        uint32(mutationCount),
-			DescriptorDigest:     descriptorDigest,
-			PredicateProofDigest: predicateProofDigest,
-			ExecutionPlanDigest:  executionPlanDigest,
-		})
+		completions = append(completions, completion)
 	}
 	if !r.done() {
 		return PerasSegment{}, ErrInvalidPerasSegment
@@ -307,6 +273,13 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
 			return PerasSegment{}, ErrInvalidPerasSegment
 		}
+		proofDigest := compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs)
+		if op.PredicateProofDigest != ([32]byte{}) {
+			if op.PredicateProofDigest != proofDigest {
+				return PerasSegment{}, ErrInvalidPerasSegment
+			}
+			proofDigest = op.PredicateProofDigest
+		}
 		version := uint64(0)
 		if !plan.Versions.Empty() {
 			v, err := plan.Versions.VersionAt(uint64(opOffset))
@@ -321,8 +294,10 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 			Version:              version,
 			MutationCount:        uint32(len(op.Mutations)),
 			DescriptorDigest:     op.DescriptorDigest,
-			PredicateProofDigest: op.PredicateProofDigest,
+			PredicateProofDigest: proofDigest,
 			ExecutionPlanDigest:  replayOperationExecutionPlanDigest(op),
+			PredicateProofs:      clonePredicateProofs(op.PredicateProofs),
+			GuardProofs:          cloneGuardProofs(op.GuardProofs),
 		})
 		for _, mutation := range op.Mutations {
 			if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
@@ -497,6 +472,9 @@ func validatePerasSegmentPayload(segment PerasSegment) error {
 		if uint64(len(completion.OpID.ClientID)) > uint64(^uint32(0)) || uint64(len(completion.Kind)) > uint64(^uint32(0)) {
 			return ErrInvalidPerasSegment
 		}
+		if compile.AdmissionProofSetDigest(completion.PredicateProofs, completion.GuardProofs) != completion.PredicateProofDigest {
+			return ErrInvalidPerasSegment
+		}
 	}
 	if completionMutationCount != segment.inputMutationCount {
 		return ErrInvalidPerasSegment
@@ -513,9 +491,278 @@ func perasSegmentPayloadEncodedSize(segment PerasSegment) int {
 		size += 8 + 4 + len(entry.Key) + 1 + 4 + len(entry.Value)
 	}
 	for _, completion := range segment.Completions {
-		size += stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32 + 32
+		size += segmentCompletionEncodedSize(completion)
 	}
 	return size
+}
+
+func writeSegmentCompletion(out io.Writer, completion SegmentCompletion) {
+	writeOperationID(out, completion.OpID)
+	writeString(out, string(completion.Kind))
+	writeUint64(out, completion.Version)
+	writeUint64(out, uint64(completion.MutationCount))
+	writeFixed(out, completion.DescriptorDigest[:])
+	writeFixed(out, completion.PredicateProofDigest[:])
+	writeFixed(out, completion.ExecutionPlanDigest[:])
+	writePredicateProofs(out, completion.PredicateProofs)
+	writeGuardProofs(out, completion.GuardProofs)
+}
+
+func readSegmentCompletion(r *witnessReader) (SegmentCompletion, error) {
+	opID, err := r.readOperationID()
+	if err != nil {
+		return SegmentCompletion{}, err
+	}
+	kind, err := r.readString()
+	if err != nil {
+		return SegmentCompletion{}, err
+	}
+	version, err := r.readUint64()
+	if err != nil {
+		return SegmentCompletion{}, err
+	}
+	mutationCount, err := r.readUint64()
+	if err != nil || mutationCount > uint64(^uint32(0)) {
+		return SegmentCompletion{}, ErrInvalidPerasSegment
+	}
+	var descriptorDigest [32]byte
+	if err := r.readFixed(descriptorDigest[:]); err != nil {
+		return SegmentCompletion{}, err
+	}
+	var predicateProofDigest [32]byte
+	if err := r.readFixed(predicateProofDigest[:]); err != nil {
+		return SegmentCompletion{}, err
+	}
+	var executionPlanDigest [32]byte
+	if err := r.readFixed(executionPlanDigest[:]); err != nil {
+		return SegmentCompletion{}, err
+	}
+	predicateProofs, err := readPredicateProofs(r)
+	if err != nil {
+		return SegmentCompletion{}, err
+	}
+	guardProofs, err := readGuardProofs(r)
+	if err != nil {
+		return SegmentCompletion{}, err
+	}
+	return SegmentCompletion{
+		OpID:                 opID,
+		Kind:                 fsmeta.OperationKind(kind),
+		Version:              version,
+		MutationCount:        uint32(mutationCount),
+		DescriptorDigest:     descriptorDigest,
+		PredicateProofDigest: predicateProofDigest,
+		ExecutionPlanDigest:  executionPlanDigest,
+		PredicateProofs:      predicateProofs,
+		GuardProofs:          guardProofs,
+	}, nil
+}
+
+func writePredicateProofs(out io.Writer, proofs []compile.PredicateProof) {
+	writeUint64(out, uint64(len(proofs)))
+	for _, proof := range proofs {
+		writeBytes(out, proof.Key)
+		writeBool(out, proof.Present)
+		writeBytes(out, proof.Value)
+		writeUint64(out, proof.Version)
+		writeUint64(out, uint64(proof.Source))
+		writeUint64(out, proof.ProofFrontier.EpochID)
+		writeUint64(out, proof.ProofFrontier.Sequence)
+		writeFixed(out, proof.Digest[:])
+	}
+}
+
+func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
+	count, err := r.readUint64()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	if count > uint64(maxSegmentSliceLen()) {
+		return nil, ErrInvalidPerasSegment
+	}
+	proofs := make([]compile.PredicateProof, 0, count)
+	for range count {
+		key, err := r.readBytes()
+		if err != nil {
+			return nil, err
+		}
+		present, err := r.readBool()
+		if err != nil {
+			return nil, err
+		}
+		value, err := r.readBytes()
+		if err != nil {
+			return nil, err
+		}
+		version, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		source, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		epochID, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		sequence, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		var digest [32]byte
+		if err := r.readFixed(digest[:]); err != nil {
+			return nil, err
+		}
+		proof := compile.PredicateProof{
+			Key:           key,
+			Present:       present,
+			Value:         value,
+			Version:       version,
+			Source:        compile.ReadSource(source),
+			ProofFrontier: compile.ProofFrontier{EpochID: epochID, Sequence: sequence},
+			Digest:        digest,
+		}
+		if compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier) != proof.Digest {
+			return nil, ErrInvalidPerasSegment
+		}
+		proofs = append(proofs, proof)
+	}
+	return proofs, nil
+}
+
+func writeGuardProofs(out io.Writer, proofs []compile.GuardProof) {
+	writeUint64(out, uint64(len(proofs)))
+	for _, proof := range proofs {
+		writeString(out, string(proof.Guard))
+		writeBool(out, proof.Passed)
+		writeGuardEvidence(out, proof.Evidence)
+		writeFixed(out, proof.Digest[:])
+	}
+}
+
+func readGuardProofs(r *witnessReader) ([]compile.GuardProof, error) {
+	count, err := r.readUint64()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	if count > uint64(maxSegmentSliceLen()) {
+		return nil, ErrInvalidPerasSegment
+	}
+	proofs := make([]compile.GuardProof, 0, count)
+	for range count {
+		guard, err := r.readString()
+		if err != nil {
+			return nil, err
+		}
+		passed, err := r.readBool()
+		if err != nil {
+			return nil, err
+		}
+		evidence, err := readGuardEvidence(r)
+		if err != nil {
+			return nil, err
+		}
+		var digest [32]byte
+		if err := r.readFixed(digest[:]); err != nil {
+			return nil, err
+		}
+		proof := compile.GuardProof{
+			Guard:    compile.RuntimeGuard(guard),
+			Passed:   passed,
+			Evidence: evidence,
+			Digest:   digest,
+		}
+		if compile.GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) != proof.Digest {
+			return nil, ErrInvalidPerasSegment
+		}
+		proofs = append(proofs, proof)
+	}
+	return proofs, nil
+}
+
+func writeGuardEvidence(out io.Writer, evidence compile.GuardEvidence) {
+	writeString(out, string(evidence.Guard))
+	writeUint64(out, uint64(evidence.Kind))
+	writeFixed(out, evidence.DescriptorDigest[:])
+	writeFixed(out, evidence.PredicateProofDigest[:])
+	writeFixed(out, evidence.FootprintDigest[:])
+	writeFixed(out, evidence.EffectDigest[:])
+	writeFixed(out, evidence.SubjectDigest[:])
+	writeUint64(out, evidence.ProofFrontier.EpochID)
+	writeUint64(out, evidence.ProofFrontier.Sequence)
+}
+
+func readGuardEvidence(r *witnessReader) (compile.GuardEvidence, error) {
+	guard, err := r.readString()
+	if err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	kind, err := r.readUint64()
+	if err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	var descriptorDigest [32]byte
+	if err := r.readFixed(descriptorDigest[:]); err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	var predicateProofDigest [32]byte
+	if err := r.readFixed(predicateProofDigest[:]); err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	var footprintDigest [32]byte
+	if err := r.readFixed(footprintDigest[:]); err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	var effectDigest [32]byte
+	if err := r.readFixed(effectDigest[:]); err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	var subjectDigest [32]byte
+	if err := r.readFixed(subjectDigest[:]); err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	epochID, err := r.readUint64()
+	if err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	sequence, err := r.readUint64()
+	if err != nil {
+		return compile.GuardEvidence{}, err
+	}
+	return compile.GuardEvidence{
+		Guard:                compile.RuntimeGuard(guard),
+		Kind:                 compile.GuardEvidenceKind(kind),
+		DescriptorDigest:     descriptorDigest,
+		PredicateProofDigest: predicateProofDigest,
+		FootprintDigest:      footprintDigest,
+		EffectDigest:         effectDigest,
+		SubjectDigest:        subjectDigest,
+		ProofFrontier:        compile.ProofFrontier{EpochID: epochID, Sequence: sequence},
+	}, nil
+}
+
+func segmentCompletionEncodedSize(completion SegmentCompletion) int {
+	size := stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32 + 32
+	size += 8
+	for _, proof := range completion.PredicateProofs {
+		size += 4 + len(proof.Key) + 1 + 4 + len(proof.Value) + 8 + 8 + 8 + 8 + 32
+	}
+	size += 8
+	for _, proof := range completion.GuardProofs {
+		size += stringEncodedSize(string(proof.Guard)) + 1 + guardEvidenceEncodedSize(proof.Evidence) + 32
+	}
+	return size
+}
+
+func guardEvidenceEncodedSize(evidence compile.GuardEvidence) int {
+	return stringEncodedSize(string(evidence.Guard)) + 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8
 }
 
 func maxSegmentSliceLen() int {
@@ -612,13 +859,7 @@ func segmentRoot(segment PerasSegment) [32]byte {
 	}
 	writeUint64(h, uint64(len(segment.Completions)))
 	for _, completion := range segment.Completions {
-		writeOperationID(h, completion.OpID)
-		writeString(h, string(completion.Kind))
-		writeUint64(h, completion.Version)
-		writeUint64(h, uint64(completion.MutationCount))
-		writeFixed(h, completion.DescriptorDigest[:])
-		writeFixed(h, completion.PredicateProofDigest[:])
-		writeFixed(h, completion.ExecutionPlanDigest[:])
+		writeSegmentCompletion(h, completion)
 	}
 	return digestFromHash(h.Sum(nil))
 }

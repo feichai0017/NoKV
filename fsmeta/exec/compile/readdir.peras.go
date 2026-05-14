@@ -60,6 +60,9 @@ func validateReadDirLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicatePrefixScan {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "read_prefix[0]") {
+		return false
+	}
 	if len(delta.WriteEffects) != 0 {
 		return false
 	}

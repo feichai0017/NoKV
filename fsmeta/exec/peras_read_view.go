@@ -212,7 +212,7 @@ func (v *perasReadView) predicateProofs() []compile.PredicateProof {
 			Version: observed.version,
 			Source:  observed.source,
 		}
-		proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+		proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		proofs = append(proofs, proof)
 	}
 	return proofs

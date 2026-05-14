@@ -61,13 +61,22 @@ func validateUnlinkLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateObservedValue {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "primary") {
+		return false
+	}
 	if len(delta.WriteEffects) != 2 {
 		return false
 	}
 	if delta.WriteEffects[0].Kind != EffectDelete {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[0].Key, "mutate[0]") {
+		return false
+	}
 	if delta.WriteEffects[1].Kind != EffectDerivedPut {
+		return false
+	}
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "runtime") {
 		return false
 	}
 	if len(delta.RuntimeGuards) < 1 || len(delta.RuntimeGuards) > 2 {

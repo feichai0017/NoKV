@@ -335,7 +335,7 @@ func TestRuntimeReturnsPendingAckOnRetry(t *testing.T) {
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	first, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
-	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp) (fsperas.AdmissionResult, bool, error) {
+	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp, fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
 		t.Fatal("pending retry should not re-run admission")
 		return fsperas.AdmissionResult{}, false, nil
 	})
@@ -1827,8 +1827,11 @@ func testRuntimeCreateOp(mount fsmeta.MountIdentity, parent fsmeta.InodeID, name
 
 func testRuntimeSealMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
 	proofs := testRuntimePredicateProofsForOp(op)
-	evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
-	return compile.WithAdmissionProofs(op, proofs, compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence))
+	guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
+	if err != nil {
+		panic(err)
+	}
+	return compile.WithAdmissionProofs(op, proofs, guardProofs)
 }
 
 func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []compile.PredicateProof {
@@ -1837,13 +1840,14 @@ func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []compile.Predic
 	}
 	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
 	for _, predicate := range op.Delta.ReadPredicates {
+		frontier := compile.ProofFrontier{EpochID: 1, Sequence: 1}
 		switch predicate.Kind {
 		case compile.PredicateExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay, frontier))
 		case compile.PredicateNotExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
 		case compile.PredicateObservedValue:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay, frontier))
 		}
 	}
 	return proofs

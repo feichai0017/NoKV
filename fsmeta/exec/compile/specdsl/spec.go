@@ -41,13 +41,16 @@ type AuthoritySpec struct {
 type PredicateSpec struct {
 	Name       string
 	Kind       string
+	Key        string
 	Repeatable bool
 }
 
 type EffectSpec struct {
-	Name      string
-	Kind      string
-	ValueName string
+	Name        string
+	Kind        string
+	Key         string
+	ValueName   string
+	ValueSource string
 }
 
 type GuardSpec struct {

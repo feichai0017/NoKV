@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,8 @@ func requireProgramMatchesSemanticSpec(t *testing.T, op CompiledOp, spec specdsl
 	for i, effect := range spec.Effects {
 		require.Equal(t, effect.Kind, effectKindSpecName(op.Delta.WriteEffects[i].Kind), spec.Name)
 		require.Equal(t, effect.Kind, effectKindSpecName(op.Effects[i].Kind), spec.Name)
+		require.True(t, semanticKeyBindingMatches(op.Delta, op.Delta.WriteEffects[i].Key, effect.Key), spec.Name)
+		require.True(t, semanticKeyBindingMatches(op.Delta, op.Effects[i].Key, effect.Key), spec.Name)
 	}
 
 	require.Len(t, op.Delta.RuntimeGuards, len(spec.Guards), spec.Name)
@@ -129,6 +132,8 @@ func requirePredicatesMatchSemanticSpec(t *testing.T, op CompiledOp, spec specds
 		for i := range op.Delta.ReadPredicates {
 			require.Equal(t, spec.Predicates[0].Kind, predicateKindSpecName(op.Delta.ReadPredicates[i].Kind), spec.Name)
 			require.Equal(t, spec.Predicates[0].Kind, predicateKindSpecName(op.Predicates[i].Kind), spec.Name)
+			require.True(t, semanticIndexedKeyBindingMatches(op.Delta, op.Delta.ReadPredicates[i].Key, repeatableSpecBindingFamily(spec.Predicates[0].Key), i), spec.Name)
+			require.True(t, semanticIndexedKeyBindingMatches(op.Delta, op.Predicates[i].Key, repeatableSpecBindingFamily(spec.Predicates[0].Key), i), spec.Name)
 		}
 		return
 	}
@@ -137,7 +142,16 @@ func requirePredicatesMatchSemanticSpec(t *testing.T, op CompiledOp, spec specds
 	for i, predicate := range spec.Predicates {
 		require.Equal(t, predicate.Kind, predicateKindSpecName(op.Delta.ReadPredicates[i].Kind), spec.Name)
 		require.Equal(t, predicate.Kind, predicateKindSpecName(op.Predicates[i].Kind), spec.Name)
+		require.True(t, semanticKeyBindingMatches(op.Delta, op.Delta.ReadPredicates[i].Key, predicate.Key), spec.Name)
+		require.True(t, semanticKeyBindingMatches(op.Delta, op.Predicates[i].Key, predicate.Key), spec.Name)
 	}
+}
+
+func repeatableSpecBindingFamily(binding string) string {
+	if i := strings.IndexByte(binding, '['); i >= 0 {
+		return binding[:i]
+	}
+	return binding
 }
 
 func operationKindSpecName(kind fsmeta.OperationKind) string {

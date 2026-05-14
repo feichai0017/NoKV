@@ -62,10 +62,12 @@ func requireSemanticNames(t *testing.T, op string, predicates []specdsl.Predicat
 	for _, predicate := range predicates {
 		require.NotEmpty(t, predicate.Name, op)
 		require.NotEmpty(t, predicate.Kind, op)
+		require.NotEmpty(t, predicate.Key, op)
 	}
 	for _, effect := range effects {
 		require.NotEmpty(t, effect.Name, op)
 		require.NotEmpty(t, effect.Kind, op)
+		require.NotEmpty(t, effect.Key, op)
 	}
 	for _, guard := range append(append([]specdsl.GuardSpec(nil), guards...), optional...) {
 		require.NotEmpty(t, guard.Name, op)

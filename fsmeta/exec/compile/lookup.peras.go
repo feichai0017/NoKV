@@ -60,6 +60,9 @@ func validateLookupLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[0].Kind != PredicateExists {
 		return false
 	}
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[0].Key, "primary") {
+		return false
+	}
 	if len(delta.WriteEffects) != 0 {
 		return false
 	}

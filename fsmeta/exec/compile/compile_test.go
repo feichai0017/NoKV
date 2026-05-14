@@ -63,7 +63,7 @@ func testPredicateProof(key, value []byte, present bool, version uint64, source 
 		Version: version,
 		Source:  source,
 	}
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 	return proof
 }
 
@@ -91,7 +91,11 @@ func testMaterializeAOTWithEffects(tb testing.TB, op CompiledOp, effects []Write
 }
 
 func testGuardProofsFor(op MaterializedOp) []GuardProof {
-	return GuardProofsFor(op.Delta.RuntimeGuards, GuardEvidenceFor(op.CompiledOp, op.PredicateProofs))
+	proofs, err := GuardProofsFor(op.CompiledOp, op.PredicateProofs, op.Delta.RuntimeGuards)
+	if err != nil {
+		panic(err)
+	}
+	return proofs
 }
 
 func testCreateDelta(tb testing.TB, req fsmeta.CreateRequest, mount fsmeta.MountIdentity, inodeID fsmeta.InodeID, opts ...Option) (SemanticDelta, error) {
@@ -204,6 +208,10 @@ func testConcreteUpdateInodeDelta(tb testing.TB, expected []byte) (SemanticDelta
 	require.NoError(tb, err)
 	dentryKey := delta.ReadPredicates[0].Key
 	inodeKey := delta.ReadPredicates[1].Key
+	if expected == nil {
+		expected, err = fsmeta.EncodeInodeValue(fsmeta.InodeRecord{Inode: 44, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+		require.NoError(tb, err)
+	}
 	delta.ReadPredicates = []Predicate{
 		{Kind: PredicateObservedValue, Key: dentryKey, ExpectedValue: dentryValue, HasExpectedValue: true, RuntimeChecked: true},
 		{Kind: PredicateObservedValue, Key: inodeKey, ExpectedValue: expected, HasExpectedValue: true, RuntimeChecked: true},

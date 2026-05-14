@@ -342,6 +342,8 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		left.DescriptorDigest != right.DescriptorDigest ||
 		left.PredicateProofDigest != right.PredicateProofDigest ||
 		left.ExecutionPlanDigest != right.ExecutionPlanDigest ||
+		!predicateProofsEqual(left.PredicateProofs, right.PredicateProofs) ||
+		!guardProofsEqual(left.GuardProofs, right.GuardProofs) ||
 		left.Segment != right.Segment ||
 		left.Durability != right.Durability ||
 		left.Atomicity.Splittable != right.Atomicity.Splittable ||
@@ -364,4 +366,20 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		}
 	}
 	return true
+}
+
+func predicateProofsEqual(left, right []compile.PredicateProof) bool {
+	return slices.EqualFunc(left, right, func(l, r compile.PredicateProof) bool {
+		return l.Present == r.Present &&
+			l.Version == r.Version &&
+			l.Source == r.Source &&
+			l.ProofFrontier == r.ProofFrontier &&
+			l.Digest == r.Digest &&
+			bytes.Equal(l.Key, r.Key) &&
+			bytes.Equal(l.Value, r.Value)
+	})
+}
+
+func guardProofsEqual(left, right []compile.GuardProof) bool {
+	return slices.Equal(left, right)
 }

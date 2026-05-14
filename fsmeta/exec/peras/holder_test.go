@@ -320,8 +320,11 @@ func opWithValueWrites(key, value string) compile.MaterializedOp {
 
 func sealTestMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
 	proofs := testPredicateProofsForMaterializedOp(op)
-	evidence := compile.GuardEvidenceFor(op.CompiledOp, proofs)
-	return compile.WithAdmissionProofs(op, proofs, compile.GuardProofsFor(op.Delta.RuntimeGuards, evidence))
+	guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
+	if err != nil {
+		panic(err)
+	}
+	return compile.WithAdmissionProofs(op, proofs, guardProofs)
 }
 
 func testPredicateProofsForMaterializedOp(op compile.MaterializedOp) []compile.PredicateProof {
@@ -330,13 +333,14 @@ func testPredicateProofsForMaterializedOp(op compile.MaterializedOp) []compile.P
 	}
 	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
 	for _, predicate := range op.Delta.ReadPredicates {
+		frontier := compile.ProofFrontier{EpochID: 1, Sequence: 1}
 		switch predicate.Kind {
 		case compile.PredicateExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay, frontier))
 		case compile.PredicateNotExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
 		case compile.PredicateObservedValue:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay, frontier))
 		}
 	}
 	return proofs
