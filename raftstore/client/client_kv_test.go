@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -338,6 +339,101 @@ func TestClientScanWithOptionsStrongFollowerPreferFallsBackToLeader(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, resp, 2)
 	require.Equal(t, uint64(1), cluster.lastReadStore)
+}
+
+func TestClientScanWithOptionsExhaustsTransportUnavailableRetryBudget(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var scanCalls atomic.Int32
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		scanFn: func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+			scanCalls.Add(1)
+			return nil, status.Error(codes.Unavailable, "store down")
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:                 3,
+			TransportUnavailableBackoff: time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	kvs, err := cli.ScanWithOptions(ctx, []byte("alfa"), 1, 20, DefaultReadOptions())
+	require.Nil(t, kvs)
+	require.Error(t, err)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.Equal(t, int32(3), scanCalls.Load())
+	require.NoError(t, ctx.Err())
+}
+
+func TestClientScanWithOptionsExhaustsRegionErrorRetryBudget(t *testing.T) {
+	cluster := newMockCluster(clusterRegion{
+		meta: &metapb.RegionDescriptor{
+			RegionId: 1,
+			StartKey: []byte("a"),
+			EndKey:   []byte("z"),
+			Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+			Peers: []*metapb.RegionPeer{
+				{StoreId: 1, PeerId: 101},
+			},
+		},
+		leaderStore: 1,
+	})
+
+	var scanCalls atomic.Int32
+	addr, stop := startBlockingStore(t, &scriptedKVService{
+		mockService: mockService{storeID: 1, cluster: cluster},
+		scanFn: func(context.Context, *kvrpcpb.KvScanRequest) (*kvrpcpb.KvScanResponse, error) {
+			scanCalls.Add(1)
+			return &kvrpcpb.KvScanResponse{
+				RegionError: &errorpb.RegionError{NotLeader: &errorpb.NotLeader{}},
+			}, nil
+		},
+	})
+	defer stop()
+
+	cli, err := New(Config{
+		StoreResolver:  staticStoreResolver{{StoreID: 1, Addr: addr}},
+		RegionResolver: resolverFromCluster(cluster),
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry: RetryPolicy{
+			MaxAttempts:        3,
+			RegionErrorBackoff: time.Millisecond,
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	kvs, err := cli.ScanWithOptions(ctx, []byte("alfa"), 1, 20, DefaultReadOptions())
+	require.Nil(t, kvs)
+	require.Error(t, err)
+	require.True(t, IsRetryExhausted(err))
+	require.Equal(t, nokverrors.KindRetryExhausted, nokverrors.KindOf(err))
+	require.Equal(t, int32(3), scanCalls.Load())
+	require.NoError(t, ctx.Err())
 }
 
 func TestClientCallGetWithFallbackReturnsLeaderRegionError(t *testing.T) {
