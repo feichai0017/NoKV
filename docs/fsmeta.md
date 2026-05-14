@@ -4,7 +4,7 @@
 
 - Topic: NoKV's namespace metadata substrate.
 - Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
-- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner -> raftstore + txn/percolator + coordinator`.
+- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner/Peras -> raftstore + txn/percolator/CMD_PERAS_INSTALL_SEGMENT + coordinator/meta-root`.
 - Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime adapter is `fsmeta/runtime/raftstore.Open`.
 
 ## 1. Conclusion
@@ -65,11 +65,14 @@ type TxnRunner interface {
     Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
     BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
     Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
-    Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) error
+    Mutate(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
+    MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
 }
 ```
 
 The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
+
+When explicitly configured, the same runtime can enable Peras visible commit for compiler-proven fsmeta operations. Peras admission is holder-local visibility; durable publication still goes through witness/segment install and raftstore `CMD_PERAS_INSTALL_SEGMENT`.
 
 `fsmeta/runtime/raftstore.Open` can also wire two derived slab caches when explicitly configured:
 
@@ -83,7 +86,7 @@ The layering constraints are:
 - `Executor` does not directly know about raft region / store routing.
 - `fsmeta/runtime/raftstore` is NoKV's default adapter; it owns the raftstore wiring.
 - `meta/root` does not store high-frequency inode/dentry data — only lifecycle / authority truth.
-- `raftstore` and `percolator` don't understand fsmeta semantics; they only provide transactions and apply observation.
+- `raftstore` and `percolator` don't understand fsmeta operations; they provide transactions, Peras segment install, and apply observation.
 
 ## 5. Native primitives
 
@@ -101,7 +104,8 @@ Strict semantics: if any inode is missing or fails to decode, the whole page ret
 `WatchSubtree` subscribes to an fsmeta key prefix and externally exposes a `(region_id, term, index)` cursor and a `commit_version`. Event sources include:
 
 - a successful `CMD_COMMIT`;
-- `CMD_RESOLVE_LOCK` with `commit_version != 0`.
+- `CMD_RESOLVE_LOCK` with `commit_version != 0`;
+- a successful `CMD_PERAS_INSTALL_SEGMENT` with an install version.
 
 `CMD_PREWRITE`, rollback, and diagnostic commands do not produce visible events.
 
@@ -132,7 +136,7 @@ The current dentry schema references the parent directory via `parent_inode_id`,
 The extra semantics live in the authority layer:
 
 - publish `SubtreeHandoffStarted` before mutation;
-- the dentry mutation goes through Percolator 2PC;
+- the dentry mutation goes through `TxnRunner.MutateAtCommit` using the rooted handoff commit timestamp;
 - publish `SubtreeHandoffCompleted` after mutation;
 - the runtime monitor uses `WatchRootEvents` to discover pending handoffs and complete them.
 

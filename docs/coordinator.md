@@ -176,6 +176,10 @@ The initial closed set is `alloc_id`, `tso`, and `region_lookup`. Unknown or
 unregistered duties are rejected by root, coordinator admission, client
 verification, and audit-facing checks.
 
+Peras authority is deliberately outside this Eunomia duty set. It uses
+`PerasAuthorityGrant` / `PerasAuthoritySeal` as fsmeta-specific root state
+instead of another `DutySpec`.
+
 ---
 
 ## 3. Deployment Model
