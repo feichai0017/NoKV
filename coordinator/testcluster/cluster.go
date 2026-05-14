@@ -88,7 +88,9 @@ func OpenReplicatedWithTickIntervals(tb testing.TB, tickIntervals map[uint64]tim
 
 func stableRootTickIntervals() map[uint64]time.Duration {
 	// Coverage builds and heavily parallel CI runs add enough scheduler jitter
-	// to make the production-like 100ms tick produce split elections in tests.
+	// to make very short root ticks produce split elections in tests. Keep this
+	// faster than production's 1000ms default without returning to the old 100ms
+	// behavior.
 	return map[uint64]time.Duration{
 		1: stableRootTickInterval,
 		2: stableRootTickInterval,
