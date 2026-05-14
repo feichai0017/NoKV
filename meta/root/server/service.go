@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -29,6 +30,10 @@ type Backend interface {
 type leaderBackend interface {
 	IsLeader() bool
 	LeaderID() uint64
+}
+
+type rootWriteReadyBackend interface {
+	PrepareRootWrite(ctx context.Context) error
 }
 
 type observedBackend interface {
@@ -90,7 +95,7 @@ func (s *Service) Append(ctx context.Context, req *metapb.MetadataRootAppendRequ
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootAppendResponse{}, nil
 	}
-	if err := s.requireLeader(); err != nil {
+	if err := s.requireRootWriteReady(ctx); err != nil {
 		return nil, err
 	}
 	events := make([]rootevent.Event, 0, len(req.GetEvents()))
@@ -115,7 +120,7 @@ func (s *Service) FenceAllocator(ctx context.Context, req *metapb.MetadataRootFe
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootFenceAllocatorResponse{}, nil
 	}
-	if err := s.requireLeader(); err != nil {
+	if err := s.requireRootWriteReady(ctx); err != nil {
 		return nil, err
 	}
 	kind, ok := metawire.RootAllocatorKindFromProto(req.GetKind())
@@ -143,7 +148,7 @@ func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyG
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootApplyGrantResponse{}, nil
 	}
-	backend, err := s.coordinatorProtocolBackend()
+	backend, err := s.coordinatorProtocolBackend(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +178,7 @@ func (s *Service) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataR
 	if s == nil || s.backend == nil {
 		return &metapb.MetadataRootApplyPerasAuthorityResponse{}, nil
 	}
-	if err := s.requireLeader(); err != nil {
+	if err := s.requireRootWriteReady(ctx); err != nil {
 		return nil, err
 	}
 	backend, ok := s.backend.(perasAuthorityBackend)
@@ -296,8 +301,31 @@ func (s *Service) requireLeader() error {
 	return statusNotLeader(leaderID)
 }
 
-func (s *Service) coordinatorProtocolBackend() (leaseBackend, error) {
+func (s *Service) requireRootWriteReady(ctx context.Context) error {
 	if err := s.requireLeader(); err != nil {
+		return err
+	}
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	ready, ok := s.backend.(rootWriteReadyBackend)
+	if !ok {
+		return nil
+	}
+	if err := ready.PrepareRootWrite(ctx); err != nil {
+		if nokverrors.IsKind(err, nokverrors.KindNotLeader) {
+			if leader, ok := s.backend.(leaderBackend); ok {
+				return statusNotLeader(leader.LeaderID())
+			}
+			return statusNotLeader(0)
+		}
+		return rpcError(err)
+	}
+	return nil
+}
+
+func (s *Service) coordinatorProtocolBackend(ctx context.Context) (leaseBackend, error) {
+	if err := s.requireRootWriteReady(ctx); err != nil {
 		return nil, err
 	}
 	backend, ok := s.backend.(leaseBackend)
