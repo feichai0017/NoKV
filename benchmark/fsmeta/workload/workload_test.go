@@ -169,16 +169,27 @@ func TestScaleForLoadsOfficialProfileFile(t *testing.T) {
 
 	hard := ProfileFor(MDTestHard)
 	require.Equal(t, "3901", hard.Official["file_size_bytes"])
-	require.Equal(t, 1000000, ScaleFor(MDTestHard, "official").FilesPerDirectory)
+	require.Equal(t, "1000000", hard.Official["n_per_rank"])
+	require.Equal(t, "16000000", hard.Official["projected_total_files"])
+	require.Equal(t, 16000000, ScaleFor(MDTestHard, "official").FilesPerDirectory)
 
 	varmail := ProfileFor(FilebenchVarmail)
 	require.Equal(t, "1000", varmail.Official["nfiles"])
 	require.Equal(t, "16", varmail.Official["nthreads"])
-	require.Equal(t, 63, ScaleFor(FilebenchVarmail, "official").MessagesPerUser)
+	require.Equal(t, "1000", varmail.Official["projected_total_messages"])
+	require.Equal(t, 1, ScaleFor(FilebenchVarmail, "official").Users)
+	require.Equal(t, 1000, ScaleFor(FilebenchVarmail, "official").MessagesPerUser)
+
+	mimesis := ProfileFor(MimesisNamespace)
+	require.Equal(t, "unavailable", mimesis.Official["fixed_scale"])
+	require.Equal(t, "150000000", mimesis.Official["yahoo_trace_files"])
 
 	mlperf := ProfileFor(AICheckpointAgent)
 	require.Equal(t, "10", mlperf.Official["save_operations"])
+	require.Equal(t, "8, 64, 512, 1024", mlperf.Official["process_counts"])
+	require.Equal(t, 8, ScaleFor(AICheckpointAgent, "official").Clients)
 	require.Equal(t, 10, ScaleFor(AICheckpointAgent, "official").CheckpointsPerWorkspace)
+	require.Equal(t, 1, ScaleFor(AICheckpointAgent, "official").FilesPerCheckpoint)
 }
 
 func TestTimeCallRetriesStableRetryableOperationError(t *testing.T) {
