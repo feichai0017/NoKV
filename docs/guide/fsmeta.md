@@ -269,37 +269,61 @@ make fsmeta-bench
 ```
 
 The Compose gateway enables both persistent DirPage and NegativeCache directories
-by default. The default script scale is intentionally larger than a smoke test:
-12 clients, 4096 checkpoint creates, 4096 hotspot/watch/negative keys, and a
-mixed fsmeta workflow with 512 published entries. After the ports are reachable,
-the script waits 20 seconds for Raft leadership and coordinator grants to settle.
-Override `NOKV_FSMETA_STABILIZE_SECONDS` when testing an already-warm cluster.
+by default. Workload provenance and default scales are kept in
+`benchmark/fsmeta/profiles/official/workloads.yaml`, which records the public
+IO500/mdtest, Filebench varmail, MimesisBench, and MLPerf Storage
+checkpointing source links, their official shape, and NoKV's fsmeta projection.
+It is a normalized service-benchmark profile, not a vendored copy of those
+benchmark implementations and not a certified third-party score.
+
+The default script scale is the `median` profile and is intentionally larger
+than a smoke test: 12 clients, mdtest/mimesis directory trees of 16 x 256 files,
+16 varmail users with 128 messages each, and 4 AI workspaces with 64 checkpoint
+publishes each. Use `NOKV_FSMETA_PROFILE=long` for scheduled larger runs or
+`NOKV_FSMETA_PROFILE=official` for the profile's official-size shape. After the
+ports are reachable, the script waits 20 seconds for Raft leadership and
+coordinator grants to settle. Override `NOKV_FSMETA_STABILIZE_SECONDS` when
+testing an already-warm cluster.
 
 The matrix is isolated by default: the script runs one workload per Go test
-process, writes one CSV per workload, waits for Peras pending work and install
-queues to become idle, and then appends the rows into an `_isolated.csv` summary.
-This keeps durable-barrier workloads, such as `durable-snapshot`, from measuring
-the previous visible-commit workload's background segment installation backlog.
+process against a fresh Docker Compose data volume, writes one CSV per workload,
+and then appends the rows into an `_isolated.csv` summary. This keeps one
+workload from measuring the previous workload's Peras overlay, recovery state,
+or background segment installation backlog. Set
+`NOKV_FSMETA_RESET_BETWEEN_WORKLOADS=0` for same-cluster soak profiling; in
+that mode the harness waits for install and seal queues to become idle between
+workloads. `NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING=1` is intentionally opt-in
+for durable-drain experiments, because `pending` counts visible operations that
+may remain in the holder overlay.
 CSV rows include both `throughput_ops_sec` (operation count divided by whole
 workload wall time) and `active_ops_per_sec` (operation count divided by that
-operation's measured active latency). Use the active column when a mixed
-workload has intentional waits or slow side operations. The median profile keeps
-stale-session cleanup short (`20ms`) so it still exercises expiry without
-dominating the workload wall clock.
+operation's measured active latency). Use the active column when a workload has
+watch waits, snapshot barriers, or slow side operations.
 
-The main system workload is `mixed`. It is a combined fsmeta API workload rather
-than a synthetic KV loop: project bootstrap, staged publication, artifact and
-checkpoint creation, writer-session open/heartbeat/close, stale-session
-cleanup, shared-file links, temp unlink, snapshot/retire, watch delivery,
-quota reads, and `ReadDir` / `ReadDirPlus`.
+The default suite is official-aligned rather than a synthetic KV loop:
 
-The same harness also keeps focused slices:
+- `mdtest-easy`: private-directory create/stat/ReadDirPlus/unlink, following the
+  easy IO500/mdtest metadata shape with zero-byte files.
+- `mdtest-hard`: shared-directory create/stat/ReadDirPlus/unlink, following the
+  hard IO500/mdtest contention shape with 3901-byte file metadata records.
+- `filebench-varmail`: mailbox-style create/update/session/readdir/unlink,
+  following Filebench varmail's small-file mail-spool pattern. The upstream
+  `varmail.f` personality defaults to `nfiles=1000`, `nthreads=16`, mean file
+  size 16 KiB, and mean append size 16 KiB; fsmeta maps body appends and fsyncs
+  to inode-size updates and writer-session lifecycle operations.
+- `mimesis-namespace`: namespace churn with create/rename/setattr/lookup/scan
+  and unlink, aligned with MimesisBench-style trace replay.
+- `ai-checkpoint-agent`: agent/ML checkpoint publication with artifact fan-out,
+  manifest update, writer-session lifecycle, watch notification, snapshot read,
+  and snapshot retirement. The scale motivation comes from MLPerf Storage v2.0
+  checkpointing, which defines Llama-style 8B/70B/405B/1T model scales; NoKV
+  measures the metadata publish side rather than checkpoint body throughput.
 
-- `checkpoint-storm` for dense checkpoint/artifact creation.
-- `durable-snapshot` for `SnapshotSubtree` and snapshot retirement barriers.
-- `hotspot-fanin` with `ReadDirPlus` for DirPage-heavy directory reads.
-- `watch-subtree` for watch notification latency.
-- `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
+Every fsmeta benchmark CSV includes `source`, `source_url`, and `projection`
+columns. The test also writes a sibling `.manifest.txt` file with exact scale
+parameters, selected scale profile, official source links, and the fsmeta
+projection used for each workload. Treat results without this manifest as
+incomplete evidence.
 
 ## 10. Non-goals
 
