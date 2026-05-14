@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"crypto/ed25519"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -64,4 +65,24 @@ func TestCloneAuthorityRetiredEraFloorsIsIsolated(t *testing.T) {
 	require.Zero(t, AuthorityRetiredEraFloorFor(cloned, DutyTSO, global))
 	cloned[0].RetiredEraFloor = 100
 	require.Equal(t, uint64(7), original[0].RetiredEraFloor)
+}
+
+func TestGrantKeyMaterialCanBeAbsentUntilAuthorityUse(t *testing.T) {
+	t.Setenv(GrantSigningPrivateKeyEnv, "")
+	t.Setenv(GrantVerificationPublicKeyEnv, "")
+	t.Setenv(GrantAllowEphemeralKeysEnv, "")
+
+	keys := loadGrantKeyMaterialWithEphemeral(false)
+	require.Empty(t, keys.private)
+	require.Empty(t, keys.public)
+}
+
+func TestGrantKeyMaterialCanUseEphemeralDevKey(t *testing.T) {
+	t.Setenv(GrantSigningPrivateKeyEnv, "")
+	t.Setenv(GrantVerificationPublicKeyEnv, "")
+	t.Setenv(GrantAllowEphemeralKeysEnv, "")
+
+	keys := loadGrantKeyMaterialWithEphemeral(true)
+	require.Len(t, keys.private, ed25519.PrivateKeySize)
+	require.Len(t, keys.public, ed25519.PublicKeySize)
 }
