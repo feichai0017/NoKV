@@ -527,16 +527,8 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	if info.MaterializeMVCC && info.HasPayload && len(info.MaterializedKeys) == 0 {
-		segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
-		if err != nil {
-			return epochNotMatchError(&meta), AdmissionReasonInvalid
-		}
-		for _, entry := range segment.EntriesView() {
-			if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
-				return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
-			}
-		}
+	if err, reason := validatePerasMaterializedPayloadKeys(meta, req, info); err != nil {
+		return err, reason
 	}
 	keys, err := rsperas.InstallKeys(req)
 	if err != nil {
@@ -550,6 +542,37 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	for _, key := range keys {
 		if len(key) == 0 || !keyInRange(meta, key) {
 			return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
+		}
+	}
+	return nil, AdmissionReasonUnknown
+}
+
+func validatePerasMaterializedPayloadKeys(meta localmeta.RegionMeta, req *kvrpcpb.PerasInstallSegmentRequest, info rsperas.InstallRequestInfo) (*errorpb.RegionError, AdmissionReason) {
+	if !info.MaterializeMVCC {
+		return nil, AdmissionReasonUnknown
+	}
+	if !info.HasPayload {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	entries := segment.EntriesView()
+	for _, entry := range entries {
+		if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
+			return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
+		}
+	}
+	if len(info.MaterializedKeys) == 0 {
+		return nil, AdmissionReasonUnknown
+	}
+	if len(info.MaterializedKeys) != len(entries) {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	for i, entry := range entries {
+		if !bytes.Equal(info.MaterializedKeys[i], entry.Key) {
+			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
 	}
 	return nil, AdmissionReasonUnknown

@@ -1266,6 +1266,104 @@ func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T
 	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
 }
 
+func TestValidateRequestKeysRejectsPerasHeaderThatHidesOutOfRegionPayload(t *testing.T) {
+	meta := localmeta.RegionMeta{
+		ID:       12,
+		StartKey: []byte("b"),
+		EndKey:   []byte("m"),
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{
+				ClientID: "client",
+				Seq:      1,
+			},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: []byte("c"), Value: []byte("in-region")},
+				{Key: []byte("z"), Value: []byte("out-of-region")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			RoutingKey:            []byte("c"),
+			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
+			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+			SegmentPayload:        payload,
+			InstallVersion:        10,
+			MaterializeMvcc:       true,
+			SegmentEntryCount:     2,
+			MaterializedKeys:      [][]byte{[]byte("c"), []byte("d")},
+			DependencyKeys:        [][]byte{[]byte("c"), []byte("d")},
+			SegmentEpochId:        1,
+			SegmentOperationCount: 1,
+			SegmentPayloadSize:    uint64(len(payload)),
+		}},
+	}}}
+
+	regionErr, reason := validateRequestKeys(meta, req)
+	require.Equal(t, AdmissionReasonKeyNotInRegion, reason)
+	require.NotNil(t, regionErr)
+	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
+}
+
+func TestValidateRequestKeysRejectsPerasMaterializedHeaderMismatch(t *testing.T) {
+	meta := localmeta.RegionMeta{
+		ID:       12,
+		StartKey: []byte("b"),
+		EndKey:   []byte("m"),
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID: 1,
+		Operations: []fsperas.ReplayOperation{{
+			OpID: fsperas.OperationID{
+				ClientID: "client",
+				Seq:      1,
+			},
+			Kind: fsmeta.OperationCreate,
+			Mutations: []fsperas.ReplayMutation{
+				{Key: []byte("c"), Value: []byte("left")},
+				{Key: []byte("d"), Value: []byte("right")},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
+		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			RoutingKey:            []byte("c"),
+			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
+			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+			SegmentPayload:        payload,
+			InstallVersion:        10,
+			MaterializeMvcc:       true,
+			SegmentEntryCount:     2,
+			MaterializedKeys:      [][]byte{[]byte("c"), []byte("e")},
+			DependencyKeys:        [][]byte{[]byte("c"), []byte("e")},
+			SegmentEpochId:        1,
+			SegmentOperationCount: 1,
+			SegmentPayloadSize:    uint64(len(payload)),
+		}},
+	}}}
+
+	regionErr, reason := validateRequestKeys(meta, req)
+	require.Equal(t, AdmissionReasonInvalid, reason)
+	require.NotNil(t, regionErr)
+	require.NotNil(t, regionErr.GetEpochNotMatch())
+}
+
 func TestValidateRequestKeysAcceptsPayloadlessPerasCatalogIndexRoute(t *testing.T) {
 	meta := localmeta.RegionMeta{ID: 12}
 	root := [32]byte{1}

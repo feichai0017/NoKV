@@ -790,7 +790,6 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 		default:
 		}
 	}
-	done <- nil
 }
 
 func waitForWatchName(ctx context.Context, stream fsmetaclient.WatchSubscription, want string) error {
