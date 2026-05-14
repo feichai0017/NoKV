@@ -3,7 +3,6 @@ package table
 import (
 	"bytes"
 	stderrors "errors"
-	"expvar"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,16 +19,11 @@ import (
 	cachepkg "github.com/feichai0017/NoKV/engine/lsm/cache"
 	"github.com/feichai0017/NoKV/engine/lsm/rangefilter"
 	"github.com/feichai0017/NoKV/engine/vfs"
+	"github.com/feichai0017/NoKV/metrics"
 	storagepb "github.com/feichai0017/NoKV/pb/storage"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
-)
-
-var (
-	prefetchLaunched  = expvar.NewInt("NoKV.Prefetch.Launched")
-	prefetchAborted   = expvar.NewInt("NoKV.Prefetch.Aborted")
-	prefetchCompleted = expvar.NewInt("NoKV.Prefetch.Completed")
 )
 
 // Table is one open SSTable plus its cached metadata.
@@ -612,9 +606,9 @@ func (it *Iterator) prefetchNext(idx int) {
 			return
 		default:
 			if ok := it.prefetchRing.Push(next); ok {
-				prefetchLaunched.Add(1)
+				metrics.RecordTablePrefetchLaunched()
 			} else {
-				prefetchAborted.Add(1)
+				metrics.RecordTablePrefetchAborted()
 				return
 			}
 		}
@@ -666,13 +660,13 @@ func (t *Table) NewIterator(options *index.Options) index.Iterator {
 						if err := it.prefetchPool.Submit(func() {
 							it.t.IncrRef()
 							if _, err := it.t.loadBlock(idx); err == nil {
-								prefetchCompleted.Add(1)
+								metrics.RecordTablePrefetchCompleted()
 							} else {
-								prefetchAborted.Add(1)
+								metrics.RecordTablePrefetchAborted()
 							}
 							_ = it.t.DecrRef()
 						}); err != nil {
-							prefetchAborted.Add(1)
+							metrics.RecordTablePrefetchAborted()
 						}
 					}
 				}

@@ -1,18 +1,18 @@
 package peras
 
-import "errors"
+import nokverrors "github.com/feichai0017/NoKV/errors"
 
 var (
-	ErrInvalidPerasSegment             = errors.New("fsmeta peras: invalid peras segment")
-	ErrAdmissionRejected               = errors.New("fsmeta peras: admission rejected")
-	ErrHolderConfigInvalid             = errors.New("fsmeta peras: invalid holder config")
-	ErrIneligibleOperation             = errors.New("fsmeta peras: ineligible operation")
-	ErrInvalidOperationID              = errors.New("fsmeta peras: invalid operation id")
-	ErrDuplicateOperation              = errors.New("fsmeta peras: duplicate operation id")
-	ErrSegmentCatalogStoreRequired     = errors.New("fsmeta peras: segment catalog store required")
-	ErrReplayVersionRequired           = errors.New("fsmeta peras: replay version required")
-	ErrInvalidWitnessRecord            = errors.New("fsmeta peras: invalid witness record")
-	ErrWitnessLogRequired              = errors.New("fsmeta peras: witness log required")
-	ErrWitnessReplicaInvalid           = errors.New("fsmeta peras: invalid witness replica")
-	ErrSegmentWitnessQuorumUnavailable = errors.New("fsmeta peras: segment witness quorum unavailable")
+	ErrInvalidPerasSegment             = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: invalid peras segment")
+	ErrAdmissionRejected               = nokverrors.New(nokverrors.KindConflict, "fsmeta/exec/peras: admission rejected")
+	ErrHolderConfigInvalid             = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: invalid holder config")
+	ErrIneligibleOperation             = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: ineligible operation")
+	ErrInvalidOperationID              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: invalid operation id")
+	ErrDuplicateOperation              = nokverrors.New(nokverrors.KindConflict, "fsmeta/exec/peras: duplicate operation id")
+	ErrSegmentCatalogStoreRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: segment catalog store required")
+	ErrReplayVersionRequired           = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: replay version required")
+	ErrInvalidWitnessRecord            = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: invalid witness record")
+	ErrWitnessLogRequired              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: witness log required")
+	ErrWitnessReplicaInvalid           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: invalid witness replica")
+	ErrSegmentWitnessQuorumUnavailable = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/exec/peras: segment witness quorum unavailable")
 )

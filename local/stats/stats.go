@@ -296,11 +296,13 @@ type CacheStatsSnapshot struct {
 
 // LSMStatsSnapshot summarizes per-level storage shape and value-density signals.
 type LSMStatsSnapshot struct {
-	Levels            []LSMLevelStats          `json:"levels,omitempty"`
-	ValueBytesTotal   int64                    `json:"value_bytes_total"`
-	ValueDensityMax   float64                  `json:"value_density_max"`
-	ValueDensityAlert bool                     `json:"value_density_alert"`
-	RangeFilter       RangeFilterStatsSnapshot `json:"range_filter"`
+	Levels            []LSMLevelStats               `json:"levels,omitempty"`
+	ValueBytesTotal   int64                         `json:"value_bytes_total"`
+	ValueDensityMax   float64                       `json:"value_density_max"`
+	ValueDensityAlert bool                          `json:"value_density_alert"`
+	RangeFilter       RangeFilterStatsSnapshot      `json:"range_filter"`
+	Mmap              metrics.MmapAdviceSnapshot    `json:"mmap"`
+	Prefetch          metrics.TablePrefetchSnapshot `json:"prefetch"`
 }
 
 // RangeFilterStatsSnapshot summarizes range-filter pruning activity on read paths.
@@ -512,6 +514,8 @@ func (s *Stats) Snapshot() StatsSnapshot {
 		snap.Write.ThrottlePressure = lsmSrc.ThrottlePressurePermille()
 		snap.Write.ThrottleRate = lsmSrc.ThrottleRateBytesPerSec()
 	}
+	snap.LSM.Mmap = metrics.MmapAdviceStats()
+	snap.LSM.Prefetch = metrics.TablePrefetchStats()
 
 	if wm := s.host.WriteMetrics(); wm != nil {
 		wsnap := wm.Snapshot()

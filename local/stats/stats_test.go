@@ -47,6 +47,13 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	db.SetRegionMetrics(rm)
 	rm.RecordState(1, metaregion.ReplicaStateRunning)
 	rm.RecordState(2, metaregion.ReplicaStateRemoving)
+	mmapBefore := metrics.MmapAdviceStats()
+	prefetchBefore := metrics.TablePrefetchStats()
+	metrics.RecordMmapMadvise(true)
+	metrics.RecordMmapMadvise(false)
+	metrics.RecordTablePrefetchLaunched()
+	metrics.RecordTablePrefetchCompleted()
+	metrics.RecordTablePrefetchAborted()
 
 	require.NoError(t, db.Set([]byte("stats-key"), []byte("stats-value")))
 	entry, err := db.Get([]byte("stats-key"))
@@ -64,6 +71,11 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Greater(t, snap.Write.BatchesTotal, int64(0))
 	require.False(t, snap.Write.ThrottleActive)
 	require.Equal(t, db.IteratorReused(), snap.Cache.IteratorReused)
+	require.GreaterOrEqual(t, snap.LSM.Mmap.Madvise, mmapBefore.Madvise+1)
+	require.GreaterOrEqual(t, snap.LSM.Mmap.MadviseFailed, mmapBefore.MadviseFailed+1)
+	require.GreaterOrEqual(t, snap.LSM.Prefetch.Launched, prefetchBefore.Launched+1)
+	require.GreaterOrEqual(t, snap.LSM.Prefetch.Completed, prefetchBefore.Completed+1)
+	require.GreaterOrEqual(t, snap.LSM.Prefetch.Aborted, prefetchBefore.Aborted+1)
 
 	require.Equal(t, int64(2), snap.Region.Total)
 	require.Equal(t, int64(1), snap.Region.Running)
@@ -78,12 +90,19 @@ func TestStatsCollectSnapshots(t *testing.T) {
 	require.Equal(t, snap.WAL.ActiveSegment, exported.WAL.ActiveSegment)
 	require.Equal(t, snap.WAL.SegmentsRemoved, exported.WAL.SegmentsRemoved)
 	require.Equal(t, snap.Region.Total, exported.Region.Total)
+	require.Equal(t, snap.LSM.Mmap, exported.LSM.Mmap)
+	require.Equal(t, snap.LSM.Prefetch, exported.LSM.Prefetch)
 
 	// Legacy scalar keys are intentionally removed.
 	require.Nil(t, expvar.Get("NoKV.Local.Stats.Flush.Pending"))
 	require.Nil(t, expvar.Get("NoKV.Local.Stats.WAL.ActiveSegment"))
 	require.Nil(t, expvar.Get("NoKV.Txns.Active"))
 	require.Nil(t, expvar.Get("NoKV.Stats"))
+	require.Nil(t, expvar.Get("NoKV.Mmap.Madvise"))
+	require.Nil(t, expvar.Get("NoKV.Mmap.MadviseFailed"))
+	require.Nil(t, expvar.Get("NoKV.Prefetch.Launched"))
+	require.Nil(t, expvar.Get("NoKV.Prefetch.Aborted"))
+	require.Nil(t, expvar.Get("NoKV.Prefetch.Completed"))
 }
 
 func TestStatsSnapshotTracksThrottleAndWalRemovals(t *testing.T) {

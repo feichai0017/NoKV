@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
 
 var (
-	ErrWitnessNodeConfigInvalid = errors.New("raftstore peras: invalid witness node config")
-	ErrWitnessAuthorityMissing  = errors.New("raftstore peras: missing active authority")
-	ErrWitnessAuthorityMismatch = errors.New("raftstore peras: authority mismatch")
+	ErrWitnessNodeConfigInvalid = nokverrors.New(nokverrors.KindInvalidArgument, "raftstore/peras: invalid witness node config")
+	ErrWitnessAuthorityMissing  = nokverrors.New(nokverrors.KindStaleEpoch, "raftstore/peras: missing active authority")
+	ErrWitnessAuthorityMismatch = nokverrors.New(nokverrors.KindStaleEpoch, "raftstore/peras: authority mismatch")
 )
 
 type WitnessNodeConfig struct {

@@ -2,11 +2,11 @@
 package peras
 
 import (
-	"errors"
 	"slices"
 	"sync"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -14,10 +14,10 @@ import (
 )
 
 var (
-	ErrInvalidGrant       = errors.New("fsmeta peras: invalid authority grant")
-	ErrAmbiguousAuthority = errors.New("fsmeta peras: ambiguous active authority")
-	ErrConflictingGrant   = errors.New("fsmeta peras: conflicting authority grant")
-	ErrAuthorityViewStale = errors.New("fsmeta peras: active authority view stale")
+	ErrInvalidGrant       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/peras: invalid authority grant")
+	ErrAmbiguousAuthority = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: ambiguous active authority")
+	ErrConflictingGrant   = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: conflicting authority grant")
+	ErrAuthorityViewStale = nokverrors.New(nokverrors.KindStaleEpoch, "fsmeta/runtime/peras: active authority view stale")
 )
 
 // AuthorityGrant is the execution-side alias for the root-issued fsmeta

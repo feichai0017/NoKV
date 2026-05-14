@@ -63,7 +63,7 @@ Representative fields:
 - `region.total`, `region.running`, `region.removing`, `region.tombstone`
 - `hot.write_keys`, `hot.write_ring`
 - `cache.block_l0_hit_rate`, `cache.bloom_hit_rate`, `cache.iterator_reused`
-- `lsm.levels`, `lsm.value_bytes_total`
+- `lsm.levels`, `lsm.value_bytes_total`, `lsm.mmap.*`, `lsm.prefetch.*`
 
 ---
 
@@ -83,6 +83,7 @@ Legacy scalar compatibility keys are removed. Consumers should read fields from 
 - `nokv_fsmeta_watch`
 - `nokv_fsmeta_quota`
 - `nokv_fsmeta_mount`
+- `nokv_fsmeta_peras`
 - `nokv_fsmeta_sessions`
 
 ---
