@@ -13,7 +13,7 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-const defaultNetworkTickInterval = 100 * time.Millisecond
+const defaultNetworkTickInterval = time.Second
 const defaultNetworkElectionTick = 10
 const defaultNetworkHeartbeatTick = 1
 const defaultAppendWaitTimeout = 5 * time.Second

@@ -44,6 +44,7 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 }
 
 func TestNetworkDriverDefaultRaftTiming(t *testing.T) {
+	require.Equal(t, time.Second, defaultNetworkTickInterval)
 	require.Equal(t, 10, defaultNetworkElectionTick)
 	require.Equal(t, 1, defaultNetworkHeartbeatTick)
 }

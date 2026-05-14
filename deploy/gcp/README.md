@@ -95,12 +95,11 @@ These windows are wall-clock guards and are not benchmark measurement time.
 | `NOKV_FSMETA_STABILIZE_SECONDS` | profile-specific | Wait after ports are ready for raft leaders and grants |
 
 Meta-root Raft timing is intentionally conservative for GCP smoke. The
-replicated root uses `ElectionTick=10` and `HeartbeatTick=1`, and the GCP
-deployment passes `--tick-interval=$NOKV_META_ROOT_TICK_INTERVAL` with a
-`1000ms` default. That makes the production-like GCP election timeout baseline
-10 seconds. Do not let the GCP path fall back to the CLI's raw `100ms` tick
-default: `5 * 100ms = 500ms` election windows are too aggressive for low-cost VM
-jitter and have already shown split elections during `meta-root-leader-down`.
+replicated root uses `ElectionTick=10`, `HeartbeatTick=1`, and a `1000ms`
+default tick interval. The GCP deployment still passes
+`--tick-interval=$NOKV_META_ROOT_TICK_INTERVAL` explicitly so smoke runs can
+raise the interval without rebuilding images. That makes the default
+production-like GCP election timeout baseline 10 seconds.
 
 Benchmark profile stabilization defaults:
 

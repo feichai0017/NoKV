@@ -32,7 +32,7 @@ func runMetaRootCmd(w io.Writer, args []string) error {
 	workdir := fs.String("workdir", "", "metadata root work directory (resolved from --config if present)")
 	nodeID := fs.Uint64("node-id", 0, "metadata root node id (required, must be > 0)")
 	transportAddr := fs.String("transport-addr", "", "metadata root raft transport address (resolved from --config if present)")
-	tickInterval := fs.Duration("tick-interval", 100*time.Millisecond, "replicated root raft tick interval")
+	tickInterval := fs.Duration("tick-interval", time.Second, "replicated root raft tick interval")
 	metricsAddr := fs.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
 	configPath := fs.String("config", "", "optional raft configuration file (meta_root.peers drives --peer/--transport-addr/--workdir)")
 	scope := fs.String("scope", "host", "scope for config-resolved addresses: host|docker")

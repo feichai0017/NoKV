@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"os"
@@ -35,6 +36,14 @@ func threePeerArgs() []string {
 		"-peer", "1=127.0.0.1:7001",
 		"-peer", "2=127.0.0.1:7002",
 		"-peer", "3=127.0.0.1:7003",
+	}
+}
+
+func TestMetaRootDefaultTickInterval(t *testing.T) {
+	fs := flag.NewFlagSet("meta-root-test", flag.ContinueOnError)
+	tickInterval := fs.Duration("tick-interval", time.Second, "replicated root raft tick interval")
+	if *tickInterval != time.Second {
+		t.Fatalf("default tick interval = %s, want 1s", *tickInterval)
 	}
 }
 
