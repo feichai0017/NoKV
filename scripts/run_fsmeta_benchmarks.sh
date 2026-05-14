@@ -40,7 +40,7 @@ case "$profile" in
 		default_artifacts_per_entry=8
 		default_workspaces=4
 		default_session_ttl=5m
-		default_stale_session_ttl=2s
+		default_stale_session_ttl=20ms
 		default_timeout=25m
 		default_stabilize_seconds=20
 		;;
@@ -55,7 +55,7 @@ case "$profile" in
 		default_artifacts_per_entry=10
 		default_workspaces=8
 		default_session_ttl=5m
-		default_stale_session_ttl=2s
+		default_stale_session_ttl=100ms
 		default_timeout=120m
 		default_stabilize_seconds=45
 		;;

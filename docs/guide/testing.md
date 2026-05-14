@@ -235,7 +235,10 @@ Nightly policy:
 2. PR benchmark CI also runs the median `make fsmeta-bench` profile as an
    isolated Docker Compose matrix across all fsmeta workloads. Each workload gets
    its own CSV, and the script also emits a combined `_isolated.csv` summary so
-   durable-barrier workloads do not absorb earlier visible-commit backlog.
+   durable-barrier workloads do not absorb earlier visible-commit backlog. CSVs
+   report both wall-clock `throughput_ops_sec` and per-operation
+   `active_ops_per_sec` to keep mixed-workload waits from hiding the real active
+   operation cost.
 3. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
    and steps, replays raftstore/fsmeta contract/history schedules with longer
    bounds, repeats crash-matrix boundaries, replays deterministic split-region

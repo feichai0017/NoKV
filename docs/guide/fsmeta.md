@@ -275,6 +275,12 @@ process, writes one CSV per workload, waits for Peras pending work and install
 queues to become idle, and then appends the rows into an `_isolated.csv` summary.
 This keeps durable-barrier workloads, such as `durable-snapshot`, from measuring
 the previous visible-commit workload's background segment installation backlog.
+CSV rows include both `throughput_ops_sec` (operation count divided by whole
+workload wall time) and `active_ops_per_sec` (operation count divided by that
+operation's measured active latency). Use the active column when a mixed
+workload has intentional waits or slow side operations. The median profile keeps
+stale-session cleanup short (`20ms`) so it still exercises expiry without
+dominating the workload wall clock.
 
 The main system workload is `mixed`. It is a combined fsmeta API workload rather
 than a synthetic KV loop: project bootstrap, staged publication, artifact and

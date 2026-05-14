@@ -225,6 +225,7 @@ func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName
 		result, err = workload.RunDurableSnapshot(ctx, cli, workload.DurableSnapshotConfig{
 			Mount:     fsmeta.MountID(*fsmetaMount),
 			RunID:     runID,
+			Clients:   *fsmetaClients,
 			Files:     *fsmetaFilesPerDir,
 			Snapshots: *fsmetaEntriesPerGroup,
 			PageLimit: uint32(*fsmetaPageLimit),

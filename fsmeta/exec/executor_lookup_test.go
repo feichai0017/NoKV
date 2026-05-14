@@ -103,6 +103,43 @@ func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) 
 	}}, pairs)
 }
 
+func TestExecutorReadDirPlusPerasOnlyPathMaterializesDirPage(t *testing.T) {
+	runner := newFakeRunner()
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+		WithDirPageCache(cache),
+	)
+	require.NoError(t, err)
+
+	created, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{Dentry: created.Dentry, Inode: created.Inode}}, first)
+	require.Equal(t, uint64(1), cache.Stats().StoreOK)
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	stats := cache.Stats()
+	require.Equal(t, uint64(1), stats.Hits)
+	require.Equal(t, uint64(1), stats.StoreOK)
+}
+
 func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
 	runner := newFakeRunner()
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)

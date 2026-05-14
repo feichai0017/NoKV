@@ -43,3 +43,27 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	require.Zero(t, overlayKeys)
 	require.NotZero(t, knownKeys)
 }
+
+func TestOverlayViewScanReusesSortedIndexAcrossReads(t *testing.T) {
+	view := NewOverlayView()
+	for _, item := range []struct {
+		name string
+		seq  uint64
+	}{
+		{name: "c", seq: 1},
+		{name: "a", seq: 2},
+		{name: "b", seq: 3},
+	} {
+		op := testGeneratedCreateOpForInodes(t, 9, fsmeta.InodeID(20+item.seq), item.name)
+		require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: item.seq}, op))
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(testMount, 9)
+	require.NoError(t, err)
+
+	first := view.Scan(prefix, 3)
+	second := view.Scan(prefix, 3)
+	require.Equal(t, first, second)
+	require.Len(t, first, 3)
+	require.Less(t, string(first[0].Key), string(first[1].Key))
+	require.Less(t, string(first[1].Key), string(first[2].Key))
+}

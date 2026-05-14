@@ -558,10 +558,18 @@ func runStaleSessionCleanup(ctx context.Context, cli MixedClient, cfg MixedConfi
 		return err
 	})
 	wait := cfg.StaleSessionTTL + 10*time.Millisecond
-	select {
-	case <-time.After(wait):
-	case <-ctx.Done():
-		rec.record("expire_write_sessions", 0, ctx.Err())
+	duration, waitErr := timeCall(func() error {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	rec.record("wait_stale_session_ttl", duration, waitErr)
+	if waitErr != nil {
 		return
 	}
 	rec.recordCall("expire_write_sessions", func() error {

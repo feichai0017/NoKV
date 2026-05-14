@@ -79,6 +79,7 @@ type WatchSubtreeConfig struct {
 type DurableSnapshotConfig struct {
 	Mount     fsmeta.MountID
 	RunID     string
+	Clients   int
 	Files     int
 	Snapshots int
 	PageLimit uint32
@@ -122,18 +123,20 @@ type Sample struct {
 }
 
 type SummaryRow struct {
-	Workload     string
-	Driver       string
-	RunID        string
-	Operation    string
-	Count        int
-	Errors       int
-	Throughput   float64
-	AverageUS    float64
-	P50US        float64
-	P95US        float64
-	P99US        float64
-	DurationSecs float64
+	Workload             string
+	Driver               string
+	RunID                string
+	Operation            string
+	Count                int
+	Errors               int
+	Throughput           float64
+	ActiveThroughput     float64
+	ActiveDurationSecs   float64
+	AverageUS            float64
+	P50US                float64
+	P95US                float64
+	P99US                float64
+	WorkloadDurationSecs float64
 }
 
 func RunCheckpointStorm(ctx context.Context, cli Client, cfg CheckpointStormConfig) (Result, error) {
@@ -438,33 +441,50 @@ func RunDurableSnapshot(ctx context.Context, cli Client, cfg DurableSnapshotConf
 			return err
 		})
 	}
-	for i := 0; i < cfg.Snapshots; i++ {
-		var token fsmeta.SnapshotSubtreeToken
-		var snapshotErr error
-		rec.recordCall("snapshot_subtree", func() error {
-			token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
-			return snapshotErr
-		})
-		if snapshotErr != nil {
-			continue
-		}
-		if token.ReadVersion != 0 {
-			rec.recordCall("snapshot_readdirplus", func() error {
-				_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-					Mount:           cfg.Mount,
-					Parent:          root,
-					Limit:           cfg.PageLimit,
-					SnapshotVersion: token.ReadVersion,
-				})
-				return err
-			})
-		}
-		rec.recordCall("retire_snapshot_subtree", func() error {
-			return snapshotCli.RetireSnapshotSubtree(ctx, token)
-		})
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for worker := 0; worker < cfg.Clients; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				idx := int(next.Add(1)) - 1
+				if idx >= cfg.Snapshots {
+					return
+				}
+				runDurableSnapshotCycle(ctx, cli, snapshotCli, cfg, root, rec)
+			}
+		}()
 	}
+	wg.Wait()
 
 	return finishResult(DurableSnapshot, cfg.RunID, started, rec.snapshot())
+}
+
+func runDurableSnapshotCycle(ctx context.Context, cli Client, snapshotCli DurableSnapshotClient, cfg DurableSnapshotConfig, root fsmeta.InodeID, rec *recorder) {
+	var token fsmeta.SnapshotSubtreeToken
+	var snapshotErr error
+	rec.recordCall("snapshot_subtree", func() error {
+		token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
+		return snapshotErr
+	})
+	if snapshotErr != nil {
+		return
+	}
+	if token.ReadVersion != 0 {
+		rec.recordCall("snapshot_readdirplus", func() error {
+			_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+				Mount:           cfg.Mount,
+				Parent:          root,
+				Limit:           cfg.PageLimit,
+				SnapshotVersion: token.ReadVersion,
+			})
+			return err
+		})
+	}
+	rec.recordCall("retire_snapshot_subtree", func() error {
+		return snapshotCli.RetireSnapshotSubtree(ctx, token)
+	})
 }
 
 func SummaryRows(result Result) []SummaryRow {
@@ -497,18 +517,20 @@ func SummaryRows(result Result) []SummaryRow {
 			avgUS = float64(total.Microseconds()) / float64(count)
 		}
 		rows = append(rows, SummaryRow{
-			Workload:     result.Name,
-			Driver:       result.Driver,
-			RunID:        result.RunID,
-			Operation:    op,
-			Count:        count,
-			Errors:       errors,
-			Throughput:   throughput(count, result.Duration),
-			AverageUS:    avgUS,
-			P50US:        percentileUS(latencies, 0.50),
-			P95US:        percentileUS(latencies, 0.95),
-			P99US:        percentileUS(latencies, 0.99),
-			DurationSecs: result.Duration.Seconds(),
+			Workload:             result.Name,
+			Driver:               result.Driver,
+			RunID:                result.RunID,
+			Operation:            op,
+			Count:                count,
+			Errors:               errors,
+			Throughput:           throughput(count, result.Duration),
+			ActiveThroughput:     throughput(count, total),
+			ActiveDurationSecs:   total.Seconds(),
+			AverageUS:            avgUS,
+			P50US:                percentileUS(latencies, 0.50),
+			P95US:                percentileUS(latencies, 0.95),
+			P99US:                percentileUS(latencies, 0.99),
+			WorkloadDurationSecs: result.Duration.Seconds(),
 		})
 	}
 	return rows
@@ -524,11 +546,13 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 		"count",
 		"errors",
 		"throughput_ops_sec",
+		"active_ops_per_sec",
+		"active_duration_sec",
 		"avg_latency_us",
 		"p50_latency_us",
 		"p95_latency_us",
 		"p99_latency_us",
-		"duration_sec",
+		"workload_duration_sec",
 	}); err != nil {
 		return err
 	}
@@ -541,11 +565,13 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 			strconv.Itoa(row.Count),
 			strconv.Itoa(row.Errors),
 			formatFloat(row.Throughput),
+			formatFloat(row.ActiveThroughput),
+			formatFloat(row.ActiveDurationSecs),
 			formatFloat(row.AverageUS),
 			formatFloat(row.P50US),
 			formatFloat(row.P95US),
 			formatFloat(row.P99US),
-			formatFloat(row.DurationSecs),
+			formatFloat(row.WorkloadDurationSecs),
 		}); err != nil {
 			return err
 		}
@@ -876,6 +902,9 @@ func normalizeDurableSnapshotConfig(cfg DurableSnapshotConfig) DurableSnapshotCo
 	}
 	if cfg.RunID == "" {
 		cfg.RunID = NewRunID()
+	}
+	if cfg.Clients <= 0 {
+		cfg.Clients = 1
 	}
 	if cfg.Files <= 0 {
 		cfg.Files = 128
