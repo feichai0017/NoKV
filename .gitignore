@@ -27,8 +27,6 @@ mem.pprof
 benchmark.test
 
 
-AGENTS.md
-
 ./artifacts/
 
 work_redis
