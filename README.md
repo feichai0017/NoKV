@@ -239,7 +239,6 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`txn/percolator/`](./txn/percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
-| [`fsmeta/exec/compile/`](./fsmeta/exec/compile) + [`fsmeta/runtime/peras/`](./fsmeta/runtime/peras) | Peras semantic visible commit, holder overlay, witness-backed segment install | [Peras](docs/peras.md) |
 | [`local/`](./local) | Embedded single-node DB facade, local stats, workdir mode, and local-only write runtime internals | [Runtime](docs/runtime.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |

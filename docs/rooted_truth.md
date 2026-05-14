@@ -230,7 +230,5 @@ Related docs:
 
 - [Coordinator](coordinator.md) — how the control plane consumes rooted state,
   including the Eunomia production-hardening backlog
-- [Peras](peras.md) — how fsmeta Peras authority uses root grants/seals without
-  becoming an Eunomia coordinator duty
 - [Control and Execution Plane Protocols](control_and_execution_protocols.md) — the full contract between `meta/root`, `coordinator/`, and `raftstore/`
 - [Migration](migration.md) — how the seeded→distributed flow bootstraps rooted state

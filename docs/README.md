@@ -91,7 +91,6 @@ For the authority schema behind those primitives, read **[notes/2026-04-25-names
 | Standalone → distributed migration | [migration.md](migration.md) |
 | Recovery model | [recovery.md](recovery.md) |
 | Percolator MVCC 2PC + AssertionNotExist | [percolator.md](percolator.md) |
-| Peras semantic visible-commit path | [peras.md](peras.md) |
 | Runtime call chains (sequence diagrams) | [runtime.md](runtime.md) |
 
 ### 🔧 Storage engine internals — the foundation
@@ -155,7 +154,6 @@ Layer 2  meta/root         ← rooted authority truth (Mount / SubtreeAuthority 
          coordinator       ← routing, TSO, store discovery, root-event publish + WatchRootEvents stream
          raftstore         ← per-region Raft + apply observer
          percolator        ← 2PC + MVCC + AssertionNotExist + commit-ts retry
-         peras             ← fsmeta semantic visible commit + segment install
    │
 Layer 3  engine            ← LSM + ART memtable + WAL + slab sidecar substrate
 ```
@@ -212,7 +210,6 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat / root-event subscribe |
 | **[Rooted truth](rooted_truth.md)** | `meta/root` typed event log |
 | **[Percolator / MVCC](percolator.md)** | 2PC primitives in distributed mode |
-| **[Peras](peras.md)** | fsmeta semantic visible-commit path and segment install |
 | **[Runtime call chains](runtime.md)** | Function-level sequence diagrams |
 | **[Testing](testing.md)** | Failpoints, chaos, restart, migration |
 | **[SUMMARY.md](SUMMARY.md)** | Full mdbook table of contents |

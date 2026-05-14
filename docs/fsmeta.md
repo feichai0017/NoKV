@@ -72,7 +72,7 @@ type TxnRunner interface {
 
 The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
 
-When explicitly configured, the same runtime can enable Peras visible commit for compiler-proven fsmeta operations. Peras admission is holder-local visibility; durable publication still goes through witness/segment install and raftstore `CMD_PERAS_INSTALL_SEGMENT`. See [`peras.md`](peras.md) for the full boundary.
+When explicitly configured, the same runtime can enable Peras visible commit for compiler-proven fsmeta operations. Peras admission is holder-local visibility; durable publication still goes through witness/segment install and raftstore `CMD_PERAS_INSTALL_SEGMENT`.
 
 `fsmeta/runtime/raftstore.Open` can also wire two derived slab caches when explicitly configured:
 

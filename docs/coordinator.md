@@ -177,8 +177,8 @@ unregistered duties are rejected by root, coordinator admission, client
 verification, and audit-facing checks.
 
 Peras authority is deliberately outside this Eunomia duty set. It uses
-`PerasAuthorityGrant` / `PerasAuthoritySeal` as fsmeta-specific root state; see
-[`peras.md`](peras.md) before treating it as another `DutySpec`.
+`PerasAuthorityGrant` / `PerasAuthoritySeal` as fsmeta-specific root state
+instead of another `DutySpec`.
 
 ---
 
