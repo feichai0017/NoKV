@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"os"
 	"strings"
+	"sync"
 )
 
 // Cursor identifies one committed position in the metadata-root log.
@@ -187,31 +188,44 @@ type grantKeyMaterial struct {
 	public  ed25519.PublicKey
 }
 
-var rootGrantKeys = loadGrantKeyMaterial()
+var rootGrantKeys = struct {
+	sync.Once
+	material grantKeyMaterial
+}{}
 
 func SignGrantBytes(payload []byte) []byte {
-	if len(rootGrantKeys.private) != ed25519.PrivateKeySize {
+	keys := cachedRootGrantKeys()
+	if len(keys.private) != ed25519.PrivateKeySize {
 		return nil
 	}
-	return ed25519.Sign(rootGrantKeys.private, payload)
+	return ed25519.Sign(keys.private, payload)
 }
 
 func VerifyGrantBytes(payload, signature []byte) bool {
-	if len(rootGrantKeys.public) != ed25519.PublicKeySize {
+	keys := cachedRootGrantKeys()
+	if len(keys.public) != ed25519.PublicKeySize {
 		return false
 	}
-	return ed25519.Verify(rootGrantKeys.public, payload, signature)
+	return ed25519.Verify(keys.public, payload, signature)
+}
+
+func cachedRootGrantKeys() grantKeyMaterial {
+	rootGrantKeys.Do(func() {
+		rootGrantKeys.material = loadGrantKeyMaterial()
+	})
+	return rootGrantKeys.material
 }
 
 func loadGrantKeyMaterial() grantKeyMaterial {
+	return loadGrantKeyMaterialWithEphemeral(allowEphemeralGrantKeys())
+}
+
+func loadGrantKeyMaterialWithEphemeral(allowEphemeral bool) grantKeyMaterial {
 	private := parseEd25519PrivateKeyEnv(GrantSigningPrivateKeyEnv)
 	public := parseEd25519PublicKeyEnv(GrantVerificationPublicKeyEnv)
 	if private == nil && public == nil {
-		if !allowEphemeralGrantKeys() {
-			panic("meta/root/protocol: " + GrantSigningPrivateKeyEnv +
-				" and/or " + GrantVerificationPublicKeyEnv +
-				" must be provided; set " + GrantAllowEphemeralKeysEnv +
-				"=1 only for local dev/test")
+		if !allowEphemeral {
+			return grantKeyMaterial{}
 		}
 		generatedPublic, generatedPrivate, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
