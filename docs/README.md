@@ -123,6 +123,13 @@ The single-node substrate that everything sits on. Independently usable as an em
 | Stats / expvar / metrics (fsmeta executor, watch, quota, mount, sessions) | [stats.md](stats.md) |
 | Testing strategy (failpoints, chaos, restart, migration) | [testing.md](testing.md) |
 
+### 🧑‍💻 Development contract
+
+| Topic | Doc |
+|---|---|
+| Code ownership, file naming, type/function naming, errors, metrics, DCO, generated code, and compatibility rules | [development/code_contract.md](development/code_contract.md) |
+| Human and agent PR review checklist | [development/pr_review_checklist.md](development/pr_review_checklist.md) |
+
 ### 📒 Notable design decision records
 
 All notes under [`notes/`](notes/) are dated decision records — they explain the *why*, not just the what.
