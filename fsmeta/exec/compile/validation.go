@@ -269,21 +269,7 @@ func predicateProofMap(proofs []PredicateProof) (map[string]PredicateProof, erro
 		if len(proof.Key) == 0 {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch}
 		}
-		if !proof.Present && len(proof.Value) != 0 {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
-		}
-		if !predicateProofSourceValid(proof) {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
-		}
-		if proof.ProofKind != PredicateProofKindFor(proof.Present, proof.Source) {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
-		}
-		scopeDigest := PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-		if proof.ScopeDigest != scopeDigest {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
-		}
-		digest := PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-		if digest != proof.Digest {
+		if err := VerifyPredicateProof(proof); err != nil {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
 		}
 		if _, ok := out[string(proof.Key)]; ok {
@@ -303,19 +289,6 @@ func durableAbsenceProof(proof PredicateProof) bool {
 		return proof.ProofKind == PredicateProofPointAbsence && proof.Version != 0
 	case ReadSourceOverlay:
 		return proof.ProofKind == PredicateProofOverlayFrontierAbsence && proof.ProofFrontier.Valid()
-	default:
-		return false
-	}
-}
-
-func predicateProofSourceValid(proof PredicateProof) bool {
-	switch proof.Source {
-	case ReadSourceUnknown:
-		return !proof.Present && len(proof.Value) == 0 && proof.Version == 0 && proof.ProofFrontier == (ProofFrontier{})
-	case ReadSourceOverlay:
-		return proof.Version == 0
-	case ReadSourceBase, ReadSourceSegment:
-		return proof.Version != 0
 	default:
 		return false
 	}
@@ -387,7 +360,11 @@ func authorityScopeCoversBuckets(scope AuthorityScope, buckets []fsmeta.Affinity
 func guardProofMap(proofs []GuardProof) (map[RuntimeGuard]GuardProof, error) {
 	out := make(map[RuntimeGuard]GuardProof, len(proofs))
 	for _, proof := range proofs {
-		if proof.Guard == "" || !proof.Passed {
+		if proof.SchemaVersion != ProofVersion1 || proof.Evidence.SchemaVersion != ProofVersion1 || proof.Guard == "" || !proof.Passed {
+			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
+		}
+		guard, ok := RuntimeGuardForProofRule(proof.Guard)
+		if !ok {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 		if proof.Evidence.Guard != proof.Guard {
@@ -396,10 +373,10 @@ func guardProofMap(proofs []GuardProof) (map[RuntimeGuard]GuardProof, error) {
 		if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		if _, ok := out[proof.Guard]; ok {
+		if _, ok := out[guard]; ok {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		out[proof.Guard] = proof
+		out[guard] = proof
 	}
 	return out, nil
 }

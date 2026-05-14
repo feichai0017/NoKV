@@ -370,10 +370,14 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 
 func predicateProofsEqual(left, right []compile.PredicateProof) bool {
 	return slices.EqualFunc(left, right, func(l, r compile.PredicateProof) bool {
-		return l.Present == r.Present &&
+		return l.SchemaVersion == r.SchemaVersion &&
+			l.Rule == r.Rule &&
+			l.Present == r.Present &&
 			l.Version == r.Version &&
 			l.Source == r.Source &&
 			l.ProofFrontier == r.ProofFrontier &&
+			l.ProofKind == r.ProofKind &&
+			l.ScopeDigest == r.ScopeDigest &&
 			l.Digest == r.Digest &&
 			bytes.Equal(l.Key, r.Key) &&
 			bytes.Equal(l.Value, r.Value)

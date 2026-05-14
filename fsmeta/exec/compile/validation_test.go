@@ -66,7 +66,7 @@ func TestPredicateProofCarriesAbsenceProofClass(t *testing.T) {
 func TestMaterializedOpValidationBindsGuardProofEvidence(t *testing.T) {
 	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 	op := testMaterializeAOT(t, delta, proofs)
-	wrongEvidence := GuardEvidenceFor(op.CompiledOp, nil)
+	wrongEvidence := GuardEvidence{SchemaVersion: ProofVersion1}
 	op = WithGuardProofs(op, []GuardProof{GuardProofFor(op.Delta.RuntimeGuards[0], true, wrongEvidence)})
 
 	var validationErr ValidationError

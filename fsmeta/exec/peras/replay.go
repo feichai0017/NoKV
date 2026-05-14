@@ -121,6 +121,8 @@ func clonePredicateProofs(proofs []compile.PredicateProof) []compile.PredicatePr
 	out := make([]compile.PredicateProof, len(proofs))
 	for i, proof := range proofs {
 		out[i] = compile.PredicateProof{
+			SchemaVersion: proof.SchemaVersion,
+			Rule:          proof.Rule,
 			Key:           cloneBytes(proof.Key),
 			Present:       proof.Present,
 			Value:         cloneBytes(proof.Value),

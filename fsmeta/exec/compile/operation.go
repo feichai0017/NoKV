@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	metaproof "github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 const segmentFormatVersion uint16 = 1
@@ -135,34 +136,23 @@ type PredicateObligation struct {
 	ExpectHash       [32]byte
 }
 
-type ReadSource uint8
+type ReadSource = metaproof.ReadSource
 
 const (
-	ReadSourceUnknown ReadSource = iota
-	ReadSourceOverlay
-	ReadSourceSegment
-	ReadSourceBase
+	ReadSourceUnknown = metaproof.ReadSourceUnknown
+	ReadSourceOverlay = metaproof.ReadSourceOverlay
+	ReadSourceSegment = metaproof.ReadSourceSegment
+	ReadSourceBase    = metaproof.ReadSourceBase
 )
 
-type PredicateProof struct {
-	Key           []byte
-	Present       bool
-	Value         []byte
-	Version       uint64
-	Source        ReadSource
-	ProofFrontier ProofFrontier
-	ProofKind     PredicateProofKind
-	ScopeDigest   [32]byte
-	Digest        [32]byte
-}
-
-type PredicateProofKind uint8
+type PredicateProof = metaproof.PredicateProof
+type PredicateProofKind = metaproof.PredicateProofKind
 
 const (
-	PredicateProofUnknown PredicateProofKind = iota
-	PredicateProofPointValue
-	PredicateProofPointAbsence
-	PredicateProofOverlayFrontierAbsence
+	PredicateProofUnknown                = metaproof.PredicateProofUnknown
+	PredicateProofPointValue             = metaproof.PredicateProofPointValue
+	PredicateProofPointAbsence           = metaproof.PredicateProofPointAbsence
+	PredicateProofOverlayFrontierAbsence = metaproof.PredicateProofOverlayFrontierAbsence
 )
 
 type GuardObligation struct {
@@ -170,44 +160,26 @@ type GuardObligation struct {
 	Digest [32]byte
 }
 
-type ProofFrontier struct {
-	EpochID  uint64
-	Sequence uint64
-}
+type ProofFrontier = metaproof.ProofFrontier
 
-func (f ProofFrontier) Valid() bool {
-	return f.EpochID != 0 && f.Sequence != 0
-}
-
-type GuardEvidenceKind uint8
+type GuardEvidenceKind = metaproof.GuardEvidenceKind
 
 const (
-	GuardEvidenceUnknown GuardEvidenceKind = iota
-	GuardEvidenceSingleLinkInode
-	GuardEvidenceSameAuthority
-	GuardEvidenceNonDirectoryInode
-	GuardEvidenceLiveSession
-	GuardEvidenceExpiredSessionOwner
-	GuardEvidenceQuotaCredit
+	GuardEvidenceUnknown             = metaproof.GuardEvidenceUnknown
+	GuardEvidenceSingleLinkInode     = metaproof.GuardEvidenceSingleLinkInode
+	GuardEvidenceSameAuthority       = metaproof.GuardEvidenceSameAuthority
+	GuardEvidenceNonDirectoryInode   = metaproof.GuardEvidenceNonDirectoryInode
+	GuardEvidenceLiveSession         = metaproof.GuardEvidenceLiveSession
+	GuardEvidenceExpiredSessionOwner = metaproof.GuardEvidenceExpiredSessionOwner
+	GuardEvidenceQuotaCredit         = metaproof.GuardEvidenceQuotaCredit
 )
 
-type GuardEvidence struct {
-	Guard                RuntimeGuard
-	Kind                 GuardEvidenceKind
-	DescriptorDigest     [32]byte
-	PredicateProofDigest [32]byte
-	FootprintDigest      [32]byte
-	EffectDigest         [32]byte
-	SubjectDigest        [32]byte
-	ProofFrontier        ProofFrontier
-}
+type GuardEvidence = metaproof.GuardEvidence
+type GuardProof = metaproof.GuardProof
+type ProofVersion = metaproof.Version
+type ProofRuleID = metaproof.RuleID
 
-type GuardProof struct {
-	Guard    RuntimeGuard
-	Passed   bool
-	Evidence GuardEvidence
-	Digest   [32]byte
-}
+const ProofVersion1 = metaproof.Version1
 
 type DerivationKind uint8
 
@@ -673,55 +645,15 @@ func PredicateProofDigest(key, value []byte, present bool, version uint64, sourc
 	if len(frontiers) > 0 {
 		frontier = frontiers[0]
 	}
-	kind := PredicateProofKindFor(present, source)
-	scopeDigest := PredicateProofScopeDigest(key, value, present, version, source, frontier)
-	h := newDigestBuilder()
-	h.writeRaw(key)
-	h.writeBoolByte(present)
-	h.writeRaw(value)
-	h.writeByte(byte(source))
-	h.writeUint64(version)
-	h.writeUint64(frontier.EpochID)
-	h.writeUint64(frontier.Sequence)
-	h.writeUint64(uint64(kind))
-	h.writeBytes(scopeDigest[:])
-	return h.sum()
+	return metaproof.PredicateProofDigest(key, value, present, version, source, frontier)
 }
 
 func PredicateProofKindFor(present bool, source ReadSource) PredicateProofKind {
-	if present {
-		return PredicateProofPointValue
-	}
-	if source == ReadSourceOverlay {
-		return PredicateProofOverlayFrontierAbsence
-	}
-	if source == ReadSourceBase || source == ReadSourceSegment {
-		return PredicateProofPointAbsence
-	}
-	return PredicateProofUnknown
+	return metaproof.PredicateProofKindFor(present, source)
 }
 
 func PredicateProofScopeDigest(key, value []byte, present bool, version uint64, source ReadSource, frontier ProofFrontier) [32]byte {
-	h := newDigestBuilder()
-	h.writeString("predicate-proof-scope")
-	h.writeUint64(uint64(PredicateProofKindFor(present, source)))
-	h.writeBytes(key)
-	h.writeBool(present)
-	h.writeUint64(uint64(source))
-	switch {
-	case present:
-		valueHash := sha256.Sum256(value)
-		h.writeBytes(valueHash[:])
-		h.writeUint64(version)
-		h.writeUint64(frontier.EpochID)
-		h.writeUint64(frontier.Sequence)
-	case source == ReadSourceOverlay:
-		h.writeUint64(frontier.EpochID)
-		h.writeUint64(frontier.Sequence)
-	default:
-		h.writeUint64(version)
-	}
-	return h.sum()
+	return metaproof.PredicateProofScopeDigest(key, value, present, version, source, frontier)
 }
 
 func PredicateProofFor(key, value []byte, present bool, version uint64, source ReadSource, frontiers ...ProofFrontier) PredicateProof {
@@ -729,18 +661,11 @@ func PredicateProofFor(key, value []byte, present bool, version uint64, source R
 	if len(frontiers) > 0 {
 		frontier = frontiers[0]
 	}
-	proof := PredicateProof{
-		Key:           cloneBytes(key),
-		Present:       present,
-		Value:         cloneBytes(value),
-		Version:       version,
-		Source:        source,
-		ProofFrontier: frontier,
-	}
-	proof.ProofKind = PredicateProofKindFor(proof.Present, proof.Source)
-	proof.ScopeDigest = PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-	return proof
+	return metaproof.NewPredicateProof(key, value, present, version, source, frontier)
+}
+
+func VerifyPredicateProof(proof PredicateProof) error {
+	return metaproof.VerifyPredicateProof(proof)
 }
 
 func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
@@ -750,6 +675,8 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	h := newDigestBuilder()
 	h.writeUint64(uint64(len(proofs)))
 	for _, proof := range proofs {
+		h.writeUint64(uint64(proof.SchemaVersion))
+		h.writeString(string(proof.Rule))
 		h.writeBytes(proof.Key)
 		h.writeBool(proof.Present)
 		h.writeBytes(proof.Value)
@@ -764,20 +691,51 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	return h.sum()
 }
 
-func GuardObligationDigest(guard RuntimeGuard) [32]byte {
-	h := newDigestBuilder()
-	h.writeString(string(guard))
-	return h.sum()
+func ProofRuleForGuard(guard RuntimeGuard) (ProofRuleID, bool) {
+	switch guard {
+	case GuardSingleLinkInode:
+		return metaproof.RuleGuardSingleLinkInode, true
+	case GuardSameAuthority:
+		return metaproof.RuleGuardSameAuthority, true
+	case GuardNonDirectoryInode:
+		return metaproof.RuleGuardNonDirectoryInode, true
+	case GuardLiveSession:
+		return metaproof.RuleGuardLiveSession, true
+	case GuardExpiredSessionOwner:
+		return metaproof.RuleGuardExpiredSessionOwner, true
+	case GuardQuotaCredit:
+		return metaproof.RuleGuardQuotaCredit, true
+	default:
+		return "", false
+	}
 }
 
-func GuardEvidenceFor(op CompiledOp, predicateProofs []PredicateProof) GuardEvidence {
-	return GuardEvidence{
-		Kind:                 GuardEvidenceUnknown,
-		DescriptorDigest:     op.DescriptorDigest,
-		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
-		FootprintDigest:      KeyFootprintDigest(op.Footprint),
-		EffectDigest:         EffectPlanDigest(op.Effects),
+func RuntimeGuardForProofRule(rule ProofRuleID) (RuntimeGuard, bool) {
+	switch rule {
+	case metaproof.RuleGuardSingleLinkInode:
+		return GuardSingleLinkInode, true
+	case metaproof.RuleGuardSameAuthority:
+		return GuardSameAuthority, true
+	case metaproof.RuleGuardNonDirectoryInode:
+		return GuardNonDirectoryInode, true
+	case metaproof.RuleGuardLiveSession:
+		return GuardLiveSession, true
+	case metaproof.RuleGuardExpiredSessionOwner:
+		return GuardExpiredSessionOwner, true
+	case metaproof.RuleGuardQuotaCredit:
+		return GuardQuotaCredit, true
+	default:
+		return "", false
 	}
+}
+
+func guardProofRule(guard RuntimeGuard) ProofRuleID {
+	rule, _ := ProofRuleForGuard(guard)
+	return rule
+}
+
+func GuardObligationDigest(guard RuntimeGuard) [32]byte {
+	return metaproof.GuardObligationDigest(guardProofRule(guard))
 }
 
 func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
@@ -803,29 +761,13 @@ func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
 // GuardProofDigest commits to the generated guard identity, boolean result,
 // and the guard-specific predicate/effect descriptor evidence the holder used
 // for admission.
-func GuardProofDigest(guard RuntimeGuard, passed bool, evidence GuardEvidence) [32]byte {
-	h := newDigestBuilder()
-	h.writeString(string(guard))
-	h.writeBool(passed)
-	h.writeString(string(evidence.Guard))
-	h.writeUint64(uint64(evidence.Kind))
-	h.writeBytes(evidence.DescriptorDigest[:])
-	h.writeBytes(evidence.PredicateProofDigest[:])
-	h.writeBytes(evidence.FootprintDigest[:])
-	h.writeBytes(evidence.EffectDigest[:])
-	h.writeBytes(evidence.SubjectDigest[:])
-	h.writeUint64(evidence.ProofFrontier.EpochID)
-	h.writeUint64(evidence.ProofFrontier.Sequence)
-	return h.sum()
+func GuardProofDigest(guard ProofRuleID, passed bool, evidence GuardEvidence) [32]byte {
+	return metaproof.GuardProofDigest(guard, passed, evidence)
 }
 
 func GuardProofFor(guard RuntimeGuard, passed bool, evidence GuardEvidence) GuardProof {
-	return GuardProof{
-		Guard:    guard,
-		Passed:   passed,
-		Evidence: evidence,
-		Digest:   GuardProofDigest(guard, passed, evidence),
-	}
+	rule := guardProofRule(guard)
+	return metaproof.GuardProofFor(rule, passed, evidence)
 }
 
 func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []RuntimeGuard) ([]GuardProof, error) {
@@ -844,31 +786,32 @@ func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []Ru
 }
 
 func VerifyGuardProof(op CompiledOp, predicateProofs []PredicateProof, obligation GuardObligation, proof GuardProof) error {
-	if proof.Guard != obligation.Guard || !proof.Passed {
+	rule, ok := ProofRuleForGuard(obligation.Guard)
+	if !ok {
 		return fsmeta.ErrInvalidRequest
 	}
-	if obligation.Digest != ([32]byte{}) && obligation.Digest != GuardObligationDigest(obligation.Guard) {
-		return fsmeta.ErrInvalidRequest
-	}
-	if proof.Evidence.Guard != proof.Guard {
-		return fsmeta.ErrInvalidRequest
-	}
-	if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
-		return fsmeta.ErrInvalidRequest
+	proofObligation := metaproof.GuardObligation{
+		Guard:  rule,
+		Digest: GuardObligationDigest(obligation.Guard),
 	}
 	evidence, err := GuardEvidenceForGuard(op, predicateProofs, obligation.Guard)
 	if err != nil {
 		return err
 	}
-	if proof.Evidence != evidence {
+	if err := metaproof.VerifyGuardProof(proofObligation, evidence, proof); err != nil {
 		return fsmeta.ErrInvalidRequest
 	}
 	return nil
 }
 
 func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guard RuntimeGuard) (GuardEvidence, error) {
+	rule, ok := ProofRuleForGuard(guard)
+	if !ok {
+		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+	}
 	evidence := GuardEvidence{
-		Guard:                guard,
+		SchemaVersion:        ProofVersion1,
+		Guard:                rule,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
 		FootprintDigest:      KeyFootprintDigest(op.Footprint),
@@ -876,30 +819,30 @@ func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guar
 		ProofFrontier:        proofSetFrontier(predicateProofs),
 	}
 	var subject [32]byte
-	var ok bool
+	var subjectOK bool
 	switch guard {
 	case GuardSingleLinkInode:
 		evidence.Kind = GuardEvidenceSingleLinkInode
-		subject, ok = singleLinkInodeGuardSubject(predicateProofs)
+		subject, subjectOK = singleLinkInodeGuardSubject(predicateProofs)
 	case GuardSameAuthority:
 		evidence.Kind = GuardEvidenceSameAuthority
-		subject, ok = sameAuthorityGuardSubject(op)
+		subject, subjectOK = sameAuthorityGuardSubject(op)
 	case GuardNonDirectoryInode:
 		evidence.Kind = GuardEvidenceNonDirectoryInode
-		subject, ok = nonDirectoryGuardSubject(predicateProofs)
+		subject, subjectOK = nonDirectoryGuardSubject(predicateProofs)
 	case GuardLiveSession:
 		evidence.Kind = GuardEvidenceLiveSession
-		subject, ok = liveSessionGuardSubject(predicateProofs)
+		subject, subjectOK = liveSessionGuardSubject(predicateProofs)
 	case GuardExpiredSessionOwner:
 		evidence.Kind = GuardEvidenceExpiredSessionOwner
-		subject, ok = expiredSessionOwnerGuardSubject(predicateProofs)
+		subject, subjectOK = expiredSessionOwnerGuardSubject(predicateProofs)
 	case GuardQuotaCredit:
 		evidence.Kind = GuardEvidenceQuotaCredit
-		subject, ok = quotaCreditGuardSubject(op)
+		subject, subjectOK = quotaCreditGuardSubject(op)
 	default:
 		return GuardEvidence{}, fsmeta.ErrInvalidRequest
 	}
-	if !ok {
+	if !subjectOK {
 		return GuardEvidence{}, fsmeta.ErrInvalidRequest
 	}
 	evidence.SubjectDigest = subject
@@ -1131,8 +1074,10 @@ func GuardProofSetDigest(proofs []GuardProof) [32]byte {
 	h := newDigestBuilder()
 	h.writeUint64(uint64(len(proofs)))
 	for _, proof := range proofs {
+		h.writeUint64(uint64(proof.SchemaVersion))
 		h.writeString(string(proof.Guard))
 		h.writeBool(proof.Passed)
+		h.writeUint64(uint64(proof.Evidence.SchemaVersion))
 		h.writeString(string(proof.Evidence.Guard))
 		h.writeUint64(uint64(proof.Evidence.Kind))
 		h.writeBytes(proof.Evidence.DescriptorDigest[:])
@@ -1355,6 +1300,8 @@ func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
 	out := make([]PredicateProof, len(proofs))
 	for i, proof := range proofs {
 		out[i] = PredicateProof{
+			SchemaVersion: proof.SchemaVersion,
+			Rule:          proof.Rule,
 			Key:           cloneBytes(proof.Key),
 			Present:       proof.Present,
 			Value:         cloneBytes(proof.Value),

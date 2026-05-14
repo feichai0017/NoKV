@@ -210,21 +210,7 @@ func proofFrontierForSource(source compile.ReadSource, frontier compile.ProofFro
 
 func perasPredicateProofsValid(proofs []compile.PredicateProof) bool {
 	for _, proof := range proofs {
-		if len(proof.Key) == 0 {
-			return false
-		}
-		if !proof.Present && len(proof.Value) != 0 {
-			return false
-		}
-		if proof.ProofKind != compile.PredicateProofKindFor(proof.Present, proof.Source) {
-			return false
-		}
-		scopeDigest := compile.PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-		if proof.ScopeDigest != scopeDigest {
-			return false
-		}
-		digest := compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-		if digest != proof.Digest {
+		if err := compile.VerifyPredicateProof(proof); err != nil {
 			return false
 		}
 	}

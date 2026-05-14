@@ -561,6 +561,8 @@ func readSegmentCompletion(r *witnessReader) (SegmentCompletion, error) {
 func writePredicateProofs(out io.Writer, proofs []compile.PredicateProof) {
 	writeUint64(out, uint64(len(proofs)))
 	for _, proof := range proofs {
+		writeUint64(out, uint64(proof.SchemaVersion))
+		writeString(out, string(proof.Rule))
 		writeBytes(out, proof.Key)
 		writeBool(out, proof.Present)
 		writeBytes(out, proof.Value)
@@ -587,6 +589,14 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 	}
 	proofs := make([]compile.PredicateProof, 0, count)
 	for range count {
+		schemaVersion, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		rule, err := r.readString()
+		if err != nil {
+			return nil, err
+		}
 		key, err := r.readBytes()
 		if err != nil {
 			return nil, err
@@ -628,6 +638,8 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 			return nil, err
 		}
 		proof := compile.PredicateProof{
+			SchemaVersion: compile.ProofVersion(schemaVersion),
+			Rule:          compile.ProofRuleID(rule),
 			Key:           key,
 			Present:       present,
 			Value:         value,
@@ -638,13 +650,7 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 			ScopeDigest:   scopeDigest,
 			Digest:        digest,
 		}
-		if proof.ProofKind != compile.PredicateProofKindFor(proof.Present, proof.Source) {
-			return nil, ErrInvalidPerasSegment
-		}
-		if compile.PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier) != proof.ScopeDigest {
-			return nil, ErrInvalidPerasSegment
-		}
-		if compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier) != proof.Digest {
+		if err := compile.VerifyPredicateProof(proof); err != nil {
 			return nil, ErrInvalidPerasSegment
 		}
 		proofs = append(proofs, proof)
@@ -655,6 +661,7 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 func writeGuardProofs(out io.Writer, proofs []compile.GuardProof) {
 	writeUint64(out, uint64(len(proofs)))
 	for _, proof := range proofs {
+		writeUint64(out, uint64(proof.SchemaVersion))
 		writeString(out, string(proof.Guard))
 		writeBool(out, proof.Passed)
 		writeGuardEvidence(out, proof.Evidence)
@@ -675,6 +682,10 @@ func readGuardProofs(r *witnessReader) ([]compile.GuardProof, error) {
 	}
 	proofs := make([]compile.GuardProof, 0, count)
 	for range count {
+		schemaVersion, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
 		guard, err := r.readString()
 		if err != nil {
 			return nil, err
@@ -692,10 +703,14 @@ func readGuardProofs(r *witnessReader) ([]compile.GuardProof, error) {
 			return nil, err
 		}
 		proof := compile.GuardProof{
-			Guard:    compile.RuntimeGuard(guard),
-			Passed:   passed,
-			Evidence: evidence,
-			Digest:   digest,
+			SchemaVersion: compile.ProofVersion(schemaVersion),
+			Guard:         compile.ProofRuleID(guard),
+			Passed:        passed,
+			Evidence:      evidence,
+			Digest:        digest,
+		}
+		if proof.SchemaVersion != compile.ProofVersion1 || proof.Evidence.SchemaVersion != compile.ProofVersion1 {
+			return nil, ErrInvalidPerasSegment
 		}
 		if compile.GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) != proof.Digest {
 			return nil, ErrInvalidPerasSegment
@@ -706,6 +721,7 @@ func readGuardProofs(r *witnessReader) ([]compile.GuardProof, error) {
 }
 
 func writeGuardEvidence(out io.Writer, evidence compile.GuardEvidence) {
+	writeUint64(out, uint64(evidence.SchemaVersion))
 	writeString(out, string(evidence.Guard))
 	writeUint64(out, uint64(evidence.Kind))
 	writeFixed(out, evidence.DescriptorDigest[:])
@@ -718,6 +734,10 @@ func writeGuardEvidence(out io.Writer, evidence compile.GuardEvidence) {
 }
 
 func readGuardEvidence(r *witnessReader) (compile.GuardEvidence, error) {
+	schemaVersion, err := r.readUint64()
+	if err != nil {
+		return compile.GuardEvidence{}, err
+	}
 	guard, err := r.readString()
 	if err != nil {
 		return compile.GuardEvidence{}, err
@@ -755,7 +775,8 @@ func readGuardEvidence(r *witnessReader) (compile.GuardEvidence, error) {
 		return compile.GuardEvidence{}, err
 	}
 	return compile.GuardEvidence{
-		Guard:                compile.RuntimeGuard(guard),
+		SchemaVersion:        compile.ProofVersion(schemaVersion),
+		Guard:                compile.ProofRuleID(guard),
 		Kind:                 compile.GuardEvidenceKind(kind),
 		DescriptorDigest:     descriptorDigest,
 		PredicateProofDigest: predicateProofDigest,
@@ -770,17 +791,17 @@ func segmentCompletionEncodedSize(completion SegmentCompletion) int {
 	size := stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32 + 32
 	size += 8
 	for _, proof := range completion.PredicateProofs {
-		size += 4 + len(proof.Key) + 1 + 4 + len(proof.Value) + 8 + 8 + 8 + 8 + 8 + 32 + 32
+		size += 8 + stringEncodedSize(string(proof.Rule)) + 4 + len(proof.Key) + 1 + 4 + len(proof.Value) + 8 + 8 + 8 + 8 + 8 + 32 + 32
 	}
 	size += 8
 	for _, proof := range completion.GuardProofs {
-		size += stringEncodedSize(string(proof.Guard)) + 1 + guardEvidenceEncodedSize(proof.Evidence) + 32
+		size += 8 + stringEncodedSize(string(proof.Guard)) + 1 + guardEvidenceEncodedSize(proof.Evidence) + 32
 	}
 	return size
 }
 
 func guardEvidenceEncodedSize(evidence compile.GuardEvidence) int {
-	return stringEncodedSize(string(evidence.Guard)) + 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8
+	return 8 + stringEncodedSize(string(evidence.Guard)) + 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8
 }
 
 func maxSegmentSliceLen() int {
