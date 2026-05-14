@@ -4,12 +4,15 @@
 package fsmetabench
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -30,23 +33,21 @@ const benchEnvKey = "NOKV_FSMETA_BENCH"
 var (
 	fsmetaAddr            = flag.String("fsmeta_addr", "127.0.0.1:8090", "FSMetadata gRPC endpoint")
 	fsmetaCoordAddr       = flag.String("fsmeta_coordinator_addr", "127.0.0.1:2379", "Coordinator gRPC endpoint for mount bootstrap")
-	fsmetaWorkloads       = flag.String("fsmeta_workloads", "multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup", "comma-separated workloads: multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup")
+	fsmetaWorkloads       = flag.String("fsmeta_workloads", workload.DefaultWorkloadSuite, "comma-separated workloads: "+workload.DefaultWorkloadSuite)
+	fsmetaScaleProfile    = flag.String("fsmeta_scale_profile", workload.DefaultScaleProfile, "scale profile from benchmark/fsmeta/profiles/official/workloads.yaml: median,long,official")
 	fsmetaMount           = flag.String("fsmeta_mount", "fsmeta-bench", "fsmeta mount id")
-	fsmetaClients         = flag.Int("fsmeta_clients", 8, "concurrent clients")
-	fsmetaDirs            = flag.Int("fsmeta_dirs", 16, "checkpoint-storm directory count")
-	fsmetaFilesPerDir     = flag.Int("fsmeta_files_per_dir", 128, "checkpoint-storm files per directory")
-	fsmetaFiles           = flag.Int("fsmeta_files", 2048, "hotspot-fanin/watch/negative file count")
-	fsmetaReadsPerClient  = flag.Int("fsmeta_reads_per_client", 128, "hotspot-fanin/negative reads per client")
-	fsmetaPageLimit       = flag.Uint("fsmeta_page_limit", 0, "readdir page limit; 0 uses workload default")
-	fsmetaReadDirPlus     = flag.Bool("fsmeta_readdirplus", true, "hotspot-fanin uses ReadDirPlus instead of ReadDir")
-	fsmetaWatchWindow     = flag.Uint("fsmeta_watch_window", 0, "watch-subtree back-pressure window; 0 uses workload default")
+	fsmetaClients         = flag.Int("fsmeta_clients", 0, "concurrent clients; 0 uses selected scale profile")
+	fsmetaDirs            = flag.Int("fsmeta_dirs", 0, "mdtest/mimesis directory count; 0 uses selected scale profile")
+	fsmetaFilesPerDir     = flag.Int("fsmeta_files_per_dir", 0, "mdtest/mimesis files per directory; 0 uses selected scale profile")
+	fsmetaPageLimit       = flag.Uint("fsmeta_page_limit", 0, "ReadDirPlus page limit; 0 uses workload default")
+	fsmetaWatchWindow     = flag.Uint("fsmeta_watch_window", 0, "AI checkpoint watch back-pressure window; 0 uses workload default")
 	fsmetaMountWait       = flag.Duration("fsmeta_mount_wait", 30*time.Second, "maximum time to wait for fsmeta gateway to observe benchmark mount")
-	fsmetaGroups          = flag.Int("fsmeta_groups", 4, "mixed workload group directory count")
-	fsmetaEntriesPerGroup = flag.Int("fsmeta_entries_per_group", 8, "mixed workload published entry count per group")
-	fsmetaArtifactsPerRun = flag.Int("fsmeta_artifacts_per_entry", 4, "mixed workload artifact file count per entry; minimum 4")
-	fsmetaWorkspaces      = flag.Int("fsmeta_workspaces", 4, "multi-workspace-autoscale workspace count")
-	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 5*time.Minute, "mixed writer session TTL")
-	fsmetaStaleSessionTTL = flag.Duration("fsmeta_stale_session_ttl", 20*time.Millisecond, "mixed stale-session cleanup TTL; keep short for throughput runs, override for long-TTL cleanup drills")
+	fsmetaUsers           = flag.Int("fsmeta_users", 0, "filebench-varmail user mailbox count; 0 uses selected scale profile")
+	fsmetaMessagesPerUser = flag.Int("fsmeta_messages_per_user", 0, "filebench-varmail messages per user mailbox; 0 uses selected scale profile")
+	fsmetaWorkspaces      = flag.Int("fsmeta_workspaces", 0, "AI checkpoint workspace count; 0 uses selected scale profile")
+	fsmetaCheckpoints     = flag.Int("fsmeta_checkpoints_per_workspace", 0, "AI checkpoints per workspace; 0 uses selected scale profile")
+	fsmetaFilesPerCkpt    = flag.Int("fsmeta_files_per_checkpoint", 0, "AI checkpoint artifact files per checkpoint; 0 uses selected scale profile")
+	fsmetaSessionTTL      = flag.Duration("fsmeta_session_ttl", 0, "writer session TTL for varmail and AI checkpoint workloads; 0 uses selected scale profile")
 	fsmetaLookupCache     = flag.Int("fsmeta_lookup_cache_entries", 4096, "client-side positive Lookup cache entries; 0 disables")
 	fsmetaLookupCacheTTL  = flag.Duration("fsmeta_lookup_cache_ttl", time.Second, "client-side positive Lookup cache TTL")
 	fsmetaTimeout         = flag.Duration("fsmeta_timeout", 5*time.Minute, "overall benchmark timeout")
@@ -66,7 +67,8 @@ func TestBenchmarkFSMeta(t *testing.T) {
 	cli, cleanup := openBenchmarkClient(t, ctx)
 	defer cleanup()
 	waitForFSMetaMount(t, ctx, cli)
-	for _, workloadName := range parseWorkloads(*fsmetaWorkloads) {
+	workloads := parseWorkloads(*fsmetaWorkloads)
+	for _, workloadName := range workloads {
 		result, err := runBenchmarkWorkload(ctx, cli, workloadName, runID)
 		if err != nil {
 			t.Fatalf("run %s: %v", workloadName, err)
@@ -94,6 +96,16 @@ func TestBenchmarkFSMeta(t *testing.T) {
 		t.Fatalf("write summary CSV: %v", err)
 	}
 	t.Logf("wrote fsmeta benchmark summary: %s", output)
+	manifest := output + ".manifest.txt"
+	mf, err := os.Create(manifest)
+	if err != nil {
+		t.Fatalf("create manifest: %v", err)
+	}
+	defer func() { _ = mf.Close() }()
+	if err := writeBenchmarkManifest(mf, runID, workloads); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	t.Logf("wrote fsmeta benchmark manifest: %s", manifest)
 }
 
 func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
@@ -138,7 +150,7 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	// the frontier advances during a long benchmark run.
 }
 
-func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.Client, func()) {
+func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.MetadataClient, func()) {
 	t.Helper()
 	cfg := fsmetaclient.ClientConfig{
 		DisableLookupCache: *fsmetaLookupCache <= 0,
@@ -156,16 +168,15 @@ func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.Client, fu
 	return cli, func() { _ = cli.Close() }
 }
 
-func waitForFSMetaMount(t *testing.T, ctx context.Context, cli workload.Client) {
+func waitForFSMetaMount(t *testing.T, ctx context.Context, cli workload.MetadataClient) {
 	t.Helper()
-	watchCli, ok := cli.(workload.WatchClient)
-	if !ok || *fsmetaMountWait <= 0 {
+	if *fsmetaMountWait <= 0 {
 		return
 	}
 	deadline := time.Now().Add(*fsmetaMountWait)
 	var lastErr error
 	for {
-		stream, err := watchCli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		stream, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
 			Mount:     fsmeta.MountID(*fsmetaMount),
 			RootInode: fsmeta.RootInode,
 		})
@@ -192,88 +203,103 @@ func isMountVisibilityPending(err error) bool {
 	return errors.Is(err, fsmeta.ErrMountNotRegistered)
 }
 
-func runBenchmarkWorkload(ctx context.Context, cli workload.Client, workloadName, runID string) (workload.Result, error) {
+func runBenchmarkWorkload(ctx context.Context, cli workload.MetadataClient, workloadName, runID string) (workload.Result, error) {
 	var (
 		result workload.Result
 		err    error
 	)
 	switch workloadName {
-	case workload.CheckpointStorm:
-		result, err = workload.RunCheckpointStorm(ctx, cli, workload.CheckpointStormConfig{
+	case workload.MDTestEasy:
+		scale := resolvedScale(workloadName)
+		result, err = workload.RunMDTestEasy(ctx, cli, workload.MDTestConfig{
 			Mount:             fsmeta.MountID(*fsmetaMount),
 			RunID:             runID,
-			Clients:           *fsmetaClients,
-			Directories:       *fsmetaDirs,
-			FilesPerDirectory: *fsmetaFilesPerDir,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
 		})
-	case workload.HotspotFanIn:
-		result, err = workload.RunHotspotFanIn(ctx, cli, workload.HotspotFanInConfig{
-			Mount:          fsmeta.MountID(*fsmetaMount),
-			RunID:          runID,
-			Clients:        *fsmetaClients,
-			Files:          *fsmetaFiles,
-			ReadsPerClient: *fsmetaReadsPerClient,
-			PageLimit:      uint32(*fsmetaPageLimit),
-			ReadDirPlus:    *fsmetaReadDirPlus,
+	case workload.MDTestHard:
+		scale := resolvedScale(workloadName)
+		result, err = workload.RunMDTestHard(ctx, cli, workload.MDTestConfig{
+			Mount:             fsmeta.MountID(*fsmetaMount),
+			RunID:             runID,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
 		})
-	case workload.WatchSubtree:
-		result, err = workload.RunWatchSubtree(ctx, cli, workload.WatchSubtreeConfig{
-			Mount:              fsmeta.MountID(*fsmetaMount),
-			RunID:              runID,
-			Clients:            *fsmetaClients,
-			Files:              *fsmetaFiles,
-			BackPressureWindow: uint32(*fsmetaWatchWindow),
-		})
-	case workload.DurableSnapshot:
-		result, err = workload.RunDurableSnapshot(ctx, cli, workload.DurableSnapshotConfig{
-			Mount:     fsmeta.MountID(*fsmetaMount),
-			RunID:     runID,
-			Clients:   *fsmetaClients,
-			Files:     *fsmetaFilesPerDir,
-			Snapshots: *fsmetaEntriesPerGroup,
-			PageLimit: uint32(*fsmetaPageLimit),
-		})
-	case workload.NegativeLookup:
-		result, err = workload.RunNegativeLookup(ctx, cli, workload.NegativeLookupConfig{
-			Mount:          fsmeta.MountID(*fsmetaMount),
-			RunID:          runID,
-			Clients:        *fsmetaClients,
-			Keys:           *fsmetaFiles,
-			ReadsPerClient: *fsmetaReadsPerClient,
-			Parent:         fsmeta.RootInode,
-		})
-	case workload.Mixed:
-		result, err = workload.RunMixed(ctx, cli, workload.MixedConfig{
+	case workload.FilebenchVarmail:
+		scale := resolvedScale(workloadName)
+		result, err = workload.RunFilebenchVarmail(ctx, cli, workload.FilebenchVarmailConfig{
 			Mount:           fsmeta.MountID(*fsmetaMount),
 			RunID:           runID,
-			Clients:         *fsmetaClients,
-			Groups:          *fsmetaGroups,
-			EntriesPerGroup: *fsmetaEntriesPerGroup,
-			ArtifactsPerRun: *fsmetaArtifactsPerRun,
-			PageLimit:       uint32(*fsmetaPageLimit),
-			SessionTTL:      *fsmetaSessionTTL,
-			StaleSessionTTL: *fsmetaStaleSessionTTL,
+			Clients:         scale.Clients,
+			Users:           scale.Users,
+			MessagesPerUser: scale.MessagesPerUser,
+			PageLimit:       scale.PageLimit,
+			SessionTTL:      scale.SessionTTLDuration(0),
 		})
-	case workload.MultiWorkspaceAutoscale:
-		result, err = workload.RunMultiWorkspaceAutoscale(ctx, cli, workload.MultiWorkspaceAutoscaleConfig{
-			MixedConfig: workload.MixedConfig{
-				Mount:           fsmeta.MountID(*fsmetaMount),
-				RunID:           runID,
-				Clients:         *fsmetaClients,
-				Groups:          *fsmetaGroups,
-				EntriesPerGroup: *fsmetaEntriesPerGroup,
-				ArtifactsPerRun: *fsmetaArtifactsPerRun,
-				PageLimit:       uint32(*fsmetaPageLimit),
-				SessionTTL:      *fsmetaSessionTTL,
-				StaleSessionTTL: *fsmetaStaleSessionTTL,
-			},
-			Workspaces: *fsmetaWorkspaces,
+	case workload.MimesisNamespace:
+		scale := resolvedScale(workloadName)
+		result, err = workload.RunMimesisNamespace(ctx, cli, workload.MimesisNamespaceConfig{
+			Mount:             fsmeta.MountID(*fsmetaMount),
+			RunID:             runID,
+			Clients:           scale.Clients,
+			Directories:       scale.Directories,
+			FilesPerDirectory: scale.FilesPerDirectory,
+			PageLimit:         scale.PageLimit,
+		})
+	case workload.AICheckpointAgent:
+		scale := resolvedScale(workloadName)
+		result, err = workload.RunAICheckpointAgent(ctx, cli, workload.AICheckpointAgentConfig{
+			Mount:                   fsmeta.MountID(*fsmetaMount),
+			RunID:                   runID,
+			Clients:                 scale.Clients,
+			Workspaces:              scale.Workspaces,
+			CheckpointsPerWorkspace: scale.CheckpointsPerWorkspace,
+			FilesPerCheckpoint:      scale.FilesPerCheckpoint,
+			PageLimit:               scale.PageLimit,
+			WatchWindow:             scale.WatchWindow,
+			SessionTTL:              scale.SessionTTLDuration(0),
 		})
 	default:
 		return workload.Result{}, fmt.Errorf("unknown workload %q", workloadName)
 	}
 	result.Driver = workload.DriverNativeFSMetadata
 	return result, err
+}
+
+func resolvedScale(workloadName string) workload.OfficialScale {
+	scale := workload.ScaleFor(workloadName, strings.TrimSpace(*fsmetaScaleProfile))
+	scale.Clients = chooseInt(*fsmetaClients, scale.Clients)
+	scale.Directories = chooseInt(*fsmetaDirs, scale.Directories)
+	scale.FilesPerDirectory = chooseInt(*fsmetaFilesPerDir, scale.FilesPerDirectory)
+	scale.Users = chooseInt(*fsmetaUsers, scale.Users)
+	scale.MessagesPerUser = chooseInt(*fsmetaMessagesPerUser, scale.MessagesPerUser)
+	scale.Workspaces = chooseInt(*fsmetaWorkspaces, scale.Workspaces)
+	scale.CheckpointsPerWorkspace = chooseInt(*fsmetaCheckpoints, scale.CheckpointsPerWorkspace)
+	scale.FilesPerCheckpoint = chooseInt(*fsmetaFilesPerCkpt, scale.FilesPerCheckpoint)
+	scale.PageLimit = chooseUint32(uint32(*fsmetaPageLimit), scale.PageLimit)
+	scale.WatchWindow = chooseUint32(uint32(*fsmetaWatchWindow), scale.WatchWindow)
+	if *fsmetaSessionTTL > 0 {
+		scale.SessionTTL = fsmetaSessionTTL.String()
+	}
+	return scale
+}
+
+func chooseInt(override, profile int) int {
+	if override > 0 {
+		return override
+	}
+	return profile
+}
+
+func chooseUint32(override, profile uint32) uint32 {
+	if override > 0 {
+		return override
+	}
+	return profile
 }
 
 func parseWorkloads(raw string) []string {
@@ -286,7 +312,78 @@ func parseWorkloads(raw string) []string {
 		}
 	}
 	if len(out) == 0 {
-		return []string{workload.CheckpointStorm}
+		return parseWorkloads(workload.DefaultWorkloadSuite)
 	}
 	return out
+}
+
+func writeBenchmarkManifest(w io.Writer, runID string, workloads []string) error {
+	lines := []string{
+		"run_id=" + runID,
+		"benchmark=fsmeta",
+		"driver=" + workload.DriverNativeFSMetadata,
+		"profile_file=" + workload.OfficialProfilePath(),
+		"scale_profile=" + strings.TrimSpace(*fsmetaScaleProfile),
+		"mount=" + *fsmetaMount,
+		"fsmeta_addr=" + *fsmetaAddr,
+		"coordinator_addr=" + *fsmetaCoordAddr,
+		"workloads=" + strings.Join(workloads, ","),
+		fmt.Sprintf("lookup_cache_entries=%d", *fsmetaLookupCache),
+		"lookup_cache_ttl=" + fsmetaLookupCacheTTL.String(),
+		"timeout=" + fsmetaTimeout.String(),
+		"",
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	for _, name := range workloads {
+		profile := workload.ProfileFor(name)
+		scale := resolvedScale(name)
+		if _, err := fmt.Fprintf(w, "[workload.%s]\nsource=%s\nsource_url=%s\nofficial_shape=%s\nfsmeta_projection=%s\n",
+			profile.Workload,
+			profile.Source,
+			profile.SourceURL,
+			profile.Shape,
+			profile.Projection,
+		); err != nil {
+			return err
+		}
+		for _, line := range scale.FormatLines("scale.") {
+			if _, err := fmt.Fprintln(w, line); err != nil {
+				return err
+			}
+		}
+		keys := make([]string, 0, len(profile.Official))
+		for key := range profile.Official {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value := profile.Official[key]
+			if _, err := fmt.Fprintf(w, "official.%s=%s\n", key, value); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestWriteBenchmarkManifestDocumentsOfficialSources(t *testing.T) {
+	var buf bytes.Buffer
+	err := writeBenchmarkManifest(&buf, "run-1", []string{workload.MDTestEasy, workload.AICheckpointAgent})
+	if err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "source=IO500 mdtest-easy") {
+		t.Fatalf("manifest missing mdtest source: %s", out)
+	}
+	if !strings.Contains(out, "source=MLPerf Storage checkpointing") {
+		t.Fatalf("manifest missing MLPerf source: %s", out)
+	}
 }
