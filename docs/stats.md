@@ -77,6 +77,14 @@ All domains (`flush`, `compaction`, `wal`, `raft`, `write`, `region`, `hot`, `ca
 
 Legacy scalar compatibility keys are removed. Consumers should read fields from `NoKV.Local.Stats` directly.
 
+`nokv-fsmeta --metrics-addr` also exposes fsmeta-specific expvar groups:
+
+- `nokv_fsmeta_executor`
+- `nokv_fsmeta_watch`
+- `nokv_fsmeta_quota`
+- `nokv_fsmeta_mount`
+- `nokv_fsmeta_sessions`
+
 ---
 
 ## 4. CLI & JSON
