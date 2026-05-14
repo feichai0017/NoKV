@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
@@ -101,6 +102,36 @@ func TestReplicatedStoreApplyPerasAuthorityRejectsConflicts(t *testing.T) {
 		GrantID:  grant.GrantID,
 	})
 	require.True(t, errors.Is(err, rootstate.ErrPrimacy))
+}
+
+func TestReplicatedStorePerasAuthorityCatchesUpAfterLeaderHandoff(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	state, first, err := stores[leaderID].ApplyPerasAuthority(context.Background(), testPerasAcquireCommand("holder-a", 1))
+	require.NoError(t, err)
+	require.NotEqual(t, rootstate.Cursor{}, state.LastCommitted)
+	requireDriverObservedCursor(t, drivers[followerID], state.LastCommitted)
+
+	stale, err := stores[followerID].Current()
+	require.NoError(t, err)
+	require.Equal(t, rootstate.Cursor{}, stale.LastCommitted)
+
+	drivers[leaderID].PauseTicks()
+	defer drivers[leaderID].ResumeTicks()
+	require.NoError(t, drivers[followerID].Campaign())
+	require.Eventually(t, func() bool {
+		return drivers[followerID].IsLeader()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	state, conflicting, err := stores[followerID].ApplyPerasAuthority(context.Background(), testPerasAcquireCommand("holder-b", 1))
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
+	require.Empty(t, conflicting.GrantID)
+	require.Len(t, state.ActivePerasGrants, 1)
+	require.Equal(t, first.GrantID, state.ActivePerasGrants[0].GrantID)
 }
 
 func TestReplicatedStoreApplyPerasAuthorityExpandsSameHolderGrant(t *testing.T) {

@@ -77,11 +77,6 @@ func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstor
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	before, err := d.ObserveTail(rootstorage.TailToken{})
-	if err != nil {
-		return 0, err
-	}
-	target := records[len(records)-1].Cursor
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
@@ -91,6 +86,16 @@ func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstor
 		d.mu.Unlock()
 		return 0, errNodeNotLeader(d.id)
 	}
+	before, err := d.ObserveTail(rootstorage.TailToken{})
+	if err != nil {
+		d.mu.Unlock()
+		return 0, err
+	}
+	if err := validateCommittedCursorContinuity(before.LastCursor(), records); err != nil {
+		d.mu.Unlock()
+		return 0, err
+	}
+	target := records[len(records)-1].Cursor
 	for _, rec := range records {
 		payload, err := marshalCommittedEvent(rec)
 		if err != nil {
@@ -118,6 +123,17 @@ func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstor
 		return 0, err
 	}
 	return d.adapter.size()
+}
+
+func validateCommittedCursorContinuity(last rootstate.Cursor, records []rootstorage.CommittedEvent) error {
+	expected := rootstate.NextCursor(last)
+	for _, rec := range records {
+		if rec.Cursor != expected {
+			return errCommittedCursorDiscontinuity(expected, rec.Cursor)
+		}
+		expected = rootstate.NextCursor(rec.Cursor)
+	}
+	return nil
 }
 
 func (d *NetworkDriver) waitForCommittedCursor(ctx context.Context, after rootstorage.TailToken, target rootstate.Cursor, timeout time.Duration) error {

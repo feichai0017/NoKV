@@ -643,6 +643,112 @@ func TestReplicatedStoreGrantFenceSurvivesLeaderChange(t *testing.T) {
 	}
 }
 
+func TestReplicatedStoreGrantWriteCatchesUpAfterLeaderHandoff(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	grant, _, err := issueGrant(stores[leaderID], "c1", 1_000, 100, 123, 456, 1)
+	require.NoError(t, err)
+	require.NotEqual(t, rootstate.Cursor{}, grant.IssuedAt)
+	requireDriverObservedCursor(t, drivers[followerID], grant.IssuedAt)
+
+	stale, err := stores[followerID].Current()
+	require.NoError(t, err)
+	require.Equal(t, rootstate.Cursor{}, stale.LastCommitted)
+
+	drivers[leaderID].PauseTicks()
+	defer drivers[leaderID].ResumeTicks()
+	require.NoError(t, drivers[followerID].Campaign())
+	require.Eventually(t, func() bool {
+		return drivers[followerID].IsLeader()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	renewed, _, err := issueGrant(stores[followerID], "c1", 2_000, 500, 200, 600, 1)
+	require.NoError(t, err)
+	require.Equal(t, "c1", renewed.HolderID)
+	require.Equal(t, uint64(2), renewed.Era)
+	require.Len(t, renewed.PredecessorRetirements, 1)
+
+	current, err := stores[followerID].Current()
+	require.NoError(t, err)
+	require.Equal(t, renewed.IssuedAt, current.LastCommitted)
+	require.Equal(t, uint64(200), current.IDFence)
+	require.Equal(t, uint64(600), current.TSOFence)
+}
+
+func TestReplicatedStoreFenceAllocatorCatchesUpAfterLeaderHandoff(t *testing.T) {
+	stores, drivers, leaderID := openNetworkTestCluster(t, 8)
+	followerID := uint64(1)
+	if followerID == leaderID {
+		followerID = 2
+	}
+
+	firstFence, err := stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 1000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), firstFence)
+	require.Eventually(t, func() bool {
+		if err := stores[followerID].Refresh(); err != nil {
+			return false
+		}
+		current, err := stores[followerID].Current()
+		return err == nil && current.TSOFence == 1000
+	}, 5*time.Second, 50*time.Millisecond)
+
+	latestFence, err := stores[leaderID].FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 2000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2000), latestFence)
+	requireDriverObservedCursor(t, drivers[followerID], rootstate.Cursor{Term: 1, Index: 2})
+
+	stale, err := stores[followerID].Current()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), stale.TSOFence)
+
+	drivers[leaderID].PauseTicks()
+	defer drivers[leaderID].ResumeTicks()
+	require.NoError(t, drivers[followerID].Campaign())
+	require.Eventually(t, func() bool {
+		return drivers[followerID].IsLeader()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	fence, err := stores[followerID].FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 500)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2000), fence)
+}
+
+func TestReplicatedStoreApplyObservedDoesNotRegressMaterializedState(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	store := stores[leaderID]
+
+	fence, err := store.FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 1000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), fence)
+	fence, err = store.FenceAllocator(context.Background(), rootstate.AllocatorKindTSO, 2000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2000), fence)
+	current, err := store.Current()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2000), current.TSOFence)
+
+	store.applyObserved(rootstorage.ObservedCommitted{
+		Checkpoint: rootstorage.Checkpoint{
+			Snapshot: rootstate.Snapshot{
+				State: rootstate.State{
+					LastCommitted: rootstate.Cursor{Term: 1, Index: 1},
+					TSOFence:      1000,
+				},
+			},
+		},
+	})
+
+	after, err := store.Current()
+	require.NoError(t, err)
+	require.Equal(t, current.LastCommitted, after.LastCommitted)
+	require.Equal(t, uint64(2000), after.TSOFence)
+}
+
 func TestReplicatedStoreRetireExpiredGrant(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 

@@ -31,6 +31,7 @@ type fakeServiceBackend struct {
 	waitTailErr         error
 	applyGrantErr       error
 	applyPerasErr       error
+	prepareErr          error
 	observed            rootstorage.ObservedCommitted
 	observeAdvance      rootstorage.TailAdvance
 	waitAdvance         rootstorage.TailAdvance
@@ -40,7 +41,10 @@ type fakeServiceBackend struct {
 	applyPerasGrant     rootproto.PerasAuthorityGrant
 	isLeader            bool
 	leaderID            uint64
+	prepareCalls        int
 	appendCalls         int
+	applyGrantCalls     int
+	applyPerasCalls     int
 	fenceCalls          []rootstate.AllocatorKind
 	appendedEvents      []rootevent.Event
 }
@@ -95,6 +99,11 @@ func (f *fakeServiceBackend) FenceAllocator(_ context.Context, kind rootstate.Al
 func (f *fakeServiceBackend) IsLeader() bool   { return f.isLeader }
 func (f *fakeServiceBackend) LeaderID() uint64 { return f.leaderID }
 
+func (f *fakeServiceBackend) PrepareRootWrite(context.Context) error {
+	f.prepareCalls++
+	return f.prepareErr
+}
+
 func (f *fakeServiceBackend) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	if f.observeCommittedErr != nil {
 		return rootstorage.ObservedCommitted{}, f.observeCommittedErr
@@ -117,10 +126,12 @@ func (f *fakeServiceBackend) WaitForTail(rootstorage.TailToken, time.Duration) (
 }
 
 func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	f.applyGrantCalls++
 	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
 }
 
 func (f *fakeServiceBackend) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+	f.applyPerasCalls++
 	return f.applyPerasState, f.applyPerasGrant, f.applyPerasErr
 }
 
@@ -260,6 +271,19 @@ func TestServiceAppendPaths(t *testing.T) {
 		require.Equal(t, codes.Internal, status.Code(err))
 	})
 
+	t.Run("write readiness error", func(t *testing.T) {
+		backend := &fakeServiceBackend{
+			isLeader:   true,
+			prepareErr: nokverrors.New(nokverrors.KindUnavailable, "root state not ready"),
+		}
+		_, err := NewService(backend).Append(context.Background(), &metapb.MetadataRootAppendRequest{
+			Events: []*metapb.RootEvent{metawire.RootEventToProto(rootevent.IDAllocatorFenced(11))},
+		})
+		require.Equal(t, codes.Unavailable, status.Code(err))
+		require.Equal(t, 1, backend.prepareCalls)
+		require.Zero(t, backend.appendCalls)
+	})
+
 	t.Run("success", func(t *testing.T) {
 		backend := &fakeServiceBackend{
 			snapshot: testServerSnapshot(),
@@ -307,6 +331,20 @@ func TestServiceFenceAllocatorAndStatus(t *testing.T) {
 			Minimum: 77,
 		})
 		require.Equal(t, codes.Internal, status.Code(err))
+	})
+
+	t.Run("write readiness error", func(t *testing.T) {
+		backend := &fakeServiceBackend{
+			isLeader:   true,
+			prepareErr: nokverrors.New(nokverrors.KindUnavailable, "root state not ready"),
+		}
+		_, err := NewService(backend).FenceAllocator(context.Background(), &metapb.MetadataRootFenceAllocatorRequest{
+			Kind:    metapb.RootAllocatorKind_ROOT_ALLOCATOR_KIND_TSO,
+			Minimum: 99,
+		})
+		require.Equal(t, codes.Unavailable, status.Code(err))
+		require.Equal(t, 1, backend.prepareCalls)
+		require.Empty(t, backend.fenceCalls)
 	})
 
 	t.Run("success and status", func(t *testing.T) {
@@ -468,6 +506,19 @@ func TestServiceApplyGrant(t *testing.T) {
 		require.Equal(t, grantState, metawire.RootEunomiaStateFromProto(resp.State))
 	})
 
+	t.Run("write readiness error", func(t *testing.T) {
+		backend := &fakeServiceBackend{
+			isLeader:   true,
+			prepareErr: nokverrors.New(nokverrors.KindUnavailable, "root state not ready"),
+		}
+		_, err := NewService(backend).ApplyGrant(context.Background(), &metapb.MetadataRootApplyGrantRequest{
+			Command: metawire.RootGrantCommandToProto(cmd),
+		})
+		require.Equal(t, codes.Unavailable, status.Code(err))
+		require.Equal(t, 1, backend.prepareCalls)
+		require.Zero(t, backend.applyGrantCalls)
+	})
+
 	t.Run("success", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
 			isLeader:         true,
@@ -552,6 +603,19 @@ func TestServiceApplyPerasAuthority(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
 		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
+	})
+
+	t.Run("write readiness error", func(t *testing.T) {
+		backend := &fakeServiceBackend{
+			isLeader:   true,
+			prepareErr: nokverrors.New(nokverrors.KindUnavailable, "root state not ready"),
+		}
+		_, err := NewService(backend).ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
+			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		})
+		require.Equal(t, codes.Unavailable, status.Code(err))
+		require.Equal(t, 1, backend.prepareCalls)
+		require.Zero(t, backend.applyPerasCalls)
 	})
 
 	t.Run("success", func(t *testing.T) {
