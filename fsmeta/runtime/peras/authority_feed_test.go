@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -58,13 +59,13 @@ func TestRootAuthorityFeedAppliesGrantEvents(t *testing.T) {
 
 type pollingAuthoritySource struct {
 	mu     sync.Mutex
-	grants []AuthorityGrant
+	grants []rootproto.PerasAuthorityGrant
 }
 
-func (s *pollingAuthoritySource) replace(grants ...AuthorityGrant) {
+func (s *pollingAuthoritySource) replace(grants ...rootproto.PerasAuthorityGrant) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.grants = append([]AuthorityGrant(nil), grants...)
+	s.grants = append([]rootproto.PerasAuthorityGrant(nil), grants...)
 }
 
 func (s *pollingAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {

@@ -111,8 +111,6 @@ type PerasAuthorityAdmitter interface {
 	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
 }
 
-type PerasAuthorityRetirer = fsperas.AuthorityRetirer
-
 // PerasCommitter is the experimental, opt-in Peras visible commit boundary.
 // Success replaces the ordinary Percolator/Raft commit for this fsmeta
 // operation, so errors are returned and never silently fall back after the

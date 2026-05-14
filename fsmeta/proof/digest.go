@@ -72,20 +72,6 @@ func (b *digestBuilder) writeBool(value bool) {
 	b.writeUint64(0)
 }
 
-func (b *digestBuilder) writeByte(value byte) {
-	if b.heap != nil {
-		b.heap = append(b.heap, value)
-		return
-	}
-	if b.off < len(b.stack) {
-		b.stack[b.off] = value
-		b.off++
-		return
-	}
-	b.spill(1)
-	b.heap = append(b.heap, value)
-}
-
 func (b *digestBuilder) sum() [32]byte {
 	if b.heap != nil {
 		return sha256.Sum256(b.heap)
@@ -95,10 +81,7 @@ func (b *digestBuilder) sum() [32]byte {
 
 func (b *digestBuilder) spill(extra int) {
 	needed := b.off + extra
-	capacity := len(b.stack) * 2
-	if needed > capacity {
-		capacity = needed
-	}
+	capacity := max(needed, len(b.stack)*2)
 	b.heap = make([]byte, b.off, capacity)
 	copy(b.heap, b.stack[:b.off])
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
 	err := Admit(context.Background(), testGeneratedCreateOp(t, "admit", "value"), func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error) {
 		return AdmissionResult{}, false, nil
-	}, AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
+	}, AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.ErrorIs(t, err, ErrAdmissionRejected)
 }
 
@@ -102,7 +103,7 @@ func TestAdmitAndSealBindsGuardProofsAfterAdmission(t *testing.T) {
 			PredicateProofs: proofs,
 			GuardProofs:     guardProofs,
 		}, true, nil
-	}, AdmissionContext{ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: 1}})
+	}, AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.NoError(t, sealed.ValidateForAdmission())
 	require.NotEmpty(t, sealed.GuardProofs)

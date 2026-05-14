@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile/specdsl"
@@ -330,6 +331,9 @@ func emitOperationFile(specs []specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("import (\n")
 	b.WriteString("\t\"crypto/sha256\"\n\n")
 	b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta\"\n")
+	if operationFileNeedsProof(specs) {
+		b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta/proof\"\n")
+	}
 	b.WriteString(")\n\n")
 	for _, spec := range specs {
 		if spec.ProgramType == "" {
@@ -370,13 +374,23 @@ func emitValuesType(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	case "":
 		return nil
 	case "session_put":
-		fmt.Fprintf(b, "type %s struct {\n\tSessionValue []byte\n\tPredicateProofs []PredicateProof\n}\n\n", spec.ValuesType)
+		fmt.Fprintf(b, "type %s struct {\n\tSessionValue []byte\n\tPredicateProofs []proof.PredicateProof\n}\n\n", spec.ValuesType)
 	case "session_close":
-		fmt.Fprintf(b, "type %s struct {\n\tDeleteOwner bool\n\tPredicateProofs []PredicateProof\n}\n\n", spec.ValuesType)
+		fmt.Fprintf(b, "type %s struct {\n\tDeleteOwner bool\n\tPredicateProofs []proof.PredicateProof\n}\n\n", spec.ValuesType)
 	default:
 		return fmt.Errorf("unsupported materializer %q for %s", spec.Materializer, spec.Name)
 	}
 	return nil
+}
+
+func operationFileNeedsProof(specs []specdsl.OpSpec) bool {
+	for _, spec := range specs {
+		switch spec.Materializer {
+		case "session_put", "session_close":
+			return true
+		}
+	}
+	return false
 }
 
 func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
@@ -611,12 +625,7 @@ func specUsesKeyBinding(spec specdsl.OpSpec, binding string) bool {
 }
 
 func hasSlowFallback(spec specdsl.OpSpec, reason string) bool {
-	for _, fallback := range spec.SlowFallbacks {
-		if fallback == reason {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(spec.SlowFallbacks, reason)
 }
 
 func emitSemanticDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {

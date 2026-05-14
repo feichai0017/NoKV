@@ -232,15 +232,17 @@ Nightly policy:
 
 1. PR CI runs bounded smoke through `make test-correctness-smoke`, including
    `make test-history-smoke` and `make test-model-smoke`.
-2. PR benchmark CI also runs the median `make fsmeta-bench` profile across all
-   fsmeta workloads: mixed, checkpoint-storm, hotspot-fanin, watch-subtree, and
-   negative-lookup. It uploads CSVs and Docker diagnostics as workflow artifacts.
+2. PR benchmark CI also runs the median `make fsmeta-bench` profile as an
+   isolated Docker Compose matrix across all fsmeta workloads. Each workload gets
+   its own CSV, and the script also emits a combined `_isolated.csv` summary so
+   durable-barrier workloads do not absorb earlier visible-commit backlog.
 3. Nightly CI runs `make test-correctness-nightly`, which raises model seeds
    and steps, replays raftstore/fsmeta contract/history schedules with longer
    bounds, repeats crash-matrix boundaries, replays deterministic split-region
    fault simulation, and repeats failpoint-heavy coordinator/meta/raftstore suites.
 4. Scheduled fsmeta benchmark CI runs `NOKV_FSMETA_PROFILE=long make fsmeta-bench`
-   for larger data volumes and longer timeout, then uploads the same artifacts.
+   with the same isolated matrix shape, larger data volumes, and longer timeout,
+   then uploads the same artifacts.
 5. A nightly-only failure should still be triaged as a correctness issue unless
    the failure is clearly in the test harness.
 

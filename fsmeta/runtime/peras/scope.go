@@ -6,9 +6,10 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
-func GrantHasPredecessor(grant AuthorityGrant) bool {
+func GrantHasPredecessor(grant rootproto.PerasAuthorityGrant) bool {
 	var zero [32]byte
 	return grant.EpochID > 1 && grant.PredecessorDigest != zero
 }

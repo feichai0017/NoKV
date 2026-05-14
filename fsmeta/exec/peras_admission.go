@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.SemanticDelta) error {
@@ -92,30 +93,30 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 		return fsperas.AdmissionResult{}, false, nil
 	}
 	frontier := admissionCtx.ProofFrontier
-	proofs := make([]compile.PredicateProof, 0, len(delta.ReadPredicates))
+	proofs := make([]proof.PredicateProof, 0, len(delta.ReadPredicates))
 	if len(delta.ReadPredicates) == 0 {
 		return e.perasAdmissionResult(op, proofs)
 	}
 	index := e.perasPredicateIndex()
 	var version uint64
 	var haveVersion bool
-	read := func(key []byte) ([]byte, bool, compile.ReadSource, uint64, error) {
+	read := func(key []byte) ([]byte, bool, proof.ReadSource, uint64, error) {
 		if value, deleted, ok := e.perasOverlayGet(key); ok {
 			if deleted {
-				return nil, false, compile.ReadSourceOverlay, 0, nil
+				return nil, false, proof.ReadSourceOverlay, 0, nil
 			}
-			return value, true, compile.ReadSourceOverlay, 0, nil
+			return value, true, proof.ReadSourceOverlay, 0, nil
 		}
 		if !haveVersion {
 			var err error
 			version, err = e.reserveReadVersion(ctx)
 			if err != nil {
-				return nil, false, compile.ReadSourceUnknown, 0, err
+				return nil, false, proof.ReadSourceUnknown, 0, err
 			}
 			haveVersion = true
 		}
 		value, ok, err := e.runner.Get(ctx, key, version)
-		return value, ok, compile.ReadSourceBase, version, err
+		return value, ok, proof.ReadSourceBase, version, err
 	}
 	for _, predicate := range delta.ReadPredicates {
 		switch predicate.Kind {
@@ -126,7 +127,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 					if !present {
 						return fsperas.AdmissionResult{}, false, fsmeta.ErrNotFound
 					}
-					proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay, frontier))
+					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, true, 0, proof.ReadSourceOverlay, frontier))
 					continue
 				}
 			}
@@ -137,7 +138,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 			if !ok {
 				return fsperas.AdmissionResult{}, false, fsmeta.ErrNotFound
 			}
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicateNotExists:
 			if index != nil {
 				present, known := index.KeyState(predicate.Key)
@@ -145,12 +146,12 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 					if present {
 						return fsperas.AdmissionResult{}, false, fsmeta.ErrExists
 					}
-					proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
+					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 					continue
 				}
 				if e.perasNotExistsKnown(delta.Authority, predicate.Key, index) ||
 					perasNotExistsDerivedFromDelta(delta, predicate, index) {
-					proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
+					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 					continue
 				}
 			}
@@ -161,7 +162,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 			if ok {
 				return fsperas.AdmissionResult{}, false, fsmeta.ErrExists
 			}
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, proofVersion, source, proofFrontierForSource(source, frontier)))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicateObservedValue:
 			if !predicate.HasExpectedValue {
 				return fsperas.AdmissionResult{}, false, nil
@@ -170,7 +171,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 				if deleted || !bytes.Equal(value, predicate.ExpectedValue) {
 					return fsperas.AdmissionResult{}, false, nil
 				}
-				proofs = append(proofs, compile.PredicateProofFor(predicate.Key, value, true, 0, compile.ReadSourceOverlay, frontier))
+				proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, 0, proof.ReadSourceOverlay, frontier))
 				continue
 			}
 			value, ok, source, proofVersion, err := read(predicate.Key)
@@ -180,7 +181,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 			if !ok || !bytes.Equal(value, predicate.ExpectedValue) {
 				return fsperas.AdmissionResult{}, false, nil
 			}
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicatePrefixScan:
 			return fsperas.AdmissionResult{}, false, nil
 		default:
@@ -190,7 +191,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 	return e.perasAdmissionResult(op, proofs)
 }
 
-func (e *Executor) perasAdmissionResult(op compile.MaterializedOp, proofs []compile.PredicateProof) (fsperas.AdmissionResult, bool, error) {
+func (e *Executor) perasAdmissionResult(op compile.MaterializedOp, proofs []proof.PredicateProof) (fsperas.AdmissionResult, bool, error) {
 	guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
 	if err != nil {
 		return fsperas.AdmissionResult{}, false, nil
@@ -201,16 +202,16 @@ func (e *Executor) perasAdmissionResult(op compile.MaterializedOp, proofs []comp
 	}, true, nil
 }
 
-func proofFrontierForSource(source compile.ReadSource, frontier compile.ProofFrontier) compile.ProofFrontier {
-	if source == compile.ReadSourceOverlay {
+func proofFrontierForSource(source proof.ReadSource, frontier proof.ProofFrontier) proof.ProofFrontier {
+	if source == proof.ReadSourceOverlay {
 		return frontier
 	}
-	return compile.ProofFrontier{}
+	return proof.ProofFrontier{}
 }
 
-func perasPredicateProofsValid(proofs []compile.PredicateProof) bool {
-	for _, proof := range proofs {
-		if err := compile.VerifyPredicateProof(proof); err != nil {
+func perasPredicateProofsValid(proofs []proof.PredicateProof) bool {
+	for _, predicateProof := range proofs {
+		if err := proof.VerifyPredicateProof(predicateProof); err != nil {
 			return false
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,8 +56,8 @@ func mustInodeKey(t *testing.T, inode fsmeta.InodeID) []byte {
 	return key
 }
 
-func testPredicateProof(key, value []byte, present bool, version uint64, source ReadSource) PredicateProof {
-	return PredicateProofFor(key, value, present, version, source)
+func testPredicateProof(key, value []byte, present bool, version uint64, source proof.ReadSource) proof.PredicateProof {
+	return proof.NewPredicateProof(key, value, present, version, source, proof.ProofFrontier{})
 }
 
 func testCompileAOT(tb testing.TB, delta SemanticDelta) CompiledOp {
@@ -66,7 +67,7 @@ func testCompileAOT(tb testing.TB, delta SemanticDelta) CompiledOp {
 	return compiled
 }
 
-func testMaterializeAOT(tb testing.TB, delta SemanticDelta, proofs []PredicateProof) MaterializedOp {
+func testMaterializeAOT(tb testing.TB, delta SemanticDelta, proofs []proof.PredicateProof) MaterializedOp {
 	tb.Helper()
 	compiled := testCompileAOT(tb, delta)
 	return MaterializedOp{
@@ -75,14 +76,14 @@ func testMaterializeAOT(tb testing.TB, delta SemanticDelta, proofs []PredicatePr
 	}
 }
 
-func testMaterializeAOTWithEffects(tb testing.TB, op CompiledOp, effects []WriteEffect, proofs []PredicateProof) MaterializedOp {
+func testMaterializeAOTWithEffects(tb testing.TB, op CompiledOp, effects []WriteEffect, proofs []proof.PredicateProof) MaterializedOp {
 	tb.Helper()
 	materialized, err := MaterializeCompiledOpWithEvidence(op, effects, PredicateEvidence{Proofs: proofs}, nil)
 	require.NoError(tb, err)
 	return materialized
 }
 
-func testGuardProofsFor(op MaterializedOp) []GuardProof {
+func testGuardProofsFor(op MaterializedOp) []proof.GuardProof {
 	proofs, err := GuardProofsFor(op.CompiledOp, op.PredicateProofs, op.Delta.RuntimeGuards)
 	if err != nil {
 		panic(err)
@@ -180,7 +181,7 @@ func testExpireWriteSessionsDelta(tb testing.TB, req fsmeta.ExpireWriteSessionsR
 	return cloneDelta(program.Compiled.Delta), nil
 }
 
-func testConcreteUpdateInodeDelta(tb testing.TB, expected []byte) (SemanticDelta, []PredicateProof) {
+func testConcreteUpdateInodeDelta(tb testing.TB, expected []byte) (SemanticDelta, []proof.PredicateProof) {
 	tb.Helper()
 	delta, err := testUpdateInodeDelta(tb, fsmeta.UpdateInodeRequest{
 		Mount:   "vol",
@@ -209,9 +210,9 @@ func testConcreteUpdateInodeDelta(tb testing.TB, expected []byte) (SemanticDelta
 		{Kind: PredicateObservedValue, Key: inodeKey, ExpectedValue: expected, HasExpectedValue: true, RuntimeChecked: true},
 	}
 	delta.WriteEffects = []WriteEffect{{Kind: EffectPut, Key: inodeKey, Value: []byte("new-inode")}}
-	return delta, []PredicateProof{
-		testPredicateProof(dentryKey, dentryValue, true, 9, ReadSourceBase),
-		testPredicateProof(inodeKey, expected, true, 9, ReadSourceBase),
+	return delta, []proof.PredicateProof{
+		testPredicateProof(dentryKey, dentryValue, true, 9, proof.ReadSourceBase),
+		testPredicateProof(inodeKey, expected, true, 9, proof.ReadSourceBase),
 	}
 }
 
@@ -542,10 +543,10 @@ func TestOpenWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T)
 	inodeKey := program.Compiled.Delta.ReadPredicates[0].Key
 	sessionKey := program.Compiled.Delta.ReadPredicates[1].Key
 	ownerKey := program.Compiled.Delta.ReadPredicates[2].Key
-	proofs := []PredicateProof{
-		testPredicateProof(inodeKey, inodeValue, true, 9, ReadSourceBase),
-		testPredicateProof(sessionKey, nil, false, 9, ReadSourceBase),
-		testPredicateProof(ownerKey, nil, false, 9, ReadSourceBase),
+	proofs := []proof.PredicateProof{
+		testPredicateProof(inodeKey, inodeValue, true, 9, proof.ReadSourceBase),
+		testPredicateProof(sessionKey, nil, false, 9, proof.ReadSourceBase),
+		testPredicateProof(ownerKey, nil, false, 9, proof.ReadSourceBase),
 	}
 
 	materialized, err := MaterializeOpenWriteSession(program, OpenWriteSessionValues{
@@ -584,9 +585,9 @@ func TestHeartbeatWriteSessionMaterializerMatchesGenericMaterialization(t *testi
 	require.NoError(t, err)
 	sessionKey := program.Compiled.Delta.ReadPredicates[0].Key
 	ownerKey := program.Compiled.Delta.ReadPredicates[1].Key
-	proofs := []PredicateProof{
-		testPredicateProof(sessionKey, oldValue, true, 11, ReadSourceBase),
-		testPredicateProof(ownerKey, oldValue, true, 11, ReadSourceBase),
+	proofs := []proof.PredicateProof{
+		testPredicateProof(sessionKey, oldValue, true, 11, proof.ReadSourceBase),
+		testPredicateProof(ownerKey, oldValue, true, 11, proof.ReadSourceBase),
 	}
 
 	materialized, err := MaterializeHeartbeatWriteSession(program, HeartbeatWriteSessionValues{
@@ -623,9 +624,9 @@ func TestCloseWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T
 	require.NoError(t, err)
 	sessionKey := program.Compiled.Delta.ReadPredicates[0].Key
 	ownerKey := program.Compiled.Delta.ReadPredicates[1].Key
-	proofs := []PredicateProof{
-		testPredicateProof(sessionKey, sessionValue, true, 12, ReadSourceBase),
-		testPredicateProof(ownerKey, ownerValue, true, 12, ReadSourceBase),
+	proofs := []proof.PredicateProof{
+		testPredicateProof(sessionKey, sessionValue, true, 12, proof.ReadSourceBase),
+		testPredicateProof(ownerKey, ownerValue, true, 12, proof.ReadSourceBase),
 	}
 
 	materialized, err := MaterializeCloseWriteSession(program, CloseWriteSessionValues{
@@ -666,10 +667,10 @@ func TestSessionMaterializersRejectMalformedInput(t *testing.T) {
 
 	sessionValue, err := fsmeta.EncodeSessionValue(fsmeta.SessionRecord{Session: openReq.Session, Inode: openReq.Inode, ExpiresUnixNs: 100})
 	require.NoError(t, err)
-	badProof := PredicateProof{Key: openProgram.Compiled.Delta.ReadPredicates[0].Key, Present: true, Value: []byte("bad"), Version: 1, Source: ReadSourceBase}
+	badProof := proof.PredicateProof{Key: openProgram.Compiled.Delta.ReadPredicates[0].Key, Present: true, Value: []byte("bad"), Version: 1, Source: proof.ReadSourceBase}
 	_, err = MaterializeOpenWriteSession(openProgram, OpenWriteSessionValues{
 		SessionValue:    sessionValue,
-		PredicateProofs: []PredicateProof{badProof},
+		PredicateProofs: []proof.PredicateProof{badProof},
 	})
 	require.Error(t, err)
 }

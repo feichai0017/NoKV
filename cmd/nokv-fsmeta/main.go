@@ -54,7 +54,6 @@ func main() {
 		sessionCleanupInterval          = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
 		perasHolderID                   = flag.String("peras-holder-id", "", "Peras holder id; empty derives a stable local holder id")
-		perasVisibleCommit              = flag.Bool("peras-visible-commit", true, "enable Peras visible commit path against raftstore witnesses")
 		perasAuthorityTTL               = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
 		perasWitnessStores              = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
 		perasWitnessQuorum              = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
@@ -88,7 +87,7 @@ func main() {
 		return
 	}
 	holderID := strings.TrimSpace(*perasHolderID)
-	if *perasVisibleCommit && holderID == "" {
+	if holderID == "" {
 		holderID = defaultPerasHolderID()
 	}
 
@@ -105,7 +104,6 @@ func main() {
 		SessionCleanupLimit:             uint32(*sessionCleanupLimit),
 		PerasHolderID:                   holderID,
 		PerasAuthorityTTL:               *perasAuthorityTTL,
-		PerasVisibleCommit:              *perasVisibleCommit,
 		PerasWitnessStoreIDs:            perasStoreIDs,
 		PerasWitnessQuorum:              *perasWitnessQuorum,
 		PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
@@ -175,6 +173,7 @@ func main() {
 	}
 
 	log.Printf("NoKV FSMetadata server listening on %s", ln.Addr().String())
+	log.Printf("fsmeta commit contract: Peras is the default write path; successful metadata writes are visible immediately, while durable completion is reached by witness/segment install and explicit FlushDurable/FlushTo in embedded APIs")
 
 	sigCh := make(chan os.Signal, 1)
 	signalNotify(sigCh, syscall.SIGINT, syscall.SIGTERM)

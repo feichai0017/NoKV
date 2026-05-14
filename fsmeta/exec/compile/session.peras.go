@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type OpenWriteSessionProgram struct {
@@ -26,17 +27,17 @@ type ExpireWriteSessionsProgram struct {
 
 type OpenWriteSessionValues struct {
 	SessionValue    []byte
-	PredicateProofs []PredicateProof
+	PredicateProofs []proof.PredicateProof
 }
 
 type HeartbeatWriteSessionValues struct {
 	SessionValue    []byte
-	PredicateProofs []PredicateProof
+	PredicateProofs []proof.PredicateProof
 }
 
 type CloseWriteSessionValues struct {
 	DeleteOwner     bool
-	PredicateProofs []PredicateProof
+	PredicateProofs []proof.PredicateProof
 }
 
 func CompileOpenWriteSessionProgram(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (OpenWriteSessionProgram, error) {

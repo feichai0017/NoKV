@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 func (e *Executor) perasOverlay() PerasOverlayReader {
@@ -61,7 +62,7 @@ func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.A
 	if e == nil || e.perasAuthority == nil {
 		return nil
 	}
-	retirer, ok := e.perasAuthority.(PerasAuthorityRetirer)
+	retirer, ok := e.perasAuthority.(fsperas.AuthorityRetirer)
 	if !ok {
 		return nil
 	}
@@ -77,7 +78,7 @@ func (e *Executor) drainPerasAuthority(ctx context.Context, scopes ...compile.Au
 	}
 	if e.perasCommitter != nil && e.perasAuthority != nil {
 		drainer, drainOK := e.perasCommitter.(PerasAuthorityDrainer)
-		retirer, retireOK := e.perasAuthority.(PerasAuthorityRetirer)
+		retirer, retireOK := e.perasAuthority.(fsperas.AuthorityRetirer)
 		if drainOK && retireOK {
 			if ctx == nil {
 				ctx = context.Background()
@@ -138,16 +139,16 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	}
 	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
 		if deleted {
-			v.remember(key, nil, false, compile.ReadSourceOverlay, 0)
+			v.remember(key, nil, false, proof.ReadSourceOverlay, 0)
 			return nil, false, nil
 		}
-		v.remember(key, value, true, compile.ReadSourceOverlay, 0)
+		v.remember(key, value, true, proof.ReadSourceOverlay, 0)
 		return value, true, nil
 	}
 	if index := v.executor.perasPredicateIndex(); index != nil {
 		present, known := index.KeyState(key)
 		if known && !present {
-			v.remember(key, nil, false, compile.ReadSourceUnknown, 0)
+			v.remember(key, nil, false, proof.ReadSourceUnknown, 0)
 			return nil, false, nil
 		}
 	}
@@ -163,18 +164,18 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	v.remember(key, value, ok, compile.ReadSourceBase, v.version)
+	v.remember(key, value, ok, proof.ReadSourceBase, v.version)
 	return value, ok, nil
 }
 
 type perasObservedValue struct {
 	value   []byte
 	present bool
-	source  compile.ReadSource
+	source  proof.ReadSource
 	version uint64
 }
 
-func (v *perasReadView) remember(key, value []byte, present bool, source compile.ReadSource, version uint64) {
+func (v *perasReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
 	if v == nil {
 		return
 	}
@@ -193,7 +194,7 @@ func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, 
 	return compile.MaterializeCompiledOpWithEvidence(compiled, effects, v.predicateEvidenceForDelta(compiled.Delta), nil)
 }
 
-func (v *perasReadView) predicateProofs() []compile.PredicateProof {
+func (v *perasReadView) predicateProofs() []proof.PredicateProof {
 	if v == nil || len(v.observed) == 0 {
 		return nil
 	}
@@ -202,10 +203,10 @@ func (v *perasReadView) predicateProofs() []compile.PredicateProof {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	proofs := make([]compile.PredicateProof, 0, len(keys))
+	proofs := make([]proof.PredicateProof, 0, len(keys))
 	for _, key := range keys {
 		observed := v.observed[key]
-		proofs = append(proofs, compile.PredicateProofFor([]byte(key), observed.value, observed.present, observed.version, observed.source))
+		proofs = append(proofs, proof.NewPredicateProof([]byte(key), observed.value, observed.present, observed.version, observed.source, proof.ProofFrontier{}))
 	}
 	return proofs
 }
@@ -227,7 +228,7 @@ func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) c
 		if allowAbsentDowngrade &&
 			predicate.Kind == compile.PredicateObservedValue &&
 			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{}))
 		}
 	}
 	return compile.PredicateEvidence{

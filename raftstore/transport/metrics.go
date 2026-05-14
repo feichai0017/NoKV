@@ -13,9 +13,6 @@ const (
 	defaultGRPCWatchdogThreshold = int64(3)
 )
 
-// GRPCTransportMetrics captures gRPC transport watchdog counters.
-type GRPCTransportMetrics = metrics.GRPCTransportMetrics
-
 type grpcMetricsRegistry struct {
 	dials          atomic.Int64
 	dialFailures   atomic.Int64
@@ -48,13 +45,13 @@ func grpcMetrics() *grpcMetricsRegistry {
 }
 
 // GRPCMetricsSnapshot returns the current global gRPC transport metrics snapshot.
-func GRPCMetricsSnapshot() GRPCTransportMetrics {
+func GRPCMetricsSnapshot() metrics.GRPCTransportMetrics {
 	reg := grpcMetrics()
 	reason := ""
 	if v, ok := reg.watchdogReason.Load().(string); ok {
 		reason = v
 	}
-	return GRPCTransportMetrics{
+	return metrics.GRPCTransportMetrics{
 		DialsTotal:               reg.dials.Load(),
 		DialFailures:             reg.dialFailures.Load(),
 		SendAttempts:             reg.sendAttempts.Load(),

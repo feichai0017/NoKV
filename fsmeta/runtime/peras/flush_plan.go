@@ -3,6 +3,7 @@ package peras
 import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]perasFlushBatch, error) {
@@ -154,34 +155,34 @@ func cloneRuntimeReplayOperation(op fsperas.ReplayOperation) fsperas.ReplayOpera
 	}
 }
 
-func cloneRuntimePredicateProofs(proofs []compile.PredicateProof) []compile.PredicateProof {
+func cloneRuntimePredicateProofs(proofs []proof.PredicateProof) []proof.PredicateProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]compile.PredicateProof, len(proofs))
-	for i, proof := range proofs {
-		out[i] = compile.PredicateProof{
-			SchemaVersion: proof.SchemaVersion,
-			Rule:          proof.Rule,
-			Key:           append([]byte(nil), proof.Key...),
-			Present:       proof.Present,
-			Value:         append([]byte(nil), proof.Value...),
-			Version:       proof.Version,
-			Source:        proof.Source,
-			ProofFrontier: proof.ProofFrontier,
-			ProofKind:     proof.ProofKind,
-			ScopeDigest:   proof.ScopeDigest,
-			Digest:        proof.Digest,
+	out := make([]proof.PredicateProof, len(proofs))
+	for i, predicateProof := range proofs {
+		out[i] = proof.PredicateProof{
+			SchemaVersion: predicateProof.SchemaVersion,
+			Rule:          predicateProof.Rule,
+			Key:           append([]byte(nil), predicateProof.Key...),
+			Present:       predicateProof.Present,
+			Value:         append([]byte(nil), predicateProof.Value...),
+			Version:       predicateProof.Version,
+			Source:        predicateProof.Source,
+			ProofFrontier: predicateProof.ProofFrontier,
+			ProofKind:     predicateProof.ProofKind,
+			ScopeDigest:   predicateProof.ScopeDigest,
+			Digest:        predicateProof.Digest,
 		}
 	}
 	return out
 }
 
-func cloneRuntimeGuardProofs(proofs []compile.GuardProof) []compile.GuardProof {
+func cloneRuntimeGuardProofs(proofs []proof.GuardProof) []proof.GuardProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]compile.GuardProof, len(proofs))
+	out := make([]proof.GuardProof, len(proofs))
 	copy(out, proofs)
 	return out
 }

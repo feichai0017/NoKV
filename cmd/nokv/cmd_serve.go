@@ -64,8 +64,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
 	storageMaxBatchCount := fs.Int64("storage-max-batch-count", 0, "maximum internal entries accepted by one local storage batch; zero uses engine default")
 	storageMaxBatchSize := fs.Int64("storage-max-batch-size", 0, "maximum bytes accepted by one local storage batch; zero uses engine default")
-	perasWitnessEnabled := fs.Bool("peras-witness", true, "enable fsmeta Peras witness RPCs backed by the local control WAL")
-	perasWitnessDurability := fs.String("peras-witness-durability", "fsync-batched", "peras witness WAL durability: fsync-batched|fsync|flushed|buffered")
+	perasWitnessWALPolicy := fs.String("peras-witness-wal-policy", "fsync-batched", "peras witness WAL sync policy: fsync-batched|fsync|flushed|buffered")
 	var storeAddrFlags []string
 	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -132,7 +131,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *storageMaxBatchCount < 0 || *storageMaxBatchSize < 0 {
 		return fmt.Errorf("storage batch limits must be non-negative")
 	}
-	perasDurability, err := parsePerasWitnessDurability(*perasWitnessDurability)
+	perasDurability, err := parsePerasWitnessWALPolicy(*perasWitnessWALPolicy)
 	if err != nil {
 		return err
 	}
@@ -235,14 +234,12 @@ func runServeCmd(w io.Writer, args []string) error {
 	var perasWitness kv.PerasWitness
 	var perasAuthorityTable *runtimeperas.ActiveAuthorities
 	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
-	if *perasWitnessEnabled {
-		perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
-		if err != nil {
-			return err
-		}
-		if perasAuthorityFeed != nil {
-			defer func() { _ = perasAuthorityFeed.Close() }()
-		}
+	perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+	if err != nil {
+		return err
+	}
+	if perasAuthorityFeed != nil {
+		defer func() { _ = perasAuthorityFeed.Close() }()
 	}
 
 	coordScheduler := storecontrol.NewClient(storecontrol.Config{
@@ -397,7 +394,7 @@ func runServeCmd(w io.Writer, args []string) error {
 
 	_, _ = fmt.Fprintf(w, "StoreKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
 	if perasWitness != nil {
-		_, _ = fmt.Fprintf(w, "Peras witness enabled (durability=%s)\n", strings.TrimSpace(*perasWitnessDurability))
+		_, _ = fmt.Fprintf(w, "Peras witness enabled (wal_policy=%s)\n", strings.TrimSpace(*perasWitnessWALPolicy))
 	}
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())

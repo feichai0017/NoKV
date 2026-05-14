@@ -11,6 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
 	"sort"
@@ -1624,7 +1625,7 @@ func (i *witnessPhaseCheckingRuntimePerasSegmentInstaller) InstallSegment(contex
 
 type fakeRuntimePerasGrantProvider struct {
 	holderID string
-	grant    AuthorityGrant
+	grant    rootproto.PerasAuthorityGrant
 	seals    []rootproto.PerasAuthoritySeal
 	owned    bool
 	err      error
@@ -1635,7 +1636,7 @@ func (p *fakeRuntimePerasGrantProvider) HolderID() string {
 	return p.holderID
 }
 
-func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (AuthorityGrant, bool, error) {
+func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
 	owned := p.owned
 	if !owned {
 		owned = true
@@ -1658,14 +1659,14 @@ type publishingRuntimePerasGrantProvider struct {
 	fakeRuntimePerasGrantProvider
 	mu            sync.Mutex
 	sealCalls     int
-	sealedGrant   AuthorityGrant
+	sealedGrant   rootproto.PerasAuthorityGrant
 	sealedSegment fsperas.PerasSegment
 	sealedDigest  [32]byte
 	sealedCursor  InstallCursor
 	sealErr       error
 }
 
-func (p *publishingRuntimePerasGrantProvider) PublishSegmentSeal(_ context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor InstallCursor) error {
+func (p *publishingRuntimePerasGrantProvider) PublishSegmentSeal(_ context.Context, grant rootproto.PerasAuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor InstallCursor) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sealCalls++
@@ -1724,8 +1725,8 @@ func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) 
 	return out, nil
 }
 
-func testRuntimeCommitterGrant() AuthorityGrant {
-	return AuthorityGrant{
+func testRuntimeCommitterGrant() rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
@@ -1834,20 +1835,20 @@ func testRuntimeSealMaterializedOp(op compile.MaterializedOp) compile.Materializ
 	return compile.WithAdmissionProofs(op, proofs, guardProofs)
 }
 
-func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []compile.PredicateProof {
+func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []proof.PredicateProof {
 	if len(op.Delta.ReadPredicates) == 0 {
 		return nil
 	}
-	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
+	proofs := make([]proof.PredicateProof, 0, len(op.Delta.ReadPredicates))
 	for _, predicate := range op.Delta.ReadPredicates {
-		frontier := compile.ProofFrontier{EpochID: 1, Sequence: 1}
+		frontier := proof.ProofFrontier{EpochID: 1, Sequence: 1}
 		switch predicate.Kind {
 		case compile.PredicateExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, true, 0, proof.ReadSourceOverlay, frontier))
 		case compile.PredicateNotExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 		case compile.PredicateObservedValue:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, predicate.ExpectedValue, true, 0, proof.ReadSourceOverlay, frontier))
 		}
 	}
 	return proofs
@@ -1972,29 +1973,13 @@ func testRuntimeInodeForBucketValue(bucket fsmeta.AffinityBucket) fsmeta.InodeID
 
 func testRuntimeInodeForBucketSeed(bucket fsmeta.AffinityBucket, seed []byte) fsmeta.InodeID {
 	start := uint64(testRuntimeInodeFromKey(seed))
-	for offset := uint64(0); offset < 1_000_000; offset++ {
+	for offset := range uint64(1_000_000) {
 		inode := fsmeta.InodeID(2 + (start+offset)%1_000_000)
 		if fsmeta.BucketForInodeID(inode) == bucket {
 			return inode
 		}
 	}
 	panic(fmt.Sprintf("no inode found for bucket %d", bucket))
-}
-
-func uniqueRuntimeBuckets(in []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fsmeta.AffinityBucket, 0, len(in))
-	seen := make(map[fsmeta.AffinityBucket]struct{}, len(in))
-	for _, bucket := range in {
-		if _, ok := seen[bucket]; ok {
-			continue
-		}
-		seen[bucket] = struct{}{}
-		out = append(out, bucket)
-	}
-	return out
 }
 
 func testRuntimePerasOpWithScope(op compile.MaterializedOp, scope compile.AuthorityScope) compile.MaterializedOp {

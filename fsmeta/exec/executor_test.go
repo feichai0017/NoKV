@@ -10,6 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 	"sort"
@@ -392,7 +393,7 @@ func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 		c.beforeAdmission()
 	}
 	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, fsperas.AdmissionContext{
-		ProofFrontier: compile.ProofFrontier{EpochID: 1, Sequence: id.Seq},
+		ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: id.Seq},
 	})
 	if err != nil {
 		return fsperas.VisibleAck{}, err
@@ -414,7 +415,7 @@ func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, fsperas.AdmissionContext{
-		ProofFrontier: compile.ProofFrontier{EpochID: c.holder.EpochID(), Sequence: id.Seq},
+		ProofFrontier: proof.ProofFrontier{EpochID: c.holder.EpochID(), Sequence: id.Seq},
 	})
 	if err != nil {
 		return fsperas.VisibleAck{}, err

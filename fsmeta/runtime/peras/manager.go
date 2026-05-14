@@ -49,7 +49,7 @@ type AuthorityManager struct {
 
 type acquireCall struct {
 	done  chan struct{}
-	grant AuthorityGrant
+	grant rootproto.PerasAuthorityGrant
 	owned bool
 	err   error
 }
@@ -95,13 +95,13 @@ func (m *AuthorityManager) AcquirePerasAuthority(ctx context.Context, scope comp
 	return owned, err
 }
 
-func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (AuthorityGrant, bool, error) {
+func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
 	if m == nil {
-		return AuthorityGrant{}, false, ErrClientRequired
+		return rootproto.PerasAuthorityGrant{}, false, ErrClientRequired
 	}
 	now := m.now()
 	if grant, ok, err := m.table.Find(scope, now); err != nil {
-		return AuthorityGrant{}, false, err
+		return rootproto.PerasAuthorityGrant{}, false, err
 	} else if ok && grant.HolderID == m.holderID {
 		return grant, true, nil
 	}
@@ -113,11 +113,11 @@ func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityS
 		case <-call.done:
 			return call.grant, call.owned, call.err
 		case <-ctx.Done():
-			return AuthorityGrant{}, false, ctx.Err()
+			return rootproto.PerasAuthorityGrant{}, false, ctx.Err()
 		}
 	}
 
-	var grant AuthorityGrant
+	var grant rootproto.PerasAuthorityGrant
 	var owned bool
 	cmd := rootproto.PerasAuthorityCommand{
 		Kind:            rootproto.PerasAuthorityActAcquire,
@@ -130,19 +130,19 @@ func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityS
 		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
-		m.finishAcquire(key, AuthorityGrant{}, false, err)
-		return AuthorityGrant{}, false, err
+		m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, err)
+		return rootproto.PerasAuthorityGrant{}, false, err
 	}
 	if err := m.installResponse(resp); err != nil {
-		m.finishAcquire(key, AuthorityGrant{}, false, err)
-		return AuthorityGrant{}, false, err
+		m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, err)
+		return rootproto.PerasAuthorityGrant{}, false, err
 	}
 	switch resp.GetStatus() {
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
 		grant = metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
-			m.finishAcquire(key, AuthorityGrant{}, false, ErrInvalidResponse)
-			return AuthorityGrant{}, false, ErrInvalidResponse
+			m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, ErrInvalidResponse)
+			return rootproto.PerasAuthorityGrant{}, false, ErrInvalidResponse
 		}
 		owned = true
 	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
@@ -171,7 +171,7 @@ func (m *AuthorityManager) beginAcquire(key string) (*acquireCall, bool) {
 	return call, true
 }
 
-func (m *AuthorityManager) finishAcquire(key string, grant AuthorityGrant, owned bool, err error) {
+func (m *AuthorityManager) finishAcquire(key string, grant rootproto.PerasAuthorityGrant, owned bool, err error) {
 	m.acquireMu.Lock()
 	call := m.acquires[key]
 	if call != nil {
@@ -208,7 +208,7 @@ func acquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	return rootScope
 }
 
-func (m *AuthorityManager) Retire(ctx context.Context, grant AuthorityGrant) error {
+func (m *AuthorityManager) Retire(ctx context.Context, grant rootproto.PerasAuthorityGrant) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -243,7 +243,7 @@ func (m *AuthorityManager) Retire(ctx context.Context, grant AuthorityGrant) err
 	return nil
 }
 
-func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
+func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootproto.PerasAuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -342,13 +342,13 @@ func (m *AuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...c
 	return nil
 }
 
-func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []AuthorityGrant {
+func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []rootproto.PerasAuthorityGrant {
 	if m == nil || m.table == nil || strings.TrimSpace(m.holderID) == "" {
 		return nil
 	}
 	now := m.now()
 	snapshot := m.table.Snapshot()
-	out := make([]AuthorityGrant, 0, len(snapshot))
+	out := make([]rootproto.PerasAuthorityGrant, 0, len(snapshot))
 	for _, grant := range snapshot {
 		if grant.HolderID != m.holderID || !grant.ActiveAt(now.UnixNano()) {
 			continue
@@ -367,7 +367,7 @@ func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope
 	return out
 }
 
-func grantMatchesRetireScope(grant AuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+func grantMatchesRetireScope(grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
 	}
@@ -407,8 +407,8 @@ func (m *AuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorityResp
 	return m.table.Replace(grants)
 }
 
-func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]AuthorityGrant, error) {
-	out := make([]AuthorityGrant, 0, len(in))
+func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]rootproto.PerasAuthorityGrant, error) {
+	out := make([]rootproto.PerasAuthorityGrant, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
 	for _, pbGrant := range in {
 		grant := metawire.RootPerasAuthorityGrantFromProto(pbGrant)
@@ -424,7 +424,7 @@ func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]Authorit
 	return out, nil
 }
 
-func appendPerasGrantIfMissing(grants []AuthorityGrant, grant AuthorityGrant) []AuthorityGrant {
+func appendPerasGrantIfMissing(grants []rootproto.PerasAuthorityGrant, grant rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
 	for _, current := range grants {
 		if current.GrantID == grant.GrantID {
 			return grants

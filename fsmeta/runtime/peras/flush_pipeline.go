@@ -7,6 +7,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -221,9 +222,9 @@ func (c *Runtime) publishSegmentSeal(ctx context.Context, holder *fsperas.Holder
 	return nil
 }
 
-func (c *Runtime) grantForEpoch(epochID uint64) (AuthorityGrant, bool) {
+func (c *Runtime) grantForEpoch(epochID uint64) (rootproto.PerasAuthorityGrant, bool) {
 	if c == nil || c.epochs == nil {
-		return AuthorityGrant{}, false
+		return rootproto.PerasAuthorityGrant{}, false
 	}
 	return c.epochs.grant(epochID)
 }

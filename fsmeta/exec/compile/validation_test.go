@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,9 +26,9 @@ func TestMaterializedOpValidationRequiresAbsentProof(t *testing.T) {
 	require.ErrorAs(t, err, &validationErr)
 	require.Equal(t, ValidationPredicateProofMissing, validationErr.Kind)
 
-	proofs := []PredicateProof{
-		PredicateProofFor(op.Delta.ReadPredicates[0].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 1, Sequence: 1}),
-		PredicateProofFor(op.Delta.ReadPredicates[1].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 1, Sequence: 1}),
+	proofs := []proof.PredicateProof{
+		proof.NewPredicateProof(op.Delta.ReadPredicates[0].Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{EpochID: 1, Sequence: 1}),
+		proof.NewPredicateProof(op.Delta.ReadPredicates[1].Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{EpochID: 1, Sequence: 1}),
 	}
 	op = WithPredicateProofs(op, proofs)
 	require.NoError(t, op.ValidateForAdmission())
@@ -44,19 +45,19 @@ func TestPredicateProofCarriesAbsenceProofClass(t *testing.T) {
 	op, err := MaterializeCreate(program, CreateValues{})
 	require.NoError(t, err)
 
-	overlay := PredicateProofFor(op.Delta.ReadPredicates[0].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 7, Sequence: 9})
-	require.Equal(t, PredicateProofOverlayFrontierAbsence, overlay.ProofKind)
+	overlay := proof.NewPredicateProof(op.Delta.ReadPredicates[0].Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{EpochID: 7, Sequence: 9})
+	require.Equal(t, proof.PredicateProofOverlayFrontierAbsence, overlay.ProofKind)
 	require.NotEqual(t, [32]byte{}, overlay.ScopeDigest)
 
-	base := PredicateProofFor(op.Delta.ReadPredicates[1].Key, nil, false, 11, ReadSourceBase)
-	require.Equal(t, PredicateProofPointAbsence, base.ProofKind)
+	base := proof.NewPredicateProof(op.Delta.ReadPredicates[1].Key, nil, false, 11, proof.ReadSourceBase, proof.ProofFrontier{})
+	require.Equal(t, proof.PredicateProofPointAbsence, base.ProofKind)
 	require.NotEqual(t, [32]byte{}, base.ScopeDigest)
 
-	op = WithPredicateProofs(op, []PredicateProof{overlay, base})
+	op = WithPredicateProofs(op, []proof.PredicateProof{overlay, base})
 	require.NoError(t, op.ValidateForAdmission())
 
 	base.ScopeDigest[0] ^= 0xff
-	op = WithPredicateProofs(op, []PredicateProof{overlay, base})
+	op = WithPredicateProofs(op, []proof.PredicateProof{overlay, base})
 	var validationErr ValidationError
 	err = op.ValidateForAdmission()
 	require.ErrorAs(t, err, &validationErr)
@@ -66,8 +67,8 @@ func TestPredicateProofCarriesAbsenceProofClass(t *testing.T) {
 func TestMaterializedOpValidationBindsGuardProofEvidence(t *testing.T) {
 	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 	op := testMaterializeAOT(t, delta, proofs)
-	wrongEvidence := GuardEvidence{SchemaVersion: ProofVersion1}
-	op = WithGuardProofs(op, []GuardProof{GuardProofFor(op.Delta.RuntimeGuards[0], true, wrongEvidence)})
+	wrongEvidence := proof.GuardEvidence{SchemaVersion: proof.Version1}
+	op = WithGuardProofs(op, []proof.GuardProof{GuardProofFor(op.Delta.RuntimeGuards[0], true, wrongEvidence)})
 
 	var validationErr ValidationError
 	err := op.ValidateForAdmission()
@@ -163,21 +164,21 @@ func TestMaterializedOpValidationRequiresObservedValueProof(t *testing.T) {
 
 func TestMaterializedOpValidationRejectsBadPredicateProofContract(t *testing.T) {
 	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
-	badProof := PredicateProof{
+	badProof := proof.PredicateProof{
 		Key:     proofs[1].Key,
 		Present: proofs[1].Present,
 		Value:   proofs[1].Value,
-		Source:  ReadSourceUnknown,
+		Source:  proof.ReadSourceUnknown,
 	}
-	badProof.Digest = PredicateProofDigest(badProof.Key, badProof.Value, badProof.Present, badProof.Version, badProof.Source, badProof.ProofFrontier)
+	badProof.Digest = proof.PredicateProofDigest(badProof.Key, badProof.Value, badProof.Present, badProof.Version, badProof.Source, badProof.ProofFrontier)
 
 	var validationErr ValidationError
-	err := testMaterializeAOT(t, delta, []PredicateProof{proofs[0], badProof}).ValidateForAdmission()
+	err := testMaterializeAOT(t, delta, []proof.PredicateProof{proofs[0], badProof}).ValidateForAdmission()
 	require.ErrorAs(t, err, &validationErr)
 	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
 
 	duplicateProof := proofs[1]
-	err = testMaterializeAOT(t, delta, []PredicateProof{proofs[0], duplicateProof, duplicateProof}).ValidateForAdmission()
+	err = testMaterializeAOT(t, delta, []proof.PredicateProof{proofs[0], duplicateProof, duplicateProof}).ValidateForAdmission()
 	require.ErrorAs(t, err, &validationErr)
 	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
 }

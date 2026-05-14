@@ -8,6 +8,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +31,7 @@ func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
 		Buckets:    []fsmeta.AffinityBucket{1, 2},
 		Parents:    []fsmeta.InodeID{10},
 	})
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 
 	found, ok, err := table.Find(request, testNow)
 	require.NoError(t, err)
@@ -52,7 +53,7 @@ func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
 
 func TestActiveAuthoritiesRejectsExpiredAndWrongMount(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -79,7 +80,7 @@ func TestActiveAuthoritiesRejectsExpiredAndWrongMount(t *testing.T) {
 
 func TestActiveAuthoritiesTreatsEmptyGrantDimensionsAsWildcard(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -99,7 +100,7 @@ func TestActiveAuthoritiesTreatsEmptyGrantDimensionsAsWildcard(t *testing.T) {
 
 func TestActiveAuthoritiesDoesNotLetSpecificBucketCoverMountWideScope(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -118,7 +119,7 @@ func TestActiveAuthoritiesDoesNotLetSpecificBucketCoverMountWideScope(t *testing
 func TestActiveAuthoritiesRejectsInvalidDuplicateAndConflictingGrants(t *testing.T) {
 	table := NewActiveAuthorities()
 
-	require.ErrorIs(t, table.Replace([]AuthorityGrant{{GrantID: "missing-fields"}}), ErrInvalidGrant)
+	require.ErrorIs(t, table.Replace([]rootproto.PerasAuthorityGrant{{GrantID: "missing-fields"}}), ErrInvalidGrant)
 
 	left := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
@@ -126,14 +127,14 @@ func TestActiveAuthoritiesRejectsInvalidDuplicateAndConflictingGrants(t *testing
 		Buckets:    []fsmeta.AffinityBucket{1},
 	})
 	duplicate := left
-	require.ErrorIs(t, table.Replace([]AuthorityGrant{left, duplicate}), ErrInvalidGrant)
+	require.ErrorIs(t, table.Replace([]rootproto.PerasAuthorityGrant{left, duplicate}), ErrInvalidGrant)
 
 	right := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
 		Buckets:    []fsmeta.AffinityBucket{1},
 	})
-	require.ErrorIs(t, table.Replace([]AuthorityGrant{left, right}), ErrConflictingGrant)
+	require.ErrorIs(t, table.Replace([]rootproto.PerasAuthorityGrant{left, right}), ErrConflictingGrant)
 }
 
 func TestActiveAuthoritiesAllowsDisjointBuckets(t *testing.T) {
@@ -148,7 +149,7 @@ func TestActiveAuthoritiesAllowsDisjointBuckets(t *testing.T) {
 		MountKeyID: testMount.MountKeyID,
 		Buckets:    []fsmeta.AffinityBucket{2},
 	})
-	require.NoError(t, table.Replace([]AuthorityGrant{left, right}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{left, right}))
 
 	found, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      testMount.MountID,
@@ -162,7 +163,7 @@ func TestActiveAuthoritiesAllowsDisjointBuckets(t *testing.T) {
 
 func TestActiveAuthoritiesSnapshotIsIsolated(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -185,7 +186,7 @@ func TestActiveAuthoritiesSnapshotIsIsolated(t *testing.T) {
 }
 
 func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
-	table := &ActiveAuthorities{grants: map[string]AuthorityGrant{
+	table := &ActiveAuthorities{grants: map[string]rootproto.PerasAuthorityGrant{
 		"g1": testGrant("g1", "holder-a", compile.AuthorityScope{Mount: "vol", MountKeyID: 7}),
 		"g2": testGrant("g2", "holder-b", compile.AuthorityScope{Mount: "vol", MountKeyID: 7}),
 	}}
@@ -200,7 +201,7 @@ func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
 
 func TestActiveAuthoritiesFencesMountWideFsmetaKeys(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -248,7 +249,7 @@ func TestActiveAuthoritiesFencesFsmetaKeysFailClosedBeforeSnapshot(t *testing.T)
 func TestActiveAuthoritiesFencesSpecificParentAndBucket(t *testing.T) {
 	table := NewActiveAuthorities()
 	parent := fsmeta.InodeID(10)
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -282,7 +283,7 @@ func TestActiveAuthoritiesFencesSpecificParentAndBucket(t *testing.T) {
 
 func TestActiveAuthoritiesFencesUsageOnlyWhenScopeMatches(t *testing.T) {
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
@@ -406,7 +407,7 @@ func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
 func BenchmarkActiveAuthoritiesApplyRootEvent(b *testing.B) {
 	b.ReportAllocs()
 	table := NewActiveAuthorities()
-	grants := make([]AuthorityGrant, 0, 16)
+	grants := make([]rootproto.PerasAuthorityGrant, 0, 16)
 	for bucket := range 16 {
 		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
@@ -426,7 +427,7 @@ func BenchmarkActiveAuthoritiesApplyRootEvent(b *testing.B) {
 func BenchmarkActiveAuthoritiesFind(b *testing.B) {
 	b.ReportAllocs()
 	table := NewActiveAuthorities()
-	grants := make([]AuthorityGrant, 0, 16)
+	grants := make([]rootproto.PerasAuthorityGrant, 0, 16)
 	for bucket := range 16 {
 		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
@@ -449,8 +450,8 @@ func BenchmarkActiveAuthoritiesFind(b *testing.B) {
 	}
 }
 
-func testGrant(id, holder string, scope compile.AuthorityScope) AuthorityGrant {
-	return AuthorityGrant{
+func testGrant(id, holder string, scope compile.AuthorityScope) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:         id,
 		EpochID:         1,
 		HolderID:        holder,

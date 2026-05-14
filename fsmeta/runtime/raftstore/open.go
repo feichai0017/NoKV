@@ -72,18 +72,16 @@ type Options struct {
 	// shape hints; this value belongs to fsmeta placement policy.
 	AffinityBuckets int
 
-	// PerasHolderID enables coordinator-mediated Peras authority acquisition
-	// for this fsmeta runtime. Empty leaves Peras execution disabled while the
-	// active authority view still follows root events for diagnostics.
+	// PerasHolderID identifies this fsmeta runtime when it acquires Peras
+	// authority. Empty leaves the embedded runtime on the durable Percolator
+	// path; the nokv-fsmeta server derives a stable holder id so Peras is the
+	// default project startup path.
 	PerasHolderID string
 
 	// PerasAuthorityTTL bounds one acquired Peras authority grant. Zero uses
 	// the runtime default; negative is rejected.
 	PerasAuthorityTTL time.Duration
 
-	// PerasVisibleCommit enables the experimental Peras holder -> remote witness
-	// visible commit path. It requires PerasHolderID and store-side witnesses.
-	PerasVisibleCommit bool
 	// PerasWitnessStoreIDs restricts the witness set to these store IDs. Empty
 	// uses every currently UP store reported by the coordinator.
 	PerasWitnessStoreIDs []uint64
@@ -178,9 +176,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}
-	if opts.PerasVisibleCommit && strings.TrimSpace(opts.PerasHolderID) == "" {
-		return nil, runtimeperas.ErrHolderRequired
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -264,7 +259,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	var witnessConns *witnessConnections
 	var perasRuntime *runtimeperas.Runtime
-	if opts.PerasVisibleCommit {
+	if perasAuthorityManager != nil {
 		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
 		if err != nil {
 			_ = kv.Close()

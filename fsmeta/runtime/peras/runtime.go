@@ -11,6 +11,8 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -332,7 +334,7 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	unlockAdmission := c.latches.Lock(op)
 	defer unlockAdmission()
 	admissionCtx := fsperas.AdmissionContext{
-		ProofFrontier: compile.ProofFrontier{EpochID: holder.EpochID(), Sequence: id.Seq},
+		ProofFrontier: proof.ProofFrontier{EpochID: holder.EpochID(), Sequence: id.Seq},
 	}
 	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, admissionCtx)
 	if err != nil {
@@ -358,7 +360,7 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	return ack, nil
 }
 
-func (c *Runtime) holderForGrant(ctx context.Context, grant AuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
+func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
 		return nil, ErrRuntimeInvalid
 	}

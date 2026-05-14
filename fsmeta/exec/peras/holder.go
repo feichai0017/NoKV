@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type HolderConfig struct {
@@ -368,8 +369,8 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 	return true
 }
 
-func predicateProofsEqual(left, right []compile.PredicateProof) bool {
-	return slices.EqualFunc(left, right, func(l, r compile.PredicateProof) bool {
+func predicateProofsEqual(left, right []proof.PredicateProof) bool {
+	return slices.EqualFunc(left, right, func(l, r proof.PredicateProof) bool {
 		return l.SchemaVersion == r.SchemaVersion &&
 			l.Rule == r.Rule &&
 			l.Present == r.Present &&
@@ -384,6 +385,6 @@ func predicateProofsEqual(left, right []compile.PredicateProof) bool {
 	})
 }
 
-func guardProofsEqual(left, right []compile.GuardProof) bool {
+func guardProofsEqual(left, right []proof.GuardProof) bool {
 	return slices.Equal(left, right)
 }

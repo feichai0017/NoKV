@@ -4,15 +4,16 @@ import (
 	"context"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type AdmissionResult struct {
-	PredicateProofs []compile.PredicateProof
-	GuardProofs     []compile.GuardProof
+	PredicateProofs []proof.PredicateProof
+	GuardProofs     []proof.GuardProof
 }
 
 type AdmissionContext struct {
-	ProofFrontier compile.ProofFrontier
+	ProofFrontier proof.ProofFrontier
 }
 
 type AdmissionFunc func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -327,31 +328,23 @@ func sealTestMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
 	return compile.WithAdmissionProofs(op, proofs, guardProofs)
 }
 
-func testPredicateProofsForMaterializedOp(op compile.MaterializedOp) []compile.PredicateProof {
+func testPredicateProofsForMaterializedOp(op compile.MaterializedOp) []proof.PredicateProof {
 	if len(op.Delta.ReadPredicates) == 0 {
 		return nil
 	}
-	proofs := make([]compile.PredicateProof, 0, len(op.Delta.ReadPredicates))
+	proofs := make([]proof.PredicateProof, 0, len(op.Delta.ReadPredicates))
 	for _, predicate := range op.Delta.ReadPredicates {
-		frontier := compile.ProofFrontier{EpochID: 1, Sequence: 1}
+		frontier := proof.ProofFrontier{EpochID: 1, Sequence: 1}
 		switch predicate.Kind {
 		case compile.PredicateExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, true, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, true, 0, proof.ReadSourceOverlay, frontier))
 		case compile.PredicateNotExists:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, nil, false, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 		case compile.PredicateObservedValue:
-			proofs = append(proofs, compile.PredicateProofFor(predicate.Key, predicate.ExpectedValue, true, 0, compile.ReadSourceOverlay, frontier))
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, predicate.ExpectedValue, true, 0, proof.ReadSourceOverlay, frontier))
 		}
 	}
 	return proofs
-}
-
-func fsmetaInodeKeyForBucket(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) []byte {
-	t.Helper()
-	inode := inodeForBucket(t, bucket)
-	key, err := fsmeta.EncodeInodeKey(mount, inode)
-	require.NoError(t, err)
-	return key
 }
 
 func inodeForBucket(t *testing.T, bucket fsmeta.AffinityBucket) fsmeta.InodeID {

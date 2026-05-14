@@ -18,9 +18,6 @@ func buildPerasRuntime(
 	dialOpts []grpc.DialOption,
 	opts Options,
 ) (*runtimeperas.Runtime, *witnessConnections, error) {
-	if !opts.PerasVisibleCommit {
-		return nil, nil, nil
-	}
 	witnessConns, err := buildWitnessConnections(ctx, lister, dialOpts, opts.PerasWitnessStoreIDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init peras witnesses: %w", err)

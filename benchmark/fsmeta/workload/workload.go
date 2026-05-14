@@ -37,6 +37,8 @@ const (
 	maxOperationAttempts = 4
 	operationRetryBase   = 10 * time.Millisecond
 	operationRetryMax    = 100 * time.Millisecond
+	watchDeliveryPoll    = 10 * time.Millisecond
+	watchTailTimeout     = 10 * time.Second
 )
 
 // Client is the fsmeta operation surface needed by metadata workloads.
@@ -316,8 +318,11 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	}
 
 	starts := newWatchStarts()
+	var successfulCreates atomic.Int64
+	var deliveredCreates atomic.Int64
+	createsDone := make(chan struct{})
 	done := make(chan error, 1)
-	go collectWatchEvents(ctx, stream, starts, cfg.Files, rec, done)
+	go collectWatchEvents(ctx, stream, starts, &successfulCreates, &deliveredCreates, createsDone, rec, done)
 
 	var next atomic.Int64
 	var wg sync.WaitGroup
@@ -332,7 +337,7 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 				}
 				name := fmt.Sprintf("watch-%s-file-%08d", cfg.RunID, idx)
 				starts.put(name, time.Now())
-				rec.recordCall("watch_create", func() error {
+				duration, err := timeCall(func() error {
 					_, err := cli.Create(ctx, fsmeta.CreateRequest{
 						Mount:  cfg.Mount,
 						Parent: dirInode,
@@ -344,12 +349,20 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 					})
 					return err
 				})
+				if err != nil {
+					starts.delete(name)
+				} else {
+					successfulCreates.Add(1)
+				}
+				rec.record("watch_create", duration, err)
 			}
 		}()
 	}
 	wg.Wait()
-	if err := <-done; err != nil {
-		rec.record("watch_notify", 0, err)
+	close(createsDone)
+	closeWatchAfterDelivery(stream, &successfulCreates, &deliveredCreates)
+	if watchErr := <-done; watchErr != nil {
+		rec.record("watch_notify", 0, watchErr)
 	}
 
 	return finishResult(WatchSubtree, cfg.RunID, started, rec.snapshot())
@@ -684,13 +697,51 @@ func (s *watchStarts) pop(name string) (time.Time, bool) {
 	return started, ok
 }
 
-func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscription, starts *watchStarts, target int, rec *recorder, done chan<- error) {
+func (s *watchStarts) delete(name string) {
+	s.mu.Lock()
+	delete(s.values, name)
+	s.mu.Unlock()
+}
+
+func closeWatchAfterDelivery(stream fsmetaclient.WatchSubscription, expected, delivered *atomic.Int64) {
+	deadline := time.NewTimer(watchTailTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(watchDeliveryPoll)
+	defer ticker.Stop()
+	for {
+		if delivered.Load() >= expected.Load() {
+			_ = stream.Close()
+			return
+		}
+		select {
+		case <-deadline.C:
+			_ = stream.Close()
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscription, starts *watchStarts, expected, delivered *atomic.Int64, createsDone <-chan struct{}, rec *recorder, done chan<- error) {
 	received := 0
-	for received < target {
+	for {
+		select {
+		case <-createsDone:
+			if received >= int(expected.Load()) {
+				done <- nil
+				return
+			}
+			createsDone = nil
+		default:
+		}
 		evt, err := stream.Recv()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) && received >= int(expected.Load()) {
 				done <- nil
+				return
+			}
+			if errors.Is(err, io.EOF) {
+				done <- fmt.Errorf("watch-subtree received %d/%d notifications before stream closed", received, expected.Load())
 				return
 			}
 			done <- err
@@ -704,6 +755,7 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 		if started, ok := starts.pop(name); ok {
 			rec.record("watch_notify", time.Since(started), nil)
 			received++
+			delivered.Add(1)
 		}
 		select {
 		case <-ctx.Done():

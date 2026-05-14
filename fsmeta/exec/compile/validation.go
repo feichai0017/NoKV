@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type ValidationErrorKind uint8
@@ -263,52 +264,52 @@ func watchProjectionsEqual(left, right []WatchProjection) bool {
 	})
 }
 
-func predicateProofMap(proofs []PredicateProof) (map[string]PredicateProof, error) {
-	out := make(map[string]PredicateProof, len(proofs))
-	for _, proof := range proofs {
-		if len(proof.Key) == 0 {
+func predicateProofMap(proofs []proof.PredicateProof) (map[string]proof.PredicateProof, error) {
+	out := make(map[string]proof.PredicateProof, len(proofs))
+	for _, predicateProof := range proofs {
+		if len(predicateProof.Key) == 0 {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch}
 		}
-		if err := VerifyPredicateProof(proof); err != nil {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
+		if err := proof.VerifyPredicateProof(predicateProof); err != nil {
+			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: predicateProof.Key}
 		}
-		if _, ok := out[string(proof.Key)]; ok {
-			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
+		if _, ok := out[string(predicateProof.Key)]; ok {
+			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: predicateProof.Key}
 		}
-		out[string(proof.Key)] = proof
+		out[string(predicateProof.Key)] = predicateProof
 	}
 	return out, nil
 }
 
-func durableAbsenceProof(proof PredicateProof) bool {
-	if proof.Present {
+func durableAbsenceProof(predicateProof proof.PredicateProof) bool {
+	if predicateProof.Present {
 		return true
 	}
-	switch proof.Source {
-	case ReadSourceBase, ReadSourceSegment:
-		return proof.ProofKind == PredicateProofPointAbsence && proof.Version != 0
-	case ReadSourceOverlay:
-		return proof.ProofKind == PredicateProofOverlayFrontierAbsence && proof.ProofFrontier.Valid()
+	switch predicateProof.Source {
+	case proof.ReadSourceBase, proof.ReadSourceSegment:
+		return predicateProof.ProofKind == proof.PredicateProofPointAbsence && predicateProof.Version != 0
+	case proof.ReadSourceOverlay:
+		return predicateProof.ProofKind == proof.PredicateProofOverlayFrontierAbsence && predicateProof.ProofFrontier.Valid()
 	default:
 		return false
 	}
 }
 
-func predicateProofMatches(obligation PredicateObligation, proof PredicateProof) bool {
-	if !bytes.Equal(obligation.Key, proof.Key) {
+func predicateProofMatches(obligation PredicateObligation, predicateProof proof.PredicateProof) bool {
+	if !bytes.Equal(obligation.Key, predicateProof.Key) {
 		return false
 	}
-	if obligation.NeedValue && !proof.Present {
+	if obligation.NeedValue && !predicateProof.Present {
 		return false
 	}
-	if obligation.NeedAbsent && proof.Present {
+	if obligation.NeedAbsent && predicateProof.Present {
 		return false
 	}
 	if obligation.HasExpectedValue {
-		if !proof.Present {
+		if !predicateProof.Present {
 			return false
 		}
-		if sha256.Sum256(proof.Value) != obligation.ExpectHash {
+		if sha256.Sum256(predicateProof.Value) != obligation.ExpectHash {
 			return false
 		}
 	}
@@ -357,26 +358,26 @@ func authorityScopeCoversBuckets(scope AuthorityScope, buckets []fsmeta.Affinity
 	return true
 }
 
-func guardProofMap(proofs []GuardProof) (map[RuntimeGuard]GuardProof, error) {
-	out := make(map[RuntimeGuard]GuardProof, len(proofs))
-	for _, proof := range proofs {
-		if proof.SchemaVersion != ProofVersion1 || proof.Evidence.SchemaVersion != ProofVersion1 || proof.Guard == "" || !proof.Passed {
+func guardProofMap(proofs []proof.GuardProof) (map[RuntimeGuard]proof.GuardProof, error) {
+	out := make(map[RuntimeGuard]proof.GuardProof, len(proofs))
+	for _, guardProof := range proofs {
+		if guardProof.SchemaVersion != proof.Version1 || guardProof.Evidence.SchemaVersion != proof.Version1 || guardProof.Guard == "" || !guardProof.Passed {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		guard, ok := RuntimeGuardForProofRule(proof.Guard)
+		guard, ok := RuntimeGuardForProofRule(guardProof.Guard)
 		if !ok {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		if proof.Evidence.Guard != proof.Guard {
+		if guardProof.Evidence.Guard != guardProof.Guard {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
+		if guardProof.Digest != proof.GuardProofDigest(guardProof.Guard, guardProof.Passed, guardProof.Evidence) {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 		if _, ok := out[guard]; ok {
 			return nil, ValidationError{Kind: ValidationGuardProofMismatch}
 		}
-		out[guard] = proof
+		out[guard] = guardProof
 	}
 	return out, nil
 }

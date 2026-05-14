@@ -122,8 +122,11 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
 	starts := newWatchStarts()
+	var successfulPublishes atomic.Int64
+	var deliveredPublishes atomic.Int64
+	publishesDone := make(chan struct{})
 	watchDone := make(chan error, 1)
-	go collectWatchEvents(watchCtx, stream, starts, cfg.Groups*cfg.EntriesPerGroup, rec, watchDone)
+	go collectWatchEvents(watchCtx, stream, starts, &successfulPublishes, &deliveredPublishes, publishesDone, rec, watchDone)
 
 	var next atomic.Int64
 	var wg sync.WaitGroup
@@ -136,16 +139,19 @@ func RunMixed(ctx context.Context, cli Client, cfg MixedConfig) (Result, error) 
 				if idx >= len(tasks) {
 					return
 				}
-				runMixedTask(ctx, native, cfg, dirs, datasets, tasks[idx], starts, rec)
+				runMixedTask(ctx, native, cfg, dirs, datasets, tasks[idx], starts, &successfulPublishes, rec)
 			}
 		}()
 	}
 	wg.Wait()
+	close(publishesDone)
 	if hasRecordedErrors(rec.snapshot()) {
 		_ = stream.Close()
 		cancelWatch()
-	} else if err := <-watchDone; err != nil {
-		rec.record("watch_notify", 0, err)
+	}
+	closeWatchAfterDelivery(stream, &successfulPublishes, &deliveredPublishes)
+	if watchErr := <-watchDone; watchErr != nil {
+		rec.record("watch_notify", 0, watchErr)
 	}
 	runStaleSessionCleanup(ctx, native, cfg, dirs.scratch, rec)
 
@@ -288,7 +294,7 @@ func createNamespaceGroupDirectories(ctx context.Context, cli MixedClient, cfg M
 	return nil
 }
 
-func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, datasets map[mixedTask]fsmeta.CreateResult, task mixedTask, starts *watchStarts, rec *recorder) {
+func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mixedDirs, datasets map[mixedTask]fsmeta.CreateResult, task mixedTask, starts *watchStarts, successfulPublishes *atomic.Int64, rec *recorder) {
 	stageName := fmt.Sprintf("group-%02d-run-%04d.stage", task.group, task.run)
 	finalName := fmt.Sprintf("group-%02d-run-%04d", task.group, task.run)
 
@@ -319,8 +325,10 @@ func runMixedTask(ctx context.Context, cli MixedClient, cfg MixedConfig, dirs mi
 			ToName:     finalName,
 		})
 	}); err != nil {
+		starts.delete(finalName)
 		return
 	}
+	successfulPublishes.Add(1)
 
 	rec.recordCall("lookup_run", func() error {
 		_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: dirs.runs, Name: finalName})

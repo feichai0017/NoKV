@@ -59,6 +59,7 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retries_total":          uint64(0),
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
+			"commit_contract":            commitContractStats(false),
 			"peras_admission":            perasAdmissionStats(nil, false),
 			"peras_visible_commit":       perasVisibleStats(nil, false),
 			"atomic_one_phase":           atomicOnePhaseStats(nil),
@@ -72,6 +73,7 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retries_total":          e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
+		"commit_contract":            commitContractStats(e.perasCommitter != nil),
 		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
 		"peras_visible_commit":       perasVisibleStats(&e.perasVisible, e.perasCommitter != nil),
 		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
@@ -96,6 +98,21 @@ func (e *Executor) Stats() map[string]any {
 		out["inode_allocator"] = stats.Stats()
 	}
 	return out
+}
+
+func commitContractStats(perasEnabled bool) map[string]any {
+	if perasEnabled {
+		return map[string]any{
+			"default_write_path":        "peras",
+			"successful_write_boundary": "visible",
+			"durable_boundary":          "witness_quorum_plus_raftstore_segment_install",
+		}
+	}
+	return map[string]any{
+		"default_write_path":        "percolator",
+		"successful_write_boundary": "durable",
+		"durable_boundary":          "raftstore_commit",
+	}
 }
 
 func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[string]any {

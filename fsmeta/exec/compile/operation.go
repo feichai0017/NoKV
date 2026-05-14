@@ -10,7 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	metaproof "github.com/feichai0017/NoKV/fsmeta/proof"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 const segmentFormatVersion uint16 = 1
@@ -48,14 +48,14 @@ type CompiledOp struct {
 // effects needed to install the operation inside a segment.
 type MaterializedOp struct {
 	CompiledOp
-	PredicateProofs []PredicateProof
-	GuardProofs     []GuardProof
+	PredicateProofs []proof.PredicateProof
+	GuardProofs     []proof.GuardProof
 }
 
 // PredicateEvidence carries runtime reads that turn a generated program with
 // symbolic predicates into the proof-carrying descriptor admitted by Peras.
 type PredicateEvidence struct {
-	Proofs []PredicateProof
+	Proofs []proof.PredicateProof
 }
 
 type FenceMode uint8
@@ -136,50 +136,10 @@ type PredicateObligation struct {
 	ExpectHash       [32]byte
 }
 
-type ReadSource = metaproof.ReadSource
-
-const (
-	ReadSourceUnknown = metaproof.ReadSourceUnknown
-	ReadSourceOverlay = metaproof.ReadSourceOverlay
-	ReadSourceSegment = metaproof.ReadSourceSegment
-	ReadSourceBase    = metaproof.ReadSourceBase
-)
-
-type PredicateProof = metaproof.PredicateProof
-type PredicateProofKind = metaproof.PredicateProofKind
-
-const (
-	PredicateProofUnknown                = metaproof.PredicateProofUnknown
-	PredicateProofPointValue             = metaproof.PredicateProofPointValue
-	PredicateProofPointAbsence           = metaproof.PredicateProofPointAbsence
-	PredicateProofOverlayFrontierAbsence = metaproof.PredicateProofOverlayFrontierAbsence
-)
-
 type GuardObligation struct {
 	Guard  RuntimeGuard
 	Digest [32]byte
 }
-
-type ProofFrontier = metaproof.ProofFrontier
-
-type GuardEvidenceKind = metaproof.GuardEvidenceKind
-
-const (
-	GuardEvidenceUnknown             = metaproof.GuardEvidenceUnknown
-	GuardEvidenceSingleLinkInode     = metaproof.GuardEvidenceSingleLinkInode
-	GuardEvidenceSameAuthority       = metaproof.GuardEvidenceSameAuthority
-	GuardEvidenceNonDirectoryInode   = metaproof.GuardEvidenceNonDirectoryInode
-	GuardEvidenceLiveSession         = metaproof.GuardEvidenceLiveSession
-	GuardEvidenceExpiredSessionOwner = metaproof.GuardEvidenceExpiredSessionOwner
-	GuardEvidenceQuotaCredit         = metaproof.GuardEvidenceQuotaCredit
-)
-
-type GuardEvidence = metaproof.GuardEvidence
-type GuardProof = metaproof.GuardProof
-type ProofVersion = metaproof.Version
-type ProofRuleID = metaproof.RuleID
-
-const ProofVersion1 = metaproof.Version1
 
 type DerivationKind uint8
 
@@ -316,7 +276,7 @@ type SegmentDecision struct {
 // MaterializeCompiledOpWithEvidence recompiles a generated descriptor with
 // concrete runtime effects and predicate evidence, without reinterpreting the
 // operation semantics at admission time.
-func MaterializeCompiledOpWithEvidence(op CompiledOp, effects []WriteEffect, evidence PredicateEvidence, guardProofs []GuardProof) (MaterializedOp, error) {
+func MaterializeCompiledOpWithEvidence(op CompiledOp, effects []WriteEffect, evidence PredicateEvidence, guardProofs []proof.GuardProof) (MaterializedOp, error) {
 	delta := op.Delta
 	if effects != nil {
 		delta.WriteEffects = cloneEffects(effects)
@@ -378,7 +338,7 @@ func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (Se
 	return delta, nil
 }
 
-func applyPredicateProof(predicate *Predicate, proof PredicateProof) {
+func applyPredicateProof(predicate *Predicate, proof proof.PredicateProof) {
 	if !proof.Present {
 		predicate.Kind = PredicateNotExists
 		predicate.ExpectedValue = nil
@@ -423,17 +383,17 @@ func authorityScopeWithKey(scope AuthorityScope, key []byte) AuthorityScope {
 	return scope
 }
 
-func WithGuardProofs(op MaterializedOp, proofs []GuardProof) MaterializedOp {
+func WithGuardProofs(op MaterializedOp, proofs []proof.GuardProof) MaterializedOp {
 	op.GuardProofs = cloneGuardProofs(proofs)
 	return op
 }
 
-func WithPredicateProofs(op MaterializedOp, proofs []PredicateProof) MaterializedOp {
+func WithPredicateProofs(op MaterializedOp, proofs []proof.PredicateProof) MaterializedOp {
 	op.PredicateProofs = clonePredicateProofs(proofs)
 	return op
 }
 
-func WithAdmissionProofs(op MaterializedOp, predicateProofs []PredicateProof, guardProofs []GuardProof) MaterializedOp {
+func WithAdmissionProofs(op MaterializedOp, predicateProofs []proof.PredicateProof, guardProofs []proof.GuardProof) MaterializedOp {
 	op.PredicateProofs = clonePredicateProofs(predicateProofs)
 	op.GuardProofs = cloneGuardProofs(guardProofs)
 	return op
@@ -640,102 +600,74 @@ func dentryName(key []byte) string {
 	return unsafe.String(&name[0], len(name))
 }
 
-func PredicateProofDigest(key, value []byte, present bool, version uint64, source ReadSource, frontiers ...ProofFrontier) [32]byte {
-	var frontier ProofFrontier
-	if len(frontiers) > 0 {
-		frontier = frontiers[0]
-	}
-	return metaproof.PredicateProofDigest(key, value, present, version, source, frontier)
-}
-
-func PredicateProofKindFor(present bool, source ReadSource) PredicateProofKind {
-	return metaproof.PredicateProofKindFor(present, source)
-}
-
-func PredicateProofScopeDigest(key, value []byte, present bool, version uint64, source ReadSource, frontier ProofFrontier) [32]byte {
-	return metaproof.PredicateProofScopeDigest(key, value, present, version, source, frontier)
-}
-
-func PredicateProofFor(key, value []byte, present bool, version uint64, source ReadSource, frontiers ...ProofFrontier) PredicateProof {
-	var frontier ProofFrontier
-	if len(frontiers) > 0 {
-		frontier = frontiers[0]
-	}
-	return metaproof.NewPredicateProof(key, value, present, version, source, frontier)
-}
-
-func VerifyPredicateProof(proof PredicateProof) error {
-	return metaproof.VerifyPredicateProof(proof)
-}
-
-func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
+func PredicateProofSetDigest(proofs []proof.PredicateProof) [32]byte {
 	if len(proofs) == 0 {
 		return [32]byte{}
 	}
 	h := newDigestBuilder()
 	h.writeUint64(uint64(len(proofs)))
-	for _, proof := range proofs {
-		h.writeUint64(uint64(proof.SchemaVersion))
-		h.writeString(string(proof.Rule))
-		h.writeBytes(proof.Key)
-		h.writeBool(proof.Present)
-		h.writeBytes(proof.Value)
-		h.writeUint64(proof.Version)
-		h.writeUint64(uint64(proof.Source))
-		h.writeUint64(proof.ProofFrontier.EpochID)
-		h.writeUint64(proof.ProofFrontier.Sequence)
-		h.writeUint64(uint64(proof.ProofKind))
-		h.writeBytes(proof.ScopeDigest[:])
-		h.writeBytes(proof.Digest[:])
+	for _, predicateProof := range proofs {
+		h.writeUint64(uint64(predicateProof.SchemaVersion))
+		h.writeString(string(predicateProof.Rule))
+		h.writeBytes(predicateProof.Key)
+		h.writeBool(predicateProof.Present)
+		h.writeBytes(predicateProof.Value)
+		h.writeUint64(predicateProof.Version)
+		h.writeUint64(uint64(predicateProof.Source))
+		h.writeUint64(predicateProof.ProofFrontier.EpochID)
+		h.writeUint64(predicateProof.ProofFrontier.Sequence)
+		h.writeUint64(uint64(predicateProof.ProofKind))
+		h.writeBytes(predicateProof.ScopeDigest[:])
+		h.writeBytes(predicateProof.Digest[:])
 	}
 	return h.sum()
 }
 
-func ProofRuleForGuard(guard RuntimeGuard) (ProofRuleID, bool) {
+func ProofRuleForGuard(guard RuntimeGuard) (proof.RuleID, bool) {
 	switch guard {
 	case GuardSingleLinkInode:
-		return metaproof.RuleGuardSingleLinkInode, true
+		return proof.RuleGuardSingleLinkInode, true
 	case GuardSameAuthority:
-		return metaproof.RuleGuardSameAuthority, true
+		return proof.RuleGuardSameAuthority, true
 	case GuardNonDirectoryInode:
-		return metaproof.RuleGuardNonDirectoryInode, true
+		return proof.RuleGuardNonDirectoryInode, true
 	case GuardLiveSession:
-		return metaproof.RuleGuardLiveSession, true
+		return proof.RuleGuardLiveSession, true
 	case GuardExpiredSessionOwner:
-		return metaproof.RuleGuardExpiredSessionOwner, true
+		return proof.RuleGuardExpiredSessionOwner, true
 	case GuardQuotaCredit:
-		return metaproof.RuleGuardQuotaCredit, true
+		return proof.RuleGuardQuotaCredit, true
 	default:
 		return "", false
 	}
 }
 
-func RuntimeGuardForProofRule(rule ProofRuleID) (RuntimeGuard, bool) {
+func RuntimeGuardForProofRule(rule proof.RuleID) (RuntimeGuard, bool) {
 	switch rule {
-	case metaproof.RuleGuardSingleLinkInode:
+	case proof.RuleGuardSingleLinkInode:
 		return GuardSingleLinkInode, true
-	case metaproof.RuleGuardSameAuthority:
+	case proof.RuleGuardSameAuthority:
 		return GuardSameAuthority, true
-	case metaproof.RuleGuardNonDirectoryInode:
+	case proof.RuleGuardNonDirectoryInode:
 		return GuardNonDirectoryInode, true
-	case metaproof.RuleGuardLiveSession:
+	case proof.RuleGuardLiveSession:
 		return GuardLiveSession, true
-	case metaproof.RuleGuardExpiredSessionOwner:
+	case proof.RuleGuardExpiredSessionOwner:
 		return GuardExpiredSessionOwner, true
-	case metaproof.RuleGuardQuotaCredit:
+	case proof.RuleGuardQuotaCredit:
 		return GuardQuotaCredit, true
 	default:
 		return "", false
 	}
 }
 
-func guardProofRule(guard RuntimeGuard) ProofRuleID {
+func guardProofRule(guard RuntimeGuard) proof.RuleID {
 	rule, _ := ProofRuleForGuard(guard)
 	return rule
 }
 
 func GuardObligationDigest(guard RuntimeGuard) [32]byte {
-	return metaproof.GuardObligationDigest(guardProofRule(guard))
+	return proof.GuardObligationDigest(guardProofRule(guard))
 }
 
 func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
@@ -758,23 +690,16 @@ func KeyFootprintDigest(footprint KeyFootprint) [32]byte {
 	return h.sum()
 }
 
-// GuardProofDigest commits to the generated guard identity, boolean result,
-// and the guard-specific predicate/effect descriptor evidence the holder used
-// for admission.
-func GuardProofDigest(guard ProofRuleID, passed bool, evidence GuardEvidence) [32]byte {
-	return metaproof.GuardProofDigest(guard, passed, evidence)
-}
-
-func GuardProofFor(guard RuntimeGuard, passed bool, evidence GuardEvidence) GuardProof {
+func GuardProofFor(guard RuntimeGuard, passed bool, evidence proof.GuardEvidence) proof.GuardProof {
 	rule := guardProofRule(guard)
-	return metaproof.GuardProofFor(rule, passed, evidence)
+	return proof.GuardProofFor(rule, passed, evidence)
 }
 
-func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []RuntimeGuard) ([]GuardProof, error) {
+func GuardProofsFor(op CompiledOp, predicateProofs []proof.PredicateProof, guards []RuntimeGuard) ([]proof.GuardProof, error) {
 	if len(guards) == 0 {
 		return nil, nil
 	}
-	out := make([]GuardProof, 0, len(guards))
+	out := make([]proof.GuardProof, 0, len(guards))
 	for _, guard := range guards {
 		evidence, err := GuardEvidenceForGuard(op, predicateProofs, guard)
 		if err != nil {
@@ -785,12 +710,12 @@ func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []Ru
 	return out, nil
 }
 
-func VerifyGuardProof(op CompiledOp, predicateProofs []PredicateProof, obligation GuardObligation, proof GuardProof) error {
+func VerifyGuardProof(op CompiledOp, predicateProofs []proof.PredicateProof, obligation GuardObligation, guardProof proof.GuardProof) error {
 	rule, ok := ProofRuleForGuard(obligation.Guard)
 	if !ok {
 		return fsmeta.ErrInvalidRequest
 	}
-	proofObligation := metaproof.GuardObligation{
+	proofObligation := proof.GuardObligation{
 		Guard:  rule,
 		Digest: GuardObligationDigest(obligation.Guard),
 	}
@@ -798,19 +723,19 @@ func VerifyGuardProof(op CompiledOp, predicateProofs []PredicateProof, obligatio
 	if err != nil {
 		return err
 	}
-	if err := metaproof.VerifyGuardProof(proofObligation, evidence, proof); err != nil {
+	if err := proof.VerifyGuardProof(proofObligation, evidence, guardProof); err != nil {
 		return fsmeta.ErrInvalidRequest
 	}
 	return nil
 }
 
-func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guard RuntimeGuard) (GuardEvidence, error) {
+func GuardEvidenceForGuard(op CompiledOp, predicateProofs []proof.PredicateProof, guard RuntimeGuard) (proof.GuardEvidence, error) {
 	rule, ok := ProofRuleForGuard(guard)
 	if !ok {
-		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+		return proof.GuardEvidence{}, fsmeta.ErrInvalidRequest
 	}
-	evidence := GuardEvidence{
-		SchemaVersion:        ProofVersion1,
+	evidence := proof.GuardEvidence{
+		SchemaVersion:        proof.Version1,
 		Guard:                rule,
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: PredicateProofSetDigest(predicateProofs),
@@ -822,28 +747,28 @@ func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guar
 	var subjectOK bool
 	switch guard {
 	case GuardSingleLinkInode:
-		evidence.Kind = GuardEvidenceSingleLinkInode
+		evidence.Kind = proof.GuardEvidenceSingleLinkInode
 		subject, subjectOK = singleLinkInodeGuardSubject(predicateProofs)
 	case GuardSameAuthority:
-		evidence.Kind = GuardEvidenceSameAuthority
+		evidence.Kind = proof.GuardEvidenceSameAuthority
 		subject, subjectOK = sameAuthorityGuardSubject(op)
 	case GuardNonDirectoryInode:
-		evidence.Kind = GuardEvidenceNonDirectoryInode
+		evidence.Kind = proof.GuardEvidenceNonDirectoryInode
 		subject, subjectOK = nonDirectoryGuardSubject(predicateProofs)
 	case GuardLiveSession:
-		evidence.Kind = GuardEvidenceLiveSession
+		evidence.Kind = proof.GuardEvidenceLiveSession
 		subject, subjectOK = liveSessionGuardSubject(predicateProofs)
 	case GuardExpiredSessionOwner:
-		evidence.Kind = GuardEvidenceExpiredSessionOwner
+		evidence.Kind = proof.GuardEvidenceExpiredSessionOwner
 		subject, subjectOK = expiredSessionOwnerGuardSubject(predicateProofs)
 	case GuardQuotaCredit:
-		evidence.Kind = GuardEvidenceQuotaCredit
+		evidence.Kind = proof.GuardEvidenceQuotaCredit
 		subject, subjectOK = quotaCreditGuardSubject(op)
 	default:
-		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+		return proof.GuardEvidence{}, fsmeta.ErrInvalidRequest
 	}
 	if !subjectOK {
-		return GuardEvidence{}, fsmeta.ErrInvalidRequest
+		return proof.GuardEvidence{}, fsmeta.ErrInvalidRequest
 	}
 	evidence.SubjectDigest = subject
 	return evidence, nil
@@ -871,16 +796,16 @@ func EffectPlanDigest(effects []EffectPlan) [32]byte {
 	return h.sum()
 }
 
-func proofSetFrontier(proofs []PredicateProof) ProofFrontier {
-	for _, proof := range proofs {
-		if proof.ProofFrontier.Valid() {
-			return proof.ProofFrontier
+func proofSetFrontier(proofs []proof.PredicateProof) proof.ProofFrontier {
+	for _, predicateProof := range proofs {
+		if predicateProof.ProofFrontier.Valid() {
+			return predicateProof.ProofFrontier
 		}
 	}
-	return ProofFrontier{}
+	return proof.ProofFrontier{}
 }
 
-func singleLinkInodeGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+func singleLinkInodeGuardSubject(proofs []proof.PredicateProof) ([32]byte, bool) {
 	for _, proof := range proofs {
 		if !proof.Present {
 			continue
@@ -898,7 +823,7 @@ func singleLinkInodeGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
 	return [32]byte{}, false
 }
 
-func nonDirectoryGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+func nonDirectoryGuardSubject(proofs []proof.PredicateProof) ([32]byte, bool) {
 	for _, proof := range proofs {
 		if !proof.Present {
 			continue
@@ -931,7 +856,7 @@ func nonDirectoryGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
 	return [32]byte{}, false
 }
 
-func liveSessionGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+func liveSessionGuardSubject(proofs []proof.PredicateProof) ([32]byte, bool) {
 	for _, proof := range proofs {
 		if !proof.Present {
 			continue
@@ -949,7 +874,7 @@ func liveSessionGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
 	return [32]byte{}, false
 }
 
-func expiredSessionOwnerGuardSubject(proofs []PredicateProof) ([32]byte, bool) {
+func expiredSessionOwnerGuardSubject(proofs []proof.PredicateProof) ([32]byte, bool) {
 	h := newDigestBuilder()
 	h.writeString(string(GuardExpiredSessionOwner))
 	count := uint64(0)
@@ -1010,7 +935,7 @@ func quotaCreditGuardSubject(op CompiledOp) ([32]byte, bool) {
 	return h.sum(), true
 }
 
-func inodeGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, inode fsmeta.InodeRecord) [32]byte {
+func inodeGuardSubjectDigest(guard RuntimeGuard, proof proof.PredicateProof, inode fsmeta.InodeRecord) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))
 	h.writeBytes(proof.Key)
@@ -1021,7 +946,7 @@ func inodeGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, inode fsm
 	return h.sum()
 }
 
-func dentryGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, dentry fsmeta.DentryRecord) [32]byte {
+func dentryGuardSubjectDigest(guard RuntimeGuard, proof proof.PredicateProof, dentry fsmeta.DentryRecord) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))
 	h.writeBytes(proof.Key)
@@ -1033,7 +958,7 @@ func dentryGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, dentry f
 	return h.sum()
 }
 
-func sessionGuardSubjectDigest(guard RuntimeGuard, proof PredicateProof, session fsmeta.SessionRecord) [32]byte {
+func sessionGuardSubjectDigest(guard RuntimeGuard, proof proof.PredicateProof, session fsmeta.SessionRecord) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))
 	h.writeBytes(proof.Key)
@@ -1067,7 +992,7 @@ func ExecutionPlanDigest(segment SegmentPlan, atomicity AtomicityGroup, durabili
 	return h.sum()
 }
 
-func GuardProofSetDigest(proofs []GuardProof) [32]byte {
+func GuardProofSetDigest(proofs []proof.GuardProof) [32]byte {
 	if len(proofs) == 0 {
 		return [32]byte{}
 	}
@@ -1092,7 +1017,7 @@ func GuardProofSetDigest(proofs []GuardProof) [32]byte {
 	return h.sum()
 }
 
-func AdmissionProofSetDigest(predicates []PredicateProof, guards []GuardProof) [32]byte {
+func AdmissionProofSetDigest(predicates []proof.PredicateProof, guards []proof.GuardProof) [32]byte {
 	h := newDigestBuilder()
 	predicateDigest := PredicateProofSetDigest(predicates)
 	guardDigest := GuardProofSetDigest(guards)
@@ -1223,28 +1148,6 @@ func (b *digestBuilder) writeBool(value bool) {
 	b.writeUint64(0)
 }
 
-func (b *digestBuilder) writeBoolByte(value bool) {
-	if value {
-		b.writeByte(1)
-		return
-	}
-	b.writeByte(0)
-}
-
-func (b *digestBuilder) writeByte(value byte) {
-	if b.heap != nil {
-		b.heap = append(b.heap, value)
-		return
-	}
-	if b.off < len(b.stack) {
-		b.stack[b.off] = value
-		b.off++
-		return
-	}
-	b.spill(1)
-	b.heap = append(b.heap, value)
-}
-
 func (b *digestBuilder) sum() [32]byte {
 	if b.heap != nil {
 		return sha256.Sum256(b.heap)
@@ -1270,10 +1173,7 @@ func (b *digestBuilder) writeRawString(value string) {
 
 func (b *digestBuilder) spill(extra int) {
 	needed := b.off + extra
-	capacity := len(b.stack) * 2
-	if needed > capacity {
-		capacity = needed
-	}
+	capacity := max(needed, len(b.stack)*2)
 	b.heap = make([]byte, b.off, capacity)
 	copy(b.heap, b.stack[:b.off])
 }
@@ -1293,34 +1193,34 @@ func cloneDelta(delta SemanticDelta) SemanticDelta {
 	}
 }
 
-func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
+func clonePredicateProofs(proofs []proof.PredicateProof) []proof.PredicateProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]PredicateProof, len(proofs))
-	for i, proof := range proofs {
-		out[i] = PredicateProof{
-			SchemaVersion: proof.SchemaVersion,
-			Rule:          proof.Rule,
-			Key:           cloneBytes(proof.Key),
-			Present:       proof.Present,
-			Value:         cloneBytes(proof.Value),
-			Version:       proof.Version,
-			Source:        proof.Source,
-			ProofFrontier: proof.ProofFrontier,
-			ProofKind:     proof.ProofKind,
-			ScopeDigest:   proof.ScopeDigest,
-			Digest:        proof.Digest,
+	out := make([]proof.PredicateProof, len(proofs))
+	for i, predicateProof := range proofs {
+		out[i] = proof.PredicateProof{
+			SchemaVersion: predicateProof.SchemaVersion,
+			Rule:          predicateProof.Rule,
+			Key:           cloneBytes(predicateProof.Key),
+			Present:       predicateProof.Present,
+			Value:         cloneBytes(predicateProof.Value),
+			Version:       predicateProof.Version,
+			Source:        predicateProof.Source,
+			ProofFrontier: predicateProof.ProofFrontier,
+			ProofKind:     predicateProof.ProofKind,
+			ScopeDigest:   predicateProof.ScopeDigest,
+			Digest:        predicateProof.Digest,
 		}
 	}
 	return out
 }
 
-func cloneGuardProofs(proofs []GuardProof) []GuardProof {
+func cloneGuardProofs(proofs []proof.GuardProof) []proof.GuardProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]GuardProof, len(proofs))
+	out := make([]proof.GuardProof, len(proofs))
 	copy(out, proofs)
 	return out
 }

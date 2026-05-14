@@ -57,7 +57,7 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 		AuthorityView: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			refreshed = true
-			return authorities.Replace([]runtimeperas.AuthorityGrant{testAuthorityGrant()})
+			return authorities.Replace([]rootproto.PerasAuthorityGrant{testAuthorityGrant()})
 		},
 		Now: func() time.Time { return now },
 	})
@@ -110,7 +110,7 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	authorities := runtimeperas.NewActiveAuthorities()
 	expired := testAuthorityGrant()
 	expired.ExpiresUnixNano = now.Add(-time.Nanosecond).UnixNano()
-	require.NoError(t, authorities.Replace([]runtimeperas.AuthorityGrant{expired}))
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{expired}))
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
@@ -244,11 +244,11 @@ func testActiveAuthorities(tb testing.TB, now time.Time) *runtimeperas.ActiveAut
 	table := runtimeperas.NewActiveAuthorities()
 	grant := testAuthorityGrant()
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(tb, table.Replace([]runtimeperas.AuthorityGrant{grant}))
+	require.NoError(tb, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	return table
 }
 
-func testAuthorityGrant() runtimeperas.AuthorityGrant {
+func testAuthorityGrant() rootproto.PerasAuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,

@@ -3,6 +3,7 @@ package peras
 import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type ReplayMutation struct {
@@ -17,8 +18,8 @@ type ReplayOperation struct {
 	DescriptorDigest     [32]byte
 	PredicateProofDigest [32]byte
 	ExecutionPlanDigest  [32]byte
-	PredicateProofs      []compile.PredicateProof
-	GuardProofs          []compile.GuardProof
+	PredicateProofs      []proof.PredicateProof
+	GuardProofs          []proof.GuardProof
 	Segment              compile.SegmentPlan
 	Atomicity            compile.AtomicityGroup
 	Durability           compile.DurabilityClass
@@ -114,34 +115,34 @@ func cloneReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {
 	return group
 }
 
-func clonePredicateProofs(proofs []compile.PredicateProof) []compile.PredicateProof {
+func clonePredicateProofs(proofs []proof.PredicateProof) []proof.PredicateProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]compile.PredicateProof, len(proofs))
-	for i, proof := range proofs {
-		out[i] = compile.PredicateProof{
-			SchemaVersion: proof.SchemaVersion,
-			Rule:          proof.Rule,
-			Key:           cloneBytes(proof.Key),
-			Present:       proof.Present,
-			Value:         cloneBytes(proof.Value),
-			Version:       proof.Version,
-			Source:        proof.Source,
-			ProofFrontier: proof.ProofFrontier,
-			ProofKind:     proof.ProofKind,
-			ScopeDigest:   proof.ScopeDigest,
-			Digest:        proof.Digest,
+	out := make([]proof.PredicateProof, len(proofs))
+	for i, predicateProof := range proofs {
+		out[i] = proof.PredicateProof{
+			SchemaVersion: predicateProof.SchemaVersion,
+			Rule:          predicateProof.Rule,
+			Key:           cloneBytes(predicateProof.Key),
+			Present:       predicateProof.Present,
+			Value:         cloneBytes(predicateProof.Value),
+			Version:       predicateProof.Version,
+			Source:        predicateProof.Source,
+			ProofFrontier: predicateProof.ProofFrontier,
+			ProofKind:     predicateProof.ProofKind,
+			ScopeDigest:   predicateProof.ScopeDigest,
+			Digest:        predicateProof.Digest,
 		}
 	}
 	return out
 }
 
-func cloneGuardProofs(proofs []compile.GuardProof) []compile.GuardProof {
+func cloneGuardProofs(proofs []proof.GuardProof) []proof.GuardProof {
 	if len(proofs) == 0 {
 		return nil
 	}
-	out := make([]compile.GuardProof, len(proofs))
+	out := make([]proof.GuardProof, len(proofs))
 	copy(out, proofs)
 	return out
 }

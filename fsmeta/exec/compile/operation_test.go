@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,8 +49,8 @@ func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
 
 	key := mustInodeKey(t, 44)
 	value := []byte("new-inode")
-	proof := PredicateProofFor(key, []byte("old-inode"), true, 9, ReadSourceBase)
-	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: value}}, []PredicateProof{proof})
+	predicateProof := proof.NewPredicateProof(key, []byte("old-inode"), true, 9, proof.ReadSourceBase, proof.ProofFrontier{})
+	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: value}}, []proof.PredicateProof{predicateProof})
 
 	require.True(t, materialized.Placement.CanSegment)
 	require.False(t, materialized.Placement.RequiresMaterialize)
@@ -61,11 +62,11 @@ func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
 	require.Equal(t, DerivationNone, materialized.Effects[0].Derivation)
 	require.Equal(t, sha256.Sum256(value), materialized.Effects[0].ValueHash)
 	require.Len(t, materialized.PredicateProofs, 1)
-	require.Equal(t, proof.Digest, materialized.PredicateProofs[0].Digest)
+	require.Equal(t, predicateProof.Digest, materialized.PredicateProofs[0].Digest)
 
-	proof.Value[0] ^= 0xff
+	predicateProof.Value[0] ^= 0xff
 	value[0] ^= 0xff
-	require.NotEqual(t, proof.Value, materialized.PredicateProofs[0].Value)
+	require.NotEqual(t, predicateProof.Value, materialized.PredicateProofs[0].Value)
 	require.NotEqual(t, value, materialized.Effects[0].Value)
 }
 
@@ -92,8 +93,8 @@ func TestCompiledDigestSemanticsAreStableAcrossMaterialization(t *testing.T) {
 	require.NoError(t, err)
 	compiled := testCompileAOT(t, updateDelta)
 	key := mustInodeKey(t, 44)
-	proof := testPredicateProof(key, []byte("old-inode"), true, 9, ReadSourceBase)
-	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}}, []PredicateProof{proof})
+	predicateProof := testPredicateProof(key, []byte("old-inode"), true, 9, proof.ReadSourceBase)
+	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}}, []proof.PredicateProof{predicateProof})
 	require.Equal(t, compiled.IntentDigest, materialized.IntentDigest)
 	require.NotEqual(t, compiled.DescriptorDigest, materialized.DescriptorDigest)
 	require.Equal(t, materialized.DescriptorDigest, materialized.ReplayDigest)

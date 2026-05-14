@@ -837,7 +837,7 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *runtimeperas.ActiveAuthorities {
 	t.Helper()
 	table := runtimeperas.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]runtimeperas.AuthorityGrant{{
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{{
 		GrantID:         "grant-apply-test",
 		EpochID:         1,
 		HolderID:        "holder-a",

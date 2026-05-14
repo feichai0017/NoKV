@@ -148,8 +148,8 @@ func requirePredicatesMatchSemanticSpec(t *testing.T, op CompiledOp, spec specds
 }
 
 func repeatableSpecBindingFamily(binding string) string {
-	if i := strings.IndexByte(binding, '['); i >= 0 {
-		return binding[:i]
+	if before, _, ok := strings.Cut(binding, "["); ok {
+		return before
 	}
 	return binding
 }

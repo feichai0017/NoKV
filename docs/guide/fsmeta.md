@@ -70,9 +70,9 @@ type TxnRunner interface {
 }
 ```
 
-The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
+The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, subtree handoff publisher, and Peras. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
 
-When explicitly configured, the same runtime can enable Peras visible commit for compiler-proven fsmeta operations. Peras admission is holder-local visibility; durable publication still goes through witness/segment install and raftstore `CMD_PERAS_INSTALL_SEGMENT`.
+For the `nokv-fsmeta` server, Peras is the default write path. A successful compiler-proven metadata mutation returns at the **visible** boundary: readers and watches observe it through the holder overlay immediately. The **durable** boundary is reached later by witness quorum plus segment install into raftstore; embedded callers that need a synchronous durability fence use `FlushDurable` / `FlushTo`. Cross-authority or otherwise ineligible operations still use the durable Percolator path directly. This is a user-facing commit contract, not a startup mode flag.
 
 `fsmeta/runtime/raftstore.Open` can also wire two derived slab caches when explicitly configured:
 
@@ -257,7 +257,7 @@ NegativeCache / DirPage are active and the DirPage hit/miss/store counters.
 
 The fsmeta benchmark lives in `benchmark/fsmeta` and drives the native
 `nokv-fsmeta` gRPC service against a running NoKV cluster. The default Docker
-Compose helper is:
+Compose helper runs each workload in isolation:
 
 ```bash
 make fsmeta-bench
@@ -265,11 +265,16 @@ make fsmeta-bench
 
 The Compose gateway enables both persistent DirPage and NegativeCache directories
 by default. The default script scale is intentionally larger than a smoke test:
-8 clients, 1024 checkpoint creates, 1024 hotspot/watch/negative keys, and a
-mixed fsmeta workflow with 64 published entries.
-After the ports are reachable, the script waits 15 seconds for Raft leadership
-and coordinator grants to settle. Override `NOKV_FSMETA_STABILIZE_SECONDS` when
-testing an already-warm cluster.
+12 clients, 4096 checkpoint creates, 4096 hotspot/watch/negative keys, and a
+mixed fsmeta workflow with 512 published entries. After the ports are reachable,
+the script waits 20 seconds for Raft leadership and coordinator grants to settle.
+Override `NOKV_FSMETA_STABILIZE_SECONDS` when testing an already-warm cluster.
+
+The matrix is isolated by default: the script runs one workload per Go test
+process, writes one CSV per workload, waits for Peras pending work and install
+queues to become idle, and then appends the rows into an `_isolated.csv` summary.
+This keeps durable-barrier workloads, such as `durable-snapshot`, from measuring
+the previous visible-commit workload's background segment installation backlog.
 
 The main system workload is `mixed`. It is a combined fsmeta API workload rather
 than a synthetic KV loop: project bootstrap, staged publication, artifact and
@@ -280,6 +285,7 @@ quota reads, and `ReadDir` / `ReadDirPlus`.
 The same harness also keeps focused slices:
 
 - `checkpoint-storm` for dense checkpoint/artifact creation.
+- `durable-snapshot` for `SnapshotSubtree` and snapshot retirement barriers.
 - `hotspot-fanin` with `ReadDirPlus` for DirPage-heavy directory reads.
 - `watch-subtree` for watch notification latency.
 - `negative-lookup` for repeated missing dentry probes and the NegativeCache path.
