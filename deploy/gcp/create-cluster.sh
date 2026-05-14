@@ -135,6 +135,7 @@ NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM="$NOKV_FSMETA_PERAS_SEGMENT_INSTAL
 NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY="$NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY"
 NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT="$NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT"
 NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF="$NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF"
+NOKV_META_ROOT_TICK_INTERVAL="$NOKV_META_ROOT_TICK_INTERVAL"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -186,7 +187,8 @@ case "\$ROLE" in
       -v /mnt/nokv:/mnt/nokv \\
       -v /etc/nokv:/etc/nokv:ro \\
       "\$NOKV_IMAGE" \\
-      meta-root --config=/etc/nokv/raft_config.json --scope=host --node-id="\$ORDINAL" --metrics-addr=0.0.0.0:9380
+      meta-root --config=/etc/nokv/raft_config.json --scope=host --node-id="\$ORDINAL" \\
+        --tick-interval="\$NOKV_META_ROOT_TICK_INTERVAL" --metrics-addr=0.0.0.0:9380
     ;;
   coordinator)
     docker rm -f "nokv-coordinator" >/dev/null 2>&1 || true

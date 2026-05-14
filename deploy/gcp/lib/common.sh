@@ -57,6 +57,7 @@ load_config() {
   : "${GCP_LOADGEN_DOCKER_READY_TIMEOUT_SECONDS:=600}"
   : "${GCP_SERVICE_READY_TIMEOUT_SECONDS:=900}"
   : "${GCP_SERVICE_READY_RETRY_DELAY_SECONDS:=2}"
+  : "${NOKV_META_ROOT_TICK_INTERVAL:=1000ms}"
   : "${NOKV_FSMETA_PROFILE:=median}"
   : "${NOKV_FSMETA_WORKLOADS:=multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
   : "${NOKV_PERAS_WITNESS:=true}"

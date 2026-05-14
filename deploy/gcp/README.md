@@ -91,7 +91,16 @@ These windows are wall-clock guards and are not benchmark measurement time.
 | `GCP_LOADGEN_DOCKER_READY_TIMEOUT_SECONDS` | 600 | Wait for Docker on loadgen |
 | `GCP_SERVICE_READY_TIMEOUT_SECONDS` | 900 | Wait for meta-root, coordinator, store, and gateway ports |
 | `GCP_SERVICE_READY_RETRY_DELAY_SECONDS` | 2 | Delay between service port probes |
+| `NOKV_META_ROOT_TICK_INTERVAL` | `1000ms` | Raft tick interval for the 3-peer meta-root quorum |
 | `NOKV_FSMETA_STABILIZE_SECONDS` | profile-specific | Wait after ports are ready for raft leaders and grants |
+
+Meta-root Raft timing is intentionally conservative for GCP smoke. The
+replicated root uses `ElectionTick=10` and `HeartbeatTick=1`, and the GCP
+deployment passes `--tick-interval=$NOKV_META_ROOT_TICK_INTERVAL` with a
+`1000ms` default. That makes the production-like GCP election timeout baseline
+10 seconds. Do not let the GCP path fall back to the CLI's raw `100ms` tick
+default: `5 * 100ms = 500ms` election windows are too aggressive for low-cost VM
+jitter and have already shown split elections during `meta-root-leader-down`.
 
 Benchmark profile stabilization defaults:
 
@@ -209,6 +218,7 @@ interactions.
 Useful knobs:
 
 ```bash
+NOKV_META_ROOT_TICK_INTERVAL=1500ms deploy/gcp/distributed-smoke-and-destroy.sh
 NOKV_DISTRIBUTED_SMOKE_STORE_FAULT_ID=2 deploy/gcp/distributed-smoke-and-destroy.sh
 NOKV_DISTRIBUTED_SMOKE_BENCH_STABILIZE_SECONDS=15 deploy/gcp/distributed-smoke-and-destroy.sh
 NOKV_DISTRIBUTED_SMOKE_KEEP_CLUSTER=true deploy/gcp/distributed-smoke-and-destroy.sh
@@ -359,7 +369,7 @@ sudo journalctl -u google-startup-scripts.service -n 120 --no-pager
 | benchmark fails with `authority evidence signature mismatch` | loadgen signing key differs from cluster key | Keep `deploy/gcp/generated/eunomia-signing-key.txt` from `create-cluster.sh`; current run script passes it to loadgen |
 | benchmark copies results but test failed | remote command return code was not propagated | Current retry wrapper returns non-zero for non-transport failures |
 | `nokv execution -json` panics about missing Eunomia key | runtime CLI containers need the same key as services | Distributed smoke passes `NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY` into the runtime CLI probe |
-| distributed smoke fails after stopping meta-root leader and remaining peers report `leader_id=0` | meta-root raft did not elect a new leader inside the smoke window | inspect meta-root logs for repeated split votes; treat this as a truth-plane correctness failure, not a benchmark result |
+| distributed smoke fails after stopping meta-root leader and remaining peers report repeated elections or `leader_id=0` | meta-root raft did not stabilize inside the smoke window, commonly because the tick interval is too aggressive for low-cost VM jitter | keep the default `NOKV_META_ROOT_TICK_INTERVAL=1000ms` or raise it, then inspect meta-root logs for repeated split votes |
 | distributed smoke fails in `meta-root-leader-down` with `stale witness era` | meta-root re-elected, but coordinator/client witness era state became stale after the leader fault | inspect coordinator TSO/grant logs, root event propagation, and client witness-era refresh around the leader stop; this is not an image pull or bootstrap failure |
 | readiness times out on `10.42.0.41:8090` | gateway failed or coordinator dependency failed | inspect `nokv-fsmeta` logs, then coordinator logs |
 | readiness times out on `10.42.0.31-33:20160` | store bootstrap or serve failed | inspect `nokv-store` logs and startup logs |

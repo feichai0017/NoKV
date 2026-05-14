@@ -43,6 +43,11 @@ func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
 	require.Equal(t, commit.Cursor, tail)
 }
 
+func TestNetworkDriverDefaultRaftTiming(t *testing.T) {
+	require.Equal(t, 10, defaultNetworkElectionTick)
+	require.Equal(t, 1, defaultNetworkHeartbeatTick)
+}
+
 func TestNetworkDriverAppendWaitsForCommitAfterDeliveredSendError(t *testing.T) {
 	transports := map[uint64]*postDeliveryErrorTransport{}
 	for _, id := range []uint64{1, 2, 3} {
