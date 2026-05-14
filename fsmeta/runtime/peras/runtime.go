@@ -479,7 +479,7 @@ func (c *Runtime) flushBackground() {
 		defer cancel()
 	}
 	c.commitMu.Lock()
-	plans, err := c.freezeReplayPlansLocked(nil, c.batchSize)
+	plans, err := c.freezeReplayPlansLocked(nil, c.backgroundFlushMaxOpsPerHolder())
 	c.commitMu.Unlock()
 	var batches []perasFlushBatch
 	if err == nil {
@@ -508,6 +508,34 @@ func (c *Runtime) pendingOperations() int {
 		total += holder.Pending()
 	}
 	return total
+}
+
+func (c *Runtime) backgroundFlushMaxOpsPerHolder() int {
+	if c == nil {
+		return 0
+	}
+	maxOps := max(c.batchSize, 0)
+	workers := max(c.installN, 1)
+	segmentOps := c.maxOps
+	if segmentOps < 1 {
+		segmentOps = maxOps
+	}
+	parallelOps := multiplyIntSaturated(segmentOps, workers)
+	if parallelOps > maxOps {
+		maxOps = parallelOps
+	}
+	return maxOps
+}
+
+func multiplyIntSaturated(left, right int) int {
+	if left <= 0 || right <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if left > maxInt/right {
+		return maxInt
+	}
+	return left * right
 }
 
 func (c *Runtime) Close() {
