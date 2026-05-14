@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <script setup lang="ts">
 const rows = [
   { name: 'YCSB-A', desc: '50/50 read/update', nokv: 175905, badger: 108232, pebble: 169792 },

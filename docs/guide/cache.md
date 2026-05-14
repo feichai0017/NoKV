@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Cache & Bloom Filters
 
 NoKV's LSM tier layers a multi-level block cache with decoded index caching to accelerate lookups. Bloom filters remain embedded in SST indexes and are probed directly from `pb.TableIndex`. The implementation is in [`engine/lsm/cache.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/cache.go).

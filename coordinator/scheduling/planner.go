@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package scheduling owns Coordinator-side cluster scheduling policy.
 //
 // The package consumes disposable Coordinator views and emits store-control

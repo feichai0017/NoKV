@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package exec
 
 import (
@@ -105,6 +108,22 @@ func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
 		{Key: []byte("k/d"), Value: []byte("base-d")},
 		{Key: []byte("k/e"), Value: []byte("overlay-e")},
 	}, merged)
+}
+
+func TestExecutorPerasOperationIDIsExecutorScoped(t *testing.T) {
+	first, err := New(newFakeRunner())
+	require.NoError(t, err)
+	second, err := New(newFakeRunner())
+	require.NoError(t, err)
+
+	firstID := first.nextPerasOperationID(fsmeta.OperationCreate)
+	secondID := second.nextPerasOperationID(fsmeta.OperationCreate)
+
+	require.Equal(t, uint64(1), firstID.Seq)
+	require.Equal(t, uint64(1), secondID.Seq)
+	require.Contains(t, firstID.ClientID, "fsmeta-exec/create")
+	require.Contains(t, secondID.ClientID, "fsmeta-exec/create")
+	require.NotEqual(t, firstID.ClientID, secondID.ClientID)
 }
 
 func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {

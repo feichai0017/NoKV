@@ -1,3 +1,6 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
 # NoKV HA deployment: 3 meta-root + 3 coordinators + 3 stores + 1 fsmeta gateway.
 # Every running service exposes /debug/vars and /debug/pprof on its diagnostics
 # port for dashboards and benchmark profiling.

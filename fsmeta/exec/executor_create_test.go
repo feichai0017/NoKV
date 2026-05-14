@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package exec
 
 import (
@@ -71,7 +74,7 @@ func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	require.Equal(t, inode, result.Dentry.Inode)
 	require.Equal(t, 1, committer.calls)
 	require.Len(t, committer.ids, 1)
-	require.Equal(t, "fsmeta-exec/create", committer.ids[0].ClientID)
+	require.Contains(t, committer.ids[0].ClientID, "fsmeta-exec/create")
 	require.Equal(t, uint64(1), committer.ids[0].Seq)
 	require.Len(t, committer.deltas, 1)
 	require.Equal(t, compile.EligibilityVisibleCommit, committer.deltas[0].Eligibility)

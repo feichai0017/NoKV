@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package client
 
 import (
@@ -314,8 +317,30 @@ func (c *Client) ScanWithOptions(ctx context.Context, startKey []byte, limit uin
 	remaining := limit
 	lockAttempts := 0
 	lastLock := ""
+	retryKey := append([]byte(nil), currentKey...)
+	transportAttempts := 0
+	regionAttempts := 0
 	var lastKeyErr *kvrpcpb.KeyError
+	resetRetryBudget := func() {
+		if bytesCompare(retryKey, currentKey) == 0 {
+			return
+		}
+		retryKey = append(retryKey[:0], currentKey...)
+		transportAttempts = 0
+		regionAttempts = 0
+	}
+	waitScanRetry := func(attempts *int, kind retryKind, exhausted error) error {
+		*attempts = *attempts + 1
+		if *attempts >= c.retry.MaxAttempts {
+			if exhausted != nil {
+				return exhausted
+			}
+			return &RetryExhaustedError{Operation: "scan", Key: append([]byte(nil), currentKey...)}
+		}
+		return c.waitRetry(ctx, *attempts-1, kind)
+	}
 	for remaining > 0 {
+		resetRetryBudget()
 		region, err := c.routeKeyWithRetry(ctx, currentKey)
 		if err != nil {
 			return nil, err
@@ -323,7 +348,7 @@ func (c *Client) ScanWithOptions(ctx context.Context, startKey []byte, limit uin
 		resp, regionErr, err := c.callScanWithFallback(ctx, region, currentKey, remaining, version, opts)
 		if err != nil {
 			if isTransportUnavailable(err) {
-				if err := c.waitRetry(ctx, 0, retryTransportUnavailable); err != nil {
+				if err := waitScanRetry(&transportAttempts, retryTransportUnavailable, err); err != nil {
 					return nil, err
 				}
 				continue
@@ -334,7 +359,13 @@ func (c *Client) ScanWithOptions(ctx context.Context, startKey []byte, limit uin
 			if err := c.handleRegionError(region.desc.RegionID, regionErr); err != nil {
 				return nil, err
 			}
-			if err := c.waitRetry(ctx, 0, retryRegionError); err != nil {
+			retryErr := &RetryExhaustedError{
+				Operation: "scan",
+				RegionID:  region.desc.RegionID,
+				Key:       append([]byte(nil), currentKey...),
+				Detail:    "region error retry budget exhausted",
+			}
+			if err := waitScanRetry(&regionAttempts, retryRegionError, retryErr); err != nil {
 				return nil, err
 			}
 			continue

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <div align="center">
   <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 

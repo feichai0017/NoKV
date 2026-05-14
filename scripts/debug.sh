@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then

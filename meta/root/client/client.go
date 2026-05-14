@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package client is the coordinator-side gRPC client for the meta-root
 // service. It mirrors the layout used by raftstore/client and
 // coordinator/client: callers dial the Service registered by meta/root/server

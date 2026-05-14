@@ -7,6 +7,12 @@ assignees: ''
 
 ---
 
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+
 ## 🚀 Is your feature request related to a problem?
 A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
 

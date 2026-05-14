@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package peras
 
 import (
@@ -69,6 +72,19 @@ func (c *Runtime) completionForOperation(id fsperas.OperationID) (perasCompletio
 	completion, ok := c.read.completed[id]
 	c.read.mu.RUnlock()
 	return completion, ok
+}
+
+func completionMatchesOperation(completion fsperas.SegmentCompletion, op compile.MaterializedOp) bool {
+	if completion.Kind != op.Delta.Kind {
+		return false
+	}
+	if completion.MutationCount != uint32(len(op.Effects)) {
+		return false
+	}
+	if completion.DescriptorDigest != op.DescriptorDigest {
+		return false
+	}
+	return completion.ExecutionPlanDigest == compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability)
 }
 
 func (c *Runtime) segmentInstalled(root [32]byte) bool {
