@@ -84,3 +84,23 @@ func TestNetworkDriverAppendCommittedWaitsForCommittedTail(t *testing.T) {
 	require.Len(t, after.Observed.Tail.Records, 2)
 	require.Equal(t, records[len(records)-1].Cursor, after.Observed.Tail.Records[len(after.Observed.Tail.Records)-1].Cursor)
 }
+
+func TestNetworkDriverAppendCommittedRejectsStaleCursor(t *testing.T) {
+	_, drivers, leaderID := openNetworkTestCluster(t, 8)
+	driver := drivers[leaderID]
+
+	first := rootstorage.CommittedEvent{
+		Cursor: rootstate.Cursor{Term: 1, Index: 1},
+		Event:  rootevent.StoreJoined(1),
+	}
+	_, err := driver.AppendCommitted(context.Background(), first)
+	require.NoError(t, err)
+
+	_, err = driver.AppendCommitted(context.Background(), first)
+	require.ErrorContains(t, err, "committed cursor discontinuity")
+
+	after, err := driver.ObserveTail(rootstorage.TailToken{})
+	require.NoError(t, err)
+	require.Equal(t, first.Cursor, after.LastCursor())
+	require.Len(t, after.Observed.Tail.Records, 1)
+}

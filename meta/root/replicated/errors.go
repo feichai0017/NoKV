@@ -70,6 +70,17 @@ func errNodeNotLeader(id uint64) error {
 	return fmt.Errorf("meta/root/replicated: node %d is not leader", id)
 }
 
+func errRootWriteRequiresLeader(leaderID uint64) error {
+	if leaderID != 0 {
+		return nokverrors.New(nokverrors.KindNotLeader, fmt.Sprintf("meta/root/replicated: root write requires a caught-up leader; current leader is %d", leaderID))
+	}
+	return nokverrors.New(nokverrors.KindNotLeader, "meta/root/replicated: root write requires a caught-up leader")
+}
+
 func errAppendWaitTimedOut(target any) error {
 	return fmt.Errorf("meta/root/replicated: append wait timed out before committed cursor %v", target)
+}
+
+func errCommittedCursorDiscontinuity(expected, got any) error {
+	return fmt.Errorf("meta/root/replicated: committed cursor discontinuity: expected %v, got %v", expected, got)
 }

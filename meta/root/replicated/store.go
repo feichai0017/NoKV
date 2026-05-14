@@ -115,6 +115,21 @@ func (s *Store) CanSubmitRootWrites() bool {
 	return s.IsLeader()
 }
 
+func (s *Store) PrepareRootWrite(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureFreshForRootWriteLocked(ctx)
+}
+
 func (s *Store) LeaderID() uint64 {
 	if s == nil || s.driver == nil {
 		return 0
@@ -267,6 +282,9 @@ func (s *Store) Append(ctx context.Context, events ...rootevent.Event) (rootstat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
+		return rootstate.CommitInfo{}, err
+	}
 	return s.appendLocked(ctx, events...)
 }
 
@@ -343,6 +361,9 @@ func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (roo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
+		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, err
+	}
 
 	switch cmd.Kind {
 	case rootproto.GrantActIssue:
@@ -374,6 +395,9 @@ func (s *Store) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuth
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
+		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+	}
 
 	switch cmd.Kind {
 	case rootproto.PerasAuthorityActAcquire:
@@ -962,9 +986,13 @@ func (s *Store) FenceAllocator(ctx context.Context, kind rootstate.AllocatorKind
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	s.mu.RLock()
+	s.mu.Lock()
+	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
 	state := s.state
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	switch kind {
 	case rootstate.AllocatorKindID:
 		if state.IDFence >= min {
@@ -1057,12 +1085,49 @@ func (s *Store) compactEunomiaState(state rootstate.State) rootstate.State {
 	return compacted
 }
 
+func (s *Store) ensureFreshForRootWriteLocked(ctx context.Context) error {
+	if s == nil || s.driver == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.driver.IsLeader() {
+		return errRootWriteRequiresLeader(s.driver.LeaderID())
+	}
+	observed, err := observeDriverCommitted(s.driver)
+	if err != nil {
+		return err
+	}
+	if rootstate.CursorAfter(observed.LastCursor(), s.state.LastCommitted) {
+		s.applyObservedLocked(observed)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.driver.IsLeader() {
+		return errRootWriteRequiresLeader(s.driver.LeaderID())
+	}
+	return nil
+}
+
 func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	if s == nil {
 		return
 	}
-	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyObservedLocked(observed)
+}
+
+func (s *Store) applyObservedLocked(observed rootstorage.ObservedCommitted) {
+	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
+	if !committedCursorReached(bootstrap.Snapshot.State.LastCommitted, s.state.LastCommitted) {
+		return
+	}
 	s.state = bootstrap.Snapshot.State
 	s.stores = bootstrap.Snapshot.Stores
 	if s.stores == nil {
@@ -1089,5 +1154,4 @@ func (s *Store) applyObserved(observed rootstorage.ObservedCommitted) {
 	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
 	s.records = bootstrap.Tail.Records
 	s.retainFrom = bootstrap.RetainFrom
-	s.mu.Unlock()
 }
