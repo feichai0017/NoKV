@@ -74,6 +74,7 @@ jobs:
           docker compose ps > benchmark/data/fsmeta/ci/docker-ps.txt || true
           docker compose logs --no-color --tail=500 > benchmark/data/fsmeta/ci/docker-compose.log || true
           docker stats --no-stream > benchmark/data/fsmeta/ci/docker-stats.txt || true
+          curl -fsS http://127.0.0.1:9400/debug/vars > benchmark/data/fsmeta/ci/fsmeta-debug-vars.json || true
 
       - name: Upload fsmeta benchmark artifacts
         if: always()
@@ -85,6 +86,7 @@ jobs:
             benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log
+            benchmark/data/fsmeta/ci/*.json
           if-no-files-found: ignore
 
       - name: Stop Docker Compose cluster
@@ -110,6 +112,7 @@ jobs:
           NOKV_FSMETA_CAPTURE_PROFILES: "1"
           NOKV_FSMETA_PROFILE_SECONDS: "60"
           NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+          NOKV_FSMETA_PERAS_IDLE_TIMEOUT_SECONDS: "600"
         run: make fsmeta-bench
 
       - name: Collect Docker diagnostics
@@ -119,6 +122,7 @@ jobs:
           docker compose ps > benchmark/data/fsmeta/ci/docker-ps.txt || true
           docker compose logs --no-color --tail=1000 > benchmark/data/fsmeta/ci/docker-compose.log || true
           docker stats --no-stream > benchmark/data/fsmeta/ci/docker-stats.txt || true
+          curl -fsS http://127.0.0.1:9400/debug/vars > benchmark/data/fsmeta/ci/fsmeta-debug-vars.json || true
 
       - name: Upload fsmeta benchmark artifacts
         if: always()
@@ -130,6 +134,7 @@ jobs:
             benchmark/data/fsmeta/profiles/**
             benchmark/data/fsmeta/ci/*.txt
             benchmark/data/fsmeta/ci/*.log
+            benchmark/data/fsmeta/ci/*.json
           if-no-files-found: ignore
 
       - name: Stop Docker Compose cluster
