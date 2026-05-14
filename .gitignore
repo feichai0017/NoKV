@@ -29,6 +29,13 @@ benchmark.test
 
 AGENTS.md
 
+# Strictly keep local deploy and external integration work out of commits.
+/deploy/**
+/integration/**
+/integrations/**
+/intergration/**
+/intergrations/**
+
 ./artifacts/
 
 work_redis
