@@ -640,6 +640,75 @@ func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
 	require.Equal(t, []byte("dentry-value"), value)
 }
 
+func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "rooted")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 11)
+	require.NoError(t, err)
+	witnesses := testRuntimePerasWitnesses(t, 3)
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	holder, err := fsperas.NewHolder(fsperas.HolderConfig{EpochID: 1, HolderID: "holder-a"})
+	require.NoError(t, err)
+	delta := testRuntimePerasOp(dentryKey, inodeKey)
+	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
+		Mount:      delta.Delta.Authority.Mount,
+		MountKeyID: delta.Delta.Authority.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+		Inodes:     []fsmeta.InodeID{11},
+	})
+	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	require.NoError(t, err)
+	plan, scope, err := holder.BuildPendingReplayPlan(10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	require.NoError(t, committer.appendSegmentWitnesses(context.Background(), scope, holder, segment, payload, digest))
+
+	seal := testRuntimePerasRootSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	seal.SegmentPayloadDigest = digest
+	seal.OperationCount = segment.Stats().OperationCount
+	seal.EntryCount = segment.Stats().EntryCount
+	provider.seals = []rootproto.PerasAuthoritySeal{seal}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	recoverer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		Installer:         installer,
+		CatalogScanner:    &fakeRuntimePerasCatalogScanner{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer recoverer.Close()
+
+	require.NoError(t, recoverer.RecoverWitnessSegments(context.Background(), scope, holder.EpochID()))
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, segment.Root, installer.segment.Root)
+	stats := recoverer.Stats()
+	require.Equal(t, uint64(1), stats["root_sealed_segment_total"])
+	require.Equal(t, uint64(1), stats["root_sealed_segment_missing_total"])
+	require.Equal(t, uint64(1), stats["segment_recovery_install_total"])
+	value, deleted, ok := recoverer.GetPerasOverlay(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+}
+
 func TestRuntimeLoadsInstalledSegmentCatalog(t *testing.T) {
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
 	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "restored")
