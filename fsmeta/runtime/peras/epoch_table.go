@@ -62,6 +62,18 @@ func (t *epochTable) grant(epochID uint64) (rootproto.PerasAuthorityGrant, bool)
 	return grant, ok
 }
 
+func (t *epochTable) updateGrant(grant rootproto.PerasAuthorityGrant) {
+	if t == nil || !grant.Valid() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.holders[grant.EpochID] == nil {
+		return
+	}
+	t.grants[grant.EpochID] = grant
+}
+
 func (t *epochTable) holderSnapshot() []*fsperas.Holder {
 	if t == nil {
 		return nil

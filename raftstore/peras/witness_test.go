@@ -121,6 +121,21 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
 }
 
+func TestWitnessNodeAcceptsRenewedSameEpochAuthority(t *testing.T) {
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	renewed := testAuthorityGrant()
+	renewed.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{renewed}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
+
+	record := testSegmentRecord()
+	require.Equal(t, renewed.EpochID, record.EpochID)
+	require.Equal(t, renewed.HolderID, record.HolderID)
+	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), record))
+}
+
 func TestWitnessNodeDuplicateSegmentIsIdempotent(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
 	defer cleanup()

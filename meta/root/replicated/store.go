@@ -436,34 +436,38 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 		}
 	}
 
-	events := make([]rootevent.Event, 0, 2)
-	var expansion rootproto.PerasAuthorityGrant
+	var renewal rootproto.PerasAuthorityGrant
 	for _, active := range s.state.ActivePerasGrants {
 		if !active.Overlaps(request) {
 			continue
 		}
-		if active.ActiveAt(cmd.NowUnixNano) {
-			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return rootstate.CloneState(s.state), rootproto.ClonePerasAuthorityGrant(active), nil
-			}
-			if active.HolderID == holderID && !expansion.Valid() {
-				expansion = rootproto.ClonePerasAuthorityGrant(active)
-				continue
-			}
+		// Peras authority TTL is an admission freshness bound, not proof that
+		// the holder's visible overlay has been durably drained. Keep overlapping
+		// grants rooted until the holder explicitly retires them; otherwise old
+		// pending segments can be cut off by a newer epoch and fail witness
+		// authority checks.
+		if active.HolderID != holderID {
 			return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		events = append(events, rootevent.PerasAuthorityRetired(active))
-	}
-	if expansion.Valid() {
-		expansion.Scope = mergePerasAuthorityScopes(expansion.Scope, cmd.Scope)
-		if cmd.ExpiresUnixNano > expansion.ExpiresUnixNano {
-			expansion.ExpiresUnixNano = cmd.ExpiresUnixNano
+		if active.ActiveAt(cmd.NowUnixNano) &&
+			active.Covers(cmd.Scope, cmd.NowUnixNano) &&
+			cmd.ExpiresUnixNano <= active.ExpiresUnixNano {
+			return rootstate.CloneState(s.state), rootproto.ClonePerasAuthorityGrant(active), nil
 		}
-		commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(expansion))
+		if !renewal.Valid() {
+			renewal = rootproto.ClonePerasAuthorityGrant(active)
+		}
+	}
+	if renewal.Valid() {
+		renewal.Scope = mergePerasAuthorityScopes(renewal.Scope, cmd.Scope)
+		if cmd.ExpiresUnixNano > renewal.ExpiresUnixNano {
+			renewal.ExpiresUnixNano = cmd.ExpiresUnixNano
+		}
+		commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(renewal))
 		if err != nil {
 			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 		}
-		committed, ok := commit.State.ActivePerasGrantByID(expansion.GrantID)
+		committed, ok := commit.State.ActivePerasGrantByID(renewal.GrantID)
 		if !ok || !committed.Covers(cmd.Scope, cmd.NowUnixNano) {
 			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrFinality
 		}
@@ -490,8 +494,7 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 			grant.PredecessorDigest = predecessor.SegmentRoot
 		}
 	}
-	events = append(events, rootevent.PerasAuthorityGranted(grant))
-	commit, err := s.appendLocked(ctx, events...)
+	commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(grant))
 	if err != nil {
 		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
 	}
