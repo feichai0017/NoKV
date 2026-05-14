@@ -11,9 +11,6 @@ jobs:
   micro-bench:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v6
 
@@ -22,20 +19,12 @@ jobs:
         with:
           go-version: '1.26.2'
 
+      # Smoke-only: just run the micro benchmarks to catch crashes / build
+      # breaks. Historical tracking via benchmark-action/github-action-benchmark
+      # used a `gh-pages` branch that no longer exists after migrating the docs
+      # site to actions/deploy-pages; removed instead of being reintroduced.
       - name: Run micro benchmarks
-        run: |
-          go test -bench=. -run=^$ -benchtime=100ms -count=1 ./... | tee benchmark.txt
-
-      - name: Track benchmark results
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          tool: 'go'
-          output-file-path: benchmark.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: ${{ github.event_name == 'push' }}
-          comment-on-alert: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
-          alert-threshold: '115%'
-          fail-on-alert: false
+        run: go test -bench=. -run=^$ -benchtime=100ms -count=1 ./...
 
   ycsb-bench:
     if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-benchmark')
