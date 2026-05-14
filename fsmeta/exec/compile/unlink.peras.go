@@ -13,10 +13,22 @@ type UnlinkProgram struct {
 }
 
 func CompileUnlinkProgram(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option) (UnlinkProgram, error) {
-	delta, err := lowerUnlink(req, mount, opts...)
+	options := collectOptions(opts...)
+	plan, err := fsmeta.PlanUnlink(req, mount)
 	if err != nil {
 		return UnlinkProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.PrimaryKey},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDelete, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode)
+	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
 	if !validateUnlinkLoweredDelta(delta) {
 		return UnlinkProgram{}, fsmeta.ErrInvalidRequest
 	}

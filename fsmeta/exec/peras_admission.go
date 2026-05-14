@@ -216,6 +216,13 @@ func perasPredicateProofsValid(proofs []compile.PredicateProof) bool {
 		if !proof.Present && len(proof.Value) != 0 {
 			return false
 		}
+		if proof.ProofKind != compile.PredicateProofKindFor(proof.Present, proof.Source) {
+			return false
+		}
+		scopeDigest := compile.PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
+		if proof.ScopeDigest != scopeDigest {
+			return false
+		}
 		digest := compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		if digest != proof.Digest {
 			return false

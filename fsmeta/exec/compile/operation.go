@@ -151,8 +151,19 @@ type PredicateProof struct {
 	Version       uint64
 	Source        ReadSource
 	ProofFrontier ProofFrontier
+	ProofKind     PredicateProofKind
+	ScopeDigest   [32]byte
 	Digest        [32]byte
 }
+
+type PredicateProofKind uint8
+
+const (
+	PredicateProofUnknown PredicateProofKind = iota
+	PredicateProofPointValue
+	PredicateProofPointAbsence
+	PredicateProofOverlayFrontierAbsence
+)
 
 type GuardObligation struct {
 	Guard  RuntimeGuard
@@ -571,6 +582,8 @@ func semanticKeyBinding(delta SemanticDelta, binding string) ([]byte, bool) {
 	switch binding {
 	case "primary":
 		return delta.Plan.PrimaryKey, len(delta.Plan.PrimaryKey) != 0
+	case "owner":
+		return semanticOwnerKey(delta)
 	}
 	if prefix, ok := strings.CutSuffix(binding, "]"); ok {
 		name, indexText, ok := strings.Cut(prefix, "[")
@@ -607,6 +620,27 @@ func semanticKeyBinding(delta SemanticDelta, binding string) ([]byte, bool) {
 	return nil, false
 }
 
+func semanticOwnerKey(delta SemanticDelta) ([]byte, bool) {
+	var sessionKey []byte
+	switch {
+	case len(delta.Plan.ReadKeys) > 0:
+		sessionKey = delta.Plan.ReadKeys[0]
+	case len(delta.Plan.PrimaryKey) > 0:
+		sessionKey = delta.Plan.PrimaryKey
+	default:
+		return nil, false
+	}
+	parts, ok := fsmeta.InspectKey(sessionKey)
+	if !ok || parts.Kind != fsmeta.KeyKindSession || parts.Inode == 0 || delta.Authority.Mount == "" {
+		return nil, false
+	}
+	key, err := fsmeta.EncodeInodeSessionKey(fsmeta.MountIdentity{
+		MountID:    delta.Authority.Mount,
+		MountKeyID: parts.MountKeyID,
+	}, parts.Inode)
+	return key, err == nil
+}
+
 func watchEventKind(delta SemanticDelta, effect WriteEffect) WatchEventKind {
 	switch delta.Kind {
 	case fsmeta.OperationCreate:
@@ -639,6 +673,8 @@ func PredicateProofDigest(key, value []byte, present bool, version uint64, sourc
 	if len(frontiers) > 0 {
 		frontier = frontiers[0]
 	}
+	kind := PredicateProofKindFor(present, source)
+	scopeDigest := PredicateProofScopeDigest(key, value, present, version, source, frontier)
 	h := newDigestBuilder()
 	h.writeRaw(key)
 	h.writeBoolByte(present)
@@ -647,6 +683,44 @@ func PredicateProofDigest(key, value []byte, present bool, version uint64, sourc
 	h.writeUint64(version)
 	h.writeUint64(frontier.EpochID)
 	h.writeUint64(frontier.Sequence)
+	h.writeUint64(uint64(kind))
+	h.writeBytes(scopeDigest[:])
+	return h.sum()
+}
+
+func PredicateProofKindFor(present bool, source ReadSource) PredicateProofKind {
+	if present {
+		return PredicateProofPointValue
+	}
+	if source == ReadSourceOverlay {
+		return PredicateProofOverlayFrontierAbsence
+	}
+	if source == ReadSourceBase || source == ReadSourceSegment {
+		return PredicateProofPointAbsence
+	}
+	return PredicateProofUnknown
+}
+
+func PredicateProofScopeDigest(key, value []byte, present bool, version uint64, source ReadSource, frontier ProofFrontier) [32]byte {
+	h := newDigestBuilder()
+	h.writeString("predicate-proof-scope")
+	h.writeUint64(uint64(PredicateProofKindFor(present, source)))
+	h.writeBytes(key)
+	h.writeBool(present)
+	h.writeUint64(uint64(source))
+	switch {
+	case present:
+		valueHash := sha256.Sum256(value)
+		h.writeBytes(valueHash[:])
+		h.writeUint64(version)
+		h.writeUint64(frontier.EpochID)
+		h.writeUint64(frontier.Sequence)
+	case source == ReadSourceOverlay:
+		h.writeUint64(frontier.EpochID)
+		h.writeUint64(frontier.Sequence)
+	default:
+		h.writeUint64(version)
+	}
 	return h.sum()
 }
 
@@ -663,6 +737,8 @@ func PredicateProofFor(key, value []byte, present bool, version uint64, source R
 		Source:        source,
 		ProofFrontier: frontier,
 	}
+	proof.ProofKind = PredicateProofKindFor(proof.Present, proof.Source)
+	proof.ScopeDigest = PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 	return proof
 }
@@ -681,6 +757,8 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 		h.writeUint64(uint64(proof.Source))
 		h.writeUint64(proof.ProofFrontier.EpochID)
 		h.writeUint64(proof.ProofFrontier.Sequence)
+		h.writeUint64(uint64(proof.ProofKind))
+		h.writeBytes(proof.ScopeDigest[:])
 		h.writeBytes(proof.Digest[:])
 	}
 	return h.sum()
@@ -763,6 +841,29 @@ func GuardProofsFor(op CompiledOp, predicateProofs []PredicateProof, guards []Ru
 		out = append(out, GuardProofFor(guard, true, evidence))
 	}
 	return out, nil
+}
+
+func VerifyGuardProof(op CompiledOp, predicateProofs []PredicateProof, obligation GuardObligation, proof GuardProof) error {
+	if proof.Guard != obligation.Guard || !proof.Passed {
+		return fsmeta.ErrInvalidRequest
+	}
+	if obligation.Digest != ([32]byte{}) && obligation.Digest != GuardObligationDigest(obligation.Guard) {
+		return fsmeta.ErrInvalidRequest
+	}
+	if proof.Evidence.Guard != proof.Guard {
+		return fsmeta.ErrInvalidRequest
+	}
+	if proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
+		return fsmeta.ErrInvalidRequest
+	}
+	evidence, err := GuardEvidenceForGuard(op, predicateProofs, obligation.Guard)
+	if err != nil {
+		return err
+	}
+	if proof.Evidence != evidence {
+		return fsmeta.ErrInvalidRequest
+	}
+	return nil
 }
 
 func GuardEvidenceForGuard(op CompiledOp, predicateProofs []PredicateProof, guard RuntimeGuard) (GuardEvidence, error) {
@@ -1260,6 +1361,8 @@ func clonePredicateProofs(proofs []PredicateProof) []PredicateProof {
 			Version:       proof.Version,
 			Source:        proof.Source,
 			ProofFrontier: proof.ProofFrontier,
+			ProofKind:     proof.ProofKind,
+			ScopeDigest:   proof.ScopeDigest,
 			Digest:        proof.Digest,
 		}
 	}

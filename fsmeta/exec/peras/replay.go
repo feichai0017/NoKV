@@ -127,6 +127,8 @@ func clonePredicateProofs(proofs []compile.PredicateProof) []compile.PredicatePr
 			Version:       proof.Version,
 			Source:        proof.Source,
 			ProofFrontier: proof.ProofFrontier,
+			ProofKind:     proof.ProofKind,
+			ScopeDigest:   proof.ScopeDigest,
 			Digest:        proof.Digest,
 		}
 	}

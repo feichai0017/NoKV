@@ -56,15 +56,7 @@ func mustInodeKey(t *testing.T, inode fsmeta.InodeID) []byte {
 }
 
 func testPredicateProof(key, value []byte, present bool, version uint64, source ReadSource) PredicateProof {
-	proof := PredicateProof{
-		Key:     cloneBytes(key),
-		Present: present,
-		Value:   cloneBytes(value),
-		Version: version,
-		Source:  source,
-	}
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
-	return proof
+	return PredicateProofFor(key, value, present, version, source)
 }
 
 func testCompileAOT(tb testing.TB, delta SemanticDelta) CompiledOp {
@@ -418,19 +410,15 @@ func TestSessionProgramsMatchCurrentCompiler(t *testing.T) {
 	require.Equal(t, testCompileAOT(t, closeDelta), closeProgram.Compiled)
 }
 
-func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
+func TestGeneratedProgramEntriesAreCanonical(t *testing.T) {
 	renameToParent := testParentInSameBucket(t, fsmeta.RootInode)
 	crossBucketParent := testParentInDifferentBucket(t, fsmeta.RootInode)
 	for _, tc := range []struct {
 		name    string
-		lower   func() (SemanticDelta, error)
 		compile func() (CompiledOp, error)
 	}{
 		{
 			name: "update_inode",
-			lower: func() (SemanticDelta, error) {
-				return lowerUpdateInode(fsmeta.UpdateInodeRequest{Mount: "vol", Parent: fsmeta.RootInode, Inode: 44, Name: "file", SetMode: true, Mode: 0o600}, testMount, WithQuotaMode(QuotaModeEscrow))
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileUpdateInodeProgram(fsmeta.UpdateInodeRequest{Mount: "vol", Parent: fsmeta.RootInode, Inode: 44, Name: "file", SetMode: true, Mode: 0o600}, testMount, WithQuotaMode(QuotaModeEscrow))
 				return program.Compiled, err
@@ -438,9 +426,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "lookup",
-			lower: func() (SemanticDelta, error) {
-				return lowerLookup(fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file"}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileLookupProgram(fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "file"}, testMount)
 				return program.Compiled, err
@@ -448,9 +433,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "readdir",
-			lower: func() (SemanticDelta, error) {
-				return lowerReadDir(fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 32}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileReadDirProgram(fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 32}, testMount)
 				return program.Compiled, err
@@ -458,9 +440,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "snapshot_subtree",
-			lower: func() (SemanticDelta, error) {
-				return lowerSnapshotSubtree(fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: fsmeta.RootInode}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileSnapshotSubtreeProgram(fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: fsmeta.RootInode}, testMount)
 				return program.Compiled, err
@@ -468,9 +447,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "rename",
-			lower: func() (SemanticDelta, error) {
-				return lowerRename(fsmeta.RenameRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileRenameProgram(fsmeta.RenameRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
 				return program.Compiled, err
@@ -478,9 +454,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "rename_subtree",
-			lower: func() (SemanticDelta, error) {
-				return lowerRenameSubtree(fsmeta.RenameSubtreeRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: crossBucketParent, ToName: "new"}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileRenameSubtreeProgram(fsmeta.RenameSubtreeRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: crossBucketParent, ToName: "new"}, testMount)
 				return program.Compiled, err
@@ -488,9 +461,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "link",
-			lower: func() (SemanticDelta, error) {
-				return lowerLink(fsmeta.LinkRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount, WithQuotaMode(QuotaModeEscrow))
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileLinkProgram(fsmeta.LinkRequest{Mount: "vol", FromParent: fsmeta.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount, WithQuotaMode(QuotaModeEscrow))
 				return program.Compiled, err
@@ -498,9 +468,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "unlink",
-			lower: func() (SemanticDelta, error) {
-				return lowerUnlink(fsmeta.UnlinkRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileUnlinkProgram(fsmeta.UnlinkRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
 				return program.Compiled, err
@@ -508,9 +475,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "open_write_session",
-			lower: func() (SemanticDelta, error) {
-				return lowerOpenWriteSession(fsmeta.OpenWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileOpenWriteSessionProgram(fsmeta.OpenWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
 				return program.Compiled, err
@@ -518,9 +482,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "heartbeat_write_session",
-			lower: func() (SemanticDelta, error) {
-				return lowerHeartbeatWriteSession(fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileHeartbeatWriteSessionProgram(fsmeta.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
 				return program.Compiled, err
@@ -528,9 +489,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "close_write_session",
-			lower: func() (SemanticDelta, error) {
-				return lowerCloseWriteSession(fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1"}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileCloseWriteSessionProgram(fsmeta.CloseWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1"}, testMount)
 				return program.Compiled, err
@@ -538,9 +496,6 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 		{
 			name: "expire_write_sessions",
-			lower: func() (SemanticDelta, error) {
-				return lowerExpireWriteSessions(fsmeta.ExpireWriteSessionsRequest{Mount: "vol", Limit: 16}, testMount)
-			},
 			compile: func() (CompiledOp, error) {
 				program, err := CompileExpireWriteSessionsProgram(fsmeta.ExpireWriteSessionsRequest{Mount: "vol", Limit: 16}, testMount)
 				return program.Compiled, err
@@ -548,11 +503,9 @@ func TestGeneratedProgramWrappersMatchLowering(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			delta, err := tc.lower()
-			require.NoError(t, err)
 			compiled, err := tc.compile()
 			require.NoError(t, err)
-			require.Equal(t, testCompileAOT(t, delta), compiled)
+			require.Equal(t, testCompileAOT(t, compiled.Delta), compiled)
 		})
 	}
 }

@@ -568,6 +568,8 @@ func writePredicateProofs(out io.Writer, proofs []compile.PredicateProof) {
 		writeUint64(out, uint64(proof.Source))
 		writeUint64(out, proof.ProofFrontier.EpochID)
 		writeUint64(out, proof.ProofFrontier.Sequence)
+		writeUint64(out, uint64(proof.ProofKind))
+		writeFixed(out, proof.ScopeDigest[:])
 		writeFixed(out, proof.Digest[:])
 	}
 }
@@ -613,6 +615,14 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 		if err != nil {
 			return nil, err
 		}
+		proofKind, err := r.readUint64()
+		if err != nil {
+			return nil, err
+		}
+		var scopeDigest [32]byte
+		if err := r.readFixed(scopeDigest[:]); err != nil {
+			return nil, err
+		}
 		var digest [32]byte
 		if err := r.readFixed(digest[:]); err != nil {
 			return nil, err
@@ -624,7 +634,15 @@ func readPredicateProofs(r *witnessReader) ([]compile.PredicateProof, error) {
 			Version:       version,
 			Source:        compile.ReadSource(source),
 			ProofFrontier: compile.ProofFrontier{EpochID: epochID, Sequence: sequence},
+			ProofKind:     compile.PredicateProofKind(proofKind),
+			ScopeDigest:   scopeDigest,
 			Digest:        digest,
+		}
+		if proof.ProofKind != compile.PredicateProofKindFor(proof.Present, proof.Source) {
+			return nil, ErrInvalidPerasSegment
+		}
+		if compile.PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier) != proof.ScopeDigest {
+			return nil, ErrInvalidPerasSegment
 		}
 		if compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier) != proof.Digest {
 			return nil, ErrInvalidPerasSegment
@@ -752,7 +770,7 @@ func segmentCompletionEncodedSize(completion SegmentCompletion) int {
 	size := stringEncodedSize(completion.OpID.ClientID) + 8 + stringEncodedSize(string(completion.Kind)) + 8 + 8 + 32 + 32 + 32
 	size += 8
 	for _, proof := range completion.PredicateProofs {
-		size += 4 + len(proof.Key) + 1 + 4 + len(proof.Value) + 8 + 8 + 8 + 8 + 32
+		size += 4 + len(proof.Key) + 1 + 4 + len(proof.Value) + 8 + 8 + 8 + 8 + 8 + 32 + 32
 	}
 	size += 8
 	for _, proof := range completion.GuardProofs {

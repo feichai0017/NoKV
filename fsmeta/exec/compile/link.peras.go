@@ -13,10 +13,23 @@ type LinkProgram struct {
 }
 
 func CompileLinkProgram(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts ...Option) (LinkProgram, error) {
-	delta, err := lowerLink(req, mount, opts...)
+	options := collectOptions(opts...)
+	plan, err := fsmeta.PlanLink(req, mount)
 	if err != nil {
 		return LinkProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[0]},
+		{Kind: PredicateNotExists, Key: plan.ReadKeys[1]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.FromParent, req.ToParent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode, GuardSameAuthority)
+	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
 	if !validateLinkLoweredDelta(delta) {
 		return LinkProgram{}, fsmeta.ErrInvalidRequest
 	}

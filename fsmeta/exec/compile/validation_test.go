@@ -33,6 +33,36 @@ func TestMaterializedOpValidationRequiresAbsentProof(t *testing.T) {
 	require.NoError(t, op.ValidateForAdmission())
 }
 
+func TestPredicateProofCarriesAbsenceProofClass(t *testing.T) {
+	program, err := CompileCreateProgram(fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, 44)
+	require.NoError(t, err)
+	op, err := MaterializeCreate(program, CreateValues{})
+	require.NoError(t, err)
+
+	overlay := PredicateProofFor(op.Delta.ReadPredicates[0].Key, nil, false, 0, ReadSourceOverlay, ProofFrontier{EpochID: 7, Sequence: 9})
+	require.Equal(t, PredicateProofOverlayFrontierAbsence, overlay.ProofKind)
+	require.NotEqual(t, [32]byte{}, overlay.ScopeDigest)
+
+	base := PredicateProofFor(op.Delta.ReadPredicates[1].Key, nil, false, 11, ReadSourceBase)
+	require.Equal(t, PredicateProofPointAbsence, base.ProofKind)
+	require.NotEqual(t, [32]byte{}, base.ScopeDigest)
+
+	op = WithPredicateProofs(op, []PredicateProof{overlay, base})
+	require.NoError(t, op.ValidateForAdmission())
+
+	base.ScopeDigest[0] ^= 0xff
+	op = WithPredicateProofs(op, []PredicateProof{overlay, base})
+	var validationErr ValidationError
+	err = op.ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationPredicateProofMismatch, validationErr.Kind)
+}
+
 func TestMaterializedOpValidationBindsGuardProofEvidence(t *testing.T) {
 	delta, proofs := testConcreteUpdateInodeDelta(t, nil)
 	op := testMaterializeAOT(t, delta, proofs)
@@ -46,6 +76,7 @@ func TestMaterializedOpValidationBindsGuardProofEvidence(t *testing.T) {
 
 	op = testMaterializeAOT(t, delta, proofs)
 	op = WithGuardProofs(op, testGuardProofsFor(op))
+	require.NoError(t, VerifyGuardProof(op.CompiledOp, op.PredicateProofs, op.Guards[0], op.GuardProofs[0]))
 	require.NoError(t, op.ValidateForAdmission())
 }
 

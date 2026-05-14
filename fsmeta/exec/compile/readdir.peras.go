@@ -13,10 +13,16 @@ type ReadDirProgram struct {
 }
 
 func CompileReadDirProgram(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity) (ReadDirProgram, error) {
-	delta, err := lowerReadDir(req, mount)
+	plan, err := fsmeta.PlanReadDir(req, mount)
 	if err != nil {
 		return ReadDirProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicatePrefixScan, Key: plan.ReadPrefixes[0]},
+	}
+	effects := []WriteEffect(nil)
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonRangeRead}
 	if !validateReadDirLoweredDelta(delta) {
 		return ReadDirProgram{}, fsmeta.ErrInvalidRequest
 	}

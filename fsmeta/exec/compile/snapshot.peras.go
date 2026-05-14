@@ -13,10 +13,16 @@ type SnapshotSubtreeProgram struct {
 }
 
 func CompileSnapshotSubtreeProgram(req fsmeta.SnapshotSubtreeRequest, mount fsmeta.MountIdentity) (SnapshotSubtreeProgram, error) {
-	delta, err := lowerSnapshotSubtree(req, mount)
+	plan, err := fsmeta.PlanSnapshotSubtree(req, mount)
 	if err != nil {
 		return SnapshotSubtreeProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicatePrefixScan, Key: plan.ReadPrefixes[0]},
+	}
+	effects := []WriteEffect(nil)
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.RootInode}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonDurabilityBarrier, DurabilityBarrier: true}
 	if !validateSnapshotSubtreeLoweredDelta(delta) {
 		return SnapshotSubtreeProgram{}, fsmeta.ErrInvalidRequest
 	}

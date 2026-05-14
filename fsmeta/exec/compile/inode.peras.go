@@ -13,10 +13,25 @@ type UpdateInodeProgram struct {
 }
 
 func CompileUpdateInodeProgram(req fsmeta.UpdateInodeRequest, mount fsmeta.MountIdentity, opts ...Option) (UpdateInodeProgram, error) {
-	delta, err := lowerUpdateInode(req, mount, opts...)
+	options := collectOptions(opts...)
+	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
+		return UpdateInodeProgram{}, fsmeta.ErrInvalidRequest
+	}
+	plan, err := fsmeta.PlanUpdateInode(req, mount)
 	if err != nil {
 		return UpdateInodeProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[0]},
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[1]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[0]},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardSingleLinkInode)
+	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
 	if !validateUpdateInodeLoweredDelta(delta) {
 		return UpdateInodeProgram{}, fsmeta.ErrInvalidRequest
 	}

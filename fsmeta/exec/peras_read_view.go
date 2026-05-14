@@ -206,12 +206,15 @@ func (v *perasReadView) predicateProofs() []compile.PredicateProof {
 	for _, key := range keys {
 		observed := v.observed[key]
 		proof := compile.PredicateProof{
-			Key:     []byte(key),
-			Present: observed.present,
-			Value:   cloneBytes(observed.value),
-			Version: observed.version,
-			Source:  observed.source,
+			Key:           []byte(key),
+			Present:       observed.present,
+			Value:         cloneBytes(observed.value),
+			Version:       observed.version,
+			Source:        observed.source,
+			ProofFrontier: compile.ProofFrontier{},
 		}
+		proof.ProofKind = compile.PredicateProofKindFor(proof.Present, proof.Source)
+		proof.ScopeDigest = compile.PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		proofs = append(proofs, proof)
 	}

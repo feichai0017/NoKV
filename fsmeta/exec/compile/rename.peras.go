@@ -17,9 +17,23 @@ type RenameSubtreeProgram struct {
 }
 
 func CompileRenameProgram(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (RenameProgram, error) {
-	delta, err := lowerRename(req, mount)
+	plan, err := fsmeta.PlanRename(req, mount)
 	if err != nil {
 		return RenameProgram{}, err
+	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateExists, Key: plan.ReadKeys[0]},
+		{Kind: PredicateNotExists, Key: plan.ReadKeys[1]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDelete, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.FromParent, req.ToParent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	if len(delta.Authority.Buckets) > 1 {
+		delta.Eligibility = EligibilitySlowPath
+		delta.SlowReason = SlowReasonCrossBucket
 	}
 	if !validateRenameLoweredDelta(delta) {
 		return RenameProgram{}, fsmeta.ErrInvalidRequest
@@ -32,10 +46,20 @@ func CompileRenameProgram(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) 
 }
 
 func CompileRenameSubtreeProgram(req fsmeta.RenameSubtreeRequest, mount fsmeta.MountIdentity) (RenameSubtreeProgram, error) {
-	delta, err := lowerRenameSubtree(req, mount)
+	plan, err := fsmeta.PlanRenameSubtree(req, mount)
 	if err != nil {
 		return RenameSubtreeProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateExists, Key: plan.ReadKeys[0]},
+		{Kind: PredicateNotExists, Key: plan.ReadKeys[1]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDelete, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.FromParent, req.ToParent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonDurabilityBarrier, DurabilityBarrier: true, WatchAtSeal: true}
 	if !validateRenameSubtreeLoweredDelta(delta) {
 		return RenameSubtreeProgram{}, fsmeta.ErrInvalidRequest
 	}

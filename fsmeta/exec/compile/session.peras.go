@@ -40,10 +40,25 @@ type CloseWriteSessionValues struct {
 }
 
 func CompileOpenWriteSessionProgram(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (OpenWriteSessionProgram, error) {
-	delta, err := lowerOpenWriteSession(req, mount)
+	if req.TTL <= 0 {
+		return OpenWriteSessionProgram{}, fsmeta.ErrInvalidRequest
+	}
+	plan, err := fsmeta.PlanOpenWriteSession(req, mount)
 	if err != nil {
 		return OpenWriteSessionProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[0]},
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[1]},
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[2]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode, GuardExpiredSessionOwner)
 	if !validateOpenWriteSessionLoweredDelta(delta) {
 		return OpenWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
@@ -55,10 +70,24 @@ func CompileOpenWriteSessionProgram(req fsmeta.OpenWriteSessionRequest, mount fs
 }
 
 func CompileHeartbeatWriteSessionProgram(req fsmeta.HeartbeatWriteSessionRequest, mount fsmeta.MountIdentity) (HeartbeatWriteSessionProgram, error) {
-	delta, err := lowerHeartbeatWriteSession(req, mount)
+	if req.TTL <= 0 {
+		return HeartbeatWriteSessionProgram{}, fsmeta.ErrInvalidRequest
+	}
+	plan, err := fsmeta.PlanHeartbeatWriteSession(req, mount)
 	if err != nil {
 		return HeartbeatWriteSessionProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[0]},
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[1]},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardLiveSession)
 	if !validateHeartbeatWriteSessionLoweredDelta(delta) {
 		return HeartbeatWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
@@ -70,10 +99,25 @@ func CompileHeartbeatWriteSessionProgram(req fsmeta.HeartbeatWriteSessionRequest
 }
 
 func CompileCloseWriteSessionProgram(req fsmeta.CloseWriteSessionRequest, mount fsmeta.MountIdentity) (CloseWriteSessionProgram, error) {
-	delta, err := lowerCloseWriteSession(req, mount)
+	plan, err := fsmeta.PlanCloseWriteSession(req, mount)
 	if err != nil {
 		return CloseWriteSessionProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, req.Inode)
+	if err != nil {
+		return CloseWriteSessionProgram{}, err
+	}
+	predicates := []Predicate{
+		{Kind: PredicateObservedValue, Key: plan.ReadKeys[0]},
+		{Kind: PredicateObservedValue, Key: ownerKey},
+	}
+	effects := []WriteEffect{
+		{Kind: EffectDelete, Key: plan.MutateKeys[0]},
+		{Kind: EffectDerivedDelete, Key: ownerKey},
+	}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardLiveSession)
 	if !validateCloseWriteSessionLoweredDelta(delta) {
 		return CloseWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
@@ -85,10 +129,17 @@ func CompileCloseWriteSessionProgram(req fsmeta.CloseWriteSessionRequest, mount 
 }
 
 func CompileExpireWriteSessionsProgram(req fsmeta.ExpireWriteSessionsRequest, mount fsmeta.MountIdentity) (ExpireWriteSessionsProgram, error) {
-	delta, err := lowerExpireWriteSessions(req, mount)
+	plan, err := fsmeta.PlanExpireWriteSessions(req, mount)
 	if err != nil {
 		return ExpireWriteSessionsProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := make([]Predicate, 0, len(plan.ReadPrefixes))
+	for _, key := range plan.ReadPrefixes {
+		predicates = append(predicates, Predicate{Kind: PredicatePrefixScan, Key: key})
+	}
+	effects := []WriteEffect(nil)
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonMaintenanceScan}
 	if !validateExpireWriteSessionsLoweredDelta(delta) {
 		return ExpireWriteSessionsProgram{}, fsmeta.ErrInvalidRequest
 	}
@@ -279,7 +330,7 @@ func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.ReadPredicates[1].Kind != PredicateObservedValue {
 		return false
 	}
-	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "runtime") {
+	if !semanticKeyBindingMatches(delta, delta.ReadPredicates[1].Key, "owner") {
 		return false
 	}
 	if len(delta.WriteEffects) != 2 {
@@ -294,7 +345,7 @@ func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	if delta.WriteEffects[1].Kind != EffectDerivedDelete {
 		return false
 	}
-	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "predicate[1]") {
+	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "owner") {
 		return false
 	}
 	if len(delta.RuntimeGuards) != 1 {

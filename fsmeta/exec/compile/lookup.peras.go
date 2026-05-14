@@ -13,10 +13,16 @@ type LookupProgram struct {
 }
 
 func CompileLookupProgram(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) (LookupProgram, error) {
-	delta, err := lowerLookup(req, mount)
+	plan, err := fsmeta.PlanLookup(req, mount)
 	if err != nil {
 		return LookupProgram{}, err
 	}
+	plan = canonicalPlan(plan)
+	predicates := []Predicate{
+		{Kind: PredicateExists, Key: plan.PrimaryKey},
+	}
+	effects := []WriteEffect(nil)
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonReadOnly}
 	if !validateLookupLoweredDelta(delta) {
 		return LookupProgram{}, fsmeta.ErrInvalidRequest
 	}

@@ -380,19 +380,70 @@ func emitValuesType(b *bytes.Buffer, spec specdsl.OpSpec) error {
 }
 
 func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
-	if spec.CompileName == "" || spec.RequestType == "" || spec.LoweringName == "" {
+	if spec.CompileName == "" || spec.RequestType == "" || spec.PlanName == "" {
 		return fmt.Errorf("%s missing compile entry fields", spec.Name)
 	}
 	if spec.HasOptions {
 		fmt.Fprintf(b, "func %s(req %s, mount fsmeta.MountIdentity, opts ...Option) (%s, error) {\n", spec.CompileName, spec.RequestType, spec.ProgramType)
-		fmt.Fprintf(b, "\tdelta, err := %s(req, mount, opts...)\n", spec.LoweringName)
+		b.WriteString("\toptions := collectOptions(opts...)\n")
 	} else {
 		fmt.Fprintf(b, "func %s(req %s, mount fsmeta.MountIdentity) (%s, error) {\n", spec.CompileName, spec.RequestType, spec.ProgramType)
-		fmt.Fprintf(b, "\tdelta, err := %s(req, mount)\n", spec.LoweringName)
 	}
+	for _, check := range spec.RequestChecks {
+		if err := emitRequestCheck(b, spec, check); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(b, "\tplan, err := %s(req, mount)\n", spec.PlanName)
 	b.WriteString("\tif err != nil {\n")
 	fmt.Fprintf(b, "\t\treturn %s{}, err\n", spec.ProgramType)
 	b.WriteString("\t}\n")
+	b.WriteString("\tplan = canonicalPlan(plan)\n")
+	if specUsesKeyBinding(spec, "owner") {
+		b.WriteString("\townerKey, err := fsmeta.EncodeInodeSessionKey(mount, req.Inode)\n")
+		b.WriteString("\tif err != nil {\n")
+		fmt.Fprintf(b, "\t\treturn %s{}, err\n", spec.ProgramType)
+		b.WriteString("\t}\n")
+	}
+	if err := emitPredicatePlan(b, spec); err != nil {
+		return err
+	}
+	if err := emitEffectPlan(b, spec); err != nil {
+		return err
+	}
+	parents := requestInodeExprs(spec.Authority.Parents)
+	inodes := requestInodeExprs(spec.Authority.Inodes)
+	fmt.Fprintf(b, "\tdelta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, %s, %s), ReadPredicates: predicates, WriteEffects: effects, Eligibility: %s", inodeSliceExpr(parents), inodeSliceExpr(inodes), spec.Eligibility)
+	if spec.SlowReason != "" {
+		fmt.Fprintf(b, ", SlowReason: %s", spec.SlowReason)
+	}
+	if spec.DurabilityBarrier {
+		b.WriteString(", DurabilityBarrier: true")
+	}
+	if spec.WatchAtSeal {
+		b.WriteString(", WatchAtSeal: true")
+	}
+	b.WriteString("}\n")
+	if len(spec.Guards) > 0 {
+		b.WriteString("\tdelta.RuntimeGuards = append(delta.RuntimeGuards")
+		for _, guard := range spec.Guards {
+			fmt.Fprintf(b, ", %s", guard.Guard)
+		}
+		b.WriteString(")\n")
+	}
+	if spec.HasOptions {
+		for _, guard := range spec.OptionalGuards {
+			if guard.Condition == "quota_escrow" {
+				fmt.Fprintf(b, "\tdelta = applyQuotaPolicy(delta, options, %s)\n", guard.Guard)
+			}
+		}
+	}
+	if hasSlowFallback(spec, "SlowReasonCrossBucket") {
+		b.WriteString("\tif len(delta.Authority.Buckets) > 1 {\n")
+		b.WriteString("\t\tdelta.Eligibility = EligibilitySlowPath\n")
+		b.WriteString("\t\tdelta.SlowReason = SlowReasonCrossBucket\n")
+		b.WriteString("\t}\n")
+	}
 	fmt.Fprintf(b, "\tif !%s(delta) {\n", loweredDeltaValidatorName(spec))
 	fmt.Fprintf(b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
 	b.WriteString("\t}\n")
@@ -403,6 +454,169 @@ func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	fmt.Fprintf(b, "\treturn %s{Compiled: compiled}, nil\n", spec.ProgramType)
 	b.WriteString("}\n\n")
 	return nil
+}
+
+func emitRequestCheck(b *bytes.Buffer, spec specdsl.OpSpec, check string) error {
+	switch check {
+	case "inode_update_has_mutation":
+		b.WriteString("\tif !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {\n")
+		fmt.Fprintf(b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
+		b.WriteString("\t}\n")
+	case "positive_ttl":
+		b.WriteString("\tif req.TTL <= 0 {\n")
+		fmt.Fprintf(b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
+		b.WriteString("\t}\n")
+	default:
+		return fmt.Errorf("%s unknown request check %q", spec.Name, check)
+	}
+	return nil
+}
+
+func emitPredicatePlan(b *bytes.Buffer, spec specdsl.OpSpec) error {
+	repeatable := -1
+	for i, predicate := range spec.Predicates {
+		if predicate.Repeatable {
+			repeatable = i
+		}
+	}
+	if repeatable >= 0 {
+		if len(spec.Predicates) != 1 {
+			return fmt.Errorf("%s repeatable predicate specs must be the only predicate", spec.Name)
+		}
+		predicate := spec.Predicates[repeatable]
+		family := repeatableBindingFamily(predicate.Key)
+		switch family {
+		case "read_prefix":
+			b.WriteString("\tpredicates := make([]Predicate, 0, len(plan.ReadPrefixes))\n")
+			b.WriteString("\tfor _, key := range plan.ReadPrefixes {\n")
+		case "read":
+			b.WriteString("\tpredicates := make([]Predicate, 0, len(plan.ReadKeys))\n")
+			b.WriteString("\tfor _, key := range plan.ReadKeys {\n")
+		default:
+			return fmt.Errorf("%s unsupported repeatable predicate binding %q", spec.Name, predicate.Key)
+		}
+		fmt.Fprintf(b, "\t\tpredicates = append(predicates, Predicate{Kind: %s, Key: key})\n", predicate.Kind)
+		b.WriteString("\t}\n")
+		return nil
+	}
+	if len(spec.Predicates) == 0 {
+		b.WriteString("\tpredicates := []Predicate(nil)\n")
+		return nil
+	}
+	b.WriteString("\tpredicates := []Predicate{\n")
+	for _, predicate := range spec.Predicates {
+		key, err := keyBindingExpr(predicate.Key)
+		if err != nil {
+			return fmt.Errorf("%s predicate %s: %w", spec.Name, predicate.Name, err)
+		}
+		fmt.Fprintf(b, "\t\t{Kind: %s", predicate.Kind)
+		if key != "" {
+			fmt.Fprintf(b, ", Key: %s", key)
+		}
+		b.WriteString("},\n")
+	}
+	b.WriteString("\t}\n")
+	return nil
+}
+
+func emitEffectPlan(b *bytes.Buffer, spec specdsl.OpSpec) error {
+	if len(spec.Effects) == 0 {
+		b.WriteString("\teffects := []WriteEffect(nil)\n")
+		return nil
+	}
+	b.WriteString("\teffects := []WriteEffect{\n")
+	for _, effect := range spec.Effects {
+		key, err := keyBindingExpr(effect.Key)
+		if err != nil {
+			return fmt.Errorf("%s effect %s: %w", spec.Name, effect.Name, err)
+		}
+		fmt.Fprintf(b, "\t\t{Kind: %s", effect.Kind)
+		if key != "" {
+			fmt.Fprintf(b, ", Key: %s", key)
+		}
+		b.WriteString("},\n")
+	}
+	b.WriteString("\t}\n")
+	return nil
+}
+
+func keyBindingExpr(binding string) (string, error) {
+	switch binding {
+	case "", "runtime":
+		return "", nil
+	case "primary":
+		return "plan.PrimaryKey", nil
+	case "owner":
+		return "ownerKey", nil
+	}
+	if prefix, ok := strings.CutSuffix(binding, "]"); ok {
+		name, indexText, ok := strings.Cut(prefix, "[")
+		if !ok {
+			return "", fmt.Errorf("invalid key binding %q", binding)
+		}
+		switch name {
+		case "read":
+			return "plan.ReadKeys[" + indexText + "]", nil
+		case "read_prefix":
+			return "plan.ReadPrefixes[" + indexText + "]", nil
+		case "mutate":
+			return "plan.MutateKeys[" + indexText + "]", nil
+		case "predicate":
+			return "predicates[" + indexText + "].Key", nil
+		default:
+			return "", fmt.Errorf("invalid key binding %q", binding)
+		}
+	}
+	return "", fmt.Errorf("invalid key binding %q", binding)
+}
+
+func requestInodeExprs(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		switch name {
+		case "parent":
+			out = append(out, "req.Parent")
+		case "from_parent":
+			out = append(out, "req.FromParent")
+		case "to_parent":
+			out = append(out, "req.ToParent")
+		case "root":
+			out = append(out, "req.RootInode")
+		case "inode":
+			out = append(out, "req.Inode")
+		}
+	}
+	return out
+}
+
+func inodeSliceExpr(exprs []string) string {
+	if len(exprs) == 0 {
+		return "nil"
+	}
+	return "[]fsmeta.InodeID{" + strings.Join(exprs, ", ") + "}"
+}
+
+func specUsesKeyBinding(spec specdsl.OpSpec, binding string) bool {
+	for _, predicate := range spec.Predicates {
+		if predicate.Key == binding {
+			return true
+		}
+	}
+	for _, effect := range spec.Effects {
+		if effect.Key == binding {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSlowFallback(spec specdsl.OpSpec, reason string) bool {
+	for _, fallback := range spec.SlowFallbacks {
+		if fallback == reason {
+			return true
+		}
+	}
+	return false
 }
 
 func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {

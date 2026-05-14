@@ -65,14 +65,7 @@ func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 	executor, err := newTestExecutor(runner, WithPerasCommitter(newTestPerasCommitter(t, runner)))
 	require.NoError(t, err)
 
-	proof := compile.PredicateProof{
-		Key:     key,
-		Present: true,
-		Value:   value,
-		Version: 7,
-		Source:  compile.ReadSourceBase,
-	}
-	proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
+	proof := compile.PredicateProofFor(key, value, true, 7, compile.ReadSourceBase)
 	proof.Digest[0] ^= 0xff
 	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializedOp{
 		CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{

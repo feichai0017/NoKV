@@ -27,7 +27,7 @@ func TestOperationSpecsHaveStableGeneratedShape(t *testing.T) {
 		require.NotEmpty(t, spec.CompileName, spec.Name)
 		require.NotContains(t, seenCompile, spec.CompileName)
 		seenCompile[spec.CompileName] = struct{}{}
-		require.NotEmpty(t, spec.LoweringName, spec.Name)
+		require.NotEmpty(t, spec.PlanName, spec.Name)
 		require.NotEmpty(t, spec.OperationKind, spec.Name)
 		require.NotContains(t, seenKind, spec.OperationKind)
 		seenKind[spec.OperationKind] = struct{}{}

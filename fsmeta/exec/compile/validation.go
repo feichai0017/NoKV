@@ -135,11 +135,7 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 			}
 			return ValidationError{Kind: ValidationGuardProofMissing}
 		}
-		guardEvidence, err := GuardEvidenceForGuard(op.CompiledOp, op.PredicateProofs, obligation.Guard)
-		if err != nil {
-			return ValidationError{Kind: ValidationGuardProofMismatch}
-		}
-		if proof.Evidence != guardEvidence || proof.Digest != GuardProofDigest(proof.Guard, proof.Passed, proof.Evidence) {
+		if err := VerifyGuardProof(op.CompiledOp, op.PredicateProofs, obligation, proof); err != nil {
 			return ValidationError{Kind: ValidationGuardProofMismatch}
 		}
 	}
@@ -279,6 +275,13 @@ func predicateProofMap(proofs []PredicateProof) (map[string]PredicateProof, erro
 		if !predicateProofSourceValid(proof) {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
 		}
+		if proof.ProofKind != PredicateProofKindFor(proof.Present, proof.Source) {
+			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
+		}
+		scopeDigest := PredicateProofScopeDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
+		if proof.ScopeDigest != scopeDigest {
+			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
+		}
 		digest := PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source, proof.ProofFrontier)
 		if digest != proof.Digest {
 			return nil, ValidationError{Kind: ValidationPredicateProofMismatch, Key: proof.Key}
@@ -297,9 +300,9 @@ func durableAbsenceProof(proof PredicateProof) bool {
 	}
 	switch proof.Source {
 	case ReadSourceBase, ReadSourceSegment:
-		return proof.Version != 0
+		return proof.ProofKind == PredicateProofPointAbsence && proof.Version != 0
 	case ReadSourceOverlay:
-		return proof.ProofFrontier.Valid()
+		return proof.ProofKind == PredicateProofOverlayFrontierAbsence && proof.ProofFrontier.Valid()
 	default:
 		return false
 	}

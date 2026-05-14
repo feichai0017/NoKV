@@ -48,14 +48,7 @@ func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
 
 	key := mustInodeKey(t, 44)
 	value := []byte("new-inode")
-	proof := PredicateProof{
-		Key:     key,
-		Present: true,
-		Value:   []byte("old-inode"),
-		Version: 9,
-		Source:  ReadSourceBase,
-	}
-	proof.Digest = PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
+	proof := PredicateProofFor(key, []byte("old-inode"), true, 9, ReadSourceBase)
 	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: value}}, []PredicateProof{proof})
 
 	require.True(t, materialized.Placement.CanSegment)

@@ -10,7 +10,7 @@ type OpSpec struct {
 	ValuesType        string
 	RequestType       string
 	CompileName       string
-	LoweringName      string
+	PlanName          string
 	Materialize       string
 	OperationKind     string
 	Durability        string
@@ -27,6 +27,7 @@ type OpSpec struct {
 	Eligibility       string
 	SlowReason        string
 	SlowFallbacks     []string
+	RequestChecks     []string
 	DurabilityBarrier bool
 	WatchAtSeal       bool
 }
