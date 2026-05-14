@@ -1,0 +1,19 @@
+{
+  "name": "nokv-site",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview",
+    "gen:og": "node scripts/gen-og.mjs"
+  },
+  "devDependencies": {
+    "mermaid": "^11.4.1",
+    "sharp": "^0.33.5",
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "vue": "^3.5.13"
+  }
+}

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/img/logo.svg" width="200" alt="NoKV" />
+  <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 
   <p>
     <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
@@ -99,7 +99,7 @@ NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-gl
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="./docs/img/architecture.svg" alt="NoKV Architecture" width="100%" />
+  <img src="./docs/public/img/architecture.svg" alt="NoKV Architecture" width="100%" />
 </p>
 
 <br/>
@@ -125,7 +125,7 @@ Authority lifecycle (rooted in `meta/root`, managed via `nokv mount` / `nokv quo
 | **Snapshot epoch** | `SnapshotEpochPublished` / `SnapshotEpochRetired` | Read-version cache |
 | **Quota fence** | `QuotaFenceUpdated` (mount + subtree level, bytes + inodes) | Usage in raftstore (transactional, not in-memory) |
 
-Documentation: [`docs/fsmeta.md`](docs/fsmeta.md)
+Documentation: [`docs/guide/fsmeta.md`](docs/guide/fsmeta.md)
 
 <br/>
 
@@ -147,7 +147,6 @@ docker compose up -d --build
 make docker-up
 ```
 
-![NoKV demo](./docs/img/nokv-demo.gif)
 
 ### Use `fsmeta` from Go (embedded — same Executor as the gRPC server)
 
@@ -225,7 +224,7 @@ nokv regions --workdir ./artifacts/cluster/store-1 --json
 
 ```
 
-Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI reference: [`docs/cli.md`](docs/cli.md)
+Full guide: [`docs/guide/getting_started.md`](docs/guide/getting_started.md) · CLI reference: [`docs/guide/cli.md`](docs/guide/cli.md)
 
 <br/>
 
@@ -233,21 +232,21 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 
 | Module | Responsibility | Docs |
 |---|---|---|
-| **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/fsmeta.md)** |
-| [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/fsmeta.md) |
-| [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/rooted_truth.md) |
-| [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
-| [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
-| [`txn/percolator/`](./txn/percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
-| [`local/`](./local) | Embedded single-node DB facade, local stats, workdir mode, and local-only write runtime internals | [Runtime](docs/runtime.md) |
-| [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
-| [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |
-| [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/vfs.md) |
-| [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/manifest.md) |
-| [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/vfs.md) |
-| [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/thermos.md) |
-| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, migrate, mount, quota | [CLI](docs/cli.md) |
-| [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/fsmeta.md) |
+| **[`fsmeta/`](./fsmeta)** | **Namespace metadata schema, executor, gRPC service, embedded API** | **[fsmeta](docs/guide/fsmeta.md)** |
+| [`fsmeta/exec/watch/`](./fsmeta/exec/watch) | WatchSubtree router + RemoteSource + catch-up replay | [fsmeta](docs/guide/fsmeta.md) |
+| [`meta/root/`](./meta/root) | Typed rooted truth kernel (Delos-lite) | [Rooted Truth](docs/guide/rooted_truth.md) |
+| [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/guide/coordinator.md) |
+| [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/guide/raftstore.md) |
+| [`txn/percolator/`](./txn/percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/guide/percolator.md) |
+| [`local/`](./local) | Embedded single-node DB facade, local stats, workdir mode, and local-only write runtime internals | [Runtime](docs/guide/runtime.md) |
+| [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/guide/memtable.md) · [flush](docs/guide/flush.md) · [compaction](docs/guide/compaction.md) |
+| [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/guide/wal.md) |
+| [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/guide/vfs.md) |
+| [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/guide/manifest.md) |
+| [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/guide/vfs.md) |
+| [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/guide/thermos.md) |
+| [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, migrate, mount, quota | [CLI](docs/guide/cli.md) |
+| [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/guide/fsmeta.md) |
 
 <br/>
 
@@ -264,7 +263,7 @@ FSMetadata exports per-domain expvar namespaces when `--metrics-addr` is enabled
 | | `nokv_fsmeta_peras` | `commit_total`, `flush_total`, `segment_total`, `witness_latency_*` |
 | | `nokv_fsmeta_sessions` | stale writer-session cleanup runs, expired sessions, and last error |
 
-Plus structured logs from coordinator and each store. More: [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`docs/testing.md`](docs/testing.md).
+Plus structured logs from coordinator and each store. More: [`docs/guide/stats.md`](docs/guide/stats.md) · [`docs/guide/cli.md`](docs/guide/cli.md) · [`docs/guide/testing.md`](docs/guide/testing.md).
 
 <br/>
 
