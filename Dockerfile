@@ -1,3 +1,6 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
 # syntax=docker/dockerfile:1
 
 FROM --platform=$BUILDPLATFORM golang:1.26 AS builder

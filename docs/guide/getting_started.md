@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Getting Started
 
 This guide gets you from zero to a running NoKV cluster (or an embedded DB) in a few minutes.

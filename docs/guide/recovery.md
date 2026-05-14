@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Recovery Model
 
 NoKV recovery is intentionally strict. Startup verifies durable metadata and

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Memtable Design & Lifecycle
 
 NoKV's write path mirrors RocksDB: every write lands in the **WAL** and an in-memory **memtable** backed by a selectable in-memory index (skiplist or ART). The implementation lives in [`engine/lsm/memtable.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/memtable.go) and ties directly into the concrete flush queue in [`engine/lsm/flush_runtime.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/flush_runtime.go).

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package region owns the store-local region catalog: the in-memory
 // metaByID + range-by-start-key map, the per-region peer registry, the
 // persistence handoff to localmeta, and the per-region traffic counters

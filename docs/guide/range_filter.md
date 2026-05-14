@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Range Filter
 
 NoKV's range filter is a read-path pruning layer for the LSM tree. It is inspired by the paper [GRF: A Global Range Filter for LSM-Trees with Shape Encoding](https://people.iiis.tsinghua.edu.cn/~huanchen/publications/grf-sigmod24.pdf), but it is deliberately more conservative and much simpler.

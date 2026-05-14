@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rangefilter provides a per-level range pruning structure for the
 // LSM read path: given a level's tables (each exposing MinKey/MaxKey), it
 // answers "which tables can possibly contain key K" or "which tables overlap

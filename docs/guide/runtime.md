@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Runtime Call Chains
 
 This page documents the current runtime paths. Metadata values are stored inline

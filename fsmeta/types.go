@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package fsmeta is NoKV's filesystem-metadata plane.
 //
 // fsmeta sits on top of NoKV as a consumer. It uses the DB, percolator, and

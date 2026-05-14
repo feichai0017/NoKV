@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # File and mmap primitives
 
 The `engine/file` package provides low-level file and mmap helpers shared by

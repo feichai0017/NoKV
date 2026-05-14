@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # NoKV Architecture Overview
 
 NoKV delivers a hybrid storage engine that can operate as a standalone embedded KV store or as a distributed StoreKV-backed service. The distributed RPC surface follows a TinyKV/TiKV-style region + MVCC design, but the service identity and deployment model are NoKV's own. This document captures the key building blocks, how they interact, and the execution flow from client to disk.

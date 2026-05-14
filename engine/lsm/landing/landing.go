@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package landing implements the per-level landing buffer that absorbs L0
 // promotions before they merge into a level's main tables. The buffer is
 // fixed-shard (top bits of the first user-key byte) and policy-neutral: it

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package state holds the compact applied root state of the metadata
 // kernel (State, grant lifecycle, pending peer/range changes) and the
 // ApplyEventToState / ApplyEventToSnapshot functions

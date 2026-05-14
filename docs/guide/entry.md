@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Entry Model
 
 NoKV uses `kv.Entry` as the shared in-memory record type for WAL payloads,

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Documentation
 
 **NoKV** is the open-source counterpart of the *"stateless schema layer + transactional KV"* pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`** — a namespace metadata API for distributed filesystems, object storage, and AI dataset metadata.

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package lsm implements NoKV's log-structured merge-tree engine.
 // It owns the MemTable (with adaptive ART/SkipList index over arena),
 // the flush pipeline (Prepare → Build → Install → Release), leveled

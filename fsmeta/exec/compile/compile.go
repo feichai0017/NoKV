@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package compile turns fsmeta requests into generated Peras metadata programs.
 //
 // The compiler is deliberately conservative. Generated programs describe the

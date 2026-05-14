@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package pacer is a token-bucket rate limiter used to cap background
 // compaction output. It is policy-free and engine-free: callers decide when to
 // charge() bytes; this package only enforces the configured throughput.

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Agent Review Instructions
 
 This repository uses `docs/guide/development/code_contract.md` as the source of truth
