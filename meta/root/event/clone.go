@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package event
 
 import rootproto "github.com/feichai0017/NoKV/meta/root/protocol"

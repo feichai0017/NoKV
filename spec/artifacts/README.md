@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Formal Artifact Snapshots
 
 This directory stores sanitized, checked-in outputs from the current TLA+ runs.

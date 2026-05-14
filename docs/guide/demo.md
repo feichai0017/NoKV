@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Cluster Demo
 
 One-command demo of the full 333 HA topology (3 meta-root + 3 coordinator +

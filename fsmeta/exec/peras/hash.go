@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package peras
 
 func writeBytesHash(h interface{ Write([]byte) (int, error) }, value []byte) {

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package stats owns periodic runtime metric collection and snapshot
 // publication for local.DB. The Stats type runs a small ticker that builds a
 // StatsSnapshot from its Host and republishes it through the stable product

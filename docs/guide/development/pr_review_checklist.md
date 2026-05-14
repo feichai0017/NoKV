@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # PR Review Checklist
 
 Use this checklist for human review and for agent-assisted review. Findings

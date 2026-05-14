@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Coordinator
 
 `Coordinator` is NoKV's control-plane service for distributed mode.

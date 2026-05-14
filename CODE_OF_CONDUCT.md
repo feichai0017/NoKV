@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Code of Conduct
 
 NoKV follows the spirit of the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).

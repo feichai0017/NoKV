@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Percolator Distributed Transaction Design
 
 This document explains NoKV's distributed transaction path implemented by `txn/percolator/` and executed through `raftstore`.

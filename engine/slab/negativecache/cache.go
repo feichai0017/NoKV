@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package negativecache is the slab-backed Derived consumer that
 // remembers "this key does not exist". Lookups against keys that have
 // been recorded as missing return Has(true), letting the caller skip

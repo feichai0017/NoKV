@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package commit implements the DB write commit pipeline: queue,
 // dispatcher, per-shard processors, optional sync worker, and the
 // associated ack lifecycle. The Pipeline owns its queue + dispatch

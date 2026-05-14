@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # MemTable Flush Pipeline
 
 NoKV's flush path converts immutable memtables into L0 SST files, then advances the manifest WAL checkpoint and reclaims obsolete WAL segments. The queue and timing bookkeeping live directly in [`engine/lsm/flush_runtime.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/flush_runtime.go); SST persistence and manifest install are in [`engine/lsm/table_builder.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/table_builder.go) and [`engine/lsm/level_manager.go`](https://github.com/feichai0017/NoKV/blob/main/engine/lsm/level_manager.go).

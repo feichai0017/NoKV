@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Generate the 1200×630 Open Graph card for the NoKV landing page.
 //
 // Run:    npm --prefix docs run gen:og

@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # NoKV Code Contract
 
 This document is the repository-level code contract for NoKV. It is stricter

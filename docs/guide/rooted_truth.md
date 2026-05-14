@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Rooted Truth — `meta/root`
 
 The `meta/root/` tree implements NoKV's **rooted truth kernel**: a typed, append-only event log whose committed tail is the single source of truth for cluster-level metadata (root-issued authority grants, allocator fences, region lifecycle, pending peer/range changes).

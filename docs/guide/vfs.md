@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # VFS
 
 The `vfs` package provides a small filesystem abstraction used by WAL, manifest, SST, slab, and raftstore paths.
