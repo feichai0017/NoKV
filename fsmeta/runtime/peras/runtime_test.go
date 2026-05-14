@@ -1677,6 +1677,7 @@ func BenchmarkRuntimeCreate(b *testing.B) {
 	committer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(b, 3),
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1 << 30,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1701,6 +1702,7 @@ func BenchmarkRuntimeCreateParallel(b *testing.B) {
 	committer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(b, 3),
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1 << 30,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1769,6 +1771,7 @@ func BenchmarkRuntimeFlushInstallParallelism(b *testing.B) {
 					Authority:                 provider,
 					Witnesses:                 testRuntimePerasWitnesses(b, 3),
 					Installer:                 installer,
+					VisibleLog:                &recordingVisibleLog{},
 					SegmentBatchSize:          1 << 30,
 					SegmentMaxReplayMutations: 2,
 					SegmentInstallParallelism: parallelism,
