@@ -37,7 +37,12 @@ func TestValidatePerasSegmentInstallResponseChecksRootAndCounts(t *testing.T) {
 }
 
 func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
-	segment := testRaftstoreInstallSegment(t, [][]byte{[]byte("dentry/a"), []byte("inode/a")})
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
 	stats := segment.Stats()
 	kv := &fakeRaftstorePerasInstallKV{resp: &kvrpcpb.PerasInstallSegmentResponse{
@@ -67,6 +72,10 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	require.NotNil(t, req)
 	require.Equal(t, uint64(1), req.GetInstallVersion())
 	require.True(t, req.GetMaterializeMvcc())
+	require.Len(t, req.GetRoutingKeys(), 1)
+	require.NotEmpty(t, req.GetDependencyKeys())
+	require.NotEmpty(t, req.GetCatalogKeys())
+	require.Len(t, req.GetMaterializedKeys(), int(stats.EntryCount))
 }
 
 func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
@@ -162,6 +171,7 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 	require.Greater(t, kv.maxInFlight(), int32(1))
 	require.Equal(t, int32(1), kv.payloadRouteCount())
 	require.Equal(t, int32(len(routingKeys)-1), kv.indexOnlyRouteCount())
+	require.Equal(t, int32(len(routingKeys)), kv.headerRouteCount())
 }
 
 func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegment {
@@ -222,6 +232,7 @@ type parallelRaftstorePerasInstallKV struct {
 	calls           atomic.Int32
 	payloadRoutes   atomic.Int32
 	indexOnlyRoutes atomic.Int32
+	headerRoutes    atomic.Int32
 }
 
 func (f *parallelRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
@@ -229,6 +240,9 @@ func (f *parallelRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Contex
 		f.indexOnlyRoutes.Add(1)
 	} else {
 		f.payloadRoutes.Add(1)
+	}
+	if len(req.GetRoutingKeys()) > 0 && len(req.GetDependencyKeys()) > 0 {
+		f.headerRoutes.Add(1)
 	}
 	active := f.active.Add(1)
 	for {
@@ -278,4 +292,8 @@ func (f *parallelRaftstorePerasInstallKV) payloadRouteCount() int32 {
 
 func (f *parallelRaftstorePerasInstallKV) indexOnlyRouteCount() int32 {
 	return f.indexOnlyRoutes.Load()
+}
+
+func (f *parallelRaftstorePerasInstallKV) headerRouteCount() int32 {
+	return f.headerRoutes.Load()
 }

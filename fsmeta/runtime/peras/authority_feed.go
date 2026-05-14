@@ -7,6 +7,7 @@ import (
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -94,7 +95,7 @@ func (f *RootAuthorityFeed) bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	grants := make([]AuthorityGrant, 0, len(resp.GetGrants()))
+	grants := make([]rootproto.PerasAuthorityGrant, 0, len(resp.GetGrants()))
 	for _, pbGrant := range resp.GetGrants() {
 		grant := metawire.RootPerasAuthorityGrantFromProto(pbGrant)
 		if grant.Valid() {

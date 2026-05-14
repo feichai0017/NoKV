@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	local "github.com/feichai0017/NoKV/local"
+	"github.com/feichai0017/NoKV/metrics"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/failpoints"
@@ -367,7 +368,7 @@ func TestGRPCTransportMetricsBlockedPeers(t *testing.T) {
 	require.Equal(t, int64(0), snap.BlockedPeers)
 }
 
-func logTransportMetric(t *testing.T, label string, snap transportpkg.GRPCTransportMetrics) {
+func logTransportMetric(t *testing.T, label string, snap metrics.GRPCTransportMetrics) {
 	if os.Getenv("CHAOS_TRACE_METRICS") == "" {
 		return
 	}

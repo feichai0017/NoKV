@@ -155,6 +155,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		if pairs, ok, err := e.readDirPlusFromPerasView(mount, dentries); err != nil {
 			return nil, err
 		} else if ok {
+			if useDirPage {
+				e.materializeDirPage(pageKey, frontier, pairs)
+			}
 			return pairs, nil
 		}
 	}
@@ -210,11 +213,20 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		// Materialize is best-effort: if Invalidate fired since we read,
 		// the cache drops the write and the next call re-fetches. Encoding must
 		// be all-or-none: a partial cached page would be worse than a miss.
-		if entries, err := encodeDirPageEntries(out); err == nil {
-			_ = e.dirPages.MaterializeAsync(pageKey, frontier, entries)
-		}
+		e.materializeDirPage(pageKey, frontier, out)
 	}
 	return out, nil
+}
+
+func (e *Executor) materializeDirPage(pageKey dirpage.PageKey, frontier uint64, pairs []fsmeta.DentryAttrPair) {
+	if e == nil || e.dirPages == nil {
+		return
+	}
+	entries, err := encodeDirPageEntries(pairs)
+	if err != nil {
+		return
+	}
+	_ = e.dirPages.MaterializeAsync(pageKey, frontier, entries)
 }
 
 func (e *Executor) readDirPlusFromPerasView(mount fsmeta.MountIdentity, dentries []fsmeta.DentryRecord) ([]fsmeta.DentryAttrPair, bool, error) {

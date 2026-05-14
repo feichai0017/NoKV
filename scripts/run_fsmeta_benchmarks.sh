@@ -14,6 +14,7 @@ profile="${NOKV_FSMETA_PROFILE:-median}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 coord_addr="${NOKV_FSMETA_COORDINATOR_ADDR:-127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392}"
 fsmeta_addr="${NOKV_FSMETA_ADDR:-127.0.0.1:8090}"
+fsmeta_metrics_addr="${NOKV_FSMETA_METRICS_ADDR:-127.0.0.1:9400}"
 mount="${NOKV_FSMETA_MOUNT:-fsmeta-bench}"
 wait_attempts="${NOKV_FSMETA_WAIT_ATTEMPTS:-180}"
 wait_interval="${NOKV_FSMETA_WAIT_INTERVAL:-1}"
@@ -27,11 +28,6 @@ plain_pid=""
 cached_pid=""
 profile_pids=()
 
-if [[ "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}" == "true" || "${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}" == "1" ]]; then
-	export NOKV_PERAS_WITNESS="${NOKV_PERAS_WITNESS:-true}"
-	export NOKV_FSMETA_PERAS_HOLDER_ID="${NOKV_FSMETA_PERAS_HOLDER_ID:-fsmeta-compose-holder}"
-fi
-
 case "$profile" in
 	median)
 		default_clients=12
@@ -44,7 +40,7 @@ case "$profile" in
 		default_artifacts_per_entry=8
 		default_workspaces=4
 		default_session_ttl=5m
-		default_stale_session_ttl=2s
+		default_stale_session_ttl=20ms
 		default_timeout=25m
 		default_stabilize_seconds=20
 		;;
@@ -59,7 +55,7 @@ case "$profile" in
 		default_artifacts_per_entry=10
 		default_workspaces=8
 		default_session_ttl=5m
-		default_stale_session_ttl=2s
+		default_stale_session_ttl=100ms
 		default_timeout=120m
 		default_stabilize_seconds=45
 		;;
@@ -107,6 +103,75 @@ wait_port() {
 		sleep "$wait_interval"
 	done
 	echo "timed out waiting for $addr" >&2
+	return 1
+}
+
+peras_idle_snapshot() {
+	local metrics_url="http://${fsmeta_metrics_addr%%,*}/debug/vars"
+	python3 - "$metrics_url" <<'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+with urllib.request.urlopen(url, timeout=2) as response:
+	data = json.load(response)
+
+peras = data.get("nokv_fsmeta_peras")
+if not isinstance(peras, dict):
+	executor = data.get("nokv_fsmeta_executor", {})
+	peras = executor.get("peras_committer", {})
+
+def number(name):
+	value = peras.get(name, 0)
+	if isinstance(value, bool):
+		return int(value)
+	if isinstance(value, (int, float)):
+		return int(value)
+	return 0
+
+state = {
+	"pending": number("pending"),
+	"install_queue_depth": number("segment_install_queue_depth"),
+	"seal_queue_depth": number("segment_seal_queue_depth"),
+	"flush_total": number("flush_total"),
+	"segment_total": number("segment_total"),
+	"seal_total": number("seal_total"),
+}
+print(json.dumps(state, sort_keys=True, separators=(",", ":")))
+if state["pending"] == 0 and state["install_queue_depth"] == 0 and state["seal_queue_depth"] == 0:
+	sys.exit(0)
+sys.exit(1)
+PY
+}
+
+wait_fsmeta_peras_idle() {
+	local timeout_seconds="${NOKV_FSMETA_PERAS_IDLE_TIMEOUT_SECONDS:-180}"
+	local interval_seconds="${NOKV_FSMETA_PERAS_IDLE_INTERVAL_SECONDS:-1}"
+	local stable_polls="${NOKV_FSMETA_PERAS_IDLE_STABLE_POLLS:-2}"
+	local deadline=$((SECONDS + timeout_seconds))
+	local last=""
+	local stable=0
+	local snapshot=""
+
+	while (( SECONDS < deadline )); do
+		if snapshot="$(peras_idle_snapshot 2>/dev/null)"; then
+			if [[ "$snapshot" == "$last" ]]; then
+				stable=$((stable + 1))
+			else
+				stable=1
+				last="$snapshot"
+			fi
+			if (( stable >= stable_polls )); then
+				return 0
+			fi
+		else
+			stable=0
+			last=""
+		fi
+		sleep "$interval_seconds"
+	done
+	echo "timed out waiting for fsmeta Peras idle state; last=$last" >&2
 	return 1
 }
 
@@ -246,7 +311,7 @@ print_bench_summary() {
 
 run_compose_benchmarks() {
 	local workloads="${NOKV_FSMETA_WORKLOADS:-multi-workspace-autoscale,mixed,durable-snapshot,checkpoint-storm,hotspot-fanin,watch-subtree,negative-lookup}"
-	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}.csv}"
+	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}_isolated.csv}"
 	case "$output" in
 		/*) ;;
 		*) output="$ROOT/$output" ;;
@@ -273,17 +338,50 @@ run_compose_benchmarks() {
 			sleep "$stabilize_seconds"
 		fi
 	fi
+	wait_fsmeta_peras_idle
 	start_profile_capture "$workloads"
-	set +e
-	run_bench "$fsmeta_addr" "$workloads" "$output"
-	local bench_status=$?
-	set -e
+	local combined_tmp="$output.tmp"
+	local wrote_header=0
+	local bench_status=0
+	rm -f "$combined_tmp" "$output"
+	IFS=',' read -r -a workload_list <<<"$workloads"
+	for workload in "${workload_list[@]}"; do
+		workload="${workload//[[:space:]]/}"
+		if [[ -z "$workload" ]]; then
+			continue
+		fi
+		local safe_workload="${workload//[^A-Za-z0-9_-]/_}"
+		local workload_output="$output_dir/fsmeta_compose_${profile}_${run_id}_${safe_workload}.csv"
+		echo "running isolated fsmeta workload: $workload"
+		set +e
+		run_bench "$fsmeta_addr" "$workload" "$workload_output"
+		bench_status=$?
+		set -e
+		if [[ "$bench_status" -ne 0 ]]; then
+			break
+		fi
+		if [[ "$wrote_header" -eq 0 ]]; then
+			cat "$workload_output" >"$combined_tmp"
+			wrote_header=1
+		else
+			tail -n +2 "$workload_output" >>"$combined_tmp"
+		fi
+		print_bench_summary "$workload_output"
+		wait_fsmeta_peras_idle
+	done
 	finish_profile_capture
 	if [[ "$bench_status" -ne 0 ]]; then
+		rm -f "$combined_tmp"
 		exit "$bench_status"
 	fi
+	if [[ "$wrote_header" -eq 0 ]]; then
+		echo "no fsmeta workloads selected" >&2
+		rm -f "$combined_tmp"
+		exit 2
+	fi
+	mv "$combined_tmp" "$output"
 	print_bench_summary "$output"
-	echo "wrote fsmeta benchmark summary: $output"
+	echo "wrote isolated fsmeta benchmark summary: $output"
 	if [[ "${NOKV_FSMETA_COMPOSE_DOWN:-0}" == "1" ]]; then
 		docker compose down -v
 	fi

@@ -122,17 +122,17 @@ func EncodeInodeValue(record InodeRecord) ([]byte, error) {
 	if len(record.OpaqueAttrs) > MaxInodeOpaqueAttrsBytes {
 		return nil, ErrInvalidValue
 	}
-	body := make([]byte, 0, 41+binary.MaxVarintLen64+len(record.OpaqueAttrs))
-	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
-	body = append(body, typ)
-	body = binary.BigEndian.AppendUint64(body, record.Size)
-	body = binary.BigEndian.AppendUint32(body, record.Mode)
-	body = binary.BigEndian.AppendUint32(body, record.LinkCount)
-	body = binary.BigEndian.AppendUint64(body, uint64(record.CreatedUnixNs))
-	body = binary.BigEndian.AppendUint64(body, uint64(record.UpdatedUnixNs))
-	body = binary.AppendUvarint(body, uint64(len(record.OpaqueAttrs)))
-	body = append(body, record.OpaqueAttrs...)
-	return encodeValue(ValueKindInode, body), nil
+	out := encodeValuePrefix(ValueKindInode, 41+binary.MaxVarintLen64+len(record.OpaqueAttrs))
+	out = binary.BigEndian.AppendUint64(out, uint64(record.Inode))
+	out = append(out, typ)
+	out = binary.BigEndian.AppendUint64(out, record.Size)
+	out = binary.BigEndian.AppendUint32(out, record.Mode)
+	out = binary.BigEndian.AppendUint32(out, record.LinkCount)
+	out = binary.BigEndian.AppendUint64(out, uint64(record.CreatedUnixNs))
+	out = binary.BigEndian.AppendUint64(out, uint64(record.UpdatedUnixNs))
+	out = binary.AppendUvarint(out, uint64(len(record.OpaqueAttrs)))
+	out = append(out, record.OpaqueAttrs...)
+	return out, nil
 }
 
 // DecodeInodeValue decodes an inode record.
@@ -159,13 +159,13 @@ func EncodeDentryValue(record DentryRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	body := make([]byte, 0, 8+binary.MaxVarintLen64+len(record.Name)+8+1)
-	body = binary.BigEndian.AppendUint64(body, uint64(record.Parent))
-	body = binary.AppendUvarint(body, uint64(len(record.Name)))
-	body = append(body, record.Name...)
-	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
-	body = append(body, typ)
-	return encodeValue(ValueKindDentry, body), nil
+	out := encodeValuePrefix(ValueKindDentry, 8+binary.MaxVarintLen64+len(record.Name)+8+1)
+	out = binary.BigEndian.AppendUint64(out, uint64(record.Parent))
+	out = binary.AppendUvarint(out, uint64(len(record.Name)))
+	out = append(out, record.Name...)
+	out = binary.BigEndian.AppendUint64(out, uint64(record.Inode))
+	out = append(out, typ)
+	return out, nil
 }
 
 // DecodeDentryValue decodes a dentry record.
@@ -238,11 +238,16 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 }
 
 func encodeValue(kind ValueKind, body []byte) []byte {
-	out := make([]byte, 0, len(valueMagic)+2+len(body))
+	out := encodeValuePrefix(kind, len(body))
+	out = append(out, body...)
+	return out
+}
+
+func encodeValuePrefix(kind ValueKind, bodyLen int) []byte {
+	out := make([]byte, 0, len(valueMagic)+2+bodyLen)
 	out = append(out, valueMagic...)
 	out = append(out, valueSchemaVersion)
 	out = append(out, byte(kind))
-	out = append(out, body...)
 	return out
 }
 

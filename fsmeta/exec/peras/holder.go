@@ -9,6 +9,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type HolderConfig struct {
@@ -342,6 +343,8 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		left.DescriptorDigest != right.DescriptorDigest ||
 		left.PredicateProofDigest != right.PredicateProofDigest ||
 		left.ExecutionPlanDigest != right.ExecutionPlanDigest ||
+		!predicateProofsEqual(left.PredicateProofs, right.PredicateProofs) ||
+		!guardProofsEqual(left.GuardProofs, right.GuardProofs) ||
 		left.Segment != right.Segment ||
 		left.Durability != right.Durability ||
 		left.Atomicity.Splittable != right.Atomicity.Splittable ||
@@ -364,4 +367,24 @@ func replayOperationsEqual(left, right ReplayOperation) bool {
 		}
 	}
 	return true
+}
+
+func predicateProofsEqual(left, right []proof.PredicateProof) bool {
+	return slices.EqualFunc(left, right, func(l, r proof.PredicateProof) bool {
+		return l.SchemaVersion == r.SchemaVersion &&
+			l.Rule == r.Rule &&
+			l.Present == r.Present &&
+			l.Version == r.Version &&
+			l.Source == r.Source &&
+			l.ProofFrontier == r.ProofFrontier &&
+			l.ProofKind == r.ProofKind &&
+			l.ScopeDigest == r.ScopeDigest &&
+			l.Digest == r.Digest &&
+			bytes.Equal(l.Key, r.Key) &&
+			bytes.Equal(l.Value, r.Value)
+	})
+}
+
+func guardProofsEqual(left, right []proof.GuardProof) bool {
+	return slices.Equal(left, right)
 }

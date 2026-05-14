@@ -122,7 +122,7 @@ func TestMonitorRefreshesPerasAuthorityTable(t *testing.T) {
 	require.NoError(t, mon.bootstrap(context.Background()))
 
 	require.Equal(t, 1, list.perasCalls)
-	require.Equal(t, []runtimeperas.AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, table.Snapshot())
 
 	retired := rootevent.PerasAuthorityRetired(grant)
 	mon.applyRootEvent(context.Background(), retired)
@@ -130,7 +130,7 @@ func TestMonitorRefreshesPerasAuthorityTable(t *testing.T) {
 
 	next := testMonitorPerasGrant("peras-2", 2)
 	mon.applyRootEvent(context.Background(), rootevent.PerasAuthorityGranted(next))
-	require.Equal(t, []runtimeperas.AuthorityGrant{next}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{next}, table.Snapshot())
 }
 
 func TestMonitorCompletesPendingSubtreeHandoffs(t *testing.T) {

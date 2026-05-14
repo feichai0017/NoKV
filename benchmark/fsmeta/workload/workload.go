@@ -37,6 +37,8 @@ const (
 	maxOperationAttempts = 4
 	operationRetryBase   = 10 * time.Millisecond
 	operationRetryMax    = 100 * time.Millisecond
+	watchDeliveryPoll    = 10 * time.Millisecond
+	watchTailTimeout     = 10 * time.Second
 )
 
 // Client is the fsmeta operation surface needed by metadata workloads.
@@ -77,6 +79,7 @@ type WatchSubtreeConfig struct {
 type DurableSnapshotConfig struct {
 	Mount     fsmeta.MountID
 	RunID     string
+	Clients   int
 	Files     int
 	Snapshots int
 	PageLimit uint32
@@ -120,18 +123,20 @@ type Sample struct {
 }
 
 type SummaryRow struct {
-	Workload     string
-	Driver       string
-	RunID        string
-	Operation    string
-	Count        int
-	Errors       int
-	Throughput   float64
-	AverageUS    float64
-	P50US        float64
-	P95US        float64
-	P99US        float64
-	DurationSecs float64
+	Workload             string
+	Driver               string
+	RunID                string
+	Operation            string
+	Count                int
+	Errors               int
+	Throughput           float64
+	ActiveThroughput     float64
+	ActiveDurationSecs   float64
+	AverageUS            float64
+	P50US                float64
+	P95US                float64
+	P99US                float64
+	WorkloadDurationSecs float64
 }
 
 func RunCheckpointStorm(ctx context.Context, cli Client, cfg CheckpointStormConfig) (Result, error) {
@@ -316,8 +321,11 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 	}
 
 	starts := newWatchStarts()
+	var successfulCreates atomic.Int64
+	var deliveredCreates atomic.Int64
+	createsDone := make(chan struct{})
 	done := make(chan error, 1)
-	go collectWatchEvents(ctx, stream, starts, cfg.Files, rec, done)
+	go collectWatchEvents(ctx, stream, starts, &successfulCreates, &deliveredCreates, createsDone, rec, done)
 
 	var next atomic.Int64
 	var wg sync.WaitGroup
@@ -332,7 +340,7 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 				}
 				name := fmt.Sprintf("watch-%s-file-%08d", cfg.RunID, idx)
 				starts.put(name, time.Now())
-				rec.recordCall("watch_create", func() error {
+				duration, err := timeCall(func() error {
 					_, err := cli.Create(ctx, fsmeta.CreateRequest{
 						Mount:  cfg.Mount,
 						Parent: dirInode,
@@ -344,12 +352,20 @@ func RunWatchSubtree(ctx context.Context, cli Client, cfg WatchSubtreeConfig) (R
 					})
 					return err
 				})
+				if err != nil {
+					starts.delete(name)
+				} else {
+					successfulCreates.Add(1)
+				}
+				rec.record("watch_create", duration, err)
 			}
 		}()
 	}
 	wg.Wait()
-	if err := <-done; err != nil {
-		rec.record("watch_notify", 0, err)
+	close(createsDone)
+	closeWatchAfterDelivery(stream, &successfulCreates, &deliveredCreates)
+	if watchErr := <-done; watchErr != nil {
+		rec.record("watch_notify", 0, watchErr)
 	}
 
 	return finishResult(WatchSubtree, cfg.RunID, started, rec.snapshot())
@@ -425,33 +441,50 @@ func RunDurableSnapshot(ctx context.Context, cli Client, cfg DurableSnapshotConf
 			return err
 		})
 	}
-	for i := 0; i < cfg.Snapshots; i++ {
-		var token fsmeta.SnapshotSubtreeToken
-		var snapshotErr error
-		rec.recordCall("snapshot_subtree", func() error {
-			token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
-			return snapshotErr
-		})
-		if snapshotErr != nil {
-			continue
-		}
-		if token.ReadVersion != 0 {
-			rec.recordCall("snapshot_readdirplus", func() error {
-				_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-					Mount:           cfg.Mount,
-					Parent:          root,
-					Limit:           cfg.PageLimit,
-					SnapshotVersion: token.ReadVersion,
-				})
-				return err
-			})
-		}
-		rec.recordCall("retire_snapshot_subtree", func() error {
-			return snapshotCli.RetireSnapshotSubtree(ctx, token)
-		})
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for worker := 0; worker < cfg.Clients; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				idx := int(next.Add(1)) - 1
+				if idx >= cfg.Snapshots {
+					return
+				}
+				runDurableSnapshotCycle(ctx, cli, snapshotCli, cfg, root, rec)
+			}
+		}()
 	}
+	wg.Wait()
 
 	return finishResult(DurableSnapshot, cfg.RunID, started, rec.snapshot())
+}
+
+func runDurableSnapshotCycle(ctx context.Context, cli Client, snapshotCli DurableSnapshotClient, cfg DurableSnapshotConfig, root fsmeta.InodeID, rec *recorder) {
+	var token fsmeta.SnapshotSubtreeToken
+	var snapshotErr error
+	rec.recordCall("snapshot_subtree", func() error {
+		token, snapshotErr = snapshotCli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{Mount: cfg.Mount, RootInode: root})
+		return snapshotErr
+	})
+	if snapshotErr != nil {
+		return
+	}
+	if token.ReadVersion != 0 {
+		rec.recordCall("snapshot_readdirplus", func() error {
+			_, err := cli.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+				Mount:           cfg.Mount,
+				Parent:          root,
+				Limit:           cfg.PageLimit,
+				SnapshotVersion: token.ReadVersion,
+			})
+			return err
+		})
+	}
+	rec.recordCall("retire_snapshot_subtree", func() error {
+		return snapshotCli.RetireSnapshotSubtree(ctx, token)
+	})
 }
 
 func SummaryRows(result Result) []SummaryRow {
@@ -484,18 +517,20 @@ func SummaryRows(result Result) []SummaryRow {
 			avgUS = float64(total.Microseconds()) / float64(count)
 		}
 		rows = append(rows, SummaryRow{
-			Workload:     result.Name,
-			Driver:       result.Driver,
-			RunID:        result.RunID,
-			Operation:    op,
-			Count:        count,
-			Errors:       errors,
-			Throughput:   throughput(count, result.Duration),
-			AverageUS:    avgUS,
-			P50US:        percentileUS(latencies, 0.50),
-			P95US:        percentileUS(latencies, 0.95),
-			P99US:        percentileUS(latencies, 0.99),
-			DurationSecs: result.Duration.Seconds(),
+			Workload:             result.Name,
+			Driver:               result.Driver,
+			RunID:                result.RunID,
+			Operation:            op,
+			Count:                count,
+			Errors:               errors,
+			Throughput:           throughput(count, result.Duration),
+			ActiveThroughput:     throughput(count, total),
+			ActiveDurationSecs:   total.Seconds(),
+			AverageUS:            avgUS,
+			P50US:                percentileUS(latencies, 0.50),
+			P95US:                percentileUS(latencies, 0.95),
+			P99US:                percentileUS(latencies, 0.99),
+			WorkloadDurationSecs: result.Duration.Seconds(),
 		})
 	}
 	return rows
@@ -511,11 +546,13 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 		"count",
 		"errors",
 		"throughput_ops_sec",
+		"active_ops_per_sec",
+		"active_duration_sec",
 		"avg_latency_us",
 		"p50_latency_us",
 		"p95_latency_us",
 		"p99_latency_us",
-		"duration_sec",
+		"workload_duration_sec",
 	}); err != nil {
 		return err
 	}
@@ -528,11 +565,13 @@ func WriteSummaryCSV(w io.Writer, rows []SummaryRow) error {
 			strconv.Itoa(row.Count),
 			strconv.Itoa(row.Errors),
 			formatFloat(row.Throughput),
+			formatFloat(row.ActiveThroughput),
+			formatFloat(row.ActiveDurationSecs),
 			formatFloat(row.AverageUS),
 			formatFloat(row.P50US),
 			formatFloat(row.P95US),
 			formatFloat(row.P99US),
-			formatFloat(row.DurationSecs),
+			formatFloat(row.WorkloadDurationSecs),
 		}); err != nil {
 			return err
 		}
@@ -684,13 +723,51 @@ func (s *watchStarts) pop(name string) (time.Time, bool) {
 	return started, ok
 }
 
-func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscription, starts *watchStarts, target int, rec *recorder, done chan<- error) {
+func (s *watchStarts) delete(name string) {
+	s.mu.Lock()
+	delete(s.values, name)
+	s.mu.Unlock()
+}
+
+func closeWatchAfterDelivery(stream fsmetaclient.WatchSubscription, expected, delivered *atomic.Int64) {
+	deadline := time.NewTimer(watchTailTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(watchDeliveryPoll)
+	defer ticker.Stop()
+	for {
+		if delivered.Load() >= expected.Load() {
+			_ = stream.Close()
+			return
+		}
+		select {
+		case <-deadline.C:
+			_ = stream.Close()
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscription, starts *watchStarts, expected, delivered *atomic.Int64, createsDone <-chan struct{}, rec *recorder, done chan<- error) {
 	received := 0
-	for received < target {
+	for {
+		select {
+		case <-createsDone:
+			if received >= int(expected.Load()) {
+				done <- nil
+				return
+			}
+			createsDone = nil
+		default:
+		}
 		evt, err := stream.Recv()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) && received >= int(expected.Load()) {
 				done <- nil
+				return
+			}
+			if errors.Is(err, io.EOF) {
+				done <- fmt.Errorf("watch-subtree received %d/%d notifications before stream closed", received, expected.Load())
 				return
 			}
 			done <- err
@@ -704,6 +781,7 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 		if started, ok := starts.pop(name); ok {
 			rec.record("watch_notify", time.Since(started), nil)
 			received++
+			delivered.Add(1)
 		}
 		select {
 		case <-ctx.Done():
@@ -712,7 +790,6 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 		default:
 		}
 	}
-	done <- nil
 }
 
 func waitForWatchName(ctx context.Context, stream fsmetaclient.WatchSubscription, want string) error {
@@ -824,6 +901,9 @@ func normalizeDurableSnapshotConfig(cfg DurableSnapshotConfig) DurableSnapshotCo
 	}
 	if cfg.RunID == "" {
 		cfg.RunID = NewRunID()
+	}
+	if cfg.Clients <= 0 {
+		cfg.Clients = 1
 	}
 	if cfg.Files <= 0 {
 		cfg.Files = 128

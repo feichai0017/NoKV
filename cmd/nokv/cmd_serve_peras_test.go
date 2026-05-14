@@ -12,6 +12,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
@@ -22,7 +23,7 @@ import (
 func TestStartServePerasWitnessUsesRootAuthorityFeed(t *testing.T) {
 	scope := servePerasAuthorityScope()
 	source := &servePerasAuthoritySource{
-		grants: []runtimeperas.AuthorityGrant{servePerasAuthorityGrant(scope)},
+		grants: []rootproto.PerasAuthorityGrant{servePerasAuthorityGrant(scope)},
 	}
 	opener := &servePerasTestWALOpener{dir: t.TempDir()}
 	defer opener.close(t)
@@ -62,7 +63,7 @@ func (o *servePerasTestWALOpener) close(t *testing.T) {
 }
 
 type servePerasAuthoritySource struct {
-	grants []runtimeperas.AuthorityGrant
+	grants []rootproto.PerasAuthorityGrant
 }
 
 func (s *servePerasAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
@@ -97,8 +98,8 @@ func servePerasAuthorityScope() compile.AuthorityScope {
 	}
 }
 
-func servePerasAuthorityGrant(scope compile.AuthorityScope) runtimeperas.AuthorityGrant {
-	return runtimeperas.AuthorityGrant{
+func servePerasAuthorityGrant(scope compile.AuthorityScope) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",

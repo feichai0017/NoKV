@@ -129,6 +129,54 @@ func mustAdmit(detector *ConflictDetector, id OperationID, op compile.Materializ
 	return err
 }
 
+func testFootprintOp(delta compile.SemanticDelta) compile.MaterializedOp {
+	if delta.Eligibility == 0 {
+		delta.Eligibility = compile.EligibilityVisibleCommit
+	}
+	reads := make([]compile.KeyRef, 0, len(delta.ReadPredicates))
+	writes := make([]compile.KeyRef, 0, len(delta.WriteEffects))
+	conflicts := make([]compile.KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))
+	hasPrefixRead := false
+	for _, predicate := range delta.ReadPredicates {
+		mode := compile.KeyAccessRead
+		if predicate.Kind == compile.PredicatePrefixScan {
+			mode = compile.KeyAccessReadPrefix
+			hasPrefixRead = true
+		}
+		ref := compile.KeyRef{Mode: mode, Key: append([]byte(nil), predicate.Key...), Opaque: true}
+		reads = append(reads, ref)
+		conflicts = append(conflicts, ref)
+		if predicate.Kind == compile.PredicatePrefixScan {
+			delta.SlowReason = compile.SlowReasonRangeRead
+		}
+	}
+	effects := make([]compile.EffectPlan, 0, len(delta.WriteEffects))
+	for i, effect := range delta.WriteEffects {
+		ref := compile.KeyRef{Mode: compile.KeyAccessWrite, Key: append([]byte(nil), effect.Key...), Opaque: true}
+		writes = append(writes, ref)
+		conflicts = append(conflicts, ref)
+		effects = append(effects, compile.EffectPlan{
+			ID:       compile.MutationID(i),
+			Kind:     effect.Kind,
+			Key:      append([]byte(nil), effect.Key...),
+			Value:    append([]byte(nil), effect.Value...),
+			Concrete: effect.Kind == compile.EffectPut || effect.Kind == compile.EffectDelete,
+			Opaque:   true,
+		})
+	}
+	return compile.MaterializedOp{CompiledOp: compile.CompiledOp{
+		Delta:   delta,
+		Effects: effects,
+		Footprint: compile.KeyFootprint{
+			Reads:         reads,
+			Writes:        writes,
+			ConflictKeys:  conflicts,
+			HasPrefixRead: hasPrefixRead,
+			HasOpaqueKeys: true,
+		},
+	}}
+}
+
 func opWithReads(keys ...string) compile.MaterializedOp {
 	delta := compile.SemanticDelta{Eligibility: compile.EligibilityVisibleCommit}
 	for _, key := range keys {
@@ -137,17 +185,17 @@ func opWithReads(keys ...string) compile.MaterializedOp {
 			Key:  []byte(key),
 		})
 	}
-	return compile.MaterializeDelta(delta, nil)
+	return testFootprintOp(delta)
 }
 
 func opWithPrefixRead(prefix string) compile.MaterializedOp {
-	return compile.MaterializeDelta(compile.SemanticDelta{
+	return testFootprintOp(compile.SemanticDelta{
 		Eligibility: compile.EligibilityVisibleCommit,
 		ReadPredicates: []compile.Predicate{{
 			Kind: compile.PredicatePrefixScan,
 			Key:  []byte(prefix),
 		}},
-	}, nil)
+	})
 }
 
 func opWithWrites(keys ...string) compile.MaterializedOp {
@@ -158,7 +206,7 @@ func opWithWrites(keys ...string) compile.MaterializedOp {
 			Key:  []byte(key),
 		})
 	}
-	return compile.MaterializeDelta(delta, nil)
+	return testFootprintOp(delta)
 }
 
 func keyForBench(i int) string {

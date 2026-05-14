@@ -10,6 +10,7 @@ import (
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -119,7 +120,7 @@ func (m *monitor) bootstrap(ctx context.Context) error {
 		return err
 	}
 	if m.peras != nil {
-		grants := make([]runtimeperas.AuthorityGrant, 0, len(peras.GetGrants()))
+		grants := make([]rootproto.PerasAuthorityGrant, 0, len(peras.GetGrants()))
 		for _, grant := range peras.GetGrants() {
 			parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
 			if parsed.Valid() {

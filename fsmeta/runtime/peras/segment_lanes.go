@@ -145,6 +145,7 @@ func (c *Runtime) installSegmentWithRetry(ctx context.Context, job perasFlushJob
 			Segment:         job.segment,
 			Payload:         job.payload,
 			PayloadDigest:   job.digest,
+			Install:         job.install,
 			MaterializeMVCC: job.materialize,
 		})
 		if err == nil {
@@ -180,6 +181,10 @@ func perasSegmentInstallRetryDelay(err error, attempt int) time.Duration {
 
 func (c *Runtime) recordInstallJobShape(job perasFlushJob) {
 	if c == nil {
+		return
+	}
+	if len(job.install.RoutingKeys) > 0 {
+		c.recordInstallShape(len(job.payload), len(job.install.RoutingKeys))
 		return
 	}
 	routeKeys, err := SegmentInstallRoutingKeys(job.segment, job.materialize)

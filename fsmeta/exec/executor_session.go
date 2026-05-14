@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program compile.OpenWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+	delta := program.Compiled.Delta
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
+	plan := delta.Plan
 	view := e.newPerasReadView(ctx)
 	inode, ok, err := view.readInode(mount, req.Inode)
 	if err != nil {
@@ -58,10 +60,14 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
-		perasPutEffect(plan.MutateKeys[0], value),
-		perasPutEffect(plan.MutateKeys[1], value),
+	evidence := view.predicateEvidenceForDelta(delta)
+	concrete, err := compile.MaterializeOpenWriteSession(program, compile.OpenWriteSessionValues{
+		SessionValue:    value,
+		PredicateProofs: evidence.Proofs,
 	})
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
 	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
@@ -72,10 +78,12 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, delta co
 	return record, true, nil
 }
 
-func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+	delta := program.Compiled.Delta
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
+	plan := delta.Plan
 	view := e.newPerasReadView(ctx)
 	nowTime := e.clock()
 	expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
@@ -102,10 +110,14 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, del
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
-		perasPutEffect(plan.MutateKeys[0], value),
-		perasPutEffect(plan.MutateKeys[1], value),
+	evidence := view.predicateEvidenceForDelta(delta)
+	concrete, err := compile.MaterializeHeartbeatWriteSession(program, compile.HeartbeatWriteSessionValues{
+		SessionValue:    value,
+		PredicateProofs: evidence.Proofs,
 	})
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
 	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
@@ -116,10 +128,12 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, del
 	return record, true, nil
 }
 
-func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.CloseWriteSessionRequest) (bool, error) {
+func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program compile.CloseWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.CloseWriteSessionRequest) (bool, error) {
+	delta := program.Compiled.Delta
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
+	plan := delta.Plan
 	view := e.newPerasReadView(ctx)
 	session, ok, err := view.readSession(plan.ReadKeys[0])
 	if err != nil {
@@ -128,7 +142,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	if !ok || session.Inode != req.Inode {
 		return false, nil
 	}
-	effects := []compile.WriteEffect{perasDeleteEffect(plan.MutateKeys[0])}
+	deleteOwner := false
 	ownerKey, err := fsmeta.EncodeInodeSessionKey(mount, session.Inode)
 	if err != nil {
 		return false, err
@@ -136,14 +150,21 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, delta c
 	if owner, ok, err := view.readSession(ownerKey); err != nil {
 		return false, err
 	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
-		effects = append(effects, perasDeleteEffect(ownerKey))
+		deleteOwner = true
 	}
-	concrete := view.materializePerasOp(delta, effects)
+	evidence := view.predicateEvidenceForDelta(delta)
+	concrete, err := compile.MaterializeCloseWriteSession(program, compile.CloseWriteSessionValues{
+		DeleteOwner:     deleteOwner,
+		PredicateProofs: evidence.Proofs,
+	})
+	if err != nil {
+		return false, err
+	}
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
 func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount fsmeta.MountIdentity, record fsmeta.SessionRecord) (bool, error) {
-	delta, err := compile.CloseWriteSession(fsmeta.CloseWriteSessionRequest{
+	program, err := compile.CompileCloseWriteSessionProgram(fsmeta.CloseWriteSessionRequest{
 		Mount:   mount.MountID,
 		Inode:   record.Inode,
 		Session: record.Session,
@@ -151,7 +172,7 @@ func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount 
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCloseWriteSession(ctx, delta, delta.Plan, mount, fsmeta.CloseWriteSessionRequest{
+	return e.tryPerasVisibleCloseWriteSession(ctx, program, mount, fsmeta.CloseWriteSessionRequest{
 		Mount:   mount.MountID,
 		Inode:   record.Inode,
 		Session: record.Session,
@@ -190,10 +211,11 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		return fsmeta.SessionRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.OpenWriteSession(req, mount)
+	program, err := compile.CompileOpenWriteSessionProgram(req, mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -201,7 +223,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if record, committed, err := e.tryPerasVisibleOpenWriteSession(ctx, delta, plan, mount, req); committed || err != nil {
+	if record, committed, err := e.tryPerasVisibleOpenWriteSession(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
@@ -307,10 +329,11 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		return fsmeta.SessionRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.HeartbeatWriteSession(req, mount)
+	program, err := compile.CompileHeartbeatWriteSessionProgram(req, mount)
 	if err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
@@ -318,7 +341,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, delta, plan, req); committed || err != nil {
+	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, program, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
@@ -386,15 +409,16 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.CloseWriteSession(req, mount)
+	program, err := compile.CompileCloseWriteSessionProgram(req, mount)
 	if err != nil {
 		return err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
-	if committed, err := e.tryPerasVisibleCloseWriteSession(ctx, delta, plan, mount, req); committed || err != nil {
+	if committed, err := e.tryPerasVisibleCloseWriteSession(ctx, program, mount, req); committed || err != nil {
 		return err
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -444,10 +468,11 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.ExpireWriteSessions(req, mount)
+	program, err := compile.CompileExpireWriteSessionsProgram(req, mount)
 	if err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}

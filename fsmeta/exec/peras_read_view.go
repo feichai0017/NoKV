@@ -9,6 +9,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 func (e *Executor) perasOverlay() PerasOverlayReader {
@@ -61,7 +62,7 @@ func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.A
 	if e == nil || e.perasAuthority == nil {
 		return nil
 	}
-	retirer, ok := e.perasAuthority.(PerasAuthorityRetirer)
+	retirer, ok := e.perasAuthority.(fsperas.AuthorityRetirer)
 	if !ok {
 		return nil
 	}
@@ -77,7 +78,7 @@ func (e *Executor) drainPerasAuthority(ctx context.Context, scopes ...compile.Au
 	}
 	if e.perasCommitter != nil && e.perasAuthority != nil {
 		drainer, drainOK := e.perasCommitter.(PerasAuthorityDrainer)
-		retirer, retireOK := e.perasAuthority.(PerasAuthorityRetirer)
+		retirer, retireOK := e.perasAuthority.(fsperas.AuthorityRetirer)
 		if drainOK && retireOK {
 			if ctx == nil {
 				ctx = context.Background()
@@ -138,16 +139,16 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	}
 	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
 		if deleted {
-			v.remember(key, nil, false, compile.ReadSourceOverlay, 0)
+			v.remember(key, nil, false, proof.ReadSourceOverlay, 0)
 			return nil, false, nil
 		}
-		v.remember(key, value, true, compile.ReadSourceOverlay, 0)
+		v.remember(key, value, true, proof.ReadSourceOverlay, 0)
 		return value, true, nil
 	}
 	if index := v.executor.perasPredicateIndex(); index != nil {
 		present, known := index.KeyState(key)
 		if known && !present {
-			v.remember(key, nil, false, compile.ReadSourceUnknown, 0)
+			v.remember(key, nil, false, proof.ReadSourceUnknown, 0)
 			return nil, false, nil
 		}
 	}
@@ -163,18 +164,18 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	v.remember(key, value, ok, compile.ReadSourceBase, v.version)
+	v.remember(key, value, ok, proof.ReadSourceBase, v.version)
 	return value, ok, nil
 }
 
 type perasObservedValue struct {
 	value   []byte
 	present bool
-	source  compile.ReadSource
+	source  proof.ReadSource
 	version uint64
 }
 
-func (v *perasReadView) remember(key, value []byte, present bool, source compile.ReadSource, version uint64) {
+func (v *perasReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
 	if v == nil {
 		return
 	}
@@ -186,53 +187,14 @@ func (v *perasReadView) remember(key, value []byte, present bool, source compile
 	}
 }
 
-func (v *perasReadView) materializePerasOp(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.MaterializedOp {
+func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, effects []compile.WriteEffect) (compile.MaterializedOp, error) {
 	if v == nil || v.executor == nil {
-		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
+		return compile.MaterializeCompiledOpWithEvidence(compiled, effects, compile.PredicateEvidence{}, nil)
 	}
-	index := v.executor.perasPredicateIndex()
-	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
-	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(v.observed))
-	for i := range delta.ReadPredicates {
-		predicate := &delta.ReadPredicates[i]
-		if predicate.Kind == compile.PredicatePrefixScan {
-			continue
-		}
-		seen[string(predicate.Key)] = struct{}{}
-		if observed, ok := v.observed[string(predicate.Key)]; ok {
-			applyPerasObservedPredicate(predicate, observed)
-			continue
-		}
-		if allowAbsentDowngrade &&
-			predicate.Kind == compile.PredicateObservedValue &&
-			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
-			predicate.Kind = compile.PredicateNotExists
-			predicate.ExpectedValue = nil
-			predicate.HasExpectedValue = false
-			predicate.RuntimeChecked = true
-		}
-	}
-	if len(v.observed) == 0 {
-		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
-	}
-	keys := make([]string, 0, len(v.observed))
-	for key := range v.observed {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		observed := v.observed[key]
-		predicate := compile.Predicate{Key: []byte(key)}
-		applyPerasObservedPredicate(&predicate, observed)
-		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
-	}
-	return compile.MaterializeDelta(concretePerasDelta(delta, effects), v.predicateProofs())
+	return compile.MaterializeCompiledOpWithEvidence(compiled, effects, v.predicateEvidenceForDelta(compiled.Delta), nil)
 }
 
-func (v *perasReadView) predicateProofs() []compile.PredicateProof {
+func (v *perasReadView) predicateProofs() []proof.PredicateProof {
 	if v == nil || len(v.observed) == 0 {
 		return nil
 	}
@@ -241,37 +203,37 @@ func (v *perasReadView) predicateProofs() []compile.PredicateProof {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	proofs := make([]compile.PredicateProof, 0, len(keys))
+	proofs := make([]proof.PredicateProof, 0, len(keys))
 	for _, key := range keys {
 		observed := v.observed[key]
-		proof := compile.PredicateProof{
-			Key:     []byte(key),
-			Present: observed.present,
-			Value:   cloneBytes(observed.value),
-			Version: observed.version,
-			Source:  observed.source,
-		}
-		proof.Digest = compile.PredicateProofDigest(proof.Key, proof.Value, proof.Present, proof.Version, proof.Source)
-		proofs = append(proofs, proof)
+		proofs = append(proofs, proof.NewPredicateProof([]byte(key), observed.value, observed.present, observed.version, observed.source, proof.ProofFrontier{}))
 	}
 	return proofs
 }
 
-func applyPerasObservedPredicate(predicate *compile.Predicate, observed perasObservedValue) {
-	if predicate == nil {
-		return
+func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) compile.PredicateEvidence {
+	if v == nil || v.executor == nil {
+		return compile.PredicateEvidence{}
 	}
-	if !observed.present {
-		predicate.Kind = compile.PredicateNotExists
-		predicate.ExpectedValue = nil
-		predicate.HasExpectedValue = false
-		predicate.RuntimeChecked = true
-		return
+	index := v.executor.perasPredicateIndex()
+	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
+	proofs := v.predicateProofs()
+	for _, predicate := range delta.ReadPredicates {
+		if predicate.Kind == compile.PredicatePrefixScan {
+			continue
+		}
+		if _, ok := v.observed[string(predicate.Key)]; ok {
+			continue
+		}
+		if allowAbsentDowngrade &&
+			predicate.Kind == compile.PredicateObservedValue &&
+			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{}))
+		}
 	}
-	predicate.Kind = compile.PredicateObservedValue
-	predicate.ExpectedValue = cloneBytes(observed.value)
-	predicate.HasExpectedValue = true
-	predicate.RuntimeChecked = true
+	return compile.PredicateEvidence{
+		Proofs: proofs,
+	}
 }
 
 func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {

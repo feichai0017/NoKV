@@ -4,22 +4,23 @@ import (
 	"sync"
 
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
 type epochTable struct {
 	mu      sync.Mutex
 	holders map[uint64]*fsperas.Holder
-	grants  map[uint64]AuthorityGrant
+	grants  map[uint64]rootproto.PerasAuthorityGrant
 }
 
 func newEpochTable() *epochTable {
 	return &epochTable{
 		holders: make(map[uint64]*fsperas.Holder),
-		grants:  make(map[uint64]AuthorityGrant),
+		grants:  make(map[uint64]rootproto.PerasAuthorityGrant),
 	}
 }
 
-func (t *epochTable) holder(grant AuthorityGrant) (*fsperas.Holder, bool) {
+func (t *epochTable) holder(grant rootproto.PerasAuthorityGrant) (*fsperas.Holder, bool) {
 	if t == nil {
 		return nil, false
 	}
@@ -33,7 +34,7 @@ func (t *epochTable) holder(grant AuthorityGrant) (*fsperas.Holder, bool) {
 	return holder, true
 }
 
-func (t *epochTable) installHolder(grant AuthorityGrant, holder *fsperas.Holder) *fsperas.Holder {
+func (t *epochTable) installHolder(grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder) *fsperas.Holder {
 	if t == nil || holder == nil {
 		return nil
 	}
@@ -48,9 +49,9 @@ func (t *epochTable) installHolder(grant AuthorityGrant, holder *fsperas.Holder)
 	return holder
 }
 
-func (t *epochTable) grant(epochID uint64) (AuthorityGrant, bool) {
+func (t *epochTable) grant(epochID uint64) (rootproto.PerasAuthorityGrant, bool) {
 	if t == nil {
-		return AuthorityGrant{}, false
+		return rootproto.PerasAuthorityGrant{}, false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

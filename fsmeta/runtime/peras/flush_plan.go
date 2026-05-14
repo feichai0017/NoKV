@@ -3,6 +3,7 @@ package peras
 import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, materialize bool, maxOpsPerHolder int) ([]perasFlushBatch, error) {
@@ -38,12 +39,17 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			if err != nil {
 				return nil, c.recordErrorf("digest peras segment: %w", err)
 			}
+			install, err := fsperas.PerasSegmentInstallPlan(segment, materialize)
+			if err != nil {
+				return nil, c.recordErrorf("plan peras segment install: %w", err)
+			}
 			batch.jobs = append(batch.jobs, perasFlushJob{
 				scope:       frozen.scope,
 				plan:        plan,
 				segment:     segment,
 				payload:     payload,
 				digest:      digest,
+				install:     install,
 				materialize: materialize,
 			})
 		}
@@ -140,11 +146,45 @@ func cloneRuntimeReplayOperation(op fsperas.ReplayOperation) fsperas.ReplayOpera
 		DescriptorDigest:     op.DescriptorDigest,
 		PredicateProofDigest: op.PredicateProofDigest,
 		ExecutionPlanDigest:  op.ExecutionPlanDigest,
+		PredicateProofs:      cloneRuntimePredicateProofs(op.PredicateProofs),
+		GuardProofs:          cloneRuntimeGuardProofs(op.GuardProofs),
 		Segment:              op.Segment,
 		Atomicity:            cloneRuntimeReplayAtomicity(op.Atomicity),
 		Durability:           op.Durability,
 		Mutations:            mutations,
 	}
+}
+
+func cloneRuntimePredicateProofs(proofs []proof.PredicateProof) []proof.PredicateProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]proof.PredicateProof, len(proofs))
+	for i, predicateProof := range proofs {
+		out[i] = proof.PredicateProof{
+			SchemaVersion: predicateProof.SchemaVersion,
+			Rule:          predicateProof.Rule,
+			Key:           append([]byte(nil), predicateProof.Key...),
+			Present:       predicateProof.Present,
+			Value:         append([]byte(nil), predicateProof.Value...),
+			Version:       predicateProof.Version,
+			Source:        predicateProof.Source,
+			ProofFrontier: predicateProof.ProofFrontier,
+			ProofKind:     predicateProof.ProofKind,
+			ScopeDigest:   predicateProof.ScopeDigest,
+			Digest:        predicateProof.Digest,
+		}
+	}
+	return out
+}
+
+func cloneRuntimeGuardProofs(proofs []proof.GuardProof) []proof.GuardProof {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([]proof.GuardProof, len(proofs))
+	copy(out, proofs)
+	return out
 }
 
 func cloneRuntimeReplayAtomicity(group compile.AtomicityGroup) compile.AtomicityGroup {

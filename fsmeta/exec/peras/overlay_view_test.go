@@ -4,45 +4,23 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	view := NewOverlayView()
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, 9, "a")
+	dentryKey, err := fsmeta.EncodeDentryKey(testMount, 9, "a")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := fsmeta.EncodeInodeKey(testMount, 10)
 	require.NoError(t, err)
-	delta := compile.SemanticDelta{
-		Kind: fsmeta.OperationCreate,
-		Authority: compile.AuthorityScope{
-			Mount:      mount.MountID,
-			MountKeyID: mount.MountKeyID,
-			Buckets: []fsmeta.AffinityBucket{
-				fsmeta.BucketForInodeID(9),
-				fsmeta.BucketForInodeID(10),
-			},
-			Parents: []fsmeta.InodeID{9},
-			Inodes:  []fsmeta.InodeID{10},
-		},
-		Eligibility: compile.EligibilityVisibleCommit,
-		ReadPredicates: []compile.Predicate{
-			{Kind: compile.PredicateNotExists, Key: dentryKey},
-		},
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: dentryKey, Value: []byte("dentry")},
-			{Kind: compile.EffectPut, Key: inodeKey, Value: []byte("inode")},
-		},
-	}
+	op := testGeneratedCreateOpForInodes(t, 9, 10, "a")
 	opID := OperationID{ClientID: "c", Seq: 1}
-	require.NoError(t, view.Add(opID, compile.MaterializeDelta(delta, nil)))
+	require.NoError(t, view.Add(opID, op))
 
 	value, deleted, ok := view.Get(dentryKey)
 	require.True(t, ok)
 	require.False(t, deleted)
-	require.Equal(t, []byte("dentry"), value)
+	require.Equal(t, op.Effects[0].Value, value)
 	present, known := view.KeyState(dentryKey)
 	require.True(t, present)
 	require.True(t, known)
@@ -64,4 +42,28 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	overlayKeys, knownKeys, _, _ := view.Stats()
 	require.Zero(t, overlayKeys)
 	require.NotZero(t, knownKeys)
+}
+
+func TestOverlayViewScanReusesSortedIndexAcrossReads(t *testing.T) {
+	view := NewOverlayView()
+	for _, item := range []struct {
+		name string
+		seq  uint64
+	}{
+		{name: "c", seq: 1},
+		{name: "a", seq: 2},
+		{name: "b", seq: 3},
+	} {
+		op := testGeneratedCreateOpForInodes(t, 9, fsmeta.InodeID(20+item.seq), item.name)
+		require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: item.seq}, op))
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(testMount, 9)
+	require.NoError(t, err)
+
+	first := view.Scan(prefix, 3)
+	second := view.Scan(prefix, 3)
+	require.Equal(t, first, second)
+	require.Len(t, first, 3)
+	require.Less(t, string(first[0].Key), string(first[1].Key))
+	require.Less(t, string(first[1].Key), string(first[2].Key))
 }

@@ -29,6 +29,8 @@ type overlayEntry struct {
 type OverlayView struct {
 	mu            sync.RWMutex
 	entries       map[string]overlayEntry
+	sortedKeys    []string
+	sortedDirty   bool
 	known         map[string]bool
 	emptyDirs     map[string]struct{}
 	emptySessions map[string]struct{}
@@ -73,6 +75,7 @@ func (v *OverlayView) Add(id OperationID, op compile.MaterializedOp) error {
 			return ErrInvalidPerasSegment
 		}
 		v.entries[string(effect.Key)] = entry
+		v.sortedDirty = true
 	}
 	return RememberOperationFacts(v.known, v.emptyDirs, v.emptySessions, op)
 }
@@ -96,6 +99,7 @@ func (v *OverlayView) AddSegment(segment PerasSegment) error {
 			value:  cloneBytes(kv.Value),
 			delete: kv.Delete,
 		}
+		v.sortedDirty = true
 	}
 	return nil
 }
@@ -189,19 +193,13 @@ func (v *OverlayView) Scan(start []byte, limit uint32) []OverlayKV {
 	if v == nil || limit == 0 {
 		return nil
 	}
-	v.mu.RLock()
-	keys := make([]string, 0, len(v.entries))
-	for key := range v.entries {
-		if bytes.Compare([]byte(key), start) >= 0 {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	if len(keys) > int(limit) {
-		keys = keys[:limit]
-	}
-	out := make([]OverlayKV, 0, len(keys))
-	for _, key := range keys {
+	v.mu.Lock()
+	v.rebuildSortedKeysLocked()
+	startKey := string(start)
+	idx := sort.SearchStrings(v.sortedKeys, startKey)
+	end := min(idx+int(limit), len(v.sortedKeys))
+	out := make([]OverlayKV, 0, end-idx)
+	for _, key := range v.sortedKeys[idx:end] {
 		entry := v.entries[key]
 		out = append(out, OverlayKV{
 			Key:    cloneBytes(entry.key),
@@ -209,7 +207,7 @@ func (v *OverlayView) Scan(start []byte, limit uint32) []OverlayKV {
 			Delete: entry.delete,
 		})
 	}
-	v.mu.RUnlock()
+	v.mu.Unlock()
 	return out
 }
 
@@ -257,6 +255,7 @@ func (v *OverlayView) RemovePlan(plan ReplayPlan) {
 			entry, ok := v.entries[string(mutation.Key)]
 			if ok && entry.opID == op.OpID {
 				delete(v.entries, string(mutation.Key))
+				v.sortedDirty = true
 			}
 		}
 	}
@@ -284,6 +283,21 @@ func (v *OverlayView) initLocked() {
 	if v.emptySessions == nil {
 		v.emptySessions = make(map[string]struct{})
 	}
+	if v.sortedKeys == nil {
+		v.sortedDirty = true
+	}
+}
+
+func (v *OverlayView) rebuildSortedKeysLocked() {
+	if !v.sortedDirty && len(v.sortedKeys) == len(v.entries) {
+		return
+	}
+	v.sortedKeys = v.sortedKeys[:0]
+	for key := range v.entries {
+		v.sortedKeys = append(v.sortedKeys, key)
+	}
+	sort.Strings(v.sortedKeys)
+	v.sortedDirty = false
 }
 
 func cloneOverlayKV(in OverlayKV) OverlayKV {

@@ -228,8 +228,7 @@ services:
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
       - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
-      - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
-      - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
+      - "--peras-witness-wal-policy=${NOKV_PERAS_WITNESS_WAL_POLICY:-fsync-batched}"
     volumes:
       - store1-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -258,8 +257,7 @@ services:
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
       - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
-      - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
-      - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
+      - "--peras-witness-wal-policy=${NOKV_PERAS_WITNESS_WAL_POLICY:-fsync-batched}"
     volumes:
       - store2-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -288,8 +286,7 @@ services:
       - "--extra"
       - "--metrics-addr=0.0.0.0:9200"
       - "--storage-max-batch-count=${NOKV_STORE_MAX_BATCH_COUNT:-1024}"
-      - "--peras-witness=${NOKV_PERAS_WITNESS:-false}"
-      - "--peras-witness-durability=${NOKV_PERAS_WITNESS_DURABILITY:-fsync-batched}"
+      - "--peras-witness-wal-policy=${NOKV_PERAS_WITNESS_WAL_POLICY:-fsync-batched}"
     volumes:
       - store3-data:/var/lib/nokv/store
       - ./raft_config.example.json:/etc/nokv/raft_config.json:ro
@@ -342,9 +339,8 @@ services:
       - "--dirpage-cache-dir=/var/lib/nokv/dirpage-cache"
       - "--affinity-buckets=16"
       - "--metrics-addr=0.0.0.0:9400"
-      - "--peras-holder-id=${NOKV_FSMETA_PERAS_HOLDER_ID:-}"
+      - "--peras-holder-id=${NOKV_FSMETA_PERAS_HOLDER_ID:-fsmeta-compose-holder}"
       - "--peras-authority-ttl=${NOKV_FSMETA_PERAS_AUTHORITY_TTL:-5m}"
-      - "--peras-visible-commit=${NOKV_FSMETA_PERAS_VISIBLE_COMMIT:-false}"
       - "--peras-witness-stores=${NOKV_FSMETA_PERAS_WITNESS_STORES:-}"
       - "--peras-witness-quorum=${NOKV_FSMETA_PERAS_WITNESS_QUORUM:-0}"
       - "--peras-segment-witness-retries=${NOKV_FSMETA_PERAS_SEGMENT_WITNESS_RETRIES:-50}"

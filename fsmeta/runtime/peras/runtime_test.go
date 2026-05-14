@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,7 +37,7 @@ func TestRuntimeCommitsAndServesOverlay(t *testing.T) {
 	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.NoError(t, err)
 
-	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
+	value, deleted, ok := committer.GetPerasOverlay(delta.Effects[0].Key)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
@@ -111,7 +114,8 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 	require.Equal(t, 4, stats["segment_keys"])
 	require.Equal(t, 0, stats["pending"])
 	require.Equal(t, 1, installer.calls)
-	require.Equal(t, testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a")).Delta.Authority, installer.scope)
+	require.True(t, ScopesOverlap(installer.scope, testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a")).Delta.Authority))
+	require.True(t, ScopesOverlap(installer.scope, testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b")).Delta.Authority))
 	require.NotZero(t, installer.segment.Root)
 	require.NotEmpty(t, installer.payload)
 	require.NotZero(t, installer.digest)
@@ -120,15 +124,17 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, installer.segment.Root, decoded.Root)
 
-	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
+	dentryA := testRuntimeDentryKeyForLabel("a")
+	dentryB := testRuntimeDentryKeyForLabel("b")
+	value, deleted, ok := committer.GetPerasOverlay(dentryA)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
 
-	scan := committer.ScanPerasOverlay([]byte("dentry/"), 2)
+	scan := committer.ScanPerasOverlay(testRuntimeRootDentryPrefix(), 2)
 	require.Len(t, scan, 2)
-	require.Equal(t, []byte("dentry/a"), scan[0].Key)
-	require.Equal(t, []byte("dentry/b"), scan[1].Key)
+	require.Equal(t, dentryA, scan[0].Key)
+	require.Equal(t, dentryB, scan[1].Key)
 
 }
 
@@ -143,32 +149,27 @@ func TestRuntimeScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/a"), []byte("sealed-a"))))
-	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/b"), []byte("sealed-b"))))
-	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay([]byte("k/d"), []byte("sealed-d"))))
-	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, compile.MaterializeDelta(compile.SemanticDelta{
-		Eligibility: compile.EligibilityVisibleCommit,
-		Authority: compile.AuthorityScope{
-			AllowOpaqueKeys: true,
-		},
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectDelete, Key: []byte("k/b")},
-			{Kind: compile.EffectPut, Key: []byte("k/c"), Value: []byte("overlay-c")},
-		},
-	}, nil)))
+	keyA := testRuntimeDentryKeyForLabel("a")
+	keyB := testRuntimeDentryKeyForLabel("b")
+	keyC := testRuntimeDentryKeyForLabel("c")
+	keyD := testRuntimeDentryKeyForLabel("d")
+	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a"))))
+	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(keyB, []byte("sealed-b"))))
+	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(keyD, []byte("sealed-d"))))
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, testRuntimeRenameDentryOp("b", "c", []byte("overlay-c"))))
 
-	scan := committer.ScanPerasOverlay([]byte("k/"), 4)
+	scan := committer.ScanPerasOverlay(testRuntimeRootDentryPrefix(), 4)
 	require.Equal(t, []fsperas.OverlayKV{
-		{Key: []byte("k/a"), Value: []byte("sealed-a")},
-		{Key: []byte("k/b"), Delete: true},
-		{Key: []byte("k/c"), Value: []byte("overlay-c")},
-		{Key: []byte("k/d"), Value: []byte("sealed-d")},
+		{Key: keyA, Value: []byte("sealed-a")},
+		{Key: keyB, Delete: true},
+		{Key: keyC, Value: []byte("overlay-c")},
+		{Key: keyD, Value: []byte("sealed-d")},
 	}, scan)
 
-	scan = committer.ScanPerasOverlay([]byte("k/b"), 2)
+	scan = committer.ScanPerasOverlay(keyB, 2)
 	require.Equal(t, []fsperas.OverlayKV{
-		{Key: []byte("k/b"), Delete: true},
-		{Key: []byte("k/c"), Value: []byte("overlay-c")},
+		{Key: keyB, Delete: true},
+		{Key: keyC, Value: []byte("overlay-c")},
 	}, scan)
 }
 
@@ -335,7 +336,7 @@ func TestRuntimeReturnsPendingAckOnRetry(t *testing.T) {
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	first, err := committer.SubmitVisible(ctx, opID, delta, nil)
 	require.NoError(t, err)
-	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp) (fsperas.AdmissionResult, bool, error) {
+	second, err := committer.SubmitVisible(ctx, opID, delta, func(context.Context, compile.MaterializedOp, fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
 		t.Fatal("pending retry should not re-run admission")
 		return fsperas.AdmissionResult{}, false, nil
 	})
@@ -416,7 +417,8 @@ func TestRuntimeAcceptsCrossBucketCreateForCatalogInstall(t *testing.T) {
 	leftA, _ := testRuntimeBucketKeys(t, mount, 1)
 	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
 	ctx := context.Background()
-	err = commitRuntimePeras(ctx, committer, 1, leftA, rightA)
+	op := testRuntimePerasOp(leftA, rightA)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, op, nil)
 	require.NoError(t, err)
 
 	stats := committer.Stats()
@@ -425,9 +427,9 @@ func TestRuntimeAcceptsCrossBucketCreateForCatalogInstall(t *testing.T) {
 	require.Equal(t, uint64(0), stats["segment_operations_total"])
 	require.Equal(t, 0, installer.calls)
 	require.Equal(t, 1, stats["pending"])
-	_, _, ok := committer.GetPerasOverlay(leftA)
+	_, _, ok := committer.GetPerasOverlay(op.Effects[0].Key)
 	require.True(t, ok)
-	_, _, ok = committer.GetPerasOverlay(rightA)
+	_, _, ok = committer.GetPerasOverlay(op.Effects[1].Key)
 	require.True(t, ok)
 
 	require.NoError(t, committer.FlushDurable(ctx))
@@ -517,7 +519,7 @@ func TestRuntimeFlushRequiresInstaller(t *testing.T) {
 	require.Equal(t, uint64(0), stats["flush_total"])
 	require.Equal(t, uint64(0), stats["segment_total"])
 	require.Equal(t, 1, stats["pending"])
-	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
+	value, deleted, ok := committer.GetPerasOverlay(testRuntimeDentryKeyForLabel("a"))
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
@@ -538,6 +540,7 @@ func TestRuntimeRecoversWitnessSegment(t *testing.T) {
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{EpochID: 1, HolderID: "holder-a"})
 	require.NoError(t, err)
 	delta := testRuntimePerasOp([]byte("dentry/recovered"), []byte("inode/recovered"))
+	recoveredKey := delta.Effects[0].Key
 	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
@@ -566,7 +569,7 @@ func TestRuntimeRecoversWitnessSegment(t *testing.T) {
 	require.Equal(t, segment.Root, installer.segment.Root)
 	require.Equal(t, uint64(1), recoverer.Stats()["segment_recovery_install_total"])
 	require.Equal(t, uint64(0), recoverer.Stats()["segment_recovery_skip_total"])
-	value, deleted, ok := recoverer.GetPerasOverlay([]byte("dentry/recovered"))
+	value, deleted, ok := recoverer.GetPerasOverlay(recoveredKey)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
@@ -855,6 +858,13 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{EpochID: 1, HolderID: "holder-a"})
 	require.NoError(t, err)
 	recoveredDelta := testRuntimePerasOp([]byte("dentry/recovered"), []byte("inode/recovered"))
+	recoveredDelta = testRuntimePerasOpWithScope(recoveredDelta, compile.AuthorityScope{
+		Mount:      "vol",
+		MountKeyID: 1,
+		Parents:    []fsmeta.InodeID{1},
+		Inodes:     []fsmeta.InodeID{2},
+	})
+	recoveredKey := recoveredDelta.Effects[0].Key
 	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
@@ -886,11 +896,11 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 	require.Equal(t, 1, installer.calls)
 	require.Equal(t, segment.Root, installer.segment.Root)
 
-	value, deleted, ok := recoverer.GetPerasOverlay([]byte("dentry/recovered"))
+	value, deleted, ok := recoverer.GetPerasOverlay(recoveredKey)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
-	value, deleted, ok = recoverer.GetPerasOverlay([]byte("dentry/new"))
+	value, deleted, ok = recoverer.GetPerasOverlay(testRuntimeDentryKeyForLabel("new"))
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
@@ -939,14 +949,14 @@ func TestRuntimeFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	scopeA := compile.AuthorityScope{
+	requestedScopeA := compile.AuthorityScope{
 		Mount:           "vol",
 		MountKeyID:      1,
 		Parents:         []fsmeta.InodeID{1},
 		Inodes:          []fsmeta.InodeID{2},
 		AllowOpaqueKeys: true,
 	}
-	scopeB := compile.AuthorityScope{
+	requestedScopeB := compile.AuthorityScope{
 		Mount:           "vol",
 		MountKeyID:      1,
 		Parents:         []fsmeta.InodeID{2},
@@ -954,9 +964,10 @@ func TestRuntimeFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 		AllowOpaqueKeys: true,
 	}
 	deltaA := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
-	deltaA = testRuntimePerasOpWithScope(deltaA, scopeA)
+	deltaA = testRuntimePerasOpWithScope(deltaA, requestedScopeA)
+	scopeA := deltaA.Delta.Authority
 	deltaB := testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b"))
-	deltaB = testRuntimePerasOpWithScope(deltaB, scopeB)
+	deltaB = testRuntimePerasOpWithScope(deltaB, requestedScopeB)
 
 	ctx := context.Background()
 	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, deltaA, nil)
@@ -976,11 +987,11 @@ func TestRuntimeFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 	require.Equal(t, scopeA, installer.scope)
 	require.Equal(t, uint64(1), installer.segment.Stats().OperationCount)
 
-	value, deleted, ok := committer.GetPerasOverlay([]byte("dentry/a"))
+	value, deleted, ok := committer.GetPerasOverlay(deltaA.Effects[0].Key)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
-	value, deleted, ok = committer.GetPerasOverlay([]byte("dentry/b"))
+	value, deleted, ok = committer.GetPerasOverlay(deltaB.Effects[0].Key)
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
@@ -1008,22 +1019,23 @@ func TestRuntimeDrainAuthorityFlushesAndRetires(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	scope := compile.AuthorityScope{
+	requestedScope := compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 1,
 		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{2},
+		Inodes:     []fsmeta.InodeID{testRuntimeInodeForBucketValue(fsmeta.BucketForInodeID(1))},
 	}
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
-	delta = testRuntimePerasOpWithScope(delta, scope)
-	otherScope := compile.AuthorityScope{
+	delta = testRuntimePerasOpWithScope(delta, requestedScope)
+	scope := delta.Delta.Authority
+	requestedOtherScope := compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 1,
 		Parents:    []fsmeta.InodeID{9},
 		Inodes:     []fsmeta.InodeID{10},
 	}
 	otherDelta := testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b"))
-	otherDelta = testRuntimePerasOpWithScope(otherDelta, otherScope)
+	otherDelta = testRuntimePerasOpWithScope(otherDelta, requestedOtherScope)
 
 	ctx := context.Background()
 	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
@@ -1313,9 +1325,7 @@ func TestRuntimeRollsBackHolderOnOverlayAdmissionFailure(t *testing.T) {
 	defer committer.Close()
 
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
-	raw := delta.Delta
-	raw.WriteEffects = []compile.WriteEffect{{Kind: compile.EffectDelete}}
-	delta = compile.MaterializeDelta(raw, nil)
+	committer.read = nil
 	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.Error(t, err)
 	require.Equal(t, 0, committer.Stats()["pending"])
@@ -1378,27 +1388,23 @@ func BenchmarkRuntimeScanPerasOverlay(b *testing.B) {
 		read: newReadState(),
 	}
 	for i := range 100_000 {
-		key := fmt.Appendf(nil, "dentry/%08d", i)
+		key, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, fmt.Sprintf("%08d", i))
+		require.NoError(b, err)
 		require.NoError(b, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(key, []byte("sealed"))))
 	}
 	for i := range 1024 {
-		key := fmt.Appendf(nil, "dentry/%08d", i*16)
-		require.NoError(b, committer.read.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, compile.MaterializeDelta(compile.SemanticDelta{
-			Eligibility: compile.EligibilityVisibleCommit,
-			Authority: compile.AuthorityScope{
-				AllowOpaqueKeys: true,
-			},
-			WriteEffects: []compile.WriteEffect{
-				{Kind: compile.EffectPut, Key: key, Value: []byte("overlay")},
-			},
-		}, nil)))
+		name := fmt.Sprintf("%08d", i*16)
+		op := testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, name, fsmeta.InodeID(200_000+i), []byte("overlay"), []byte("inode-value"))
+		require.NoError(b, committer.read.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, op))
 	}
-	require.Len(b, committer.ScanPerasOverlay([]byte("dentry/00000000"), 128), 128)
+	start, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, "00000000")
+	require.NoError(b, err)
+	require.Len(b, committer.ScanPerasOverlay(start, 128), 128)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		out := committer.ScanPerasOverlay([]byte("dentry/00000000"), 128)
+		out := committer.ScanPerasOverlay(start, 128)
 		if len(out) != 128 {
 			b.Fatalf("scan returned %d rows", len(out))
 		}
@@ -1619,7 +1625,7 @@ func (i *witnessPhaseCheckingRuntimePerasSegmentInstaller) InstallSegment(contex
 
 type fakeRuntimePerasGrantProvider struct {
 	holderID string
-	grant    AuthorityGrant
+	grant    rootproto.PerasAuthorityGrant
 	seals    []rootproto.PerasAuthoritySeal
 	owned    bool
 	err      error
@@ -1630,7 +1636,7 @@ func (p *fakeRuntimePerasGrantProvider) HolderID() string {
 	return p.holderID
 }
 
-func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (AuthorityGrant, bool, error) {
+func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
 	owned := p.owned
 	if !owned {
 		owned = true
@@ -1653,14 +1659,14 @@ type publishingRuntimePerasGrantProvider struct {
 	fakeRuntimePerasGrantProvider
 	mu            sync.Mutex
 	sealCalls     int
-	sealedGrant   AuthorityGrant
+	sealedGrant   rootproto.PerasAuthorityGrant
 	sealedSegment fsperas.PerasSegment
 	sealedDigest  [32]byte
 	sealedCursor  InstallCursor
 	sealErr       error
 }
 
-func (p *publishingRuntimePerasGrantProvider) PublishSegmentSeal(_ context.Context, grant AuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor InstallCursor) error {
+func (p *publishingRuntimePerasGrantProvider) PublishSegmentSeal(_ context.Context, grant rootproto.PerasAuthorityGrant, segment fsperas.PerasSegment, digest [32]byte, cursor InstallCursor) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sealCalls++
@@ -1719,8 +1725,8 @@ func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) 
 	return out, nil
 }
 
-func testRuntimeCommitterGrant() AuthorityGrant {
-	return AuthorityGrant{
+func testRuntimeCommitterGrant() rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
@@ -1787,77 +1793,213 @@ func testPerasInstallCursor(offset uint64) InstallCursor {
 	}
 }
 
+var testRuntimeMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
 func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.MaterializedOp {
-	scope := compile.AuthorityScope{
-		Mount:           "vol",
-		MountKeyID:      1,
-		AllowOpaqueKeys: true,
+	mount, parent, name, inode := testRuntimeCreateArgs(dentryKey, inodeKey)
+	return testRuntimeCreateOp(mount, parent, name, inode, []byte("dentry-value"), []byte("inode-value"))
+}
+
+func testRuntimeCreateOp(mount fsmeta.MountIdentity, parent fsmeta.InodeID, name string, inode fsmeta.InodeID, dentryValue, inodeValue []byte) compile.MaterializedOp {
+	program, err := compile.CompileCreateProgram(fsmeta.CreateRequest{
+		Mount:  mount.MountID,
+		Parent: parent,
+		Name:   name,
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	}, mount, inode)
+	if err != nil {
+		panic(err)
 	}
-	for _, key := range [][]byte{dentryKey, inodeKey} {
-		if parts, ok := fsmeta.InspectKey(key); ok {
-			scope.MountKeyID = parts.MountKeyID
-			scope.Buckets = append(scope.Buckets, parts.Bucket)
-			switch parts.Kind {
-			case fsmeta.KeyKindDentry:
-				scope.Parents = append(scope.Parents, parts.Parent)
-			case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
-				scope.Inodes = append(scope.Inodes, parts.Inode)
-			}
+	if dentryValue == nil {
+		dentryValue = program.Compiled.Delta.WriteEffects[0].Value
+	}
+	if _, err := fsmeta.DecodeInodeValue(inodeValue); inodeValue == nil || err != nil {
+		inodeValue = program.Compiled.Delta.WriteEffects[1].Value
+	}
+	op, err := compile.MaterializeCreate(program, compile.CreateValues{
+		DentryValue: dentryValue,
+		InodeValue:  inodeValue,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return testRuntimeSealMaterializedOp(op)
+}
+
+func testRuntimeSealMaterializedOp(op compile.MaterializedOp) compile.MaterializedOp {
+	proofs := testRuntimePredicateProofsForOp(op)
+	guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
+	if err != nil {
+		panic(err)
+	}
+	return compile.WithAdmissionProofs(op, proofs, guardProofs)
+}
+
+func testRuntimePredicateProofsForOp(op compile.MaterializedOp) []proof.PredicateProof {
+	if len(op.Delta.ReadPredicates) == 0 {
+		return nil
+	}
+	proofs := make([]proof.PredicateProof, 0, len(op.Delta.ReadPredicates))
+	for _, predicate := range op.Delta.ReadPredicates {
+		frontier := proof.ProofFrontier{EpochID: 1, Sequence: 1}
+		switch predicate.Kind {
+		case compile.PredicateExists:
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, true, 0, proof.ReadSourceOverlay, frontier))
+		case compile.PredicateNotExists:
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
+		case compile.PredicateObservedValue:
+			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, predicate.ExpectedValue, true, 0, proof.ReadSourceOverlay, frontier))
 		}
 	}
-	scope.Buckets = uniqueRuntimeBuckets(scope.Buckets)
-	return compile.MaterializeDelta(compile.SemanticDelta{
-		Kind:      fsmeta.OperationCreate,
-		Authority: scope,
-		ReadPredicates: []compile.Predicate{
-			{Kind: compile.PredicateNotExists, Key: dentryKey},
-			{Kind: compile.PredicateNotExists, Key: inodeKey},
-		},
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: dentryKey, Value: []byte("dentry-value")},
-			{Kind: compile.EffectPut, Key: inodeKey, Value: []byte("inode-value")},
-		},
-		Eligibility: compile.EligibilityVisibleCommit,
-	}, nil)
+	return proofs
+}
+
+func testRuntimeCreateArgs(dentryKey, inodeKey []byte) (fsmeta.MountIdentity, fsmeta.InodeID, string, fsmeta.InodeID) {
+	mount := testRuntimeMount
+	parent := fsmeta.RootInode
+	name := testRuntimeNameFromKey(dentryKey)
+	inode := fsmeta.InodeID(0)
+	inodeFromStorageKey := false
+	if parts, ok := fsmeta.InspectKey(dentryKey); ok {
+		mount.MountKeyID = parts.MountKeyID
+		switch parts.Kind {
+		case fsmeta.KeyKindDentry:
+			parent = parts.Parent
+			if dentryName, ok := fsmeta.DentryNameOfKey(dentryKey); ok {
+				name = dentryName
+			}
+		case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+			parent = parts.Inode
+		}
+	}
+	if parts, ok := fsmeta.InspectKey(inodeKey); ok {
+		if mount.MountKeyID == 0 {
+			mount.MountKeyID = parts.MountKeyID
+		}
+		switch parts.Kind {
+		case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+			inode = parts.Inode
+			inodeFromStorageKey = true
+		}
+	}
+	if !inodeFromStorageKey {
+		inode = testRuntimeInodeForBucketSeed(fsmeta.BucketForInodeID(parent), inodeKey)
+	}
+	if inode == 0 || inode == parent {
+		inode = testRuntimeInodeForBucketSeed(fsmeta.BucketForInodeID(parent), append(append([]byte(nil), inodeKey...), '#'))
+	}
+	return mount, parent, name, inode
+}
+
+func testRuntimeNameFromKey(key []byte) string {
+	if name, ok := fsmeta.DentryNameOfKey(key); ok {
+		return name
+	}
+	label := string(key)
+	if slash := strings.LastIndex(label, "/"); slash >= 0 {
+		label = label[slash+1:]
+	}
+	if label == "" || label == "." || label == ".." || strings.ContainsAny(label, "/\x00") {
+		return "k-" + hex.EncodeToString(key)
+	}
+	return label
+}
+
+func testRuntimeInodeFromKey(key []byte) fsmeta.InodeID {
+	var hash uint64 = 1469598103934665603
+	for _, b := range key {
+		hash ^= uint64(b)
+		hash *= 1099511628211
+	}
+	return fsmeta.InodeID(2 + hash%1_000_000)
+}
+
+func testRuntimeDentryKeyForLabel(label string) []byte {
+	return testRuntimePerasOp([]byte("dentry/"+label), []byte("inode/"+label)).Effects[0].Key
+}
+
+func testRuntimeRootDentryPrefix() []byte {
+	prefix, err := fsmeta.EncodeDentryPrefix(testRuntimeMount, fsmeta.RootInode)
+	if err != nil {
+		panic(err)
+	}
+	return prefix
+}
+
+func testRuntimeRenameDentryOp(fromName, toName string, toValue []byte) compile.MaterializedOp {
+	program, err := compile.CompileRenameProgram(fsmeta.RenameRequest{
+		Mount:      testRuntimeMount.MountID,
+		FromParent: fsmeta.RootInode,
+		FromName:   fromName,
+		ToParent:   fsmeta.RootInode,
+		ToName:     toName,
+	}, testRuntimeMount)
+	if err != nil {
+		panic(err)
+	}
+	fromKey, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, fromName)
+	if err != nil {
+		panic(err)
+	}
+	toKey, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, toName)
+	if err != nil {
+		panic(err)
+	}
+	op, err := compile.MaterializeCompiledOpWithEvidence(program.Compiled, []compile.WriteEffect{
+		{Kind: compile.EffectDelete, Key: fromKey},
+		{Kind: compile.EffectPut, Key: toKey, Value: toValue},
+	}, compile.PredicateEvidence{}, nil)
+	if err != nil {
+		panic(err)
+	}
+	return testRuntimeSealMaterializedOp(op)
 }
 
 func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.MaterializedOp {
-	delta := testRuntimePerasOp(dentryKey, inodeKey).Delta
-	delta.Authority.Buckets = []fsmeta.AffinityBucket{bucket}
-	delta.Authority.Parents = nil
-	delta.Authority.Inodes = nil
-	return compile.MaterializeDelta(delta, nil)
+	parent := testRuntimeInodeForBucketValue(bucket)
+	inode := parent + fsmeta.InodeID(fsmeta.DefaultAffinityBucketCount)
+	name := testRuntimeNameFromKey(dentryKey)
+	return testRuntimeCreateOp(testRuntimeMount, parent, name, inode, []byte("dentry-value"), []byte("inode-value"))
 }
 
-func uniqueRuntimeBuckets(in []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fsmeta.AffinityBucket, 0, len(in))
-	seen := make(map[fsmeta.AffinityBucket]struct{}, len(in))
-	for _, bucket := range in {
-		if _, ok := seen[bucket]; ok {
-			continue
+func testRuntimeInodeForBucketValue(bucket fsmeta.AffinityBucket) fsmeta.InodeID {
+	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
+		if fsmeta.BucketForInodeID(inode) == bucket {
+			return inode
 		}
-		seen[bucket] = struct{}{}
-		out = append(out, bucket)
 	}
-	return out
+	panic(fmt.Sprintf("no inode found for bucket %d", bucket))
+}
+
+func testRuntimeInodeForBucketSeed(bucket fsmeta.AffinityBucket, seed []byte) fsmeta.InodeID {
+	start := uint64(testRuntimeInodeFromKey(seed))
+	for offset := range uint64(1_000_000) {
+		inode := fsmeta.InodeID(2 + (start+offset)%1_000_000)
+		if fsmeta.BucketForInodeID(inode) == bucket {
+			return inode
+		}
+	}
+	panic(fmt.Sprintf("no inode found for bucket %d", bucket))
 }
 
 func testRuntimePerasOpWithScope(op compile.MaterializedOp, scope compile.AuthorityScope) compile.MaterializedOp {
-	delta := op.Delta
-	if len(scope.Buckets) == 0 {
-		scope.Buckets = append([]fsmeta.AffinityBucket(nil), delta.Authority.Buckets...)
+	mount, parent, name, inode := testRuntimeCreateArgs(op.Effects[0].Key, op.Effects[1].Key)
+	if scope.Mount != "" {
+		mount.MountID = scope.Mount
 	}
-	if op.Footprint.HasOpaqueKeys {
-		scope.AllowOpaqueKeys = true
+	if scope.MountKeyID != 0 {
+		mount.MountKeyID = scope.MountKeyID
 	}
-	if len(scope.Parents) == 0 && len(scope.Inodes) == 0 {
-		scope.Broad = true
+	if len(scope.Parents) > 0 {
+		parent = scope.Parents[0]
 	}
-	delta.Authority = scope
-	return compile.MaterializeDelta(delta, nil)
+	if len(scope.Inodes) > 0 {
+		inode = scope.Inodes[0]
+	}
+	if name == "" {
+		name = "entry"
+	}
+	return testRuntimeCreateOp(mount, parent, name, inode, []byte("dentry-value"), []byte("inode-value"))
 }
 
 func appendUvarintKey(prefix string, v uint64) []byte {

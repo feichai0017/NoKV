@@ -7,10 +7,12 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, bool, error) {
+func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, program compile.UpdateInodeProgram, mount fsmeta.MountIdentity, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, bool, error) {
+	delta := program.Compiled.Delta
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.InodeRecord{}, false, nil
 	}
+	plan := delta.Plan
 	view := e.newPerasReadView(ctx)
 	dentry, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
@@ -66,7 +68,10 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, delta compile
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	concrete := view.materializePerasOp(delta, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
+	concrete, err := view.materializePerasCompiledOp(program.Compiled, []compile.WriteEffect{perasPutEffect(plan.MutateKeys[0], value)})
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
 	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
 	if err != nil {
 		return fsmeta.InodeRecord{}, committed, err
@@ -86,10 +91,11 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 		return fsmeta.InodeRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.UpdateInode(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileUpdateInodeProgram(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.InodeRecord{}, err
 	}
@@ -97,7 +103,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeReques
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return fsmeta.InodeRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if updated, committed, err := e.tryPerasVisibleUpdateInode(ctx, delta, plan, mount, req); committed || err != nil {
+	if updated, committed, err := e.tryPerasVisibleUpdateInode(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.InodeRecord{}, err
 		}

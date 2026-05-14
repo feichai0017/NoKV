@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,9 +59,9 @@ func TestAdmissionLatchesAllowDisjointKeys(t *testing.T) {
 
 func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 	latches := NewAdmissionLatches()
-	release := latches.Lock(compile.MaterializeDelta(compile.SemanticDelta{
+	release := latches.Lock(testFootprintOp(compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{Kind: compile.PredicatePrefixScan, Key: []byte("dentry/")}},
-	}, nil))
+	}))
 
 	var entered atomic.Bool
 	done := make(chan struct{})
@@ -83,33 +83,27 @@ func TestAdmissionLatchesUseGlobalKeyForPrefixPredicates(t *testing.T) {
 }
 
 func TestAdmitRejectsFalseAdmission(t *testing.T) {
-	err := Admit(context.Background(), compile.MaterializeDelta(compile.SemanticDelta{}, nil), func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
+	err := Admit(context.Background(), testGeneratedCreateOp(t, "admit", "value"), func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error) {
 		return AdmissionResult{}, false, nil
-	})
+	}, AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.ErrorIs(t, err, ErrAdmissionRejected)
 }
 
 func TestAdmitAndSealBindsGuardProofsAfterAdmission(t *testing.T) {
-	delta := compile.SemanticDelta{
-		Kind:        fsmeta.OperationCreate,
-		Eligibility: compile.EligibilityVisibleCommit,
-		Authority: compile.AuthorityScope{
-			AllowOpaqueKeys: true,
-		},
-		RuntimeGuards: []compile.RuntimeGuard{compile.GuardQuotaCredit},
-		WriteEffects: []compile.WriteEffect{{
-			Kind:  compile.EffectPut,
-			Key:   []byte("k"),
-			Value: []byte("v"),
-		}},
-	}
-	op := compile.MaterializeDelta(delta, nil)
+	op, err := generatedCreateIntentOp("guarded", "v", compile.WithQuotaMode(compile.QuotaModeEscrow))
+	require.NoError(t, err)
 	require.NoError(t, op.ValidateForAdmissionIntent())
 	require.Error(t, op.ValidateForAdmission())
 
-	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp) (AdmissionResult, bool, error) {
-		return AdmissionResult{GuardProofs: compile.GuardProofsFor(delta.RuntimeGuards)}, true, nil
-	})
+	sealed, err := AdmitAndSeal(context.Background(), op, func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error) {
+		proofs := testPredicateProofsForMaterializedOp(op)
+		guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
+		require.NoError(t, err)
+		return AdmissionResult{
+			PredicateProofs: proofs,
+			GuardProofs:     guardProofs,
+		}, true, nil
+	}, AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.NoError(t, sealed.ValidateForAdmission())
 	require.NotEmpty(t, sealed.GuardProofs)

@@ -32,6 +32,16 @@ func fatalf(format string, args ...any) {
 	exit(1)
 }
 
+func defaultPerasHolderID() string {
+	if hostname, err := os.Hostname(); err == nil {
+		hostname = strings.TrimSpace(hostname)
+		if hostname != "" {
+			return "fsmeta/" + hostname
+		}
+	}
+	return "fsmeta/default"
+}
+
 func main() {
 	var (
 		addr                            = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
@@ -43,8 +53,7 @@ func main() {
 		lockTTL                         = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
 		sessionCleanupInterval          = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
-		perasHolderID                   = flag.String("peras-holder-id", "", "experimental Peras holder id; empty disables authority acquisition")
-		perasVisibleCommit              = flag.Bool("peras-visible-commit", false, "enable experimental Peras visible commit path against raftstore witnesses")
+		perasHolderID                   = flag.String("peras-holder-id", "", "Peras holder id; empty derives a stable local holder id")
 		perasAuthorityTTL               = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
 		perasWitnessStores              = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
 		perasWitnessQuorum              = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
@@ -77,6 +86,10 @@ func main() {
 		fatalf("parse peras-witness-stores: %v", err)
 		return
 	}
+	holderID := strings.TrimSpace(*perasHolderID)
+	if holderID == "" {
+		holderID = defaultPerasHolderID()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -89,9 +102,8 @@ func main() {
 		LockTTL:                         *lockTTL,
 		SessionCleanupInterval:          *sessionCleanupInterval,
 		SessionCleanupLimit:             uint32(*sessionCleanupLimit),
-		PerasHolderID:                   *perasHolderID,
+		PerasHolderID:                   holderID,
 		PerasAuthorityTTL:               *perasAuthorityTTL,
-		PerasVisibleCommit:              *perasVisibleCommit,
 		PerasWitnessStoreIDs:            perasStoreIDs,
 		PerasWitnessQuorum:              *perasWitnessQuorum,
 		PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
@@ -161,6 +173,7 @@ func main() {
 	}
 
 	log.Printf("NoKV FSMetadata server listening on %s", ln.Addr().String())
+	log.Printf("fsmeta commit contract: Peras is the default write path; successful metadata writes are visible immediately, while durable completion is reached by witness/segment install and explicit FlushDurable/FlushTo in embedded APIs")
 
 	sigCh := make(chan os.Signal, 1)
 	signalNotify(sigCh, syscall.SIGINT, syscall.SIGTERM)

@@ -129,13 +129,14 @@ func run(ctx context.Context, cli workload.Client, cfg runConfig) (workload.Resu
 func printSummary(result workload.Result) {
 	fmt.Printf("workload=%s run_id=%s ops=%d errors=%d duration=%s\n", result.Name, result.RunID, result.Ops, result.Errors, result.Duration)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "operation\tcount\terrors\tops/s\tavg_us\tp50_us\tp95_us\tp99_us")
+	fmt.Fprintln(tw, "operation\tcount\terrors\twall_ops/s\tactive_ops/s\tavg_us\tp50_us\tp95_us\tp99_us")
 	for _, row := range workload.SummaryRows(result) {
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%.2f\t%.1f\t%.1f\t%.1f\t%.1f\n",
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%.2f\t%.2f\t%.1f\t%.1f\t%.1f\t%.1f\n",
 			row.Operation,
 			row.Count,
 			row.Errors,
 			row.Throughput,
+			row.ActiveThroughput,
 			row.AverageUS,
 			row.P50US,
 			row.P95US,

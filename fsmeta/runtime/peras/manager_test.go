@@ -61,7 +61,7 @@ func TestManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	require.Empty(t, client.last.Scope.Buckets)
 	require.Empty(t, client.last.Scope.Parents)
 	require.Empty(t, client.last.Scope.Inodes)
-	require.Equal(t, []AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, table.Snapshot())
 }
 
 func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
@@ -73,7 +73,7 @@ func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
 	wideScope.Inodes = nil
 	grant := testRuntimePerasGrant("holder-a/1", "holder-a", wideScope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	client := &fakePerasAuthorityClient{}
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	scope := testRuntimePerasScope(1)
 	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	client := &fakePerasAuthorityClient{}
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestManagerAcquireHeldUpdatesActiveAuthorityView(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, owned)
 	require.Equal(t, held, got)
-	require.Equal(t, []AuthorityGrant{held}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{held}, table.Snapshot())
 }
 
 func TestManagerRetireAuthority(t *testing.T) {
@@ -138,7 +138,7 @@ func TestManagerRetireAuthority(t *testing.T) {
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -159,7 +159,7 @@ func TestManagerPublishesSegmentSeal(t *testing.T) {
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 	segment := testRuntimePerasSegment(t)
@@ -214,14 +214,14 @@ func TestManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grantA, grantB}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grantA, grantB}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scopeA))
 	require.Equal(t, 1, client.calls)
 	require.Equal(t, grantA.GrantID, client.last.GrantID)
-	require.Equal(t, []AuthorityGrant{grantB}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{grantB}, table.Snapshot())
 }
 
 func TestManagerMountRetireScopeMatchesBucketGrants(t *testing.T) {
@@ -231,12 +231,12 @@ func TestManagerMountRetireScopeMatchesBucketGrants(t *testing.T) {
 	grantA := testRuntimePerasGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
 	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grantA, grantB}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grantA, grantB}))
 	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	grants := manager.ownedGrantsForScopes(compile.AuthorityScope{Mount: "vol", MountKeyID: 7})
-	require.ElementsMatch(t, []AuthorityGrant{grantA, grantB}, grants)
+	require.ElementsMatch(t, []rootproto.PerasAuthorityGrant{grantA, grantB}, grants)
 }
 
 func TestManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
@@ -245,13 +245,13 @@ func TestManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
 	grant := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
 	client := &fakePerasAuthorityClient{}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]AuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scope))
 	require.Zero(t, client.calls)
-	require.Equal(t, []AuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, table.Snapshot())
 }
 
 func TestManagerRejectsInvalidConfigAndResponses(t *testing.T) {
@@ -289,7 +289,7 @@ func BenchmarkManagerAcquireLocalHeld(b *testing.B) {
 	scope := testRuntimePerasScope(1)
 	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	if err := table.Replace([]AuthorityGrant{grant}); err != nil {
+	if err := table.Replace([]rootproto.PerasAuthorityGrant{grant}); err != nil {
 		b.Fatal(err)
 	}
 	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
@@ -316,8 +316,8 @@ func testRuntimePerasScope(bucket fsmeta.AffinityBucket) compile.AuthorityScope 
 	}
 }
 
-func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) AuthorityGrant {
-	return AuthorityGrant{
+func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) rootproto.PerasAuthorityGrant {
+	return rootproto.PerasAuthorityGrant{
 		GrantID:         id,
 		EpochID:         1,
 		HolderID:        holder,

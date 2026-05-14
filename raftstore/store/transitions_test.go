@@ -233,7 +233,9 @@ func TestTransitionExecutorProposalAndTerminalOutcomeGuards(t *testing.T) {
 	require.Error(t, nilStore.executeTransitionTarget(transitionTarget{}))
 	require.Error(t, nilStore.applyTerminalOutcome(terminalOutcome{}))
 
-	rs := NewStore(Config{Scheduler: newTestSchedulerSink()})
+	sink := newTestSchedulerSink()
+	rs := NewStore(Config{Scheduler: sink})
+	t.Cleanup(rs.Close)
 	require.NoError(t, rs.executeTransitionTarget(transitionTarget{Noop: true}))
 	require.Error(t, rs.executeTransitionTarget(transitionTarget{RegionID: 1}))
 	require.Error(t, rs.proposeTransition(transitionTarget{ConfChange: &raftpb.ConfChangeV2{}}))
@@ -250,7 +252,9 @@ func TestTransitionExecutorProposalAndTerminalOutcomeGuards(t *testing.T) {
 		Event:  rootevent.RegionTombstoned(55),
 		Action: "remove",
 	}))
-	require.True(t, rs.hasPendingRegionUpdate(55))
+	require.Eventually(t, func() bool {
+		return rs.hasPendingRegionUpdate(55) || historyContainsRootKind(sink.EventHistory(), rootevent.KindRegionTombstoned)
+	}, time.Second, 10*time.Millisecond)
 }
 
 type errorSchedulerSink struct {

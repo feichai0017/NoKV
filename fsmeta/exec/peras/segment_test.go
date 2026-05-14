@@ -305,7 +305,7 @@ func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 	ops := make([]ReplayOperation, 0, count)
 	for i := range count {
 		name := fmt.Sprintf("checkpoint-%06d", i)
-		delta, err := compile.Create(fsmeta.CreateRequest{
+		program, err := compile.CompileCreateProgram(fsmeta.CreateRequest{
 			Mount:  mount.MountID,
 			Parent: fsmeta.RootInode,
 			Name:   name,
@@ -318,7 +318,10 @@ func workspaceCreateReplayPlan(tb testing.TB, count int) ReplayPlan {
 			},
 		}, mount, fsmeta.InodeID(1000+i))
 		require.NoError(tb, err)
-		op, err := replayOperationFromMaterialized(OperationID{ClientID: "workspace-writer", Seq: uint64(i + 1)}, compile.MaterializeDelta(delta, nil))
+		materialized, err := compile.MaterializeCreate(program, compile.CreateValues{})
+		require.NoError(tb, err)
+		materialized = sealTestMaterializedOp(materialized)
+		op, err := replayOperationFromMaterialized(OperationID{ClientID: "workspace-writer", Seq: uint64(i + 1)}, materialized)
 		require.NoError(tb, err)
 		ops = append(ops, op)
 	}

@@ -207,6 +207,7 @@ func TestWriteSummaryCSVIncludesDriver(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.Contains(t, buf.String(), "workload,driver,run_id,operation")
+	require.Contains(t, buf.String(), "throughput_ops_sec,active_ops_per_sec,active_duration_sec")
 	require.Contains(t, buf.String(), "checkpoint-storm,native-fsmeta,run-1,create_checkpoint")
 }
 

@@ -14,10 +14,11 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	delta, err := compile.SnapshotSubtree(req, mountRecord.Identity())
+	program, err := compile.CompileSnapshotSubtreeProgram(req, mountRecord.Identity())
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
