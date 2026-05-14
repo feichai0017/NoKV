@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { withBase } from 'vitepress'
+
 const featured = [
   {
     key: 'cncf',
     name: 'CNCF Landscape',
     headline: 'Listed under Cloud Native Storage runtime',
     detail: 'Cloud Native Computing Foundation · projects-and-products',
+    logo: '/img/recognition/cncf.svg',
     href: 'https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv',
   },
   {
@@ -12,6 +15,7 @@ const featured = [
     name: 'dbdb.io',
     headline: 'Profiled in the database of databases',
     detail: 'CMU-DB · database systems catalog',
+    logo: '/img/recognition/dbdb.svg',
     href: 'https://dbdb.io/db/nokv',
   },
 ]
@@ -55,61 +59,8 @@ const chips = [
         class="featured-card"
         :class="`featured-card--${f.key}`"
       >
-        <div class="featured-mark" :data-mark="f.key" aria-hidden="true">
-          <!-- CNCF — stylized cloud + plus -->
-          <svg v-if="f.key === 'cncf'" viewBox="0 0 64 64" width="40" height="40">
-            <defs>
-              <linearGradient id="cncf-grad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#60a5fa" />
-                <stop offset="1" stop-color="#06b6d4" />
-              </linearGradient>
-            </defs>
-            <path
-              d="M32 16c-7.4 0-13.5 5.4-14.5 12.5C12.7 29.3 9 33.4 9 38.3 9 43.7 13.3 48 18.7 48h27.6C51.7 48 56 43.7 56 38.3c0-4.9-3.7-9-8.5-9.8C46.5 21.4 40.4 16 32 16Z"
-              fill="url(#cncf-grad)"
-              opacity="0.16"
-              stroke="url(#cncf-grad)"
-              stroke-width="1.5"
-            />
-            <path
-              d="M32 27v14M25 34h14"
-              stroke="url(#cncf-grad)"
-              stroke-width="2.8"
-              stroke-linecap="round"
-            />
-          </svg>
-
-          <!-- dbdb.io — cylinder/database stack -->
-          <svg v-else viewBox="0 0 64 64" width="40" height="40">
-            <defs>
-              <linearGradient id="dbdb-grad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#3b82f6" />
-                <stop offset="1" stop-color="#fbbf24" />
-              </linearGradient>
-            </defs>
-            <ellipse
-              cx="32"
-              cy="18"
-              rx="18"
-              ry="6"
-              fill="url(#dbdb-grad)"
-              opacity="0.16"
-              stroke="url(#dbdb-grad)"
-              stroke-width="1.6"
-            />
-            <path
-              d="M14 18v10c0 3.3 8 6 18 6s18-2.7 18-6V18M14 32v10c0 3.3 8 6 18 6s18-2.7 18-6V32"
-              fill="none"
-              stroke="url(#dbdb-grad)"
-              stroke-width="1.6"
-            />
-            <path
-              d="M14 46v4c0 3.3 8 6 18 6s18-2.7 18-6v-4"
-              fill="none"
-              stroke="url(#dbdb-grad)"
-              stroke-width="1.6"
-            />
-          </svg>
+        <div class="featured-mark">
+          <img :src="withBase(f.logo)" :alt="`${f.name} logo`" />
         </div>
 
         <div class="featured-meta">
@@ -133,29 +84,31 @@ const chips = [
       </a>
     </div>
 
-    <div class="chip-row">
+    <div class="chip-section">
       <span class="chip-label">Also listed in</span>
-      <a
-        v-for="c in chips"
-        :key="c.name"
-        :href="c.href"
-        target="_blank"
-        rel="noreferrer"
-        class="chip"
-      >
-        <strong>{{ c.name }}</strong>
-        <span>{{ c.label }}</span>
-        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-          <path
-            d="M7 17 17 7M9 7h8v8"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </a>
+      <div class="chip-row">
+        <a
+          v-for="c in chips"
+          :key="c.name"
+          :href="c.href"
+          target="_blank"
+          rel="noreferrer"
+          class="chip"
+        >
+          <strong>{{ c.name }}</strong>
+          <span>{{ c.label }}</span>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path
+              d="M7 17 17 7M9 7h8v8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </a>
+      </div>
     </div>
   </section>
 </template>
@@ -169,7 +122,7 @@ const chips = [
   display: grid;
   gap: 22px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 28px;
+  margin-bottom: 36px;
 }
 
 .featured-card {
@@ -222,8 +175,8 @@ const chips = [
 
 .featured-mark {
   align-items: center;
-  background: color-mix(in srgb, var(--nokv-accent) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nokv-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--vp-c-bg-soft) 70%, transparent);
+  border: 1px solid var(--vp-c-divider);
   border-radius: 14px;
   display: inline-flex;
   height: 64px;
@@ -231,15 +184,22 @@ const chips = [
   width: 64px;
 }
 
-.featured-card--dbdb .featured-mark {
-  background: color-mix(in srgb, var(--nokv-accent-3) 9%, transparent);
-  border-color: color-mix(in srgb, var(--nokv-accent-3) 22%, transparent);
+.dark .featured-mark {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.featured-mark img {
+  display: block;
+  height: 40px;
+  object-fit: contain;
+  width: 40px;
 }
 
 .featured-meta {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .featured-eyebrow {
@@ -286,22 +246,28 @@ const chips = [
   transform: translate(2px, -2px);
 }
 
-/* Chip row */
-.chip-row {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+/* Chip section — centered label + equal-width grid */
+.chip-section {
+  border-top: 1px dashed var(--vp-c-divider);
+  padding-top: 24px;
+  text-align: center;
 }
 
 .chip-label {
   color: var(--vp-c-text-3);
+  display: block;
   font-family: var(--vp-font-family-mono);
   font-size: 0.74rem;
   font-weight: 600;
-  letter-spacing: 0.12em;
-  margin-right: 4px;
+  letter-spacing: 0.14em;
+  margin-bottom: 14px;
   text-transform: uppercase;
+}
+
+.chip-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .chip {
@@ -310,10 +276,12 @@ const chips = [
   border: 1px solid var(--vp-c-border);
   border-radius: 12px;
   color: var(--vp-c-text-1);
-  display: inline-flex;
-  font-size: 0.9rem;
+  display: flex;
+  font-size: 0.92rem;
   gap: 10px;
-  padding: 10px 14px;
+  justify-content: flex-start;
+  padding: 12px 16px;
+  text-align: left;
   text-decoration: none !important;
   transition: border-color 0.18s ease, transform 0.18s ease;
 }
@@ -324,15 +292,22 @@ const chips = [
 }
 
 .chip strong {
+  flex: 0 0 auto;
   font-weight: 700;
 }
 
 .chip span {
   color: var(--vp-c-text-3);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip svg {
   color: var(--vp-c-text-3);
+  flex: 0 0 auto;
 }
 
 .chip:hover svg {
@@ -350,6 +325,10 @@ const chips = [
 
   .featured-arrow {
     display: none;
+  }
+
+  .chip-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>
