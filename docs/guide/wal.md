@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # WAL Subsystem
 
 NoKV's write-ahead log mirrors RocksDB's durability model and is implemented as a compact typed log. WAL appends happen alongside memtable writes through the DB commit pipeline; metadata values are stored inline, so replay does not depend on a separate blob layer.

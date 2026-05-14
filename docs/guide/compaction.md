@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Compaction & Cache Strategy
 
 > NoKV’s compaction pipeline borrows the leveled‑LSM layout from RocksDB, but layers it with a landing buffer, lightweight cache telemetry, and simple concurrency guards so the implementation stays approachable while still handling bursty workloads.

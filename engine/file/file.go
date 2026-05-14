@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package file provides low-level file and mmap primitives shared by WAL, slab,
 // and SST layers.
 package file

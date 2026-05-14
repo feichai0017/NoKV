@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cache owns the LSM block + index cache layer. It is engine-neutral:
 // callers pass opaque block payloads (Block) and a TableRef abstraction that
 // only exposes the ref-counting hooks the cache needs to release a block on

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
 # build_rocksdb.sh builds RocksDB and installs it into a local prefix so that the
 # benchmark suite can link against it when comparing NoKV with RocksDB.
 #

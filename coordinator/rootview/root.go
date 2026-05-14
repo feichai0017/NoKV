@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rootview is the coordinator-side view onto the remote metadata-root
 // cluster. It wraps the gRPC remote client with snapshot caching, rooted-tail
 // subscriptions, and bootstrap helpers so that coordinator/server can treat

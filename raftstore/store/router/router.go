@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package router is the addressable peer registration hub for one raftstore
 // node. Stores, transports, RPC handlers, and tests resolve a peer ID to a
 // concrete *peer.Peer through this layer rather than holding peer references

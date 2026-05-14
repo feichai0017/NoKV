@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package plan owns the LSM compaction policy: key ranges, conflict state,
 // level targets, priority calculation, and plan construction. It is policy-
 // only — no mmap, no SST, no I/O. The lsm package supplies the live tables

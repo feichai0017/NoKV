@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package server implements the Coordinator gRPC service — the control-plane
 // entry point for route lookup, TSO, ID allocation, grant management, and
 // rooted topology mutations.

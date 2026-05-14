@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package flush owns the LSM flush queue: the per-shard FIFO that
 // preserves WAL segment ordering while letting different shards flush
 // in parallel.

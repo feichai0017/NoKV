@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Scripts Overview
 
 NoKV now groups shell entrypoints by role instead of keeping every helper flat under `scripts/`.

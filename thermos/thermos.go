@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package thermos implements a lightweight bounded-memory hot-key
 // detector + early-skew observer for NoKV's write path.
 //

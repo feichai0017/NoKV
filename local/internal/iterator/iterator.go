@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package iterator implements the user-facing DB iterator state machine on top
 // of an LSM merge iterator. local.DB keeps the NewIterator and
 // NewInternalIterator wrappers as thin facades so callers continue to write

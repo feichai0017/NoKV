@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package observer owns the post-apply event fanout: a Runtime
 // dispatches Event values to registered Observers. Dispatch is
 // non-blocking; slow observers drop events instead of stalling raft

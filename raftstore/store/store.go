@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package store is the multi-region execution runtime of NoKV's raft
 // side. Each Store hosts a Router, a set of Peers, a region runtime,
 // a command runtime, an execution runtime, and a scheduler runtime.

@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package dirpage implements the DirPageSlab Derived consumer of
 // engine/slab. It materializes individual (mount, parent_inode, cursor,
 // limit) directory pages as packed records in a slab so that ReadDirPlus

@@ -7,6 +7,12 @@ assignees: ''
 
 ---
 
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+
 > Security vulnerabilities should not be reported through a public bug issue. Please follow [`SECURITY.md`](../../SECURITY.md) instead.
 
 ## 🐛 Bug Description

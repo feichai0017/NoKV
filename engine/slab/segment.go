@@ -1,3 +1,6 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package slab provides the append-only mmap-backed segment substrate used by
 // sideband physical storage consumers such as DirPage and NegativeCache. The
 // substrate is intentionally minimal: it knows how to

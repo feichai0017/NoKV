@@ -1,3 +1,8 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # CLI (`cmd/nokv`) Reference
 
 `nokv` provides operational visibility similar to RocksDB `ldb` / Badger CLI, with script-friendly JSON output.
