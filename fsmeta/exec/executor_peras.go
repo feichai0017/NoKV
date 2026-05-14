@@ -5,10 +5,19 @@ package exec
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
+
+var perasClientIDFallbackSeq atomic.Uint64
 
 func perasPutEffect(key, value []byte) compile.WriteEffect {
 	return compile.WriteEffect{Kind: compile.EffectPut, Key: cloneBytes(key), Value: cloneBytes(value)}
@@ -23,7 +32,19 @@ func (e *Executor) nextPerasOperationID(kind fsmeta.OperationKind) fsperas.Opera
 	if e != nil {
 		seq = e.perasSeq.Add(1)
 	}
-	return fsperas.OperationID{ClientID: perasOperationClientID(kind), Seq: seq}
+	clientID := perasOperationClientID(kind)
+	if e != nil && e.perasClientID != "" {
+		clientID += "/" + e.perasClientID
+	}
+	return fsperas.OperationID{ClientID: clientID, Seq: seq}
+}
+
+func newPerasClientID() string {
+	var entropy [12]byte
+	if _, err := rand.Read(entropy[:]); err == nil {
+		return hex.EncodeToString(entropy[:])
+	}
+	return fmt.Sprintf("%x-%x-%x", os.Getpid(), time.Now().UnixNano(), perasClientIDFallbackSeq.Add(1))
 }
 
 func perasOperationClientID(kind fsmeta.OperationKind) string {
