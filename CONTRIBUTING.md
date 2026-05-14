@@ -79,7 +79,7 @@ make bench
 - Keep PRs small enough for focused review.
 - Keep each PR scoped to one logical boundary. Do not mix root/control-plane fixes, fsmeta/Peras changes, generated-code rewrites, benchmarks, or unrelated refactors.
 - Every non-merge commit must include a `Signed-off-by` trailer matching the Developer Certificate of Origin in [`DCO`](./DCO).
-- If you use Codex or another agent to review a PR, point it at [`docs/development/code_contract.md`](./docs/development/code_contract.md) and [`docs/development/pr_review_checklist.md`](./docs/development/pr_review_checklist.md).
+- If you use Codex or another agent to review a PR, point it at [`docs/guide/development/code_contract.md`](./docs/guide/development/code_contract.md) and [`docs/guide/development/pr_review_checklist.md`](./docs/guide/development/pr_review_checklist.md).
 
 ## Code Guidelines
 
@@ -88,7 +88,7 @@ make bench
 - Keep package boundaries clear; avoid cross-package coupling without need.
 - Do not mix unrelated refactors with behavior changes in one PR.
 - Add tests for every bug fix or behavior change.
-- Follow the repository code contract in [`docs/development/code_contract.md`](./docs/development/code_contract.md), including package responsibilities, shared-helper reuse, file naming, type/interface/function naming, error placement, metrics/stats ownership, generated-code discipline, and compatibility rules.
+- Follow the repository code contract in [`docs/guide/development/code_contract.md`](./docs/guide/development/code_contract.md), including package responsibilities, shared-helper reuse, file naming, type/interface/function naming, error placement, metrics/stats ownership, generated-code discipline, and compatibility rules.
 - Prefer breaking changes that remove ambiguity over compatibility wrappers. Add a compatibility shim only when a released RPC, CLI, config, or persisted format requires it, and document the removal condition.
 
 ## Testing Expectations

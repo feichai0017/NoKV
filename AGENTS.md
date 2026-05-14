@@ -1,13 +1,13 @@
 # Agent Review Instructions
 
-This repository uses `docs/development/code_contract.md` as the source of truth
+This repository uses `docs/guide/development/code_contract.md` as the source of truth
 for code structure, package boundaries, naming, errors, metrics, tests, DCO,
 and distributed-safety review.
 
 Before reviewing or editing a PR:
 
-1. Read `docs/development/code_contract.md`.
-2. Use `docs/development/pr_review_checklist.md`.
+1. Read `docs/guide/development/code_contract.md`.
+2. Use `docs/guide/development/pr_review_checklist.md`.
 3. Inspect the real changed files before relying on README or design docs.
 4. Report findings first, ordered by severity.
 
