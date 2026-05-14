@@ -89,6 +89,9 @@ func visibleLogLineageCovers(record fsperas.VisibleOperationRecord, active rootp
 	if !activeLineage.Valid() || record.RootLineage.ClusterEpoch != activeLineage.ClusterEpoch {
 		return false
 	}
+	if active.PredecessorDigest != record.PredecessorDigest {
+		return false
+	}
 	if active.EpochID < record.EpochID {
 		return false
 	}

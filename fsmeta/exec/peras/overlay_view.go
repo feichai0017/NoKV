@@ -37,6 +37,8 @@ type OverlayView struct {
 	directoryKeys  map[string]map[string]struct{}
 	directoryRuns  map[string][]string
 	directoryDirty map[string]bool
+	directoryEpoch map[string]uint64
+	epoch          uint64
 	known          map[string]bool
 	emptyDirs      map[string]struct{}
 	emptySessions  map[string]struct{}
@@ -48,6 +50,7 @@ func NewOverlayView() *OverlayView {
 		directoryKeys:  make(map[string]map[string]struct{}),
 		directoryRuns:  make(map[string][]string),
 		directoryDirty: make(map[string]bool),
+		directoryEpoch: make(map[string]uint64),
 		known:          make(map[string]bool),
 		emptyDirs:      make(map[string]struct{}),
 		emptySessions:  make(map[string]struct{}),
@@ -300,6 +303,19 @@ func (v *OverlayView) HasDirectory(prefix []byte) bool {
 	return ok
 }
 
+func (v *OverlayView) DirectoryFrontier(prefix []byte) uint64 {
+	if v == nil || len(prefix) == 0 {
+		return 0
+	}
+	v.mu.RLock()
+	frontier := v.directoryEpoch[string(prefix)]
+	if len(v.directoryKeys[string(prefix)]) == 0 {
+		frontier = 0
+	}
+	v.mu.RUnlock()
+	return frontier
+}
+
 func MergeOverlayScans(base, overlay []OverlayKV, limit uint32) []OverlayKV {
 	if limit == 0 {
 		return nil
@@ -392,6 +408,9 @@ func (v *OverlayView) initLocked() {
 	if v.directoryDirty == nil {
 		v.directoryDirty = make(map[string]bool)
 	}
+	if v.directoryEpoch == nil {
+		v.directoryEpoch = make(map[string]uint64)
+	}
 	if v.known == nil {
 		v.known = make(map[string]bool)
 	}
@@ -453,6 +472,7 @@ func (v *OverlayView) indexDirectoryKeyLocked(key []byte) {
 	}
 	keys[string(key)] = struct{}{}
 	v.directoryDirty[prefix] = true
+	v.bumpDirectoryFrontierLocked(prefix)
 }
 
 func (v *OverlayView) removeDirectoryKeyLocked(key []byte) {
@@ -467,10 +487,20 @@ func (v *OverlayView) removeDirectoryKeyLocked(key []byte) {
 			delete(v.directoryKeys, prefix)
 			delete(v.directoryRuns, prefix)
 			delete(v.directoryDirty, prefix)
+			delete(v.directoryEpoch, prefix)
 			return
 		}
 	}
 	v.directoryDirty[prefix] = true
+	v.bumpDirectoryFrontierLocked(prefix)
+}
+
+func (v *OverlayView) bumpDirectoryFrontierLocked(prefix string) {
+	v.epoch++
+	if v.epoch == 0 {
+		v.epoch = 1
+	}
+	v.directoryEpoch[prefix] = v.epoch
 }
 
 func dentryDirectoryPrefix(key []byte) (string, bool) {

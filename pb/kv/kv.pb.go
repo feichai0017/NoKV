@@ -3893,6 +3893,7 @@ type PerasSegmentWitnessRecord struct {
 	SegmentPayloadSize   uint64                 `protobuf:"varint,8,opt,name=segment_payload_size,json=segmentPayloadSize,proto3" json:"segment_payload_size,omitempty"`
 	SegmentPointer       string                 `protobuf:"bytes,9,opt,name=segment_pointer,json=segmentPointer,proto3" json:"segment_pointer,omitempty"`
 	SegmentPayload       []byte                 `protobuf:"bytes,10,opt,name=segment_payload,json=segmentPayload,proto3" json:"segment_payload,omitempty"`
+	PredecessorDigest    []byte                 `protobuf:"bytes,11,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -3993,6 +3994,13 @@ func (x *PerasSegmentWitnessRecord) GetSegmentPointer() string {
 func (x *PerasSegmentWitnessRecord) GetSegmentPayload() []byte {
 	if x != nil {
 		return x.SegmentPayload
+	}
+	return nil
+}
+
+func (x *PerasSegmentWitnessRecord) GetPredecessorDigest() []byte {
+	if x != nil {
+		return x.PredecessorDigest
 	}
 	return nil
 }
@@ -4788,7 +4796,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"mountKeyId\x12\x18\n" +
 	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
 	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
-	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xaa\x03\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xd9\x03\n" +
 	"\x19PerasSegmentWitnessRecord\x12\x19\n" +
 	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +
@@ -4801,7 +4809,8 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x14segment_payload_size\x18\b \x01(\x04R\x12segmentPayloadSize\x12'\n" +
 	"\x0fsegment_pointer\x18\t \x01(\tR\x0esegmentPointer\x12'\n" +
 	"\x0fsegment_payload\x18\n" +
-	" \x01(\fR\x0esegmentPayload\"\x92\x01\n" +
+	" \x01(\fR\x0esegmentPayload\x12-\n" +
+	"\x12predecessor_digest\x18\v \x01(\fR\x11predecessorDigest\"\x92\x01\n" +
 	"\x1aPerasWitnessSegmentRequest\x125\n" +
 	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12=\n" +
 	"\x06record\x18\x02 \x01(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\x06record\"\x1d\n" +

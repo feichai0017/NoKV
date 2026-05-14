@@ -308,6 +308,39 @@ func TestRuntimeRecoversVisibleLogOldEpochForSameHolder(t *testing.T) {
 	require.Equal(t, uint64(1), stats["visible_log_recover_old_epoch_total"])
 }
 
+func TestRuntimeSkipsVisibleLogOldEpochWithPredecessorMismatch(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	old := testRuntimeCommitterGrant()
+	old.GrantID = "grant-old"
+	old.PredecessorDigest[0] = 1
+	active := testRuntimeCommitterGrant()
+	active.GrantID = "grant-new"
+	active.EpochID = 2
+	active.PredecessorDigest[0] = 2
+	active.IssuedRootToken.Index = 2
+	active.IssuedRootToken.Revision = 2
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(old, op.Delta.Authority, replay),
+	}}
+	committer, err := NewRuntime(Config{
+		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: active},
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.Zero(t, committer.pendingOperations())
+	stats := committer.Stats()
+	require.Equal(t, uint64(0), stats["visible_log_recover_total"])
+	require.Equal(t, uint64(1), stats["visible_log_recover_skip_total"])
+}
+
 func TestRuntimeSkipsVisibleLogFromDifferentRootLineage(t *testing.T) {
 	id := fsperas.OperationID{ClientID: "client", Seq: 1}
 	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))

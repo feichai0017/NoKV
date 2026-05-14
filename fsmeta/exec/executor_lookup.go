@@ -109,7 +109,8 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 	}
 	mount := mountRecord.Identity()
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
-	includeOverlay := overlayOnly || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
+	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mountRecord.Identity(), includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
@@ -147,18 +148,19 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	}
 	mount := mountRecord.Identity()
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
-	includeOverlay := overlayOnly || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
+	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mount, includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
 	}
 
-	useDirPage := e.dirPages != nil && req.SnapshotVersion == 0 && !plan.IncludePeras && !plan.PerasOnly
+	useDirPage := e.dirPages != nil && req.SnapshotVersion == 0 && !hasVisibleOverlay
 	var pageKey dirpage.PageKey
 	var frontier uint64
 	if useDirPage {
 		pageKey = dirPageKey(req.Mount, req.Parent, req.StartAfter, plan.Limit)
-		frontier = e.dirPages.CurrentEpoch(pageKey.Directory())
+		frontier = e.dirPageReadFrontier(pageKey.Directory(), mount, req.Parent)
 		if entries, ok := e.dirPages.Lookup(pageKey, frontier); ok {
 			if cached, err := decodeDirPageEntries(pageKey, entries); err == nil {
 				return cached, nil
@@ -334,6 +336,65 @@ func (e *Executor) perasDirectoryHasOverlay(mount fsmeta.MountIdentity, parent f
 		return true
 	}
 	return presence.HasPerasDirectory(prefix)
+}
+
+func (e *Executor) perasDirectoryHasVisibleOverlay(mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {
+	overlay := e.perasOverlay()
+	if overlay == nil {
+		return false
+	}
+	presence, ok := overlay.(PerasVisibleDirectoryPresence)
+	if !ok {
+		return e.perasDirectoryHasOverlay(mount, parent)
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	if err != nil {
+		return true
+	}
+	return presence.HasPerasVisibleDirectory(prefix)
+}
+
+func (e *Executor) dirPageReadFrontier(directory dirpage.DirectoryKey, mount fsmeta.MountIdentity, parent fsmeta.InodeID) uint64 {
+	e.syncDirPagePerasFrontier(directory, e.perasDirectoryCacheFrontier(mount, parent))
+	return e.dirPages.CurrentEpoch(directory)
+}
+
+func (e *Executor) perasDirectoryCacheFrontier(mount fsmeta.MountIdentity, parent fsmeta.InodeID) uint64 {
+	overlay := e.perasOverlay()
+	if overlay == nil {
+		return 0
+	}
+	reporter, ok := overlay.(PerasDirectoryCacheFrontier)
+	if !ok {
+		return 0
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	if err != nil {
+		return 0
+	}
+	return reporter.PerasDirectoryCacheFrontier(prefix)
+}
+
+func (e *Executor) syncDirPagePerasFrontier(directory dirpage.DirectoryKey, frontier uint64) {
+	if e == nil || e.dirPages == nil {
+		return
+	}
+	e.dirPagePerasMu.Lock()
+	if e.dirPagePerasFrontier == nil {
+		e.dirPagePerasFrontier = make(map[dirpage.DirectoryKey]uint64)
+	}
+	previous, known := e.dirPagePerasFrontier[directory]
+	if (!known && frontier == 0) || (known && previous == frontier) {
+		e.dirPagePerasMu.Unlock()
+		return
+	}
+	if frontier == 0 {
+		delete(e.dirPagePerasFrontier, directory)
+	} else {
+		e.dirPagePerasFrontier[directory] = frontier
+	}
+	e.dirPagePerasMu.Unlock()
+	e.dirPages.Invalidate(directory)
 }
 
 func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (fsmeta.DentryRecord, error) {

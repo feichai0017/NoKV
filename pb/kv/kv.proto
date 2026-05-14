@@ -427,6 +427,7 @@ message PerasSegmentWitnessRecord {
   uint64 segment_payload_size = 8;
   string segment_pointer = 9;
   bytes segment_payload = 10;
+  bytes predecessor_digest = 11;
 }
 
 message PerasWitnessSegmentRequest {

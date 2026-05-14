@@ -75,7 +75,7 @@ func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.Authority
 	if n == nil || n.log == nil || n.authorityView == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
-	if err := n.validateAuthority(ctx, scope, record.EpochID, record.HolderID); err != nil {
+	if err := n.validateAuthority(ctx, scope, record); err != nil {
 		return err
 	}
 	key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
@@ -121,8 +121,8 @@ func (n *WitnessNode) Probe(ctx context.Context, epochID uint64) (fsperas.Witnes
 	return n.log.Probe(ctx, epochID)
 }
 
-func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.AuthorityScope, epochID uint64, holderID string) error {
-	err := n.checkAuthority(scope, epochID, holderID)
+func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+	err := n.checkAuthority(scope, record)
 	if err == nil || n.refresh == nil || ctx.Err() != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -135,23 +135,24 @@ func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.Autho
 	if refreshErr := n.refresh(ctx); refreshErr != nil {
 		return refreshErr
 	}
-	return n.checkAuthority(scope, epochID, holderID)
+	return n.checkAuthority(scope, record)
 }
 
-func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, epochID uint64, holderID string) error {
+func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
 	grant, ok, err := n.authorityView.Find(scope, n.now())
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%w: want epoch=%d holder=%q", ErrWitnessAuthorityMissing, epochID, holderID)
+		return fmt.Errorf("%w: want epoch=%d holder=%q", ErrWitnessAuthorityMissing, record.EpochID, record.HolderID)
 	}
 	// A holder may drain segments from an older local visible log after root
 	// has renewed the same holder into a later epoch. Reject transferred
-	// ownership and future epochs; accept same-holder predecessor drain.
-	if grant.HolderID != holderID || grant.EpochID < epochID {
+	// ownership, future epochs, and records from a different predecessor
+	// frontier; accept same-holder predecessor drain only on the same frontier.
+	if grant.HolderID != record.HolderID || grant.EpochID < record.EpochID || grant.PredecessorDigest != record.PredecessorDigest {
 		return fmt.Errorf("%w: have grant=%q epoch=%d holder=%q want epoch=%d holder=%q",
-			ErrWitnessAuthorityMismatch, grant.GrantID, grant.EpochID, grant.HolderID, epochID, holderID)
+			ErrWitnessAuthorityMismatch, grant.GrantID, grant.EpochID, grant.HolderID, record.EpochID, record.HolderID)
 	}
 	return nil
 }

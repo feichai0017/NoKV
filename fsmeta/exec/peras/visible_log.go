@@ -12,7 +12,6 @@ import (
 )
 
 var visibleRecordMagic = [4]byte{'N', 'P', 'V', 3}
-var visibleRecordMagicV2 = [4]byte{'N', 'P', 'V', 2}
 var visibleAppliedMagic = [4]byte{'N', 'P', 'A', 2}
 
 type VisibleRootLineage struct {
@@ -64,7 +63,7 @@ type VisibleLogApplier interface {
 }
 
 func EncodeVisibleOperationRecord(record VisibleOperationRecord) ([]byte, error) {
-	if err := validateVisibleOperationRecord(record, true); err != nil {
+	if err := validateVisibleOperationRecord(record); err != nil {
 		return nil, err
 	}
 	var out bytes.Buffer
@@ -104,12 +103,7 @@ func DecodeVisibleOperationRecord(payload []byte) (VisibleOperationRecord, error
 	if err := r.readFixed(magic[:]); err != nil {
 		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
 	}
-	hasLineage := true
-	switch {
-	case bytes.Equal(magic[:], visibleRecordMagic[:]):
-	case bytes.Equal(magic[:], visibleRecordMagicV2[:]):
-		hasLineage = false
-	default:
+	if !bytes.Equal(magic[:], visibleRecordMagic[:]) {
 		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
 	}
 	record := VisibleOperationRecord{}
@@ -131,10 +125,8 @@ func DecodeVisibleOperationRecord(payload []byte) (VisibleOperationRecord, error
 	if err := r.readFixed(record.PredecessorDigest[:]); err != nil {
 		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
 	}
-	if hasLineage {
-		if record.RootLineage, err = readVisibleRootLineage(&r); err != nil {
-			return VisibleOperationRecord{}, ErrInvalidWitnessRecord
-		}
+	if record.RootLineage, err = readVisibleRootLineage(&r); err != nil {
+		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
 	}
 	if record.Scope, err = readAuthorityScope(&r); err != nil {
 		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
@@ -150,7 +142,7 @@ func DecodeVisibleOperationRecord(payload []byte) (VisibleOperationRecord, error
 	if !r.done() {
 		return VisibleOperationRecord{}, ErrInvalidWitnessRecord
 	}
-	if err := validateVisibleOperationRecord(record, hasLineage); err != nil {
+	if err := validateVisibleOperationRecord(record); err != nil {
 		return VisibleOperationRecord{}, err
 	}
 	return record, nil
@@ -190,11 +182,11 @@ func DecodeVisibleAppliedRecord(payload []byte) (VisibleAppliedRecord, error) {
 	return record, nil
 }
 
-func validateVisibleOperationRecord(record VisibleOperationRecord, requireLineage bool) error {
+func validateVisibleOperationRecord(record VisibleOperationRecord) error {
 	if record.EpochID == 0 || record.HolderID == "" || record.GrantID == "" || record.GrantExpiresNanos <= 0 {
 		return ErrInvalidWitnessRecord
 	}
-	if requireLineage && !record.RootLineage.Valid() {
+	if !record.RootLineage.Valid() {
 		return ErrInvalidWitnessRecord
 	}
 	if record.Scope.Mount == "" || record.Scope.MountKeyID == 0 {

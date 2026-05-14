@@ -5,13 +5,15 @@ package exec
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"sync/atomic"
-	"time"
 )
 
 const (
@@ -138,6 +140,14 @@ type PerasDirectoryOverlayPresence interface {
 	HasPerasDirectory(prefix []byte) bool
 }
 
+type PerasVisibleDirectoryPresence interface {
+	HasPerasVisibleDirectory(prefix []byte) bool
+}
+
+type PerasDirectoryCacheFrontier interface {
+	PerasDirectoryCacheFrontier(prefix []byte) uint64
+}
+
 type PerasFlusher interface {
 	FlushDurable(context.Context) error
 }
@@ -187,6 +197,8 @@ type Executor struct {
 	perasClientID           string
 	negCache                NegativeCache
 	dirPages                DirPageCache
+	dirPagePerasMu          sync.Mutex
+	dirPagePerasFrontier    map[dirpage.DirectoryKey]uint64
 	lockTTL                 uint64
 	now                     func() time.Time
 	readRetriesTotal        atomic.Uint64

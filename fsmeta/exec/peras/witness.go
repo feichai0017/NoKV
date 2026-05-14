@@ -22,7 +22,7 @@ type WitnessRecordKind uint8
 
 const WitnessRecordSegment WitnessRecordKind = 1
 
-var witnessRecordMagic = [4]byte{'N', 'P', 'W', 1}
+var witnessRecordMagic = [4]byte{'N', 'P', 'W', 2}
 
 // SegmentWitnessRecord is the only durable Peras witness evidence. Individual
 // metadata operations enter the holder overlay; witnesses persist the sealed
@@ -31,6 +31,7 @@ type SegmentWitnessRecord struct {
 	EpochID              uint64
 	SegmentRoot          [32]byte
 	SegmentPayloadDigest [32]byte
+	PredecessorDigest    [32]byte
 	SegmentPayloadSize   uint64
 	SegmentPointer       string
 	SegmentPayload       []byte
@@ -59,6 +60,7 @@ func EncodeSegmentWitnessRecord(record SegmentWitnessRecord) ([]byte, error) {
 	writeUint64(&out, record.EpochID)
 	out.Write(record.SegmentRoot[:])
 	out.Write(record.SegmentPayloadDigest[:])
+	out.Write(record.PredecessorDigest[:])
 	writeUint64(&out, record.SegmentPayloadSize)
 	writeString(&out, record.SegmentPointer)
 	writeBytes(&out, record.SegmentPayload)
@@ -115,7 +117,7 @@ func validateSegmentWitnessRecord(record SegmentWitnessRecord) error {
 }
 
 func segmentWitnessRecordEncodedSize(record SegmentWitnessRecord) int {
-	return len(witnessRecordMagic) + 1 + 8 + 32 + 32 + 8 + stringEncodedSize(record.SegmentPointer) + 4 + len(record.SegmentPayload) + 8 + 8 + 8 + stringEncodedSize(record.HolderID)
+	return len(witnessRecordMagic) + 1 + 8 + 32 + 32 + 32 + 8 + stringEncodedSize(record.SegmentPointer) + 4 + len(record.SegmentPayload) + 8 + 8 + 8 + stringEncodedSize(record.HolderID)
 }
 
 func stringEncodedSize(value string) int {
@@ -209,6 +211,9 @@ func (r *witnessReader) readSegment() (SegmentWitnessRecord, error) {
 		return SegmentWitnessRecord{}, err
 	}
 	if err := r.readFixed(record.SegmentPayloadDigest[:]); err != nil {
+		return SegmentWitnessRecord{}, err
+	}
+	if err := r.readFixed(record.PredecessorDigest[:]); err != nil {
 		return SegmentWitnessRecord{}, err
 	}
 	if record.SegmentPayloadSize, err = r.readUint64(); err != nil {

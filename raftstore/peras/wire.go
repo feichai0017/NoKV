@@ -62,6 +62,7 @@ func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.P
 		EpochId:              record.EpochID,
 		SegmentRoot:          append([]byte(nil), record.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), record.SegmentPayloadDigest[:]...),
+		PredecessorDigest:    append([]byte(nil), record.PredecessorDigest[:]...),
 		SegmentPayloadSize:   record.SegmentPayloadSize,
 		SegmentPointer:       record.SegmentPointer,
 		SegmentPayload:       append([]byte(nil), record.SegmentPayload...),
@@ -90,6 +91,9 @@ func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsper
 		return fsperas.SegmentWitnessRecord{}, err
 	}
 	if err := copyFixed(out.SegmentPayloadDigest[:], in.GetSegmentPayloadDigest(), "segment_payload_digest"); err != nil {
+		return fsperas.SegmentWitnessRecord{}, err
+	}
+	if err := copyFixed(out.PredecessorDigest[:], in.GetPredecessorDigest(), "predecessor_digest"); err != nil {
 		return fsperas.SegmentWitnessRecord{}, err
 	}
 	return out, nil

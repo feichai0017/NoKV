@@ -4,6 +4,7 @@
 package exec
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"testing"
@@ -181,6 +182,100 @@ func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
 	require.Equal(t, uint64(0), stats.Hits)
 	require.Equal(t, uint64(0), stats.StoreOK)
 	require.Len(t, runner.scanVersions, 2, "Peras-backed ReadDirPlus must not materialize the persistent dirpage cache")
+}
+
+func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	sealedDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed")
+	sealedInodeKey := inodeKeyForTest(t, "vol", 33)
+	sealedRows := []fsperas.OverlayKV{
+		overlayValueForTest(sealedDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed", 33, fsmeta.InodeTypeFile)),
+		overlayValueForTest(sealedInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 33, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
+	}
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasCommitter(sealedDirectoryCommitter{
+			rows:     sealedRows,
+			values:   overlayMapForTest(sealedRows...),
+			frontier: 7,
+		}),
+		WithDirPageCache(cache),
+	)
+	require.NoError(t, err)
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	scansAfterFirst := len(runner.scanVersions)
+	require.Eventually(t, func() bool {
+		return cache.Stats().StoreOK > 0
+	}, time.Second, 10*time.Millisecond)
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "sealed Peras directory should use frontier-aware dirpage cache")
+	require.Greater(t, cache.Stats().Hits, uint64(0))
+}
+
+func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	sealedDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed")
+	sealedInodeKey := inodeKeyForTest(t, "vol", 33)
+	sealedRows := []fsperas.OverlayKV{
+		overlayValueForTest(sealedDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed", 33, fsmeta.InodeTypeFile)),
+		overlayValueForTest(sealedInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 33, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
+	}
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	committer := &sealedDirectoryCommitter{
+		rows:     sealedRows,
+		values:   overlayMapForTest(sealedRows...),
+		frontier: 7,
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer), WithDirPageCache(cache))
+	require.NoError(t, err)
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	require.Eventually(t, func() bool {
+		return cache.Stats().StoreOK > 0
+	}, time.Second, 10*time.Millisecond)
+	scansAfterFirst := len(runner.scanVersions)
+
+	newDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed-new")
+	newInodeKey := inodeKeyForTest(t, "vol", 44)
+	newRows := []fsperas.OverlayKV{
+		overlayValueForTest(newDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed-new", 44, fsmeta.InodeTypeFile)),
+		overlayValueForTest(newInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 44, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
+	}
+	committer.rows = append(committer.rows, newRows...)
+	committer.values = overlayMapForTest(committer.rows...)
+	committer.frontier = 8
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, second, 3)
+	require.Greater(t, len(runner.scanVersions), scansAfterFirst, "sealed frontier change must invalidate stale dirpage rows")
 }
 
 func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *testing.T) {
@@ -842,4 +937,77 @@ func BenchmarkExecutorReadDirPlusFromPerasView100(b *testing.B) {
 			b.Fatalf("unexpected Peras view result: ok=%v entries=%d", ok, len(pairs))
 		}
 	}
+}
+
+type sealedDirectoryCommitter struct {
+	noopPerasCommitter
+	rows     []fsperas.OverlayKV
+	values   map[string]fsperas.OverlayKV
+	frontier uint64
+}
+
+func (c sealedDirectoryCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetPerasOverlayView(key)
+	if !ok {
+		return nil, false, false
+	}
+	return append([]byte(nil), value...), deleted, true
+}
+
+func (c sealedDirectoryCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
+	row, ok := c.values[string(key)]
+	if !ok {
+		return nil, false, false
+	}
+	return row.Value, row.Delete, true
+}
+
+func (c sealedDirectoryCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
+	return scanOverlayRowsForTest(c.rows, start, limit)
+}
+
+func (c sealedDirectoryCommitter) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	rows := scanOverlayRowsForTest(c.rows, start, limit)
+	out := rows[:0]
+	for _, row := range rows {
+		if !bytes.HasPrefix(row.Key, prefix) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func (c sealedDirectoryCommitter) HasPerasDirectory(prefix []byte) bool {
+	for _, row := range c.rows {
+		if bytes.HasPrefix(row.Key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c sealedDirectoryCommitter) HasPerasVisibleDirectory([]byte) bool {
+	return false
+}
+
+func (c sealedDirectoryCommitter) PerasDirectoryCacheFrontier(prefix []byte) uint64 {
+	if c.HasPerasDirectory(prefix) {
+		return c.frontier
+	}
+	return 0
+}
+
+func scanOverlayRowsForTest(rows []fsperas.OverlayKV, start []byte, limit uint32) []fsperas.OverlayKV {
+	out := make([]fsperas.OverlayKV, 0, len(rows))
+	for _, row := range rows {
+		if bytes.Compare(row.Key, start) < 0 {
+			continue
+		}
+		out = append(out, row)
+		if uint32(len(out)) == limit {
+			break
+		}
+	}
+	return out
 }

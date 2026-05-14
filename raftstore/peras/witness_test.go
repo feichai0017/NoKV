@@ -124,6 +124,24 @@ func TestWitnessNodeAcceptsSameHolderOldEpochDrain(t *testing.T) {
 	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), record))
 }
 
+func TestWitnessNodeRejectsSameHolderOldEpochPredecessorMismatch(t *testing.T) {
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	grant := testAuthorityGrant()
+	grant.GrantID = "grant-2"
+	grant.EpochID = 2
+	grant.PredecessorDigest[0] = 9
+	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
+
+	record := testSegmentRecord()
+	record.EpochID = 1
+	record.PredecessorDigest[0] = 8
+	require.ErrorIs(t, node.AppendSegment(context.Background(), testAuthorityScope(), record), ErrWitnessAuthorityMismatch)
+}
+
 func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	now := time.Unix(100, 0)
 	authorities := runtimeperas.NewActiveAuthorities()

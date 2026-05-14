@@ -39,10 +39,26 @@ func (c *Runtime) appendSegmentWitnesses(ctx context.Context, scope compile.Auth
 		return err
 	}
 	stats := segment.Stats()
+	grant, ok := c.epochs.grant(holder.EpochID())
+	if !ok && c.authority != nil {
+		active, owned, err := c.authority.Acquire(ctx, scope)
+		if err != nil {
+			return err
+		}
+		if owned && active.EpochID == holder.EpochID() && active.HolderID == holder.HolderID() {
+			grant = active
+			ok = true
+			c.epochs.installHolder(active, holder)
+		}
+	}
+	if !ok {
+		return fmt.Errorf("peras witness grant missing for epoch %d: %w", holder.EpochID(), ErrRuntimeInvalid)
+	}
 	record := fsperas.SegmentWitnessRecord{
 		EpochID:              holder.EpochID(),
 		SegmentRoot:          segment.Root,
 		SegmentPayloadDigest: digest,
+		PredecessorDigest:    grant.PredecessorDigest,
 		SegmentPayloadSize:   uint64(len(payload)),
 		SegmentPayload:       cloneBytes(payload),
 		OperationCount:       stats.OperationCount,
