@@ -1,13 +1,12 @@
 package peras
 
 import (
-	"errors"
-
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-var ErrInvalidInstallRequest = errors.New("raftstore/peras: invalid install request")
+var ErrInvalidInstallRequest = nokverrors.New(nokverrors.KindProtocolViolation, "raftstore/peras: invalid install request")
 
 type InstallRequestInfo struct {
 	RoutingKey         []byte

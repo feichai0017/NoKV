@@ -1,14 +1,10 @@
 package file
 
 import (
-	"expvar"
-
+	"github.com/feichai0017/NoKV/metrics"
 	"github.com/feichai0017/NoKV/utils"
 	"github.com/feichai0017/NoKV/utils/mmap"
 )
-
-var madviseCount = expvar.NewInt("NoKV.Mmap.Madvise")
-var madviseFailed = expvar.NewInt("NoKV.Mmap.MadviseFailed")
 
 func toMmapAdvice(pattern utils.AccessPattern) mmap.Advice {
 	switch pattern {
@@ -33,10 +29,6 @@ func (m *MmapFile) Advise(pattern utils.AccessPattern) error {
 		return nil
 	}
 	err := mmap.MadvisePattern(m.Data, toMmapAdvice(pattern))
-	if err == nil {
-		madviseCount.Add(1)
-	} else {
-		madviseFailed.Add(1)
-	}
+	metrics.RecordMmapMadvise(err == nil)
 	return err
 }

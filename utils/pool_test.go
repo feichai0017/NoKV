@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"expvar"
 	"testing"
 	"time"
 
@@ -21,7 +22,8 @@ func TestPoolSubmitAndSize(t *testing.T) {
 	}
 
 	require.Equal(t, 1, pool.Size())
-	require.NotNil(t, getOrCreateInt("NoKV.Pool.test.Submit"))
+	require.Nil(t, expvar.Get("NoKV.Pool.test.Submit"))
+	require.Nil(t, expvar.Get("NoKV.Pool.test.Active"))
 	require.NoError(t, pool.Submit(nil))
 	pool.Release()
 }

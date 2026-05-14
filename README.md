@@ -253,7 +253,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 
 ## 📡 Observability
 
-Five fsmeta expvar metric namespaces (per-domain admission visibility):
+FSMetadata exports per-domain expvar namespaces when `--metrics-addr` is enabled:
 
 | Endpoint | Metric namespace | Fields |
 |---|---|---|
@@ -261,6 +261,7 @@ Five fsmeta expvar metric namespaces (per-domain admission visibility):
 | | `nokv_fsmeta_watch` | `subscribers`, `events_total`, `delivered_total`, `dropped_total`, `overflow_total` |
 | | `nokv_fsmeta_quota` | `checks_total`, `rejects_total`, `cache_hits_total`, `cache_misses_total`, `fence_updates_total`, `usage_mutations_total` |
 | | `nokv_fsmeta_mount` | `cache_hits`, `cache_misses`, `admission_rejects_total` |
+| | `nokv_fsmeta_peras` | `commit_total`, `flush_total`, `segment_total`, `witness_latency_*` |
 | | `nokv_fsmeta_sessions` | stale writer-session cleanup runs, expired sessions, and last error |
 
 Plus structured logs from coordinator and each store. More: [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`docs/testing.md`](docs/testing.md).
