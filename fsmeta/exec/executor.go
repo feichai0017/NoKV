@@ -169,6 +169,7 @@ type Executor struct {
 	authorities             SubtreeAuthorityResolver
 	perasAuthority          PerasAuthorityAdmitter
 	perasCommitter          PerasCommitter
+	perasClientID           string
 	negCache                NegativeCache
 	dirPages                DirPageCache
 	lockTTL                 uint64
@@ -298,6 +299,7 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 	executor := &Executor{
 		runner:         runner,
 		lockTTL:        defaultLockTTL,
+		perasClientID:  newPerasClientID(),
 		atomicOnePhase: newAtomicOnePhaseCounters(),
 	}
 	for _, opt := range opts {

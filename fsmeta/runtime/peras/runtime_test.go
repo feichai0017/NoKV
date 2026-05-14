@@ -323,6 +323,33 @@ func TestRuntimeReturnsInstalledCompletionOnRetry(t *testing.T) {
 	require.Equal(t, 0, committer.Stats()["pending"])
 }
 
+func TestRuntimeRejectsInstalledCompletionIDCollision(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	opID := fsperas.OperationID{ClientID: "client", Seq: 7}
+	first := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	_, err = committer.SubmitVisible(ctx, opID, first, nil)
+	require.NoError(t, err)
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	colliding := testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b"))
+	_, err = committer.SubmitVisible(ctx, opID, colliding, nil)
+	require.ErrorIs(t, err, fsperas.ErrDuplicateOperation)
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
 func TestRuntimeReturnsPendingAckOnRetry(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRuntime(Config{

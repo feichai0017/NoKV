@@ -315,6 +315,9 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 		return fsperas.VisibleAck{}, ErrRuntimeClosed
 	}
 	if completion, ok := c.completionForOperation(id); ok {
+		if !completionMatchesOperation(completion.completion, op) {
+			return fsperas.VisibleAck{}, fsperas.ErrDuplicateOperation
+		}
 		return fsperas.VisibleAck{EpochID: completion.epochID, OpID: id, HolderID: c.authority.HolderID()}, nil
 	}
 	grant, owned, err := c.authority.Acquire(ctx, delta.Authority)
