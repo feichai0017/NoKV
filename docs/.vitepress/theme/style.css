@@ -1,0 +1,448 @@
+/* ------------------------------------------------------------------------- */
+/*  NoKV site theme — VitePress design-token overrides + landing tokens      */
+/* ------------------------------------------------------------------------- */
+
+:root {
+  /* Brand */
+  --vp-c-brand-1: #2563eb;
+  --vp-c-brand-2: #1d4ed8;
+  --vp-c-brand-3: #1e40af;
+  --vp-c-brand-soft: rgba(37, 99, 235, 0.16);
+  --vp-c-brand-bg: rgba(37, 99, 235, 0.08);
+
+  /* Surface palette (light) */
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #fafbfc;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f4f6fa;
+  --vp-c-bg-mute: #eef1f6;
+
+  /* Text */
+  --vp-c-text-1: #0f172a;
+  --vp-c-text-2: #475569;
+  --vp-c-text-3: #64748b;
+
+  /* Divider */
+  --vp-c-divider: rgba(15, 23, 42, 0.08);
+  --vp-c-gutter: rgba(15, 23, 42, 0.06);
+  --vp-c-border: rgba(15, 23, 42, 0.1);
+
+  /* Custom NoKV tokens */
+  --nokv-accent: #2563eb;
+  --nokv-accent-2: #0891b2;
+  --nokv-accent-3: #f59e0b;
+  --nokv-accent-glow: rgba(37, 99, 235, 0.28);
+  --nokv-grid: rgba(37, 99, 235, 0.07);
+  --nokv-glass: rgba(255, 255, 255, 0.65);
+  --nokv-card-bg: linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 255, 0.9));
+  --nokv-card-bg-strong: linear-gradient(165deg, #ffffff, #f5f8ff);
+  --nokv-card-border: rgba(15, 23, 42, 0.08);
+  --nokv-card-shadow: 0 20px 40px -20px rgba(15, 23, 42, 0.18);
+  --nokv-code-bg: #0d1117;
+  --nokv-code-text: #e6edf3;
+
+  --vp-font-family-base:
+    'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', sans-serif;
+  --vp-font-family-mono:
+    'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+}
+
+.dark {
+  /* Brand (lighter / glowier in dark) */
+  --vp-c-brand-1: #60a5fa;
+  --vp-c-brand-2: #3b82f6;
+  --vp-c-brand-3: #2563eb;
+  --vp-c-brand-soft: rgba(96, 165, 250, 0.18);
+  --vp-c-brand-bg: rgba(96, 165, 250, 0.08);
+
+  /* Surface — deep navy almost-black */
+  --vp-c-bg: #07090f;
+  --vp-c-bg-alt: #0a0d18;
+  --vp-c-bg-elv: #0f1320;
+  --vp-c-bg-soft: #11162a;
+  --vp-c-bg-mute: #161c33;
+
+  /* Text */
+  --vp-c-text-1: #f1f5f9;
+  --vp-c-text-2: #b4becc;
+  --vp-c-text-3: #8b94a7;
+
+  /* Divider */
+  --vp-c-divider: rgba(148, 163, 184, 0.14);
+  --vp-c-gutter: rgba(148, 163, 184, 0.08);
+  --vp-c-border: rgba(148, 163, 184, 0.16);
+
+  /* NoKV tokens */
+  --nokv-accent: #60a5fa;
+  --nokv-accent-2: #22d3ee;
+  --nokv-accent-3: #fbbf24;
+  --nokv-accent-glow: rgba(96, 165, 250, 0.35);
+  --nokv-grid: rgba(96, 165, 250, 0.07);
+  --nokv-glass: rgba(15, 23, 42, 0.6);
+  --nokv-card-bg: linear-gradient(165deg, rgba(20, 27, 48, 0.92), rgba(14, 19, 34, 0.92));
+  --nokv-card-bg-strong: linear-gradient(165deg, rgba(28, 38, 66, 0.95), rgba(15, 22, 42, 0.95));
+  --nokv-card-border: rgba(148, 163, 184, 0.14);
+  --nokv-card-shadow: 0 20px 50px -22px rgba(0, 0, 0, 0.7);
+  --nokv-code-bg: #08111f;
+  --nokv-code-text: #e6edf3;
+}
+
+/* Buttons */
+:root {
+  --vp-button-brand-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --vp-button-brand-hover-bg: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+  --vp-button-brand-active-bg: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-text: #ffffff;
+}
+
+.dark {
+  --vp-button-brand-bg: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  --vp-button-brand-hover-bg: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  --vp-button-brand-active-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+
+/* --------------------------------- Globals -------------------------------- */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Nav glass */
+.VPNav {
+  backdrop-filter: saturate(140%) blur(14px);
+  -webkit-backdrop-filter: saturate(140%) blur(14px);
+  background: color-mix(in srgb, var(--vp-c-bg) 78%, transparent);
+}
+
+.dark .VPNav {
+  background: color-mix(in srgb, #06080e 72%, transparent);
+}
+
+/* Bigger logo + brand wordmark in the nav */
+.VPNavBarTitle .logo {
+  height: 32px !important;
+  width: 32px !important;
+  margin-right: 10px;
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--nokv-accent) 35%, transparent));
+}
+
+.VPNavBarTitle .title {
+  font-size: 1.18rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em;
+}
+
+.VPNavBar.has-sidebar .content-body,
+.VPNavBar .content-body {
+  background: transparent !important;
+}
+
+/* Sidebar polish */
+.VPSidebarItem.level-0 > .item > .text {
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+
+/* Code blocks */
+.vp-doc div[class*='language-'] {
+  border-radius: 14px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+/* Make the default home/page padding wider on big screens */
+.VPDoc.has-aside .content-container,
+.VPDoc .content-container {
+  max-width: 1100px;
+}
+
+/* ---------------------------- Landing page shell -------------------------- */
+
+.home-page .VPSidebar,
+.home-page .VPDocAside,
+.home-page .VPDocFooter,
+.home-page .VPDocOutlineDropdown {
+  display: none !important;
+}
+
+.home-page .VPDoc {
+  padding: 0 !important;
+}
+
+.home-page .VPDoc .container,
+.home-page .VPDoc .content,
+.home-page .VPDoc .content-container {
+  max-width: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.home-page .VPDoc .vp-doc {
+  padding: 0 !important;
+}
+
+.home-page .VPDoc .vp-doc > div {
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.home-page .VPFooter {
+  display: none;
+}
+
+/* Section container */
+.nokv-section {
+  margin: 0 auto;
+  max-width: 1280px;
+  padding: 96px 32px;
+  position: relative;
+}
+
+.nokv-section--tight {
+  padding-top: 56px;
+  padding-bottom: 56px;
+}
+
+@media (max-width: 768px) {
+  .nokv-section {
+    padding: 64px 20px;
+  }
+}
+
+/* Section eyebrow */
+.nokv-eyebrow {
+  align-items: center;
+  color: var(--nokv-accent);
+  display: inline-flex;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  gap: 8px;
+  letter-spacing: 0.18em;
+  margin-bottom: 18px;
+  text-transform: uppercase;
+}
+
+.nokv-eyebrow::before {
+  background: var(--nokv-accent);
+  border-radius: 999px;
+  content: '';
+  display: inline-block;
+  height: 6px;
+  width: 24px;
+  box-shadow: 0 0 12px var(--nokv-accent-glow);
+}
+
+.nokv-h2 {
+  font-size: clamp(1.8rem, 3.6vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  margin: 0 0 16px;
+}
+
+.nokv-lead {
+  color: var(--vp-c-text-2);
+  font-size: 1.12rem;
+  line-height: 1.65;
+  margin: 0 0 36px;
+  max-width: 720px;
+}
+
+/* Card pattern shared across sections */
+.nokv-card {
+  background: var(--nokv-card-bg);
+  border: 1px solid var(--nokv-card-border);
+  border-radius: 18px;
+  box-shadow: var(--nokv-card-shadow);
+  padding: 28px 28px 24px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.nokv-card:hover {
+  border-color: color-mix(in srgb, var(--nokv-accent) 40%, transparent);
+  transform: translateY(-3px);
+}
+
+.nokv-card h3 {
+  font-size: 1.18rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 10px;
+}
+
+.nokv-card p {
+  color: var(--vp-c-text-2);
+  font-size: 0.98rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Pill */
+.nokv-pill {
+  align-items: center;
+  background: var(--vp-c-brand-soft);
+  border: 1px solid color-mix(in srgb, var(--nokv-accent) 22%, transparent);
+  border-radius: 999px;
+  color: var(--nokv-accent);
+  display: inline-flex;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  gap: 6px;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+}
+
+/* Buttons in landing */
+.nokv-btn {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  display: inline-flex;
+  font-size: 0.98rem;
+  font-weight: 600;
+  gap: 10px;
+  letter-spacing: -0.005em;
+  padding: 13px 22px;
+  text-decoration: none !important;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease,
+    border-color 0.18s ease, color 0.18s ease;
+}
+
+.nokv-btn--primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 60%, #1d4ed8 100%);
+  box-shadow: 0 12px 32px -10px rgba(37, 99, 235, 0.55);
+  color: #ffffff;
+}
+
+.nokv-btn--primary:hover {
+  box-shadow: 0 16px 38px -10px rgba(37, 99, 235, 0.7);
+  transform: translateY(-1px);
+}
+
+.nokv-btn--ghost {
+  background: color-mix(in srgb, var(--vp-c-bg) 80%, transparent);
+  border-color: var(--vp-c-border);
+  color: var(--vp-c-text-1);
+}
+
+.dark .nokv-btn--ghost {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nokv-btn--ghost:hover {
+  border-color: color-mix(in srgb, var(--nokv-accent) 60%, transparent);
+  color: var(--nokv-accent);
+  transform: translateY(-1px);
+}
+
+.nokv-btn svg,
+.nokv-btn .arrow {
+  transition: transform 0.18s ease;
+}
+
+.nokv-btn:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* Decorative background grid */
+.nokv-grid-bg {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  background-image:
+    linear-gradient(var(--nokv-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--nokv-grid) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.6), transparent 70%);
+}
+
+/* Decorative glow orb */
+.nokv-glow {
+  filter: blur(80px);
+  inset: -10% auto auto -10%;
+  height: 480px;
+  opacity: 0.55;
+  pointer-events: none;
+  position: absolute;
+  width: 480px;
+  background: radial-gradient(circle, var(--nokv-accent-glow) 0%, transparent 65%);
+  z-index: 0;
+}
+
+.nokv-glow--right {
+  inset: auto -10% -20% auto;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--nokv-accent-2) 50%, transparent) 0%,
+    transparent 65%
+  );
+}
+
+/* Divider that doubles as section anchor */
+.nokv-divider {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--nokv-accent) 25%, transparent) 50%,
+    transparent
+  );
+  height: 1px;
+  margin: 0 auto;
+  max-width: 1100px;
+  width: 92%;
+}
+
+/* Inline accent for headings */
+.nokv-gradient-text {
+  background: linear-gradient(
+    100deg,
+    var(--nokv-accent) 0%,
+    var(--nokv-accent-2) 55%,
+    var(--nokv-accent-3) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Section heading wrapper */
+.nokv-section-head {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 48px;
+}
+
+.nokv-section-head--center {
+  align-items: center;
+  text-align: center;
+}
+
+.nokv-section-head--center .nokv-lead {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Reusable text aside */
+.nokv-fine {
+  color: var(--vp-c-text-3);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+/* Selection */
+::selection {
+  background: color-mix(in srgb, var(--nokv-accent) 35%, transparent);
+  color: var(--vp-c-text-1);
+}

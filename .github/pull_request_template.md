@@ -11,7 +11,7 @@
 
 ## Code Contract
 
-- [ ] Package boundaries follow `docs/development/code_contract.md`.
+- [ ] Package boundaries follow `docs/guide/development/code_contract.md`.
 - [ ] Shared helpers reuse the standard library or existing repository helpers; new `utils/` code is domain-neutral and tested.
 - [ ] File names and file placement follow the code contract.
 - [ ] New types, interfaces, structs, fields, and functions use domain-specific names.

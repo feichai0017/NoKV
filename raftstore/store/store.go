@@ -11,7 +11,7 @@
 // are expressed as typed events through transition_builder.go and
 // transition_executor.go, then published to coordinator via PublishRootEvent.
 //
-// See docs/raftstore.md and docs/control_and_execution_protocols.md.
+// See docs/guide/raftstore.md and docs/guide/control_and_execution_protocols.md.
 package store
 
 import (

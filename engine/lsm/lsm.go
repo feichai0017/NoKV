@@ -13,8 +13,8 @@
 // is atomic via the CURRENT symlink plus varint edit log, and replay
 // walks the shard WALs using segment retention marks.
 //
-// Design references: docs/memtable.md, docs/flush.md, docs/compaction.md,
-// docs/landing_buffer.md, docs/range_filter.md, docs/cache.md.
+// Design references: docs/guide/memtable.md, docs/guide/flush.md, docs/guide/compaction.md,
+// docs/guide/landing_buffer.md, docs/guide/range_filter.md, docs/guide/cache.md.
 package lsm
 
 import (

@@ -10,7 +10,7 @@
 // This package is used in distributed mode only. Embedded DB APIs
 // go straight through the engine substrate without percolator's 2PC.
 //
-// See docs/percolator.md for the protocol walkthrough.
+// See docs/guide/percolator.md for the protocol walkthrough.
 package percolator
 
 import (
