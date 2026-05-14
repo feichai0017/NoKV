@@ -31,6 +31,7 @@ type SegmentInstallRequest struct {
 	Segment         fsperas.PerasSegment
 	Payload         []byte
 	PayloadDigest   [32]byte
+	Install         compile.InstallPlan
 	MaterializeMVCC bool
 }
 

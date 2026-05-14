@@ -16,21 +16,27 @@ const segmentFormatVersion uint16 = 1
 // descriptor is the compiler boundary Peras needs for admission, segment
 // packing, recovery, completion, and watch projection.
 type CompiledOp struct {
-	Delta            SemanticDelta
+	Delta SemanticDelta
+	// DescriptorDigest is the canonical digest of this exact generated
+	// descriptor, including any materialized observed values and effects.
 	DescriptorDigest [32]byte
-	IntentDigest     [32]byte
-	ReplayDigest     [32]byte
-	Authority        AuthorityPlan
-	Placement        PlacementPlan
-	Footprint        KeyFootprint
-	Predicates       []PredicateObligation
-	Guards           []GuardObligation
-	Effects          []EffectPlan
-	Atomicity        AtomicityGroup
-	Durability       DurabilityClass
-	Watch            []WatchProjection
-	Completion       CompletionPlan
-	Segment          SegmentPlan
+	// IntentDigest stays pinned to the original request intent across
+	// materialization so completion/watch code can identify the user's op.
+	IntentDigest [32]byte
+	// ReplayDigest is the digest that segment replay must install. After
+	// materialization it must equal DescriptorDigest.
+	ReplayDigest [32]byte
+	Authority    AuthorityPlan
+	Placement    PlacementPlan
+	Footprint    KeyFootprint
+	Predicates   []PredicateObligation
+	Guards       []GuardObligation
+	Effects      []EffectPlan
+	Atomicity    AtomicityGroup
+	Durability   DurabilityClass
+	Watch        []WatchProjection
+	Completion   CompletionPlan
+	Segment      SegmentPlan
 }
 
 // MaterializedOp is the closed Peras IR admitted by the holder. It has the
@@ -253,6 +259,19 @@ type SegmentPlan struct {
 	EstimatedPayloadBytes uint64
 	OperationCount        uint32
 	MutationCount         uint32
+}
+
+// InstallPlan is the segment-install command header produced after a compiled
+// replay plan has been sealed into a concrete Peras segment. Routing and apply
+// scheduling consume this metadata without decoding the segment payload.
+type InstallPlan struct {
+	Mode               SegmentInstallMode
+	Materialize        bool
+	RoutingKeys        [][]byte
+	DependencyKeys     [][]byte
+	CatalogKeys        [][]byte
+	MaterializedKeys   [][]byte
+	CanonicalObjectKey []byte
 }
 
 type SegmentBudget struct {
@@ -530,6 +549,9 @@ func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	return h.sum()
 }
 
+// GuardProofDigest commits to the generated guard identity and boolean result.
+// The holder/admission path still owns the evidence check for that guard; this
+// digest is the replay-stable statement that the closed descriptor consumed.
 func GuardProofDigest(guard RuntimeGuard, passed bool) [32]byte {
 	h := newDigestBuilder()
 	h.writeString(string(guard))

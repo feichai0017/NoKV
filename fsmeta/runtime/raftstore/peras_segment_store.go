@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
@@ -49,18 +50,18 @@ func (i *raftstoreSegmentInstaller) InstallSegment(ctx context.Context, req runt
 	if err != nil {
 		return runtimeperas.InstallCursor{}, err
 	}
-	routingKeys, err := runtimeperas.SegmentInstallRoutingKeys(req.Segment, req.MaterializeMVCC)
+	install, err := normalizedSegmentInstallPlan(req.Segment, req.Install, req.MaterializeMVCC)
 	if err != nil {
 		return runtimeperas.InstallCursor{}, err
 	}
+	routingKeys := install.RoutingKeys
 	if len(routingKeys) == 0 {
 		return runtimeperas.InstallCursor{}, runtimeperas.ErrRuntimeInvalid
 	}
-	var canonicalObjectKey []byte
+	canonicalObjectKey := runtimeCloneBytes(install.CanonicalObjectKey)
 	if !req.MaterializeMVCC {
-		canonicalObjectKey, err = fsperas.PerasSegmentObjectKey(req.Segment)
-		if err != nil {
-			return runtimeperas.InstallCursor{}, err
+		if len(canonicalObjectKey) == 0 {
+			return runtimeperas.InstallCursor{}, runtimeperas.ErrRuntimeInvalid
 		}
 	}
 	results := make([]perasRouteInstallResult, len(routingKeys))
@@ -70,8 +71,9 @@ func (i *raftstoreSegmentInstaller) InstallSegment(ctx context.Context, req runt
 	}
 	throttle := utils.NewThrottle(parallelism)
 	for idx, routingKey := range routingKeys {
+		idx, routingKey := idx, runtimeCloneBytes(routingKey)
 		err := throttle.Go(func() error {
-			result, err := i.installSegmentRoute(ctx, kv, routingKey, canonicalObjectKey, req.Segment, req.Payload, req.PayloadDigest, installVersion, req.MaterializeMVCC)
+			result, err := i.installSegmentRoute(ctx, kv, routingKey, install, canonicalObjectKey, req.Segment, req.Payload, req.PayloadDigest, installVersion, req.MaterializeMVCC)
 			if err != nil {
 				return fmt.Errorf("peras install segment route %d: %w", idx, err)
 			}
@@ -120,6 +122,7 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 	ctx context.Context,
 	kv perasSegmentInstallClient,
 	routingKey []byte,
+	install compile.InstallPlan,
 	canonicalObjectKey []byte,
 	segment fsperas.PerasSegment,
 	payload []byte,
@@ -130,6 +133,10 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 	routePayload := payload
 	if !materialize && len(canonicalObjectKey) > 0 && !bytes.Equal(routingKey, canonicalObjectKey) {
 		routePayload = nil
+	}
+	dependencyKeys, catalogKeys, materializedKeys, err := routeInstallHeaderKeys(install, segment.Root, routingKey, materialize)
+	if err != nil {
+		return perasRouteInstallResult{}, err
 	}
 	stats := segment.Stats()
 	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
@@ -144,6 +151,10 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 		SegmentEntryCount:     stats.EntryCount,
 		SegmentPayloadSize:    uint64(len(payload)),
 		CanonicalObjectKey:    runtimeCloneBytes(canonicalObjectKey),
+		RoutingKeys:           cloneRuntimeKeySet(install.RoutingKeys),
+		DependencyKeys:        dependencyKeys,
+		CatalogKeys:           catalogKeys,
+		MaterializedKeys:      materializedKeys,
 	})
 	if err != nil {
 		return perasRouteInstallResult{}, err
@@ -162,6 +173,39 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 		return perasRouteInstallResult{}, runtimeperas.ErrRuntimeInvalid
 	}
 	return perasRouteInstallResult{cursor: cursor, resp: resp}, nil
+}
+
+func normalizedSegmentInstallPlan(segment fsperas.PerasSegment, plan compile.InstallPlan, materialize bool) (compile.InstallPlan, error) {
+	if len(plan.RoutingKeys) == 0 || plan.Mode == compile.SegmentInstallNone {
+		return fsperas.PerasSegmentInstallPlan(segment, materialize)
+	}
+	if plan.Materialize != materialize {
+		return compile.InstallPlan{}, runtimeperas.ErrRuntimeInvalid
+	}
+	return compile.InstallPlan{
+		Mode:               plan.Mode,
+		Materialize:        plan.Materialize,
+		RoutingKeys:        cloneRuntimeKeySet(plan.RoutingKeys),
+		DependencyKeys:     cloneRuntimeKeySet(plan.DependencyKeys),
+		CatalogKeys:        cloneRuntimeKeySet(plan.CatalogKeys),
+		MaterializedKeys:   cloneRuntimeKeySet(plan.MaterializedKeys),
+		CanonicalObjectKey: runtimeCloneBytes(plan.CanonicalObjectKey),
+	}, nil
+}
+
+func routeInstallHeaderKeys(plan compile.InstallPlan, root [32]byte, routingKey []byte, materialize bool) ([][]byte, [][]byte, [][]byte, error) {
+	if materialize {
+		if len(plan.DependencyKeys) == 0 || len(plan.MaterializedKeys) == 0 {
+			return nil, nil, nil, runtimeperas.ErrRuntimeInvalid
+		}
+		return cloneRuntimeKeySet(plan.DependencyKeys), cloneRuntimeKeySet(plan.CatalogKeys), cloneRuntimeKeySet(plan.MaterializedKeys), nil
+	}
+	keys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(root, routingKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	routeKeys := cloneRuntimeKeySet(keys)
+	return routeKeys, routeKeys, nil, nil
 }
 
 func (i *raftstoreSegmentInstaller) reserveInstallVersion(ctx context.Context) (uint64, error) {
@@ -236,6 +280,17 @@ func runtimeCloneBytes(in []byte) []byte {
 	}
 	out := make([]byte, len(in))
 	copy(out, in)
+	return out
+}
+
+func cloneRuntimeKeySet(keys [][]byte) [][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, runtimeCloneBytes(key))
+	}
 	return out
 }
 

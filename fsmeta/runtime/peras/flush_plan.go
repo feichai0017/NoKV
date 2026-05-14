@@ -38,12 +38,17 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			if err != nil {
 				return nil, c.recordErrorf("digest peras segment: %w", err)
 			}
+			install, err := fsperas.PerasSegmentInstallPlan(segment, materialize)
+			if err != nil {
+				return nil, c.recordErrorf("plan peras segment install: %w", err)
+			}
 			batch.jobs = append(batch.jobs, perasFlushJob{
 				scope:       frozen.scope,
 				plan:        plan,
 				segment:     segment,
 				payload:     payload,
 				digest:      digest,
+				install:     install,
 				materialize: materialize,
 			})
 		}

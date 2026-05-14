@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
 // PerasSegmentInstallKeys returns the exact metadata keys written by a segment
@@ -18,6 +19,19 @@ func PerasSegmentInstallKeys(segment PerasSegment, routingKey []byte, materializ
 		return perasSegmentMaterializeInstallKeys(segment)
 	}
 	return perasSegmentCatalogInstallKeys(segment, routingKey)
+}
+
+// PerasSegmentInstallPlan materializes the compiler install header for a sealed
+// segment. Raftstore uses this header for route selection and apply dependency
+// planning, so the planner does not have to decode the segment payload.
+func PerasSegmentInstallPlan(segment PerasSegment, materialize bool) (compile.InstallPlan, error) {
+	if err := validatePerasSegmentPayload(segment); err != nil {
+		return compile.InstallPlan{}, err
+	}
+	if materialize {
+		return perasSegmentMaterializeInstallPlan(segment)
+	}
+	return perasSegmentCatalogInstallPlan(segment)
 }
 
 // PerasSegmentCatalogRouteInstallKeys returns the conservative dependency
@@ -41,6 +55,76 @@ func PerasSegmentCatalogRouteInstallKeys(root [32]byte, routingKey []byte) ([][]
 	keys = appendUniquePerasInstallKey(keys, routingKey)
 	keys = appendUniquePerasInstallKey(keys, indexKey)
 	return keys, nil
+}
+
+func perasSegmentMaterializeInstallPlan(segment PerasSegment) (compile.InstallPlan, error) {
+	routingKey, err := segment.FirstKey()
+	if err != nil {
+		return compile.InstallPlan{}, err
+	}
+	dependencyKeys, err := perasSegmentMaterializeInstallKeys(segment)
+	if err != nil {
+		return compile.InstallPlan{}, err
+	}
+	materializedKeys := make([][]byte, 0, len(segment.entries))
+	if err := segment.ForEachEntry(func(entry SegmentKV) error {
+		if len(entry.Key) == 0 {
+			return ErrInvalidPerasSegment
+		}
+		materializedKeys = appendUniquePerasInstallKey(materializedKeys, entry.Key)
+		return nil
+	}); err != nil {
+		return compile.InstallPlan{}, err
+	}
+	catalogKeys, canonicalObjectKey, err := perasSegmentCatalogHeaderKeys(segment)
+	if err != nil {
+		return compile.InstallPlan{}, err
+	}
+	return compile.InstallPlan{
+		Mode:               compile.SegmentInstallSingleBucket,
+		Materialize:        true,
+		RoutingKeys:        [][]byte{routingKey},
+		DependencyKeys:     dependencyKeys,
+		CatalogKeys:        catalogKeys,
+		MaterializedKeys:   materializedKeys,
+		CanonicalObjectKey: canonicalObjectKey,
+	}, nil
+}
+
+func perasSegmentCatalogInstallPlan(segment PerasSegment) (compile.InstallPlan, error) {
+	routingKeys, err := PerasSegmentCatalogObjectKeys(segment)
+	if err != nil {
+		return compile.InstallPlan{}, err
+	}
+	catalogKeys, canonicalObjectKey, err := perasSegmentCatalogHeaderKeys(segment)
+	if err != nil {
+		return compile.InstallPlan{}, err
+	}
+	return compile.InstallPlan{
+		Mode:               compile.SegmentInstallCatalog,
+		Materialize:        false,
+		RoutingKeys:        routingKeys,
+		DependencyKeys:     catalogKeys,
+		CatalogKeys:        catalogKeys,
+		CanonicalObjectKey: canonicalObjectKey,
+	}, nil
+}
+
+func perasSegmentCatalogHeaderKeys(segment PerasSegment) ([][]byte, []byte, error) {
+	canonicalObjectKey, err := PerasSegmentObjectKey(segment)
+	if err != nil {
+		return nil, nil, err
+	}
+	catalogKeys := make([][]byte, 0, 4)
+	catalogKeys = appendUniquePerasInstallKey(catalogKeys, canonicalObjectKey)
+	indexKeys, err := PerasSegmentCatalogIndexKeys(segment)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, key := range indexKeys {
+		catalogKeys = appendUniquePerasInstallKey(catalogKeys, key)
+	}
+	return catalogKeys, canonicalObjectKey, nil
 }
 
 func perasSegmentMaterializeInstallKeys(segment PerasSegment) ([][]byte, error) {

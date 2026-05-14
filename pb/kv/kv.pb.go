@@ -2071,6 +2071,10 @@ type PerasInstallSegmentRequest struct {
 	SegmentEntryCount     uint64                 `protobuf:"varint,9,opt,name=segment_entry_count,json=segmentEntryCount,proto3" json:"segment_entry_count,omitempty"`
 	SegmentPayloadSize    uint64                 `protobuf:"varint,10,opt,name=segment_payload_size,json=segmentPayloadSize,proto3" json:"segment_payload_size,omitempty"`
 	CanonicalObjectKey    []byte                 `protobuf:"bytes,11,opt,name=canonical_object_key,json=canonicalObjectKey,proto3" json:"canonical_object_key,omitempty"`
+	RoutingKeys           [][]byte               `protobuf:"bytes,12,rep,name=routing_keys,json=routingKeys,proto3" json:"routing_keys,omitempty"`
+	DependencyKeys        [][]byte               `protobuf:"bytes,13,rep,name=dependency_keys,json=dependencyKeys,proto3" json:"dependency_keys,omitempty"`
+	CatalogKeys           [][]byte               `protobuf:"bytes,14,rep,name=catalog_keys,json=catalogKeys,proto3" json:"catalog_keys,omitempty"`
+	MaterializedKeys      [][]byte               `protobuf:"bytes,15,rep,name=materialized_keys,json=materializedKeys,proto3" json:"materialized_keys,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -2178,6 +2182,34 @@ func (x *PerasInstallSegmentRequest) GetSegmentPayloadSize() uint64 {
 func (x *PerasInstallSegmentRequest) GetCanonicalObjectKey() []byte {
 	if x != nil {
 		return x.CanonicalObjectKey
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetRoutingKeys() [][]byte {
+	if x != nil {
+		return x.RoutingKeys
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetDependencyKeys() [][]byte {
+	if x != nil {
+		return x.DependencyKeys
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetCatalogKeys() [][]byte {
+	if x != nil {
+		return x.CatalogKeys
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetMaterializedKeys() [][]byte {
+	if x != nil {
+		return x.MaterializedKeys
 	}
 	return nil
 }
@@ -4566,7 +4598,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x17TryAtomicMutateResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fapplied_keys\x18\x02 \x01(\x04R\vappliedKeys\x12>\n" +
-	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\x89\x04\n" +
+	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\xa5\x05\n" +
 	"\x1aPerasInstallSegmentRequest\x12\x1f\n" +
 	"\vrouting_key\x18\x01 \x01(\fR\n" +
 	"routingKey\x12!\n" +
@@ -4580,7 +4612,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x13segment_entry_count\x18\t \x01(\x04R\x11segmentEntryCount\x120\n" +
 	"\x14segment_payload_size\x18\n" +
 	" \x01(\x04R\x12segmentPayloadSize\x120\n" +
-	"\x14canonical_object_key\x18\v \x01(\fR\x12canonicalObjectKey\"\xcd\x02\n" +
+	"\x14canonical_object_key\x18\v \x01(\fR\x12canonicalObjectKey\x12!\n" +
+	"\frouting_keys\x18\f \x03(\fR\vroutingKeys\x12'\n" +
+	"\x0fdependency_keys\x18\r \x03(\fR\x0edependencyKeys\x12!\n" +
+	"\fcatalog_keys\x18\x0e \x03(\fR\vcatalogKeys\x12+\n" +
+	"\x11materialized_keys\x18\x0f \x03(\fR\x10materializedKeys\"\xcd\x02\n" +
 	"\x1bPerasInstallSegmentResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +

@@ -527,7 +527,7 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
-	if info.MaterializeMVCC && info.HasPayload {
+	if info.MaterializeMVCC && info.HasPayload && len(info.MaterializedKeys) == 0 {
 		segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
 		if err != nil {
 			return epochNotMatchError(&meta), AdmissionReasonInvalid

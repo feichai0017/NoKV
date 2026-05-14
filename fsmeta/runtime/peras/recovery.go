@@ -44,11 +44,16 @@ func (c *Runtime) RecoverWitnessSegments(ctx context.Context, scope compile.Auth
 		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
 			return c.recordError(fsperas.ErrInvalidWitnessRecord)
 		}
+		install, err := fsperas.PerasSegmentInstallPlan(segment, false)
+		if err != nil {
+			return c.recordErrorf("plan recovered peras segment install: %w", err)
+		}
 		job := perasFlushJob{
 			scope:   scope,
 			segment: segment,
 			payload: record.SegmentPayload,
 			digest:  record.SegmentPayloadDigest,
+			install: install,
 		}
 		if _, err := c.submitInstallJob(ctx, job); err != nil {
 			return c.recordErrorf("recover peras segment install: %w", err)

@@ -234,6 +234,10 @@ message PerasInstallSegmentRequest {
   uint64 segment_entry_count = 9;
   uint64 segment_payload_size = 10;
   bytes canonical_object_key = 11;
+  repeated bytes routing_keys = 12;
+  repeated bytes dependency_keys = 13;
+  repeated bytes catalog_keys = 14;
+  repeated bytes materialized_keys = 15;
 }
 
 message PerasInstallSegmentResponse {

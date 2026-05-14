@@ -121,6 +121,7 @@ type perasFlushJob struct {
 	segment     fsperas.PerasSegment
 	payload     []byte
 	digest      [32]byte
+	install     compile.InstallPlan
 	materialize bool
 	cursor      InstallCursor
 }

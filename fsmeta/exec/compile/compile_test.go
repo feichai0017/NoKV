@@ -834,6 +834,53 @@ func TestMaterializedOpRecompilesConcreteEffectsAndCarriesProofs(t *testing.T) {
 	require.NotEqual(t, value, materialized.Effects[0].Value)
 }
 
+func TestCompiledDigestSemanticsAreStableAcrossMaterialization(t *testing.T) {
+	createDelta, err := testCreateDelta(t, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, 44)
+	require.NoError(t, err)
+	create := testCompileAOT(t, createDelta)
+	require.Equal(t, create.DescriptorDigest, create.IntentDigest)
+	require.Equal(t, create.DescriptorDigest, create.ReplayDigest)
+
+	updateDelta, err := testUpdateInodeDelta(t, fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  3,
+		Inode:   44,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	}, testMount)
+	require.NoError(t, err)
+	compiled := testCompileAOT(t, updateDelta)
+	key := mustInodeKey(t, 44)
+	proof := testPredicateProof(key, []byte("old-inode"), true, 9, ReadSourceBase)
+	materialized := testMaterializeAOTWithEffects(t, compiled, []WriteEffect{{Kind: EffectPut, Key: key, Value: []byte("new-inode")}}, []PredicateProof{proof})
+	require.Equal(t, compiled.IntentDigest, materialized.IntentDigest)
+	require.NotEqual(t, compiled.DescriptorDigest, materialized.DescriptorDigest)
+	require.Equal(t, materialized.DescriptorDigest, materialized.ReplayDigest)
+}
+
+func TestMaterializedOpValidationRejectsReplayDigestDrift(t *testing.T) {
+	delta, err := testCreateDelta(t, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	}, testMount, 44)
+	require.NoError(t, err)
+	op := testMaterializeAOT(t, delta, nil)
+	op.ReplayDigest[0] ^= 0xff
+
+	var validationErr ValidationError
+	err = op.ValidateForAdmission()
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, ValidationCanonicalMismatch, validationErr.Kind)
+}
+
 func TestObservedValuePredicateCompilesExactProofObligation(t *testing.T) {
 	expected := []byte("old-inode")
 	delta, _ := testConcreteUpdateInodeDelta(t, expected)
