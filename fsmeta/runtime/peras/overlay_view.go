@@ -84,6 +84,9 @@ func completionMatchesOperation(completion fsperas.SegmentCompletion, op compile
 	if completion.DescriptorDigest != op.DescriptorDigest {
 		return false
 	}
+	if completion.PredicateProofDigest != compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs) {
+		return false
+	}
 	return completion.ExecutionPlanDigest == compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability)
 }
 

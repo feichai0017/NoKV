@@ -217,6 +217,54 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *te
 	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "directory without Peras rows should still use dirpage cache")
 }
 
+func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasRowsAreInAnotherDirectory(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     33,
+		Type:      fsmeta.InodeTypeDirectory,
+		LinkCount: 1,
+	})
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{next: 44}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+		WithDirPageCache(cache),
+	)
+	require.NoError(t, err)
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: 33,
+		Name:   "overlay",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	scansAfterFirst := len(runner.scanVersions)
+	require.Eventually(t, func() bool {
+		return cache.Stats().StoreOK > 0
+	}, time.Second, 10*time.Millisecond)
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "Peras rows in a different directory must not disable this directory's cache")
+}
+
 func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
 	runner := newFakeRunner()
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)

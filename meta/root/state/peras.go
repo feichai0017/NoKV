@@ -43,14 +43,16 @@ func (s State) LatestPerasAuthoritySealFor(scope rootproto.PerasAuthorityScope) 
 	return rootproto.PerasAuthoritySeal{}, false
 }
 
-func applyPerasAuthorityGrantedToState(state *State, cursor Cursor, event rootevent.Event) {
-	if state == nil || event.PerasGrant == nil {
-		return
+func NormalizePerasAuthorityEvent(state State, cursor Cursor, event rootevent.Event) rootevent.Event {
+	if event.Kind != rootevent.KindPerasAuthorityGranted || event.PerasGrant == nil {
+		return rootevent.CloneEvent(event)
 	}
-	grant := rootproto.ClonePerasAuthorityGrant(*event.PerasGrant)
-	if !grant.Valid() {
-		return
-	}
+	grant := normalizePerasAuthorityGrant(state, cursor, *event.PerasGrant)
+	return rootevent.PerasAuthorityGranted(grant)
+}
+
+func normalizePerasAuthorityGrant(state State, cursor Cursor, grant rootproto.PerasAuthorityGrant) rootproto.PerasAuthorityGrant {
+	grant = rootproto.ClonePerasAuthorityGrant(grant)
 	if grant.RootClusterEpoch == 0 {
 		grant.RootClusterEpoch = state.ClusterEpoch
 		if grant.RootClusterEpoch == 0 {
@@ -65,6 +67,17 @@ func applyPerasAuthorityGrantedToState(state *State, cursor Cursor, event rootev
 			Index:    cursor.Index,
 			Revision: cursor.Index,
 		}
+	}
+	return grant
+}
+
+func applyPerasAuthorityGrantedToState(state *State, cursor Cursor, event rootevent.Event) {
+	if state == nil || event.PerasGrant == nil {
+		return
+	}
+	grant := normalizePerasAuthorityGrant(*state, cursor, *event.PerasGrant)
+	if !grant.Valid() {
+		return
 	}
 	for i, current := range state.ActivePerasGrants {
 		if current.GrantID == grant.GrantID {

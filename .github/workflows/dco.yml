@@ -49,9 +49,41 @@ jobs:
           fi
 
           missing=0
+          has_signoff() {
+            local message="$1"
+            local trailers
+            trailers="$(git interpret-trailers --parse <<<"$message")"
+            if grep -Eiq '^Signed-off-by: .+ <[^>]+>$' <<<"$trailers"; then
+              return 0
+            fi
+
+            # Dependabot messages contain an updated-dependencies YAML block that
+            # can make git interpret-trailers miss the final trailer paragraph.
+            # Keep the fallback trailer-shaped by checking only the last
+            # non-empty paragraph, not the whole commit body.
+            local last_paragraph
+            last_paragraph="$(awk '
+              NF {
+                block = block $0 "\n"
+                next
+              }
+              block != "" {
+                last = block
+                block = ""
+              }
+              END {
+                if (block != "") {
+                  last = block
+                }
+                printf "%s", last
+              }
+            ' <<<"$message")"
+            grep -Eiq '^Signed-off-by: .+ <[^>]+>$' <<<"$last_paragraph"
+          }
+
           while IFS= read -r commit; do
-            trailers="$(git show -s --format=%B "$commit" | git interpret-trailers --parse)"
-            if ! grep -Eiq '^Signed-off-by: .+ <[^>]+>$' <<<"$trailers"; then
+            message="$(git show -s --format=%B "$commit")"
+            if ! has_signoff "$message"; then
               echo "::error title=Missing DCO sign-off::Commit $commit is missing a Signed-off-by trailer."
               git show -s --format='%h %s' "$commit"
               missing=1

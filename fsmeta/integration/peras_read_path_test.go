@@ -12,6 +12,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -29,9 +30,15 @@ func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T)
 	require.NoError(t, err)
 	defer func() { _ = dirPages.Close() }()
 	negatives := negativecache.New(negativecache.Config{GroupKeyFn: func(k []byte) []byte { return k }})
+	visibleWAL, err := wal.Open(wal.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = visibleWAL.Close() }()
+	visibleLog, err := runtimeperas.NewWALVisibleLog(visibleWAL, wal.DurabilityFlushed)
+	require.NoError(t, err)
 	perasRuntime, err := runtimeperas.NewRuntime(runtimeperas.Config{
 		Authority:         integrationPerasGrantProvider{},
 		Witnesses:         integrationPerasWitnesses(3),
+		VisibleLog:        visibleLog,
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -68,6 +75,26 @@ func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T)
 	require.Equal(t, created.Dentry, lookedUp)
 	require.False(t, negatives.Has(key), "visible overlay hit must evict stale negative memo")
 
+	session, err := executor.OpenWriteSession(ctx, fsmeta.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   created.Inode.Inode,
+		Session: "visible-writer",
+		TTL:     time.Minute,
+	})
+	require.NoError(t, err)
+	_, err = executor.HeartbeatWriteSession(ctx, fsmeta.HeartbeatWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   created.Inode.Inode,
+		Session: session.Session,
+		TTL:     time.Minute,
+	})
+	require.NoError(t, err)
+	require.NoError(t, executor.CloseWriteSession(ctx, fsmeta.CloseWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   created.Inode.Inode,
+		Session: session.Session,
+	}))
+
 	first, err := executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
 		Mount:  "vol",
 		Parent: fsmeta.RootInode,
@@ -103,10 +130,16 @@ func (integrationPerasGrantProvider) HolderID() string {
 
 func (integrationPerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
 	return rootproto.PerasAuthorityGrant{
-		GrantID:         "integration-grant",
-		EpochID:         1,
-		HolderID:        "integration-holder",
-		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		GrantID:          "integration-grant",
+		EpochID:          1,
+		HolderID:         "integration-holder",
+		ExpiresUnixNano:  time.Now().Add(time.Hour).UnixNano(),
+		RootClusterEpoch: 1,
+		IssuedRootToken: rootproto.AuthorityRootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
 		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 1,

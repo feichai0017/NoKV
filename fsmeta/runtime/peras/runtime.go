@@ -6,6 +6,7 @@ package peras
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -384,7 +385,7 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 
 func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, id fsperas.OperationID, op compile.MaterializedOp) error {
 	if c == nil || c.visibleLog == nil {
-		return nil
+		return fsperas.ErrVisibleLogRequired
 	}
 	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
 	if err != nil {
@@ -401,7 +402,11 @@ func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAut
 		Operation:         replay,
 		TimestampUnixNano: c.now().UnixNano(),
 	}
-	return c.visibleLog.AppendVisible(ctx, record)
+	if err := c.visibleLog.AppendVisible(ctx, record); err != nil {
+		return fmt.Errorf("append peras visible record kind=%s op=%s/%d epoch=%d holder=%s lineage_valid=%t mutations=%d predicates=%d guards=%d: %w",
+			replay.Kind, replay.OpID.ClientID, replay.OpID.Seq, record.EpochID, record.HolderID, record.RootLineage.Valid(), len(replay.Mutations), len(replay.PredicateProofs), len(replay.GuardProofs), err)
+	}
+	return nil
 }
 
 func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {

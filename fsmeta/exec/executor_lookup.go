@@ -363,12 +363,15 @@ func (e *Executor) readInode(ctx context.Context, mount fsmeta.MountIdentity, in
 	return inode, true, nil
 }
 
-func (e *Executor) readSessionByKey(ctx context.Context, key []byte, version uint64) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) readSessionByKey(ctx context.Context, mount fsmeta.MountIdentity, key []byte, version uint64) (fsmeta.SessionRecord, bool, error) {
 	parts, ok := fsmeta.InspectKey(key)
 	if !ok || parts.Kind != fsmeta.KeyKindSession {
 		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidKey
 	}
-	program, err := compile.CompileReadSessionKeyProgram(fsmeta.MountIdentity{MountID: "", MountKeyID: parts.MountKeyID}, key)
+	if parts.MountKeyID != mount.MountKeyID {
+		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidRequest
+	}
+	program, err := compile.CompileReadSessionKeyProgram(mount, key)
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}

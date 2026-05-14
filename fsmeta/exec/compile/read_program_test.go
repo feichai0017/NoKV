@@ -50,6 +50,8 @@ func TestGeneratedReadSessionKeyProgramValidatesMountAndKeyShape(t *testing.T) {
 	require.Equal(t, ReadProgramReadSession, program.Kind)
 	require.Equal(t, fsmeta.OperationReadSession, program.Plan.Kind)
 	require.Equal(t, fsmeta.KeyKindSession, program.Footprint.Reads[0].Kind)
+	require.Equal(t, testMount.MountID, program.Authority.Scope.Mount)
+	require.Equal(t, testMount.MountID, program.Plan.Mount)
 	require.Equal(t, []fsmeta.InodeID{44}, program.Authority.Scope.Inodes)
 
 	wrongMount := testMount

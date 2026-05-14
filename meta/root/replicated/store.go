@@ -307,6 +307,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootstate.NextCursor(snapshot.State.LastCommitted)
+		evt = rootstate.NormalizePerasAuthorityEvent(snapshot.State, next, evt)
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}

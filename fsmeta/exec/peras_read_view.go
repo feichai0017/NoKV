@@ -282,12 +282,15 @@ func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.Ino
 	return inode, true, nil
 }
 
-func (v *perasReadView) readSession(key []byte) (fsmeta.SessionRecord, bool, error) {
+func (v *perasReadView) readSession(mount fsmeta.MountIdentity, key []byte) (fsmeta.SessionRecord, bool, error) {
 	parts, ok := fsmeta.InspectKey(key)
 	if !ok || parts.Kind != fsmeta.KeyKindSession {
 		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidKey
 	}
-	program, err := compile.CompileReadSessionKeyProgram(fsmeta.MountIdentity{MountKeyID: parts.MountKeyID}, key)
+	if parts.MountKeyID != mount.MountKeyID {
+		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidRequest
+	}
+	program, err := compile.CompileReadSessionKeyProgram(mount, key)
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}

@@ -31,6 +31,7 @@ func TestRuntimeCommitsAndServesOverlay(t *testing.T) {
 	committer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -46,6 +47,27 @@ func TestRuntimeCommitsAndServesOverlay(t *testing.T) {
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
+}
+
+func TestRuntimeSubmitVisibleRequiresVisibleLog(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, op, nil)
+	require.ErrorIs(t, err, fsperas.ErrVisibleLogRequired)
+
+	_, _, ok := committer.GetPerasOverlay(op.Effects[0].Key)
+	require.False(t, ok)
+	require.Equal(t, 0, committer.Stats()["pending"])
+	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
 }
 
 func TestRuntimePublishesVisibleWatch(t *testing.T) {
@@ -68,6 +90,7 @@ func TestRuntimePublishesVisibleWatch(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		WatchPublisher:    router,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -99,6 +122,7 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -417,6 +441,7 @@ func TestRuntimePublishesRootSealAfterInstall(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -462,6 +487,7 @@ func TestRuntimeCanStopAtDurablePersistence(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -501,6 +527,7 @@ func TestRuntimeAppendsBatchWitnessesBeforeParallelInstall(t *testing.T) {
 		Authority:                 &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
 		Witnesses:                 []fsperas.WitnessReplica{witness},
 		Installer:                 installer,
+		VisibleLog:                &recordingVisibleLog{},
 		Quorum:                    1,
 		SegmentBatchSize:          1024,
 		SegmentMaxReplayMutations: 2,
@@ -530,6 +557,7 @@ func TestRuntimeReturnsInstalledCompletionOnRetry(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -562,6 +590,7 @@ func TestRuntimeRejectsInstalledCompletionIDCollision(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -587,6 +616,7 @@ func TestRuntimeReturnsPendingAckOnRetry(t *testing.T) {
 	committer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -618,6 +648,7 @@ func TestRuntimeShutdownFlushesPendingSegment(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -641,6 +672,7 @@ func TestRuntimeFlushPreservesCatalogSegmentAcrossFSMetaBuckets(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -669,6 +701,7 @@ func TestRuntimeAcceptsCrossBucketCreateForCatalogInstall(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -709,6 +742,7 @@ func TestRuntimeFlushHonorsReplayMutationBudget(t *testing.T) {
 		Authority:                 provider,
 		Witnesses:                 testRuntimePerasWitnesses(t, 3),
 		Installer:                 installer,
+		VisibleLog:                &recordingVisibleLog{},
 		SegmentBatchSize:          1024,
 		SegmentMaxReplayMutations: 4,
 		SegmentFlushEvery:         time.Hour,
@@ -736,6 +770,7 @@ func TestRuntimeRetriesRetryableSegmentInstall(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -767,6 +802,7 @@ func TestRuntimeFlushRequiresInstaller(t *testing.T) {
 	committer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1148,6 +1184,7 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: nextGrant},
 		Witnesses:         witnesses,
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1205,6 +1242,7 @@ func TestRuntimeFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1275,6 +1313,7 @@ func TestRuntimeDrainAuthorityFlushesAndRetires(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1325,6 +1364,7 @@ func TestRuntimeDrainAuthorityUsesMaterializeBudget(t *testing.T) {
 		Authority:                 provider,
 		Witnesses:                 testRuntimePerasWitnesses(t, 3),
 		Installer:                 installer,
+		VisibleLog:                &recordingVisibleLog{},
 		SegmentBatchSize:          1024,
 		SegmentMaxReplayMutations: defaultPerasSegmentMaxReplayMutations,
 		SegmentFlushEvery:         time.Hour,
@@ -1352,6 +1392,7 @@ func TestRuntimeBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 		Authority:              provider,
 		Witnesses:              testRuntimePerasWitnesses(t, 3),
 		Installer:              installer,
+		VisibleLog:             &recordingVisibleLog{},
 		SegmentBatchSize:       1,
 		SegmentFlushEvery:      time.Hour,
 		BackgroundFlushTimeout: 10 * time.Millisecond,
@@ -1382,6 +1423,7 @@ func TestRuntimeCloseCancelsInstallLane(t *testing.T) {
 		Authority:                  provider,
 		Witnesses:                  testRuntimePerasWitnesses(t, 3),
 		Installer:                  installer,
+		VisibleLog:                 &recordingVisibleLog{},
 		SegmentBatchSize:           1024,
 		SegmentInstallParallelism:  1,
 		SegmentFlushEvery:          time.Hour,
@@ -1424,6 +1466,7 @@ func TestRuntimeFlushChainsBoundedReplayWindows(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1453,6 +1496,7 @@ func TestRuntimeFlushAllowsConcurrentCommitsDuringInstall(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1494,6 +1538,7 @@ func TestRuntimeDrainAuthorityBlocksConcurrentCommitsUntilInstallFinishes(t *tes
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1534,6 +1579,7 @@ func TestRuntimeDrainAuthorityAllowsDisjointCommitsDuringInstall(t *testing.T) {
 		Authority:         provider,
 		Witnesses:         testRuntimePerasWitnesses(t, 3),
 		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
 	})
@@ -1775,11 +1821,14 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req
 }
 
 type recordingVisibleLog struct {
+	mu      sync.Mutex
 	err     error
 	records []fsperas.VisibleOperationRecord
 }
 
 func (l *recordingVisibleLog) AppendVisible(_ context.Context, record fsperas.VisibleOperationRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.err != nil {
 		return l.err
 	}

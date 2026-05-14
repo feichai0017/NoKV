@@ -1,10 +1,15 @@
 # Copyright 2024-2026 The NoKV Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# This file records normalized fsmeta projections of public benchmark workload
+# This file records normalized fsmeta projections of public benchmark
 # definitions. It does not vendor third-party benchmark source files; it records
-# source URLs, the official shape, and the NoKV metadata-service projection used
+# source URLs, the upstream shape, and the NoKV metadata-service projection used
 # to make each run reproducible.
+#
+# The "official" scale profile uses upstream published parameters when the
+# source defines a fixed scale. For sources that define a model rather than one
+# fixed run size, the profile records the source scale and labels the NoKV
+# projection as model-derived.
 
 profiles:
   mdtest-easy:
@@ -18,6 +23,8 @@ profiles:
       file_size_bytes: "0"
       phases: create, stat, delete
       stonewall_seconds: "300"
+      n_per_rank: "1000000"
+      projected_rank_count: "16"
       reference_command: mdtest -n 1000000 -u -L -F -N 1 -C -W 1
     scale:
       median:
@@ -47,6 +54,9 @@ profiles:
       file_size_bytes: "3901"
       phases: create, stat, read, delete
       stonewall_seconds: "300"
+      n_per_rank: "1000000"
+      projected_rank_count: "16"
+      projected_total_files: "16000000"
       reference_command: mdtest -n 1000000 -t -w 3901 -e 3901 -N 1 -F -C -W 1
     scale:
       median:
@@ -62,7 +72,7 @@ profiles:
       official:
         clients: 16
         directories: 1
-        files_per_directory: 1000000
+        files_per_directory: 16000000
         page_limit: 1024
 
   filebench-varmail:
@@ -79,6 +89,7 @@ profiles:
       mean_dir_width: "1000000"
       prealloc_percent: "80"
       run_seconds: "60"
+      projected_total_messages: "1000"
     scale:
       median:
         clients: 12
@@ -94,9 +105,9 @@ profiles:
         session_ttl: 5m
       official:
         clients: 16
-        users: 16
-        messages_per_user: 63
-        page_limit: 128
+        users: 1
+        messages_per_user: 1000
+        page_limit: 1000
         session_ttl: 5m
 
   mimesis-namespace:
@@ -106,6 +117,10 @@ profiles:
     projection: fsmeta Create, Rename, UpdateInode, Lookup, ReadDirPlus, Unlink namespace churn
     official:
       source_detail: MimesisBench models namespace metadata behavior from large Yahoo Big Data clusters.
+      fixed_scale: unavailable
+      yahoo_trace_files: "150000000"
+      yahoo_trace_storage: 3.9PB
+      projection_note: MimesisBench publishes a model and workload profile, not one fixed official run size.
       operations: create, delete, rename, open/stat-like metadata accesses
       model: type-aware synthetic namespace metadata generator
     scale:
@@ -122,7 +137,7 @@ profiles:
       official:
         clients: 16
         directories: 32
-        files_per_directory: 1000000
+        files_per_directory: 4687500
         page_limit: 1024
 
   ai-checkpoint-agent:
@@ -138,6 +153,8 @@ profiles:
       process_counts: 8, 64, 512, 1024
       checkpoint_sizes: 105GB, 912GB, 5.29TB, 15TB
       subset_processes: "8"
+      selected_projection: 8B closed/subset process count
+      projection_note: metadata-only; checkpoint bytes and PyTorch save/load data path are outside fsmeta
     scale:
       median:
         clients: 12
@@ -154,9 +171,9 @@ profiles:
         page_limit: 11
         session_ttl: 5m
       official:
-        clients: 16
+        clients: 8
         workspaces: 8
         checkpoints_per_workspace: 10
-        files_per_checkpoint: 8
-        page_limit: 9
+        files_per_checkpoint: 1
+        page_limit: 2
         session_ttl: 5m

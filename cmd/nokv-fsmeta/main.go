@@ -70,7 +70,7 @@ func main() {
 		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
 		perasBackgroundFlushTimeout     = flag.Duration("peras-background-flush-timeout", 0, "timeout for opportunistic Peras background segment install; zero uses runtime default")
 		perasBackgroundErrorBackoff     = flag.Duration("peras-background-error-backoff", 0, "backoff after failed opportunistic Peras background segment install; zero uses runtime default")
-		perasVisibleLogDir              = flag.String("peras-visible-log-dir", "", "optional local WAL directory for holder visible acknowledgements")
+		perasVisibleLogDir              = flag.String("peras-visible-log-dir", "peras-visible-log", "local WAL directory for holder visible acknowledgements")
 		perasVisibleLogPolicy           = flag.String("peras-visible-log-policy", "flushed", "holder visible WAL sync policy: flushed|fsync-batched|fsync|buffered")
 	)
 	flag.Parse()

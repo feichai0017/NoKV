@@ -6,6 +6,7 @@ package peras
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,11 +58,11 @@ func (l *WALVisibleLog) AppendVisible(ctx context.Context, record fsperas.Visibl
 	}
 	payload, err := fsperas.EncodeVisibleOperationRecord(record)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode peras visible record: %w", err)
 	}
 	info, err := l.appendPayload(payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("append peras visible WAL: %w", err)
 	}
 	l.mu.Lock()
 	l.records = append(l.records, cloneVisibleOperationRecord(record))

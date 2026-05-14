@@ -129,9 +129,10 @@ type Options struct {
 	// after a failed install so visible commits do not create retry
 	// storms against an unhealthy raftstore. Zero uses the runtime default.
 	PerasBackgroundErrorBackoff time.Duration
-	// PerasVisibleLog is an optional holder-local WAL surface written before a
-	// visible ack reaches clients. PerasVisibleLogDir wires the default WAL
-	// implementation when no explicit log is provided.
+	// PerasVisibleLog is the holder-local WAL surface written before a visible
+	// ack reaches clients. PerasVisibleLogDir wires the default WAL
+	// implementation when no explicit log is provided; the default durability
+	// policy is page-cache flush for the performance-first server profile.
 	PerasVisibleLog           execperas.VisibleLog
 	PerasVisibleLogDir        string
 	PerasVisibleLogDurability wal.DurabilityPolicy
@@ -186,6 +187,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
+	}
+	if strings.TrimSpace(opts.PerasHolderID) != "" && opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) == "" {
+		return nil, execperas.ErrVisibleLogRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -290,6 +294,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 				_ = coord.Close()
 				return nil, fmt.Errorf("init peras visible log: %w", err)
 			}
+		}
+		if opts.PerasVisibleLog == nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, execperas.ErrVisibleLogRequired
 		}
 		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
 		if err != nil {
