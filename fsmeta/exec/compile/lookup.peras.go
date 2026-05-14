@@ -23,7 +23,7 @@ func CompileLookupProgram(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) 
 	}
 	effects := []WriteEffect(nil)
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonReadOnly}
-	if !validateLookupLoweredDelta(delta) {
+	if !validateLookupSemanticDelta(delta) {
 		return LookupProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileLookupCompiledOp(delta)
@@ -33,7 +33,7 @@ func CompileLookupProgram(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) 
 	return LookupProgram{Compiled: compiled}, nil
 }
 
-func validateLookupLoweredDelta(delta SemanticDelta) bool {
+func validateLookupSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationLookup {
 		return false
 	}

@@ -29,7 +29,7 @@ func CompileUnlinkProgram(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, 
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode)
 	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
-	if !validateUnlinkLoweredDelta(delta) {
+	if !validateUnlinkSemanticDelta(delta) {
 		return UnlinkProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileUnlinkCompiledOp(delta)
@@ -39,7 +39,7 @@ func CompileUnlinkProgram(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, 
 	return UnlinkProgram{Compiled: compiled}, nil
 }
 
-func validateUnlinkLoweredDelta(delta SemanticDelta) bool {
+func validateUnlinkSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationUnlink {
 		return false
 	}

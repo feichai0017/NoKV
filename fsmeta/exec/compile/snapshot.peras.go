@@ -23,7 +23,7 @@ func CompileSnapshotSubtreeProgram(req fsmeta.SnapshotSubtreeRequest, mount fsme
 	}
 	effects := []WriteEffect(nil)
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.RootInode}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonDurabilityBarrier, DurabilityBarrier: true}
-	if !validateSnapshotSubtreeLoweredDelta(delta) {
+	if !validateSnapshotSubtreeSemanticDelta(delta) {
 		return SnapshotSubtreeProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileSnapshotSubtreeCompiledOp(delta)
@@ -33,7 +33,7 @@ func CompileSnapshotSubtreeProgram(req fsmeta.SnapshotSubtreeRequest, mount fsme
 	return SnapshotSubtreeProgram{Compiled: compiled}, nil
 }
 
-func validateSnapshotSubtreeLoweredDelta(delta SemanticDelta) bool {
+func validateSnapshotSubtreeSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationSnapshotSubtree {
 		return false
 	}

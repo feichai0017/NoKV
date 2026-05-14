@@ -59,7 +59,7 @@ func CompileOpenWriteSessionProgram(req fsmeta.OpenWriteSessionRequest, mount fs
 	}
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode, GuardExpiredSessionOwner)
-	if !validateOpenWriteSessionLoweredDelta(delta) {
+	if !validateOpenWriteSessionSemanticDelta(delta) {
 		return OpenWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileOpenWriteSessionCompiledOp(delta)
@@ -88,7 +88,7 @@ func CompileHeartbeatWriteSessionProgram(req fsmeta.HeartbeatWriteSessionRequest
 	}
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardLiveSession)
-	if !validateHeartbeatWriteSessionLoweredDelta(delta) {
+	if !validateHeartbeatWriteSessionSemanticDelta(delta) {
 		return HeartbeatWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileHeartbeatWriteSessionCompiledOp(delta)
@@ -118,7 +118,7 @@ func CompileCloseWriteSessionProgram(req fsmeta.CloseWriteSessionRequest, mount 
 	}
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardLiveSession)
-	if !validateCloseWriteSessionLoweredDelta(delta) {
+	if !validateCloseWriteSessionSemanticDelta(delta) {
 		return CloseWriteSessionProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileCloseWriteSessionCompiledOp(delta)
@@ -140,7 +140,7 @@ func CompileExpireWriteSessionsProgram(req fsmeta.ExpireWriteSessionsRequest, mo
 	}
 	effects := []WriteEffect(nil)
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, nil, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonMaintenanceScan}
-	if !validateExpireWriteSessionsLoweredDelta(delta) {
+	if !validateExpireWriteSessionsSemanticDelta(delta) {
 		return ExpireWriteSessionsProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileExpireWriteSessionsCompiledOp(delta)
@@ -150,7 +150,7 @@ func CompileExpireWriteSessionsProgram(req fsmeta.ExpireWriteSessionsRequest, mo
 	return ExpireWriteSessionsProgram{Compiled: compiled}, nil
 }
 
-func validateOpenWriteSessionLoweredDelta(delta SemanticDelta) bool {
+func validateOpenWriteSessionSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationOpenWriteSession {
 		return false
 	}
@@ -225,7 +225,7 @@ func validateOpenWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	return true
 }
 
-func validateHeartbeatWriteSessionLoweredDelta(delta SemanticDelta) bool {
+func validateHeartbeatWriteSessionSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationHeartbeatSession {
 		return false
 	}
@@ -291,7 +291,7 @@ func validateHeartbeatWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	return true
 }
 
-func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
+func validateCloseWriteSessionSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationCloseSession {
 		return false
 	}
@@ -357,7 +357,7 @@ func validateCloseWriteSessionLoweredDelta(delta SemanticDelta) bool {
 	return true
 }
 
-func validateExpireWriteSessionsLoweredDelta(delta SemanticDelta) bool {
+func validateExpireWriteSessionsSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationExpireSessions {
 		return false
 	}

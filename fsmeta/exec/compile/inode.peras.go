@@ -32,7 +32,7 @@ func CompileUpdateInodeProgram(req fsmeta.UpdateInodeRequest, mount fsmeta.Mount
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, []fsmeta.InodeID{req.Inode}), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardSingleLinkInode)
 	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
-	if !validateUpdateInodeLoweredDelta(delta) {
+	if !validateUpdateInodeSemanticDelta(delta) {
 		return UpdateInodeProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileUpdateInodeCompiledOp(delta)
@@ -42,7 +42,7 @@ func CompileUpdateInodeProgram(req fsmeta.UpdateInodeRequest, mount fsmeta.Mount
 	return UpdateInodeProgram{Compiled: compiled}, nil
 }
 
-func validateUpdateInodeLoweredDelta(delta SemanticDelta) bool {
+func validateUpdateInodeSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationUpdateInode {
 		return false
 	}

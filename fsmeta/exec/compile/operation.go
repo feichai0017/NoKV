@@ -342,8 +342,8 @@ type SegmentDecision struct {
 }
 
 // MaterializeCompiledOpWithEvidence recompiles a generated descriptor with
-// concrete runtime effects and predicate evidence, without runtime semantic
-// lowering.
+// concrete runtime effects and predicate evidence, without reinterpreting the
+// operation semantics at admission time.
 func MaterializeCompiledOpWithEvidence(op CompiledOp, effects []WriteEffect, evidence PredicateEvidence, guardProofs []GuardProof) (MaterializedOp, error) {
 	delta := op.Delta
 	if effects != nil {

@@ -35,7 +35,7 @@ func CompileRenameProgram(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) 
 		delta.Eligibility = EligibilitySlowPath
 		delta.SlowReason = SlowReasonCrossBucket
 	}
-	if !validateRenameLoweredDelta(delta) {
+	if !validateRenameSemanticDelta(delta) {
 		return RenameProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileRenameCompiledOp(delta)
@@ -60,7 +60,7 @@ func CompileRenameSubtreeProgram(req fsmeta.RenameSubtreeRequest, mount fsmeta.M
 		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
 	}
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.FromParent, req.ToParent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonDurabilityBarrier, DurabilityBarrier: true, WatchAtSeal: true}
-	if !validateRenameSubtreeLoweredDelta(delta) {
+	if !validateRenameSubtreeSemanticDelta(delta) {
 		return RenameSubtreeProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileRenameSubtreeCompiledOp(delta)
@@ -70,7 +70,7 @@ func CompileRenameSubtreeProgram(req fsmeta.RenameSubtreeRequest, mount fsmeta.M
 	return RenameSubtreeProgram{Compiled: compiled}, nil
 }
 
-func validateRenameLoweredDelta(delta SemanticDelta) bool {
+func validateRenameSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationRename {
 		return false
 	}
@@ -134,7 +134,7 @@ func validateRenameLoweredDelta(delta SemanticDelta) bool {
 	return true
 }
 
-func validateRenameSubtreeLoweredDelta(delta SemanticDelta) bool {
+func validateRenameSubtreeSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationRenameSubtree {
 		return false
 	}

@@ -23,7 +23,7 @@ func CompileReadDirProgram(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity
 	}
 	effects := []WriteEffect(nil)
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilitySlowPath, SlowReason: SlowReasonRangeRead}
-	if !validateReadDirLoweredDelta(delta) {
+	if !validateReadDirSemanticDelta(delta) {
 		return ReadDirProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileReadDirCompiledOp(delta)
@@ -33,7 +33,7 @@ func CompileReadDirProgram(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity
 	return ReadDirProgram{Compiled: compiled}, nil
 }
 
-func validateReadDirLoweredDelta(delta SemanticDelta) bool {
+func validateReadDirSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationReadDir {
 		return false
 	}

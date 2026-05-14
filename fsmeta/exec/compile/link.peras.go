@@ -30,7 +30,7 @@ func CompileLinkProgram(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.FromParent, req.ToParent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode, GuardSameAuthority)
 	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
-	if !validateLinkLoweredDelta(delta) {
+	if !validateLinkSemanticDelta(delta) {
 		return LinkProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileLinkCompiledOp(delta)
@@ -40,7 +40,7 @@ func CompileLinkProgram(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts
 	return LinkProgram{Compiled: compiled}, nil
 }
 
-func validateLinkLoweredDelta(delta SemanticDelta) bool {
+func validateLinkSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationLink {
 		return false
 	}

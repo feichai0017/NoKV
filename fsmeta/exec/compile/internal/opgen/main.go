@@ -176,7 +176,7 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\tEligibility: EligibilityVisibleCommit,\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\tdelta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)\n")
-	b.WriteString("\tif !validateCreateLoweredDelta(delta) {\n")
+	b.WriteString("\tif !validateCreateSemanticDelta(delta) {\n")
 	fmt.Fprintf(&b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
 	b.WriteString("\t}\n")
 	b.WriteString("\tcompiled, err := compileCreateCompiledOp(delta)\n")
@@ -209,7 +209,7 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\treturn MaterializedOp{CompiledOp: materialized}, nil\n")
 	b.WriteString("}\n")
 	b.WriteString("\n")
-	if err := emitLoweredDeltaValidator(&b, spec); err != nil {
+	if err := emitSemanticDeltaValidator(&b, spec); err != nil {
 		return nil, err
 	}
 	b.WriteString("func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {\n")
@@ -348,7 +348,7 @@ func emitOperationFile(specs []specdsl.OpSpec) ([]byte, error) {
 		}
 	}
 	for _, spec := range specs {
-		if err := emitLoweredDeltaValidator(&b, spec); err != nil {
+		if err := emitSemanticDeltaValidator(&b, spec); err != nil {
 			return nil, err
 		}
 	}
@@ -444,7 +444,7 @@ func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
 		b.WriteString("\t\tdelta.SlowReason = SlowReasonCrossBucket\n")
 		b.WriteString("\t}\n")
 	}
-	fmt.Fprintf(b, "\tif !%s(delta) {\n", loweredDeltaValidatorName(spec))
+	fmt.Fprintf(b, "\tif !%s(delta) {\n", semanticDeltaValidatorName(spec))
 	fmt.Fprintf(b, "\t\treturn %s{}, fsmeta.ErrInvalidRequest\n", spec.ProgramType)
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\tcompiled, err := %s(delta)\n", compiledOpFuncName(spec))
@@ -619,7 +619,7 @@ func hasSlowFallback(spec specdsl.OpSpec, reason string) bool {
 	return false
 }
 
-func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
+func emitSemanticDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
 	if spec.OperationKind == "" || spec.Eligibility == "" {
 		return fmt.Errorf("%s missing semantic validator fields", spec.Name)
 	}
@@ -633,7 +633,7 @@ func emitLoweredDeltaValidator(b *bytes.Buffer, spec specdsl.OpSpec) error {
 		return fmt.Errorf("%s repeatable predicate specs must be the only predicate", spec.Name)
 	}
 
-	fmt.Fprintf(b, "func %s(delta SemanticDelta) bool {\n", loweredDeltaValidatorName(spec))
+	fmt.Fprintf(b, "func %s(delta SemanticDelta) bool {\n", semanticDeltaValidatorName(spec))
 	fmt.Fprintf(b, "\tif delta.Kind != %s {\n", spec.OperationKind)
 	b.WriteString("\t\treturn false\n")
 	b.WriteString("\t}\n")
@@ -772,11 +772,11 @@ func emitEligibilityValidator(b *bytes.Buffer, spec specdsl.OpSpec) {
 	b.WriteString("\t}\n")
 }
 
-func loweredDeltaValidatorName(spec specdsl.OpSpec) string {
+func semanticDeltaValidatorName(spec specdsl.OpSpec) string {
 	if spec.Name == "" {
 		return ""
 	}
-	return "validate" + spec.Name + "LoweredDelta"
+	return "validate" + spec.Name + "SemanticDelta"
 }
 
 func emitCompiledOpFunction(b *bytes.Buffer, spec specdsl.OpSpec) error {

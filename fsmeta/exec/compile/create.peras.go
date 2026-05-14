@@ -73,7 +73,7 @@ func CompileCreateProgram(req fsmeta.CreateRequest, mount fsmeta.MountIdentity, 
 		Eligibility: EligibilityVisibleCommit,
 	}
 	delta = applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit)
-	if !validateCreateLoweredDelta(delta) {
+	if !validateCreateSemanticDelta(delta) {
 		return CreateProgram{}, fsmeta.ErrInvalidRequest
 	}
 	compiled, err := compileCreateCompiledOp(delta)
@@ -107,7 +107,7 @@ func MaterializeCreate(program CreateProgram, values CreateValues) (Materialized
 	return MaterializedOp{CompiledOp: materialized}, nil
 }
 
-func validateCreateLoweredDelta(delta SemanticDelta) bool {
+func validateCreateSemanticDelta(delta SemanticDelta) bool {
 	if delta.Kind != fsmeta.OperationCreate {
 		return false
 	}

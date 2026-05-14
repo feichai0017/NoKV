@@ -112,8 +112,11 @@ type AuthorityScope struct {
 	AllowOpaqueKeys bool
 }
 
-// SemanticDelta is the static lowering result produced from one fsmeta request.
-// Runtime code must materialize it into MaterializedOp before holder admission.
+// SemanticDelta is the request-time semantic program produced by generated
+// compile entries. It carries the authority scope, predicate obligations,
+// symbolic/concrete effects, and slow-path decision before runtime evidence is
+// attached. Runtime code must materialize it into MaterializedOp before holder
+// admission.
 type SemanticDelta struct {
 	Kind              fsmeta.OperationKind
 	Plan              fsmeta.OperationPlan
