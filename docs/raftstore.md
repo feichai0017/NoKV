@@ -26,7 +26,7 @@ admission, transition execution, publish boundaries, and restart state, read
 | [`raftlog`](../raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage across all Raft groups, leveraging the NoKV WAL while tracking store-local raft replay metadata. |
 | [`meta`](../raftstore/localmeta) | Store-local durable metadata: peer catalog for restart and raft WAL replay checkpoints for replay/GC. |
 | [`transport`](../raftstore/transport) | gRPC transport with retry/TLS/backpressure; exposes the raft Step RPC and can host additional services (StoreKV). |
-| [`kv`](../raftstore/kv) | StoreKV RPC implementation, bridging Raft commands to MVCC operations via `kv.Apply`. |
+| [`kv`](../raftstore/kv) | StoreKV RPC implementation, bridging Raft commands to MVCC operations and Peras segment installs via `kv.Apply`. |
 | [`server`](../raftstore/server) | `Config` + `NewNode` that bind storage, Store, transport, and the shared KV/admin RPC surfaces into a reusable node primitive. |
 
 ### Runtime ownership sketch
@@ -45,7 +45,7 @@ flowchart TD
         Store --> Admin["admin service"]
         Store --> Meta["raftstore/localmeta"]
         Peer --> Engine["raftstore/raftlog"]
-        Peer --> Apply["kv.Apply"]
+        Peer --> Apply["kv.Apply / Peras install"]
     end
 
     Apply --> DB["NoKV DB"]
@@ -100,7 +100,7 @@ flowchart TD
 
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
-2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to the `percolator` package.
+2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to `percolator` or `PerasInstallSegment` to the Peras install path.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates `raftstore/localmeta` raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.
 4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
 
@@ -126,11 +126,11 @@ sequenceDiagram
     end
 
     rect rgb(241, 253, 244)
-      C->>SVC: Prewrite/Commit/...
+      C->>SVC: Prewrite/Commit/.../PerasInstallSegment
       SVC->>ST: ProposeCommand
       ST->>RF: route + replicate
       RF->>AP: apply committed entry
-      AP->>DB: percolator mutate -> ApplyInternalEntries
+      AP->>DB: percolator / Peras install -> ApplyInternalEntries
       AP-->>C: write response
     end
 ```
@@ -159,6 +159,9 @@ sequenceDiagram
 | --- | --- | --- |
 | `Get` / `Scan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
 | `Prewrite` / `Commit` / `BatchRollback` / `ResolveLock` / `CheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
+| `PerasInstallSegment` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Installs Peras segment catalog/index records or materialized MVCC entries. Ordinary writes are fenced by active Peras authority for covered keys. |
+
+`PerasWitnessSegment` and `PerasWitnessProbe` are StoreKV sidecar RPCs backed by the configured witness node. They provide segment evidence for Peras recovery; they are not a second Raft quorum and do not replace replicated install.
 
 The `cmd/nokv serve` command uses `server.Node` internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.
 

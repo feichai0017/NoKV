@@ -8,7 +8,7 @@ The deployment is intentionally split into two modes:
 | Mode | Goal | Default VM shape | Placement | Output |
 | --- | --- | --- | --- | --- |
 | Smoke | Validate the deployment path end to end | `e2-standard-2` for every role | no compact placement | pass/fail plus a small CSV |
-| Distributed smoke | Validate a small distributed-correctness slice with fault injection | `e2-standard-2` for every role | no compact placement | pass/fail plus per-phase CSVs |
+| Distributed smoke | Validate a small distributed-correctness slice with fault injection | `e2-standard-2` for every role | no compact placement | pass/fail plus per-phase CSVs and failure diagnostics |
 | Formal benchmark | Produce performance evidence | C4 layout below | same zone, ideally compact or otherwise controlled placement | benchmark CSVs and run metadata |
 
 Smoke results are not performance evidence. They only prove that infra creation,
@@ -17,7 +17,8 @@ copyback, and destroy all work.
 
 Distributed smoke is also not performance evidence. It adds active checks for
 meta-root leadership, coordinator grant handoff, store execution restart state,
-and a small workload after selected node faults.
+and a small workload after selected node faults. The fault-smoke path preserves
+failed clusters by default so operators can inspect the live system.
 
 ## Topology
 
@@ -159,7 +160,7 @@ as written". Do that only when you intentionally want a non-default smoke run.
 
 ## Distributed Smoke
 
-Run the distributed smoke path and always destroy resources:
+Run the distributed smoke path with success cleanup and failure preservation:
 
 ```bash
 deploy/gcp/distributed-smoke-and-destroy.sh
@@ -168,6 +169,9 @@ deploy/gcp/distributed-smoke-and-destroy.sh
 When no config file argument is passed, `distributed-smoke-and-destroy.sh` uses
 the same low-cost shape as normal smoke: 11 `e2-standard-2` VMs, no compact
 placement, no external IPv4, Cloud NAT for pulls, and IAP for operator SSH/SCP.
+The wrapper destroys resources after a successful run by default. On failure it
+keeps the cluster and prints the matching `destroy-cluster.sh` command so the
+same VMs can be inspected before cleanup.
 
 The distributed smoke sequence is intentionally small:
 
@@ -178,15 +182,23 @@ The distributed smoke sequence is intentionally small:
 4. Assert each live store reports `execution -json` restart state `ready`, with
    non-zero region/raft-group counts and no missing raft pointers.
 5. Run a baseline `mixed` fsmeta smoke workload.
-6. Stop the current meta-root leader, wait for election, assert a new live
-   leader, and run `mixed`.
-7. Stop the current coordinator grant holder, wait for grant handoff, assert one
-   live holder, and run `mixed,negative-lookup` using only live coordinator
-   addresses for benchmark bootstrap.
-8. Stop one store, wait for raft failover, assert the remaining stores, and run
-   `mixed,hotspot-fanin,negative-lookup`.
-9. Restart gateway, run `negative-lookup`, then run final health checks and
-   `mixed`.
+6. Stop the current meta-root leader, wait for election, rerun all control-plane
+   assertions with the stopped meta-root skipped, and run `mixed`.
+7. Restore meta-root, wait for all services, and rerun all control-plane
+   assertions.
+8. Stop the current coordinator grant holder, wait for grant handoff, rerun all
+   control-plane assertions with the stopped coordinator skipped, and run
+   `mixed,negative-lookup` using only live coordinator addresses for benchmark
+   bootstrap.
+9. Restore the coordinator, wait for all services, and rerun all control-plane
+   assertions.
+10. Stop one store, wait for raft failover, rerun all control-plane assertions
+    with the stopped store skipped, and run
+    `mixed,hotspot-fanin,negative-lookup`.
+11. Restore the store, wait for all services, and rerun all control-plane
+    assertions.
+12. Restart gateway, wait for all services, rerun all control-plane assertions,
+    run `negative-lookup`, then run final control-plane assertions and `mixed`.
 
 This is a distributed-correctness smoke, not a complete Jepsen-style validation.
 It covers the current deployment's expected failure handling path with bounded
@@ -199,6 +211,9 @@ Useful knobs:
 ```bash
 NOKV_DISTRIBUTED_SMOKE_STORE_FAULT_ID=2 deploy/gcp/distributed-smoke-and-destroy.sh
 NOKV_DISTRIBUTED_SMOKE_BENCH_STABILIZE_SECONDS=15 deploy/gcp/distributed-smoke-and-destroy.sh
+NOKV_DISTRIBUTED_SMOKE_KEEP_CLUSTER=true deploy/gcp/distributed-smoke-and-destroy.sh
+NOKV_DISTRIBUTED_SMOKE_DESTROY_ON_FAILURE=true deploy/gcp/distributed-smoke-and-destroy.sh
+NOKV_DISTRIBUTED_SMOKE_LOG_TAIL=1200 deploy/gcp/distributed-smoke-and-destroy.sh
 ```
 
 To run against an existing cluster without auto-destroy:
@@ -207,9 +222,12 @@ To run against an existing cluster without auto-destroy:
 deploy/gcp/distributed-smoke.sh deploy/gcp/config.env
 ```
 
-If distributed smoke fails after at least one workload phase, the script attempts
-to copy partial results from loadgen before `distributed-smoke-and-destroy.sh`
-destroys the VMs.
+If distributed smoke fails, `distributed-smoke.sh` collects local diagnostics
+under `deploy/gcp/results/<run_id>/diagnostics/` before exit. Each node snapshot
+includes Docker state, container logs, the service `/debug/vars` endpoint when
+available, and startup-script journal output. The destroy wrapper preserves the
+cluster on failure unless `NOKV_DISTRIBUTED_SMOKE_DESTROY_ON_FAILURE=true` is
+set.
 
 ## Formal Benchmark
 
@@ -277,6 +295,7 @@ Ignored local artifacts:
 | `deploy/gcp/generated/eunomia-signing-key.txt` | signing key shared by cluster and loadgen |
 | `deploy/gcp/generated/startup-*.sh` | generated VM startup scripts |
 | `deploy/gcp/results/<run_id>/...` | copied benchmark CSVs |
+| `deploy/gcp/results/<run_id>/diagnostics/...` | distributed-smoke failure diagnostics |
 
 Inspect the latest smoke CSV:
 
@@ -352,6 +371,10 @@ sudo journalctl -u google-startup-scripts.service -n 120 --no-pager
 - Smoke defaults to e2, no compact placement, no external IPv4.
 - `smoke-and-destroy.sh` has an exit trap and calls `destroy-cluster.sh
   --delete-infra` even when smoke fails.
+- `distributed-smoke-and-destroy.sh` destroys resources after success, but keeps
+  failed clusters by default for fault diagnosis. Destroy them manually after
+  collecting evidence, or set `NOKV_DISTRIBUTED_SMOKE_DESTROY_ON_FAILURE=true`
+  when live debugging is not needed.
 - Formal runs do not auto-destroy because humans may need to inspect logs and
   run multiple profiles. Destroy manually as soon as evidence is collected.
 - Avoid compact placement during smoke. Capacity waits can cost wall-clock time

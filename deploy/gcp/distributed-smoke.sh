@@ -31,6 +31,8 @@ run_id="distributed-$(date -u +%Y%m%dT%H%M%SZ)"
 remote_dir="/mnt/nokv/results/${run_id}"
 local_dir="$SCRIPT_DIR/results/${run_id}"
 results_copied=0
+diagnostics_collected=0
+diagnostics_dir="$local_dir/diagnostics"
 
 all_coord_addr="10.42.0.21:2379,10.42.0.22:2379,10.42.0.23:2379"
 
@@ -119,11 +121,65 @@ copy_results_once() {
   results_copied=1
 }
 
+collect_instance_diagnostics() {
+  local instance="$1"
+  local container="$2"
+  local metrics_port="$3"
+  local out_dir="$diagnostics_dir/$instance"
+  local log_tail="${NOKV_DISTRIBUTED_SMOKE_LOG_TAIL:-600}"
+  local cmd
+
+  mkdir -p "$out_dir"
+  cmd="set +e"$'\n'
+  cmd="${cmd}"'echo "## date -u"'$'\n''date -u'$'\n'
+  cmd="${cmd}"'echo'$'\n''echo "## docker ps -a"'$'\n''sudo docker ps -a 2>&1'$'\n'
+  if [[ -n "$container" ]]; then
+    cmd="${cmd}"'echo'$'\n'"echo \"## docker inspect ${container}\""$'\n'
+    cmd="${cmd}sudo docker inspect $(shell_quote "$container") 2>&1"$'\n'
+    cmd="${cmd}"'echo'$'\n'"echo \"## docker logs ${container}\""$'\n'
+    cmd="${cmd}sudo docker logs --timestamps --tail=$(shell_quote "$log_tail") $(shell_quote "$container") 2>&1"$'\n'
+  fi
+  if [[ "$metrics_port" != "0" ]]; then
+    cmd="${cmd}"'echo'$'\n'"echo \"## debug vars :${metrics_port}\""$'\n'
+    cmd="${cmd}curl -fsS http://127.0.0.1:$(shell_quote "$metrics_port")/debug/vars 2>&1"$'\n'
+  fi
+  cmd="${cmd}"'echo'$'\n''echo "## startup journal"'$'\n'
+  cmd="${cmd}"'sudo journalctl -u google-startup-scripts.service -n 200 --no-pager 2>&1'$'\n'
+
+  retry_transport "collect diagnostics from ${instance}" ssh_instance "$instance" "$cmd" >"$out_dir/snapshot.txt" 2>&1 || true
+}
+
+collect_diagnostics_once() {
+  if [[ "$diagnostics_collected" -eq 1 ]]; then
+    return 0
+  fi
+  diagnostics_collected=1
+
+  mkdir -p "$diagnostics_dir"
+  echo "Collecting distributed smoke diagnostics into: $diagnostics_dir"
+
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-meta-root-1" "nokv-meta-root" "9380"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-meta-root-2" "nokv-meta-root" "9380"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-meta-root-3" "nokv-meta-root" "9380"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-coordinator-1" "nokv-coordinator" "9100"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-coordinator-2" "nokv-coordinator" "9100"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-coordinator-3" "nokv-coordinator" "9100"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-store-1" "nokv-store" "9200"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-store-2" "nokv-store" "9200"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-store-3" "nokv-store" "9200"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-gateway-1" "nokv-fsmeta" "9400"
+  collect_instance_diagnostics "${GCP_CLUSTER_NAME}-loadgen-1" "" "0"
+}
+
 copy_partial_results_on_failure() {
   local status=$?
   if [[ "$status" -ne 0 ]]; then
-    echo "Distributed smoke failed; attempting to copy partial results before destroy..."
+    echo "Distributed smoke failed; preserving evidence before exit..."
+    if is_truthy "${NOKV_DISTRIBUTED_SMOKE_COLLECT_DIAGNOSTICS_ON_FAILURE:-true}"; then
+      collect_diagnostics_once || true
+    fi
     copy_results_once || true
+    echo "Distributed smoke local evidence directory: $local_dir"
   fi
   return "$status"
 }
@@ -222,6 +278,19 @@ run_bench_phase() {
   run_loadgen_action "run-bench" "$phase" "$workloads" "$coord_addr" "$skip_meta_root" "$skip_coord" "$skip_store"
 }
 
+assert_control_plane() {
+  local phase="$1"
+  local workloads="${2:-mixed}"
+  local coord_addr="${3:-$all_coord_addr}"
+  local skip_meta_root="${4:-}"
+  local skip_coord="${5:-}"
+  local skip_store="${6:-}"
+
+  run_loadgen_action "assert-meta-root" "${phase}-meta-root" "$workloads" "$coord_addr" "$skip_meta_root" "$skip_coord" "$skip_store"
+  run_loadgen_action "assert-coordinator-grant" "${phase}-coordinator-grant" "$workloads" "$coord_addr" "$skip_meta_root" "$skip_coord" "$skip_store"
+  run_loadgen_action "assert-store-execution" "${phase}-store-execution" "$workloads" "$coord_addr" "$skip_meta_root" "$skip_coord" "$skip_store"
+}
+
 coord_addr_excluding() {
   case "$1" in
     coord-1|1) printf '10.42.0.22:2379,10.42.0.23:2379\n' ;;
@@ -281,9 +350,7 @@ retry_transport "chmod distributed smoke helper" ssh_instance "$loadgen" "chmod 
 
 run_loadgen_action "prepare" "prepare"
 run_loadgen_action "wait-all" "initial-wait"
-run_loadgen_action "assert-meta-root" "initial-meta-root"
-run_loadgen_action "assert-coordinator-grant" "initial-coordinator-grant"
-run_loadgen_action "assert-store-execution" "initial-store-execution"
+assert_control_plane "initial"
 
 run_bench_phase "baseline" "mixed"
 
@@ -293,12 +360,12 @@ meta_root_instance="${GCP_CLUSTER_NAME}-meta-root-${meta_root_id}"
 echo "Injecting meta-root leader fault: ${meta_root_leader}"
 stop_container "$meta_root_instance" "nokv-meta-root" 45
 settle "Meta-root leader election" "${NOKV_DISTRIBUTED_SMOKE_META_ROOT_SETTLE_SECONDS:-20}"
-run_loadgen_action "assert-meta-root" "meta-root-leader-down" "mixed" "$all_coord_addr" "$meta_root_leader"
+assert_control_plane "meta-root-leader-down" "mixed" "$all_coord_addr" "$meta_root_leader"
 run_bench_phase "meta-root-leader-down" "mixed" "$all_coord_addr" "$meta_root_leader"
 start_container "$meta_root_instance" "nokv-meta-root"
 settle "Meta-root restart" "${NOKV_DISTRIBUTED_SMOKE_RESTART_SETTLE_SECONDS:-20}"
 run_loadgen_action "wait-all" "meta-root-restored"
-run_loadgen_action "assert-meta-root" "meta-root-restored"
+assert_control_plane "meta-root-restored"
 
 coord_holder="$(capture_loadgen_action "coordinator-holder" "detect-coordinator-holder" | awk '/^coord-[0-9]+$/ {line=$0} END {if (line == "") exit 1; print line}')"
 coord_id="$(node_ordinal "$coord_holder")"
@@ -307,12 +374,12 @@ live_coord_addr="$(coord_addr_excluding "$coord_holder")"
 echo "Injecting coordinator holder fault: ${coord_holder}"
 stop_container "$coord_instance" "nokv-coordinator" 45
 settle "Coordinator grant handoff" "${NOKV_DISTRIBUTED_SMOKE_COORDINATOR_SETTLE_SECONDS:-40}"
-run_loadgen_action "assert-coordinator-grant" "coordinator-holder-down" "mixed" "$live_coord_addr" "" "$coord_holder"
+assert_control_plane "coordinator-holder-down" "mixed" "$live_coord_addr" "" "$coord_holder"
 run_bench_phase "coordinator-holder-down" "mixed,negative-lookup" "$live_coord_addr" "" "$coord_holder"
 start_container "$coord_instance" "nokv-coordinator"
 settle "Coordinator restart" "${NOKV_DISTRIBUTED_SMOKE_RESTART_SETTLE_SECONDS:-20}"
 run_loadgen_action "wait-all" "coordinator-restored"
-run_loadgen_action "assert-coordinator-grant" "coordinator-restored"
+assert_control_plane "coordinator-restored"
 
 store_id="${NOKV_DISTRIBUTED_SMOKE_STORE_FAULT_ID:-3}"
 store_node="store-${store_id}"
@@ -320,22 +387,21 @@ store_instance="${GCP_CLUSTER_NAME}-store-${store_id}"
 echo "Injecting store fault: ${store_node}"
 stop_container "$store_instance" "nokv-store" 30
 settle "Store raft failover" "${NOKV_DISTRIBUTED_SMOKE_STORE_SETTLE_SECONDS:-45}"
-run_loadgen_action "assert-store-execution" "store-down" "mixed" "$all_coord_addr" "" "" "$store_node"
+assert_control_plane "store-down" "mixed" "$all_coord_addr" "" "" "$store_node"
 run_bench_phase "store-${store_id}-down" "mixed,hotspot-fanin,negative-lookup" "$all_coord_addr" "" "" "$store_node"
 start_container "$store_instance" "nokv-store"
 settle "Store restart" "${NOKV_DISTRIBUTED_SMOKE_RESTART_SETTLE_SECONDS:-20}"
 run_loadgen_action "wait-all" "store-restored"
-run_loadgen_action "assert-store-execution" "store-restored"
+assert_control_plane "store-restored"
 
 echo "Restarting gateway"
 restart_container "${GCP_CLUSTER_NAME}-gateway-1" "nokv-fsmeta" 30
 settle "Gateway restart" "${NOKV_DISTRIBUTED_SMOKE_GATEWAY_SETTLE_SECONDS:-10}"
 run_loadgen_action "wait-all" "gateway-restored"
+assert_control_plane "gateway-restored"
 run_bench_phase "gateway-restart" "negative-lookup"
 
-run_loadgen_action "assert-meta-root" "final-meta-root"
-run_loadgen_action "assert-coordinator-grant" "final-coordinator-grant"
-run_loadgen_action "assert-store-execution" "final-store-execution"
+assert_control_plane "final"
 run_bench_phase "final" "mixed"
 
 copy_results_once

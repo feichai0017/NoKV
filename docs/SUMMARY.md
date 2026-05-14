@@ -31,6 +31,7 @@
 - [Coordinator](coordinator.md)
 - [Rooted Truth (meta/root)](rooted_truth.md)
 - [Percolator](percolator.md)
+- [Peras](peras.md)
 - [FSMetadata](fsmeta.md)
 - [Migration](migration.md)
 - [Recovery](recovery.md)

@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config_arg="${1:-}"
 runtime_config_arg="$config_arg"
 smoke_config_file=""
+cluster_created=0
+
+is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Distributed smoke validates control-plane and storage-plane failure behavior.
 # Keep the VM shape cheap and quota-friendly; the output is correctness signal,
@@ -35,24 +43,56 @@ NOKV_DISTRIBUTED_SMOKE_COORDINATOR_SETTLE_SECONDS=${NOKV_DISTRIBUTED_SMOKE_COORD
 NOKV_DISTRIBUTED_SMOKE_STORE_SETTLE_SECONDS=${NOKV_DISTRIBUTED_SMOKE_STORE_SETTLE_SECONDS:-45}
 NOKV_DISTRIBUTED_SMOKE_GATEWAY_SETTLE_SECONDS=${NOKV_DISTRIBUTED_SMOKE_GATEWAY_SETTLE_SECONDS:-10}
 NOKV_DISTRIBUTED_SMOKE_RESTART_SETTLE_SECONDS=${NOKV_DISTRIBUTED_SMOKE_RESTART_SETTLE_SECONDS:-20}
+NOKV_DISTRIBUTED_SMOKE_COLLECT_DIAGNOSTICS_ON_FAILURE=${NOKV_DISTRIBUTED_SMOKE_COLLECT_DIAGNOSTICS_ON_FAILURE:-true}
+NOKV_DISTRIBUTED_SMOKE_LOG_TAIL=${NOKV_DISTRIBUTED_SMOKE_LOG_TAIL:-600}
 EOF
   } >"$smoke_config_file"
 fi
 
+should_destroy_cluster() {
+  local status="$1"
+
+  if [[ "$cluster_created" -eq 0 ]]; then
+    return 0
+  fi
+  if is_truthy "${NOKV_DISTRIBUTED_SMOKE_KEEP_CLUSTER:-false}"; then
+    return 1
+  fi
+  if [[ "$status" -eq 0 ]]; then
+    is_truthy "${NOKV_DISTRIBUTED_SMOKE_DESTROY_ON_SUCCESS:-true}"
+  else
+    is_truthy "${NOKV_DISTRIBUTED_SMOKE_DESTROY_ON_FAILURE:-false}"
+  fi
+}
+
 cleanup() {
   local status=$?
-  echo "Destroying distributed smoke VMs to stop compute billing..."
-  if [[ -n "$runtime_config_arg" ]]; then
-    "$SCRIPT_DIR/destroy-cluster.sh" "$runtime_config_arg" --delete-infra || true
+  if should_destroy_cluster "$status"; then
+    echo "Destroying distributed smoke VMs to stop compute billing..."
+    if [[ -n "$runtime_config_arg" ]]; then
+      "$SCRIPT_DIR/destroy-cluster.sh" "$runtime_config_arg" --delete-infra || true
+    else
+      "$SCRIPT_DIR/destroy-cluster.sh" --delete-infra || true
+    fi
+    if [[ -n "$smoke_config_file" ]]; then
+      rm -f "$smoke_config_file"
+    fi
   else
-    "$SCRIPT_DIR/destroy-cluster.sh" --delete-infra || true
-  fi
-  if [[ -n "$smoke_config_file" ]]; then
-    rm -f "$smoke_config_file"
+    echo "Preserving distributed smoke VMs for debugging."
+    echo "Destroy them manually when finished:"
+    if [[ -n "$runtime_config_arg" ]]; then
+      echo "  $SCRIPT_DIR/destroy-cluster.sh $runtime_config_arg --delete-infra"
+    else
+      echo "  $SCRIPT_DIR/destroy-cluster.sh --delete-infra"
+    fi
+    if [[ -n "$smoke_config_file" ]]; then
+      echo "Preserved smoke config: $smoke_config_file"
+    fi
   fi
   return "$status"
 }
 trap cleanup EXIT
 
 "$SCRIPT_DIR/create-cluster.sh" "$runtime_config_arg" || exit $?
+cluster_created=1
 "$SCRIPT_DIR/distributed-smoke.sh" "$runtime_config_arg"

@@ -6,7 +6,7 @@
   <p><strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong></p>
 
   <p>
-    <em>Native fsmeta primitives · Own LSM · Own Raft · Own MVCC · Own control plane</em>
+    <em>Native fsmeta primitives · Own LSM · Own raftstore integration · Own MVCC · Own control plane</em>
   </p>
 
   <p>
@@ -52,7 +52,7 @@ Deep dive: [fsmeta positioning](notes/2026-04-24-fsmeta-positioning.md) · [name
 Start here:
 
 1. **[fsmeta.md](fsmeta.md)** — namespace metadata service (the headline). Primitives, lifecycle authority, deployment.
-2. **[architecture.md](architecture.md)** — three-layer architecture. Where each module lives, what each layer is allowed to know.
+2. **[architecture.md](architecture.md)** — layered architecture. Where each module lives, what each layer is allowed to know.
 3. **[control_and_execution_protocols.md](control_and_execution_protocols.md)** — the contract between control plane (`coordinator/`), execution plane (`raftstore/`), and rooted truth (`meta/root/`).
 
 For the authority schema behind those primitives, read **[notes/2026-04-25-namespace-authority-events-umbrella.md](notes/2026-04-25-namespace-authority-events-umbrella.md)**.
@@ -91,11 +91,12 @@ For the authority schema behind those primitives, read **[notes/2026-04-25-names
 | Standalone → distributed migration | [migration.md](migration.md) |
 | Recovery model | [recovery.md](recovery.md) |
 | Percolator MVCC 2PC + AssertionNotExist | [percolator.md](percolator.md) |
+| Peras semantic visible-commit path | [peras.md](peras.md) |
 | Runtime call chains (sequence diagrams) | [runtime.md](runtime.md) |
 
 ### 🔧 Storage engine internals — the foundation
 
-The single-node substrate that everything sits on. Independently usable as an embedded Go LSM + Raft library.
+The single-node substrate that everything sits on. Independently usable as an embedded Go LSM, with distributed runtime built through NoKV's raftstore integration.
 
 | Topic | Doc |
 |---|---|
@@ -120,7 +121,7 @@ The single-node substrate that everything sits on. Independently usable as an em
 | Configuration (one JSON file shared by all binaries) | [config.md](config.md) |
 | Cluster demo | [demo.md](demo.md) |
 | Scripts layout | [scripts.md](scripts.md) |
-| Stats / expvar / metrics (4 namespaces: executor, watch, quota, mount) | [stats.md](stats.md) |
+| Stats / expvar / metrics (fsmeta executor, watch, quota, mount, sessions) | [stats.md](stats.md) |
 | Testing strategy (failpoints, chaos, restart, migration) | [testing.md](testing.md) |
 
 ### 📒 Notable design decision records
@@ -154,6 +155,7 @@ Layer 2  meta/root         ← rooted authority truth (Mount / SubtreeAuthority 
          coordinator       ← routing, TSO, store discovery, root-event publish + WatchRootEvents stream
          raftstore         ← per-region Raft + apply observer
          percolator        ← 2PC + MVCC + AssertionNotExist + commit-ts retry
+         peras             ← fsmeta semantic visible commit + segment install
    │
 Layer 3  engine            ← LSM + ART memtable + WAL + slab sidecar substrate
 ```
@@ -191,7 +193,7 @@ nokv quota set --coordinator-addr 127.0.0.1:2379 \
 #    or embedded Go: see fsmeta/runtime/raftstore.Open in the root README
 
 # 6. Inspect runtime state
-curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount'
+curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount, .nokv_fsmeta_sessions'
 nokv stats --workdir ./artifacts/cluster/store-1
 ```
 
@@ -210,6 +212,7 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 | **[Coordinator](coordinator.md)** | Route / TSO / heartbeat / root-event subscribe |
 | **[Rooted truth](rooted_truth.md)** | `meta/root` typed event log |
 | **[Percolator / MVCC](percolator.md)** | 2PC primitives in distributed mode |
+| **[Peras](peras.md)** | fsmeta semantic visible-commit path and segment install |
 | **[Runtime call chains](runtime.md)** | Function-level sequence diagrams |
 | **[Testing](testing.md)** | Failpoints, chaos, restart, migration |
 | **[SUMMARY.md](SUMMARY.md)** | Full mdbook table of contents |
@@ -218,5 +221,5 @@ Full walkthrough: [getting_started.md](getting_started.md) · CLI reference: [cl
 
 <div align="center">
   <sub><strong>Open-source namespace metadata substrate for DFS, OSS, and AI dataset metadata.</strong></sub><br/>
-  <sub>Built from scratch — no external storage engine, no external Raft library, no external coordinator.</sub>
+  <sub>Built from scratch around the storage engine, metadata semantics, coordinator, and raftstore integration; raftstore reuses etcd/raft RawNode as its consensus core.</sub>
 </div>

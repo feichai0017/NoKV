@@ -172,9 +172,15 @@ func main() {
     defer rt.Close()
 
     // mount must be registered first (see `nokv mount register`)
-    err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-        Mount: "default", Parent: 1, Name: "hello.txt", Inode: 100,
-    }, fsmeta.InodeRecord{Type: fsmeta.InodeTypeFile, LinkCount: 1, Size: 13})
+    _, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
+        Mount:  "default",
+        Parent: 1,
+        Name:   "hello.txt",
+        Attrs: fsmeta.CreateAttrs{
+            Type: fsmeta.InodeTypeFile,
+            Size: 13,
+        },
+    })
     if err != nil {
         panic(err)
     }
@@ -209,8 +215,8 @@ Then use any gRPC client against `fsmeta.proto` (Go typed client at `fsmeta/clie
 ### Inspect runtime state
 
 ```bash
-# Live, via expvar (executor / watch / quota / mount metrics)
-curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount'
+# Live, via expvar (executor / watch / quota / mount / session metrics)
+curl http://127.0.0.1:9101/debug/vars | jq '.nokv_fsmeta_executor, .nokv_fsmeta_watch, .nokv_fsmeta_quota, .nokv_fsmeta_mount, .nokv_fsmeta_sessions'
 
 # Offline forensics from a stopped node's workdir
 nokv stats --workdir ./artifacts/cluster/store-1
@@ -233,6 +239,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 | [`coordinator/`](./coordinator) | Routing, TSO, store discovery, root-event publish, streaming subscribe | [Coordinator](docs/coordinator.md) |
 | [`raftstore/`](./raftstore) | Multi-Raft, transport, membership, SST snapshot install, apply observer | [RaftStore](docs/raftstore.md) |
 | [`txn/percolator/`](./txn/percolator) | Distributed MVCC 2PC + AssertionNotExist | [Percolator](docs/percolator.md) |
+| [`fsmeta/exec/compile/`](./fsmeta/exec/compile) + [`fsmeta/runtime/peras/`](./fsmeta/runtime/peras) | Peras semantic visible commit, holder overlay, witness-backed segment install | [Peras](docs/peras.md) |
 | [`local/`](./local) | Embedded single-node DB facade, local stats, workdir mode, and local-only write runtime internals | [Runtime](docs/runtime.md) |
 | [`engine/lsm/`](./engine/lsm) | MemTable, flush, leveled compaction, SST | [LSM](docs/memtable.md) · [flush](docs/flush.md) · [compaction](docs/compaction.md) |
 | [`engine/wal/`](./engine/wal) | WAL segments, CRC, rotation, replay | [WAL](docs/wal.md) |
@@ -247,7 +254,7 @@ Full guide: [`docs/getting_started.md`](docs/getting_started.md) · CLI referenc
 
 ## 📡 Observability
 
-Four independent expvar metric namespaces (per-domain admission visibility):
+Five fsmeta expvar metric namespaces (per-domain admission visibility):
 
 | Endpoint | Metric namespace | Fields |
 |---|---|---|
@@ -255,6 +262,7 @@ Four independent expvar metric namespaces (per-domain admission visibility):
 | | `nokv_fsmeta_watch` | `subscribers`, `events_total`, `delivered_total`, `dropped_total`, `overflow_total` |
 | | `nokv_fsmeta_quota` | `checks_total`, `rejects_total`, `cache_hits_total`, `cache_misses_total`, `fence_updates_total`, `usage_mutations_total` |
 | | `nokv_fsmeta_mount` | `cache_hits`, `cache_misses`, `admission_rejects_total` |
+| | `nokv_fsmeta_sessions` | stale writer-session cleanup runs, expired sessions, and last error |
 
 Plus structured logs from coordinator and each store. More: [`docs/stats.md`](docs/stats.md) · [`docs/cli.md`](docs/cli.md) · [`docs/testing.md`](docs/testing.md).
 

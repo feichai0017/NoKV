@@ -35,10 +35,9 @@ meta/
 │   ├── materialize/    # Helpers that build Snapshot from raw events
 │   ├── storage/        # Virtual log file layout + checkpoint format
 │   │   └── file/       # Actual on-disk file operations
-│   ├── backend/
-│   │   ├── local/      # Single-node file-backed log
-│   │   └── replicated/ # Embedded raft-backed log (quorum durability)
-│   └── remote/         # gRPC service + client for remote rooted access
+│   ├── replicated/     # Embedded raft-backed log (quorum durability)
+│   ├── server/         # gRPC service for rooted access
+│   └── client/         # gRPC client for rooted access
 └── wire/               # proto <-> Go conversions (Event, Snapshot, Cursor)
 ```
 
@@ -58,8 +57,17 @@ type State struct {
     ActiveGrants       []AuthorityGrant // mutually exclusive by {DutyID, Scope}
     RetiredGrants      []GrantRetirement
     GrantInheritances  []GrantInheritance
+    RetiredEraFloors   []AuthorityRetiredEraFloor
+    ActivePerasGrants   []PerasAuthorityGrant
+    PerasAuthorityEpoch uint64
+    PerasAuthoritySeals []PerasAuthoritySeal
 }
 ```
+
+`AuthorityGrant` is the Eunomia grant for coordinator duties such as `alloc_id`,
+`tso`, and `region_lookup`. `PerasAuthorityGrant` is a separate fsmeta Peras
+authority object; its root seals record segment digest and raftstore install
+cursor, not segment payload bytes.
 
 `Snapshot` wraps `State` together with descriptors and pending peer/range changes:
 
@@ -107,7 +115,7 @@ After `Append` returns successfully, callers can observe the new state via `Snap
 NoKV ships one meta-root backend: the 3-peer raft-replicated cluster.
 Historical single-process "local" backend has been removed.
 
-[`meta/root/replicated/store.go`](../meta/root/replicated/store.go) — embedded raft library, quorum-durable commits.
+[`meta/root/replicated/store.go`](../meta/root/replicated/store.go) — embedded raft-backed root log, quorum-durable commits.
 
 - exactly 3 replicas, one leader
 - `Append` proposes a raft log entry; returns after it's committed to quorum
@@ -128,6 +136,8 @@ In addition to "raw" events, backends expose command APIs for control-plane-spec
 ```go
 ApplyGrant(ctx, cmd GrantCommand)
     (EunomiaState, GrantCertificate, error)
+ApplyPerasAuthority(ctx, cmd PerasAuthorityCommand)
+    (State, PerasAuthorityGrant, error)
 ```
 
 These are **validated, typed writes** that internally:
@@ -144,6 +154,11 @@ These are **validated, typed writes** that internally:
 Crash-before-seal is handled conservatively: root never fabricates an exact
 served frontier. After expiry, the successor retires the predecessor using the
 predecessor grant's root-known upper bound and then inherits that bound.
+
+`ApplyPerasAuthority` is the analogous typed command path for fsmeta Peras
+authority acquire/retire/seal. It updates `ActivePerasGrants`,
+`PerasAuthorityEpoch`, and `PerasAuthoritySeals`, but it is not part of the
+Eunomia `DutySpec` set.
 
 ---
 
@@ -187,10 +202,10 @@ If the backend file is corrupted, the coordinator fails fast — it does **not**
 
 ## 9. Remote access
 
-`meta/root/remote/` provides a gRPC service + client. This exists so a raftstore store can read rooted state without being colocated with the replicated backend:
+`meta/root/server` and `meta/root/client` provide gRPC rooted access. This exists so a raftstore store can read rooted state without being colocated with the replicated backend:
 
-- `RemoteRootService` serves `Snapshot`, `Append`, `WaitForTail`, `ObserveTail`, etc.
-- `RemoteRootClient` implements the same `rootBackend` interface by calling over gRPC
+- `meta/root/server` serves `Snapshot`, `Append`, `WaitForTail`, `ObserveTail`, etc.
+- `meta/root/client` implements the same `rootBackend` interface by calling over gRPC
 - Leader redirect is automatic: if the target returns `NotLeader`, client re-dials the returned leader
 
 This is what keeps `coordinator/` deployable separately from the rooted log, if you ever want to.
@@ -215,5 +230,7 @@ Related docs:
 
 - [Coordinator](coordinator.md) — how the control plane consumes rooted state,
   including the Eunomia production-hardening backlog
+- [Peras](peras.md) — how fsmeta Peras authority uses root grants/seals without
+  becoming an Eunomia coordinator duty
 - [Control and Execution Plane Protocols](control_and_execution_protocols.md) — the full contract between `meta/root`, `coordinator/`, and `raftstore/`
 - [Migration](migration.md) — how the seeded→distributed flow bootstraps rooted state
