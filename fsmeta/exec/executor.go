@@ -127,6 +127,14 @@ type PerasOverlayReader interface {
 	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
 }
 
+type PerasDirectoryOverlayReader interface {
+	ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV
+}
+
+type PerasDirectoryOverlayPresence interface {
+	HasPerasDirectory(prefix []byte) bool
+}
+
 type PerasFlusher interface {
 	FlushDurable(context.Context) error
 }
@@ -148,6 +156,10 @@ type NegativeCache interface {
 	Has([]byte) bool
 	Remember([]byte)
 	Invalidate([]byte)
+}
+
+type negativeCacheClearer interface {
+	Clear()
 }
 
 // DirPageCache is the ReadDirPlus page memo surface.
@@ -181,6 +193,7 @@ type Executor struct {
 	createTotal             atomic.Uint64
 	perasAdmission          perasAdmissionCounters
 	perasVisible            perasVisibleCounters
+	perasDirectoryRead      perasDirectoryReadCounters
 	perasSeq                atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
 }
@@ -230,9 +243,9 @@ func WithInodeAllocator(allocator InodeAllocator) Option {
 }
 
 // WithNegativeCache wires the visible-commit "this dentry does not exist" memo.
-// Lookup checks Has on the dentry primary key before consulting the runner;
-// misses are recorded via Remember; mutating ops call Invalidate on the
-// touched dentry keys after a successful commit.
+// Lookup checks Peras overlay first, then Has on the dentry primary key before
+// consulting the runner; misses are recorded via Remember; mutating ops call
+// Invalidate on the touched dentry keys after a successful commit.
 //
 // A nil cache disables the cache.
 func WithNegativeCache(cache NegativeCache) Option {
@@ -306,6 +319,9 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 		if opt != nil {
 			opt(executor)
 		}
+	}
+	if executor.perasCommitter != nil {
+		executor.clearNegativeCache()
 	}
 	return executor, nil
 }

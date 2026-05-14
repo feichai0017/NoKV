@@ -31,6 +31,8 @@ type PerasAuthorityGrant struct {
 	PredecessorDigest [32]byte
 	QuotaCreditBytes  int64
 	QuotaCreditInodes int64
+	RootClusterEpoch  uint64
+	IssuedRootToken   AuthorityRootToken
 }
 
 // PerasAuthoritySeal is rooted evidence that one Peras segment for an

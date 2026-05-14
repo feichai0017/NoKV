@@ -108,6 +108,22 @@ func TestWitnessNodeRejectsWrongHolderAndEpoch(t *testing.T) {
 	require.ErrorIs(t, node.AppendSegment(context.Background(), scope, wrongEpoch), ErrWitnessAuthorityMismatch)
 }
 
+func TestWitnessNodeAcceptsSameHolderOldEpochDrain(t *testing.T) {
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	grant := testAuthorityGrant()
+	grant.GrantID = "grant-2"
+	grant.EpochID = 2
+	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
+
+	record := testSegmentRecord()
+	record.EpochID = 1
+	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), record))
+}
+
 func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	now := time.Unix(100, 0)
 	authorities := runtimeperas.NewActiveAuthorities()
@@ -129,6 +145,29 @@ func TestWitnessNodeDuplicateSegmentIsIdempotent(t *testing.T) {
 
 	require.NoError(t, node.AppendSegment(context.Background(), scope, record))
 	require.NoError(t, node.AppendSegment(context.Background(), scope, record))
+
+	snapshot, err := node.Probe(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
+}
+
+func TestWitnessNodeConcurrentDuplicateSegmentIsSingleWALRecord(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsyncBatched)
+	defer cleanup()
+	scope := testAuthorityScope()
+	record := testSegmentRecord()
+	start := make(chan struct{})
+	errCh := make(chan error, 16)
+	for range 16 {
+		go func() {
+			<-start
+			errCh <- node.AppendSegment(context.Background(), scope, record)
+		}()
+	}
+	close(start)
+	for range 16 {
+		require.NoError(t, <-errCh)
+	}
 
 	snapshot, err := node.Probe(context.Background(), 1)
 	require.NoError(t, err)
@@ -253,11 +292,17 @@ func testActiveAuthorities(tb testing.TB, now time.Time) *runtimeperas.ActiveAut
 
 func testAuthorityGrant() rootproto.PerasAuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
-		GrantID:         "grant-1",
-		EpochID:         1,
-		HolderID:        "holder-a",
-		Scope:           runtimeperas.AuthorityScopeFromDelta(testAuthorityScope()),
-		ExpiresUnixNano: time.Unix(101, 0).UnixNano(),
+		GrantID:          "grant-1",
+		EpochID:          1,
+		HolderID:         "holder-a",
+		Scope:            runtimeperas.AuthorityScopeFromDelta(testAuthorityScope()),
+		ExpiresUnixNano:  time.Unix(101, 0).UnixNano(),
+		RootClusterEpoch: 1,
+		IssuedRootToken: rootproto.AuthorityRootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
 	}
 }
 

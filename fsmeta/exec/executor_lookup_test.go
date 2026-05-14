@@ -5,11 +5,14 @@ package exec
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestExecutorCreateAndLookup(t *testing.T) {
@@ -106,7 +109,7 @@ func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) 
 	}}, pairs)
 }
 
-func TestExecutorReadDirPlusPerasOnlyPathMaterializesDirPage(t *testing.T) {
+func TestExecutorReadDirPlusPerasOnlyPathBypassesDirPageCache(t *testing.T) {
 	runner := newFakeRunner()
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
@@ -133,14 +136,84 @@ func TestExecutorReadDirPlusPerasOnlyPathMaterializesDirPage(t *testing.T) {
 	first, err := executor.ReadDirPlus(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, []fsmeta.DentryAttrPair{{Dentry: created.Dentry, Inode: created.Inode}}, first)
-	require.Equal(t, uint64(1), cache.Stats().StoreOK)
+	require.Equal(t, uint64(0), cache.Stats().StoreOK)
 
 	second, err := executor.ReadDirPlus(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
 	stats := cache.Stats()
-	require.Equal(t, uint64(1), stats.Hits)
-	require.Equal(t, uint64(1), stats.StoreOK)
+	require.Equal(t, uint64(0), stats.Hits)
+	require.Equal(t, uint64(0), stats.StoreOK)
+}
+
+func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasCommitter(scanOverlayCommitter{}),
+		WithDirPageCache(cache),
+	)
+	require.NoError(t, err)
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{
+		Dentry: fsmeta.DentryRecord{Parent: fsmeta.RootInode, Name: "base", Inode: 22, Type: fsmeta.InodeTypeFile},
+		Inode:  fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1},
+	}}, first)
+	require.Equal(t, uint64(0), cache.Stats().StoreOK)
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	stats := cache.Stats()
+	require.Equal(t, uint64(0), stats.Hits)
+	require.Equal(t, uint64(0), stats.StoreOK)
+	require.Len(t, runner.scanVersions, 2, "Peras-backed ReadDirPlus must not materialize the persistent dirpage cache")
+}
+
+func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     22,
+		Type:      fsmeta.InodeTypeFile,
+		LinkCount: 1,
+	})
+	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = cache.Close() }()
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithPerasCommitter(committer),
+		WithDirPageCache(cache),
+	)
+	require.NoError(t, err)
+	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
+
+	first, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	scansAfterFirst := len(runner.scanVersions)
+	require.Eventually(t, func() bool {
+		return cache.Stats().StoreOK > 0
+	}, time.Second, 10*time.Millisecond)
+
+	second, err := executor.ReadDirPlus(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "directory without Peras rows should still use dirpage cache")
 }
 
 func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
@@ -375,6 +448,128 @@ func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 	require.Zero(t, runner.getCalls)
 	require.Equal(t, uint64(1), runner.nextTS, "overlay tombstone lookup must not reserve a read timestamp")
+}
+
+func TestExecutorLookupChecksPerasOverlayBeforeNegativeCache(t *testing.T) {
+	runner := newFakeRunner()
+	cache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "visible")
+	value := dentryValueForTest(t, fsmeta.RootInode, "visible", 22, fsmeta.InodeTypeFile)
+	committer := scanOverlayCommitter{
+		values: overlayMapForTest(overlayValueForTest(key, value)),
+	}
+	executor, err := newTestExecutor(runner, WithNegativeCache(cache), WithPerasCommitter(committer))
+	require.NoError(t, err)
+	cache.Remember(key)
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "visible",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
+	require.Zero(t, runner.getCalls)
+	require.False(t, cache.Has(key), "overlay hit must invalidate stale negative memo")
+}
+
+func TestExecutorClearsNegativeCacheWhenPerasOverlayIsEnabled(t *testing.T) {
+	runner := newFakeRunner()
+	cache := negativecache.New(negativecache.Config{
+		GroupKeyFn: func(k []byte) []byte { return k },
+	})
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "stale")
+	cache.Remember(key)
+
+	_, err := newTestExecutor(runner, WithNegativeCache(cache), WithPerasCommitter(scanOverlayCommitter{}))
+	require.NoError(t, err)
+	require.False(t, cache.Has(key), "startup Peras replay can make persisted negative memos stale")
+}
+
+func TestExecutorReadDirRefillsBaseAfterOverlayTombstone(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedDentry(t, runner, "vol", 7, "b", 22)
+	seedDentry(t, runner, "vol", 7, "c", 23)
+	deleteKey := dentryKeyForTest(t, "vol", 7, "a")
+	committer := scanOverlayCommitter{
+		rows: []fsperas.OverlayKV{overlayDeleteForTest(deleteKey)},
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{
+		{Parent: 7, Name: "b", Inode: 22, Type: fsmeta.InodeTypeFile},
+		{Parent: 7, Name: "c", Inode: 23, Type: fsmeta.InodeTypeFile},
+	}, records)
+	require.Len(t, runner.scanVersions, 2, "base scan must refill after overlay tombstone removes a row")
+}
+
+func TestExecutorReadDirRefillsOverlayTombstonesBeforeBaseRows(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedDentry(t, runner, "vol", 7, "b", 22)
+	seedDentry(t, runner, "vol", 7, "c", 23)
+	seedDentry(t, runner, "vol", 7, "d", 24)
+	seedDentry(t, runner, "vol", 7, "e", 25)
+	committer := scanOverlayCommitter{
+		rows: []fsperas.OverlayKV{
+			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "a")),
+			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "b")),
+			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "c")),
+		},
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+
+	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Limit:  2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryRecord{
+		{Parent: 7, Name: "d", Inode: 24, Type: fsmeta.InodeTypeFile},
+		{Parent: 7, Name: "e", Inode: 25, Type: fsmeta.InodeTypeFile},
+	}, records)
+}
+
+func TestExecutorReadDirPerasOnlyRefillsOverlayAfterTombstone(t *testing.T) {
+	prefix, err := fsmeta.EncodeDentryPrefix(testMountIdentityFor("vol"), 7)
+	require.NoError(t, err)
+	committer := scanOverlayCommitter{
+		rows: []fsperas.OverlayKV{
+			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "a")),
+			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "b")),
+			overlayValueForTest(
+				dentryKeyForTest(t, "vol", 7, "c"),
+				dentryValueForTest(t, 7, "c", 23, fsmeta.InodeTypeFile),
+			),
+			overlayValueForTest(
+				dentryKeyForTest(t, "vol", 7, "d"),
+				dentryValueForTest(t, 7, "d", 24, fsmeta.InodeTypeFile),
+			),
+		},
+	}
+	executor := &Executor{perasCommitter: committer}
+
+	kvs, rows, _ := executor.mergePerasDirectoryOverlayScan(nil, prefix, prefix, 2)
+	require.Equal(t, uint32(4), rows)
+	require.Len(t, kvs, 2)
+	first, err := fsmeta.DecodeDentryValue(kvs[0].Value)
+	require.NoError(t, err)
+	second, err := fsmeta.DecodeDentryValue(kvs[1].Value)
+	require.NoError(t, err)
+	require.Equal(t, "c", first.Name)
+	require.Equal(t, "d", second.Name)
 }
 
 func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) {

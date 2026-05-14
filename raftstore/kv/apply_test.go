@@ -192,13 +192,13 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
 				RoutingKey:           objectKey,
 				SegmentRoot:          segment.Root[:],
 				SegmentPayloadDigest: digest[:],
 				SegmentPayload:       payload,
 				InstallVersion:       99,
-			}},
+			}, segment, payload)},
 		}},
 	})
 	require.NoError(t, err)
@@ -245,13 +245,13 @@ func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 	request := func(version uint64) *raftcmdpb.RaftCmdRequest {
 		return &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
 				RoutingKey:           objectKey,
 				SegmentRoot:          segment.Root[:],
 				SegmentPayloadDigest: digest[:],
 				SegmentPayload:       payload,
 				InstallVersion:       version,
-			}},
+			}, segment, payload)},
 		}}}
 	}
 
@@ -301,14 +301,14 @@ func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
 				RoutingKey:           dentryKey,
 				SegmentRoot:          segment.Root[:],
 				SegmentPayloadDigest: digest[:],
 				SegmentPayload:       payload,
 				InstallVersion:       99,
 				MaterializeMvcc:      true,
-			}},
+			}, segment, payload)},
 		}},
 	})
 	require.NoError(t, err)
@@ -367,13 +367,13 @@ func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
 		resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 			Requests: []*raftcmdpb.Request{{
 				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
 					RoutingKey:           objectKey,
 					SegmentRoot:          segment.Root[:],
 					SegmentPayloadDigest: digest[:],
 					SegmentPayload:       payload,
 					InstallVersion:       version,
-				}},
+				}, segment, payload)},
 			}},
 		})
 		require.NoError(t, err)
@@ -432,7 +432,7 @@ func TestApplyPerasInstallSegmentInstallsPayloadlessCatalogIndexRoute(t *testing
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
 				RoutingKey:            routeKey,
 				SegmentRoot:           segment.Root[:],
 				SegmentPayloadDigest:  digest[:],
@@ -442,7 +442,7 @@ func TestApplyPerasInstallSegmentInstallsPayloadlessCatalogIndexRoute(t *testing
 				SegmentEntryCount:     stats.EntryCount,
 				SegmentPayloadSize:    uint64(len(payload)),
 				CanonicalObjectKey:    canonicalObjectKey,
-			}},
+			}, segment, payload)},
 		}},
 	})
 	require.NoError(t, err)
@@ -460,6 +460,23 @@ func TestApplyPerasInstallSegmentInstallsPayloadlessCatalogIndexRoute(t *testing
 	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Empty(t, records)
+}
+
+func testApplyPerasInstallRequestWithHeader(req *kvrpcpb.PerasInstallSegmentRequest, segment fsperas.PerasSegment, payload []byte) *kvrpcpb.PerasInstallSegmentRequest {
+	stats := segment.Stats()
+	header := segment.ReadHeaderView()
+	req.SegmentEpochId = segment.EpochID
+	req.SegmentOperationCount = stats.OperationCount
+	req.SegmentEntryCount = stats.EntryCount
+	req.SegmentPayloadSize = uint64(len(payload))
+	req.ReadFirstKey = header.FirstKey
+	req.ReadLastKey = header.LastKey
+	req.ReadDentryCount = header.DentryCount
+	req.ReadInodeCount = header.InodeCount
+	req.ReadSessionCount = header.SessionCount
+	req.ReadTombstoneCount = header.TombstoneCount
+	req.ReadDirectoryCount = header.DirectoryCount
+	return req
 }
 
 func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {

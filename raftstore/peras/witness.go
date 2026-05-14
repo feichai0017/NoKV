@@ -31,12 +31,18 @@ type WitnessNode struct {
 
 	mu       sync.Mutex
 	segments map[witnessSegmentKey]struct{}
+	inflight map[witnessSegmentKey]*witnessAppendCall
 }
 
 type witnessSegmentKey struct {
 	epochID uint64
 	root    [32]byte
 	digest  [32]byte
+}
+
+type witnessAppendCall struct {
+	done chan struct{}
+	err  error
 }
 
 func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
@@ -54,6 +60,7 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		refresh:       cfg.AuthorityRefresh,
 		now:           now,
 		segments:      make(map[witnessSegmentKey]struct{}),
+		inflight:      make(map[witnessSegmentKey]*witnessAppendCall),
 	}, nil
 }
 
@@ -74,21 +81,37 @@ func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.Authority
 	key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
 
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	if _, ok := n.segments[key]; ok {
+		n.mu.Unlock()
 		return nil
+	}
+	if call := n.inflight[key]; call != nil {
+		n.mu.Unlock()
+		return n.waitAppendCall(ctx, key, call)
 	}
 	if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
+		n.mu.Unlock()
 		return err
 	}
 	if _, ok := n.segments[key]; ok {
+		n.mu.Unlock()
 		return nil
 	}
-	if _, err := n.log.AppendSegment(ctx, record); err != nil {
-		return err
+	call := &witnessAppendCall{done: make(chan struct{})}
+	n.inflight[key] = call
+	n.mu.Unlock()
+
+	_, err := n.log.AppendSegment(ctx, record)
+
+	n.mu.Lock()
+	if err == nil {
+		n.segments[key] = struct{}{}
 	}
-	n.segments[key] = struct{}{}
-	return nil
+	call.err = err
+	delete(n.inflight, key)
+	close(call.done)
+	n.mu.Unlock()
+	return err
 }
 
 func (n *WitnessNode) Probe(ctx context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
@@ -123,7 +146,10 @@ func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, epochID uint6
 	if !ok {
 		return fmt.Errorf("%w: want epoch=%d holder=%q", ErrWitnessAuthorityMissing, epochID, holderID)
 	}
-	if grant.EpochID != epochID || grant.HolderID != holderID {
+	// A holder may drain segments from an older local visible log after root
+	// has renewed the same holder into a later epoch. Reject transferred
+	// ownership and future epochs; accept same-holder predecessor drain.
+	if grant.HolderID != holderID || grant.EpochID < epochID {
 		return fmt.Errorf("%w: have grant=%q epoch=%d holder=%q want epoch=%d holder=%q",
 			ErrWitnessAuthorityMismatch, grant.GrantID, grant.EpochID, grant.HolderID, epochID, holderID)
 	}
@@ -139,4 +165,22 @@ func (n *WitnessNode) loadEpochLocked(ctx context.Context, epochID uint64) error
 		n.segments[witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}] = struct{}{}
 	}
 	return nil
+}
+
+func (n *WitnessNode) waitAppendCall(ctx context.Context, key witnessSegmentKey, call *witnessAppendCall) error {
+	select {
+	case <-call.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if call.err != nil {
+		return call.err
+	}
+	n.mu.Lock()
+	_, ok := n.segments[key]
+	n.mu.Unlock()
+	if ok {
+		return nil
+	}
+	return fsperas.ErrInvalidWitnessRecord
 }

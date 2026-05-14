@@ -92,6 +92,38 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.Material
 	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
 }
 
+func (h *Holder) RestoreVisible(scope compile.AuthorityScope, op ReplayOperation) error {
+	if h == nil || h.detector == nil {
+		return ErrHolderConfigInvalid
+	}
+	if scope.Mount == "" || scope.MountKeyID == 0 {
+		return ErrInvalidWitnessRecord
+	}
+	if err := validateVisibleReplayOperation(op); err != nil {
+		return err
+	}
+	h.submitMu.Lock()
+	defer h.submitMu.Unlock()
+	if _, ok, err := h.pendingAckForOperation(op.OpID, op); ok || err != nil {
+		return err
+	}
+	if err := h.detector.AdmitReplay(op); err != nil {
+		if errors.Is(err, ErrDuplicateOperation) {
+			if _, ok, pendingErr := h.pendingAckForOperation(op.OpID, op); ok || pendingErr != nil {
+				return pendingErr
+			}
+		}
+		return err
+	}
+	h.mu.Lock()
+	h.pending[op.OpID] = holderPendingOperation{
+		scope: cloneAuthorityScope(scope),
+		op:    cloneReplayOperation(op),
+	}
+	h.mu.Unlock()
+	return nil
+}
+
 func (h *Holder) PendingAck(id OperationID, op compile.MaterializedOp) (VisibleAck, bool, error) {
 	if h == nil || h.detector == nil {
 		return VisibleAck{}, false, ErrHolderConfigInvalid

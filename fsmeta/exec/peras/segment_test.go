@@ -24,6 +24,12 @@ func TestBuildPerasSegmentBuildsSortedQueryableRuns(t *testing.T) {
 	require.Len(t, segment.Dentries, 3)
 	require.Len(t, segment.Inodes, 3)
 	require.Empty(t, segment.Tombstones)
+	header := segment.ReadHeaderView()
+	require.Equal(t, uint64(6), header.EntryCount)
+	require.Equal(t, uint64(3), header.DentryCount)
+	require.Equal(t, uint64(3), header.InodeCount)
+	require.NotEmpty(t, header.FirstKey)
+	require.NotEmpty(t, header.LastKey)
 
 	firstDentry := segment.Dentries[0]
 	value, deleted, ok := segment.Get(firstDentry.Key)
@@ -144,6 +150,7 @@ func TestPerasSegmentPayloadRoundTrip(t *testing.T) {
 
 	require.Equal(t, segment.Root, decoded.Root)
 	require.Equal(t, segment.Stats(), decoded.Stats())
+	require.Equal(t, segment.ReadHeaderView(), decoded.ReadHeaderView())
 	require.Equal(t, segment.Entries(), decoded.Entries())
 	require.Equal(t, segment.Completions, decoded.Completions)
 	value, deleted, ok := decoded.Get(segment.Dentries[0].Key)

@@ -1,0 +1,152 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package integration
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dirPages, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer func() { _ = dirPages.Close() }()
+	negatives := negativecache.New(negativecache.Config{GroupKeyFn: func(k []byte) []byte { return k }})
+	perasRuntime, err := runtimeperas.NewRuntime(runtimeperas.Config{
+		Authority:         integrationPerasGrantProvider{},
+		Witnesses:         integrationPerasWitnesses(3),
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer perasRuntime.Close()
+
+	runtime := openRealClusterRuntimeWithOptions(
+		t,
+		ctx,
+		fsmetaexec.WithPerasAuthorityAdmitter(integrationPerasAdmitter{}),
+		fsmetaexec.WithPerasCommitter(perasRuntime),
+		fsmetaexec.WithNegativeCache(negatives),
+		fsmetaexec.WithDirPageCache(dirPages),
+	)
+	executor := runtime.executor
+
+	created, err := executor.Create(ctx, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "visible",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 4096, Mode: 0o644},
+	})
+	require.NoError(t, err)
+
+	key, err := fsmeta.EncodeDentryKey(runtime.mountIdentity, fsmeta.RootInode, "visible")
+	require.NoError(t, err)
+	negatives.Remember(key)
+	lookedUp, err := executor.Lookup(ctx, fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "visible",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry, lookedUp)
+	require.False(t, negatives.Has(key), "visible overlay hit must evict stale negative memo")
+
+	first, err := executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.DentryAttrPair{{Dentry: created.Dentry, Inode: created.Inode}}, first)
+	require.Equal(t, uint64(0), dirPages.Stats().StoreOK)
+
+	second, err := executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	stats := dirPages.Stats()
+	require.Equal(t, uint64(0), stats.Hits)
+	require.Equal(t, uint64(0), stats.StoreOK)
+}
+
+type integrationPerasAdmitter struct{}
+
+func (integrationPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
+	return true, nil
+}
+
+type integrationPerasGrantProvider struct{}
+
+func (integrationPerasGrantProvider) HolderID() string {
+	return "integration-holder"
+}
+
+func (integrationPerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
+	return rootproto.PerasAuthorityGrant{
+		GrantID:         "integration-grant",
+		EpochID:         1,
+		HolderID:        "integration-holder",
+		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		Scope: rootproto.PerasAuthorityScope{
+			MountID:    "vol",
+			MountKeyID: 1,
+		},
+	}, true, nil
+}
+
+type integrationPerasWitness struct {
+	id      string
+	mu      sync.Mutex
+	records []fsperas.SegmentWitnessRecord
+}
+
+func integrationPerasWitnesses(n int) []fsperas.WitnessReplica {
+	out := make([]fsperas.WitnessReplica, 0, n)
+	for i := range n {
+		out = append(out, &integrationPerasWitness{id: fmt.Sprintf("integration-witness-%d", i)})
+	}
+	return out
+}
+
+func (w *integrationPerasWitness) ID() string {
+	return w.id
+}
+
+func (w *integrationPerasWitness) AppendSegment(_ context.Context, _ compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.records = append(w.records, record)
+	return nil
+}
+
+func (w *integrationPerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out fsperas.WitnessSnapshot
+	for _, record := range w.records {
+		if record.EpochID == epochID {
+			out.Segments = append(out.Segments, record)
+		}
+	}
+	return out, nil
+}

@@ -43,13 +43,28 @@ func (s State) LatestPerasAuthoritySealFor(scope rootproto.PerasAuthorityScope) 
 	return rootproto.PerasAuthoritySeal{}, false
 }
 
-func applyPerasAuthorityGrantedToState(state *State, event rootevent.Event) {
+func applyPerasAuthorityGrantedToState(state *State, cursor Cursor, event rootevent.Event) {
 	if state == nil || event.PerasGrant == nil {
 		return
 	}
 	grant := rootproto.ClonePerasAuthorityGrant(*event.PerasGrant)
 	if !grant.Valid() {
 		return
+	}
+	if grant.RootClusterEpoch == 0 {
+		grant.RootClusterEpoch = state.ClusterEpoch
+		if grant.RootClusterEpoch == 0 {
+			grant.RootClusterEpoch = 1
+		}
+	}
+	// Peras visible WAL records persist this token and may only replay against
+	// an active grant from the same rooted lineage.
+	if grant.IssuedRootToken.Term == 0 && grant.IssuedRootToken.Index == 0 && grant.IssuedRootToken.Revision == 0 {
+		grant.IssuedRootToken = rootproto.AuthorityRootToken{
+			Term:     cursor.Term,
+			Index:    cursor.Index,
+			Revision: cursor.Index,
+		}
 	}
 	for i, current := range state.ActivePerasGrants {
 		if current.GrantID == grant.GrantID {

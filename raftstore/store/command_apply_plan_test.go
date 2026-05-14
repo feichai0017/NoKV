@@ -329,6 +329,7 @@ func testPerasInstallSegmentRequest(tb testing.TB, segment fsperas.PerasSegment,
 		materializedKeys = nil
 	}
 	stats := segment.Stats()
+	readHeader := segment.ReadHeaderView()
 	return &raftcmdpb.Request{
 		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
@@ -347,6 +348,13 @@ func testPerasInstallSegmentRequest(tb testing.TB, segment fsperas.PerasSegment,
 			DependencyKeys:        dependencyKeys,
 			CatalogKeys:           catalogKeys,
 			MaterializedKeys:      materializedKeys,
+			ReadFirstKey:          readHeader.FirstKey,
+			ReadLastKey:           readHeader.LastKey,
+			ReadDentryCount:       readHeader.DentryCount,
+			ReadInodeCount:        readHeader.InodeCount,
+			ReadSessionCount:      readHeader.SessionCount,
+			ReadTombstoneCount:    readHeader.TombstoneCount,
+			ReadDirectoryCount:    readHeader.DirectoryCount,
 		}},
 	}
 }
@@ -383,22 +391,6 @@ func BenchmarkCommandApplyDependenciesPerasMaterializeInstall1000(b *testing.B) 
 	}
 }
 
-func BenchmarkCommandApplyDependenciesPerasMaterializeInstall1000DecodeFallback(b *testing.B) {
-	segment, payload, digest := benchmarkCommandApplyPerasSegment(b, 1000)
-	firstKey, err := segment.FirstKey()
-	require.NoError(b, err)
-	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{testPerasInstallSegmentRequestWithoutHeader(segment, payload, digest, firstKey, true)}}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		deps, barrier := commandApplyDependencies(req)
-		if barrier || len(deps) == 0 {
-			b.Fatal("unexpected barrier")
-		}
-	}
-}
-
 func benchmarkCommandApplyPerasSegment(b *testing.B, n int) (fsperas.PerasSegment, []byte, [32]byte) {
 	b.Helper()
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
@@ -422,18 +414,4 @@ func benchmarkCommandApplyPerasSegment(b *testing.B, n int) (fsperas.PerasSegmen
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(b, err)
 	return segment, payload, digest
-}
-
-func testPerasInstallSegmentRequestWithoutHeader(segment fsperas.PerasSegment, payload []byte, digest [32]byte, routingKey []byte, materialize bool) *raftcmdpb.Request {
-	return &raftcmdpb.Request{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:           routingKey,
-			SegmentRoot:          segment.Root[:],
-			SegmentPayloadDigest: digest[:],
-			SegmentPayload:       payload,
-			InstallVersion:       1,
-			MaterializeMvcc:      materialize,
-		}},
-	}
 }

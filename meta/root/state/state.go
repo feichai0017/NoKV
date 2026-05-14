@@ -471,7 +471,7 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(state, cursor, event)
 	case rootevent.KindPerasAuthorityGranted:
-		applyPerasAuthorityGrantedToState(state, event)
+		applyPerasAuthorityGrantedToState(state, cursor, event)
 	case rootevent.KindPerasAuthoritySealed:
 		applyPerasAuthoritySealedToState(state, event)
 	case rootevent.KindPerasAuthorityRetired:

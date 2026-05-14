@@ -24,9 +24,18 @@ func (c *Runtime) flushLocked(ctx context.Context, scope *compile.AuthorityScope
 }
 
 type flushPipeline struct {
-	runtime *Runtime
-	level   fsperas.SegmentPersistenceLevel
+	runtime                 *Runtime
+	level                   fsperas.SegmentPersistenceLevel
+	allowDurableOldEpochRun bool
 }
+
+type publishDecision uint8
+
+const (
+	publishDecisionDenied publishDecision = iota
+	publishDecisionNow
+	publishDecisionOldEpochDrain
+)
 
 func (p flushPipeline) freeze(scope *compile.AuthorityScope) ([]perasFlushBatch, error) {
 	c := p.runtime
@@ -49,7 +58,10 @@ func (p flushPipeline) run(ctx context.Context, batches []perasFlushBatch) error
 		if err != nil {
 			return err
 		}
-		if err := p.commitBatch(installed); err != nil {
+		if installed.publishErr != nil {
+			return installed.publishErr
+		}
+		if err := p.commitBatch(ctx, installed); err != nil {
 			return err
 		}
 	}
@@ -72,13 +84,49 @@ func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (per
 	}
 	batch.jobs = jobs
 	if p.level.RequiresPublish() {
-		if err := p.sealBatch(ctx, batch); err != nil {
+		decision, err := p.publishDecision(ctx, batch)
+		if err != nil {
 			return perasFlushBatch{}, err
+		}
+		switch decision {
+		case publishDecisionNow:
+			if err := p.sealBatch(ctx, batch); err != nil {
+				return perasFlushBatch{}, err
+			}
+		case publishDecisionOldEpochDrain:
+			if !p.allowDurableOldEpochRun {
+				batch.publishErr = c.recordError(ErrPublishRequired)
+			}
+			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+		default:
+			batch.publishErr = c.recordError(ErrPublishRequired)
+			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 		}
 	} else {
 		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	}
 	return batch, nil
+}
+
+func (p flushPipeline) publishDecision(ctx context.Context, batch perasFlushBatch) (publishDecision, error) {
+	c := p.runtime
+	if c == nil || batch.holder == nil {
+		return publishDecisionDenied, ErrRuntimeInvalid
+	}
+	grant, owned, err := c.authority.Acquire(ctx, batch.scope)
+	if err != nil {
+		return publishDecisionDenied, c.recordErrorf("check peras publish authority: %w", err)
+	}
+	if !owned || grant.HolderID != batch.holder.HolderID() {
+		return publishDecisionDenied, nil
+	}
+	if grant.EpochID == batch.holder.EpochID() {
+		return publishDecisionNow, nil
+	}
+	if grant.EpochID > batch.holder.EpochID() {
+		return publishDecisionOldEpochDrain, nil
+	}
+	return publishDecisionDenied, nil
 }
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
@@ -122,17 +170,17 @@ func (p flushPipeline) sealBatch(ctx context.Context, batch perasFlushBatch) err
 	return nil
 }
 
-func (p flushPipeline) commitBatch(batch perasFlushBatch) error {
+func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) error {
 	c := p.runtime
-	if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
-		return c.recordErrorf("mark peras plan applied: %w", err)
-	}
 	for _, job := range batch.jobs {
 		if err := c.installSegment(job.plan, job.segment); err != nil {
 			return err
 		}
 	}
-	return nil
+	if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
+		return c.recordErrorf("mark peras plan applied: %w", err)
+	}
+	return c.markVisibleLogApplied(ctx, batch.holder, batch.plan)
 }
 
 func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {

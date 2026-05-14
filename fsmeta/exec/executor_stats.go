@@ -41,6 +41,15 @@ type perasVisibleCounters struct {
 	latencyMaxNanosecond   atomic.Uint64
 }
 
+type perasDirectoryReadCounters struct {
+	total      atomic.Uint64
+	perasOnly  atomic.Uint64
+	dirIndex   atomic.Uint64
+	baseRows   atomic.Uint64
+	perasRows  atomic.Uint64
+	outputRows atomic.Uint64
+}
+
 type atomicOnePhaseCounters struct {
 	attemptTotal           atomic.Uint64
 	skipTotal              atomic.Uint64
@@ -65,6 +74,7 @@ func (e *Executor) Stats() map[string]any {
 			"commit_contract":            commitContractStats(false),
 			"peras_admission":            perasAdmissionStats(nil, false),
 			"peras_visible_commit":       perasVisibleStats(nil, false),
+			"peras_directory_read":       perasDirectoryReadStats(nil),
 			"atomic_one_phase":           atomicOnePhaseStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -79,6 +89,7 @@ func (e *Executor) Stats() map[string]any {
 		"commit_contract":            commitContractStats(e.perasCommitter != nil),
 		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
 		"peras_visible_commit":       perasVisibleStats(&e.perasVisible, e.perasCommitter != nil),
+		"peras_directory_read":       perasDirectoryReadStats(&e.perasDirectoryRead),
 		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -103,6 +114,27 @@ func (e *Executor) Stats() map[string]any {
 	return out
 }
 
+func perasDirectoryReadStats(counters *perasDirectoryReadCounters) map[string]any {
+	if counters == nil {
+		return map[string]any{
+			"total":       uint64(0),
+			"peras_only":  uint64(0),
+			"dir_index":   uint64(0),
+			"base_rows":   uint64(0),
+			"peras_rows":  uint64(0),
+			"output_rows": uint64(0),
+		}
+	}
+	return map[string]any{
+		"total":       counters.total.Load(),
+		"peras_only":  counters.perasOnly.Load(),
+		"dir_index":   counters.dirIndex.Load(),
+		"base_rows":   counters.baseRows.Load(),
+		"peras_rows":  counters.perasRows.Load(),
+		"output_rows": counters.outputRows.Load(),
+	}
+}
+
 func commitContractStats(perasEnabled bool) map[string]any {
 	if perasEnabled {
 		return map[string]any{
@@ -116,6 +148,19 @@ func commitContractStats(perasEnabled bool) map[string]any {
 		"successful_write_boundary": "durable",
 		"durable_boundary":          "raftstore_commit",
 	}
+}
+
+func (s *perasDirectoryReadCounters) record(stats compile.DirectoryReadStats) {
+	s.total.Add(1)
+	if stats.UsedPerasOnly {
+		s.perasOnly.Add(1)
+	}
+	if stats.UsedDirIndex {
+		s.dirIndex.Add(1)
+	}
+	s.baseRows.Add(uint64(stats.BaseRows))
+	s.perasRows.Add(uint64(stats.PerasRows))
+	s.outputRows.Add(uint64(stats.OutputRows))
 }
 
 func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[string]any {

@@ -30,6 +30,8 @@ const (
 	RecordTypeEntryBatch
 	// RecordTypePerasWitness encodes fsmeta Peras witness evidence.
 	RecordTypePerasWitness
+	// RecordTypePerasVisible encodes fsmeta Peras holder-local visible acks.
+	RecordTypePerasVisible
 )
 
 // Record describes a typed WAL payload.

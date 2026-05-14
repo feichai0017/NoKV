@@ -481,6 +481,13 @@ func (c *testPerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fspe
 	return c.view.Scan(start, limit)
 }
 
+func (c *testPerasCommitter) HasPerasDirectory(prefix []byte) bool {
+	if c == nil || c.view == nil {
+		return false
+	}
+	return c.view.HasDirectory(prefix)
+}
+
 func (c *testPerasCommitter) KeyState(key []byte) (bool, bool) {
 	if c == nil || c.view == nil {
 		return false, false

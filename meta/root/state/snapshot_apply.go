@@ -74,7 +74,7 @@ func ApplyEventToSnapshot(snapshot *Snapshot, cursor Cursor, event rootevent.Eve
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(&snapshot.State, cursor, event)
 	case rootevent.KindPerasAuthorityGranted:
-		applyPerasAuthorityGrantedToState(&snapshot.State, event)
+		applyPerasAuthorityGrantedToState(&snapshot.State, cursor, event)
 	case rootevent.KindPerasAuthoritySealed:
 		applyPerasAuthoritySealedToState(&snapshot.State, event)
 	case rootevent.KindPerasAuthorityRetired:

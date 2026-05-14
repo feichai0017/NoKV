@@ -354,9 +354,12 @@ services:
       - "--peras-segment-flush-every=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY:-20ms}"
       - "--peras-background-flush-timeout=${NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT:-30s}"
       - "--peras-background-error-backoff=${NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF:-1s}"
+      - "--peras-visible-log-dir=/var/lib/nokv/peras-visible-log"
+      - "--peras-visible-log-policy=${NOKV_FSMETA_PERAS_VISIBLE_LOG_POLICY:-flushed}"
     volumes:
       - fsmeta-negative-cache:/var/lib/nokv/negative-cache
       - fsmeta-dirpage-cache:/var/lib/nokv/dirpage-cache
+      - fsmeta-peras-visible-log:/var/lib/nokv/peras-visible-log
     ports:
       - "8090:8090"   # FSMetadata gRPC
       - "9400:9400"   # expvar
@@ -390,3 +393,4 @@ volumes:
   store3-data:
   fsmeta-negative-cache:
   fsmeta-dirpage-cache:
+  fsmeta-peras-visible-log:

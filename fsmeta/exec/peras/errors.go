@@ -16,6 +16,7 @@ var (
 	ErrReplayVersionRequired           = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: replay version required")
 	ErrInvalidWitnessRecord            = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec/peras: invalid witness record")
 	ErrWitnessLogRequired              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: witness log required")
+	ErrVisibleLogRequired              = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: visible log required")
 	ErrWitnessReplicaInvalid           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec/peras: invalid witness replica")
 	ErrSegmentWitnessQuorumUnavailable = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/exec/peras: segment witness quorum unavailable")
 )

@@ -106,6 +106,10 @@ func replayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) 
 	}, nil
 }
 
+func ReplayOperationFromMaterialized(id OperationID, op compile.MaterializedOp) (ReplayOperation, error) {
+	return replayOperationFromMaterialized(id, op)
+}
+
 func replayOperationExecutionPlanDigest(op ReplayOperation) [32]byte {
 	if op.ExecutionPlanDigest != ([32]byte{}) {
 		return op.ExecutionPlanDigest

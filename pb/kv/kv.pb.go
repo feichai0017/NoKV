@@ -2078,6 +2078,13 @@ type PerasInstallSegmentRequest struct {
 	DependencyKeys        [][]byte               `protobuf:"bytes,13,rep,name=dependency_keys,json=dependencyKeys,proto3" json:"dependency_keys,omitempty"`
 	CatalogKeys           [][]byte               `protobuf:"bytes,14,rep,name=catalog_keys,json=catalogKeys,proto3" json:"catalog_keys,omitempty"`
 	MaterializedKeys      [][]byte               `protobuf:"bytes,15,rep,name=materialized_keys,json=materializedKeys,proto3" json:"materialized_keys,omitempty"`
+	ReadFirstKey          []byte                 `protobuf:"bytes,16,opt,name=read_first_key,json=readFirstKey,proto3" json:"read_first_key,omitempty"`
+	ReadLastKey           []byte                 `protobuf:"bytes,17,opt,name=read_last_key,json=readLastKey,proto3" json:"read_last_key,omitempty"`
+	ReadDentryCount       uint64                 `protobuf:"varint,18,opt,name=read_dentry_count,json=readDentryCount,proto3" json:"read_dentry_count,omitempty"`
+	ReadInodeCount        uint64                 `protobuf:"varint,19,opt,name=read_inode_count,json=readInodeCount,proto3" json:"read_inode_count,omitempty"`
+	ReadSessionCount      uint64                 `protobuf:"varint,20,opt,name=read_session_count,json=readSessionCount,proto3" json:"read_session_count,omitempty"`
+	ReadTombstoneCount    uint64                 `protobuf:"varint,21,opt,name=read_tombstone_count,json=readTombstoneCount,proto3" json:"read_tombstone_count,omitempty"`
+	ReadDirectoryCount    uint64                 `protobuf:"varint,22,opt,name=read_directory_count,json=readDirectoryCount,proto3" json:"read_directory_count,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -2215,6 +2222,55 @@ func (x *PerasInstallSegmentRequest) GetMaterializedKeys() [][]byte {
 		return x.MaterializedKeys
 	}
 	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetReadFirstKey() []byte {
+	if x != nil {
+		return x.ReadFirstKey
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetReadLastKey() []byte {
+	if x != nil {
+		return x.ReadLastKey
+	}
+	return nil
+}
+
+func (x *PerasInstallSegmentRequest) GetReadDentryCount() uint64 {
+	if x != nil {
+		return x.ReadDentryCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetReadInodeCount() uint64 {
+	if x != nil {
+		return x.ReadInodeCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetReadSessionCount() uint64 {
+	if x != nil {
+		return x.ReadSessionCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetReadTombstoneCount() uint64 {
+	if x != nil {
+		return x.ReadTombstoneCount
+	}
+	return 0
+}
+
+func (x *PerasInstallSegmentRequest) GetReadDirectoryCount() uint64 {
+	if x != nil {
+		return x.ReadDirectoryCount
+	}
+	return 0
 }
 
 type PerasInstallSegmentResponse struct {
@@ -4601,7 +4657,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x17TryAtomicMutateResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fapplied_keys\x18\x02 \x01(\x04R\vappliedKeys\x12>\n" +
-	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\xa5\x05\n" +
+	"\x1cfallback_to_two_phase_commit\x18\x03 \x01(\bR\x18fallbackToTwoPhaseCommit\"\xd7\a\n" +
 	"\x1aPerasInstallSegmentRequest\x12\x1f\n" +
 	"\vrouting_key\x18\x01 \x01(\fR\n" +
 	"routingKey\x12!\n" +
@@ -4619,7 +4675,14 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\frouting_keys\x18\f \x03(\fR\vroutingKeys\x12'\n" +
 	"\x0fdependency_keys\x18\r \x03(\fR\x0edependencyKeys\x12!\n" +
 	"\fcatalog_keys\x18\x0e \x03(\fR\vcatalogKeys\x12+\n" +
-	"\x11materialized_keys\x18\x0f \x03(\fR\x10materializedKeys\"\xcd\x02\n" +
+	"\x11materialized_keys\x18\x0f \x03(\fR\x10materializedKeys\x12$\n" +
+	"\x0eread_first_key\x18\x10 \x01(\fR\freadFirstKey\x12\"\n" +
+	"\rread_last_key\x18\x11 \x01(\fR\vreadLastKey\x12*\n" +
+	"\x11read_dentry_count\x18\x12 \x01(\x04R\x0freadDentryCount\x12(\n" +
+	"\x10read_inode_count\x18\x13 \x01(\x04R\x0ereadInodeCount\x12,\n" +
+	"\x12read_session_count\x18\x14 \x01(\x04R\x10readSessionCount\x120\n" +
+	"\x14read_tombstone_count\x18\x15 \x01(\x04R\x12readTombstoneCount\x120\n" +
+	"\x14read_directory_count\x18\x16 \x01(\x04R\x12readDirectoryCount\"\xcd\x02\n" +
 	"\x1bPerasInstallSegmentResponse\x12*\n" +
 	"\x05error\x18\x01 \x01(\v2\x14.nokv.kv.v1.KeyErrorR\x05error\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x12'\n" +

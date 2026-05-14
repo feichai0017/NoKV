@@ -166,6 +166,20 @@ func (c *Runtime) ScanPerasOverlay(start []byte, limit uint32) []fsperas.Overlay
 	return fsperas.MergeOverlayScans(c.read.sealed.Scan(start, limit), c.read.overlay.Scan(start, limit), limit)
 }
 
+func (c *Runtime) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	if c == nil || c.read == nil || limit == 0 {
+		return nil
+	}
+	return fsperas.MergeOverlayScans(c.read.sealed.ScanDirectory(prefix, start, limit), c.read.overlay.ScanDirectory(prefix, start, limit), limit)
+}
+
+func (c *Runtime) HasPerasDirectory(prefix []byte) bool {
+	if c == nil || c.read == nil {
+		return false
+	}
+	return c.read.overlay.HasDirectory(prefix) || c.read.sealed.HasDirectory(prefix)
+}
+
 func (c *Runtime) addOverlay(id fsperas.OperationID, op compile.MaterializedOp) error {
 	if c == nil || c.read == nil {
 		return ErrRuntimeInvalid

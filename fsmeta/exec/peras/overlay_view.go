@@ -30,21 +30,27 @@ type overlayEntry struct {
 // is sealed and installed. It owns only semantic overlay state; durable
 // segment catalog discovery stays in the runtime layer.
 type OverlayView struct {
-	mu            sync.RWMutex
-	entries       map[string]overlayEntry
-	sortedKeys    []string
-	sortedDirty   bool
-	known         map[string]bool
-	emptyDirs     map[string]struct{}
-	emptySessions map[string]struct{}
+	mu             sync.RWMutex
+	entries        map[string]overlayEntry
+	sortedKeys     []string
+	sortedDirty    bool
+	directoryKeys  map[string]map[string]struct{}
+	directoryRuns  map[string][]string
+	directoryDirty map[string]bool
+	known          map[string]bool
+	emptyDirs      map[string]struct{}
+	emptySessions  map[string]struct{}
 }
 
 func NewOverlayView() *OverlayView {
 	return &OverlayView{
-		entries:       make(map[string]overlayEntry),
-		known:         make(map[string]bool),
-		emptyDirs:     make(map[string]struct{}),
-		emptySessions: make(map[string]struct{}),
+		entries:        make(map[string]overlayEntry),
+		directoryKeys:  make(map[string]map[string]struct{}),
+		directoryRuns:  make(map[string][]string),
+		directoryDirty: make(map[string]bool),
+		known:          make(map[string]bool),
+		emptyDirs:      make(map[string]struct{}),
+		emptySessions:  make(map[string]struct{}),
 	}
 }
 
@@ -79,8 +85,40 @@ func (v *OverlayView) Add(id OperationID, op compile.MaterializedOp) error {
 		}
 		v.entries[string(effect.Key)] = entry
 		v.sortedDirty = true
+		v.indexDirectoryKeyLocked(effect.Key)
 	}
 	return RememberOperationFacts(v.known, v.emptyDirs, v.emptySessions, op)
+}
+
+func (v *OverlayView) AddReplayOperation(op ReplayOperation) error {
+	if v == nil {
+		return ErrInvalidPerasSegment
+	}
+	if err := validateVisibleReplayOperation(op); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.initLocked()
+	for _, mutation := range op.Mutations {
+		if len(mutation.Key) == 0 || (!mutation.Delete && mutation.Value == nil) {
+			return ErrInvalidPerasSegment
+		}
+		entry := overlayEntry{
+			opID:   op.OpID,
+			key:    cloneBytes(mutation.Key),
+			value:  cloneBytes(mutation.Value),
+			delete: mutation.Delete,
+		}
+		v.entries[string(mutation.Key)] = entry
+		v.known[string(mutation.Key)] = !mutation.Delete
+		if !mutation.Delete {
+			ForgetEmptySessionNamespaceForKey(v.emptySessions, mutation.Key)
+		}
+		v.sortedDirty = true
+		v.indexDirectoryKeyLocked(mutation.Key)
+	}
+	return nil
 }
 
 func (v *OverlayView) AddSegment(segment PerasSegment) error {
@@ -103,6 +141,7 @@ func (v *OverlayView) AddSegment(segment PerasSegment) error {
 			delete: kv.Delete,
 		}
 		v.sortedDirty = true
+		v.indexDirectoryKeyLocked(kv.Key)
 	}
 	return nil
 }
@@ -197,6 +236,7 @@ func (v *OverlayView) Scan(start []byte, limit uint32) []OverlayKV {
 		return nil
 	}
 	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.rebuildSortedKeysLocked()
 	startKey := string(start)
 	idx := sort.SearchStrings(v.sortedKeys, startKey)
@@ -210,8 +250,44 @@ func (v *OverlayView) Scan(start []byte, limit uint32) []OverlayKV {
 			Delete: entry.delete,
 		})
 	}
-	v.mu.Unlock()
 	return out
+}
+
+func (v *OverlayView) ScanDirectory(prefix, start []byte, limit uint32) []OverlayKV {
+	if v == nil || limit == 0 || len(prefix) == 0 {
+		return nil
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.rebuildDirectoryRunLocked(string(prefix))
+	keys := v.directoryRuns[string(prefix)]
+	if len(keys) == 0 {
+		return nil
+	}
+	startKey := string(start)
+	idx := sort.SearchStrings(keys, startKey)
+	end := min(idx+int(limit), len(keys))
+	out := make([]OverlayKV, 0, end-idx)
+	for _, key := range keys[idx:end] {
+		entry := v.entries[key]
+		out = append(out, OverlayKV{
+			Key:    cloneBytes(entry.key),
+			Value:  cloneBytes(entry.value),
+			Delete: entry.delete,
+		})
+	}
+	return out
+}
+
+func (v *OverlayView) HasDirectory(prefix []byte) bool {
+	if v == nil || len(prefix) == 0 {
+		return false
+	}
+	v.mu.RLock()
+	keys := v.directoryKeys[string(prefix)]
+	ok := len(keys) > 0
+	v.mu.RUnlock()
+	return ok
 }
 
 func MergeOverlayScans(base, overlay []OverlayKV, limit uint32) []OverlayKV {
@@ -259,6 +335,7 @@ func (v *OverlayView) RemovePlan(plan ReplayPlan) {
 			if ok && entry.opID == op.OpID {
 				delete(v.entries, string(mutation.Key))
 				v.sortedDirty = true
+				v.removeDirectoryKeyLocked(mutation.Key)
 			}
 		}
 	}
@@ -273,9 +350,37 @@ func (v *OverlayView) Stats() (overlayKeys, knownKeys, emptyDirs, emptySessions 
 	return len(v.entries), len(v.known), len(v.emptyDirs), len(v.emptySessions)
 }
 
+func (v *OverlayView) ReadIndexStats() (directories, dirty int) {
+	if v == nil {
+		return 0, 0
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, keys := range v.directoryKeys {
+		if len(keys) > 0 {
+			directories++
+		}
+	}
+	for _, isDirty := range v.directoryDirty {
+		if isDirty {
+			dirty++
+		}
+	}
+	return directories, dirty
+}
+
 func (v *OverlayView) initLocked() {
 	if v.entries == nil {
 		v.entries = make(map[string]overlayEntry)
+	}
+	if v.directoryKeys == nil {
+		v.directoryKeys = make(map[string]map[string]struct{})
+	}
+	if v.directoryRuns == nil {
+		v.directoryRuns = make(map[string][]string)
+	}
+	if v.directoryDirty == nil {
+		v.directoryDirty = make(map[string]bool)
 	}
 	if v.known == nil {
 		v.known = make(map[string]bool)
@@ -301,6 +406,69 @@ func (v *OverlayView) rebuildSortedKeysLocked() {
 	}
 	sort.Strings(v.sortedKeys)
 	v.sortedDirty = false
+}
+
+func (v *OverlayView) rebuildDirectoryRunLocked(prefix string) {
+	v.initLocked()
+	keys := v.directoryKeys[prefix]
+	if len(keys) == 0 {
+		delete(v.directoryRuns, prefix)
+		delete(v.directoryDirty, prefix)
+		return
+	}
+	if !v.directoryDirty[prefix] && len(v.directoryRuns[prefix]) == len(keys) {
+		return
+	}
+	run := v.directoryRuns[prefix][:0]
+	for key := range keys {
+		if _, ok := v.entries[key]; ok {
+			run = append(run, key)
+		}
+	}
+	sort.Strings(run)
+	v.directoryRuns[prefix] = run
+	v.directoryDirty[prefix] = false
+}
+
+func (v *OverlayView) indexDirectoryKeyLocked(key []byte) {
+	prefix, ok := dentryDirectoryPrefix(key)
+	if !ok {
+		return
+	}
+	v.initLocked()
+	keys := v.directoryKeys[prefix]
+	if keys == nil {
+		keys = make(map[string]struct{})
+		v.directoryKeys[prefix] = keys
+	}
+	keys[string(key)] = struct{}{}
+	v.directoryDirty[prefix] = true
+}
+
+func (v *OverlayView) removeDirectoryKeyLocked(key []byte) {
+	prefix, ok := dentryDirectoryPrefix(key)
+	if !ok {
+		return
+	}
+	keyString := string(key)
+	if keys := v.directoryKeys[prefix]; keys != nil {
+		delete(keys, keyString)
+		if len(keys) == 0 {
+			delete(v.directoryKeys, prefix)
+			delete(v.directoryRuns, prefix)
+			delete(v.directoryDirty, prefix)
+			return
+		}
+	}
+	v.directoryDirty[prefix] = true
+}
+
+func dentryDirectoryPrefix(key []byte) (string, bool) {
+	name, ok := fsmeta.DentryNameBytesOfKey(key)
+	if !ok || len(name) == 0 || len(name) > len(key) {
+		return "", false
+	}
+	return string(key[:len(key)-len(name)]), true
 }
 
 func cloneOverlayKV(in OverlayKV) OverlayKV {

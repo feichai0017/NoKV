@@ -107,6 +107,13 @@ func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
 	return overlay.GetPerasOverlay(key)
 }
 
+func (e *Executor) readPerasProgram(program compile.ReadProgram) ([]byte, bool, bool) {
+	if len(program.Key) == 0 {
+		return nil, false, false
+	}
+	return e.perasOverlayGet(program.Key)
+}
+
 func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
 	if value, deleted, ok := e.perasOverlayGet(key); ok {
 		if deleted {
@@ -115,6 +122,16 @@ func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint6
 		return value, true, nil
 	}
 	return e.runner.Get(ctx, key, version)
+}
+
+func (e *Executor) getMergedProgramValue(ctx context.Context, program compile.ReadProgram, version uint64) ([]byte, bool, error) {
+	if value, deleted, ok := e.readPerasProgram(program); ok {
+		if deleted {
+			return nil, false, nil
+		}
+		return value, true, nil
+	}
+	return e.runner.Get(ctx, program.Key, version)
 }
 
 type perasReadView struct {
@@ -251,11 +268,11 @@ func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
 }
 
 func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.InodeID) (fsmeta.InodeRecord, bool, error) {
-	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
+	program, err := compile.CompileGetAttrReadProgram(mount, inodeID)
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	value, ok, err := v.get(key)
+	value, ok, err := v.get(program.Key)
 	if err != nil || !ok {
 		return fsmeta.InodeRecord{}, ok, err
 	}
@@ -267,7 +284,15 @@ func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.Ino
 }
 
 func (v *perasReadView) readSession(key []byte) (fsmeta.SessionRecord, bool, error) {
-	value, ok, err := v.get(key)
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok || parts.Kind != fsmeta.KeyKindSession {
+		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidKey
+	}
+	program, err := compile.CompileReadSessionKeyProgram(fsmeta.MountIdentity{MountKeyID: parts.MountKeyID}, key)
+	if err != nil {
+		return fsmeta.SessionRecord{}, false, err
+	}
+	value, ok, err := v.get(program.Key)
 	if err != nil || !ok {
 		return fsmeta.SessionRecord{}, ok, err
 	}
@@ -314,6 +339,88 @@ func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) [
 	if len(overlayKVs) == 0 {
 		return kvs
 	}
+	return mergeOverlayScanRows(kvs, overlayKVs, limit)
+}
+
+func (e *Executor) mergePerasDirectoryOverlayScan(kvs []KV, prefix, start []byte, limit uint32) ([]KV, uint32, bool) {
+	overlayKVs, usedIndex := e.scanPerasDirectoryOverlayRows(prefix, start, limit)
+	if len(overlayKVs) == 0 {
+		return kvs, 0, usedIndex
+	}
+	out := mergeOverlayScanRows(kvs, overlayKVs, limit)
+	return out, uint32(len(overlayKVs)), usedIndex
+}
+
+func (e *Executor) scanPerasDirectoryOverlayRows(prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+	var (
+		out       []fsperas.OverlayKV
+		startKey  = cloneBytes(start)
+		usedIndex bool
+	)
+	for {
+		batch, batchUsedIndex := e.scanPerasDirectoryOverlayBatch(prefix, startKey, limit)
+		usedIndex = usedIndex || batchUsedIndex
+		if len(batch) == 0 {
+			return out, usedIndex
+		}
+		out = append(out, batch...)
+		visible := mergeOverlayScanRows(nil, out, limit)
+		if directoryMergeComplete(visible, prefix, limit) || !directoryOverlayScanMayContinue(batch, prefix, limit) {
+			return out, usedIndex
+		}
+		startKey = keyAfter(batch[len(batch)-1].Key)
+	}
+}
+
+func (e *Executor) scanPerasDirectoryOverlayBatch(prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+	overlay := e.perasOverlay()
+	if overlay == nil || limit == 0 {
+		return nil, false
+	}
+	var (
+		overlayKVs []fsperas.OverlayKV
+		usedIndex  bool
+	)
+	if directoryReader, ok := overlay.(PerasDirectoryOverlayReader); ok {
+		overlayKVs = directoryReader.ScanPerasDirectory(prefix, start, limit)
+		usedIndex = true
+	} else {
+		overlayKVs = overlay.ScanPerasOverlay(start, limit)
+	}
+	if len(overlayKVs) == 0 {
+		return nil, usedIndex
+	}
+	out := overlayKVs[:0]
+	for _, row := range overlayKVs {
+		if !bytes.HasPrefix(row.Key, prefix) {
+			break
+		}
+		out = append(out, row)
+	}
+	return out, usedIndex
+}
+
+func (e *Executor) scanMergedDirectoryRows(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]KV, uint32, uint32, bool, error) {
+	overlayKVs, usedIndex := e.scanPerasDirectoryOverlayRows(plan.Prefix, plan.StartKey, plan.Limit)
+	start := cloneBytes(plan.StartKey)
+	baseRows := make([]KV, 0, plan.Limit)
+	var baseTotal uint32
+	for {
+		batch, err := e.runner.Scan(ctx, start, plan.Limit, version)
+		if err != nil {
+			return nil, baseTotal, uint32(len(overlayKVs)), usedIndex, err
+		}
+		baseTotal += uint32(len(batch))
+		baseRows = append(baseRows, batch...)
+		merged := mergeOverlayScanRows(baseRows, overlayKVs, plan.Limit)
+		if directoryMergeComplete(merged, plan.Prefix, plan.Limit) || !directoryBaseScanMayContinue(batch, plan.Prefix, plan.Limit) {
+			return merged, baseTotal, uint32(len(overlayKVs)), usedIndex, nil
+		}
+		start = keyAfter(batch[len(batch)-1].Key)
+	}
+}
+
+func mergeOverlayScanRows(kvs []KV, overlayKVs []fsperas.OverlayKV, limit uint32) []KV {
 	out := make([]KV, 0, int(limit))
 	base, peras := 0, 0
 	for len(out) < int(limit) && (base < len(kvs) || peras < len(overlayKVs)) {
@@ -348,4 +455,41 @@ func appendOverlayScanKV(out []KV, kv fsperas.OverlayKV) []KV {
 		return out
 	}
 	return append(out, KV{Key: kv.Key, Value: kv.Value})
+}
+
+func directoryMergeComplete(kvs []KV, prefix []byte, limit uint32) bool {
+	if limit == 0 {
+		return true
+	}
+	var n uint32
+	for _, kv := range kvs {
+		if !bytes.HasPrefix(kv.Key, prefix) {
+			return true
+		}
+		n++
+		if n >= limit {
+			return true
+		}
+	}
+	return false
+}
+
+func directoryBaseScanMayContinue(batch []KV, prefix []byte, limit uint32) bool {
+	if limit == 0 || uint32(len(batch)) < limit {
+		return false
+	}
+	return bytes.HasPrefix(batch[len(batch)-1].Key, prefix)
+}
+
+func directoryOverlayScanMayContinue(batch []fsperas.OverlayKV, prefix []byte, limit uint32) bool {
+	if limit == 0 || uint32(len(batch)) < limit {
+		return false
+	}
+	return bytes.HasPrefix(batch[len(batch)-1].Key, prefix)
+}
+
+func keyAfter(key []byte) []byte {
+	out := make([]byte, len(key)+1)
+	copy(out, key)
+	return out
 }

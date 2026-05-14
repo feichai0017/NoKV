@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -174,6 +175,237 @@ func TestRuntimeScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 		{Key: keyB, Delete: true},
 		{Key: keyC, Value: []byte("overlay-c")},
 	}, scan)
+}
+
+func TestRuntimeScanPerasDirectoryUsesDirectoryIndex(t *testing.T) {
+	committer := &Runtime{read: newReadState()}
+	prefix, err := fsmeta.EncodeDentryPrefix(testRuntimeMount, 9)
+	require.NoError(t, err)
+	keyA, err := fsmeta.EncodeDentryKey(testRuntimeMount, 9, "a")
+	require.NoError(t, err)
+	keyB, err := fsmeta.EncodeDentryKey(testRuntimeMount, 9, "b")
+	require.NoError(t, err)
+	other, err := fsmeta.EncodeDentryKey(testRuntimeMount, 10, "a")
+	require.NoError(t, err)
+	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(keyB, []byte("sealed-b"))))
+	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(other, []byte("other"))))
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, 9, "a", 41, []byte("overlay-a"), nil)))
+
+	scan := committer.ScanPerasDirectory(prefix, prefix, 8)
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: keyA, Value: []byte("overlay-a")},
+		{Key: keyB, Value: []byte("sealed-b")},
+	}, scan)
+}
+
+func TestRuntimeAppendsVisibleLogBeforeOverlay(t *testing.T) {
+	log := &recordingVisibleLog{}
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, op, nil)
+	require.NoError(t, err)
+	require.Len(t, log.records, 1)
+	require.Equal(t, fsmeta.OperationCreate, log.records[0].Operation.Kind)
+	require.Equal(t, op.Delta.Authority, log.records[0].Scope)
+	value, deleted, ok := committer.GetPerasOverlay(op.Effects[0].Key)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, op.Effects[0].Value, value)
+}
+
+func TestRuntimeRecoversVisibleLogRecords(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	grant := testRuntimeCommitterGrant()
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(grant, op.Delta.Authority, replay),
+	}}
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: grant}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.Equal(t, 1, committer.pendingOperations())
+	value, deleted, ok := committer.GetPerasOverlay(op.Effects[0].Key)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, op.Effects[0].Value, value)
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["visible_log_recover_total"])
+}
+
+func TestRuntimeRecoversVisibleLogOldEpochForSameHolder(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	old := testRuntimeCommitterGrant()
+	old.GrantID = "grant-old"
+	active := testRuntimeCommitterGrant()
+	active.GrantID = "grant-new"
+	active.EpochID = 2
+	active.IssuedRootToken.Index = 2
+	active.IssuedRootToken.Revision = 2
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(old, op.Delta.Authority, replay),
+	}}
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: active}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.Equal(t, 1, committer.pendingOperations())
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["visible_log_recover_total"])
+	require.Equal(t, uint64(1), stats["visible_log_recover_old_epoch_total"])
+}
+
+func TestRuntimeSkipsVisibleLogFromDifferentRootLineage(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	recordGrant := testRuntimeCommitterGrant()
+	recordGrant.RootClusterEpoch = 7
+	active := testRuntimeCommitterGrant()
+	active.RootClusterEpoch = 8
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(recordGrant, op.Delta.Authority, replay),
+	}}
+	committer, err := NewRuntime(Config{
+		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: active},
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.Zero(t, committer.pendingOperations())
+	stats := committer.Stats()
+	require.Equal(t, uint64(0), stats["visible_log_recover_total"])
+	require.Equal(t, uint64(1), stats["visible_log_recover_skip_total"])
+}
+
+func TestRuntimeFlushDurableDrainsRecoveredOldEpochWithoutRootPublish(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	old := testRuntimeCommitterGrant()
+	old.GrantID = "grant-old"
+	active := testRuntimeCommitterGrant()
+	active.GrantID = "grant-new"
+	active.EpochID = 2
+	active.IssuedRootToken.Index = 2
+	active.IssuedRootToken.Revision = 2
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(old, op.Delta.Authority, replay),
+	}}
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: active},
+	}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.NoError(t, committer.FlushDurable(context.Background()))
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, 0, provider.sealCalls)
+	require.Len(t, log.applied, 1)
+	require.Equal(t, 0, committer.pendingOperations())
+}
+
+func TestRuntimeFlushPublishedFailsWhenRecoveredOldEpochCannotPublish(t *testing.T) {
+	id := fsperas.OperationID{ClientID: "client", Seq: 1}
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	require.NoError(t, err)
+	old := testRuntimeCommitterGrant()
+	old.GrantID = "grant-old"
+	active := testRuntimeCommitterGrant()
+	active.GrantID = "grant-new"
+	active.EpochID = 2
+	active.IssuedRootToken.Index = 2
+	active.IssuedRootToken.Revision = 2
+	log := &replayingVisibleLog{records: []fsperas.VisibleOperationRecord{
+		testRuntimeVisibleRecord(old, op.Delta.Authority, replay),
+	}}
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: active},
+	}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	require.ErrorIs(t, committer.FlushPublished(context.Background()), ErrPublishRequired)
+	require.Equal(t, 1, installer.calls)
+	require.Equal(t, 0, provider.sealCalls)
+	require.Empty(t, log.applied)
+	require.Equal(t, 1, committer.pendingOperations())
+}
+
+func TestRuntimeVisibleLogFailureDoesNotPublishOverlay(t *testing.T) {
+	logErr := errors.New("visible log unavailable")
+	log := &recordingVisibleLog{err: logErr}
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	op := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, op, nil)
+	require.ErrorIs(t, err, logErr)
+	_, _, ok := committer.GetPerasOverlay(op.Effects[0].Key)
+	require.False(t, ok)
+	require.Zero(t, committer.pendingOperations())
 }
 
 func TestRuntimePublishesRootSealAfterInstall(t *testing.T) {
@@ -1542,6 +1774,40 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req
 	return testPerasInstallCursor(uint64(i.calls)), nil
 }
 
+type recordingVisibleLog struct {
+	err     error
+	records []fsperas.VisibleOperationRecord
+}
+
+func (l *recordingVisibleLog) AppendVisible(_ context.Context, record fsperas.VisibleOperationRecord) error {
+	if l.err != nil {
+		return l.err
+	}
+	l.records = append(l.records, record)
+	return nil
+}
+
+type replayingVisibleLog struct {
+	records []fsperas.VisibleOperationRecord
+	applied []fsperas.VisibleAppliedRecord
+}
+
+func (l *replayingVisibleLog) AppendVisible(_ context.Context, record fsperas.VisibleOperationRecord) error {
+	l.records = append(l.records, record)
+	return nil
+}
+
+func (l *replayingVisibleLog) ReplayVisible(context.Context) ([]fsperas.VisibleOperationRecord, error) {
+	out := make([]fsperas.VisibleOperationRecord, len(l.records))
+	copy(out, l.records)
+	return out, nil
+}
+
+func (l *replayingVisibleLog) AppendVisibleApplied(_ context.Context, record fsperas.VisibleAppliedRecord) error {
+	l.applied = append(l.applied, record)
+	return nil
+}
+
 type fakeRuntimePerasCatalogScanner struct {
 	rows  []KV
 	calls int
@@ -1757,16 +2023,36 @@ func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) 
 
 func testRuntimeCommitterGrant() rootproto.PerasAuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
-		GrantID:         "grant-1",
-		EpochID:         1,
-		HolderID:        "holder-a",
-		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
+		GrantID:          "grant-1",
+		EpochID:          1,
+		HolderID:         "holder-a",
+		ExpiresUnixNano:  time.Now().Add(time.Hour).UnixNano(),
+		RootClusterEpoch: 1,
+		IssuedRootToken: rootproto.AuthorityRootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
 		Scope: rootproto.PerasAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 1,
 			Parents:    []uint64{1},
 			Inodes:     []uint64{2},
 		},
+	}
+}
+
+func testRuntimeVisibleRecord(grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope, replay fsperas.ReplayOperation) fsperas.VisibleOperationRecord {
+	return fsperas.VisibleOperationRecord{
+		EpochID:           grant.EpochID,
+		HolderID:          grant.HolderID,
+		GrantID:           grant.GrantID,
+		GrantExpiresNanos: grant.ExpiresUnixNano,
+		PredecessorDigest: grant.PredecessorDigest,
+		RootLineage:       visibleRootLineageFromGrant(grant),
+		Scope:             scope,
+		Operation:         replay,
+		TimestampUnixNano: time.Now().UnixNano(),
 	}
 }
 

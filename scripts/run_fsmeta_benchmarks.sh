@@ -156,9 +156,15 @@ wait_fsmeta_peras_idle() {
 	local last=""
 	local stable=0
 	local snapshot=""
+	local status=0
 
 	while (( SECONDS < deadline )); do
 		if snapshot="$(peras_idle_snapshot 2>/dev/null)"; then
+			status=0
+		else
+			status=$?
+		fi
+		if (( status == 0 )); then
 			if [[ "$snapshot" == "$last" ]]; then
 				stable=$((stable + 1))
 			else
@@ -170,7 +176,9 @@ wait_fsmeta_peras_idle() {
 			fi
 		else
 			stable=0
-			last=""
+			if [[ -n "$snapshot" ]]; then
+				last="$snapshot"
+			fi
 		fi
 		sleep "$interval_seconds"
 	done

@@ -91,6 +91,34 @@ func (d *ConflictDetector) Admit(id OperationID, op compile.MaterializedOp) ([]O
 	return predecessors, nil
 }
 
+func (d *ConflictDetector) AdmitReplay(op ReplayOperation) error {
+	if err := validateVisibleReplayOperation(op); err != nil {
+		return err
+	}
+	current := trackedFromReplay(op)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.pending == nil {
+		d.pending = make(map[OperationID]trackedOperation)
+	}
+	if d.readByKey == nil {
+		d.readByKey = make(map[string][]OperationID)
+	}
+	if d.writeByKey == nil {
+		d.writeByKey = make(map[string][]OperationID)
+	}
+	if _, ok := d.pending[op.OpID]; ok {
+		return ErrDuplicateOperation
+	}
+	d.nextSeq++
+	current.seq = d.nextSeq
+	d.pending[op.OpID] = current
+	d.order = append(d.order, op.OpID)
+	d.indexOperation(current)
+	return nil
+}
+
 func (d *ConflictDetector) Remove(id OperationID) {
 	if d == nil {
 		return
@@ -126,6 +154,18 @@ func (d *ConflictDetector) IDs() []OperationID {
 		if _, ok := d.pending[id]; ok {
 			out = append(out, id)
 		}
+	}
+	return out
+}
+
+func trackedFromReplay(op ReplayOperation) trackedOperation {
+	out := trackedOperation{
+		id:     op.OpID,
+		reads:  []trackedKey{newTrackedKey(nil, false)},
+		writes: make([]trackedKey, 0, len(op.Mutations)),
+	}
+	for _, mutation := range op.Mutations {
+		out.writes = append(out.writes, newTrackedKey(mutation.Key, false))
 	}
 	return out
 }

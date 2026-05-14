@@ -7,6 +7,7 @@ import (
 	"context"
 	"expvar"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
@@ -68,6 +70,8 @@ func main() {
 		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
 		perasBackgroundFlushTimeout     = flag.Duration("peras-background-flush-timeout", 0, "timeout for opportunistic Peras background segment install; zero uses runtime default")
 		perasBackgroundErrorBackoff     = flag.Duration("peras-background-error-backoff", 0, "backoff after failed opportunistic Peras background segment install; zero uses runtime default")
+		perasVisibleLogDir              = flag.String("peras-visible-log-dir", "", "optional local WAL directory for holder visible acknowledgements")
+		perasVisibleLogPolicy           = flag.String("peras-visible-log-policy", "flushed", "holder visible WAL sync policy: flushed|fsync-batched|fsync|buffered")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
@@ -87,6 +91,11 @@ func main() {
 	perasStoreIDs, err := parseUintList(*perasWitnessStores)
 	if err != nil {
 		fatalf("parse peras-witness-stores: %v", err)
+		return
+	}
+	visibleLogDurability, err := parsePerasVisibleLogPolicy(*perasVisibleLogPolicy)
+	if err != nil {
+		fatalf("parse peras-visible-log-policy: %v", err)
 		return
 	}
 	holderID := strings.TrimSpace(*perasHolderID)
@@ -117,6 +126,8 @@ func main() {
 		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
 		PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
 		PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
+		PerasVisibleLogDir:              *perasVisibleLogDir,
+		PerasVisibleLogDurability:       visibleLogDurability,
 	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)
@@ -221,4 +232,19 @@ func parseUintList(value string) ([]uint64, error) {
 		}
 	}
 	return out, nil
+}
+
+func parsePerasVisibleLogPolicy(value string) (wal.DurabilityPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "flushed":
+		return wal.DurabilityFlushed, nil
+	case "fsync-batched", "fsync_batched", "batched":
+		return wal.DurabilityFsyncBatched, nil
+	case "fsync":
+		return wal.DurabilityFsync, nil
+	case "buffered":
+		return wal.DurabilityBuffered, nil
+	default:
+		return 0, fmt.Errorf("invalid peras visible WAL sync policy %q", value)
+	}
 }

@@ -157,15 +157,28 @@ func TestEventsFromCommandExtractsPerasSegmentInstallKeys(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	stats := segment.Stats()
+	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{
 		Header: &raftcmdpb.CmdHeader{RegionId: 7},
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-				SegmentRoot:          append([]byte(nil), segment.Root[:]...),
-				SegmentPayloadDigest: append([]byte(nil), digest[:]...),
-				SegmentPayload:       payload,
-				InstallVersion:       44,
+				SegmentRoot:           append([]byte(nil), segment.Root[:]...),
+				SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+				SegmentPayload:        payload,
+				InstallVersion:        44,
+				SegmentEpochId:        segment.EpochID,
+				SegmentOperationCount: stats.OperationCount,
+				SegmentEntryCount:     stats.EntryCount,
+				SegmentPayloadSize:    uint64(len(payload)),
+				ReadFirstKey:          readHeader.FirstKey,
+				ReadLastKey:           readHeader.LastKey,
+				ReadDentryCount:       readHeader.DentryCount,
+				ReadInodeCount:        readHeader.InodeCount,
+				ReadSessionCount:      readHeader.SessionCount,
+				ReadTombstoneCount:    readHeader.TombstoneCount,
+				ReadDirectoryCount:    readHeader.DirectoryCount,
 			}},
 		}},
 	}

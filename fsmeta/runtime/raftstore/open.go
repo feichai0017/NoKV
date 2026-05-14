@@ -13,8 +13,10 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	execperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -127,6 +129,12 @@ type Options struct {
 	// after a failed install so visible commits do not create retry
 	// storms against an unhealthy raftstore. Zero uses the runtime default.
 	PerasBackgroundErrorBackoff time.Duration
+	// PerasVisibleLog is an optional holder-local WAL surface written before a
+	// visible ack reaches clients. PerasVisibleLogDir wires the default WAL
+	// implementation when no explicit log is provided.
+	PerasVisibleLog           execperas.VisibleLog
+	PerasVisibleLogDir        string
+	PerasVisibleLogDurability wal.DurabilityPolicy
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -262,9 +270,32 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	var witnessConns *witnessConnections
 	var perasRuntime *runtimeperas.Runtime
+	var visibleWAL *wal.Manager
 	if perasAuthorityManager != nil {
+		if opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) != "" {
+			durability := opts.PerasVisibleLogDurability
+			if durability == 0 {
+				durability = wal.DurabilityFlushed
+			}
+			visibleWAL, err = wal.Open(wal.Config{Dir: opts.PerasVisibleLogDir})
+			if err != nil {
+				_ = kv.Close()
+				_ = coord.Close()
+				return nil, fmt.Errorf("init peras visible log wal: %w", err)
+			}
+			opts.PerasVisibleLog, err = runtimeperas.NewWALVisibleLog(visibleWAL, durability)
+			if err != nil {
+				_ = visibleWAL.Close()
+				_ = kv.Close()
+				_ = coord.Close()
+				return nil, fmt.Errorf("init peras visible log: %w", err)
+			}
+		}
 		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
 		if err != nil {
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, err
@@ -288,6 +319,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			if witnessConns != nil {
 				_ = witnessConns.Close()
 			}
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init negative cache: %w", err)
@@ -304,6 +338,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			if witnessConns != nil {
 				_ = witnessConns.Close()
 			}
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init dirpage cache: %w", err)
@@ -318,6 +355,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if witnessConns != nil {
 			_ = witnessConns.Close()
 		}
+		if visibleWAL != nil {
+			_ = visibleWAL.Close()
+		}
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init executor: %w", err)
@@ -330,6 +370,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if witnessConns != nil {
 			_ = witnessConns.Close()
+		}
+		if visibleWAL != nil {
+			_ = visibleWAL.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -383,6 +426,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if perasRuntime != nil {
 			if err := perasRuntime.Shutdown(context.Background()); err != nil && first == nil {
+				first = err
+			}
+		}
+		if visibleWAL != nil {
+			if err := visibleWAL.Close(); err != nil && first == nil {
 				first = err
 			}
 		}

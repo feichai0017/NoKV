@@ -31,6 +31,7 @@ func buildPerasRuntime(
 		Installer:                  newRaftstoreSegmentInstaller(runner, router),
 		CatalogScanner:             raftstoreSegmentCatalogScanner{runner: runner},
 		WatchPublisher:             router,
+		VisibleLog:                 opts.PerasVisibleLog,
 		Quorum:                     opts.PerasWitnessQuorum,
 		SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 		SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,

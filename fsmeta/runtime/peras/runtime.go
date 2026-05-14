@@ -48,6 +48,7 @@ type Config struct {
 	Installer                  SegmentInstaller
 	CatalogScanner             SegmentCatalogScanner
 	WatchPublisher             perasWatchPublisher
+	VisibleLog                 fsperas.VisibleLog
 	Quorum                     int
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
@@ -72,6 +73,7 @@ type Runtime struct {
 	installer  SegmentInstaller
 	catalog    SegmentCatalogScanner
 	watch      perasWatchPublisher
+	visibleLog fsperas.VisibleLog
 	quorum     int
 	retries    int
 	backoff    time.Duration
@@ -132,9 +134,11 @@ type perasFlushJob struct {
 }
 
 type perasFlushBatch struct {
-	holder *fsperas.Holder
-	plan   fsperas.ReplayPlan
-	jobs   []perasFlushJob
+	holder     *fsperas.Holder
+	scope      compile.AuthorityScope
+	plan       fsperas.ReplayPlan
+	jobs       []perasFlushJob
+	publishErr error
 }
 
 type perasFrozenPlan struct {
@@ -245,6 +249,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		installer:  cfg.Installer,
 		catalog:    cfg.CatalogScanner,
 		watch:      cfg.WatchPublisher,
+		visibleLog: cfg.VisibleLog,
 		quorum:     quorum,
 		retries:    retries,
 		backoff:    backoff,
@@ -269,6 +274,10 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if _, ok := c.authority.(SealPublisher); ok {
 		c.sealQ = newPerasSealLane(c, c.installN)
 	}
+	recoveredVisible, err := c.recoverVisibleLog(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	if c.watch != nil {
 		c.watchQueue = utils.NewMPSCQueue[fsmeta.WatchEvent](defaultPerasVisibleWatchQueue)
 		c.closer.Add(1)
@@ -289,6 +298,9 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 			},
 		})
 		c.flushTask.Start()
+	}
+	if recoveredVisible > 0 && c.installer != nil {
+		c.triggerBackgroundFlush()
 	}
 	return c, nil
 }
@@ -354,6 +366,10 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	if err != nil {
 		return fsperas.VisibleAck{}, c.recordError(err)
 	}
+	if err := c.appendVisibleLog(ctx, grant, holder, id, op); err != nil {
+		holder.MarkAppliedIDs(id)
+		return fsperas.VisibleAck{}, c.recordError(err)
+	}
 	if err := c.addOverlay(id, op); err != nil {
 		holder.MarkAppliedIDs(id)
 		return fsperas.VisibleAck{}, c.recordError(err)
@@ -364,6 +380,28 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 		c.triggerBackgroundFlush()
 	}
 	return ack, nil
+}
+
+func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, id fsperas.OperationID, op compile.MaterializedOp) error {
+	if c == nil || c.visibleLog == nil {
+		return nil
+	}
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	if err != nil {
+		return err
+	}
+	record := fsperas.VisibleOperationRecord{
+		EpochID:           holder.EpochID(),
+		HolderID:          holder.HolderID(),
+		GrantID:           grant.GrantID,
+		GrantExpiresNanos: grant.ExpiresUnixNano,
+		PredecessorDigest: grant.PredecessorDigest,
+		RootLineage:       visibleRootLineageFromGrant(grant),
+		Scope:             op.Delta.Authority,
+		Operation:         replay,
+		TimestampUnixNano: c.now().UnixNano(),
+	}
+	return c.visibleLog.AppendVisible(ctx, record)
 }
 
 func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
@@ -485,7 +523,11 @@ func (c *Runtime) flushBackground() {
 		batches, err = c.buildFlushBatches(plans, false)
 	}
 	if err == nil {
-		err = (flushPipeline{runtime: c, level: fsperas.SegmentPersistencePublished}).run(ctx, batches)
+		err = (flushPipeline{
+			runtime:                 c,
+			level:                   fsperas.SegmentPersistencePublished,
+			allowDurableOldEpochRun: true,
+		}).run(ctx, batches)
 	}
 	if err != nil {
 		c.metrics.bgErrorTotal.Add(1)

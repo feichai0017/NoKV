@@ -314,6 +314,8 @@ func RootPerasAuthorityGrantToProto(grant rootproto.PerasAuthorityGrant) *metapb
 		PredecessorDigest: append([]byte(nil), grant.PredecessorDigest[:]...),
 		QuotaCreditBytes:  grant.QuotaCreditBytes,
 		QuotaCreditInodes: grant.QuotaCreditInodes,
+		RootClusterEpoch:  grant.RootClusterEpoch,
+		IssuedRootToken:   RootTailTokenFromAuthorityToken(grant.IssuedRootToken),
 	}
 }
 
@@ -332,6 +334,8 @@ func RootPerasAuthorityGrantFromProto(grant *metapb.RootPerasAuthorityGrant) roo
 		PredecessorDigest: predecessorDigest,
 		QuotaCreditBytes:  grant.GetQuotaCreditBytes(),
 		QuotaCreditInodes: grant.GetQuotaCreditInodes(),
+		RootClusterEpoch:  grant.GetRootClusterEpoch(),
+		IssuedRootToken:   AuthorityTokenFromRootTailToken(grant.GetIssuedRootToken()),
 	}
 }
 

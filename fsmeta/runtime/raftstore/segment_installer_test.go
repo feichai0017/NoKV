@@ -79,6 +79,14 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	require.NotEmpty(t, req.GetDependencyKeys())
 	require.NotEmpty(t, req.GetCatalogKeys())
 	require.Len(t, req.GetMaterializedKeys(), int(stats.EntryCount))
+	readHeader := segment.ReadHeaderView()
+	require.Equal(t, readHeader.FirstKey, req.GetReadFirstKey())
+	require.Equal(t, readHeader.LastKey, req.GetReadLastKey())
+	require.Equal(t, readHeader.DentryCount, req.GetReadDentryCount())
+	require.Equal(t, readHeader.InodeCount, req.GetReadInodeCount())
+	require.Equal(t, readHeader.SessionCount, req.GetReadSessionCount())
+	require.Equal(t, readHeader.TombstoneCount, req.GetReadTombstoneCount())
+	require.Equal(t, readHeader.DirectoryCount, req.GetReadDirectoryCount())
 }
 
 func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
