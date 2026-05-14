@@ -3,6 +3,8 @@ package compile
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"slices"
+	"unsafe"
 
 	"github.com/feichai0017/NoKV/fsmeta"
 )
@@ -32,12 +34,19 @@ type CompiledOp struct {
 }
 
 // MaterializedOp is the closed Peras IR admitted by the holder. It has the
-// static descriptor from CompileDelta plus any runtime predicate proofs and
-// concrete effects needed to install the operation inside a segment.
+// static generated descriptor plus any runtime predicate proofs and concrete
+// effects needed to install the operation inside a segment.
 type MaterializedOp struct {
 	CompiledOp
 	PredicateProofs []PredicateProof
 	GuardProofs     []GuardProof
+}
+
+// PredicateEvidence carries runtime reads that turn a generated program with
+// symbolic predicates into the proof-carrying descriptor admitted by Peras.
+type PredicateEvidence struct {
+	Proofs      []PredicateProof
+	KnownAbsent [][]byte
 }
 
 type FenceMode uint8
@@ -266,62 +275,96 @@ type SegmentDecision struct {
 	Reason SlowReason
 }
 
-func CompileDelta(delta SemanticDelta) CompiledOp {
-	delta = cloneDelta(delta)
-	durability := durabilityClass(delta)
-	placement := placementPlan(delta, durability)
-	footprint := keyFootprint(delta)
-	predicates := predicateObligations(delta)
-	guards := guardObligations(delta)
-	effects := effectPlans(delta)
-	digest := descriptorDigest(delta)
-	atomicity := atomicityGroup(delta, digest)
-	segment := segmentPlan(placement, footprint, uint32(len(effects)))
-	return CompiledOp{
-		Delta:            delta,
-		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
-		Authority: AuthorityPlan{
-			Scope:    cloneScope(delta.Authority),
-			Required: delta.Eligibility == EligibilityVisibleCommit,
-			Fence:    fenceMode(delta),
-		},
-		Placement:  placement,
-		Footprint:  footprint,
-		Predicates: predicates,
-		Guards:     guards,
-		Effects:    effects,
-		Atomicity:  atomicity,
-		Durability: durability,
-		Watch:      watchProjections(delta),
-		Completion: completionPlan(delta, uint32(len(effects)), digest),
-		Segment:    segment,
-	}
-}
-
-func MaterializeDelta(delta SemanticDelta, proofs []PredicateProof) MaterializedOp {
-	return MaterializeCompiledOp(CompileDelta(delta), nil, proofs)
-}
-
-func MaterializeCompiledOp(op CompiledOp, effects []WriteEffect, proofs []PredicateProof) MaterializedOp {
-	return MaterializeCompiledOpWithGuardProofs(op, effects, proofs, nil)
-}
-
-func MaterializeCompiledOpWithGuardProofs(op CompiledOp, effects []WriteEffect, proofs []PredicateProof, guardProofs []GuardProof) MaterializedOp {
+// MaterializeCompiledOpWithEvidence recompiles a generated descriptor with
+// concrete runtime effects and predicate evidence, without runtime semantic
+// lowering.
+func MaterializeCompiledOpWithEvidence(op CompiledOp, effects []WriteEffect, evidence PredicateEvidence, guardProofs []GuardProof) (MaterializedOp, error) {
 	delta := op.Delta
 	if effects != nil {
 		delta.WriteEffects = cloneEffects(effects)
 	}
+	var err error
+	delta, err = applyPredicateEvidence(delta, evidence)
+	if err != nil {
+		return MaterializedOp{}, err
+	}
 	delta.Authority = authorityScopeWithDeltaKeys(delta.Authority, delta)
-	compiled := CompileDelta(delta)
+	compiled, err := compileAOTDelta(delta)
+	if err != nil {
+		return MaterializedOp{}, err
+	}
 	compiled.IntentDigest = op.IntentDigest
 	compiled.ReplayDigest = compiled.DescriptorDigest
 	return MaterializedOp{
 		CompiledOp:      compiled,
-		PredicateProofs: clonePredicateProofs(proofs),
+		PredicateProofs: clonePredicateProofs(evidence.Proofs),
 		GuardProofs:     cloneGuardProofs(guardProofs),
+	}, nil
+}
+
+func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (SemanticDelta, error) {
+	delta = cloneDelta(delta)
+	proofs, err := predicateProofMap(evidence.Proofs)
+	if err != nil {
+		return SemanticDelta{}, err
 	}
+	knownAbsent := make(map[string]struct{}, len(evidence.KnownAbsent))
+	for _, key := range evidence.KnownAbsent {
+		if len(key) == 0 {
+			return SemanticDelta{}, fsmeta.ErrInvalidRequest
+		}
+		knownAbsent[string(key)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(proofs))
+	for i := range delta.ReadPredicates {
+		predicate := &delta.ReadPredicates[i]
+		if predicate.Kind == PredicatePrefixScan {
+			continue
+		}
+		if len(predicate.Key) == 0 {
+			return SemanticDelta{}, fsmeta.ErrInvalidRequest
+		}
+		key := string(predicate.Key)
+		seen[key] = struct{}{}
+		if proof, ok := proofs[key]; ok {
+			applyPredicateProof(predicate, proof)
+			continue
+		}
+		if _, ok := knownAbsent[key]; ok {
+			predicate.Kind = PredicateNotExists
+			predicate.ExpectedValue = nil
+			predicate.HasExpectedValue = false
+			predicate.RuntimeChecked = true
+		}
+	}
+	extraKeys := make([]string, 0, len(proofs))
+	for key := range proofs {
+		if _, ok := seen[key]; !ok {
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	slices.Sort(extraKeys)
+	for _, key := range extraKeys {
+		proof := proofs[key]
+		predicate := Predicate{Key: cloneBytes(proof.Key)}
+		applyPredicateProof(&predicate, proof)
+		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
+	}
+	return delta, nil
+}
+
+func applyPredicateProof(predicate *Predicate, proof PredicateProof) {
+	if !proof.Present {
+		predicate.Kind = PredicateNotExists
+		predicate.ExpectedValue = nil
+		predicate.HasExpectedValue = false
+		predicate.RuntimeChecked = true
+		return
+	}
+	predicate.Kind = PredicateObservedValue
+	predicate.ExpectedValue = cloneBytes(proof.Value)
+	predicate.HasExpectedValue = true
+	predicate.RuntimeChecked = true
 }
 
 func authorityScopeWithDeltaKeys(scope AuthorityScope, delta SemanticDelta) AuthorityScope {
@@ -415,210 +458,10 @@ func fenceMode(delta SemanticDelta) FenceMode {
 	return FenceActiveAuthority
 }
 
-func durabilityClass(delta SemanticDelta) DurabilityClass {
-	if delta.Kind == fsmeta.OperationCloseSession {
-		return DurabilityNeedsCloseSession
-	}
-	if !delta.DurabilityBarrier {
-		return DurabilityVisibleOnly
-	}
-	switch delta.Kind {
-	case fsmeta.OperationSnapshotSubtree, fsmeta.OperationRenameSubtree:
-		return DurabilityNeedsPublishCheckpoint
-	default:
-		return DurabilityNeedsFsyncDir
-	}
-}
-
-func placementPlan(delta SemanticDelta, durability DurabilityClass) PlacementPlan {
-	out := PlacementPlan{
-		MountKeyID: delta.Authority.MountKeyID,
-		Buckets:    append([]fsmeta.AffinityBucket(nil), delta.Authority.Buckets...),
-		SlowReason: delta.SlowReason,
-	}
-	out.SingleBucket = len(out.Buckets) == 1
-	if delta.Eligibility != EligibilityVisibleCommit || delta.DurabilityBarrier || len(delta.WriteEffects) == 0 {
-		return out
-	}
-	var mount fsmeta.MountKeyID
-	var fsmetaKeys bool
-	var opaqueKeys bool
-	buckets := make([]fsmeta.AffinityBucket, 0, len(delta.WriteEffects))
-	for _, effect := range delta.WriteEffects {
-		switch effect.Kind {
-		case EffectPut:
-			if len(effect.Key) == 0 || effect.Value == nil {
-				out.RequiresMaterialize = true
-				return out
-			}
-		case EffectDelete:
-			if len(effect.Key) == 0 {
-				out.RequiresMaterialize = true
-				return out
-			}
-		case EffectDerivedPut, EffectDerivedDelete:
-			out.RequiresMaterialize = true
-			return out
-		default:
-			out.SlowReason = SlowReasonDynamicWriteSet
-			return out
-		}
-		parts, ok := fsmeta.InspectKey(effect.Key)
-		if !ok {
-			if fsmetaKeys {
-				out.SlowReason = SlowReasonDynamicWriteSet
-				return out
-			}
-			opaqueKeys = true
-			continue
-		}
-		if opaqueKeys {
-			out.SlowReason = SlowReasonDynamicWriteSet
-			return out
-		}
-		if !fsmetaKeys {
-			mount = parts.MountKeyID
-			fsmetaKeys = true
-		} else if mount != parts.MountKeyID {
-			out.SlowReason = SlowReasonCrossBucket
-			return out
-		}
-		buckets = append(buckets, parts.Bucket)
-	}
-	if !fsmetaKeys {
-		if opaqueKeys {
-			out.CanSegment = true
-			out.Install = SegmentInstallSingleBucket
-			out.MergeKey.MountKeyID = out.MountKeyID
-			out.MergeKey.Install = out.Install
-			out.MergeKey.Durability = durability
-			out.MergeKey.FormatVersion = segmentFormatVersion
-		}
-		return out
-	}
-	out.MountKeyID = mount
-	out.Buckets = uniqueBuckets(buckets)
-	out.SingleBucket = len(out.Buckets) == 1
-	out.CanSegment = true
-	out.Install = SegmentInstallCatalog
-	out.MergeKey.MountKeyID = mount
-	out.MergeKey.Install = out.Install
-	out.MergeKey.Durability = durability
-	out.MergeKey.FormatVersion = segmentFormatVersion
-	return out
-}
-
-func predicateObligations(delta SemanticDelta) []PredicateObligation {
-	out := make([]PredicateObligation, 0, len(delta.ReadPredicates))
-	for _, predicate := range delta.ReadPredicates {
-		obligation := PredicateObligation{
-			Kind:             predicate.Kind,
-			Key:              cloneBytes(predicate.Key),
-			HasExpectedValue: predicate.HasExpectedValue,
-		}
-		if predicate.HasExpectedValue {
-			obligation.ExpectHash = sha256.Sum256(predicate.ExpectedValue)
-		}
-		switch predicate.Kind {
-		case PredicateNotExists:
-			obligation.NeedAbsent = true
-		case PredicateObservedValue:
-			obligation.NeedValue = true
-		}
-		out = append(out, obligation)
-	}
-	return out
-}
-
-func guardObligations(delta SemanticDelta) []GuardObligation {
-	out := make([]GuardObligation, 0, len(delta.RuntimeGuards))
-	for _, guard := range delta.RuntimeGuards {
-		out = append(out, GuardObligation{
-			Guard:  guard,
-			Digest: GuardProofDigest(guard, true),
-		})
-	}
-	return out
-}
-
-func effectPlans(delta SemanticDelta) []EffectPlan {
-	out := make([]EffectPlan, 0, len(delta.WriteEffects))
-	for i, effect := range delta.WriteEffects {
-		plan := EffectPlan{
-			ID:       MutationID(i),
-			Kind:     effect.Kind,
-			Key:      cloneBytes(effect.Key),
-			Value:    cloneBytes(effect.Value),
-			Concrete: effect.Kind == EffectPut || effect.Kind == EffectDelete,
-		}
-		if len(effect.Value) > 0 {
-			plan.ValueHash = sha256.Sum256(effect.Value)
-		}
-		if parts, ok := fsmeta.InspectKey(effect.Key); ok {
-			plan.MountKeyID = parts.MountKeyID
-			plan.Bucket = parts.Bucket
-			plan.RecordKind = parts.Kind
-		} else if len(effect.Key) > 0 {
-			plan.Opaque = true
-		}
-		switch effect.Kind {
-		case EffectDerivedPut, EffectDerivedDelete:
-			plan.Derivation = DerivationRuntimeValue
-		}
-		out = append(out, plan)
-	}
-	return out
-}
-
-func atomicityGroup(delta SemanticDelta, digest [32]byte) AtomicityGroup {
-	group := AtomicityGroup{
-		Members:  make([]MutationID, 0, len(delta.WriteEffects)),
-		Recovery: RecoveryReplayAllOrNothing,
-		Digest:   digest,
-	}
-	for i := range delta.WriteEffects {
-		group.Members = append(group.Members, MutationID(i))
-	}
-	group.Splittable = len(group.Members) <= 1
-	return group
-}
-
-func keyFootprint(delta SemanticDelta) KeyFootprint {
-	out := KeyFootprint{
-		Reads:        make([]KeyRef, 0, len(delta.ReadPredicates)),
-		Writes:       make([]KeyRef, 0, len(delta.WriteEffects)),
-		ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects)),
-	}
-	for _, predicate := range delta.ReadPredicates {
-		mode := KeyAccessRead
-		if predicate.Kind == PredicatePrefixScan {
-			mode = KeyAccessReadPrefix
-			out.HasPrefixRead = true
-		}
-		ref := keyRef(mode, predicate.Key)
-		out.Reads = append(out.Reads, ref)
-		out.ConflictKeys = append(out.ConflictKeys, ref)
-		out.EstimatedBytes += uint64(len(predicate.Key) + len(predicate.ExpectedValue))
-		if ref.Opaque {
-			out.HasOpaqueKeys = true
-		}
-	}
-	for _, effect := range delta.WriteEffects {
-		ref := keyRef(KeyAccessWrite, effect.Key)
-		out.Writes = append(out.Writes, ref)
-		out.ConflictKeys = append(out.ConflictKeys, ref)
-		out.EstimatedBytes += uint64(len(effect.Key) + len(effect.Value))
-		if ref.Opaque {
-			out.HasOpaqueKeys = true
-		}
-	}
-	return out
-}
-
 func keyRef(mode KeyAccessMode, key []byte) KeyRef {
 	out := KeyRef{
 		Mode: mode,
-		Key:  cloneBytes(key),
+		Key:  key,
 	}
 	parts, ok := fsmeta.InspectKey(key)
 	if !ok {
@@ -630,85 +473,6 @@ func keyRef(mode KeyAccessMode, key []byte) KeyRef {
 	out.Kind = parts.Kind
 	out.Parent = parts.Parent
 	out.Inode = parts.Inode
-	return out
-}
-
-func segmentPlan(placement PlacementPlan, footprint KeyFootprint, mutations uint32) SegmentPlan {
-	plan := SegmentPlan{
-		MergeKey:              placement.MergeKey,
-		Install:               placement.Install,
-		CanAppend:             placement.CanSegment,
-		RequiresMaterialize:   placement.RequiresMaterialize,
-		EstimatedPayloadBytes: footprint.EstimatedBytes,
-		OperationCount:        1,
-		MutationCount:         mutations,
-	}
-	switch {
-	case placement.Install == SegmentInstallSingleBucket:
-		plan.CanMaterialize = placement.CanSegment
-		plan.MaterializeInstall = SegmentInstallSingleBucket
-		plan.MaterializeMergeKey = placement.MergeKey
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		plan.CanMaterialize = placement.CanSegment
-		plan.MaterializeInstall = SegmentInstallSingleBucket
-		plan.MaterializeMergeKey = SegmentMergeKey{
-			MountKeyID:    placement.MountKeyID,
-			PrimaryBucket: placement.Buckets[0],
-			Install:       SegmentInstallSingleBucket,
-			Durability:    placement.MergeKey.Durability,
-			FormatVersion: placement.MergeKey.FormatVersion,
-		}
-	}
-	return plan
-}
-
-func completionPlan(delta SemanticDelta, mutations uint32, digest [32]byte) CompletionPlan {
-	if delta.Eligibility != EligibilityVisibleCommit || mutations == 0 {
-		return CompletionPlan{}
-	}
-	kind := CompletionVisible
-	if durabilityClass(delta) != DurabilityVisibleOnly {
-		kind = CompletionDurable
-	}
-	return CompletionPlan{
-		RetainCompletion: true,
-		Kind:             kind,
-		MutationCount:    mutations,
-		DescriptorDigest: digest,
-	}
-}
-
-func watchProjections(delta SemanticDelta) []WatchProjection {
-	if len(delta.WriteEffects) == 0 {
-		return nil
-	}
-	emitAt := WatchEmitVisible
-	if delta.WatchAtSeal || delta.DurabilityBarrier {
-		emitAt = WatchEmitSeal
-	}
-	out := make([]WatchProjection, 0, len(delta.WriteEffects))
-	for _, effect := range delta.WriteEffects {
-		if len(effect.Key) == 0 {
-			continue
-		}
-		parts, ok := fsmeta.InspectKey(effect.Key)
-		if !ok || parts.Kind != fsmeta.KeyKindDentry {
-			continue
-		}
-		projection := WatchProjection{
-			EventKind: watchEventKind(delta, effect),
-			Key:       cloneBytes(effect.Key),
-			Parent:    parts.Parent,
-			Name:      dentryName(effect.Key),
-			EmitAt:    emitAt,
-		}
-		if len(effect.Value) > 0 {
-			if dentry, err := fsmeta.DecodeDentryValue(effect.Value); err == nil {
-				projection.Inode = dentry.Inode
-			}
-		}
-		out = append(out, projection)
-	}
 	return out
 }
 
@@ -732,65 +496,45 @@ func watchEventKind(delta SemanticDelta, effect WriteEffect) WatchEventKind {
 }
 
 func dentryName(key []byte) string {
-	name, ok := fsmeta.DentryNameOfKey(key)
-	if !ok {
+	name, ok := fsmeta.DentryNameBytesOfKey(key)
+	if !ok || len(name) == 0 {
 		return ""
 	}
-	return name
+	return unsafe.String(&name[0], len(name))
 }
 
 func PredicateProofDigest(key, value []byte, present bool, version uint64, source ReadSource) [32]byte {
-	h := sha256.New()
-	h.Write(key)
-	if present {
-		h.Write([]byte{1})
-	} else {
-		h.Write([]byte{0})
-	}
-	h.Write(value)
-	var buf [9]byte
-	buf[0] = byte(source)
-	binary.BigEndian.PutUint64(buf[1:], version)
-	h.Write(buf[:])
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	h := newDigestBuilder()
+	h.writeRaw(key)
+	h.writeBoolByte(present)
+	h.writeRaw(value)
+	h.writeByte(byte(source))
+	h.writeUint64(version)
+	return h.sum()
 }
 
 func PredicateProofSetDigest(proofs []PredicateProof) [32]byte {
 	if len(proofs) == 0 {
 		return [32]byte{}
 	}
-	h := sha256.New()
-	writeDigestUint64(h, uint64(len(proofs)))
+	h := newDigestBuilder()
+	h.writeUint64(uint64(len(proofs)))
 	for _, proof := range proofs {
-		writeDigestBytes(h, proof.Key)
-		if proof.Present {
-			writeDigestUint64(h, 1)
-		} else {
-			writeDigestUint64(h, 0)
-		}
-		writeDigestBytes(h, proof.Value)
-		writeDigestUint64(h, proof.Version)
-		writeDigestUint64(h, uint64(proof.Source))
-		writeDigestBytes(h, proof.Digest[:])
+		h.writeBytes(proof.Key)
+		h.writeBool(proof.Present)
+		h.writeBytes(proof.Value)
+		h.writeUint64(proof.Version)
+		h.writeUint64(uint64(proof.Source))
+		h.writeBytes(proof.Digest[:])
 	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	return h.sum()
 }
 
 func GuardProofDigest(guard RuntimeGuard, passed bool) [32]byte {
-	h := sha256.New()
-	writeDigestString(h, string(guard))
-	if passed {
-		writeDigestUint64(h, 1)
-	} else {
-		writeDigestUint64(h, 0)
-	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	h := newDigestBuilder()
+	h.writeString(string(guard))
+	h.writeBool(passed)
+	return h.sum()
 }
 
 func GuardProofFor(guard RuntimeGuard, passed bool) GuardProof {
@@ -813,133 +557,196 @@ func GuardProofsFor(guards []RuntimeGuard) []GuardProof {
 }
 
 func ExecutionPlanDigest(segment SegmentPlan, atomicity AtomicityGroup, durability DurabilityClass) [32]byte {
-	h := sha256.New()
-	writeSegmentMergeKey(h, segment.MergeKey)
-	writeDigestUint64(h, uint64(segment.Install))
-	writeSegmentMergeKey(h, segment.MaterializeMergeKey)
-	writeDigestUint64(h, uint64(segment.MaterializeInstall))
-	if segment.CanAppend {
-		writeDigestUint64(h, 1)
-	} else {
-		writeDigestUint64(h, 0)
-	}
-	if segment.CanMaterialize {
-		writeDigestUint64(h, 1)
-	} else {
-		writeDigestUint64(h, 0)
-	}
-	if segment.RequiresMaterialize {
-		writeDigestUint64(h, 1)
-	} else {
-		writeDigestUint64(h, 0)
-	}
-	writeDigestUint64(h, segment.EstimatedPayloadBytes)
-	writeDigestUint64(h, uint64(segment.OperationCount))
-	writeDigestUint64(h, uint64(segment.MutationCount))
-	writeDigestUint64(h, uint64(atomicity.Recovery))
-	if atomicity.Splittable {
-		writeDigestUint64(h, 1)
-	} else {
-		writeDigestUint64(h, 0)
-	}
-	writeDigestBytes(h, atomicity.Digest[:])
-	writeDigestUint64(h, uint64(len(atomicity.Members)))
+	h := newDigestBuilder()
+	h.writeSegmentMergeKey(segment.MergeKey)
+	h.writeUint64(uint64(segment.Install))
+	h.writeSegmentMergeKey(segment.MaterializeMergeKey)
+	h.writeUint64(uint64(segment.MaterializeInstall))
+	h.writeBool(segment.CanAppend)
+	h.writeBool(segment.CanMaterialize)
+	h.writeBool(segment.RequiresMaterialize)
+	h.writeUint64(segment.EstimatedPayloadBytes)
+	h.writeUint64(uint64(segment.OperationCount))
+	h.writeUint64(uint64(segment.MutationCount))
+	h.writeUint64(uint64(atomicity.Recovery))
+	h.writeBool(atomicity.Splittable)
+	h.writeBytes(atomicity.Digest[:])
+	h.writeUint64(uint64(len(atomicity.Members)))
 	for _, member := range atomicity.Members {
-		writeDigestUint64(h, uint64(member))
+		h.writeUint64(uint64(member))
 	}
-	writeDigestUint64(h, uint64(durability))
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	h.writeUint64(uint64(durability))
+	return h.sum()
 }
 
 func GuardProofSetDigest(proofs []GuardProof) [32]byte {
 	if len(proofs) == 0 {
 		return [32]byte{}
 	}
-	h := sha256.New()
-	writeDigestUint64(h, uint64(len(proofs)))
+	h := newDigestBuilder()
+	h.writeUint64(uint64(len(proofs)))
 	for _, proof := range proofs {
-		writeDigestString(h, string(proof.Guard))
-		if proof.Passed {
-			writeDigestUint64(h, 1)
-		} else {
-			writeDigestUint64(h, 0)
-		}
-		writeDigestBytes(h, proof.Digest[:])
+		h.writeString(string(proof.Guard))
+		h.writeBool(proof.Passed)
+		h.writeBytes(proof.Digest[:])
 	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	return h.sum()
 }
 
 func AdmissionProofSetDigest(predicates []PredicateProof, guards []GuardProof) [32]byte {
-	h := sha256.New()
+	h := newDigestBuilder()
 	predicateDigest := PredicateProofSetDigest(predicates)
 	guardDigest := GuardProofSetDigest(guards)
-	writeDigestBytes(h, predicateDigest[:])
-	writeDigestBytes(h, guardDigest[:])
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	h.writeBytes(predicateDigest[:])
+	h.writeBytes(guardDigest[:])
+	return h.sum()
 }
 
 func descriptorDigest(delta SemanticDelta) [32]byte {
-	h := sha256.New()
-	writeDigestString(h, string(delta.Kind))
-	writeDigestString(h, delta.Eligibility.String())
-	writeDigestString(h, string(delta.SlowReason))
+	h := newDigestBuilder()
+	h.writeString(string(delta.Kind))
+	h.writeString(delta.Eligibility.String())
+	h.writeString(string(delta.SlowReason))
 	if delta.DurabilityBarrier {
-		writeDigestUint64(h, 1)
+		h.writeUint64(1)
 	}
 	if delta.WatchAtSeal {
-		writeDigestUint64(h, 1)
+		h.writeUint64(1)
 	}
-	writeDigestUint64(h, uint64(delta.Authority.MountKeyID))
+	h.writeUint64(uint64(delta.Authority.MountKeyID))
 	for _, bucket := range delta.Authority.Buckets {
-		writeDigestUint64(h, uint64(bucket))
+		h.writeUint64(uint64(bucket))
 	}
 	for _, predicate := range delta.ReadPredicates {
-		writeDigestUint64(h, uint64(predicate.Kind))
-		writeDigestBytes(h, predicate.Key)
+		h.writeUint64(uint64(predicate.Kind))
+		h.writeBytes(predicate.Key)
 		if predicate.HasExpectedValue {
-			writeDigestBytes(h, predicate.ExpectedValue)
+			h.writeBytes(predicate.ExpectedValue)
 		}
 	}
 	for _, effect := range delta.WriteEffects {
-		writeDigestUint64(h, uint64(effect.Kind))
-		writeDigestBytes(h, effect.Key)
-		writeDigestBytes(h, effect.Value)
+		h.writeUint64(uint64(effect.Kind))
+		h.writeBytes(effect.Key)
+		h.writeBytes(effect.Value)
 	}
 	for _, guard := range delta.RuntimeGuards {
-		writeDigestString(h, string(guard))
+		h.writeString(string(guard))
 	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	return h.sum()
 }
 
-func writeSegmentMergeKey(h interface{ Write([]byte) (int, error) }, key SegmentMergeKey) {
-	writeDigestUint64(h, uint64(key.MountKeyID))
-	writeDigestUint64(h, uint64(key.PrimaryBucket))
-	writeDigestUint64(h, uint64(key.Install))
-	writeDigestUint64(h, uint64(key.Durability))
-	writeDigestUint64(h, uint64(key.FormatVersion))
+type digestBuilder struct {
+	stack [512]byte
+	off   int
+	heap  []byte
 }
 
-func writeDigestString(h interface{ Write([]byte) (int, error) }, value string) {
-	writeDigestBytes(h, []byte(value))
+func newDigestBuilder() digestBuilder {
+	return digestBuilder{}
 }
 
-func writeDigestBytes(h interface{ Write([]byte) (int, error) }, value []byte) {
-	writeDigestUint64(h, uint64(len(value)))
-	_, _ = h.Write(value)
+func (b *digestBuilder) writeSegmentMergeKey(key SegmentMergeKey) {
+	b.writeUint64(uint64(key.MountKeyID))
+	b.writeUint64(uint64(key.PrimaryBucket))
+	b.writeUint64(uint64(key.Install))
+	b.writeUint64(uint64(key.Durability))
+	b.writeUint64(uint64(key.FormatVersion))
 }
 
-func writeDigestUint64(h interface{ Write([]byte) (int, error) }, value uint64) {
+func (b *digestBuilder) writeString(value string) {
+	b.writeUint64(uint64(len(value)))
+	b.writeRawString(value)
+}
+
+func (b *digestBuilder) writeBytes(value []byte) {
+	b.writeUint64(uint64(len(value)))
+	b.writeRaw(value)
+}
+
+func (b *digestBuilder) writeRaw(value []byte) {
+	if len(value) == 0 {
+		return
+	}
+	if b.heap != nil {
+		b.heap = append(b.heap, value...)
+		return
+	}
+	if len(value) <= len(b.stack)-b.off {
+		copy(b.stack[b.off:], value)
+		b.off += len(value)
+		return
+	}
+	b.spill(len(value))
+	b.heap = append(b.heap, value...)
+}
+
+func (b *digestBuilder) writeUint64(value uint64) {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], value)
-	_, _ = h.Write(buf[:])
+	b.writeRaw(buf[:])
+}
+
+func (b *digestBuilder) writeBool(value bool) {
+	if value {
+		b.writeUint64(1)
+		return
+	}
+	b.writeUint64(0)
+}
+
+func (b *digestBuilder) writeBoolByte(value bool) {
+	if value {
+		b.writeByte(1)
+		return
+	}
+	b.writeByte(0)
+}
+
+func (b *digestBuilder) writeByte(value byte) {
+	if b.heap != nil {
+		b.heap = append(b.heap, value)
+		return
+	}
+	if b.off < len(b.stack) {
+		b.stack[b.off] = value
+		b.off++
+		return
+	}
+	b.spill(1)
+	b.heap = append(b.heap, value)
+}
+
+func (b *digestBuilder) sum() [32]byte {
+	if b.heap != nil {
+		return sha256.Sum256(b.heap)
+	}
+	return sha256.Sum256(b.stack[:b.off])
+}
+
+func (b *digestBuilder) writeRawString(value string) {
+	if len(value) == 0 {
+		return
+	}
+	if b.heap != nil {
+		b.heap = append(b.heap, value...)
+		return
+	}
+	if len(value) <= len(b.stack)-b.off {
+		b.off += copy(b.stack[b.off:], value)
+		return
+	}
+	b.spill(len(value))
+	b.heap = append(b.heap, value...)
+}
+
+func (b *digestBuilder) spill(extra int) {
+	needed := b.off + extra
+	capacity := len(b.stack) * 2
+	if needed > capacity {
+		capacity = needed
+	}
+	b.heap = make([]byte, b.off, capacity)
+	copy(b.heap, b.stack[:b.off])
 }
 
 func cloneDelta(delta SemanticDelta) SemanticDelta {

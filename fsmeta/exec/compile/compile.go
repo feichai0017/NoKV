@@ -1,9 +1,10 @@
-// Package compile turns fsmeta request plans into Peras semantic deltas.
+// Package compile turns fsmeta requests into generated Peras metadata programs.
 //
-// The compiler is deliberately conservative. It describes the static key
-// footprint and the guards a future Peras holder must prove before it may
-// bypass the ordinary Percolator/Raft path. It does not execute reads, does not
-// allocate timestamps, and does not weaken the current fsmeta executor.
+// The compiler is deliberately conservative. Generated programs describe the
+// static key footprint, concrete or symbolic effects, and the guards a Peras
+// holder must prove before bypassing the ordinary Percolator/Raft path. The
+// compiler does not execute reads, does not allocate timestamps, and does not
+// weaken the current fsmeta executor.
 package compile
 
 import (
@@ -126,6 +127,8 @@ type SemanticDelta struct {
 	WatchAtSeal       bool
 }
 
+var emptyKeySet = [][]byte{}
+
 type QuotaMode uint8
 
 const (
@@ -138,43 +141,16 @@ type Options struct {
 	QuotaMode QuotaMode
 }
 
-type Option func(*Options)
+type Option struct {
+	quotaMode    QuotaMode
+	setQuotaMode bool
+}
 
 func WithQuotaMode(mode QuotaMode) Option {
-	return func(opts *Options) {
-		opts.QuotaMode = mode
-	}
+	return Option{quotaMode: mode, setQuotaMode: true}
 }
 
-func Create(req fsmeta.CreateRequest, mount fsmeta.MountIdentity, inodeID fsmeta.InodeID, opts ...Option) (SemanticDelta, error) {
-	plan, err := fsmeta.PlanCreate(req, mount, inodeID)
-	if err != nil {
-		return SemanticDelta{}, err
-	}
-	inode := req.Attrs.InodeRecord(inodeID)
-	dentry := fsmeta.DentryRecord{Parent: req.Parent, Name: req.Name, Inode: inodeID, Type: inode.Type}
-	dentryValue, err := fsmeta.EncodeDentryValue(dentry)
-	if err != nil {
-		return SemanticDelta{}, err
-	}
-	inodeValue, err := fsmeta.EncodeInodeValue(inode)
-	if err != nil {
-		return SemanticDelta{}, err
-	}
-	delta := mutationDelta(plan, scopeFor(mount, []fsmeta.InodeID{req.Parent}, []fsmeta.InodeID{inodeID}),
-		[]Predicate{
-			{Kind: PredicateNotExists, Key: plan.MutateKeys[0]},
-			{Kind: PredicateNotExists, Key: plan.MutateKeys[1]},
-		},
-		[]WriteEffect{
-			{Kind: EffectPut, Key: plan.MutateKeys[0], Value: dentryValue},
-			{Kind: EffectPut, Key: plan.MutateKeys[1], Value: inodeValue},
-		},
-	)
-	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
-}
-
-func UpdateInode(req fsmeta.UpdateInodeRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
+func lowerUpdateInode(req fsmeta.UpdateInodeRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanUpdateInode(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -196,7 +172,7 @@ func UpdateInode(req fsmeta.UpdateInodeRequest, mount fsmeta.MountIdentity, opts
 	return delta, nil
 }
 
-func Lookup(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerLookup(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanLookup(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -204,7 +180,7 @@ func Lookup(req fsmeta.LookupRequest, mount fsmeta.MountIdentity) (SemanticDelta
 	return readDelta(plan, scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), []Predicate{{Kind: PredicateExists, Key: plan.PrimaryKey}}, SlowReasonReadOnly), nil
 }
 
-func ReadDir(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerReadDir(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanReadDir(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -212,7 +188,7 @@ func ReadDir(req fsmeta.ReadDirRequest, mount fsmeta.MountIdentity) (SemanticDel
 	return readDelta(plan, scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), []Predicate{{Kind: PredicatePrefixScan, Key: plan.ReadPrefixes[0]}}, SlowReasonRangeRead), nil
 }
 
-func SnapshotSubtree(req fsmeta.SnapshotSubtreeRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerSnapshotSubtree(req fsmeta.SnapshotSubtreeRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanSnapshotSubtree(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -222,7 +198,7 @@ func SnapshotSubtree(req fsmeta.SnapshotSubtreeRequest, mount fsmeta.MountIdenti
 	return delta, nil
 }
 
-func Rename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerRename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanRename(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -244,7 +220,7 @@ func Rename(req fsmeta.RenameRequest, mount fsmeta.MountIdentity) (SemanticDelta
 	return delta, nil
 }
 
-func RenameSubtree(req fsmeta.RenameSubtreeRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerRenameSubtree(req fsmeta.RenameSubtreeRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanRenameSubtree(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -266,7 +242,7 @@ func RenameSubtree(req fsmeta.RenameSubtreeRequest, mount fsmeta.MountIdentity) 
 	return delta, nil
 }
 
-func Link(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
+func lowerLink(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanLink(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -285,7 +261,7 @@ func Link(req fsmeta.LinkRequest, mount fsmeta.MountIdentity, opts ...Option) (S
 	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
 }
 
-func Unlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
+func lowerUnlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanUnlink(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -301,7 +277,7 @@ func Unlink(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, opts ...Option
 	return applyQuotaPolicy(delta, collectOptions(opts...), GuardQuotaCredit), nil
 }
 
-func OpenWriteSession(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerOpenWriteSession(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanOpenWriteSession(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -324,7 +300,7 @@ func OpenWriteSession(req fsmeta.OpenWriteSessionRequest, mount fsmeta.MountIden
 	return delta, nil
 }
 
-func HeartbeatWriteSession(req fsmeta.HeartbeatWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerHeartbeatWriteSession(req fsmeta.HeartbeatWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanHeartbeatWriteSession(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -346,7 +322,7 @@ func HeartbeatWriteSession(req fsmeta.HeartbeatWriteSessionRequest, mount fsmeta
 	return delta, nil
 }
 
-func CloseWriteSession(req fsmeta.CloseWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerCloseWriteSession(req fsmeta.CloseWriteSessionRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanCloseWriteSession(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -369,7 +345,7 @@ func CloseWriteSession(req fsmeta.CloseWriteSessionRequest, mount fsmeta.MountId
 	return delta, nil
 }
 
-func ExpireWriteSessions(req fsmeta.ExpireWriteSessionsRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
+func lowerExpireWriteSessions(req fsmeta.ExpireWriteSessionsRequest, mount fsmeta.MountIdentity) (SemanticDelta, error) {
 	plan, err := fsmeta.PlanExpireWriteSessions(req, mount)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -382,14 +358,28 @@ func ExpireWriteSessions(req fsmeta.ExpireWriteSessionsRequest, mount fsmeta.Mou
 }
 
 func mutationDelta(plan fsmeta.OperationPlan, scope AuthorityScope, predicates []Predicate, effects []WriteEffect) SemanticDelta {
+	plan = canonicalPlan(plan)
 	return SemanticDelta{
 		Kind:           plan.Kind,
-		Plan:           clonePlan(plan),
-		Authority:      cloneScope(scope),
-		ReadPredicates: clonePredicates(predicates),
-		WriteEffects:   cloneEffects(effects),
+		Plan:           plan,
+		Authority:      scope,
+		ReadPredicates: predicates,
+		WriteEffects:   effects,
 		Eligibility:    EligibilityVisibleCommit,
 	}
+}
+
+func canonicalPlan(plan fsmeta.OperationPlan) fsmeta.OperationPlan {
+	if plan.ReadKeys == nil {
+		plan.ReadKeys = emptyKeySet
+	}
+	if plan.ReadPrefixes == nil {
+		plan.ReadPrefixes = emptyKeySet
+	}
+	if plan.MutateKeys == nil {
+		plan.MutateKeys = emptyKeySet
+	}
+	return plan
 }
 
 func readDelta(plan fsmeta.OperationPlan, scope AuthorityScope, predicates []Predicate, reason SlowReason) SemanticDelta {
@@ -413,8 +403,8 @@ func applyQuotaPolicy(delta SemanticDelta, opts Options, guard RuntimeGuard) Sem
 func collectOptions(opts ...Option) Options {
 	var out Options
 	for _, opt := range opts {
-		if opt != nil {
-			opt(&out)
+		if opt.setQuotaMode {
+			out.QuotaMode = opt.quotaMode
 		}
 	}
 	return out
@@ -439,6 +429,29 @@ func scopeFor(mount fsmeta.MountIdentity, parents, inodes []fsmeta.InodeID) Auth
 }
 
 func uniqueInodes(in []fsmeta.InodeID) []fsmeta.InodeID {
+	switch len(in) {
+	case 0:
+		return nil
+	case 1:
+		if in[0] == 0 {
+			return nil
+		}
+		return []fsmeta.InodeID{in[0]}
+	case 2:
+		left, right := in[0], in[1]
+		switch {
+		case left == 0 && right == 0:
+			return nil
+		case left == 0:
+			return []fsmeta.InodeID{right}
+		case right == 0 || left == right:
+			return []fsmeta.InodeID{left}
+		case left < right:
+			return []fsmeta.InodeID{left, right}
+		default:
+			return []fsmeta.InodeID{right, left}
+		}
+	}
 	out := make([]fsmeta.InodeID, 0, len(in))
 	seen := make(map[fsmeta.InodeID]struct{}, len(in))
 	for _, id := range in {
@@ -456,6 +469,22 @@ func uniqueInodes(in []fsmeta.InodeID) []fsmeta.InodeID {
 }
 
 func uniqueBuckets(in []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
+	switch len(in) {
+	case 0:
+		return nil
+	case 1:
+		return []fsmeta.AffinityBucket{in[0]}
+	case 2:
+		left, right := in[0], in[1]
+		switch {
+		case left == right:
+			return []fsmeta.AffinityBucket{left}
+		case left < right:
+			return []fsmeta.AffinityBucket{left, right}
+		default:
+			return []fsmeta.AffinityBucket{right, left}
+		}
+	}
 	out := make([]fsmeta.AffinityBucket, 0, len(in))
 	seen := make(map[fsmeta.AffinityBucket]struct{}, len(in))
 	for _, bucket := range in {

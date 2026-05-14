@@ -9,7 +9,9 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, move renameMove) (bool, error) {
+func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.CompiledOp, move renameMove) (bool, error) {
+	delta := compiled.Delta
+	plan := delta.Plan
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
@@ -47,10 +49,13 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, delta compile.Sema
 	if err != nil {
 		return false, err
 	}
-	concrete := view.materializePerasOp(delta, []compile.WriteEffect{
+	concrete, err := view.materializePerasCompiledOp(compiled, []compile.WriteEffect{
 		perasDeleteEffect(plan.MutateKeys[0]),
 		perasPutEffect(plan.MutateKeys[1], value),
 	})
+	if err != nil {
+		return false, err
+	}
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
@@ -94,10 +99,11 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.Rename(req, mount)
+	program, err := compile.CompileRenameProgram(req, mount)
 	if err != nil {
 		return err
 	}
+	delta := program.Compiled.Delta
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
@@ -108,7 +114,7 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
-	if committed, err := e.tryPerasVisibleRename(ctx, delta, plan, move); committed || err != nil {
+	if committed, err := e.tryPerasVisibleRename(ctx, program.Compiled, move); committed || err != nil {
 		if err != nil {
 			return err
 		}
@@ -144,10 +150,11 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.RenameSubtree(req, mount)
+	program, err := compile.CompileRenameSubtreeProgram(req, mount)
 	if err != nil {
 		return err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}

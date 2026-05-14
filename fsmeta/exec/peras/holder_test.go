@@ -2,6 +2,7 @@ package peras
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -109,30 +110,15 @@ func TestHolderBuildPendingReplayPlanLimitKeepsLaterOperationsPending(t *testing
 
 func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing.T) {
 	holder := newTestHolder(t)
-	firstScope := compile.AuthorityScope{
-		Mount:           "vol",
-		MountKeyID:      1,
-		Parents:         []fsmeta.InodeID{1},
-		Inodes:          []fsmeta.InodeID{10},
-		AllowOpaqueKeys: true,
-	}
-	secondScope := compile.AuthorityScope{
-		Mount:           "vol",
-		MountKeyID:      1,
-		Parents:         []fsmeta.InodeID{2},
-		Inodes:          []fsmeta.InodeID{20},
-		AllowOpaqueKeys: true,
-	}
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
-	firstDelta := deltaWithValueWrites("dentry/a", "v1")
-	firstDelta.Authority = firstScope
-	secondDelta := deltaWithValueWrites("dentry/b", "v2")
-	secondDelta.Authority = secondScope
+	firstOp := testGeneratedCreateOpForInodes(t, 10, 20, "a")
+	secondOp := testGeneratedCreateOpForInodes(t, 30, 40, "b")
+	firstScope := firstOp.Delta.Authority
 
-	_, err := holder.Submit(context.Background(), first, compile.MaterializeDelta(firstDelta, nil))
+	_, err := holder.Submit(context.Background(), first, firstOp)
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, compile.MaterializeDelta(secondDelta, nil))
+	_, err = holder.Submit(context.Background(), second, secondOp)
 	require.NoError(t, err)
 
 	plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(100, firstScope)
@@ -182,33 +168,23 @@ func TestHolderBuildReplayPlanAndMarkApplied(t *testing.T) {
 
 func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	holder := newTestHolder(t)
-	delta := deltaWithValueWrites("a", "v1")
-	delta.Eligibility = compile.EligibilitySlowPath
+	op := opWithValueWrites("a", "v1")
+	op.Delta.Eligibility = compile.EligibilitySlowPath
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.MaterializeDelta(delta, nil))
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), op)
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
 func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 	holder := newTestHolder(t)
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	leftKey := fsmetaInodeKeyForBucket(t, mount, 1)
-	rightKey := fsmetaInodeKeyForBucket(t, mount, 2)
-	delta := compile.SemanticDelta{
-		Kind:        fsmeta.OperationCreate,
-		Eligibility: compile.EligibilityVisibleCommit,
-		Authority: compile.AuthorityScope{
-			Mount:      mount.MountID,
-			MountKeyID: mount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{1, 2},
-		},
-		WriteEffects: []compile.WriteEffect{
-			{Kind: compile.EffectPut, Key: leftKey, Value: []byte("left")},
-			{Kind: compile.EffectPut, Key: rightKey, Value: []byte("right")},
-		},
-	}
+	parent := inodeForBucket(t, 1)
+	inode := inodeForBucket(t, 2)
+	op := testGeneratedCreateOpForInodes(t, parent, inode, "cross-bucket")
+	require.Equal(t, mount.MountKeyID, op.Authority.Scope.MountKeyID)
+	require.Len(t, op.Authority.Scope.Buckets, 2)
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), compile.MaterializeDelta(delta, nil))
+	_, err := holder.Submit(context.Background(), opID("client-a", 1), op)
 	require.NoError(t, err)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -271,43 +247,93 @@ func newTestHolder(t *testing.T) *Holder {
 	return holder
 }
 
+var testMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+
+func testGeneratedCreateOp(tb testing.TB, name, value string, opts ...compile.Option) compile.MaterializedOp {
+	tb.Helper()
+	op, err := generatedCreateOp(name, value, opts...)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return op
+}
+
+func generatedCreateOp(name, value string, opts ...compile.Option) (compile.MaterializedOp, error) {
+	name = strings.NewReplacer("/", "-", "\x00", "-").Replace(name)
+	if name == "" || name == "." || name == ".." {
+		name = "entry"
+	}
+	inodeID := fsmeta.InodeID(100)
+	for _, ch := range name + value {
+		inodeID += fsmeta.InodeID(ch)
+	}
+	program, err := compile.CompileCreateProgram(fsmeta.CreateRequest{
+		Mount:  testMount.MountID,
+		Parent: fsmeta.RootInode,
+		Name:   name,
+		Attrs: fsmeta.CreateAttrs{
+			Type: fsmeta.InodeTypeFile,
+			Size: uint64(len(value)),
+			Mode: 0o644,
+		},
+	}, testMount, inodeID, opts...)
+	if err != nil {
+		return compile.MaterializedOp{}, err
+	}
+	return compile.MaterializeCreate(program, compile.CreateValues{})
+}
+
+func testGeneratedCreateOpForInodes(tb testing.TB, parent, inode fsmeta.InodeID, name string) compile.MaterializedOp {
+	tb.Helper()
+	program, err := compile.CompileCreateProgram(fsmeta.CreateRequest{
+		Mount:  testMount.MountID,
+		Parent: parent,
+		Name:   name,
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+	}, testMount, inode)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	op, err := compile.MaterializeCreate(program, compile.CreateValues{})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return op
+}
+
 func opWithValueWrites(key, value string) compile.MaterializedOp {
-	return compile.MaterializeDelta(deltaWithValueWrites(key, value), nil)
+	op, err := generatedCreateOp(key, value)
+	if err != nil {
+		panic(err)
+	}
+	return op
 }
 
 func opWithGuardedValueWrite(key, value string) compile.MaterializedOp {
-	delta := deltaWithValueWrites(key, value)
-	delta.RuntimeGuards = []compile.RuntimeGuard{compile.GuardSingleLinkInode}
-	return compile.MaterializeDelta(delta, nil)
-}
-
-func deltaWithValueWrites(key, value string) compile.SemanticDelta {
-	return compile.SemanticDelta{
-		Kind:        fsmeta.OperationCreate,
-		Eligibility: compile.EligibilityVisibleCommit,
-		Authority: compile.AuthorityScope{
-			AllowOpaqueKeys: true,
-		},
-		WriteEffects: []compile.WriteEffect{{
-			Kind:  compile.EffectPut,
-			Key:   []byte(key),
-			Value: []byte(value),
-		}},
+	op, err := generatedCreateOp(key, value, compile.WithQuotaMode(compile.QuotaModeEscrow))
+	if err != nil {
+		panic(err)
 	}
+	return op
 }
 
 func fsmetaInodeKeyForBucket(t *testing.T, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) []byte {
 	t.Helper()
+	inode := inodeForBucket(t, bucket)
+	key, err := fsmeta.EncodeInodeKey(mount, inode)
+	require.NoError(t, err)
+	return key
+}
+
+func inodeForBucket(t *testing.T, bucket fsmeta.AffinityBucket) fsmeta.InodeID {
+	t.Helper()
 	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
-		if fsmeta.BucketForInodeID(inode) != bucket {
-			continue
+		if fsmeta.BucketForInodeID(inode) == bucket {
+			return inode
 		}
-		key, err := fsmeta.EncodeInodeKey(mount, inode)
-		require.NoError(t, err)
-		return key
 	}
 	t.Fatalf("no inode found for bucket %d", bucket)
-	return nil
+	return 0
 }
 
 func mustHolderForBench(b *testing.B) *Holder {

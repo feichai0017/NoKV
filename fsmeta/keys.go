@@ -135,9 +135,11 @@ func EncodeInodeKey(mount MountIdentity, inode InodeID) ([]byte, error) {
 	if err := validateInodeID(inode); err != nil {
 		return nil, err
 	}
-	var body [8]byte
-	binary.BigEndian.PutUint64(body[:], uint64(inode))
-	return encodeKey(mount, BucketForInodeID(inode), KeyKindInode, body[:])
+	if err := validateMountIdentity(mount); err != nil {
+		return nil, err
+	}
+	out := encodeKeyPrefixForMountKeyID(mount.MountKeyID, BucketForInodeID(inode), KeyKindInode, 8)
+	return binary.BigEndian.AppendUint64(out, uint64(inode)), nil
 }
 
 // EncodeDentryPrefix returns the scan prefix for entries directly under parent.
@@ -155,11 +157,15 @@ func EncodeDentryKey(mount MountIdentity, parent InodeID, name string) ([]byte, 
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
-	prefix, err := EncodeDentryPrefix(mount, parent)
-	if err != nil {
+	if err := validateInodeID(parent); err != nil {
 		return nil, err
 	}
-	return append(prefix, name...), nil
+	if err := validateMountIdentity(mount); err != nil {
+		return nil, err
+	}
+	out := encodeKeyPrefixForMountKeyID(mount.MountKeyID, BucketForInodeID(parent), KeyKindDentry, 8+len(name))
+	out = binary.BigEndian.AppendUint64(out, uint64(parent))
+	return append(out, name...), nil
 }
 
 // EncodeChunkKey returns the chunk mapping record key for inode/chunk.
@@ -279,15 +285,26 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 // storage key. It is intended for watch diagnostics that receive committed
 // storage keys but must not know the mount_key_id that produced them.
 func DentryNameOfKey(key []byte) (string, bool) {
+	name, ok := DentryNameBytesOfKey(key)
+	if !ok {
+		return "", false
+	}
+	return string(name), true
+}
+
+// DentryNameBytesOfKey extracts the final name component from a concrete
+// dentry key without allocating. The returned bytes alias key and must be
+// treated as immutable by callers that keep derived views.
+func DentryNameBytesOfKey(key []byte) ([]byte, bool) {
 	_, kindPos, err := decodeHeaderParts(key)
 	if err != nil || kindPos >= len(key) || KeyKind(key[kindPos]) != KeyKindDentry {
-		return "", false
+		return nil, false
 	}
 	body := key[kindPos+1:]
 	if len(body) <= 8 {
-		return "", false
+		return nil, false
 	}
-	return string(body[8:]), true
+	return body[8:], true
 }
 
 // MountKeyIDOfKey returns the rooted storage mount identity encoded in a full
@@ -459,7 +476,13 @@ func encodeKey(mount MountIdentity, bucket AffinityBucket, kind KeyKind, body []
 }
 
 func encodeKeyForMountKeyID(mountKeyID MountKeyID, bucket AffinityBucket, kind KeyKind, body []byte) []byte {
-	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+encodedBucketBytes+1+len(body))
+	out := encodeKeyPrefixForMountKeyID(mountKeyID, bucket, kind, len(body))
+	out = append(out, body...)
+	return out
+}
+
+func encodeKeyPrefixForMountKeyID(mountKeyID MountKeyID, bucket AffinityBucket, kind KeyKind, bodyLen int) []byte {
+	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+encodedBucketBytes+1+bodyLen)
 	out = append(out, keyMagic...)
 	out = append(out, keySchemaVersion)
 	var mountBuf [encodedMountKeyBytes]byte
@@ -467,7 +490,6 @@ func encodeKeyForMountKeyID(mountKeyID MountKeyID, bucket AffinityBucket, kind K
 	out = append(out, mountBuf[:]...)
 	out = appendBucket(out, bucket)
 	out = append(out, byte(kind))
-	out = append(out, body...)
 	return out
 }
 

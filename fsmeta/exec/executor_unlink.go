@@ -7,7 +7,10 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.SemanticDelta, plan fsmeta.OperationPlan, mount fsmeta.MountIdentity, req fsmeta.UnlinkRequest) (bool, error) {
+func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.UnlinkProgram, mount fsmeta.MountIdentity, req fsmeta.UnlinkRequest) (bool, error) {
+	compiled := program.Compiled
+	delta := compiled.Delta
+	plan := delta.Plan
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
@@ -51,7 +54,10 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, delta compile.Sema
 		}
 		effects = append(effects, perasPutEffect(inodeKey, inodeValue))
 	}
-	concrete := view.materializePerasOp(delta, effects)
+	concrete, err := view.materializePerasCompiledOp(compiled, effects)
+	if err != nil {
+		return false, err
+	}
 	return e.tryPerasVisibleCommit(ctx, concrete)
 }
 
@@ -63,15 +69,16 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	delta, err := compile.Unlink(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileUnlinkProgram(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
-	if committed, err := e.tryPerasVisibleUnlink(ctx, delta, plan, mount, req); committed || err != nil {
+	if committed, err := e.tryPerasVisibleUnlink(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return err
 		}

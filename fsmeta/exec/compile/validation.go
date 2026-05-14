@@ -136,7 +136,10 @@ func (op MaterializedOp) validateForAdmission(requireGuardProofs bool) error {
 }
 
 func materializedOpIsCanonical(op MaterializedOp) bool {
-	canonical := CompileDelta(op.Delta)
+	canonical, err := compileAOTDelta(op.Delta)
+	if err != nil {
+		return false
+	}
 	if op.DescriptorDigest != canonical.DescriptorDigest ||
 		op.ReplayDigest != canonical.DescriptorDigest {
 		return false

@@ -282,8 +282,3 @@ func isPerasAdmissionTerminalError(err error) bool {
 		errors.Is(err, fsmeta.ErrInvalidRequest) ||
 		errors.Is(err, fsmeta.ErrInvalidValue)
 }
-
-func concretePerasDelta(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.SemanticDelta {
-	delta.WriteEffects = effects
-	return delta
-}

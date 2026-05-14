@@ -27,10 +27,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	delta, err := compile.Create(req, mount, inodeID, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileCreateProgram(req, mount, inodeID, compile.WithQuotaMode(e.perasQuotaMode()))
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
+	delta := program.Compiled.Delta
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
@@ -42,14 +43,8 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		Inode:  inodeID,
 		Type:   inode.Type,
 	}
-	dentryValue, err := fsmeta.EncodeDentryValue(dentry)
-	if err != nil {
-		return fsmeta.CreateResult{}, err
-	}
-	inodeValue, err := fsmeta.EncodeInodeValue(inode)
-	if err != nil {
-		return fsmeta.CreateResult{}, err
-	}
+	dentryValue := delta.WriteEffects[0].Value
+	inodeValue := delta.WriteEffects[1].Value
 	e.createTotal.Add(1)
 	quotaChanges := []QuotaChange{{
 		Mount:      req.Mount,
@@ -67,7 +62,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		}
 	}
 	if quotaOK {
-		if committed, err := e.tryPerasVisibleCommit(ctx, compile.MaterializeDelta(delta, nil)); committed || err != nil {
+		materialized, err := compile.MaterializeCreate(program, compile.CreateValues{})
+		if err != nil {
+			return fsmeta.CreateResult{}, err
+		}
+		if committed, err := e.tryPerasVisibleCommit(ctx, materialized); committed || err != nil {
 			if err != nil {
 				return fsmeta.CreateResult{}, err
 			}

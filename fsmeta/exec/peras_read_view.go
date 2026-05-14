@@ -186,50 +186,11 @@ func (v *perasReadView) remember(key, value []byte, present bool, source compile
 	}
 }
 
-func (v *perasReadView) materializePerasOp(delta compile.SemanticDelta, effects []compile.WriteEffect) compile.MaterializedOp {
+func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, effects []compile.WriteEffect) (compile.MaterializedOp, error) {
 	if v == nil || v.executor == nil {
-		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
+		return compile.MaterializeCompiledOpWithEvidence(compiled, effects, compile.PredicateEvidence{}, nil)
 	}
-	index := v.executor.perasPredicateIndex()
-	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
-	seen := make(map[string]struct{}, len(delta.ReadPredicates)+len(v.observed))
-	for i := range delta.ReadPredicates {
-		predicate := &delta.ReadPredicates[i]
-		if predicate.Kind == compile.PredicatePrefixScan {
-			continue
-		}
-		seen[string(predicate.Key)] = struct{}{}
-		if observed, ok := v.observed[string(predicate.Key)]; ok {
-			applyPerasObservedPredicate(predicate, observed)
-			continue
-		}
-		if allowAbsentDowngrade &&
-			predicate.Kind == compile.PredicateObservedValue &&
-			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
-			predicate.Kind = compile.PredicateNotExists
-			predicate.ExpectedValue = nil
-			predicate.HasExpectedValue = false
-			predicate.RuntimeChecked = true
-		}
-	}
-	if len(v.observed) == 0 {
-		return compile.MaterializeDelta(concretePerasDelta(delta, effects), nil)
-	}
-	keys := make([]string, 0, len(v.observed))
-	for key := range v.observed {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		observed := v.observed[key]
-		predicate := compile.Predicate{Key: []byte(key)}
-		applyPerasObservedPredicate(&predicate, observed)
-		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
-	}
-	return compile.MaterializeDelta(concretePerasDelta(delta, effects), v.predicateProofs())
+	return compile.MaterializeCompiledOpWithEvidence(compiled, effects, v.predicateEvidenceForDelta(compiled.Delta), nil)
 }
 
 func (v *perasReadView) predicateProofs() []compile.PredicateProof {
@@ -257,21 +218,30 @@ func (v *perasReadView) predicateProofs() []compile.PredicateProof {
 	return proofs
 }
 
-func applyPerasObservedPredicate(predicate *compile.Predicate, observed perasObservedValue) {
-	if predicate == nil {
-		return
+func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) compile.PredicateEvidence {
+	if v == nil || v.executor == nil {
+		return compile.PredicateEvidence{}
 	}
-	if !observed.present {
-		predicate.Kind = compile.PredicateNotExists
-		predicate.ExpectedValue = nil
-		predicate.HasExpectedValue = false
-		predicate.RuntimeChecked = true
-		return
+	index := v.executor.perasPredicateIndex()
+	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
+	knownAbsent := make([][]byte, 0)
+	for _, predicate := range delta.ReadPredicates {
+		if predicate.Kind == compile.PredicatePrefixScan {
+			continue
+		}
+		if _, ok := v.observed[string(predicate.Key)]; ok {
+			continue
+		}
+		if allowAbsentDowngrade &&
+			predicate.Kind == compile.PredicateObservedValue &&
+			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
+			knownAbsent = append(knownAbsent, cloneBytes(predicate.Key))
+		}
 	}
-	predicate.Kind = compile.PredicateObservedValue
-	predicate.ExpectedValue = cloneBytes(observed.value)
-	predicate.HasExpectedValue = true
-	predicate.RuntimeChecked = true
+	return compile.PredicateEvidence{
+		Proofs:      v.predicateProofs(),
+		KnownAbsent: knownAbsent,
+	}
 }
 
 func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
