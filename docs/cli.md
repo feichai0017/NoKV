@@ -207,7 +207,7 @@ nokv coordinator \
   - `--peer nodeID=addr` (repeatable, exactly 3)
 - Common flags:
   - `--addr` (default `127.0.0.1:2380`, gRPC listen)
-  - `--tick-interval` (default `100ms`)
+  - `--tick-interval` (default `1000ms`)
   - `--metrics-addr` (optional expvar endpoint)
 
 Example:

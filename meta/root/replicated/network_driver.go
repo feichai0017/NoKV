@@ -13,7 +13,9 @@ import (
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-const defaultNetworkTickInterval = 100 * time.Millisecond
+const defaultNetworkTickInterval = 1000 * time.Millisecond
+const defaultNetworkElectionTick = 10
+const defaultNetworkHeartbeatTick = 1
 const defaultAppendWaitTimeout = 5 * time.Second
 
 // NetworkConfig wires one local raft node to a transport and a fixed peer set.
@@ -263,8 +265,8 @@ func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, er
 	}
 	rcfg := &myraft.Config{
 		ID:              cfg.ID,
-		ElectionTick:    5,
-		HeartbeatTick:   1,
+		ElectionTick:    defaultNetworkElectionTick,
+		HeartbeatTick:   defaultNetworkHeartbeatTick,
 		Storage:         storage,
 		MaxSizePerMsg:   math.MaxUint64,
 		MaxInflightMsgs: 256,
