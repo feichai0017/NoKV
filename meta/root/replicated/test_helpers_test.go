@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,4 +66,12 @@ func openNetworkTestCluster(t testing.TB, maxRetainedRecords int) (map[uint64]*S
 		stores[id] = store
 	}
 	return stores, drivers, leaderID
+}
+
+func requireDriverObservedCursor(t testing.TB, driver *NetworkDriver, cursor rootstate.Cursor) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		advance, err := driver.ObserveTail(rootstorage.TailToken{})
+		return err == nil && (advance.LastCursor() == cursor || rootstate.CursorAfter(advance.LastCursor(), cursor))
+	}, 5*time.Second, 50*time.Millisecond)
 }
