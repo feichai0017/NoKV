@@ -108,6 +108,30 @@ func CatalogRouteKeys(req *kvrpcpb.PerasInstallSegmentRequest) ([][]byte, error)
 	return CatalogRouteInstallKeys(info.Root, info.RoutingKey)
 }
 
+func CatalogInstallRoutingKeys(info InstallRequestInfo) ([][]byte, error) {
+	if info.MaterializeMVCC || len(info.RoutingKey) == 0 {
+		return nil, ErrInvalidInstallRequest
+	}
+	source := info.RoutingKeys
+	if len(source) == 0 {
+		source = [][]byte{info.RoutingKey}
+	}
+	if !installKeysContainAll(source, [][]byte{info.RoutingKey}) {
+		return nil, ErrInvalidInstallRequest
+	}
+	out := make([][]byte, 0, len(source))
+	for _, key := range source {
+		if _, err := fsperas.PerasSegmentCatalogRouteInstallKeys(info.Root, key); err != nil {
+			return nil, err
+		}
+		out = appendUniqueInstallKey(out, key)
+	}
+	if len(out) == 0 {
+		return nil, ErrInvalidInstallRequest
+	}
+	return out, nil
+}
+
 func CatalogRouteInstallKeys(root [32]byte, routingKey []byte) ([][]byte, error) {
 	return fsperas.PerasSegmentCatalogRouteInstallKeys(root, routingKey)
 }
@@ -127,7 +151,19 @@ func InstallKeys(req *kvrpcpb.PerasInstallSegmentRequest) ([][]byte, error) {
 		return validateInstallDependencyHeader(info)
 	}
 	if !info.MaterializeMVCC {
-		return fsperas.PerasSegmentCatalogRouteInstallKeys(info.Root, info.RoutingKey)
+		routingKeys, err := CatalogInstallRoutingKeys(info)
+		if err != nil {
+			return nil, err
+		}
+		keys := make([][]byte, 0, len(routingKeys)*2)
+		for _, routingKey := range routingKeys {
+			routeKeys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(info.Root, routingKey)
+			if err != nil {
+				return nil, err
+			}
+			keys = appendInstallKeys(keys, routeKeys...)
+		}
+		return keys, nil
 	}
 	segment, _, err := DecodeInstallSegmentPayload(req)
 	if err != nil {
@@ -214,12 +250,18 @@ func validateInstallDependencyHeader(info InstallRequestInfo) ([][]byte, error) 
 		return nil, err
 	}
 	if !info.MaterializeMVCC {
-		routeKeys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(info.Root, info.RoutingKey)
+		routingKeys, err := CatalogInstallRoutingKeys(info)
 		if err != nil {
 			return nil, err
 		}
-		if !installKeysContainAll(info.DependencyKeys, routeKeys) {
-			return nil, ErrInvalidInstallRequest
+		for _, routingKey := range routingKeys {
+			routeKeys, err := fsperas.PerasSegmentCatalogRouteInstallKeys(info.Root, routingKey)
+			if err != nil {
+				return nil, err
+			}
+			if !installKeysContainAll(info.DependencyKeys, routeKeys) {
+				return nil, ErrInvalidInstallRequest
+			}
 		}
 		if len(info.CatalogKeys) > 0 && !installKeysContainAll(info.DependencyKeys, info.CatalogKeys) {
 			return nil, ErrInvalidInstallRequest
@@ -293,4 +335,23 @@ func installKeysContainAll(have, want [][]byte) bool {
 		}
 	}
 	return true
+}
+
+func appendInstallKeys(dst [][]byte, keys ...[]byte) [][]byte {
+	for _, key := range keys {
+		dst = appendUniqueInstallKey(dst, key)
+	}
+	return dst
+}
+
+func appendUniqueInstallKey(dst [][]byte, key []byte) [][]byte {
+	if len(key) == 0 {
+		return dst
+	}
+	for _, existing := range dst {
+		if bytes.Equal(existing, key) {
+			return dst
+		}
+	}
+	return append(dst, append([]byte(nil), key...))
 }

@@ -518,6 +518,52 @@ func TestRuntimePublishesRootSealAfterInstall(t *testing.T) {
 	require.Equal(t, uint64(1), stats["flush_jobs_max"])
 }
 
+func TestRuntimeWitnessQuorumSelectionRotatesBySegmentRoot(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	witnesses := testRuntimePerasWitnesses(t, 5)
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		Quorum:            2,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 1}
+	for i := uint64(1); i <= 64; i++ {
+		var root [32]byte
+		var digest [32]byte
+		binary.BigEndian.PutUint64(root[24:], i)
+		binary.BigEndian.PutUint64(digest[24:], i*17)
+		require.NoError(t, committer.appendSegmentWitnessRecords(context.Background(), scope, []fsperas.SegmentWitnessRecord{{
+			EpochID:              1,
+			SegmentRoot:          root,
+			SegmentPayloadDigest: digest,
+			SegmentPayloadSize:   1,
+		}}))
+	}
+
+	total := 0
+	used := 0
+	maxRecords := 0
+	for _, witness := range witnesses {
+		recorder := witness.(*recordingRuntimePerasWitness)
+		count := recorder.recordCount()
+		total += count
+		if count > 0 {
+			used++
+		}
+		if count > maxRecords {
+			maxRecords = count
+		}
+	}
+	require.Equal(t, 64*committer.quorum, total)
+	require.Equal(t, len(witnesses), used)
+	require.Less(t, maxRecords, 64)
+}
+
 func TestRuntimeCanStopAtDurablePersistence(t *testing.T) {
 	provider := &publishingRuntimePerasGrantProvider{
 		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
@@ -2705,6 +2751,12 @@ func (w *recordingRuntimePerasWitness) AppendSegments(_ context.Context, _ compi
 	defer w.mu.Unlock()
 	w.records = append(w.records, records...)
 	return nil
+}
+
+func (w *recordingRuntimePerasWitness) recordCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.records)
 }
 
 func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {

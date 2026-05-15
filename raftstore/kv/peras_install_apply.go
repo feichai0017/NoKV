@@ -7,6 +7,7 @@ import (
 	"bytes"
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
@@ -21,14 +22,20 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(rsperas.ErrInvalidInstallRequest.Error())}, nil
 	}
 	if !info.MaterializeMVCC && !info.HasPayload {
-		return applyPerasInstallSegmentIndexRoute(db, info)
+		return applyPerasInstallSegmentIndexRoutes(db, info)
 	}
 	segment, digest, err := rsperas.DecodeInstallSegmentPayload(req)
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 	}
+	var catalogRoutingKeys [][]byte
 	if !info.MaterializeMVCC {
-		if ok, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, info.RoutingKey); err != nil {
+		routingKeys, err := rsperas.CatalogInstallRoutingKeys(info)
+		if err != nil {
+			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
+		}
+		catalogRoutingKeys = routingKeys
+		if ok, err := loadPerasSegmentCatalogInstallForObjectKeys(db, segment, routingKeys); err != nil {
 			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 		} else if ok {
 			stats := segment.Stats()
@@ -44,7 +51,7 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	if info.MaterializeMVCC {
 		entries, err = buildMVCCSegmentInstallEntriesWithVerifiedPayload(segment, info.InstallVersion, info.Payload, digest)
 	} else {
-		entries, err = buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment, info.InstallVersion, info.Payload, digest, info.RoutingKey)
+		entries, err = buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKeys(segment, info.InstallVersion, info.Payload, digest, catalogRoutingKeys)
 	}
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
@@ -64,14 +71,20 @@ func applyPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegmen
 	}, nil
 }
 
-func applyPerasInstallSegmentIndexRoute(db txnstore.Store, info rsperas.InstallRequestInfo) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+func applyPerasInstallSegmentIndexRoutes(db txnstore.Store, info rsperas.InstallRequestInfo) (*kvrpcpb.PerasInstallSegmentResponse, error) {
 	if info.SegmentEpochID == 0 || info.SegmentOperationCount == 0 || info.SegmentEntryCount == 0 || info.SegmentPayloadSize == 0 || len(info.CanonicalObjectKey) == 0 {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("missing segment catalog index metadata")}, nil
 	}
-	if bytes.Equal(info.RoutingKey, info.CanonicalObjectKey) {
-		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("canonical segment route requires payload")}, nil
+	routingKeys, err := rsperas.CatalogInstallRoutingKeys(info)
+	if err != nil {
+		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 	}
-	if ok, err := LoadPerasSegmentCatalogIndexInstall(db, info.Root, info.RoutingKey, info.CanonicalObjectKey); err != nil {
+	for _, routingKey := range routingKeys {
+		if bytes.Equal(routingKey, info.CanonicalObjectKey) {
+			return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort("canonical segment route requires payload")}, nil
+		}
+	}
+	if ok, err := loadPerasSegmentCatalogIndexInstallForObjectKeys(db, info.Root, routingKeys, info.CanonicalObjectKey); err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 	} else if ok {
 		return &kvrpcpb.PerasInstallSegmentResponse{
@@ -81,15 +94,7 @@ func applyPerasInstallSegmentIndexRoute(db txnstore.Store, info rsperas.InstallR
 			AppliedEntries: 1,
 		}, nil
 	}
-	entries, err := buildMVCCSegmentCatalogIndexInstallEntries(
-		info.Root,
-		info.PayloadDigest,
-		info.SegmentEpochID,
-		info.InstallVersion,
-		info.SegmentPayloadSize,
-		info.RoutingKey,
-		info.CanonicalObjectKey,
-	)
+	entries, err := buildMVCCSegmentCatalogIndexInstallEntriesForObjectKeys(info.Root, info.PayloadDigest, info.SegmentEpochID, info.InstallVersion, info.SegmentPayloadSize, routingKeys, info.CanonicalObjectKey)
 	if err != nil {
 		return &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}, nil
 	}
@@ -107,4 +112,30 @@ func applyPerasInstallSegmentIndexRoute(db txnstore.Store, info rsperas.InstallR
 
 func perasInstallAbort(msg string) *kvrpcpb.KeyError {
 	return &kvrpcpb.KeyError{Abort: msg}
+}
+
+func loadPerasSegmentCatalogInstallForObjectKeys(store SegmentCatalogStore, segment fsperas.PerasSegment, objectKeys [][]byte) (bool, error) {
+	if len(objectKeys) == 0 {
+		return false, fsperas.ErrInvalidPerasSegment
+	}
+	for _, objectKey := range objectKeys {
+		ok, err := LoadPerasSegmentCatalogInstallForObjectKey(store, segment, objectKey)
+		if err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
+}
+
+func loadPerasSegmentCatalogIndexInstallForObjectKeys(store SegmentCatalogStore, root [32]byte, routingKeys [][]byte, canonicalObjectKey []byte) (bool, error) {
+	if len(routingKeys) == 0 {
+		return false, fsperas.ErrInvalidPerasSegment
+	}
+	for _, routingKey := range routingKeys {
+		ok, err := LoadPerasSegmentCatalogIndexInstall(store, root, routingKey, canonicalObjectKey)
+		if err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
 }

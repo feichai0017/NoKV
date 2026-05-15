@@ -6,6 +6,7 @@ package raftstore
 import (
 	"context"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -187,6 +188,40 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 	require.Equal(t, int32(len(routingKeys)), kv.headerRouteCount())
 }
 
+func TestRaftstoreSegmentInstallerGroupsCatalogRoutesByRegion(t *testing.T) {
+	segment := testRaftstoreInstallSegment(t, testRaftstoreInstallKeysAcrossBuckets(t, 4))
+	routingKeys, err := runtimeperas.SegmentInstallRoutingKeys(segment, false)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(routingKeys), 4)
+	payload, digest := encodeRaftstoreInstallSegment(t, segment)
+
+	kv := &groupingRaftstorePerasInstallKV{
+		parallelRaftstorePerasInstallKV: parallelRaftstorePerasInstallKV{
+			stats: segment.Stats(),
+			root:  segment.Root,
+		},
+		groups: []client.RouteKeyGroup{
+			{RegionID: 11, LeaderStoreID: 1, Keys: cloneRuntimeKeySet(routingKeys[:2])},
+			{RegionID: 12, LeaderStoreID: 2, Keys: cloneRuntimeKeySet(routingKeys[2:])},
+		},
+	}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+
+	installer := newRaftstoreSegmentInstaller(runner, nil)
+	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
+		Segment:       segment,
+		Payload:       payload,
+		PayloadDigest: digest,
+	})
+	require.NoError(t, err)
+	require.True(t, cursor.Valid())
+	require.Equal(t, 2, kv.callCount())
+	require.Equal(t, int32(1), kv.payloadRouteCount())
+	require.Equal(t, int32(1), kv.indexOnlyRouteCount())
+	require.Equal(t, []int{2, len(routingKeys) - 2}, kv.requestRouteCounts())
+}
+
 func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing.T) {
 	oldProcs := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(oldProcs)
@@ -332,6 +367,32 @@ type parallelRaftstorePerasInstallKV struct {
 	payloadRoutes   atomic.Int32
 	indexOnlyRoutes atomic.Int32
 	headerRoutes    atomic.Int32
+}
+
+type groupingRaftstorePerasInstallKV struct {
+	parallelRaftstorePerasInstallKV
+	groups []client.RouteKeyGroup
+	mu     sync.Mutex
+	counts []int
+}
+
+func (f *groupingRaftstorePerasInstallKV) GroupKeysByRoute(context.Context, [][]byte) ([]client.RouteKeyGroup, error) {
+	return cloneRouteKeyGroups(f.groups), nil
+}
+
+func (f *groupingRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, key []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	f.mu.Lock()
+	f.counts = append(f.counts, len(req.GetRoutingKeys()))
+	f.mu.Unlock()
+	return f.parallelRaftstorePerasInstallKV.InstallPerasSegment(ctx, key, req)
+}
+
+func (f *groupingRaftstorePerasInstallKV) requestRouteCounts() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]int(nil), f.counts...)
+	sort.Ints(out)
+	return out
 }
 
 func (f *parallelRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {

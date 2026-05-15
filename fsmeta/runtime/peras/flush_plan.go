@@ -4,6 +4,7 @@
 package peras
 
 import (
+	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
@@ -20,7 +21,7 @@ func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, mater
 func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
 	batches := make([]perasFlushBatch, 0, len(plans))
 	for _, frozen := range plans {
-		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replaySegmentBudget(materialize))
+		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replaySegmentBudget(materialize), c.replaySegmentCatalogRouteBudget(materialize))
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 		}
@@ -99,7 +100,17 @@ func (c *Runtime) replaySegmentBudget(materialize bool) compile.SegmentBudget {
 	return budget
 }
 
-func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, budget compile.SegmentBudget) ([]fsperas.ReplayPlan, error) {
+func (c *Runtime) replaySegmentCatalogRouteBudget(materialize bool) int {
+	if materialize {
+		return 0
+	}
+	if c.installN > 0 {
+		return c.installN
+	}
+	return 1
+}
+
+func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, budget compile.SegmentBudget, catalogRouteBudget int) ([]fsperas.ReplayPlan, error) {
 	if plan.EpochID == 0 || len(plan.Operations) == 0 {
 		return nil, fsperas.ErrInvalidPerasSegment
 	}
@@ -109,6 +120,7 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, 
 	out := make([]fsperas.ReplayPlan, 0, len(plan.Operations))
 	current := fsperas.ReplayPlan{EpochID: plan.EpochID}
 	var currentPlan compile.SegmentPlan
+	currentCatalogBuckets := make(map[catalogRouteBucket]struct{})
 	flush := func() {
 		if len(current.Operations) == 0 {
 			return
@@ -119,6 +131,7 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, 
 		})
 		current.Operations = current.Operations[:0]
 		currentPlan = compile.SegmentPlan{}
+		clear(currentCatalogBuckets)
 	}
 	for _, op := range plan.Operations {
 		if !op.OpID.Valid() || len(op.Mutations) == 0 {
@@ -128,11 +141,18 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, 
 		if !ok {
 			return nil, fsperas.ErrInvalidPerasSegment
 		}
+		nextCatalogBuckets, nextCatalog, err := replayOperationCatalogRouteBuckets(op, materialize, nextPlan)
+		if err != nil {
+			return nil, err
+		}
 		if len(current.Operations) > 0 {
 			decision := compile.CanAppendSegmentPlans(currentPlan, nextPlan, op.Durability, budget)
 			if decision.Kind != compile.SegmentDecisionAppend {
 				flush()
 			}
+		}
+		if len(current.Operations) > 0 && nextCatalog && catalogRouteBudget > 0 && catalogRouteBucketUnionCount(currentCatalogBuckets, nextCatalogBuckets) > catalogRouteBudget {
+			flush()
 		}
 		current.Operations = append(current.Operations, cloneRuntimeReplayOperation(op))
 		if len(current.Operations) == 1 {
@@ -140,9 +160,53 @@ func splitReplayPlanByCompilerBudget(plan fsperas.ReplayPlan, materialize bool, 
 		} else {
 			currentPlan = compile.MergeSegmentPlans(currentPlan, nextPlan)
 		}
+		if nextCatalog {
+			for _, bucket := range nextCatalogBuckets {
+				currentCatalogBuckets[bucket] = struct{}{}
+			}
+		}
 	}
 	flush()
 	return out, nil
+}
+
+type catalogRouteBucket struct {
+	mount  fsmeta.MountKeyID
+	bucket fsmeta.AffinityBucket
+}
+
+func replayOperationCatalogRouteBuckets(op fsperas.ReplayOperation, materialize bool, plan compile.SegmentPlan) ([]catalogRouteBucket, bool, error) {
+	if materialize || plan.Install != compile.SegmentInstallCatalog {
+		return nil, false, nil
+	}
+	seen := make(map[catalogRouteBucket]struct{})
+	out := make([]catalogRouteBucket, 0, len(op.Mutations))
+	for _, mutation := range op.Mutations {
+		parts, ok := fsmeta.InspectKey(mutation.Key)
+		if !ok {
+			return nil, false, fsperas.ErrInvalidPerasSegment
+		}
+		key := catalogRouteBucket{mount: parts.MountKeyID, bucket: parts.Bucket}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return nil, false, fsperas.ErrInvalidPerasSegment
+	}
+	return out, true, nil
+}
+
+func catalogRouteBucketUnionCount(current map[catalogRouteBucket]struct{}, next []catalogRouteBucket) int {
+	total := len(current)
+	for _, bucket := range next {
+		if _, ok := current[bucket]; !ok {
+			total++
+		}
+	}
+	return total
 }
 
 func cloneRuntimeReplayOperations(ops []fsperas.ReplayOperation) []fsperas.ReplayOperation {

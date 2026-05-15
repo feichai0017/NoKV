@@ -6,6 +6,8 @@ package peras
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -97,46 +99,109 @@ func (c *Runtime) appendSegmentWitnessRecords(ctx context.Context, scope compile
 	if len(records) == 0 {
 		return nil
 	}
-	broadcastCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	type result struct {
 		id      string
 		latency time.Duration
 		err     error
 	}
 	start := time.Now()
-	resultCh := make(chan result, len(c.witnesses))
-	for _, witness := range c.witnesses {
-		go func() {
-			replicaStart := time.Now()
-			err := witness.AppendSegments(broadcastCtx, scope, records)
-			resultCh <- result{id: witness.ID(), latency: time.Since(replicaStart), err: err}
-		}()
-	}
+	witnesses := preferredWitnessQuorumOrder(c.witnesses, records)
 	acks := make([]string, 0, len(c.witnesses))
 	failures := make([]error, 0, len(c.witnesses))
-	for range c.witnesses {
-		res := <-resultCh
-		c.recordWitnessReplicaAppend(res.latency, res.err)
-		if res.err == nil {
-			acks = append(acks, res.id)
-			if len(acks) >= c.quorum {
-				cancel()
-				slices.Sort(acks)
-				c.recordWitnessQuorum(time.Since(start), len(acks))
-				c.recordWitnessBatch(records)
-				return nil
-			}
-			continue
+
+	appendTo := func(targets []fsperas.WitnessReplica) bool {
+		if len(targets) == 0 {
+			return len(acks) >= c.quorum
 		}
-		failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
+		resultCh := make(chan result, len(targets))
+		for _, witness := range targets {
+			go func(witness fsperas.WitnessReplica) {
+				replicaStart := time.Now()
+				err := witness.AppendSegments(ctx, scope, records)
+				resultCh <- result{id: witness.ID(), latency: time.Since(replicaStart), err: err}
+			}(witness)
+		}
+		for range targets {
+			res := <-resultCh
+			c.recordWitnessReplicaAppend(res.latency, res.err)
+			if res.err == nil {
+				acks = append(acks, res.id)
+				continue
+			}
+			failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
+		}
+		return len(acks) >= c.quorum
 	}
-	if len(failures) == 0 {
+
+	preferred := c.quorum
+	if preferred > len(witnesses) {
+		preferred = len(witnesses)
+	}
+	if appendTo(witnesses[:preferred]) || appendTo(witnesses[preferred:]) {
+		slices.Sort(acks)
 		c.recordWitnessQuorum(time.Since(start), len(acks))
-		return fsperas.ErrSegmentWitnessQuorumUnavailable
+		c.recordWitnessBatch(records)
+		return nil
 	}
 	c.recordWitnessQuorum(time.Since(start), len(acks))
+	if len(failures) == 0 {
+		return fsperas.ErrSegmentWitnessQuorumUnavailable
+	}
 	return errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
+}
+
+type witnessQuorumCandidate struct {
+	witness fsperas.WitnessReplica
+	score   uint64
+	id      string
+}
+
+func preferredWitnessQuorumOrder(witnesses []fsperas.WitnessReplica, records []fsperas.SegmentWitnessRecord) []fsperas.WitnessReplica {
+	if len(witnesses) == 0 {
+		return nil
+	}
+	candidates := make([]witnessQuorumCandidate, 0, len(witnesses))
+	for _, witness := range witnesses {
+		if witness == nil {
+			continue
+		}
+		candidates = append(candidates, witnessQuorumCandidate{
+			witness: witness,
+			score:   witnessQuorumScore(witness.ID(), records),
+			id:      witness.ID(),
+		})
+	}
+	slices.SortFunc(candidates, func(left, right witnessQuorumCandidate) int {
+		if left.score < right.score {
+			return -1
+		}
+		if left.score > right.score {
+			return 1
+		}
+		if left.id < right.id {
+			return -1
+		}
+		if left.id > right.id {
+			return 1
+		}
+		return 0
+	})
+	out := make([]fsperas.WitnessReplica, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.witness)
+	}
+	return out
+}
+
+func witnessQuorumScore(id string, records []fsperas.SegmentWitnessRecord) uint64 {
+	h := sha256.New()
+	_, _ = h.Write([]byte(id))
+	for _, record := range records {
+		_, _ = h.Write(record.SegmentRoot[:])
+		_, _ = h.Write(record.SegmentPayloadDigest[:])
+	}
+	sum := h.Sum(nil)
+	return binary.BigEndian.Uint64(sum[:8])
 }
 
 func (c *Runtime) appendSegmentWitnessRecordsBounded(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {

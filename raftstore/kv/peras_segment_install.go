@@ -141,6 +141,22 @@ func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segmen
 	return entries, nil
 }
 
+func buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKeys(segment fsperas.PerasSegment, version uint64, payload []byte, digest [32]byte, objectKeys [][]byte) ([]*entrykv.Entry, error) {
+	if len(objectKeys) == 0 {
+		return nil, fsperas.ErrInvalidPerasSegment
+	}
+	entries := make([]*entrykv.Entry, 0, len(objectKeys)+1)
+	for _, objectKey := range objectKeys {
+		routeEntries, err := buildMVCCSegmentCatalogInstallEntriesWithVerifiedPayloadForObjectKey(segment, version, payload, digest, objectKey)
+		if err != nil {
+			releaseMVCCReplayEntries(entries)
+			return nil, err
+		}
+		entries = append(entries, routeEntries...)
+	}
+	return dedupeInternalEntries(entries), nil
+}
+
 func buildMVCCSegmentCatalogIndexInstallEntries(root, digest [32]byte, epochID, version, payloadSize uint64, routingKey, canonicalObjectKey []byte) ([]*entrykv.Entry, error) {
 	if epochID == 0 || version == 0 || version == entrykv.MaxVersion || payloadSize == 0 {
 		return nil, fsperas.ErrInvalidPerasSegment
@@ -163,6 +179,22 @@ func buildMVCCSegmentCatalogIndexInstallEntries(root, digest [32]byte, epochID, 
 	return []*entrykv.Entry{entrykv.NewInternalEntry(entrykv.CFDefault, indexKey, version, indexValue, 0, 0)}, nil
 }
 
+func buildMVCCSegmentCatalogIndexInstallEntriesForObjectKeys(root, digest [32]byte, epochID, version, payloadSize uint64, routingKeys [][]byte, canonicalObjectKey []byte) ([]*entrykv.Entry, error) {
+	if len(routingKeys) == 0 {
+		return nil, fsperas.ErrInvalidPerasSegment
+	}
+	entries := make([]*entrykv.Entry, 0, len(routingKeys))
+	for _, routingKey := range routingKeys {
+		routeEntries, err := buildMVCCSegmentCatalogIndexInstallEntries(root, digest, epochID, version, payloadSize, routingKey, canonicalObjectKey)
+		if err != nil {
+			releaseMVCCReplayEntries(entries)
+			return nil, err
+		}
+		entries = append(entries, routeEntries...)
+	}
+	return dedupeInternalEntries(entries), nil
+}
+
 func buildMVCCSegmentCatalogInstallEntries(segment fsperas.PerasSegment, version uint64, objectValue []byte, digest [32]byte, payloadSize uint64) ([]*entrykv.Entry, error) {
 	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
 	if err != nil {
@@ -183,6 +215,31 @@ func buildMVCCSegmentCatalogInstallEntries(segment fsperas.PerasSegment, version
 	}
 	_ = payloadSize
 	return entries, nil
+}
+
+func dedupeInternalEntries(entries []*entrykv.Entry) []*entrykv.Entry {
+	if len(entries) < 2 {
+		return entries
+	}
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		duplicate := false
+		for _, kept := range out {
+			if kept != nil && bytes.Equal(kept.Key, entry.Key) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			entry.DecrRef()
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 type perasSegmentCatalogBucket struct {

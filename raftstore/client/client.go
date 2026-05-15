@@ -54,6 +54,15 @@ type RetryPolicy struct {
 	LockResolveBackoff          time.Duration
 }
 
+// RouteKeyGroup is a client-side snapshot of keys that currently route to one
+// Region leader. Callers use it to coalesce one logical operation into fewer
+// raft proposals without owning the route cache internals.
+type RouteKeyGroup struct {
+	RegionID      uint64
+	LeaderStoreID uint64
+	Keys          [][]byte
+}
+
 // Client provides Region-aware helpers for StoreKV RPCs, including 2PC.
 type Client struct {
 	mu                       sync.RWMutex

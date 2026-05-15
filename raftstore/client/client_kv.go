@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -1821,6 +1822,34 @@ func (c *Client) groupKeysByRoute(ctx context.Context, keys [][]byte) (map[uint6
 		group.keys = append(group.keys, append([]byte(nil), key...))
 	}
 	return groups, nil
+}
+
+// GroupKeysByRoute exposes the current route grouping boundary without exposing
+// the mutable route cache. It is intended for commands that can merge multiple
+// route markers into one per-region raft proposal.
+func (c *Client) GroupKeysByRoute(ctx context.Context, keys [][]byte) ([]RouteKeyGroup, error) {
+	groups, err := c.groupKeysByRoute(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RouteKeyGroup, 0, len(groups))
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		out = append(out, RouteKeyGroup{
+			RegionID:      group.region.desc.RegionID,
+			LeaderStoreID: group.region.leader,
+			Keys:          cloneKeys(group.keys),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RegionID != out[j].RegionID {
+			return out[i].RegionID < out[j].RegionID
+		}
+		return out[i].LeaderStoreID < out[j].LeaderStoreID
+	})
+	return out, nil
 }
 
 func keyRouteBatchForPrimary(groups map[uint64]*keyRouteBatch, primary []byte) *keyRouteBatch {
