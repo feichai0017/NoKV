@@ -542,10 +542,7 @@ func defaultPerasAdmissionPendingLimit(batchSize, maxOps, installN int) int {
 	if installN <= 0 {
 		installN = defaultPerasSegmentInstallParallelism()
 	}
-	window := multiplyIntSaturated(maxOps, installN)
-	if window < batchSize {
-		window = batchSize
-	}
+	window := max(multiplyIntSaturated(maxOps, installN), batchSize)
 	limit := multiplyIntSaturated(window, 4)
 	if limit <= 0 {
 		return window

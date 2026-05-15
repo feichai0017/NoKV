@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -79,16 +80,12 @@ func (n *WitnessNode) ID() string {
 func (n *WitnessNode) Stats() map[string]any {
 	if n == nil {
 		stats := emptyWitnessNodeStats()
-		for k, v := range emptyWitnessLogStats() {
-			stats[k] = v
-		}
+		maps.Copy(stats, emptyWitnessLogStats())
 		return stats
 	}
 	stats := n.metrics.Stats()
 	if n.log != nil {
-		for k, v := range n.log.Stats() {
-			stats[k] = v
-		}
+		maps.Copy(stats, n.log.Stats())
 	}
 	return stats
 }
