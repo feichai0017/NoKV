@@ -99,7 +99,10 @@ jobs:
 
   fsmeta-long:
     name: Benchmark / fsmeta long
-    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.profile == 'long' || github.event.inputs.profile == 'official'))
+    # Full long/official fsmeta matrices are performance evidence, not a fast
+    # main-push correctness gate. Keep push/PR coverage on the median job and
+    # reserve this job for scheduled runs or explicit operator dispatch.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.profile == 'long' || github.event.inputs.profile == 'official'))
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -119,6 +122,10 @@ jobs:
           NOKV_FSMETA_RESET_BETWEEN_WORKLOADS: "1"
           NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING: "0"
           NOKV_FSMETA_PERAS_IDLE_TIMEOUT_SECONDS: "600"
+          NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM: "12"
+          NOKV_FSMETA_PERAS_SEGMENT_FLUSH_PARALLELISM: "12"
+          NOKV_FSMETA_PERAS_ADMISSION_PENDING_LIMIT: "24576"
+          NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT: "120s"
         run: make fsmeta-bench
 
       - name: Collect Docker diagnostics
