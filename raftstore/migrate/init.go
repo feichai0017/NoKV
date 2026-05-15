@@ -157,7 +157,7 @@ func Init(cfg InitConfig) (InitResult, error) {
 
 	opts := local.NewDefaultOptions()
 	opts.WorkDir = cfg.WorkDir
-	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{workdirmode.ModePreparing}
 	db, err := local.Open(opts)
 	if err != nil {

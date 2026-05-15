@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) (*local.DB, *localmeta.Store) {
 	opt.WorkDir = t.TempDir()
 	localMeta, err := localmeta.OpenLocalStore(opt.WorkDir, nil)
 	require.NoError(t, err)
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })

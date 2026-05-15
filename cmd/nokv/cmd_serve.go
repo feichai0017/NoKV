@@ -219,7 +219,7 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *storageMaxBatchSize > 0 {
 		opt.MaxBatchSize = *storageMaxBatchSize
 	}
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	opt.UserKeyShapeExtractor = fsmeta.UserKeyShape
 	opt.AllowedModes = []workdirmode.Mode{
 		workdirmode.ModeStandalone,

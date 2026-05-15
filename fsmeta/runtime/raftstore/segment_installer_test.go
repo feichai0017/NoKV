@@ -223,7 +223,7 @@ func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing
 	require.Equal(t, int32(len(routingKeys)), kv.callCount())
 }
 
-func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRetryable(t *testing.T) {
+func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRoutingRetryable(t *testing.T) {
 	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
 	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
 	require.NoError(t, err)
@@ -250,6 +250,7 @@ func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRetryable(t *testing
 	})
 	require.Error(t, err)
 	require.True(t, client.IsRetryExhausted(err), "%T %v", err, err)
+	require.Equal(t, nokverrors.KindRegionRouting, nokverrors.KindOf(err))
 	require.True(t, nokverrors.Retryable(err), "%T %v", err, err)
 }
 

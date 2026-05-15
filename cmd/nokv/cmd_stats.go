@@ -252,7 +252,7 @@ func localStatsSnapshot(workDir string, attachMetrics bool) (stats.StatsSnapshot
 	defer func() { _ = metaStore.Close() }()
 	opts := local.NewDefaultOptions()
 	opts.WorkDir = workDir
-	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(metaStore.RaftPointerSnapshot)
+	opts.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(metaStore.DurableRaftPointerSnapshot)
 	opts.AllowedModes = []workdirmode.Mode{
 		workdirmode.ModeStandalone,
 		workdirmode.ModePreparing,

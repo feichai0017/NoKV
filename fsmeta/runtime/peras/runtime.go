@@ -36,6 +36,7 @@ const (
 	defaultPerasSegmentFlushEvery             = 20 * time.Millisecond
 	defaultPerasBackgroundFlushTimeout        = 30 * time.Second
 	defaultPerasBackgroundErrorBackoff        = time.Second
+	defaultPerasRootRecoveryInstallTimeout    = 2 * time.Second
 	defaultPerasSegmentInstallRetries         = 24
 	defaultPerasSegmentInstallRetryBackoff    = 10 * time.Millisecond
 	defaultPerasSegmentInstallMaxBackoff      = 500 * time.Millisecond
