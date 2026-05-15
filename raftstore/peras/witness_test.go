@@ -52,6 +52,33 @@ func TestWitnessNodeAppendSegmentsAndProbe(t *testing.T) {
 	require.ElementsMatch(t, []fsperas.SegmentWitnessRecord{first, second}, snapshot.Segments)
 }
 
+func TestWitnessNodeStatsBreakDownAppendPath(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, node.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+	require.NoError(t, node.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+
+	stats := node.Stats()
+	require.Equal(t, uint64(2), stats["append_total"])
+	require.Equal(t, uint64(4), stats["append_records_total"])
+	require.Equal(t, uint64(0), stats["append_error_total"])
+	require.Equal(t, uint64(2), stats["authority_check_batches_total"])
+	require.Equal(t, uint64(4), stats["authority_check_records_total"])
+	require.Equal(t, uint64(2), stats["pending_append_records_total"])
+	require.Equal(t, uint64(2), stats["dedupe_skip_total"])
+	require.Equal(t, uint64(1), stats["wal_append_total"])
+	require.Equal(t, uint64(2), stats["wal_append_records_total"])
+	require.Greater(t, stats["wal_append_bytes_total"].(uint64), uint64(0))
+	require.Contains(t, stats, "wal_encode_latency_total_nanosecond")
+	require.Contains(t, stats, "wal_manager_append_latency_total_nanosecond")
+}
+
 func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
 	now := time.Unix(100, 0)
 	authorities := runtimeperas.NewActiveAuthorities()

@@ -292,15 +292,23 @@ func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.PerasAuthor
 }
 
 func ScopeFromGrant(grant rootproto.PerasAuthorityGrant) compile.AuthorityScope {
+	return scopeFromRootAuthority(grant.Scope)
+}
+
+func ScopeFromSeal(seal rootproto.PerasAuthoritySeal) compile.AuthorityScope {
+	return scopeFromRootAuthority(seal.Scope)
+}
+
+func scopeFromRootAuthority(rootScope rootproto.PerasAuthorityScope) compile.AuthorityScope {
 	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID(grant.Scope.MountID),
-		MountKeyID: fsmeta.MountKeyID(grant.Scope.MountKeyID),
-		Parents:    fsmetaInodesFromRoot(grant.Scope.Parents),
-		Inodes:     fsmetaInodesFromRoot(grant.Scope.Inodes),
+		Mount:      fsmeta.MountID(rootScope.MountID),
+		MountKeyID: fsmeta.MountKeyID(rootScope.MountKeyID),
+		Parents:    fsmetaInodesFromRoot(rootScope.Parents),
+		Inodes:     fsmetaInodesFromRoot(rootScope.Inodes),
 	}
-	if len(grant.Scope.Buckets) > 0 {
-		scope.Buckets = make([]fsmeta.AffinityBucket, len(grant.Scope.Buckets))
-		for i, bucket := range grant.Scope.Buckets {
+	if len(rootScope.Buckets) > 0 {
+		scope.Buckets = make([]fsmeta.AffinityBucket, len(rootScope.Buckets))
+		for i, bucket := range rootScope.Buckets {
 			scope.Buckets[i] = fsmeta.AffinityBucket(bucket)
 		}
 	}

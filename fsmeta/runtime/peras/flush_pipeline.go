@@ -4,6 +4,7 @@
 package peras
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -342,6 +343,9 @@ func (c *Runtime) publishSegmentSeal(ctx context.Context, holder *fsperas.Holder
 		if !job.cursor.Valid() {
 			return c.recordError(ErrRuntimeInvalid)
 		}
+		if err := verifySegmentInstallBeforeSeal(job); err != nil {
+			return c.recordErrorf("verify peras segment install before seal: %w", err)
+		}
 		grant, found := c.grantForEpoch(holder.EpochID())
 		if !found {
 			return c.recordError(ErrNotHeld)
@@ -354,6 +358,30 @@ func (c *Runtime) publishSegmentSeal(ctx context.Context, holder *fsperas.Holder
 		c.metrics.sealTotal.Add(1)
 	}
 	c.metrics.flushTotal.Add(1)
+	return nil
+}
+
+func verifySegmentInstallBeforeSeal(job perasFlushJob) error {
+	if job.materialize {
+		return nil
+	}
+	if !job.cursor.Valid() || job.segment.Root == ([32]byte{}) || job.digest == ([32]byte{}) || len(job.payload) == 0 {
+		return ErrRuntimeInvalid
+	}
+	digest, err := fsperas.PerasSegmentPayloadDigest(job.payload)
+	if err != nil {
+		return err
+	}
+	if digest != job.digest {
+		return fsperas.ErrInvalidPerasSegment
+	}
+	objectKey, err := fsperas.PerasSegmentObjectKey(job.segment)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(job.install.CanonicalObjectKey, objectKey) {
+		return fsperas.ErrInvalidPerasSegment
+	}
 	return nil
 }
 

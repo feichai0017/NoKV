@@ -6,6 +6,7 @@ package peras
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -56,6 +57,7 @@ func (r *LocalWitnessReplica) ProbeSegment(ctx context.Context, ref fsperas.Witn
 type WALWitnessLog struct {
 	wal        *wal.Manager
 	durability wal.DurabilityPolicy
+	metrics    witnessLogMetrics
 	mu         sync.RWMutex
 	segments   []fsperas.SegmentWitnessRecord
 }
@@ -67,8 +69,22 @@ func NewWALWitnessLog(manager *wal.Manager, durability wal.DurabilityPolicy) (*W
 	return &WALWitnessLog{wal: manager, durability: durability}, nil
 }
 
-func (l *WALWitnessLog) AppendSegments(ctx context.Context, records []fsperas.SegmentWitnessRecord) ([]wal.EntryInfo, error) {
-	if err := ctxErr(ctx); err != nil {
+func (l *WALWitnessLog) Stats() map[string]any {
+	if l == nil {
+		return emptyWitnessLogStats()
+	}
+	return l.metrics.Stats()
+}
+
+func (l *WALWitnessLog) AppendSegments(ctx context.Context, records []fsperas.SegmentWitnessRecord) (infos []wal.EntryInfo, err error) {
+	recordCount := len(records)
+	payloadBytes := 0
+	defer func() {
+		if l != nil {
+			l.metrics.recordAppend(recordCount, payloadBytes, err)
+		}
+	}()
+	if err = ctxErr(ctx); err != nil {
 		return nil, err
 	}
 	if l == nil || l.wal == nil {
@@ -78,17 +94,23 @@ func (l *WALWitnessLog) AppendSegments(ctx context.Context, records []fsperas.Se
 		return nil, nil
 	}
 	walRecords := make([]wal.Record, 0, len(records))
+	encodeStart := time.Now()
 	for _, record := range records {
 		payload, err := fsperas.EncodeSegmentWitnessRecord(record)
 		if err != nil {
+			l.metrics.recordEncode(time.Since(encodeStart))
 			return nil, err
 		}
+		payloadBytes += len(payload)
 		walRecords = append(walRecords, wal.Record{
 			Type:    wal.RecordTypePerasWitness,
 			Payload: payload,
 		})
 	}
-	infos, err := l.wal.AppendRecords(l.durability, walRecords...)
+	l.metrics.recordEncode(time.Since(encodeStart))
+	appendStart := time.Now()
+	infos, err = l.wal.AppendRecords(l.durability, walRecords...)
+	l.metrics.recordWALAppend(time.Since(appendStart))
 	if err != nil {
 		return nil, err
 	}

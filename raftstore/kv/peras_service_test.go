@@ -27,6 +27,15 @@ type perasWitnessStub struct {
 	probeRef     fsperas.WitnessSegmentRef
 }
 
+type perasWitnessStatsStub struct {
+	perasWitnessStub
+	stats map[string]any
+}
+
+func (s *perasWitnessStatsStub) Stats() map[string]any {
+	return s.stats
+}
+
 func (s *perasWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	s.segmentScope = scope
 	s.segments = append(s.segments, records...)
@@ -166,6 +175,16 @@ func TestServicePerasWitnessRequiresConfiguredNode(t *testing.T) {
 	_, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{EpochId: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestServiceStatsIncludesPerasWitnessStats(t *testing.T) {
+	witness := &perasWitnessStatsStub{stats: map[string]any{
+		"append_total": uint64(3),
+	}}
+	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+
+	stats := service.Stats()
+	require.Equal(t, map[string]any{"append_total": uint64(3)}, stats["peras_witness"])
 }
 
 func serviceTestSegmentRecord() fsperas.SegmentWitnessRecord {

@@ -24,6 +24,7 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
 		}
+		jobs := make([]perasFlushJob, 0, len(sized))
 		for _, plan := range sized {
 			segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
 			if err != nil {
@@ -50,16 +51,35 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 				install:     install,
 				materialize: materialize,
 			}
-			batches = append(batches, perasFlushBatch{
-				holder:          frozen.holder,
-				scope:           frozen.scope,
-				plan:            plan,
-				jobs:            []perasFlushJob{job},
-				witnessUnixNano: c.nextWitnessUnixNano(),
-			})
+			jobs = append(jobs, job)
 		}
+		batchPlan, err := joinReplayPlansForBatch(sized)
+		if err != nil {
+			return nil, c.recordErrorf("build peras batch replay plan: %w", err)
+		}
+		batches = append(batches, perasFlushBatch{
+			holder:          frozen.holder,
+			scope:           frozen.scope,
+			plan:            batchPlan,
+			jobs:            jobs,
+			witnessUnixNano: c.nextWitnessUnixNano(),
+		})
 	}
 	return batches, nil
+}
+
+func joinReplayPlansForBatch(plans []fsperas.ReplayPlan) (fsperas.ReplayPlan, error) {
+	if len(plans) == 0 || plans[0].EpochID == 0 {
+		return fsperas.ReplayPlan{}, fsperas.ErrInvalidPerasSegment
+	}
+	out := fsperas.ReplayPlan{EpochID: plans[0].EpochID}
+	for _, plan := range plans {
+		if plan.EpochID != out.EpochID || !plan.Versions.Empty() || len(plan.Operations) == 0 {
+			return fsperas.ReplayPlan{}, fsperas.ErrInvalidPerasSegment
+		}
+		out.Operations = append(out.Operations, cloneRuntimeReplayOperations(plan.Operations)...)
+	}
+	return out, nil
 }
 
 func (c *Runtime) replaySegmentBudget(materialize bool) compile.SegmentBudget {

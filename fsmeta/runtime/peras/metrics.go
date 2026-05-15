@@ -31,6 +31,17 @@ type runtimeMetrics struct {
 	witnessBatchBytesTotal         atomic.Uint64
 	witnessBatchBytesLast          atomic.Uint64
 	witnessBatchBytesMax           atomic.Uint64
+	witnessReplicaAppendTotal      atomic.Uint64
+	witnessReplicaAppendErrorTotal atomic.Uint64
+	witnessReplicaLatencyTotal     atomic.Uint64
+	witnessReplicaLatencyLast      atomic.Uint64
+	witnessReplicaLatencyMax       atomic.Uint64
+	witnessQuorumTotal             atomic.Uint64
+	witnessQuorumLatencyTotal      atomic.Uint64
+	witnessQuorumLatencyLast       atomic.Uint64
+	witnessQuorumLatencyMax        atomic.Uint64
+	witnessQuorumAcksLast          atomic.Uint64
+	witnessQuorumAcksMax           atomic.Uint64
 	installLatencyTotal            atomic.Uint64
 	installLatencyLast             atomic.Uint64
 	installLatencyMax              atomic.Uint64
@@ -96,6 +107,31 @@ func (c *Runtime) recordWitnessBatch(records []fsperas.SegmentWitnessRecord) {
 	c.metrics.witnessBatchBytesTotal.Add(bytes)
 	c.metrics.witnessBatchBytesLast.Store(bytes)
 	recordPerasMax(&c.metrics.witnessBatchBytesMax, bytes)
+}
+
+func (c *Runtime) recordWitnessReplicaAppend(d time.Duration, err error) {
+	if c == nil {
+		return
+	}
+	c.metrics.witnessReplicaAppendTotal.Add(1)
+	if err != nil {
+		c.metrics.witnessReplicaAppendErrorTotal.Add(1)
+	}
+	recordPerasDuration(&c.metrics.witnessReplicaLatencyTotal, &c.metrics.witnessReplicaLatencyLast, &c.metrics.witnessReplicaLatencyMax, d)
+}
+
+func (c *Runtime) recordWitnessQuorum(d time.Duration, acks int) {
+	if c == nil {
+		return
+	}
+	c.metrics.witnessQuorumTotal.Add(1)
+	recordPerasDuration(&c.metrics.witnessQuorumLatencyTotal, &c.metrics.witnessQuorumLatencyLast, &c.metrics.witnessQuorumLatencyMax, d)
+	if acks < 0 {
+		acks = 0
+	}
+	n := uint64(acks)
+	c.metrics.witnessQuorumAcksLast.Store(n)
+	recordPerasMax(&c.metrics.witnessQuorumAcksMax, n)
 }
 
 func (c *Runtime) recordInstallLatency(d time.Duration) {

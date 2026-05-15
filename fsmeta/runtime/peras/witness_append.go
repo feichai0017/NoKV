@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
@@ -99,25 +100,30 @@ func (c *Runtime) appendSegmentWitnessRecords(ctx context.Context, scope compile
 	broadcastCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
-		id  string
-		err error
+		id      string
+		latency time.Duration
+		err     error
 	}
+	start := time.Now()
 	resultCh := make(chan result, len(c.witnesses))
 	for _, witness := range c.witnesses {
 		go func() {
+			replicaStart := time.Now()
 			err := witness.AppendSegments(broadcastCtx, scope, records)
-			resultCh <- result{id: witness.ID(), err: err}
+			resultCh <- result{id: witness.ID(), latency: time.Since(replicaStart), err: err}
 		}()
 	}
 	acks := make([]string, 0, len(c.witnesses))
 	failures := make([]error, 0, len(c.witnesses))
 	for range c.witnesses {
 		res := <-resultCh
+		c.recordWitnessReplicaAppend(res.latency, res.err)
 		if res.err == nil {
 			acks = append(acks, res.id)
 			if len(acks) >= c.quorum {
 				cancel()
 				slices.Sort(acks)
+				c.recordWitnessQuorum(time.Since(start), len(acks))
 				c.recordWitnessBatch(records)
 				return nil
 			}
@@ -126,8 +132,10 @@ func (c *Runtime) appendSegmentWitnessRecords(ctx context.Context, scope compile
 		failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
 	}
 	if len(failures) == 0 {
+		c.recordWitnessQuorum(time.Since(start), len(acks))
 		return fsperas.ErrSegmentWitnessQuorumUnavailable
 	}
+	c.recordWitnessQuorum(time.Since(start), len(acks))
 	return errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
 }
 

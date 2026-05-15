@@ -28,6 +28,7 @@ type WitnessNode struct {
 	authorityView AuthorityView
 	refresh       func(context.Context) error
 	now           func() time.Time
+	metrics       witnessNodeMetrics
 
 	mu       sync.Mutex
 	segments map[witnessSegmentKey]struct{}
@@ -75,21 +76,50 @@ func (n *WitnessNode) ID() string {
 	return n.nodeID
 }
 
-func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
+func (n *WitnessNode) Stats() map[string]any {
+	if n == nil {
+		stats := emptyWitnessNodeStats()
+		for k, v := range emptyWitnessLogStats() {
+			stats[k] = v
+		}
+		return stats
+	}
+	stats := n.metrics.Stats()
+	if n.log != nil {
+		for k, v := range n.log.Stats() {
+			stats[k] = v
+		}
+	}
+	return stats
+}
+
+func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) (err error) {
+	start := time.Now()
+	recordCount := len(records)
+	defer func() {
+		if n != nil {
+			n.metrics.recordAppend(recordCount, time.Since(start), err)
+		}
+	}()
 	if n == nil || n.log == nil || n.authorityView == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
-	if err := ctxErr(ctx); err != nil {
+	if err = ctxErr(ctx); err != nil {
 		return err
 	}
 	if len(records) == 0 {
 		return nil
 	}
+	authorityStart := time.Now()
+	authorityChecks := 0
 	for _, record := range records {
-		if err := n.validateAuthority(ctx, scope, record); err != nil {
+		authorityChecks++
+		if err = n.validateAuthority(ctx, scope, record); err != nil {
+			n.metrics.recordAuthorityCheck(authorityChecks, time.Since(authorityStart))
 			return err
 		}
 	}
+	n.metrics.recordAuthorityCheck(authorityChecks, time.Since(authorityStart))
 
 	type pendingAppend struct {
 		key    witnessSegmentKey
@@ -98,10 +128,12 @@ func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.Authorit
 	}
 	pending := make([]pendingAppend, 0, len(records))
 	waiting := make([]pendingAppend, 0)
+	skipped := 0
 	n.mu.Lock()
 	for _, record := range records {
 		key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
 		if _, ok := n.segments[key]; ok {
+			skipped++
 			continue
 		}
 		if call := n.inflight[key]; call != nil {
@@ -109,12 +141,13 @@ func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.Authorit
 			continue
 		}
 		if _, loaded := n.loaded[record.EpochID]; !loaded {
-			if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
+			if err = n.loadEpochLocked(ctx, record.EpochID); err != nil {
 				n.mu.Unlock()
 				return err
 			}
 		}
 		if _, ok := n.segments[key]; ok {
+			skipped++
 			continue
 		}
 		call := &witnessAppendCall{done: make(chan struct{})}
@@ -122,13 +155,14 @@ func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.Authorit
 		pending = append(pending, pendingAppend{key: key, record: record, call: call})
 	}
 	n.mu.Unlock()
+	n.metrics.recordDedupe(skipped, len(waiting), len(pending))
 
 	if len(pending) > 0 {
 		appendRecords := make([]fsperas.SegmentWitnessRecord, 0, len(pending))
 		for _, item := range pending {
 			appendRecords = append(appendRecords, item.record)
 		}
-		_, err := n.log.AppendSegments(ctx, appendRecords)
+		_, err = n.log.AppendSegments(ctx, appendRecords)
 
 		n.mu.Lock()
 		for _, item := range pending {
@@ -146,7 +180,7 @@ func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.Authorit
 		}
 	}
 	for _, item := range waiting {
-		if err := n.waitAppendCall(ctx, item.key, item.call); err != nil {
+		if err = n.waitAppendCall(ctx, item.key, item.call); err != nil {
 			return err
 		}
 	}
