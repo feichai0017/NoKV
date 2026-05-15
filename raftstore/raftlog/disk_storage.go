@@ -227,31 +227,43 @@ func (ds *DiskStorage) SetHardState(st myraft.HardState) error {
 }
 
 // Snapshot delegates to the underlying storage.
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) Snapshot() (myraft.Snapshot, error) {
 	return ds.mem.Snapshot()
 }
 
 // Entries returns a slice of log entries between [lo,hi).
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) Entries(lo, hi, maxSize uint64) ([]myraft.Entry, error) {
 	return ds.mem.Entries(lo, hi, maxSize)
 }
 
 // Term returns the term of entry i, which must be in the log.
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) Term(i uint64) (uint64, error) {
 	return ds.mem.Term(i)
 }
 
 // LastIndex returns the last index of the log entries.
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) LastIndex() (uint64, error) {
 	return ds.mem.LastIndex()
 }
 
 // FirstIndex returns the index of the first log entry.
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) FirstIndex() (uint64, error) {
 	return ds.mem.FirstIndex()
 }
 
 // InitialState returns the HardState and ConfState information.
+//
+// forwarding-ok: DiskStorage satisfies raft.Storage; the in-memory mirror owns the read view.
 func (ds *DiskStorage) InitialState() (myraft.HardState, myraft.ConfState, error) {
 	return ds.mem.InitialState()
 }

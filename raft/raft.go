@@ -69,13 +69,8 @@ const (
 )
 
 var (
-	ErrCompacted                      = etcdraft.ErrCompacted
-	ErrSnapOutOfDate                  = etcdraft.ErrSnapOutOfDate
-	ErrUnavailable                    = etcdraft.ErrUnavailable
-	ErrSnapshotTemporarilyUnavailable = etcdraft.ErrSnapshotTemporarilyUnavailable
-	ErrStop                           = etcdraft.ErrStopped
-	IsEmptyHardState                  = etcdraft.IsEmptyHardState
-	IsEmptySnap                       = etcdraft.IsEmptySnap
+	IsEmptyHardState = etcdraft.IsEmptyHardState
+	IsEmptySnap      = etcdraft.IsEmptySnap
 )
 
 // NewMemoryStorage returns an in-memory Storage implementation.

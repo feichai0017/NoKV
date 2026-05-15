@@ -84,21 +84,6 @@ func (c *compactor) runDurations() (float64, float64, uint64) {
 	return float64(lastNs) / 1e6, float64(maxNs) / 1e6, runs
 }
 
-func (c *compactor) recordRun(duration time.Duration) {
-	c.metrics.Runs.Add(1)
-	last := duration.Nanoseconds()
-	c.metrics.LastNs.Store(last)
-	for {
-		prev := c.metrics.MaxNs.Load()
-		if last <= prev {
-			break
-		}
-		if c.metrics.MaxNs.CompareAndSwap(prev, last) {
-			break
-		}
-	}
-}
-
 // === picker glue ===
 
 // needsCompaction reports whether any level currently exceeds compaction thresholds.

@@ -1,0 +1,57 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# golangci-lint v2 configuration for NoKV.
+#
+# Stock linters: the default standard set covers correctness and obvious
+# style. We do not enable opinionated style linters here so this config stays
+# stable as the codebase grows.
+#
+# Custom NoKV linters: implemented in tools/lint and loaded via the
+# golangci-lint module plugin (see .custom-gcl.yml). They encode the
+# mechanically checkable rules from docs/guide/development/code_contract.md.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - nokvcontract
+  settings:
+    custom:
+      nokvcontract:
+        type: module
+        description: >
+          NoKV repository code-contract analyzers. Source of truth:
+          docs/guide/development/code_contract.md. Phase 1 ships
+          catchallfile (§5) and sentinelerrors (§8).
+  exclusions:
+    rules:
+      # Analyzer testdata holds intentionally bad code. The Go toolchain
+      # already skips testdata directories, but golangci-lint walks them
+      # unless excluded.
+      - path: tools/lint/analyzers/.+/testdata/
+        linters:
+          - errcheck
+          - govet
+          - ineffassign
+          - staticcheck
+          - unused
+          - nokvcontract
+      # Generated proto files own their own conventions; the contract scopes
+      # out generated code in §10.
+      - path: pb/
+        linters:
+          - nokvcontract
+
+run:
+  timeout: 5m
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

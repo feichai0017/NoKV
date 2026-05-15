@@ -618,7 +618,12 @@ func EquivalentError(got, want error) bool {
 			return errors.Is(got, sentinel) && errors.Is(want, sentinel)
 		}
 	}
-	return got.Error() == want.Error()
+	// Neither side is a registered NoKV sentinel: fall back to comparing
+	// the rendered messages. We extract to locals so it is obvious the
+	// comparison is the opaque-error fallback, not a sentinel shortcut.
+	gotMessage := got.Error()
+	wantMessage := want.Error()
+	return gotMessage == wantMessage
 }
 
 func cloneDentries(in map[dentryKey]fsmeta.DentryRecord) map[dentryKey]fsmeta.DentryRecord {

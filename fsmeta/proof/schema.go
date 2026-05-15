@@ -3,8 +3,6 @@
 
 package proof
 
-import "errors"
-
 type Version uint16
 
 const Version1 Version = 1
@@ -23,8 +21,6 @@ const (
 	RuleGuardExpiredSessionOwner RuleID = "guard.expired_session_owner"
 	RuleGuardQuotaCredit         RuleID = "guard.quota_credit"
 )
-
-var ErrInvalidProof = errors.New("fsmeta/proof: invalid proof")
 
 type ProofFrontier struct {
 	EpochID  uint64

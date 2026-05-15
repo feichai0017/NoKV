@@ -652,7 +652,7 @@ func (p *Peer) handleApplyResult(result ApplyResult) {
 		return
 	}
 	if result.Err != nil {
-		p.recordApplyError(result.Err)
+		p.noteApplyError(result.Err)
 		return
 	}
 	p.finishApply(result.Entries)
@@ -753,7 +753,7 @@ func (p *Peer) applyAdminCommand(cmd *raftcmdpb.AdminCommand) error {
 	return p.adminApply(cmd)
 }
 
-func (p *Peer) recordApplyError(err error) {
+func (p *Peer) noteApplyError(err error) {
 	if p == nil || err == nil {
 		return
 	}

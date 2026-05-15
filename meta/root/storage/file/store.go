@@ -24,10 +24,12 @@ func NewStore(fs vfs.FS, workdir string) rootstorage.VirtualLog {
 	}
 }
 
+// forwarding-ok: store satisfies rootstorage.Storage via the wrapped checkpoint helper.
 func (s store) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	return s.checkpt.LoadCheckpoint()
 }
 
+// forwarding-ok: store satisfies rootstorage.Storage via the wrapped checkpoint helper.
 func (s store) SaveCheckpoint(checkpoint rootstorage.Checkpoint) error {
 	return s.checkpt.SaveCheckpoint(checkpoint)
 }
@@ -51,6 +53,7 @@ func (s store) AppendCommitted(_ context.Context, records ...rootstorage.Committ
 	return s.log.AppendCommitted(records...)
 }
 
+// forwarding-ok: store satisfies rootstorage.Storage via the wrapped log helper.
 func (s store) CompactCommitted(stream rootstorage.CommittedTail) error {
 	return s.log.CompactCommitted(stream)
 }

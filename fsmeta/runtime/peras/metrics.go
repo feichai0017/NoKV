@@ -4,12 +4,46 @@
 package peras
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
+
+func (c *Runtime) recordErrorf(format string, args ...any) error {
+	return c.recordError(fmt.Errorf(format, args...))
+}
+
+func (c *Runtime) recordError(err error) error {
+	if c == nil || err == nil {
+		return err
+	}
+	c.metrics.errorTotal.Add(1)
+	c.metrics.statsMu.Lock()
+	c.metrics.lastError = err.Error()
+	c.metrics.statsMu.Unlock()
+	return err
+}
+
+func (c *Runtime) recordInstallRetry(err error) {
+	if c == nil {
+		return
+	}
+	c.metrics.retryTotal.Add(1)
+	switch nokverrors.KindOf(err) {
+	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable:
+		c.metrics.retryUnavailable.Add(1)
+	case nokverrors.KindRegionRouting, nokverrors.KindNotLeader:
+		c.metrics.retryRouting.Add(1)
+	case nokverrors.KindStaleEpoch:
+		c.metrics.retryStaleEpoch.Add(1)
+	default:
+		c.metrics.retryOther.Add(1)
+	}
+}
 
 type runtimeMetrics struct {
 	commitTotal                    atomic.Uint64
