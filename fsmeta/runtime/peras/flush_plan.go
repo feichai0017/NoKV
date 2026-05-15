@@ -22,6 +22,7 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 	for _, frozen := range plans {
 		batch := perasFlushBatch{
 			holder: frozen.holder,
+			scope:  frozen.scope,
 			plan:   frozen.plan,
 			jobs:   make([]perasFlushJob, 0, 1),
 		}

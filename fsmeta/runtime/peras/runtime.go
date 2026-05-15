@@ -133,6 +133,7 @@ type perasFlushJob struct {
 
 type perasFlushBatch struct {
 	holder *fsperas.Holder
+	scope  compile.AuthorityScope
 	plan   fsperas.ReplayPlan
 	jobs   []perasFlushJob
 }

@@ -63,6 +63,9 @@ func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (per
 	for idx := range started {
 		started[idx] = time.Now()
 	}
+	if err := p.renewBatchAuthority(ctx, batch); err != nil {
+		return perasFlushBatch{}, err
+	}
 	if err := p.witnessBatch(ctx, batch); err != nil {
 		return perasFlushBatch{}, err
 	}
@@ -79,6 +82,25 @@ func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (per
 		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	}
 	return batch, nil
+}
+
+func (p flushPipeline) renewBatchAuthority(ctx context.Context, batch perasFlushBatch) error {
+	c := p.runtime
+	if c == nil || c.authority == nil || batch.holder == nil {
+		return ErrRuntimeInvalid
+	}
+	grant, owned, err := c.authority.Acquire(ctx, batch.scope)
+	if err != nil {
+		return c.recordErrorf("renew peras authority for flush: %w", err)
+	}
+	if !owned {
+		return c.recordError(ErrNotHeld)
+	}
+	if grant.HolderID != batch.holder.HolderID() || grant.EpochID != batch.holder.EpochID() {
+		return c.recordErrorf("renew peras authority for flush: %w", ErrInvalidResponse)
+	}
+	c.epochs.updateGrant(grant)
+	return nil
 }
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {

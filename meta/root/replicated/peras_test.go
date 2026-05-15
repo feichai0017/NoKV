@@ -80,6 +80,14 @@ func TestReplicatedStoreApplyPerasAuthoritySealPublishesFrontier(t *testing.T) {
 	require.Len(t, state.PerasAuthoritySeals, 1)
 	require.Equal(t, root, state.PerasAuthoritySeals[0].SegmentRoot)
 
+	state, _, err = store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
+		Kind:     rootproto.PerasAuthorityActRetire,
+		HolderID: grant.HolderID,
+		GrantID:  grant.GrantID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, state.ActivePerasGrants)
+
 	expired := testPerasAcquireCommand("holder-b", 1)
 	expired.NowUnixNano = cmd.ExpiresUnixNano + 1
 	expired.ExpiresUnixNano = expired.NowUnixNano + 1_000
@@ -159,7 +167,30 @@ func TestReplicatedStoreApplyPerasAuthorityExpandsSameHolderGrant(t *testing.T) 
 	require.Equal(t, expanded, state.ActivePerasGrants[0])
 }
 
-func TestReplicatedStoreApplyPerasAuthorityReplacesExpiredGrant(t *testing.T) {
+func TestReplicatedStoreApplyPerasAuthorityRenewsExpiredSameHolderGrant(t *testing.T) {
+	stores, _, leaderID := openNetworkTestCluster(t, 4)
+	store := stores[leaderID]
+
+	expired := testPerasAcquireCommand("holder-a", 1)
+	expired.ExpiresUnixNano = 100
+	expired.NowUnixNano = 10
+	_, first, err := store.ApplyPerasAuthority(context.Background(), expired)
+	require.NoError(t, err)
+
+	next := testPerasAcquireCommand("holder-a", 1)
+	next.NowUnixNano = 101
+	next.ExpiresUnixNano = 500
+	state, renewed, err := store.ApplyPerasAuthority(context.Background(), next)
+	require.NoError(t, err)
+	require.Equal(t, first.GrantID, renewed.GrantID)
+	require.Equal(t, first.EpochID, renewed.EpochID)
+	require.Equal(t, int64(500), renewed.ExpiresUnixNano)
+	require.Equal(t, uint64(1), state.PerasAuthorityEpoch)
+	require.Len(t, state.ActivePerasGrants, 1)
+	require.Equal(t, renewed, state.ActivePerasGrants[0])
+}
+
+func TestReplicatedStoreApplyPerasAuthorityRejectsExpiredGrantTakeoverUntilRetired(t *testing.T) {
 	stores, _, leaderID := openNetworkTestCluster(t, 4)
 	store := stores[leaderID]
 
@@ -172,6 +203,20 @@ func TestReplicatedStoreApplyPerasAuthorityReplacesExpiredGrant(t *testing.T) {
 	next := testPerasAcquireCommand("holder-b", 1)
 	next.NowUnixNano = 101
 	state, second, err := store.ApplyPerasAuthority(context.Background(), next)
+	require.ErrorIs(t, err, rootstate.ErrPrimacy)
+	require.Empty(t, second.GrantID)
+	require.Len(t, state.ActivePerasGrants, 1)
+	require.Equal(t, first.GrantID, state.ActivePerasGrants[0].GrantID)
+
+	state, _, err = store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
+		Kind:     rootproto.PerasAuthorityActRetire,
+		HolderID: first.HolderID,
+		GrantID:  first.GrantID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, state.ActivePerasGrants)
+
+	state, second, err = store.ApplyPerasAuthority(context.Background(), next)
 	require.NoError(t, err)
 	require.NotEqual(t, first.GrantID, second.GrantID)
 	require.Equal(t, uint64(2), second.EpochID)
