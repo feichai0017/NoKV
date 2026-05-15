@@ -76,6 +76,11 @@ type runtimeMetrics struct {
 	visibleLogRecoverOldEpochTotal atomic.Uint64
 	visibleLogApplyMarkerTotal     atomic.Uint64
 	visibleLogApplyErrorTotal      atomic.Uint64
+	admissionWaitTotal             atomic.Uint64
+	admissionWaiting               atomic.Int64
+	admissionWaitLatencyTotal      atomic.Uint64
+	admissionWaitLatencyLast       atomic.Uint64
+	admissionWaitLatencyMax        atomic.Uint64
 
 	statsMu          sync.RWMutex
 	lastSegmentStats fsperas.SegmentStats
@@ -171,6 +176,10 @@ func (c *Runtime) recordFlushBatch(jobs int) {
 	c.metrics.flushJobTotal.Add(n)
 	c.metrics.flushJobLast.Store(n)
 	recordPerasMax(&c.metrics.flushJobMax, n)
+}
+
+func (c *Runtime) recordAdmissionWait(d time.Duration) {
+	recordPerasDuration(&c.metrics.admissionWaitLatencyTotal, &c.metrics.admissionWaitLatencyLast, &c.metrics.admissionWaitLatencyMax, d)
 }
 
 func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {

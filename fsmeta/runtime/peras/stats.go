@@ -84,6 +84,13 @@ func (c *Runtime) Stats() map[string]any {
 			"visible_log_apply_marker_total":             uint64(0),
 			"visible_log_apply_error_total":              uint64(0),
 			"visible_log_enabled":                        false,
+			"admission_pending_limit":                    0,
+			"admission_wait_total":                       uint64(0),
+			"admission_waiting":                          int64(0),
+			"admission_wait_latency_total_nanosecond":    uint64(0),
+			"admission_wait_latency_last_nanosecond":     uint64(0),
+			"admission_wait_latency_max_nanosecond":      uint64(0),
+			"admission_wait_latency_average_nanosecond":  uint64(0),
 			"overlay_keys":                               0,
 			"segment_keys":                               0,
 			"overlay_directory_index_dirs":               0,
@@ -146,6 +153,8 @@ func (c *Runtime) Stats() map[string]any {
 	witnessQuorumLatencyTotal := c.metrics.witnessQuorumLatencyTotal.Load()
 	installLatencyTotal := c.metrics.installLatencyTotal.Load()
 	sealLatencyTotal := c.metrics.sealLatencyTotal.Load()
+	admissionWaitTotal := c.metrics.admissionWaitTotal.Load()
+	admissionWaitLatencyTotal := c.metrics.admissionWaitLatencyTotal.Load()
 	return map[string]any{
 		"commit_total":                               c.metrics.commitTotal.Load(),
 		"flush_total":                                flushTotal,
@@ -226,6 +235,13 @@ func (c *Runtime) Stats() map[string]any {
 		"visible_log_apply_error_total":              c.metrics.visibleLogApplyErrorTotal.Load(),
 		"visible_log_enabled":                        c.visibleLog != nil,
 		"visible_log_policy":                         c.visibleLogPolicy(),
+		"admission_pending_limit":                    c.admitLimit,
+		"admission_wait_total":                       admissionWaitTotal,
+		"admission_waiting":                          c.metrics.admissionWaiting.Load(),
+		"admission_wait_latency_total_nanosecond":    admissionWaitLatencyTotal,
+		"admission_wait_latency_last_nanosecond":     c.metrics.admissionWaitLatencyLast.Load(),
+		"admission_wait_latency_max_nanosecond":      c.metrics.admissionWaitLatencyMax.Load(),
+		"admission_wait_latency_average_nanosecond":  averagePerasDuration(admissionWaitLatencyTotal, admissionWaitTotal),
 		"overlay_keys":                               overlayKeys,
 		"segment_keys":                               segmentKeys,
 		"overlay_directory_index_dirs":               overlayDirs,

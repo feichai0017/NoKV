@@ -244,6 +244,7 @@ func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) e
 	if err := batch.holder.MarkReplayPlanApplied(batch.plan); err != nil {
 		return c.recordErrorf("mark peras plan applied: %w", err)
 	}
+	c.signalAdmissionCapacity()
 	return c.markVisibleLogApplied(ctx, batch.holder, batch.plan)
 }
 

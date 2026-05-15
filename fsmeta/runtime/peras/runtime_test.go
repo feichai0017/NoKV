@@ -645,6 +645,50 @@ func TestRuntimeBackgroundFlushLimitScalesWithInstallParallelism(t *testing.T) {
 	require.Equal(t, 12, stats["background_flush_operation_limit"])
 }
 
+func TestRuntimeAdmissionWaitsForPendingDrain(t *testing.T) {
+	installer := &delayingRuntimePerasSegmentInstaller{delay: 50 * time.Millisecond}
+	committer, err := NewRuntime(Config{
+		Authority:              &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+		Witnesses:              testRuntimePerasWitnesses(t, 1),
+		Installer:              installer,
+		VisibleLog:             &recordingVisibleLog{},
+		Quorum:                 1,
+		SegmentBatchSize:       1024,
+		AdmissionPendingLimit:  1,
+		SegmentFlushEvery:      time.Hour,
+		BackgroundFlushTimeout: time.Second,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.Equal(t, 1, committer.Stats()["pending"])
+
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- commitRuntimePeras(ctx, committer, 2, []byte("dentry/b"), []byte("inode/b"))
+	}()
+
+	require.Eventually(t, func() bool {
+		stats := committer.Stats()
+		return stats["admission_wait_total"] == uint64(1) && stats["admission_waiting"] == int64(1)
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case err := <-commitDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("admission did not resume after pending drain")
+	}
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["admission_wait_total"])
+	require.Equal(t, int64(0), stats["admission_waiting"])
+	require.NotZero(t, stats["admission_wait_latency_total_nanosecond"])
+	require.Equal(t, 1, stats["pending"])
+	require.Equal(t, int32(1), installer.calls.Load())
+}
+
 func TestRuntimeReturnsInstalledCompletionOnRetry(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}

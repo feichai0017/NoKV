@@ -36,6 +36,7 @@ func buildPerasRuntime(
 		SegmentWitnessRetries:      opts.PerasSegmentWitnessRetries,
 		SegmentWitnessRetryBackoff: opts.PerasSegmentWitnessRetryBackoff,
 		SegmentBatchSize:           opts.PerasSegmentBatchSize,
+		AdmissionPendingLimit:      opts.PerasAdmissionPendingLimit,
 		SegmentMaxReplayOperations: opts.PerasSegmentMaxReplayOperations,
 		SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
 		SegmentMaxPayloadBytes:     opts.PerasSegmentMaxPayloadBytes,

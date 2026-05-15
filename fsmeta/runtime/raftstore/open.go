@@ -104,6 +104,10 @@ type Options struct {
 	// bounds one installed segment.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentBatchSize int
+	// PerasAdmissionPendingLimit bounds pending visible Peras operations before
+	// foreground commits wait for background segment drain. Zero uses the
+	// runtime default; negative is rejected.
+	PerasAdmissionPendingLimit int
 	// PerasSegmentMaxReplayOperations bounds one segment install by logical
 	// operation count. Zero uses the runtime default; negative is rejected.
 	PerasSegmentMaxReplayOperations int
@@ -189,7 +193,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, runtimeperas.ErrTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasAdmissionPendingLimit < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}
