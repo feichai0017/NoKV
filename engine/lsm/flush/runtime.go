@@ -7,19 +7,12 @@
 package flush
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/feichai0017/NoKV/metrics"
-)
-
-// Sentinel errors returned by Enqueue.
-var (
-	ErrNil    = errors.New("flush: runtime is nil")
-	ErrClosed = errors.New("flush: runtime closed")
 )
 
 // Task is a single flush request. Payload is the typed value passed by the

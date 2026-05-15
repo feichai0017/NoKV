@@ -419,6 +419,7 @@ func (f *faultFile) Read(p []byte) (int, error) {
 	return f.base.Read(p)
 }
 
+// forwarding-ok: faultFile satisfies io.ReaderAt; injection is gated by before/after hooks elsewhere.
 func (f *faultFile) ReadAt(p []byte, off int64) (int, error) {
 	return f.base.ReadAt(p, off)
 }

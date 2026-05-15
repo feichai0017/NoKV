@@ -3,10 +3,7 @@
 
 package failpoints
 
-import (
-	"errors"
-	"sync/atomic"
-)
+import "sync/atomic"
 
 // Mode configures coordinator service-layer failure injection hooks. Modes can
 // be ORed together to simulate multiple cut points.
@@ -21,11 +18,7 @@ const (
 	AfterSealGrantBeforeReload Mode = 1 << iota
 )
 
-var (
-	currentMode atomic.Uint32
-
-	ErrAfterSealGrantBeforeReload = errors.New("coordinator failpoint: after apply coordinator grant retirement before reload")
-)
+var currentMode atomic.Uint32
 
 // Set installs the active coordinator failpoint mask.
 func Set(mode Mode) {

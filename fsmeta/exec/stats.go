@@ -227,21 +227,6 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 	}
 }
 
-func recordUint64Max(max *atomic.Uint64, value uint64) {
-	if max == nil {
-		return
-	}
-	for {
-		old := max.Load()
-		if value <= old {
-			return
-		}
-		if max.CompareAndSwap(old, value) {
-			return
-		}
-	}
-}
-
 func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]uint64 {
 	if counters == nil {
 		return map[string]uint64{
@@ -264,28 +249,6 @@ func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]
 		string(compile.SlowReasonDynamicWriteSet):   counters.slowDynamicWriteTotal.Load(),
 		string(compile.SlowReasonMaintenanceScan):   counters.slowMaintenanceTotal.Load(),
 		"unknown": counters.slowUnknownTotal.Load(),
-	}
-}
-
-func (s *perasAdmissionCounters) recordSlow(reason compile.SlowReason) {
-	s.slowTotal.Add(1)
-	switch reason {
-	case compile.SlowReasonReadOnly:
-		s.slowReadOnlyTotal.Add(1)
-	case compile.SlowReasonRangeRead:
-		s.slowRangeReadTotal.Add(1)
-	case compile.SlowReasonDurabilityBarrier:
-		s.slowDurabilityTotal.Add(1)
-	case compile.SlowReasonCrossBucket:
-		s.slowCrossBucketTotal.Add(1)
-	case compile.SlowReasonSharedQuota:
-		s.slowSharedQuotaTotal.Add(1)
-	case compile.SlowReasonDynamicWriteSet:
-		s.slowDynamicWriteTotal.Add(1)
-	case compile.SlowReasonMaintenanceScan:
-		s.slowMaintenanceTotal.Add(1)
-	default:
-		s.slowUnknownTotal.Add(1)
 	}
 }
 

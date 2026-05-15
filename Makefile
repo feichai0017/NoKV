@@ -4,7 +4,7 @@
 # NoKV Makefile
 # Provides standardized commands for development workflow
 
-.PHONY: help build test test-short test-race test-coverage test-architecture lint fmt clean docker-up docker-dev-up docker-down bench fsmeta-bench
+.PHONY: help build test test-short test-race test-coverage lint lint-nokv test-lint verify fmt clean docker-up docker-dev-up docker-down bench fsmeta-bench
 .PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke test-soak-24h test-soak-72h
 .PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
@@ -27,7 +27,9 @@ help:
 	@echo "  make test-short         - Run tests in short mode"
 	@echo "  make test-race          - Run tests with race detector"
 	@echo "  make test-coverage      - Run tests with coverage report"
-	@echo "  make test-architecture  - Run package dependency boundary guards"
+	@echo "  make lint-nokv          - Run analyzers via standalone nokvlint (IDE / debug)"
+	@echo "  make test-lint          - Run analyzer unit tests under tools/lint"
+	@echo "  make verify             - Run build + lint + test-lint + test (pre-PR gate)"
 	@echo "  make test-contract-smoke - Run seeded fsmeta contract model smoke tests"
 	@echo "  make test-raftstore-contract-smoke - Run seeded fsmeta contract tests on real raftstore"
 	@echo "  make test-history-smoke - Run bounded concurrent fsmeta history checks"
@@ -91,9 +93,17 @@ test-coverage:
 	@echo "✓ Coverage report generated: coverage.out"
 	@echo "  View with: go tool cover -html=coverage.out"
 
-test-architecture:
-	@echo "Running architecture dependency checks..."
-	go test ./architecture -count=1 -v
+# verify is the canonical pre-PR gate. It runs every check that has to be
+# green before a change merges:
+#   build      - the whole module compiles
+#   lint       - stock golangci-lint + every nokvcontract analyzer
+#   test-lint  - analyzer unit tests under tools/lint
+#   test       - the Go test suite
+#
+# Each step is a normal Makefile target, so it can also be run alone.
+verify: build lint test-lint test
+	@echo ""
+	@echo "✓ verify: build + lint + test-lint + test all passed"
 
 # Run seeded contract tests against the fsmeta executor model.
 test-contract-smoke:
@@ -177,11 +187,29 @@ test-soak-72h:
 	@echo "Running 72h Docker fsmeta soak..."
 	NOKV_SOAK_DURATION=72h NOKV_SOAK_ROLLING_RESTARTS=1 NOKV_SOAK_STEPS=$${NOKV_SOAK_STEPS:-160} NOKV_SOAK_BATCH=$${NOKV_SOAK_BATCH:-4} ./scripts/soak/fsmeta_soak.sh
 
-# Run linter (requires golangci-lint to be installed)
-lint:
-	@echo "Running golangci-lint..."
+# Run linter. Uses the embedded custom-gcl binary that bundles NoKV's
+# code-contract analyzers from tools/lint (see .custom-gcl.yml). The plain
+# golangci-lint binary does not know about those analyzers.
+NOKV_LINT_BIN := ./bin/custom-gcl
+
+lint: $(NOKV_LINT_BIN)
+	@echo "Running custom-gcl (golangci-lint + nokvcontract)..."
+	$(NOKV_LINT_BIN) run ./...
+
+$(NOKV_LINT_BIN): .custom-gcl.yml tools/lint/go.mod $(shell find tools/lint -name '*.go' -not -path '*/testdata/*' 2>/dev/null)
 	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-tools' first." && exit 1)
-	golangci-lint run ./...
+	golangci-lint custom
+
+# Run the standalone multichecker without the golangci-lint wrapper. Useful
+# for IDE integration and for testing analyzer changes in isolation.
+lint-nokv:
+	go run github.com/feichai0017/NoKV/tools/lint/cmd/nokvlint ./...
+
+# Run the architecture-rule unit test plus the analyzer test suite. Quick
+# pre-flight before `make lint`.
+test-lint:
+	@echo "Running analyzer unit tests..."
+	cd tools/lint && go test ./...
 
 # Format code and tidy dependencies
 fmt:
@@ -232,6 +260,8 @@ install-tools:
 	@echo "Installing development tools (pinned versions)..."
 	GOTOOLCHAIN=go$(PROJECT_GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
+	@echo "Building embedded custom-gcl with NoKV code-contract analyzers..."
+	golangci-lint custom
 	@echo "✓ Tools installed"
 
 install-tla-tools:

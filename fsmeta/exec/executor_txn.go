@@ -75,21 +75,6 @@ func (s *atomicOnePhaseCounters) affinityFallbacks(affinity string) uint64 {
 	return s.fallbacksByAffinity[affinity]
 }
 
-func (s *atomicOnePhaseCounters) recordFallback(affinity string) {
-	s.mu.Lock()
-	next := s.fallbacksByAffinity[affinity] + 1
-	s.fallbacksByAffinity[affinity] = next
-	s.mu.Unlock()
-	s.consecutiveFallbacks.Store(next)
-}
-
-func (s *atomicOnePhaseCounters) recordSuccess(affinity string) {
-	s.mu.Lock()
-	delete(s.fallbacksByAffinity, affinity)
-	s.mu.Unlock()
-	s.consecutiveFallbacks.Store(0)
-}
-
 func atomicOnePhaseAffinity(primary []byte, mutations []*kvrpcpb.Mutation) string {
 	const virtualShards = 64
 	shards := make([]int, 0, 1+len(mutations))

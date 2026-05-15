@@ -9,18 +9,10 @@ import (
 	"sync"
 	"time"
 
-	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
-)
-
-var (
-	ErrInvalidGrant       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/peras: invalid authority grant")
-	ErrAmbiguousAuthority = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: ambiguous active authority")
-	ErrConflictingGrant   = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: conflicting authority grant")
-	ErrAuthorityViewStale = nokverrors.New(nokverrors.KindStaleEpoch, "fsmeta/runtime/peras: active authority view stale")
 )
 
 type ActiveAuthorities struct {

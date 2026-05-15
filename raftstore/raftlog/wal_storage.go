@@ -381,27 +381,36 @@ func (ws *WALStorage) MaybeCompact(applied, retain uint64) error {
 	return ws.compactTo(target)
 }
 
-// Delegated Storage interface methods.
+// Delegated Storage interface methods. WALStorage owns durability, but the
+// etcd/raft Storage contract reads from the in-memory mirror; each method
+// below is a deliberate adapter and not a one-off accidental wrapper.
+
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) InitialState() (myraft.HardState, myraft.ConfState, error) {
 	return ws.mem.InitialState()
 }
 
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) Entries(lo, hi, maxSize uint64) ([]myraft.Entry, error) {
 	return ws.mem.Entries(lo, hi, maxSize)
 }
 
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) Term(i uint64) (uint64, error) {
 	return ws.mem.Term(i)
 }
 
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) LastIndex() (uint64, error) {
 	return ws.mem.LastIndex()
 }
 
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) FirstIndex() (uint64, error) {
 	return ws.mem.FirstIndex()
 }
 
+// forwarding-ok: WALStorage satisfies raft.Storage; durable WAL ownership lives elsewhere.
 func (ws *WALStorage) Snapshot() (myraft.Snapshot, error) {
 	return ws.mem.Snapshot()
 }

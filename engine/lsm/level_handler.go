@@ -8,7 +8,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -594,25 +593,6 @@ func (lh *levelHandler) collectLandingTablesLocked(fidSet map[uint64]struct{}) [
 		}
 	}
 	return out
-}
-
-func (lh *levelHandler) recordLandingMetrics(merge bool, duration time.Duration, tables int) {
-	if tables < 0 {
-		tables = 0
-	}
-	if merge {
-		lh.landingMergeRuns.Add(1)
-		lh.landingMergeDurationNs.Add(duration.Nanoseconds())
-		if tables > 0 {
-			lh.landingMergeTables.Add(uint64(tables))
-		}
-		return
-	}
-	lh.landingRuns.Add(1)
-	lh.landingDurationNs.Add(duration.Nanoseconds())
-	if tables > 0 {
-		lh.landingTablesCompactedCount.Add(uint64(tables))
-	}
 }
 
 func (lh *levelHandler) iterators(opt *index.Options) []index.Iterator {
