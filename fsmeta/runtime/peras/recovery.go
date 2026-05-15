@@ -6,6 +6,7 @@ package peras
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -60,7 +61,7 @@ func (c *Runtime) RecoverWitnessSegments(ctx context.Context, scope compile.Auth
 			digest:  record.SegmentPayloadDigest,
 			install: install,
 		}
-		if _, err := c.submitInstallJob(ctx, job); err != nil {
+		if _, err := c.submitRecoveryInstallJob(ctx, job); err != nil {
 			return c.recordErrorf("recover peras segment install: %w", err)
 		}
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
@@ -184,7 +185,7 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 		digest:  record.SegmentPayloadDigest,
 		install: install,
 	}
-	if _, err := c.submitInstallJob(ctx, job); err != nil {
+	if _, err := c.submitRootRecoveryInstallJob(ctx, job); err != nil {
 		return err
 	}
 	if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
@@ -196,6 +197,71 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 
 func recoverableCatalogLoadError(err error) bool {
 	return nokverrors.Retryable(err) || nokverrors.IsKind(err, nokverrors.KindRetryExhausted)
+}
+
+func (c *Runtime) submitRootRecoveryInstallJob(ctx context.Context, job perasFlushJob) (InstallCursor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	installCtx, cancel := context.WithTimeout(ctx, defaultPerasRootRecoveryInstallTimeout)
+	cursor, err := c.submitRecoveryInstallJob(installCtx, job)
+	cancel()
+	if err == nil {
+		return cursor, nil
+	}
+	if ctx.Err() != nil {
+		return InstallCursor{}, ctx.Err()
+	}
+	if errors.Is(err, context.DeadlineExceeded) || recoverableRecoveryInstallError(err) {
+		c.startRecoveryInstallRetry(job)
+		return InstallCursor{}, nil
+	}
+	return InstallCursor{}, err
+}
+
+func (c *Runtime) submitRecoveryInstallJob(ctx context.Context, job perasFlushJob) (InstallCursor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; ; attempt++ {
+		cursor, err := c.submitInstallJob(ctx, job)
+		if err == nil {
+			return cursor, nil
+		}
+		if !recoverableRecoveryInstallError(err) {
+			return InstallCursor{}, err
+		}
+		c.recordInstallRetry(err)
+		if !sleepContext(ctx, perasSegmentInstallRetryDelay(err, attempt)) {
+			return InstallCursor{}, ctx.Err()
+		}
+	}
+}
+
+func recoverableRecoveryInstallError(err error) bool {
+	return nokverrors.Retryable(err) || nokverrors.IsKind(err, nokverrors.KindRetryExhausted)
+}
+
+func (c *Runtime) startRecoveryInstallRetry(job perasFlushJob) {
+	if c == nil || c.closer == nil {
+		return
+	}
+	c.closer.Add(1)
+	go func() {
+		defer c.closer.Done()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-c.closer.Closed():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		if _, err := c.submitRecoveryInstallJob(ctx, job); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrRuntimeClosed) {
+			_ = c.recordErrorf("background recover peras segment install: %w", err)
+		}
+	}()
 }
 
 func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal rootproto.PerasAuthoritySeal) (fsperas.SegmentWitnessRecord, bool, error) {

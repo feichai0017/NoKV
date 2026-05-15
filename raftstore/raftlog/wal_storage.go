@@ -69,10 +69,13 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 				return nil, err
 			}
 			ws.pointer = ptr
+			if err := ws.restoreCompactedPrefix(ptr); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	var replayPtr localmeta.RaftLogPointer
+	replayPtr := ws.pointer
 
 	if err := cfg.WAL.ReplayFiltered(func(info wal.EntryInfo) bool {
 		switch info.Type {
@@ -91,7 +94,7 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 			if gid != cfg.GroupID || len(entries) == 0 {
 				return nil
 			}
-			if err := ws.mem.Append(entries); err != nil {
+			if err := ws.appendReplayEntries(trimCompactedEntries(entries, ws.pointer.TruncatedIndex)); err != nil {
 				return err
 			}
 			ws.recordEntrySpan(info, payload, entries)
@@ -129,16 +132,25 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 			if gid != cfg.GroupID || myraft.IsEmptySnap(snap) {
 				return nil
 			}
-			if err := ws.mem.ApplySnapshot(snap); err != nil {
-				return err
-			}
 			meta := snap.Metadata
+			if ws.pointer.TruncatedIndex > 0 && meta.Index < ws.pointer.TruncatedIndex {
+				return nil
+			}
+			if ws.pointer.TruncatedIndex > 0 && meta.Index == ws.pointer.TruncatedIndex {
+				if err := ws.hydrateCompactedPrefixSnapshot(snap); err != nil {
+					return err
+				}
+			} else {
+				if err := ws.mem.ApplySnapshot(snap); err != nil {
+					return err
+				}
+			}
 			replayPtr.GroupID = cfg.GroupID
 			replayPtr.Segment = info.SegmentID
 			replayPtr.Offset = recordEnd(info)
 			replayPtr.SnapshotIndex = meta.Index
 			replayPtr.SnapshotTerm = meta.Term
-			if meta.Index > 0 {
+			if meta.Index > replayPtr.AppliedIndex {
 				replayPtr.AppliedIndex = meta.Index
 				replayPtr.AppliedTerm = meta.Term
 			}
@@ -171,6 +183,100 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	}
 
 	return ws, nil
+}
+
+func (ws *WALStorage) restoreCompactedPrefix(ptr localmeta.RaftLogPointer) error {
+	if ptr.TruncatedIndex == 0 {
+		return nil
+	}
+	term := ptr.TruncatedTerm
+	if term == 0 && ptr.SnapshotIndex == ptr.TruncatedIndex {
+		term = ptr.SnapshotTerm
+	}
+	return ws.mem.ApplySnapshot(myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     ptr.TruncatedIndex,
+			Term:      term,
+			ConfState: ws.compactedPrefixConfState(),
+		},
+	})
+}
+
+func (ws *WALStorage) hydrateCompactedPrefixSnapshot(snap myraft.Snapshot) error {
+	index := snap.Metadata.Index
+	hs, _, err := ws.mem.InitialState()
+	if err != nil {
+		return err
+	}
+	last, err := ws.mem.LastIndex()
+	if err != nil {
+		return err
+	}
+	var suffix []myraft.Entry
+	if last > index {
+		suffix, err = ws.mem.Entries(index+1, last+1, ^uint64(0))
+		if err != nil {
+			return err
+		}
+	}
+	mem := myraft.NewMemoryStorage()
+	if err := mem.ApplySnapshot(snap); err != nil {
+		return err
+	}
+	if err := mem.SetHardState(hs); err != nil {
+		return err
+	}
+	if len(suffix) > 0 {
+		if err := mem.Append(suffix); err != nil {
+			return err
+		}
+	}
+	ws.mem = mem
+	return nil
+}
+
+func (ws *WALStorage) compactedPrefixConfState() raftpb.ConfState {
+	if ws == nil || ws.localMeta == nil || ws.groupID == 0 {
+		return raftpb.ConfState{}
+	}
+	meta := ws.localMeta.Snapshot()[ws.groupID]
+	if len(meta.Peers) == 0 {
+		return raftpb.ConfState{}
+	}
+	voters := make([]uint64, 0, len(meta.Peers))
+	for _, peer := range meta.Peers {
+		if peer.PeerID != 0 {
+			voters = append(voters, peer.PeerID)
+		}
+	}
+	return raftpb.ConfState{Voters: voters}
+}
+
+func (ws *WALStorage) appendReplayEntries(entries []myraft.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	last, err := ws.mem.LastIndex()
+	if err != nil {
+		return err
+	}
+	if first := entries[0].Index; first > last+1 {
+		return fmt.Errorf("raftstore: raft WAL replay gap for group %d: first entry %d after last %d",
+			ws.groupID, first, last)
+	}
+	return ws.mem.Append(entries)
+}
+
+func trimCompactedEntries(entries []myraft.Entry, truncated uint64) []myraft.Entry {
+	if truncated == 0 {
+		return entries
+	}
+	for idx, entry := range entries {
+		if entry.Index > truncated {
+			return entries[idx:]
+		}
+	}
+	return nil
 }
 
 // Append persists raft entries via WAL.

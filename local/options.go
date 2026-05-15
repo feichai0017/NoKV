@@ -158,9 +158,9 @@ type Options struct {
 	// of WAL segments containing raft records exceeds this threshold. Zero
 	// disables segment-count warnings.
 	WALTypedRecordWarnSegments int64
-	// ControlLogPointerSnapshot returns control-log checkpoints used by WAL
-	// watchdogs, GC policy, and diagnostics. It must return a detached snapshot.
-	// Nil disables control-log backlog accounting.
+	// ControlLogPointerSnapshot returns durable control-log checkpoints used by
+	// WAL watchdogs, GC policy, and diagnostics. It must return a detached
+	// snapshot. Nil disables control-log backlog accounting.
 	ControlLogPointerSnapshot func() map[uint64]stats.ControlLogPointer
 
 	// NumCompactors controls how many background compaction workers are spawned.

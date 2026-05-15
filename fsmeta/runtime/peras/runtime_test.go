@@ -518,6 +518,52 @@ func TestRuntimePublishesRootSealAfterInstall(t *testing.T) {
 	require.Equal(t, uint64(1), stats["flush_jobs_max"])
 }
 
+func TestRuntimeWitnessQuorumSelectionRotatesBySegmentRoot(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	witnesses := testRuntimePerasWitnesses(t, 5)
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		Quorum:            2,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 1}
+	for i := uint64(1); i <= 64; i++ {
+		var root [32]byte
+		var digest [32]byte
+		binary.BigEndian.PutUint64(root[24:], i)
+		binary.BigEndian.PutUint64(digest[24:], i*17)
+		require.NoError(t, committer.appendSegmentWitnessRecords(context.Background(), scope, []fsperas.SegmentWitnessRecord{{
+			EpochID:              1,
+			SegmentRoot:          root,
+			SegmentPayloadDigest: digest,
+			SegmentPayloadSize:   1,
+		}}))
+	}
+
+	total := 0
+	used := 0
+	maxRecords := 0
+	for _, witness := range witnesses {
+		recorder := witness.(*recordingRuntimePerasWitness)
+		count := recorder.recordCount()
+		total += count
+		if count > 0 {
+			used++
+		}
+		if count > maxRecords {
+			maxRecords = count
+		}
+	}
+	require.Equal(t, 64*committer.quorum, total)
+	require.Equal(t, len(witnesses), used)
+	require.Less(t, maxRecords, 64)
+}
+
 func TestRuntimeCanStopAtDurablePersistence(t *testing.T) {
 	provider := &publishingRuntimePerasGrantProvider{
 		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
@@ -1322,6 +1368,76 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 	require.NotEmpty(t, installer.install.RoutingKeys)
 	stats := recoverer.Stats()
 	require.Equal(t, uint64(1), stats["root_sealed_segment_missing_total"])
+	require.Equal(t, uint64(1), stats["segment_recovery_install_total"])
+	value, deleted, ok := recoverer.GetPerasOverlay(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+}
+
+func TestRuntimeRootSealedRecoveryWaitsOutRouteRetryExhaustion(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "route-retry")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 14)
+	require.NoError(t, err)
+	witnesses := testRuntimePerasWitnesses(t, 3)
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	holder, err := fsperas.NewHolder(fsperas.HolderConfig{EpochID: 1, HolderID: "holder-a"})
+	require.NoError(t, err)
+	delta := testRuntimePerasOp(dentryKey, inodeKey)
+	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
+		Mount:      delta.Delta.Authority.Mount,
+		MountKeyID: delta.Delta.Authority.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+		Inodes:     []fsmeta.InodeID{14},
+	})
+	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	require.NoError(t, err)
+	plan, scope, err := holder.BuildPendingReplayPlan(10)
+	require.NoError(t, err)
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
+	require.NoError(t, err)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	requireRuntimeSegmentWitness(t, committer, scope, holder, segment, payload, digest)
+
+	seal := testRuntimePerasRootSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	seal.SegmentPayloadDigest = digest
+	seal.OperationCount = segment.Stats().OperationCount
+	seal.EntryCount = segment.Stats().EntryCount
+	provider.seals = []rootproto.PerasAuthoritySeal{seal}
+	installer := &flakyRuntimePerasSegmentInstaller{
+		failures: defaultPerasSegmentInstallRetries + 1,
+		kind:     nokverrors.KindRegionRouting,
+	}
+	recoverer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		Installer:         installer,
+		CatalogScanner:    &fakeRuntimePerasCatalogScanner{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer recoverer.Close()
+
+	require.NoError(t, recoverer.LoadRootSealedSegments(context.Background(), scope))
+	require.Equal(t, defaultPerasSegmentInstallRetries+2, installer.calls)
+	stats := recoverer.Stats()
+	require.Positive(t, stats["retry_routing_total"])
 	require.Equal(t, uint64(1), stats["segment_recovery_install_total"])
 	value, deleted, ok := recoverer.GetPerasOverlay(dentryKey)
 	require.True(t, ok)
@@ -2391,6 +2507,7 @@ type flakyRuntimePerasSegmentInstaller struct {
 	mu       sync.Mutex
 	calls    int
 	failures int
+	kind     nokverrors.Kind
 }
 
 func (i *flakyRuntimePerasSegmentInstaller) InstallSegment(context.Context, SegmentInstallRequest) (InstallCursor, error) {
@@ -2398,7 +2515,11 @@ func (i *flakyRuntimePerasSegmentInstaller) InstallSegment(context.Context, Segm
 	defer i.mu.Unlock()
 	i.calls++
 	if i.calls <= i.failures {
-		return InstallCursor{}, nokverrors.New(nokverrors.KindStaleEpoch, "stale install era")
+		kind := i.kind
+		if kind == nokverrors.KindUnknown {
+			kind = nokverrors.KindStaleEpoch
+		}
+		return InstallCursor{}, nokverrors.New(kind, "transient install error")
 	}
 	return testPerasInstallCursor(uint64(i.calls)), nil
 }
@@ -2630,6 +2751,12 @@ func (w *recordingRuntimePerasWitness) AppendSegments(_ context.Context, _ compi
 	defer w.mu.Unlock()
 	w.records = append(w.records, records...)
 	return nil
+}
+
+func (w *recordingRuntimePerasWitness) recordCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.records)
 }
 
 func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {

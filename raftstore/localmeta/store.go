@@ -142,6 +142,19 @@ func (s *Store) RaftPointerSnapshot() map[uint64]RaftLogPointer {
 	return CloneRaftPointers(s.state.RaftPointers)
 }
 
+// DurableRaftPointerSnapshot returns the raft pointers known to be present in
+// the store-local raft progress catalog. WAL retention must use this lower
+// bound instead of the hotter in-memory pointers, otherwise a crash after WAL GC
+// can leave durable metadata behind the retained raft log.
+func (s *Store) DurableRaftPointerSnapshot() map[uint64]RaftLogPointer {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return CloneRaftPointers(s.persistedRaftPointers)
+}
+
 // PendingRootEvents returns locally durable rooted events that still require a
 // successful publish acknowledgement. Results are sorted by sequence.
 func (s *Store) PendingRootEvents() []PendingRootEvent {

@@ -322,11 +322,13 @@ func testPerasInstallSegmentRequest(tb testing.TB, segment fsperas.PerasSegment,
 	dependencyKeys := install.DependencyKeys
 	catalogKeys := install.CatalogKeys
 	materializedKeys := install.MaterializedKeys
+	routingKeys := install.RoutingKeys
 	if !materialize {
 		dependencyKeys, err = fsperas.PerasSegmentCatalogRouteInstallKeys(segment.Root, routingKey)
 		require.NoError(tb, err)
 		catalogKeys = dependencyKeys
 		materializedKeys = nil
+		routingKeys = [][]byte{routingKey}
 	}
 	stats := segment.Stats()
 	readHeader := segment.ReadHeaderView()
@@ -344,7 +346,7 @@ func testPerasInstallSegmentRequest(tb testing.TB, segment fsperas.PerasSegment,
 			SegmentEntryCount:     stats.EntryCount,
 			SegmentPayloadSize:    uint64(len(payload)),
 			CanonicalObjectKey:    install.CanonicalObjectKey,
-			RoutingKeys:           install.RoutingKeys,
+			RoutingKeys:           routingKeys,
 			DependencyKeys:        dependencyKeys,
 			CatalogKeys:           catalogKeys,
 			MaterializedKeys:      materializedKeys,

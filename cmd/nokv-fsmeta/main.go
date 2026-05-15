@@ -67,6 +67,7 @@ func main() {
 		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras pending visible operations that trigger background flush; zero uses runtime default")
 		perasAdmissionPendingLimit      = flag.Int("peras-admission-pending-limit", 0, "Peras pending visible operations allowed before foreground commits wait for drain; zero uses runtime default")
 		perasSegmentMaxReplayMutations  = flag.Int("peras-segment-max-replay-mutations", 0, "Peras replay mutations per installed segment; zero uses runtime default")
+		perasSegmentCatalogRouteBudget  = flag.Int("peras-segment-catalog-route-budget", 0, "Peras catalog install routes per segment; zero uses runtime default")
 		perasSegmentInstallParallelism  = flag.Int("peras-segment-install-parallelism", 0, "Peras segment installs per flush; zero uses GOMAXPROCS")
 		perasSegmentFlushParallelism    = flag.Int("peras-segment-flush-parallelism", 0, "Peras flush batches prepared concurrently; zero follows install parallelism")
 		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
@@ -85,7 +86,7 @@ func main() {
 		return
 	}
 	if *perasAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *perasWitnessQuorum < 0 ||
-		*perasSegmentBatchSize < 0 || *perasAdmissionPendingLimit < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushParallelism < 0 || *perasSegmentFlushEvery < 0 ||
+		*perasSegmentBatchSize < 0 || *perasAdmissionPendingLimit < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentCatalogRouteBudget < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushParallelism < 0 || *perasSegmentFlushEvery < 0 ||
 		*perasBackgroundFlushTimeout < 0 || *perasBackgroundErrorBackoff < 0 {
 		fatalf("peras options must be non-negative")
 		return
@@ -125,6 +126,7 @@ func main() {
 		PerasSegmentBatchSize:           *perasSegmentBatchSize,
 		PerasAdmissionPendingLimit:      *perasAdmissionPendingLimit,
 		PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
+		PerasSegmentCatalogRouteBudget:  *perasSegmentCatalogRouteBudget,
 		PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
 		PerasSegmentFlushParallelism:    *perasSegmentFlushParallelism,
 		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,

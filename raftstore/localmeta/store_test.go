@@ -469,6 +469,7 @@ func TestLocalStoreHelpersAndSnapshots(t *testing.T) {
 	var nilStore *Store
 	require.Empty(t, nilStore.WorkDir())
 	require.Nil(t, nilStore.RaftPointerSnapshot())
+	require.Nil(t, nilStore.DurableRaftPointerSnapshot())
 	require.True(t, nilStore.Empty())
 
 	dir := t.TempDir()
@@ -501,6 +502,19 @@ func TestLocalStoreHelpersAndSnapshots(t *testing.T) {
 	got, ok := store.RaftPointer(ptr.GroupID)
 	require.True(t, ok)
 	require.Equal(t, ptr, got)
+
+	replayable := ptr
+	replayable.Offset = 256
+	replayable.AppliedIndex = 12
+	require.NoError(t, store.SaveRaftPointer(replayable))
+	require.Equal(t, replayable, store.RaftPointerSnapshot()[ptr.GroupID])
+	require.Equal(t, ptr, store.DurableRaftPointerSnapshot()[ptr.GroupID])
+
+	boundary := replayable
+	boundary.Segment = 3
+	boundary.Offset = 64
+	require.NoError(t, store.SaveRaftPointer(boundary))
+	require.Equal(t, boundary, store.DurableRaftPointerSnapshot()[ptr.GroupID])
 }
 
 func TestLocalStoreDeletePendingSchedulerOperation(t *testing.T) {

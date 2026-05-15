@@ -146,11 +146,22 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
 		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			result, err := applyPerasInstallSegment(db, r.GetPerasInstallSegment())
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT)
+			batch := []*kvrpcpb.PerasInstallSegmentRequest{r.GetPerasInstallSegment()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetPerasInstallSegment())
+			}
+			results, err := applyPerasInstallSegmentBatch(db, batch)
 			if err != nil {
 				return nil, err
 			}
-			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
+			if len(results) != len(batch) {
+				return nil, fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
+			}
+			for _, result := range results {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
@@ -314,13 +325,20 @@ func applyBatchRun(
 			}
 		}
 	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		for i, req := range reqs {
-			result, err := applyPerasInstallSegment(db, req.GetRequests()[0].GetPerasInstallSegment())
-			if err != nil {
-				return err
-			}
+		batch := make([]*kvrpcpb.PerasInstallSegmentRequest, 0, len(reqs))
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetPerasInstallSegment())
+		}
+		results, err := applyPerasInstallSegmentBatch(db, batch)
+		if err != nil {
+			return err
+		}
+		if len(results) != len(batch) {
+			return fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
+		}
+		for i, result := range results {
 			resps[i] = &raftcmdpb.RaftCmdResponse{
-				Header: req.GetHeader(),
+				Header: reqs[i].GetHeader(),
 				Responses: []*raftcmdpb.Response{{
 					Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result},
 				}},

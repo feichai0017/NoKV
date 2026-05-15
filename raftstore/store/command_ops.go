@@ -586,6 +586,15 @@ func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, info rsperas.Inst
 		info.SegmentPayloadSize == 0 || len(info.CanonicalObjectKey) == 0 || bytes.Equal(info.RoutingKey, info.CanonicalObjectKey) {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
+	routingKeys, err := rsperas.CatalogInstallRoutingKeys(info)
+	if err != nil {
+		return epochNotMatchError(&meta), AdmissionReasonInvalid
+	}
+	for _, routingKey := range routingKeys {
+		if bytes.Equal(routingKey, info.CanonicalObjectKey) {
+			return epochNotMatchError(&meta), AdmissionReasonInvalid
+		}
+	}
 	if _, err := rsperas.CatalogRouteInstallKeys(info.Root, info.CanonicalObjectKey); err != nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}

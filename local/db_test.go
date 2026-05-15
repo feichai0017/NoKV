@@ -1021,7 +1021,7 @@ func TestRecoverySlowFollowerSnapshotBacklog(t *testing.T) {
 	localMeta, err := localmeta.OpenLocalStore(root, nil)
 	require.NoError(t, err)
 	defer func() { _ = localMeta.Close() }()
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 
 	db := openTestDB(t, opt)
 	defer func() { _ = db.Close() }()

@@ -103,7 +103,7 @@ func openAdminTestDBWithTweak(t *testing.T, dir string, tweak func(*local.Option
 	require.NoError(t, err)
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	if tweak != nil {
 		tweak(opt)
 	}

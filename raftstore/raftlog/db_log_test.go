@@ -52,7 +52,7 @@ func openDBLogTestDB(t *testing.T) (*local.DB, *localmeta.Store) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
 	opt.EnableWALWatchdog = false
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	db, err := local.Open(opt)
 	require.NoError(t, err)
 	return db, localMeta

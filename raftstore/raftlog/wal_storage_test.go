@@ -15,6 +15,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/wal"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -24,6 +25,11 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
 	localMeta := openLocalMetaStore(t, dir)
+	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
+		ID:    1,
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State: metaregion.ReplicaStateRunning,
+	}))
 
 	ws, err := OpenWALStorage(WALStorageConfig{
 		GroupID:   1,
@@ -67,6 +73,67 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	require.Greater(t, ptr.TruncatedOffset, uint64(0))
 }
 
+func TestWALStorageReplayPreservesSnapshotAtRestoredCompactedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
+	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
+		ID:    1,
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State: metaregion.ReplicaStateRunning,
+	}))
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	snap := myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     1,
+			Term:      1,
+			ConfState: raftpb.ConfState{Voters: []uint64{1}},
+		},
+		Data: []byte("snapshot-payload"),
+	}
+	require.NoError(t, ws.ApplySnapshot(snap))
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 2, Term: 1, Data: []byte("after-snapshot-2")},
+		{Index: 3, Term: 2, Data: []byte("after-snapshot-3")},
+	}))
+	require.NoError(t, ws.SetHardState(myraft.HardState{Term: 2, Commit: 3}))
+
+	require.NoError(t, localMeta.Close())
+	require.NoError(t, walMgr.Close())
+
+	walMgr = openWalManager(t, dir)
+	defer func() { _ = walMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
+
+	reopened, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	term, err := reopened.Term(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), term)
+	hs, cs, err := reopened.InitialState()
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), hs.Commit)
+	require.Equal(t, []uint64{1}, cs.Voters)
+	restored, err := reopened.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, snap.Metadata.Index, restored.Metadata.Index)
+	require.Equal(t, snap.Data, restored.Data)
+	last, err := reopened.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), last)
+}
+
 func TestWALStorageCompactUpdatesLocalMeta(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
@@ -102,6 +169,63 @@ func TestWALStorageCompactUpdatesLocalMeta(t *testing.T) {
 	seg, ok := ws.segmentForIndex(4)
 	require.True(t, ok)
 	require.Equal(t, uint32(ptr.Segment), seg)
+}
+
+func TestWALStorageReplaysAfterCompactedPrefixSegmentRemoved(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 1, Term: 1, Data: []byte("e1")},
+		{Index: 2, Term: 1, Data: []byte("e2")},
+		{Index: 3, Term: 2, Data: []byte("e3")},
+		{Index: 4, Term: 2, Data: []byte("e4")},
+	}))
+	require.NoError(t, walMgr.SwitchSegment(2, true))
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 5, Term: 3, Data: []byte("e5")},
+		{Index: 6, Term: 3, Data: []byte("e6")},
+	}))
+	require.NoError(t, ws.compactTo(4))
+
+	ptr, ok := localMeta.RaftPointer(1)
+	require.True(t, ok)
+	require.Equal(t, uint64(4), ptr.TruncatedIndex)
+	require.Equal(t, uint64(2), ptr.TruncatedTerm)
+
+	require.NoError(t, localMeta.Close())
+	require.NoError(t, walMgr.Close())
+	require.NoError(t, os.Remove(filepath.Join(dir, "wal", "00001.wal")))
+	require.NoError(t, os.Remove(filepath.Join(dir, "wal", "00001.wal.idx")))
+
+	walMgr = openWalManager(t, dir)
+	defer func() { _ = walMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
+
+	reopened, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+
+	first, err := reopened.FirstIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), first)
+	last, err := reopened.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(6), last)
+	term, err := reopened.Term(4)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), term)
 }
 
 func TestWALStorageRejectsLocalMetaPointerToNonRaftRecord(t *testing.T) {

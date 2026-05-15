@@ -40,6 +40,7 @@ func buildPerasRuntime(
 		SegmentMaxReplayOperations: opts.PerasSegmentMaxReplayOperations,
 		SegmentMaxReplayMutations:  opts.PerasSegmentMaxReplayMutations,
 		SegmentMaxPayloadBytes:     opts.PerasSegmentMaxPayloadBytes,
+		SegmentCatalogRouteBudget:  opts.PerasSegmentCatalogRouteBudget,
 		SegmentInstallParallelism:  opts.PerasSegmentInstallParallelism,
 		SegmentFlushParallelism:    opts.PerasSegmentFlushParallelism,
 		SegmentFlushEvery:          opts.PerasSegmentFlushEvery,

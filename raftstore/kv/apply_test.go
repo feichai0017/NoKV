@@ -227,6 +227,53 @@ func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
 	require.Equal(t, []byte("attrs"), value)
 }
 
+func TestApplyPerasInstallSegmentInstallsGroupedCatalogRoutes(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	segment := fsmetaMultiBucketSegmentForTest(t)
+	payload, err := fsperas.EncodePerasSegment(segment)
+	require.NoError(t, err)
+	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
+	require.NoError(t, err)
+	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(objectKeys), 2)
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
+				RoutingKey:           objectKeys[0],
+				RoutingKeys:          objectKeys,
+				SegmentRoot:          segment.Root[:],
+				SegmentPayloadDigest: digest[:],
+				SegmentPayload:       payload,
+				InstallVersion:       99,
+			}, segment, payload)},
+		}},
+	})
+	require.NoError(t, err)
+	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
+	require.Nil(t, installResp.GetError())
+	require.Equal(t, uint64(len(objectKeys)+1), installResp.GetAppliedEntries())
+
+	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
+	require.NoError(t, err)
+	for _, objectKey := range objectKeys {
+		installed, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, objectKey)
+		require.NoError(t, err)
+		require.True(t, installed)
+	}
+	records, err := LoadPerasSegmentCatalogs(db)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, canonicalObjectKey, objectKeys[0])
+}
+
 func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
@@ -255,7 +302,8 @@ func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 		}}}
 	}
 
-	resps, err := ApplyBatch(db, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
+	store := &countingAtomicApplyStore{base: db}
+	resps, err := ApplyBatch(store, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
 	require.NoError(t, err)
 	require.Len(t, resps, 2)
 	for _, resp := range resps {
@@ -264,6 +312,8 @@ func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 		require.Nil(t, install.GetError())
 		require.Equal(t, segment.Root[:], install.GetSegmentRoot())
 	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Len(t, store.appliedEntryCounts, 1)
 	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Len(t, records, 1)

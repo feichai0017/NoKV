@@ -98,7 +98,7 @@ func StartNodeWithConfig(tb testing.TB, storeID uint64, dir string, cfg NodeConf
 	}
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = dir
-	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.RaftPointerSnapshot)
+	opt.ControlLogPointerSnapshot = raftstorestats.ControlLogPointers(localMeta.DurableRaftPointerSnapshot)
 	if cfg.AllowedModes != nil {
 		opt.AllowedModes = cfg.AllowedModes
 	}

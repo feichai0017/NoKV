@@ -29,7 +29,7 @@ var (
 	errNilAllocIDResponse              = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: nil alloc id response")
 	errEmptyAllocIDResponse            = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty alloc id response")
 	errNoUsableInodeID                 = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: no usable inode id in allocation batch")
-	errPerasInstallRouteRetryExhausted = nokverrors.New(nokverrors.KindRetryable, "fsmeta/runtime/raftstore: peras install route retry budget exhausted")
+	errPerasInstallRouteRetryExhausted = nokverrors.New(nokverrors.KindRegionRouting, "fsmeta/runtime/raftstore: peras install route retry budget exhausted")
 )
 
 func errTSOCountMismatch(got, requested uint64) error {
@@ -62,5 +62,5 @@ func (e perasInstallRouteRetryExhaustedError) Unwrap() error {
 }
 
 func (e perasInstallRouteRetryExhaustedError) ErrorKind() nokverrors.Kind {
-	return nokverrors.KindRetryable
+	return nokverrors.KindRegionRouting
 }
