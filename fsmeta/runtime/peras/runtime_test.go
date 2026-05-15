@@ -698,6 +698,37 @@ func TestRuntimeShutdownFlushesPendingSegment(t *testing.T) {
 	require.ErrorIs(t, err, ErrRuntimeClosed)
 }
 
+func TestRuntimeFlushRenewsAuthorityBeforeWitness(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	witnesses := []fsperas.WitnessReplica{
+		&authorityRenewCheckingRuntimePerasWitness{id: "witness-1", provider: provider},
+		&authorityRenewCheckingRuntimePerasWitness{id: "witness-2", provider: provider},
+		&authorityRenewCheckingRuntimePerasWitness{id: "witness-3", provider: provider},
+	}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         witnesses,
+		Installer:         installer,
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	beforeFlush := provider.acquireCalls.Load()
+	for _, witness := range witnesses {
+		witness.(*authorityRenewCheckingRuntimePerasWitness).minAcquireCalls = beforeFlush + 1
+	}
+	require.NoError(t, committer.FlushDurable(ctx))
+	require.Greater(t, provider.acquireCalls.Load(), beforeFlush)
+	require.Equal(t, 0, committer.Stats()["pending"])
+	require.Equal(t, 1, installer.calls)
+}
+
 func TestRuntimeFlushPreservesCatalogSegmentAcrossFSMetaBuckets(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
@@ -2011,6 +2042,8 @@ type fakeRuntimePerasGrantProvider struct {
 	owned    bool
 	err      error
 	sealErr  error
+
+	acquireCalls atomic.Int64
 }
 
 func (p *fakeRuntimePerasGrantProvider) HolderID() string {
@@ -2018,6 +2051,7 @@ func (p *fakeRuntimePerasGrantProvider) HolderID() string {
 }
 
 func (p *fakeRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
+	p.acquireCalls.Add(1)
 	owned := p.owned
 	if !owned {
 		owned = true
@@ -2104,6 +2138,23 @@ func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) 
 		}
 	}
 	return out, nil
+}
+
+type authorityRenewCheckingRuntimePerasWitness struct {
+	id              string
+	provider        *fakeRuntimePerasGrantProvider
+	minAcquireCalls int64
+	recordingRuntimePerasWitness
+}
+
+func (w *authorityRenewCheckingRuntimePerasWitness) ID() string { return w.id }
+
+func (w *authorityRenewCheckingRuntimePerasWitness) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+	if w.provider.acquireCalls.Load() < w.minAcquireCalls {
+		return fmt.Errorf("witness started before authority renewal")
+	}
+	w.recordingRuntimePerasWitness.id = w.id
+	return w.recordingRuntimePerasWitness.AppendSegment(ctx, scope, record)
 }
 
 func testRuntimeCommitterGrant() rootproto.PerasAuthorityGrant {

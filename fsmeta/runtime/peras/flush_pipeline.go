@@ -75,6 +75,9 @@ func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (per
 	for idx := range started {
 		started[idx] = time.Now()
 	}
+	if err := p.renewBatchAuthority(ctx, batch); err != nil {
+		return perasFlushBatch{}, err
+	}
 	if err := p.witnessBatch(ctx, batch); err != nil {
 		return perasFlushBatch{}, err
 	}
@@ -127,6 +130,38 @@ func (p flushPipeline) publishDecision(ctx context.Context, batch perasFlushBatc
 		return publishDecisionOldEpochDrain, nil
 	}
 	return publishDecisionDenied, nil
+}
+
+func (p flushPipeline) renewBatchAuthority(ctx context.Context, batch perasFlushBatch) error {
+	c := p.runtime
+	if c == nil || c.authority == nil || batch.holder == nil {
+		return ErrRuntimeInvalid
+	}
+	grant, owned, err := c.authority.Acquire(ctx, batch.scope)
+	if err != nil {
+		return c.recordErrorf("renew peras authority for flush: %w", err)
+	}
+	if !owned {
+		return c.recordError(ErrNotHeld)
+	}
+	if grant.HolderID != batch.holder.HolderID() {
+		return c.recordError(ErrNotHeld)
+	}
+	if grant.EpochID == batch.holder.EpochID() {
+		c.epochs.updateGrant(grant)
+		return nil
+	}
+	if grant.EpochID > batch.holder.EpochID() {
+		// Visible-log recovery can rebuild an older same-holder epoch after
+		// root has moved to a newer grant. The witness still verifies the
+		// predecessor frontier, so allow durable drain without rewriting the
+		// old holder's grant.
+		older, ok := c.epochs.grant(batch.holder.EpochID())
+		if ok && older.HolderID == batch.holder.HolderID() && older.PredecessorDigest == grant.PredecessorDigest {
+			return nil
+		}
+	}
+	return c.recordErrorf("renew peras authority for flush: %w", ErrInvalidResponse)
 }
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
