@@ -20,12 +20,6 @@ func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, mater
 func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
 	batches := make([]perasFlushBatch, 0, len(plans))
 	for _, frozen := range plans {
-		batch := perasFlushBatch{
-			holder: frozen.holder,
-			scope:  frozen.scope,
-			plan:   frozen.plan,
-			jobs:   make([]perasFlushJob, 0, 1),
-		}
 		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replaySegmentBudget(materialize))
 		if err != nil {
 			return nil, c.recordErrorf("split peras replay plan by install budget: %w", err)
@@ -47,7 +41,7 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			if err != nil {
 				return nil, c.recordErrorf("plan peras segment install: %w", err)
 			}
-			batch.jobs = append(batch.jobs, perasFlushJob{
+			job := perasFlushJob{
 				scope:       frozen.scope,
 				plan:        plan,
 				segment:     segment,
@@ -55,10 +49,14 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 				digest:      digest,
 				install:     install,
 				materialize: materialize,
+			}
+			batches = append(batches, perasFlushBatch{
+				holder:          frozen.holder,
+				scope:           frozen.scope,
+				plan:            plan,
+				jobs:            []perasFlushJob{job},
+				witnessUnixNano: c.nextWitnessUnixNano(),
 			})
-		}
-		if len(batch.jobs) > 0 {
-			batches = append(batches, batch)
 		}
 	}
 	return batches, nil

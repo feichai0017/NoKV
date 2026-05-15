@@ -3,147 +3,6 @@
 
 package peras
 
-import (
-	"sync"
-	"sync/atomic"
-	"time"
-
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-)
-
-type runtimeMetrics struct {
-	commitTotal                    atomic.Uint64
-	flushTotal                     atomic.Uint64
-	segmentTotal                   atomic.Uint64
-	segmentOpsTotal                atomic.Uint64
-	segmentEntryTotal              atomic.Uint64
-	sealTotal                      atomic.Uint64
-	flushLatencyTotal              atomic.Uint64
-	flushLatencyLast               atomic.Uint64
-	flushLatencyMax                atomic.Uint64
-	witnessLatencyTotal            atomic.Uint64
-	witnessLatencyLast             atomic.Uint64
-	witnessLatencyMax              atomic.Uint64
-	installLatencyTotal            atomic.Uint64
-	installLatencyLast             atomic.Uint64
-	installLatencyMax              atomic.Uint64
-	installPayloadTotal            atomic.Uint64
-	installPayloadLast             atomic.Uint64
-	installPayloadMax              atomic.Uint64
-	installRoutesTotal             atomic.Uint64
-	installRoutesLast              atomic.Uint64
-	installRoutesMax               atomic.Uint64
-	sealLatencyTotal               atomic.Uint64
-	sealLatencyLast                atomic.Uint64
-	sealLatencyMax                 atomic.Uint64
-	flushBatchTotal                atomic.Uint64
-	flushJobTotal                  atomic.Uint64
-	flushJobLast                   atomic.Uint64
-	flushJobMax                    atomic.Uint64
-	errorTotal                     atomic.Uint64
-	retryTotal                     atomic.Uint64
-	retryUnavailable               atomic.Uint64
-	retryRouting                   atomic.Uint64
-	retryStaleEpoch                atomic.Uint64
-	retryOther                     atomic.Uint64
-	bgSkipTotal                    atomic.Uint64
-	bgErrorTotal                   atomic.Uint64
-	catalogLoadTotal               atomic.Uint64
-	rootSealTotal                  atomic.Uint64
-	rootSealMissingTotal           atomic.Uint64
-	recoveryInstallTotal           atomic.Uint64
-	recoverySkipTotal              atomic.Uint64
-	visibleLogRecoverTotal         atomic.Uint64
-	visibleLogRecoverSkipTotal     atomic.Uint64
-	visibleLogRecoverOldEpochTotal atomic.Uint64
-	visibleLogApplyMarkerTotal     atomic.Uint64
-	visibleLogApplyErrorTotal      atomic.Uint64
-
-	statsMu          sync.RWMutex
-	lastSegmentStats fsperas.SegmentStats
-	lastSegmentRoot  [32]byte
-	lastError        string
-}
-
-func (c *Runtime) recordFlushLatency(d time.Duration) {
-	recordPerasDuration(&c.metrics.flushLatencyTotal, &c.metrics.flushLatencyLast, &c.metrics.flushLatencyMax, d)
-}
-
-func (c *Runtime) recordWitnessLatency(d time.Duration) {
-	recordPerasDuration(&c.metrics.witnessLatencyTotal, &c.metrics.witnessLatencyLast, &c.metrics.witnessLatencyMax, d)
-}
-
-func (c *Runtime) recordInstallLatency(d time.Duration) {
-	recordPerasDuration(&c.metrics.installLatencyTotal, &c.metrics.installLatencyLast, &c.metrics.installLatencyMax, d)
-}
-
-func (c *Runtime) recordInstallShape(payloadBytes, routeKeys int) {
-	if c == nil {
-		return
-	}
-	if payloadBytes < 0 {
-		payloadBytes = 0
-	}
-	if routeKeys < 0 {
-		routeKeys = 0
-	}
-	payload := uint64(payloadBytes)
-	routes := uint64(routeKeys)
-	c.metrics.installPayloadTotal.Add(payload)
-	c.metrics.installPayloadLast.Store(payload)
-	recordPerasMax(&c.metrics.installPayloadMax, payload)
-	c.metrics.installRoutesTotal.Add(routes)
-	c.metrics.installRoutesLast.Store(routes)
-	recordPerasMax(&c.metrics.installRoutesMax, routes)
-}
-
-func (c *Runtime) recordSealLatency(d time.Duration) {
-	recordPerasDuration(&c.metrics.sealLatencyTotal, &c.metrics.sealLatencyLast, &c.metrics.sealLatencyMax, d)
-}
-
-func (c *Runtime) recordFlushBatch(jobs int) {
-	if jobs <= 0 {
-		return
-	}
-	n := uint64(jobs)
-	c.metrics.flushBatchTotal.Add(1)
-	c.metrics.flushJobTotal.Add(n)
-	c.metrics.flushJobLast.Store(n)
-	recordPerasMax(&c.metrics.flushJobMax, n)
-}
-
-func recordPerasDuration(total, last, max *atomic.Uint64, d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	ns := uint64(d.Nanoseconds())
-	total.Add(ns)
-	last.Store(ns)
-	recordPerasMax(max, ns)
-}
-
-func recordPerasMax(max *atomic.Uint64, value uint64) {
-	if max == nil {
-		return
-	}
-	for {
-		old := max.Load()
-		if value <= old {
-			return
-		}
-		if max.CompareAndSwap(old, value) {
-			return
-		}
-	}
-}
-
-func averagePerasDuration(total, count uint64) uint64 {
-	if count == 0 {
-		return 0
-	}
-	return total / count
-}
-
 func (c *Runtime) Stats() map[string]any {
 	if c == nil {
 		return map[string]any{
@@ -161,6 +20,13 @@ func (c *Runtime) Stats() map[string]any {
 			"witness_latency_last_nanosecond":     uint64(0),
 			"witness_latency_max_nanosecond":      uint64(0),
 			"witness_latency_average_nanosecond":  uint64(0),
+			"witness_batch_total":                 uint64(0),
+			"witness_batch_records_total":         uint64(0),
+			"witness_batch_records_last":          uint64(0),
+			"witness_batch_records_max":           uint64(0),
+			"witness_batch_bytes_total":           uint64(0),
+			"witness_batch_bytes_last":            uint64(0),
+			"witness_batch_bytes_max":             uint64(0),
 			"install_latency_total_nanosecond":    uint64(0),
 			"install_latency_last_nanosecond":     uint64(0),
 			"install_latency_max_nanosecond":      uint64(0),
@@ -217,6 +83,8 @@ func (c *Runtime) Stats() map[string]any {
 			"holders":                             0,
 			"pending":                             0,
 			"segment_install_parallelism":         0,
+			"segment_flush_parallelism":           0,
+			"background_flush_operation_limit":    0,
 			"segment_install_queue_depth":         0,
 			"segment_install_queue_capacity":      0,
 			"segment_seal_queue_depth":            0,
@@ -276,6 +144,13 @@ func (c *Runtime) Stats() map[string]any {
 		"witness_latency_last_nanosecond":     c.metrics.witnessLatencyLast.Load(),
 		"witness_latency_max_nanosecond":      c.metrics.witnessLatencyMax.Load(),
 		"witness_latency_average_nanosecond":  averagePerasDuration(witnessLatencyTotal, flushTotal),
+		"witness_batch_total":                 c.metrics.witnessBatchTotal.Load(),
+		"witness_batch_records_total":         c.metrics.witnessBatchRecordsTotal.Load(),
+		"witness_batch_records_last":          c.metrics.witnessBatchRecordsLast.Load(),
+		"witness_batch_records_max":           c.metrics.witnessBatchRecordsMax.Load(),
+		"witness_batch_bytes_total":           c.metrics.witnessBatchBytesTotal.Load(),
+		"witness_batch_bytes_last":            c.metrics.witnessBatchBytesLast.Load(),
+		"witness_batch_bytes_max":             c.metrics.witnessBatchBytesMax.Load(),
 		"install_latency_total_nanosecond":    installLatencyTotal,
 		"install_latency_last_nanosecond":     c.metrics.installLatencyLast.Load(),
 		"install_latency_max_nanosecond":      c.metrics.installLatencyMax.Load(),
@@ -333,6 +208,8 @@ func (c *Runtime) Stats() map[string]any {
 		"holders":                             holders,
 		"pending":                             pending,
 		"segment_install_parallelism":         c.installN,
+		"segment_flush_parallelism":           c.flushN,
+		"background_flush_operation_limit":    c.backgroundFlushOperationLimit(),
 		"segment_install_queue_depth":         installQueueDepth,
 		"segment_install_queue_capacity":      installQueueCapacity,
 		"segment_seal_queue_depth":            sealQueueDepth,

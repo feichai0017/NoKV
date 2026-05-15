@@ -40,7 +40,7 @@ func TestStartServePerasWitnessUsesRootAuthorityFeed(t *testing.T) {
 
 	record := servePerasSegmentRecord()
 	require.Eventually(t, func() bool {
-		return witness.AppendSegment(t.Context(), scope, record) == nil
+		return witness.AppendSegments(t.Context(), scope, []fsperas.SegmentWitnessRecord{record}) == nil
 	}, time.Second, 10*time.Millisecond)
 }
 

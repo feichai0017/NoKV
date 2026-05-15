@@ -14,7 +14,7 @@ import (
 
 type WitnessReplica interface {
 	ID() string
-	AppendSegment(context.Context, compile.AuthorityScope, SegmentWitnessRecord) error
+	AppendSegments(context.Context, compile.AuthorityScope, []SegmentWitnessRecord) error
 	Probe(context.Context, uint64) (WitnessSnapshot, error)
 }
 

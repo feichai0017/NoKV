@@ -430,12 +430,12 @@ message PerasSegmentWitnessRecord {
   bytes predecessor_digest = 11;
 }
 
-message PerasWitnessSegmentRequest {
+message PerasWitnessSegmentsRequest {
   PerasAuthorityScope scope = 1;
-  PerasSegmentWitnessRecord record = 2;
+  repeated PerasSegmentWitnessRecord records = 2;
 }
 
-message PerasWitnessSegmentResponse {}
+message PerasWitnessSegmentsResponse {}
 
 message PerasWitnessProbeRequest {
   uint64 epoch_id = 1;
@@ -466,7 +466,7 @@ service StoreKV {
   rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
   rpc PerasInstallSegment(KvPerasInstallSegmentRequest) returns (KvPerasInstallSegmentResponse);
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
-  rpc PerasWitnessSegment(PerasWitnessSegmentRequest) returns (PerasWitnessSegmentResponse);
+  rpc PerasWitnessSegments(PerasWitnessSegmentsRequest) returns (PerasWitnessSegmentsResponse);
   rpc PerasWitnessProbe(PerasWitnessProbeRequest) returns (PerasWitnessProbeResponse);
 }
 

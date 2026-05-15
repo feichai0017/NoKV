@@ -118,6 +118,10 @@ type Options struct {
 	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
 	// rejected.
 	PerasSegmentInstallParallelism int
+	// PerasSegmentFlushParallelism bounds how many frozen Peras flush batches
+	// may witness and install concurrently before ordered publish/commit. Zero
+	// follows PerasSegmentInstallParallelism; negative is rejected.
+	PerasSegmentFlushParallelism int
 	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentFlushEvery time.Duration
@@ -184,7 +188,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, runtimeperas.ErrTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}

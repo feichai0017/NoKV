@@ -27,6 +27,7 @@ const (
 	defaultPerasSegmentMaxReplayOperations = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	defaultPerasSegmentMaxPayloadBytes     = 512 << 10
+	defaultPerasWitnessBatchMaxBytes       = 32 << 20
 	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
@@ -61,6 +62,7 @@ type Config struct {
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
 	SegmentInstallParallelism  int
+	SegmentFlushParallelism    int
 	Now                        func() time.Time
 }
 
@@ -83,6 +85,7 @@ type Runtime struct {
 	maxReplay  int
 	maxPayload uint64
 	installN   int
+	flushN     int
 	flushEvery time.Duration
 	bgTimeout  time.Duration
 	bgBackoff  time.Duration
@@ -94,6 +97,7 @@ type Runtime struct {
 	bgRunning  atomic.Bool
 	bgNext     atomic.Int64
 	visibleSeq atomic.Uint64
+	witnessSeq atomic.Int64
 	closed     atomic.Bool
 	closer     *utils.Closer
 	flushTask  *utils.PeriodicTask
@@ -135,11 +139,13 @@ type perasFlushJob struct {
 }
 
 type perasFlushBatch struct {
-	holder     *fsperas.Holder
-	scope      compile.AuthorityScope
-	plan       fsperas.ReplayPlan
-	jobs       []perasFlushJob
-	publishErr error
+	holder          *fsperas.Holder
+	scope           compile.AuthorityScope
+	plan            fsperas.ReplayPlan
+	jobs            []perasFlushJob
+	witnessUnixNano int64
+	publishDecision publishDecision
+	publishErr      error
 }
 
 type perasFrozenPlan struct {
@@ -217,6 +223,16 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if installN < 0 {
 		return nil, ErrRuntimeInvalid
 	}
+	flushN := cfg.SegmentFlushParallelism
+	if flushN == 0 {
+		flushN = installN
+	}
+	if flushN < 0 {
+		return nil, ErrRuntimeInvalid
+	}
+	if flushN == 0 {
+		flushN = 1
+	}
 	flushEvery := cfg.SegmentFlushEvery
 	if flushEvery == 0 {
 		flushEvery = defaultPerasSegmentFlushEvery
@@ -259,6 +275,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		maxReplay:  maxReplay,
 		maxPayload: maxPayload,
 		installN:   installN,
+		flushN:     flushN,
 		flushEvery: flushEvery,
 		bgTimeout:  bgTimeout,
 		bgBackoff:  bgBackoff,
@@ -493,6 +510,37 @@ func defaultPerasSegmentInstallParallelism() int {
 	return n
 }
 
+func (c *Runtime) backgroundFlushOperationLimit() int {
+	if c == nil {
+		return 0
+	}
+	limit := c.batchSize
+	if c.maxOps > 0 && c.flushN > 0 {
+		parallelLimit := c.maxOps * c.flushN
+		if parallelLimit > limit {
+			limit = parallelLimit
+		}
+	}
+	return limit
+}
+
+func (c *Runtime) nextWitnessUnixNano() int64 {
+	if c == nil {
+		return time.Now().UnixNano()
+	}
+	now := c.now().UnixNano()
+	for {
+		old := c.witnessSeq.Load()
+		next := now
+		if next <= old {
+			next = old + 1
+		}
+		if c.witnessSeq.CompareAndSwap(old, next) {
+			return next
+		}
+	}
+}
+
 func (c *Runtime) flushBackground() {
 	if c == nil {
 		return
@@ -521,7 +569,7 @@ func (c *Runtime) flushBackground() {
 		defer cancel()
 	}
 	c.commitMu.Lock()
-	plans, err := c.freezeReplayPlansLocked(nil, c.batchSize)
+	plans, err := c.freezeReplayPlansLocked(nil, c.backgroundFlushOperationLimit())
 	c.commitMu.Unlock()
 	var batches []perasFlushBatch
 	if err == nil {

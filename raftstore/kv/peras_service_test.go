@@ -21,14 +21,18 @@ import (
 type perasWitnessStub struct {
 	segmentScope compile.AuthorityScope
 	segment      fsperas.SegmentWitnessRecord
+	segments     []fsperas.SegmentWitnessRecord
 	probeEpoch   uint64
 	snapshot     fsperas.WitnessSnapshot
 	probeRef     fsperas.WitnessSegmentRef
 }
 
-func (s *perasWitnessStub) AppendSegment(_ context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+func (s *perasWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	s.segmentScope = scope
-	s.segment = record
+	s.segments = append(s.segments, records...)
+	if len(records) > 0 {
+		s.segment = records[len(records)-1]
+	}
 	return nil
 }
 
@@ -47,7 +51,7 @@ func (s *perasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSe
 	return fsperas.SegmentWitnessRecord{}, false, nil
 }
 
-func TestServicePerasWitnessSegmentProbe(t *testing.T) {
+func TestServicePerasWitnessSegmentsSingleRecordProbe(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID("m1"),
 		MountKeyID: 2,
@@ -61,9 +65,9 @@ func TestServicePerasWitnessSegmentProbe(t *testing.T) {
 	}
 	service := kv.NewService(nil, kv.WithPerasWitness(witness))
 
-	_, err := service.PerasWitnessSegment(context.Background(), &kvrpcpb.PerasWitnessSegmentRequest{
-		Scope:  rsperas.ScopeToProto(scope),
-		Record: rsperas.SegmentWitnessRecordToProto(record),
+	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
+		Scope:   rsperas.ScopeToProto(scope),
+		Records: []*kvrpcpb.PerasSegmentWitnessRecord{rsperas.SegmentWitnessRecordToProto(record)},
 	})
 	require.NoError(t, err)
 	require.Equal(t, scope, witness.segmentScope)
@@ -75,6 +79,31 @@ func TestServicePerasWitnessSegmentProbe(t *testing.T) {
 	decoded, err := rsperas.SnapshotFromProto(resp)
 	require.NoError(t, err)
 	require.Equal(t, witness.snapshot, decoded)
+}
+
+func TestServicePerasWitnessSegments(t *testing.T) {
+	scope := compile.AuthorityScope{
+		Mount:      fsmeta.MountID("m1"),
+		MountKeyID: 2,
+		Buckets:    []fsmeta.AffinityBucket{4},
+		Parents:    []fsmeta.InodeID{10},
+		Inodes:     []fsmeta.InodeID{20},
+	}
+	first := serviceTestSegmentRecordWithRoot(3)
+	second := serviceTestSegmentRecordWithRoot(4)
+	witness := &perasWitnessStub{}
+	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+
+	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
+		Scope: rsperas.ScopeToProto(scope),
+		Records: []*kvrpcpb.PerasSegmentWitnessRecord{
+			rsperas.SegmentWitnessRecordToProto(first),
+			rsperas.SegmentWitnessRecordToProto(second),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, scope, witness.segmentScope)
+	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, witness.segments)
 }
 
 func TestServicePerasWitnessProbeSegment(t *testing.T) {

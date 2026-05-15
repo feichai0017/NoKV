@@ -18,7 +18,7 @@ import (
 )
 
 type PerasWitness interface {
-	AppendSegment(context.Context, compile.AuthorityScope, fsperas.SegmentWitnessRecord) error
+	AppendSegments(context.Context, compile.AuthorityScope, []fsperas.SegmentWitnessRecord) error
 	Probe(context.Context, uint64) (fsperas.WitnessSnapshot, error)
 }
 

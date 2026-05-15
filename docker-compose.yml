@@ -351,6 +351,7 @@ services:
       - "--peras-segment-batch-size=${NOKV_FSMETA_PERAS_SEGMENT_BATCH_SIZE:-512}"
       - "--peras-segment-max-replay-mutations=${NOKV_FSMETA_PERAS_SEGMENT_MAX_REPLAY_MUTATIONS:-4096}"
       - "--peras-segment-install-parallelism=${NOKV_FSMETA_PERAS_SEGMENT_INSTALL_PARALLELISM:-0}"
+      - "--peras-segment-flush-parallelism=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_PARALLELISM:-0}"
       - "--peras-segment-flush-every=${NOKV_FSMETA_PERAS_SEGMENT_FLUSH_EVERY:-20ms}"
       - "--peras-background-flush-timeout=${NOKV_FSMETA_PERAS_BACKGROUND_FLUSH_TIMEOUT:-30s}"
       - "--peras-background-error-backoff=${NOKV_FSMETA_PERAS_BACKGROUND_ERROR_BACKOFF:-1s}"

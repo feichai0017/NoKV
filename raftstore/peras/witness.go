@@ -75,50 +75,82 @@ func (n *WitnessNode) ID() string {
 	return n.nodeID
 }
 
-func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+func (n *WitnessNode) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	if n == nil || n.log == nil || n.authorityView == nil {
 		return ErrWitnessNodeConfigInvalid
 	}
-	if err := n.validateAuthority(ctx, scope, record); err != nil {
+	if err := ctxErr(ctx); err != nil {
 		return err
 	}
-	key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
-
-	n.mu.Lock()
-	if _, ok := n.segments[key]; ok {
-		n.mu.Unlock()
+	if len(records) == 0 {
 		return nil
 	}
-	if call := n.inflight[key]; call != nil {
-		n.mu.Unlock()
-		return n.waitAppendCall(ctx, key, call)
-	}
-	if _, loaded := n.loaded[record.EpochID]; !loaded {
-		if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
-			n.mu.Unlock()
+	for _, record := range records {
+		if err := n.validateAuthority(ctx, scope, record); err != nil {
 			return err
 		}
 	}
-	if _, ok := n.segments[key]; ok {
-		n.mu.Unlock()
-		return nil
+
+	type pendingAppend struct {
+		key    witnessSegmentKey
+		record fsperas.SegmentWitnessRecord
+		call   *witnessAppendCall
 	}
-	call := &witnessAppendCall{done: make(chan struct{})}
-	n.inflight[key] = call
-	n.mu.Unlock()
-
-	_, err := n.log.AppendSegment(ctx, record)
-
+	pending := make([]pendingAppend, 0, len(records))
+	waiting := make([]pendingAppend, 0)
 	n.mu.Lock()
-	if err == nil {
-		n.segments[key] = struct{}{}
-		n.records[key] = record
+	for _, record := range records {
+		key := witnessSegmentKey{epochID: record.EpochID, root: record.SegmentRoot, digest: record.SegmentPayloadDigest}
+		if _, ok := n.segments[key]; ok {
+			continue
+		}
+		if call := n.inflight[key]; call != nil {
+			waiting = append(waiting, pendingAppend{key: key, call: call})
+			continue
+		}
+		if _, loaded := n.loaded[record.EpochID]; !loaded {
+			if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
+				n.mu.Unlock()
+				return err
+			}
+		}
+		if _, ok := n.segments[key]; ok {
+			continue
+		}
+		call := &witnessAppendCall{done: make(chan struct{})}
+		n.inflight[key] = call
+		pending = append(pending, pendingAppend{key: key, record: record, call: call})
 	}
-	call.err = err
-	delete(n.inflight, key)
-	close(call.done)
 	n.mu.Unlock()
-	return err
+
+	if len(pending) > 0 {
+		appendRecords := make([]fsperas.SegmentWitnessRecord, 0, len(pending))
+		for _, item := range pending {
+			appendRecords = append(appendRecords, item.record)
+		}
+		_, err := n.log.AppendSegments(ctx, appendRecords)
+
+		n.mu.Lock()
+		for _, item := range pending {
+			if err == nil {
+				n.segments[item.key] = struct{}{}
+				n.records[item.key] = item.record
+			}
+			item.call.err = err
+			delete(n.inflight, item.key)
+			close(item.call.done)
+		}
+		n.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	for _, item := range waiting {
+		if err := n.waitAppendCall(ctx, item.key, item.call); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (n *WitnessNode) Probe(ctx context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {

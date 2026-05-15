@@ -73,6 +73,14 @@ func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.P
 	}
 }
 
+func SegmentWitnessRecordsToProto(records []fsperas.SegmentWitnessRecord) []*kvrpcpb.PerasSegmentWitnessRecord {
+	out := make([]*kvrpcpb.PerasSegmentWitnessRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, SegmentWitnessRecordToProto(record))
+	}
+	return out
+}
+
 func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsperas.SegmentWitnessRecord, error) {
 	if in == nil {
 		return fsperas.SegmentWitnessRecord{}, fmt.Errorf("peras wire: segment witness record missing")
@@ -95,6 +103,18 @@ func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsper
 	}
 	if err := copyFixed(out.PredecessorDigest[:], in.GetPredecessorDigest(), "predecessor_digest"); err != nil {
 		return fsperas.SegmentWitnessRecord{}, err
+	}
+	return out, nil
+}
+
+func SegmentWitnessRecordsFromProto(in []*kvrpcpb.PerasSegmentWitnessRecord) ([]fsperas.SegmentWitnessRecord, error) {
+	out := make([]fsperas.SegmentWitnessRecord, 0, len(in))
+	for _, segment := range in {
+		record, err := SegmentWitnessRecordFromProto(segment)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
 	}
 	return out, nil
 }

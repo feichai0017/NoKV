@@ -39,13 +39,16 @@ func (w *remotePerasWitness) ID() string {
 	return w.id
 }
 
-func (w *remotePerasWitness) AppendSegment(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+func (w *remotePerasWitness) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	if w == nil || w.client == nil {
 		return runtimeperas.ErrRuntimeInvalid
 	}
-	_, err := w.client.PerasWitnessSegment(ctx, &kvrpcpb.PerasWitnessSegmentRequest{
-		Scope:  rsperas.ScopeToProto(scope),
-		Record: rsperas.SegmentWitnessRecordToProto(record),
+	if len(records) == 0 {
+		return nil
+	}
+	_, err := w.client.PerasWitnessSegments(ctx, &kvrpcpb.PerasWitnessSegmentsRequest{
+		Scope:   rsperas.ScopeToProto(scope),
+		Records: rsperas.SegmentWitnessRecordsToProto(records),
 	})
 	return err
 }

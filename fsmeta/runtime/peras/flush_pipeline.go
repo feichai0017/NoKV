@@ -53,22 +53,37 @@ func (p flushPipeline) run(ctx context.Context, batches []perasFlushBatch) error
 	if len(batches) > 0 && c.installer == nil {
 		return c.recordError(ErrRuntimeInvalid)
 	}
-	for _, batch := range batches {
-		installed, err := p.runBatch(ctx, batch)
-		if err != nil {
-			return err
-		}
-		if installed.publishErr != nil {
-			return installed.publishErr
-		}
-		if err := p.commitBatch(ctx, installed); err != nil {
+	prepared, err := p.prepareBatches(ctx, batches)
+	if err != nil {
+		return err
+	}
+	for _, batch := range prepared {
+		if err := p.commitBatch(ctx, batch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (perasFlushBatch, error) {
+func (p flushPipeline) prepareBatches(ctx context.Context, batches []perasFlushBatch) ([]perasFlushBatch, error) {
+	if len(batches) == 0 {
+		return nil, nil
+	}
+	prepared := make([]perasFlushBatch, len(batches))
+	if err := p.runBatchJobs(ctx, batches, func(ctx context.Context, idx int, batch perasFlushBatch) error {
+		installed, err := p.prepareBatch(ctx, batch)
+		if err != nil {
+			return err
+		}
+		prepared[idx] = installed
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func (p flushPipeline) prepareBatch(ctx context.Context, batch perasFlushBatch) (perasFlushBatch, error) {
 	c := p.runtime
 	c.recordFlushBatch(len(batch.jobs))
 	started := make([]time.Time, len(batch.jobs))
@@ -91,22 +106,15 @@ func (p flushPipeline) runBatch(ctx context.Context, batch perasFlushBatch) (per
 		if err != nil {
 			return perasFlushBatch{}, err
 		}
-		switch decision {
-		case publishDecisionNow:
-			if err := p.sealBatch(ctx, batch); err != nil {
-				return perasFlushBatch{}, err
-			}
-		case publishDecisionOldEpochDrain:
-			if !p.allowDurableOldEpochRun {
-				batch.publishErr = c.recordError(ErrPublishRequired)
-			}
-			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
-		default:
+		batch.publishDecision = decision
+		if decision == publishDecisionOldEpochDrain && !p.allowDurableOldEpochRun {
 			batch.publishErr = c.recordError(ErrPublishRequired)
-			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+		}
+		if decision == publishDecisionDenied {
+			batch.publishErr = c.recordError(ErrPublishRequired)
 		}
 	} else {
-		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+		batch.publishDecision = publishDecisionDenied
 	}
 	return batch, nil
 }
@@ -166,14 +174,15 @@ func (p flushPipeline) renewBatchAuthority(ctx context.Context, batch perasFlush
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
 	c := p.runtime
-	return p.runJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
-		witnessStart := time.Now()
-		if err := c.appendSegmentWitnessesWithRetry(ctx, job.scope, batch.holder, job.segment, job.payload, job.digest); err != nil {
-			return c.recordErrorf("append peras segment witness: %w", err)
-		}
-		c.recordWitnessLatency(time.Since(witnessStart))
-		return nil
-	})
+	witnessStart := time.Now()
+	if err := c.appendSegmentWitnessBatchWithRetry(ctx, batch); err != nil {
+		return c.recordErrorf("append peras segment witness batch: %w", err)
+	}
+	elapsed := time.Since(witnessStart)
+	for range batch.jobs {
+		c.recordWitnessLatency(elapsed)
+	}
+	return nil
 }
 
 func (p flushPipeline) installBatch(ctx context.Context, batch perasFlushBatch, started []time.Time) ([]perasFlushJob, error) {
@@ -197,13 +206,35 @@ func (p flushPipeline) installBatch(ctx context.Context, batch perasFlushBatch, 
 }
 
 func (p flushPipeline) sealBatch(ctx context.Context, batch perasFlushBatch) error {
-	return p.runJobs(ctx, batch.jobs, func(ctx context.Context, _ int, job perasFlushJob) error {
-		return p.submitSeal(ctx, batch.holder, job)
-	})
+	for _, job := range batch.jobs {
+		if err := p.submitSeal(ctx, batch.holder, job); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) error {
 	c := p.runtime
+	if p.level.RequiresPublish() {
+		if batch.publishErr != nil {
+			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+			return batch.publishErr
+		}
+		switch batch.publishDecision {
+		case publishDecisionNow:
+			if err := p.sealBatch(ctx, batch); err != nil {
+				return err
+			}
+		case publishDecisionOldEpochDrain:
+			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+		default:
+			c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+			return c.recordError(ErrPublishRequired)
+		}
+	} else {
+		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
+	}
 	for _, job := range batch.jobs {
 		if err := c.installSegment(job.plan, job.segment); err != nil {
 			return err
@@ -215,11 +246,32 @@ func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) e
 	return c.markVisibleLogApplied(ctx, batch.holder, batch.plan)
 }
 
+func (p flushPipeline) runBatchJobs(ctx context.Context, batches []perasFlushBatch, run func(context.Context, int, perasFlushBatch) error) error {
+	if len(batches) == 0 {
+		return nil
+	}
+	workers := min(p.runtime.flushN, len(batches))
+	if workers <= 0 {
+		workers = 1
+	}
+	return runPerasConcurrent(ctx, workers, batches, run)
+}
+
 func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {
 	if len(jobs) == 0 {
 		return nil
 	}
 	workers := min(p.runtime.installN, len(jobs))
+	if workers <= 0 {
+		workers = 1
+	}
+	return runPerasConcurrent(ctx, workers, jobs, run)
+}
+
+func runPerasConcurrent[T any](ctx context.Context, workers int, items []T, run func(context.Context, int, T) error) error {
+	if len(items) == 0 {
+		return nil
+	}
 	if workers <= 0 {
 		workers = 1
 	}
@@ -239,16 +291,16 @@ func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run fu
 		errMu.Unlock()
 	}
 	throttle := utils.NewThrottle(workers)
-	for idx, job := range jobs {
+	for idx, item := range items {
 		if runCtx.Err() != nil {
 			break
 		}
-		idx, job := idx, job
+		idx, item := idx, item
 		if err := throttle.Go(func() error {
 			if err := runCtx.Err(); err != nil {
 				return err
 			}
-			if err := run(runCtx, idx, job); err != nil {
+			if err := run(runCtx, idx, item); err != nil {
 				setErr(err)
 				return err
 			}

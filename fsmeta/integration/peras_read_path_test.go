@@ -165,10 +165,10 @@ func (w *integrationPerasWitness) ID() string {
 	return w.id
 }
 
-func (w *integrationPerasWitness) AppendSegment(_ context.Context, _ compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+func (w *integrationPerasWitness) AppendSegments(_ context.Context, _ compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.records = append(w.records, record)
+	w.records = append(w.records, records...)
 	return nil
 }
 

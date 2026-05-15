@@ -22,7 +22,7 @@ const (
 	perasWitnessProbeRecordStringBytes = 4
 )
 
-func (s *Service) PerasWitnessSegment(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentRequest) (*kvrpcpb.PerasWitnessSegmentResponse, error) {
+func (s *Service) PerasWitnessSegments(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentsRequest) (*kvrpcpb.PerasWitnessSegmentsResponse, error) {
 	if s == nil || s.perasWitness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
@@ -30,14 +30,17 @@ func (s *Service) PerasWitnessSegment(ctx context.Context, req *kvrpcpb.PerasWit
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
-	record, err := rsperas.SegmentWitnessRecordFromProto(req.GetRecord())
+	records, err := rsperas.SegmentWitnessRecordsFromProto(req.GetRecords())
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
-	if err := s.perasWitness.AppendSegment(ctx, scope, record); err != nil {
+	if len(records) == 0 {
+		return nil, rpcInvalidArgument("peras witness batch requires at least one record")
+	}
+	if err := s.perasWitness.AppendSegments(ctx, scope, records); err != nil {
 		return nil, rpcPerasWitnessStatus(err)
 	}
-	return &kvrpcpb.PerasWitnessSegmentResponse{}, nil
+	return &kvrpcpb.PerasWitnessSegmentsResponse{}, nil
 }
 
 func (s *Service) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {

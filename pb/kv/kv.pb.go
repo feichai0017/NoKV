@@ -4005,28 +4005,28 @@ func (x *PerasSegmentWitnessRecord) GetPredecessorDigest() []byte {
 	return nil
 }
 
-type PerasWitnessSegmentRequest struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	Scope         *PerasAuthorityScope       `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	Record        *PerasSegmentWitnessRecord `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
+type PerasWitnessSegmentsRequest struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Scope         *PerasAuthorityScope         `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Records       []*PerasSegmentWitnessRecord `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PerasWitnessSegmentRequest) Reset() {
-	*x = PerasWitnessSegmentRequest{}
+func (x *PerasWitnessSegmentsRequest) Reset() {
+	*x = PerasWitnessSegmentsRequest{}
 	mi := &file_kv_kv_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasWitnessSegmentRequest) String() string {
+func (x *PerasWitnessSegmentsRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasWitnessSegmentRequest) ProtoMessage() {}
+func (*PerasWitnessSegmentsRequest) ProtoMessage() {}
 
-func (x *PerasWitnessSegmentRequest) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessSegmentsRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4038,45 +4038,45 @@ func (x *PerasWitnessSegmentRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasWitnessSegmentRequest.ProtoReflect.Descriptor instead.
-func (*PerasWitnessSegmentRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessSegmentsRequest.ProtoReflect.Descriptor instead.
+func (*PerasWitnessSegmentsRequest) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *PerasWitnessSegmentRequest) GetScope() *PerasAuthorityScope {
+func (x *PerasWitnessSegmentsRequest) GetScope() *PerasAuthorityScope {
 	if x != nil {
 		return x.Scope
 	}
 	return nil
 }
 
-func (x *PerasWitnessSegmentRequest) GetRecord() *PerasSegmentWitnessRecord {
+func (x *PerasWitnessSegmentsRequest) GetRecords() []*PerasSegmentWitnessRecord {
 	if x != nil {
-		return x.Record
+		return x.Records
 	}
 	return nil
 }
 
-type PerasWitnessSegmentResponse struct {
+type PerasWitnessSegmentsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PerasWitnessSegmentResponse) Reset() {
-	*x = PerasWitnessSegmentResponse{}
+func (x *PerasWitnessSegmentsResponse) Reset() {
+	*x = PerasWitnessSegmentsResponse{}
 	mi := &file_kv_kv_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasWitnessSegmentResponse) String() string {
+func (x *PerasWitnessSegmentsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasWitnessSegmentResponse) ProtoMessage() {}
+func (*PerasWitnessSegmentsResponse) ProtoMessage() {}
 
-func (x *PerasWitnessSegmentResponse) ProtoReflect() protoreflect.Message {
+func (x *PerasWitnessSegmentsResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kv_kv_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4088,8 +4088,8 @@ func (x *PerasWitnessSegmentResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasWitnessSegmentResponse.ProtoReflect.Descriptor instead.
-func (*PerasWitnessSegmentResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use PerasWitnessSegmentsResponse.ProtoReflect.Descriptor instead.
+func (*PerasWitnessSegmentsResponse) Descriptor() ([]byte, []int) {
 	return file_kv_kv_proto_rawDescGZIP(), []int{58}
 }
 
@@ -4874,11 +4874,11 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x0fsegment_pointer\x18\t \x01(\tR\x0esegmentPointer\x12'\n" +
 	"\x0fsegment_payload\x18\n" +
 	" \x01(\fR\x0esegmentPayload\x12-\n" +
-	"\x12predecessor_digest\x18\v \x01(\fR\x11predecessorDigest\"\x92\x01\n" +
-	"\x1aPerasWitnessSegmentRequest\x125\n" +
-	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12=\n" +
-	"\x06record\x18\x02 \x01(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\x06record\"\x1d\n" +
-	"\x1bPerasWitnessSegmentResponse\"\x93\x02\n" +
+	"\x12predecessor_digest\x18\v \x01(\fR\x11predecessorDigest\"\x95\x01\n" +
+	"\x1bPerasWitnessSegmentsRequest\x125\n" +
+	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12?\n" +
+	"\arecords\x18\x02 \x03(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\arecords\"\x1e\n" +
+	"\x1cPerasWitnessSegmentsResponse\"\x93\x02\n" +
 	"\x18PerasWitnessProbeRequest\x12\x19\n" +
 	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
 	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x124\n" +
@@ -4941,7 +4941,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xa6\t\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xa9\t\n" +
 	"\aStoreKV\x12:\n" +
 	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
 	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
@@ -4955,8 +4955,8 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12j\n" +
 	"\x13PerasInstallSegment\x12(.nokv.kv.v1.KvPerasInstallSegmentRequest\x1a).nokv.kv.v1.KvPerasInstallSegmentResponse\x12M\n" +
 	"\n" +
-	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12f\n" +
-	"\x13PerasWitnessSegment\x12&.nokv.kv.v1.PerasWitnessSegmentRequest\x1a'.nokv.kv.v1.PerasWitnessSegmentResponse\x12`\n" +
+	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12i\n" +
+	"\x14PerasWitnessSegments\x12'.nokv.kv.v1.PerasWitnessSegmentsRequest\x1a(.nokv.kv.v1.PerasWitnessSegmentsResponse\x12`\n" +
 	"\x11PerasWitnessProbe\x12$.nokv.kv.v1.PerasWitnessProbeRequest\x1a%.nokv.kv.v1.PerasWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
 var (
@@ -5039,8 +5039,8 @@ var file_kv_kv_proto_goTypes = []any{
 	(*ApplyWatchResponse)(nil),               // 62: nokv.kv.v1.ApplyWatchResponse
 	(*PerasAuthorityScope)(nil),              // 63: nokv.kv.v1.PerasAuthorityScope
 	(*PerasSegmentWitnessRecord)(nil),        // 64: nokv.kv.v1.PerasSegmentWitnessRecord
-	(*PerasWitnessSegmentRequest)(nil),       // 65: nokv.kv.v1.PerasWitnessSegmentRequest
-	(*PerasWitnessSegmentResponse)(nil),      // 66: nokv.kv.v1.PerasWitnessSegmentResponse
+	(*PerasWitnessSegmentsRequest)(nil),      // 65: nokv.kv.v1.PerasWitnessSegmentsRequest
+	(*PerasWitnessSegmentsResponse)(nil),     // 66: nokv.kv.v1.PerasWitnessSegmentsResponse
 	(*PerasWitnessProbeRequest)(nil),         // 67: nokv.kv.v1.PerasWitnessProbeRequest
 	(*PerasWitnessProbeResponse)(nil),        // 68: nokv.kv.v1.PerasWitnessProbeResponse
 	(*KeyError)(nil),                         // 69: nokv.kv.v1.KeyError
@@ -5127,8 +5127,8 @@ var file_kv_kv_proto_depIdxs = []int32{
 	76, // 71: nokv.kv.v1.KvPerasInstallSegmentResponse.region_error:type_name -> nokv.error.v1.RegionError
 	5,  // 72: nokv.kv.v1.ApplyWatchEvent.source:type_name -> nokv.kv.v1.ApplyWatchEventSource
 	61, // 73: nokv.kv.v1.ApplyWatchResponse.event:type_name -> nokv.kv.v1.ApplyWatchEvent
-	63, // 74: nokv.kv.v1.PerasWitnessSegmentRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
-	64, // 75: nokv.kv.v1.PerasWitnessSegmentRequest.record:type_name -> nokv.kv.v1.PerasSegmentWitnessRecord
+	63, // 74: nokv.kv.v1.PerasWitnessSegmentsRequest.scope:type_name -> nokv.kv.v1.PerasAuthorityScope
+	64, // 75: nokv.kv.v1.PerasWitnessSegmentsRequest.records:type_name -> nokv.kv.v1.PerasSegmentWitnessRecord
 	64, // 76: nokv.kv.v1.PerasWitnessProbeResponse.segments:type_name -> nokv.kv.v1.PerasSegmentWitnessRecord
 	70, // 77: nokv.kv.v1.KeyError.locked:type_name -> nokv.kv.v1.Locked
 	71, // 78: nokv.kv.v1.KeyError.write_conflict:type_name -> nokv.kv.v1.WriteConflict
@@ -5147,7 +5147,7 @@ var file_kv_kv_proto_depIdxs = []int32{
 	56, // 91: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
 	58, // 92: nokv.kv.v1.StoreKV.PerasInstallSegment:input_type -> nokv.kv.v1.KvPerasInstallSegmentRequest
 	60, // 93: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	65, // 94: nokv.kv.v1.StoreKV.PerasWitnessSegment:input_type -> nokv.kv.v1.PerasWitnessSegmentRequest
+	65, // 94: nokv.kv.v1.StoreKV.PerasWitnessSegments:input_type -> nokv.kv.v1.PerasWitnessSegmentsRequest
 	67, // 95: nokv.kv.v1.StoreKV.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
 	39, // 96: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
 	41, // 97: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
@@ -5161,7 +5161,7 @@ var file_kv_kv_proto_depIdxs = []int32{
 	57, // 105: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
 	59, // 106: nokv.kv.v1.StoreKV.PerasInstallSegment:output_type -> nokv.kv.v1.KvPerasInstallSegmentResponse
 	62, // 107: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
-	66, // 108: nokv.kv.v1.StoreKV.PerasWitnessSegment:output_type -> nokv.kv.v1.PerasWitnessSegmentResponse
+	66, // 108: nokv.kv.v1.StoreKV.PerasWitnessSegments:output_type -> nokv.kv.v1.PerasWitnessSegmentsResponse
 	68, // 109: nokv.kv.v1.StoreKV.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
 	96, // [96:110] is the sub-list for method output_type
 	82, // [82:96] is the sub-list for method input_type
