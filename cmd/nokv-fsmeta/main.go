@@ -7,6 +7,7 @@ import (
 	"context"
 	"expvar"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
@@ -63,11 +65,15 @@ func main() {
 		perasSegmentWitnessRetries      = flag.Int("peras-segment-witness-retries", 3, "Peras segment witness retries for transient authority lag")
 		perasSegmentWitnessRetryBackoff = flag.Duration("peras-segment-witness-retry-backoff", 20*time.Millisecond, "Peras segment witness retry backoff")
 		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras pending visible operations that trigger background flush; zero uses runtime default")
+		perasAdmissionPendingLimit      = flag.Int("peras-admission-pending-limit", 0, "Peras pending visible operations allowed before foreground commits wait for drain; zero uses runtime default")
 		perasSegmentMaxReplayMutations  = flag.Int("peras-segment-max-replay-mutations", 0, "Peras replay mutations per installed segment; zero uses runtime default")
 		perasSegmentInstallParallelism  = flag.Int("peras-segment-install-parallelism", 0, "Peras segment installs per flush; zero uses GOMAXPROCS")
+		perasSegmentFlushParallelism    = flag.Int("peras-segment-flush-parallelism", 0, "Peras flush batches prepared concurrently; zero follows install parallelism")
 		perasSegmentFlushEvery          = flag.Duration("peras-segment-flush-every", 0, "Peras opportunistic segment flush interval; zero uses runtime default")
 		perasBackgroundFlushTimeout     = flag.Duration("peras-background-flush-timeout", 0, "timeout for opportunistic Peras background segment install; zero uses runtime default")
 		perasBackgroundErrorBackoff     = flag.Duration("peras-background-error-backoff", 0, "backoff after failed opportunistic Peras background segment install; zero uses runtime default")
+		perasVisibleLogDir              = flag.String("peras-visible-log-dir", "peras-visible-log", "local WAL directory for holder visible acknowledgements")
+		perasVisibleLogPolicy           = flag.String("peras-visible-log-policy", "flushed", "holder visible WAL sync policy: flushed|fsync-batched|fsync|buffered")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
@@ -79,7 +85,7 @@ func main() {
 		return
 	}
 	if *perasAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *perasWitnessQuorum < 0 ||
-		*perasSegmentBatchSize < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushEvery < 0 ||
+		*perasSegmentBatchSize < 0 || *perasAdmissionPendingLimit < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushParallelism < 0 || *perasSegmentFlushEvery < 0 ||
 		*perasBackgroundFlushTimeout < 0 || *perasBackgroundErrorBackoff < 0 {
 		fatalf("peras options must be non-negative")
 		return
@@ -87,6 +93,11 @@ func main() {
 	perasStoreIDs, err := parseUintList(*perasWitnessStores)
 	if err != nil {
 		fatalf("parse peras-witness-stores: %v", err)
+		return
+	}
+	visibleLogDurability, err := parsePerasVisibleLogPolicy(*perasVisibleLogPolicy)
+	if err != nil {
+		fatalf("parse peras-visible-log-policy: %v", err)
 		return
 	}
 	holderID := strings.TrimSpace(*perasHolderID)
@@ -112,11 +123,15 @@ func main() {
 		PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
 		PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
 		PerasSegmentBatchSize:           *perasSegmentBatchSize,
+		PerasAdmissionPendingLimit:      *perasAdmissionPendingLimit,
 		PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
 		PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
+		PerasSegmentFlushParallelism:    *perasSegmentFlushParallelism,
 		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
 		PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
 		PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
+		PerasVisibleLogDir:              *perasVisibleLogDir,
+		PerasVisibleLogDurability:       visibleLogDurability,
 	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)
@@ -221,4 +236,19 @@ func parseUintList(value string) ([]uint64, error) {
 		}
 	}
 	return out, nil
+}
+
+func parsePerasVisibleLogPolicy(value string) (wal.DurabilityPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "flushed":
+		return wal.DurabilityFlushed, nil
+	case "fsync-batched", "fsync_batched", "batched":
+		return wal.DurabilityFsyncBatched, nil
+	case "fsync":
+		return wal.DurabilityFsync, nil
+	case "buffered":
+		return wal.DurabilityBuffered, nil
+	default:
+		return 0, fmt.Errorf("invalid peras visible WAL sync policy %q", value)
+	}
 }

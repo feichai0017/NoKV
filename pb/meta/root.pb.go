@@ -2523,6 +2523,8 @@ type RootPerasAuthorityGrant struct {
 	PredecessorDigest []byte                   `protobuf:"bytes,6,opt,name=predecessor_digest,json=predecessorDigest,proto3" json:"predecessor_digest,omitempty"`
 	QuotaCreditBytes  int64                    `protobuf:"varint,7,opt,name=quota_credit_bytes,json=quotaCreditBytes,proto3" json:"quota_credit_bytes,omitempty"`
 	QuotaCreditInodes int64                    `protobuf:"varint,8,opt,name=quota_credit_inodes,json=quotaCreditInodes,proto3" json:"quota_credit_inodes,omitempty"`
+	RootClusterEpoch  uint64                   `protobuf:"varint,9,opt,name=root_cluster_epoch,json=rootClusterEpoch,proto3" json:"root_cluster_epoch,omitempty"`
+	IssuedRootToken   *RootTailToken           `protobuf:"bytes,10,opt,name=issued_root_token,json=issuedRootToken,proto3" json:"issued_root_token,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2611,6 +2613,20 @@ func (x *RootPerasAuthorityGrant) GetQuotaCreditInodes() int64 {
 		return x.QuotaCreditInodes
 	}
 	return 0
+}
+
+func (x *RootPerasAuthorityGrant) GetRootClusterEpoch() uint64 {
+	if x != nil {
+		return x.RootClusterEpoch
+	}
+	return 0
+}
+
+func (x *RootPerasAuthorityGrant) GetIssuedRootToken() *RootTailToken {
+	if x != nil {
+		return x.IssuedRootToken
+	}
+	return nil
 }
 
 type RootPerasAuthoritySeal struct {
@@ -5544,7 +5560,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"mountKeyId\x12\x18\n" +
 	"\abuckets\x18\x03 \x03(\rR\abuckets\x12\x18\n" +
 	"\aparents\x18\x04 \x03(\x04R\aparents\x12\x16\n" +
-	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xe2\x02\n" +
+	"\x06inodes\x18\x05 \x03(\x04R\x06inodes\"\xd9\x03\n" +
 	"\x17RootPerasAuthorityGrant\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x12\x19\n" +
 	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
@@ -5553,7 +5569,10 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x11expires_unix_nano\x18\x05 \x01(\x03R\x0fexpiresUnixNano\x12-\n" +
 	"\x12predecessor_digest\x18\x06 \x01(\fR\x11predecessorDigest\x12,\n" +
 	"\x12quota_credit_bytes\x18\a \x01(\x03R\x10quotaCreditBytes\x12.\n" +
-	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\"\x92\x04\n" +
+	"\x13quota_credit_inodes\x18\b \x01(\x03R\x11quotaCreditInodes\x12,\n" +
+	"\x12root_cluster_epoch\x18\t \x01(\x04R\x10rootClusterEpoch\x12G\n" +
+	"\x11issued_root_token\x18\n" +
+	" \x01(\v2\x1b.nokv.meta.v1.RootTailTokenR\x0fissuedRootToken\"\x92\x04\n" +
 	"\x16RootPerasAuthoritySeal\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x12\x19\n" +
 	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
@@ -6018,115 +6037,116 @@ var file_meta_root_proto_depIdxs = []int32{
 	13,  // 43: nokv.meta.v1.RootGrantInheritance.inherited_at:type_name -> nokv.meta.v1.RootCursor
 	23,  // 44: nokv.meta.v1.RootAuthorityRetiredEraFloor.scope:type_name -> nokv.meta.v1.RootDutyScope
 	34,  // 45: nokv.meta.v1.RootPerasAuthorityGrant.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
-	34,  // 46: nokv.meta.v1.RootPerasAuthoritySeal.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
-	6,   // 47: nokv.meta.v1.RootPerasAuthorityCommand.kind:type_name -> nokv.meta.v1.RootPerasAuthorityAct
-	34,  // 48: nokv.meta.v1.RootPerasAuthorityCommand.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
-	30,  // 49: nokv.meta.v1.RootGrantCertificate.grant:type_name -> nokv.meta.v1.RootAuthorityGrant
-	23,  // 50: nokv.meta.v1.RootAuthorityUsage.scope:type_name -> nokv.meta.v1.RootDutyScope
-	28,  // 51: nokv.meta.v1.RootAuthorityUsage.usage:type_name -> nokv.meta.v1.RootDutyBound
-	38,  // 52: nokv.meta.v1.RootAuthorityEvidence.certificate:type_name -> nokv.meta.v1.RootGrantCertificate
-	39,  // 53: nokv.meta.v1.RootAuthorityEvidence.usage:type_name -> nokv.meta.v1.RootAuthorityUsage
-	31,  // 54: nokv.meta.v1.RootAuthorityEvidence.observed_retirements:type_name -> nokv.meta.v1.RootGrantRetirement
-	23,  // 55: nokv.meta.v1.RootAuthorityVerifierKey.scope:type_name -> nokv.meta.v1.RootDutyScope
-	41,  // 56: nokv.meta.v1.RootAuthorityVerifierState.key:type_name -> nokv.meta.v1.RootAuthorityVerifierKey
-	66,  // 57: nokv.meta.v1.RootAuthorityVerifierState.max_root_token:type_name -> nokv.meta.v1.RootTailToken
-	28,  // 58: nokv.meta.v1.RootAuthorityVerifierState.max_frontier:type_name -> nokv.meta.v1.RootDutyBound
-	42,  // 59: nokv.meta.v1.RootAuthorityVerifierStore.states:type_name -> nokv.meta.v1.RootAuthorityVerifierState
-	75,  // 60: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 61: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 62: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 63: nokv.meta.v1.RootRangeSplit.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 64: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 65: nokv.meta.v1.RootRangeMerge.base_left:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 66: nokv.meta.v1.RootRangeMerge.base_right:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 67: nokv.meta.v1.RootPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 68: nokv.meta.v1.RootPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
-	8,   // 69: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
-	75,  // 70: nokv.meta.v1.RootPendingPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 71: nokv.meta.v1.RootPendingPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
-	9,   // 72: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
-	75,  // 73: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 74: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 75: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 76: nokv.meta.v1.RootPendingRangeChange.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 77: nokv.meta.v1.RootPendingRangeChange.base_left:type_name -> nokv.meta.v1.RegionDescriptor
-	75,  // 78: nokv.meta.v1.RootPendingRangeChange.base_right:type_name -> nokv.meta.v1.RegionDescriptor
-	0,   // 79: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
-	16,  // 80: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
-	22,  // 81: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
-	44,  // 82: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
-	45,  // 83: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
-	46,  // 84: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
-	47,  // 85: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
-	48,  // 86: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
-	30,  // 87: nokv.meta.v1.RootEvent.grant:type_name -> nokv.meta.v1.RootAuthorityGrant
-	31,  // 88: nokv.meta.v1.RootEvent.grant_retirement:type_name -> nokv.meta.v1.RootGrantRetirement
-	32,  // 89: nokv.meta.v1.RootEvent.grant_inheritance:type_name -> nokv.meta.v1.RootGrantInheritance
-	18,  // 90: nokv.meta.v1.RootEvent.snapshot_epoch:type_name -> nokv.meta.v1.RootSnapshotEpoch
-	19,  // 91: nokv.meta.v1.RootEvent.mount:type_name -> nokv.meta.v1.RootMount
-	20,  // 92: nokv.meta.v1.RootEvent.subtree_authority:type_name -> nokv.meta.v1.RootSubtreeAuthority
-	21,  // 93: nokv.meta.v1.RootEvent.quota_fence:type_name -> nokv.meta.v1.RootQuotaFence
-	35,  // 94: nokv.meta.v1.RootEvent.peras_authority_grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
-	36,  // 95: nokv.meta.v1.RootEvent.peras_authority_seal:type_name -> nokv.meta.v1.RootPerasAuthoritySeal
-	15,  // 96: nokv.meta.v1.MetadataRootSnapshotResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	51,  // 97: nokv.meta.v1.MetadataRootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
-	13,  // 98: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
-	14,  // 99: nokv.meta.v1.MetadataRootAppendResponse.state:type_name -> nokv.meta.v1.RootState
-	10,  // 100: nokv.meta.v1.MetadataRootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.RootAllocatorKind
-	30,  // 101: nokv.meta.v1.RootEunomiaState.active_grants:type_name -> nokv.meta.v1.RootAuthorityGrant
-	31,  // 102: nokv.meta.v1.RootEunomiaState.retired_grants:type_name -> nokv.meta.v1.RootGrantRetirement
-	32,  // 103: nokv.meta.v1.RootEunomiaState.grant_inheritances:type_name -> nokv.meta.v1.RootGrantInheritance
-	33,  // 104: nokv.meta.v1.RootEunomiaState.retired_era_floors:type_name -> nokv.meta.v1.RootAuthorityRetiredEraFloor
-	11,  // 105: nokv.meta.v1.RootGrantCommand.kind:type_name -> nokv.meta.v1.RootGrantAct
-	29,  // 106: nokv.meta.v1.RootGrantCommand.requested_duties:type_name -> nokv.meta.v1.RootDutyGrant
-	39,  // 107: nokv.meta.v1.RootGrantCommand.exact_usages:type_name -> nokv.meta.v1.RootAuthorityUsage
-	61,  // 108: nokv.meta.v1.MetadataRootApplyGrantRequest.command:type_name -> nokv.meta.v1.RootGrantCommand
-	60,  // 109: nokv.meta.v1.MetadataRootApplyGrantResponse.state:type_name -> nokv.meta.v1.RootEunomiaState
-	12,  // 110: nokv.meta.v1.MetadataRootApplyGrantResponse.status:type_name -> nokv.meta.v1.RootGrantApplyStatus
-	38,  // 111: nokv.meta.v1.MetadataRootApplyGrantResponse.certificate:type_name -> nokv.meta.v1.RootGrantCertificate
-	37,  // 112: nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest.command:type_name -> nokv.meta.v1.RootPerasAuthorityCommand
-	14,  // 113: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.state:type_name -> nokv.meta.v1.RootState
-	7,   // 114: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.status:type_name -> nokv.meta.v1.RootPerasAuthorityApplyStatus
-	35,  // 115: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
-	13,  // 116: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
-	13,  // 117: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
-	51,  // 118: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent
-	67,  // 119: nokv.meta.v1.RootCommittedTail.records:type_name -> nokv.meta.v1.RootCommittedEvent
-	15,  // 120: nokv.meta.v1.MetadataRootObserveCommittedResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	68,  // 121: nokv.meta.v1.MetadataRootObserveCommittedResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	66,  // 122: nokv.meta.v1.MetadataRootObserveTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	66,  // 123: nokv.meta.v1.MetadataRootObserveTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
-	66,  // 124: nokv.meta.v1.MetadataRootObserveTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	15,  // 125: nokv.meta.v1.MetadataRootObserveTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	68,  // 126: nokv.meta.v1.MetadataRootObserveTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	66,  // 127: nokv.meta.v1.MetadataRootWaitTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
-	66,  // 128: nokv.meta.v1.MetadataRootWaitTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
-	66,  // 129: nokv.meta.v1.MetadataRootWaitTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
-	15,  // 130: nokv.meta.v1.MetadataRootWaitTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
-	68,  // 131: nokv.meta.v1.MetadataRootWaitTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
-	52,  // 132: nokv.meta.v1.MetadataRoot.Snapshot:input_type -> nokv.meta.v1.MetadataRootSnapshotRequest
-	54,  // 133: nokv.meta.v1.MetadataRoot.Append:input_type -> nokv.meta.v1.MetadataRootAppendRequest
-	56,  // 134: nokv.meta.v1.MetadataRoot.FenceAllocator:input_type -> nokv.meta.v1.MetadataRootFenceAllocatorRequest
-	58,  // 135: nokv.meta.v1.MetadataRoot.Status:input_type -> nokv.meta.v1.MetadataRootStatusRequest
-	62,  // 136: nokv.meta.v1.MetadataRoot.ApplyGrant:input_type -> nokv.meta.v1.MetadataRootApplyGrantRequest
-	64,  // 137: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:input_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest
-	69,  // 138: nokv.meta.v1.MetadataRoot.ObserveCommitted:input_type -> nokv.meta.v1.MetadataRootObserveCommittedRequest
-	71,  // 139: nokv.meta.v1.MetadataRoot.ObserveTail:input_type -> nokv.meta.v1.MetadataRootObserveTailRequest
-	73,  // 140: nokv.meta.v1.MetadataRoot.WaitTail:input_type -> nokv.meta.v1.MetadataRootWaitTailRequest
-	53,  // 141: nokv.meta.v1.MetadataRoot.Snapshot:output_type -> nokv.meta.v1.MetadataRootSnapshotResponse
-	55,  // 142: nokv.meta.v1.MetadataRoot.Append:output_type -> nokv.meta.v1.MetadataRootAppendResponse
-	57,  // 143: nokv.meta.v1.MetadataRoot.FenceAllocator:output_type -> nokv.meta.v1.MetadataRootFenceAllocatorResponse
-	59,  // 144: nokv.meta.v1.MetadataRoot.Status:output_type -> nokv.meta.v1.MetadataRootStatusResponse
-	63,  // 145: nokv.meta.v1.MetadataRoot.ApplyGrant:output_type -> nokv.meta.v1.MetadataRootApplyGrantResponse
-	65,  // 146: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:output_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse
-	70,  // 147: nokv.meta.v1.MetadataRoot.ObserveCommitted:output_type -> nokv.meta.v1.MetadataRootObserveCommittedResponse
-	72,  // 148: nokv.meta.v1.MetadataRoot.ObserveTail:output_type -> nokv.meta.v1.MetadataRootObserveTailResponse
-	74,  // 149: nokv.meta.v1.MetadataRoot.WaitTail:output_type -> nokv.meta.v1.MetadataRootWaitTailResponse
-	141, // [141:150] is the sub-list for method output_type
-	132, // [132:141] is the sub-list for method input_type
-	132, // [132:132] is the sub-list for extension type_name
-	132, // [132:132] is the sub-list for extension extendee
-	0,   // [0:132] is the sub-list for field type_name
+	66,  // 46: nokv.meta.v1.RootPerasAuthorityGrant.issued_root_token:type_name -> nokv.meta.v1.RootTailToken
+	34,  // 47: nokv.meta.v1.RootPerasAuthoritySeal.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
+	6,   // 48: nokv.meta.v1.RootPerasAuthorityCommand.kind:type_name -> nokv.meta.v1.RootPerasAuthorityAct
+	34,  // 49: nokv.meta.v1.RootPerasAuthorityCommand.scope:type_name -> nokv.meta.v1.RootPerasAuthorityScope
+	30,  // 50: nokv.meta.v1.RootGrantCertificate.grant:type_name -> nokv.meta.v1.RootAuthorityGrant
+	23,  // 51: nokv.meta.v1.RootAuthorityUsage.scope:type_name -> nokv.meta.v1.RootDutyScope
+	28,  // 52: nokv.meta.v1.RootAuthorityUsage.usage:type_name -> nokv.meta.v1.RootDutyBound
+	38,  // 53: nokv.meta.v1.RootAuthorityEvidence.certificate:type_name -> nokv.meta.v1.RootGrantCertificate
+	39,  // 54: nokv.meta.v1.RootAuthorityEvidence.usage:type_name -> nokv.meta.v1.RootAuthorityUsage
+	31,  // 55: nokv.meta.v1.RootAuthorityEvidence.observed_retirements:type_name -> nokv.meta.v1.RootGrantRetirement
+	23,  // 56: nokv.meta.v1.RootAuthorityVerifierKey.scope:type_name -> nokv.meta.v1.RootDutyScope
+	41,  // 57: nokv.meta.v1.RootAuthorityVerifierState.key:type_name -> nokv.meta.v1.RootAuthorityVerifierKey
+	66,  // 58: nokv.meta.v1.RootAuthorityVerifierState.max_root_token:type_name -> nokv.meta.v1.RootTailToken
+	28,  // 59: nokv.meta.v1.RootAuthorityVerifierState.max_frontier:type_name -> nokv.meta.v1.RootDutyBound
+	42,  // 60: nokv.meta.v1.RootAuthorityVerifierStore.states:type_name -> nokv.meta.v1.RootAuthorityVerifierState
+	75,  // 61: nokv.meta.v1.RootRegionDescriptor.descriptor:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 62: nokv.meta.v1.RootRangeSplit.left:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 63: nokv.meta.v1.RootRangeSplit.right:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 64: nokv.meta.v1.RootRangeSplit.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 65: nokv.meta.v1.RootRangeMerge.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 66: nokv.meta.v1.RootRangeMerge.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 67: nokv.meta.v1.RootRangeMerge.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 68: nokv.meta.v1.RootPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 69: nokv.meta.v1.RootPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	8,   // 70: nokv.meta.v1.RootPendingPeerChange.kind:type_name -> nokv.meta.v1.RootPendingPeerChangeKind
+	75,  // 71: nokv.meta.v1.RootPendingPeerChange.target:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 72: nokv.meta.v1.RootPendingPeerChange.base:type_name -> nokv.meta.v1.RegionDescriptor
+	9,   // 73: nokv.meta.v1.RootPendingRangeChange.kind:type_name -> nokv.meta.v1.RootPendingRangeChangeKind
+	75,  // 74: nokv.meta.v1.RootPendingRangeChange.left:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 75: nokv.meta.v1.RootPendingRangeChange.right:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 76: nokv.meta.v1.RootPendingRangeChange.merged:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 77: nokv.meta.v1.RootPendingRangeChange.base_parent:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 78: nokv.meta.v1.RootPendingRangeChange.base_left:type_name -> nokv.meta.v1.RegionDescriptor
+	75,  // 79: nokv.meta.v1.RootPendingRangeChange.base_right:type_name -> nokv.meta.v1.RegionDescriptor
+	0,   // 80: nokv.meta.v1.RootEvent.kind:type_name -> nokv.meta.v1.RootEventKind
+	16,  // 81: nokv.meta.v1.RootEvent.store_membership:type_name -> nokv.meta.v1.RootStoreMembership
+	22,  // 82: nokv.meta.v1.RootEvent.allocator_fence:type_name -> nokv.meta.v1.RootAllocatorFence
+	44,  // 83: nokv.meta.v1.RootEvent.region_descriptor:type_name -> nokv.meta.v1.RootRegionDescriptor
+	45,  // 84: nokv.meta.v1.RootEvent.region_removal:type_name -> nokv.meta.v1.RootRegionRemoval
+	46,  // 85: nokv.meta.v1.RootEvent.range_split:type_name -> nokv.meta.v1.RootRangeSplit
+	47,  // 86: nokv.meta.v1.RootEvent.range_merge:type_name -> nokv.meta.v1.RootRangeMerge
+	48,  // 87: nokv.meta.v1.RootEvent.peer_change:type_name -> nokv.meta.v1.RootPeerChange
+	30,  // 88: nokv.meta.v1.RootEvent.grant:type_name -> nokv.meta.v1.RootAuthorityGrant
+	31,  // 89: nokv.meta.v1.RootEvent.grant_retirement:type_name -> nokv.meta.v1.RootGrantRetirement
+	32,  // 90: nokv.meta.v1.RootEvent.grant_inheritance:type_name -> nokv.meta.v1.RootGrantInheritance
+	18,  // 91: nokv.meta.v1.RootEvent.snapshot_epoch:type_name -> nokv.meta.v1.RootSnapshotEpoch
+	19,  // 92: nokv.meta.v1.RootEvent.mount:type_name -> nokv.meta.v1.RootMount
+	20,  // 93: nokv.meta.v1.RootEvent.subtree_authority:type_name -> nokv.meta.v1.RootSubtreeAuthority
+	21,  // 94: nokv.meta.v1.RootEvent.quota_fence:type_name -> nokv.meta.v1.RootQuotaFence
+	35,  // 95: nokv.meta.v1.RootEvent.peras_authority_grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
+	36,  // 96: nokv.meta.v1.RootEvent.peras_authority_seal:type_name -> nokv.meta.v1.RootPerasAuthoritySeal
+	15,  // 97: nokv.meta.v1.MetadataRootSnapshotResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	51,  // 98: nokv.meta.v1.MetadataRootAppendRequest.events:type_name -> nokv.meta.v1.RootEvent
+	13,  // 99: nokv.meta.v1.MetadataRootAppendResponse.cursor:type_name -> nokv.meta.v1.RootCursor
+	14,  // 100: nokv.meta.v1.MetadataRootAppendResponse.state:type_name -> nokv.meta.v1.RootState
+	10,  // 101: nokv.meta.v1.MetadataRootFenceAllocatorRequest.kind:type_name -> nokv.meta.v1.RootAllocatorKind
+	30,  // 102: nokv.meta.v1.RootEunomiaState.active_grants:type_name -> nokv.meta.v1.RootAuthorityGrant
+	31,  // 103: nokv.meta.v1.RootEunomiaState.retired_grants:type_name -> nokv.meta.v1.RootGrantRetirement
+	32,  // 104: nokv.meta.v1.RootEunomiaState.grant_inheritances:type_name -> nokv.meta.v1.RootGrantInheritance
+	33,  // 105: nokv.meta.v1.RootEunomiaState.retired_era_floors:type_name -> nokv.meta.v1.RootAuthorityRetiredEraFloor
+	11,  // 106: nokv.meta.v1.RootGrantCommand.kind:type_name -> nokv.meta.v1.RootGrantAct
+	29,  // 107: nokv.meta.v1.RootGrantCommand.requested_duties:type_name -> nokv.meta.v1.RootDutyGrant
+	39,  // 108: nokv.meta.v1.RootGrantCommand.exact_usages:type_name -> nokv.meta.v1.RootAuthorityUsage
+	61,  // 109: nokv.meta.v1.MetadataRootApplyGrantRequest.command:type_name -> nokv.meta.v1.RootGrantCommand
+	60,  // 110: nokv.meta.v1.MetadataRootApplyGrantResponse.state:type_name -> nokv.meta.v1.RootEunomiaState
+	12,  // 111: nokv.meta.v1.MetadataRootApplyGrantResponse.status:type_name -> nokv.meta.v1.RootGrantApplyStatus
+	38,  // 112: nokv.meta.v1.MetadataRootApplyGrantResponse.certificate:type_name -> nokv.meta.v1.RootGrantCertificate
+	37,  // 113: nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest.command:type_name -> nokv.meta.v1.RootPerasAuthorityCommand
+	14,  // 114: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.state:type_name -> nokv.meta.v1.RootState
+	7,   // 115: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.status:type_name -> nokv.meta.v1.RootPerasAuthorityApplyStatus
+	35,  // 116: nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse.grant:type_name -> nokv.meta.v1.RootPerasAuthorityGrant
+	13,  // 117: nokv.meta.v1.RootTailToken.cursor:type_name -> nokv.meta.v1.RootCursor
+	13,  // 118: nokv.meta.v1.RootCommittedEvent.cursor:type_name -> nokv.meta.v1.RootCursor
+	51,  // 119: nokv.meta.v1.RootCommittedEvent.event:type_name -> nokv.meta.v1.RootEvent
+	67,  // 120: nokv.meta.v1.RootCommittedTail.records:type_name -> nokv.meta.v1.RootCommittedEvent
+	15,  // 121: nokv.meta.v1.MetadataRootObserveCommittedResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	68,  // 122: nokv.meta.v1.MetadataRootObserveCommittedResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	66,  // 123: nokv.meta.v1.MetadataRootObserveTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	66,  // 124: nokv.meta.v1.MetadataRootObserveTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
+	66,  // 125: nokv.meta.v1.MetadataRootObserveTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	15,  // 126: nokv.meta.v1.MetadataRootObserveTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	68,  // 127: nokv.meta.v1.MetadataRootObserveTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	66,  // 128: nokv.meta.v1.MetadataRootWaitTailRequest.after:type_name -> nokv.meta.v1.RootTailToken
+	66,  // 129: nokv.meta.v1.MetadataRootWaitTailResponse.after:type_name -> nokv.meta.v1.RootTailToken
+	66,  // 130: nokv.meta.v1.MetadataRootWaitTailResponse.token:type_name -> nokv.meta.v1.RootTailToken
+	15,  // 131: nokv.meta.v1.MetadataRootWaitTailResponse.checkpoint:type_name -> nokv.meta.v1.RootCheckpoint
+	68,  // 132: nokv.meta.v1.MetadataRootWaitTailResponse.tail:type_name -> nokv.meta.v1.RootCommittedTail
+	52,  // 133: nokv.meta.v1.MetadataRoot.Snapshot:input_type -> nokv.meta.v1.MetadataRootSnapshotRequest
+	54,  // 134: nokv.meta.v1.MetadataRoot.Append:input_type -> nokv.meta.v1.MetadataRootAppendRequest
+	56,  // 135: nokv.meta.v1.MetadataRoot.FenceAllocator:input_type -> nokv.meta.v1.MetadataRootFenceAllocatorRequest
+	58,  // 136: nokv.meta.v1.MetadataRoot.Status:input_type -> nokv.meta.v1.MetadataRootStatusRequest
+	62,  // 137: nokv.meta.v1.MetadataRoot.ApplyGrant:input_type -> nokv.meta.v1.MetadataRootApplyGrantRequest
+	64,  // 138: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:input_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityRequest
+	69,  // 139: nokv.meta.v1.MetadataRoot.ObserveCommitted:input_type -> nokv.meta.v1.MetadataRootObserveCommittedRequest
+	71,  // 140: nokv.meta.v1.MetadataRoot.ObserveTail:input_type -> nokv.meta.v1.MetadataRootObserveTailRequest
+	73,  // 141: nokv.meta.v1.MetadataRoot.WaitTail:input_type -> nokv.meta.v1.MetadataRootWaitTailRequest
+	53,  // 142: nokv.meta.v1.MetadataRoot.Snapshot:output_type -> nokv.meta.v1.MetadataRootSnapshotResponse
+	55,  // 143: nokv.meta.v1.MetadataRoot.Append:output_type -> nokv.meta.v1.MetadataRootAppendResponse
+	57,  // 144: nokv.meta.v1.MetadataRoot.FenceAllocator:output_type -> nokv.meta.v1.MetadataRootFenceAllocatorResponse
+	59,  // 145: nokv.meta.v1.MetadataRoot.Status:output_type -> nokv.meta.v1.MetadataRootStatusResponse
+	63,  // 146: nokv.meta.v1.MetadataRoot.ApplyGrant:output_type -> nokv.meta.v1.MetadataRootApplyGrantResponse
+	65,  // 147: nokv.meta.v1.MetadataRoot.ApplyPerasAuthority:output_type -> nokv.meta.v1.MetadataRootApplyPerasAuthorityResponse
+	70,  // 148: nokv.meta.v1.MetadataRoot.ObserveCommitted:output_type -> nokv.meta.v1.MetadataRootObserveCommittedResponse
+	72,  // 149: nokv.meta.v1.MetadataRoot.ObserveTail:output_type -> nokv.meta.v1.MetadataRootObserveTailResponse
+	74,  // 150: nokv.meta.v1.MetadataRoot.WaitTail:output_type -> nokv.meta.v1.MetadataRootWaitTailResponse
+	142, // [142:151] is the sub-list for method output_type
+	133, // [133:142] is the sub-list for method input_type
+	133, // [133:133] is the sub-list for extension type_name
+	133, // [133:133] is the sub-list for extension extendee
+	0,   // [0:133] is the sub-list for field type_name
 }
 
 func init() { file_meta_root_proto_init() }

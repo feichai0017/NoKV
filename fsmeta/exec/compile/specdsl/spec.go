@@ -62,3 +62,11 @@ type GuardSpec struct {
 	Guard     string
 	Condition string
 }
+
+type ReadSpec struct {
+	Name          string
+	OperationKind string
+	KeyShape      string
+	Authority     string
+	Source        string
+}

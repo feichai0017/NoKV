@@ -16,6 +16,7 @@ import (
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -142,6 +143,7 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 		return perasRouteInstallResult{}, err
 	}
 	stats := segment.Stats()
+	readHeader := segment.ReadHeaderView()
 	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
 		RoutingKey:            runtimeCloneBytes(routingKey),
 		SegmentRoot:           append([]byte(nil), segment.Root[:]...),
@@ -158,8 +160,18 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 		DependencyKeys:        dependencyKeys,
 		CatalogKeys:           catalogKeys,
 		MaterializedKeys:      materializedKeys,
+		ReadFirstKey:          readHeader.FirstKey,
+		ReadLastKey:           readHeader.LastKey,
+		ReadDentryCount:       readHeader.DentryCount,
+		ReadInodeCount:        readHeader.InodeCount,
+		ReadSessionCount:      readHeader.SessionCount,
+		ReadTombstoneCount:    readHeader.TombstoneCount,
+		ReadDirectoryCount:    readHeader.DirectoryCount,
 	})
 	if err != nil {
+		if client.IsRetryExhausted(err) {
+			return perasRouteInstallResult{}, perasInstallRouteRetryExhaustedError{cause: err}
+		}
 		return perasRouteInstallResult{}, err
 	}
 	if resp == nil {

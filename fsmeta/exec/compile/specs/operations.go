@@ -374,3 +374,14 @@ func All() []specdsl.OpSpec {
 		ExpireWriteSessions,
 	}
 }
+
+func ReadAll() []specdsl.ReadSpec {
+	return []specdsl.ReadSpec{
+		{Name: "Lookup", OperationKind: "fsmeta.OperationLookup", KeyShape: "dentry", Authority: "parent", Source: "point"},
+		{Name: "GetAttr", OperationKind: "fsmeta.OperationGetAttr", KeyShape: "inode", Authority: "inode", Source: "point"},
+		{Name: "ReadSession", OperationKind: "fsmeta.OperationReadSession", KeyShape: "session", Authority: "inode", Source: "point"},
+		{Name: "ReadSessionOwner", OperationKind: "fsmeta.OperationReadSession", KeyShape: "session_owner", Authority: "inode", Source: "point"},
+		{Name: "ReadSessionKey", OperationKind: "fsmeta.OperationReadSession", KeyShape: "session_key", Authority: "session_key", Source: "point"},
+		{Name: "ReadDir", OperationKind: "fsmeta.OperationReadDir", KeyShape: "dentry_prefix", Authority: "parent", Source: "directory"},
+	}
+}

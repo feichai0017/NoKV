@@ -20,18 +20,63 @@ import (
 )
 
 var _ fsperas.WitnessReplica = (*WitnessNode)(nil)
+var _ fsperas.WitnessReplica = (*LocalWitnessReplica)(nil)
+var _ fsperas.WitnessSegmentProber = (*WitnessNode)(nil)
 
-func TestWitnessNodeAppendSegmentAndProbe(t *testing.T) {
+func TestWitnessNodeAppendSegmentsSingleRecordAndProbe(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
 	defer cleanup()
 	scope := testAuthorityScope()
 	record := testSegmentRecord()
 
-	require.NoError(t, node.AppendSegment(context.Background(), scope, record))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, record))
 
 	snapshot, err := node.Probe(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
+}
+
+func TestWitnessNodeAppendSegmentsAndProbe(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, node.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+
+	snapshot, err := node.Probe(context.Background(), 1)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []fsperas.SegmentWitnessRecord{first, second}, snapshot.Segments)
+}
+
+func TestWitnessNodeStatsBreakDownAppendPath(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, node.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+	require.NoError(t, node.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+
+	stats := node.Stats()
+	require.Equal(t, uint64(2), stats["append_total"])
+	require.Equal(t, uint64(4), stats["append_records_total"])
+	require.Equal(t, uint64(0), stats["append_error_total"])
+	require.Equal(t, uint64(2), stats["authority_check_batches_total"])
+	require.Equal(t, uint64(4), stats["authority_check_records_total"])
+	require.Equal(t, uint64(2), stats["pending_append_records_total"])
+	require.Equal(t, uint64(2), stats["dedupe_skip_total"])
+	require.Equal(t, uint64(1), stats["wal_append_total"])
+	require.Equal(t, uint64(2), stats["wal_append_records_total"])
+	require.Greater(t, stats["wal_append_bytes_total"].(uint64), uint64(0))
+	require.Contains(t, stats, "wal_encode_latency_total_nanosecond")
+	require.Contains(t, stats, "wal_manager_append_latency_total_nanosecond")
 }
 
 func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
@@ -41,7 +86,7 @@ func TestWitnessNodeRejectsMissingAuthority(t *testing.T) {
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
-	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
+	err := appendWitnessSegment(context.Background(), node, testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
 }
 
@@ -66,7 +111,7 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord()))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, testAuthorityScope(), testSegmentRecord()))
 	require.True(t, refreshed)
 }
 
@@ -90,7 +135,7 @@ func TestWitnessNodeRefreshFailureIsFatal(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
+	err = appendWitnessSegment(context.Background(), node, testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, refreshErr)
 }
 
@@ -101,11 +146,45 @@ func TestWitnessNodeRejectsWrongHolderAndEpoch(t *testing.T) {
 
 	wrongHolder := testSegmentRecord()
 	wrongHolder.HolderID = "holder-b"
-	require.ErrorIs(t, node.AppendSegment(context.Background(), scope, wrongHolder), ErrWitnessAuthorityMismatch)
+	require.ErrorIs(t, appendWitnessSegment(context.Background(), node, scope, wrongHolder), ErrWitnessAuthorityMismatch)
 
 	wrongEpoch := testSegmentRecord()
 	wrongEpoch.EpochID = 2
-	require.ErrorIs(t, node.AppendSegment(context.Background(), scope, wrongEpoch), ErrWitnessAuthorityMismatch)
+	require.ErrorIs(t, appendWitnessSegment(context.Background(), node, scope, wrongEpoch), ErrWitnessAuthorityMismatch)
+}
+
+func TestWitnessNodeAcceptsSameHolderOldEpochDrain(t *testing.T) {
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	grant := testAuthorityGrant()
+	grant.GrantID = "grant-2"
+	grant.EpochID = 2
+	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
+
+	record := testSegmentRecord()
+	record.EpochID = 1
+	require.NoError(t, appendWitnessSegment(context.Background(), node, testAuthorityScope(), record))
+}
+
+func TestWitnessNodeRejectsSameHolderOldEpochPredecessorMismatch(t *testing.T) {
+	now := time.Unix(100, 0)
+	authorities := runtimeperas.NewActiveAuthorities()
+	grant := testAuthorityGrant()
+	grant.GrantID = "grant-2"
+	grant.EpochID = 2
+	grant.PredecessorDigest[0] = 9
+	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
+	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
+	defer cleanup()
+
+	record := testSegmentRecord()
+	record.EpochID = 1
+	record.PredecessorDigest[0] = 8
+	require.ErrorIs(t, appendWitnessSegment(context.Background(), node, testAuthorityScope(), record), ErrWitnessAuthorityMismatch)
 }
 
 func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
@@ -117,7 +196,7 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
-	err := node.AppendSegment(context.Background(), testAuthorityScope(), testSegmentRecord())
+	err := appendWitnessSegment(context.Background(), node, testAuthorityScope(), testSegmentRecord())
 	require.ErrorIs(t, err, ErrWitnessAuthorityMissing)
 }
 
@@ -133,7 +212,7 @@ func TestWitnessNodeAcceptsRenewedSameEpochAuthority(t *testing.T) {
 	record := testSegmentRecord()
 	require.Equal(t, renewed.EpochID, record.EpochID)
 	require.Equal(t, renewed.HolderID, record.HolderID)
-	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), record))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, testAuthorityScope(), record))
 }
 
 func TestWitnessNodeDuplicateSegmentIsIdempotent(t *testing.T) {
@@ -142,8 +221,91 @@ func TestWitnessNodeDuplicateSegmentIsIdempotent(t *testing.T) {
 	scope := testAuthorityScope()
 	record := testSegmentRecord()
 
-	require.NoError(t, node.AppendSegment(context.Background(), scope, record))
-	require.NoError(t, node.AppendSegment(context.Background(), scope, record))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, record))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, record))
+
+	snapshot, err := node.Probe(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
+}
+
+func TestWitnessNodeCachesLoadedEpoch(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, first))
+	node.mu.Lock()
+	_, loaded := node.loaded[first.EpochID]
+	require.True(t, loaded)
+	require.Len(t, node.loaded, 1)
+	node.mu.Unlock()
+
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, second))
+	node.mu.Lock()
+	_, loaded = node.loaded[first.EpochID]
+	require.True(t, loaded)
+	require.Len(t, node.loaded, 1)
+	node.mu.Unlock()
+
+	snapshot, err := node.Probe(context.Background(), first.EpochID)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Segments, 2)
+}
+
+func TestWitnessNodeProbeSegmentReturnsTargetOnly(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, first))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, scope, second))
+
+	record, found, err := node.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
+		EpochID:              second.EpochID,
+		SegmentRoot:          second.SegmentRoot,
+		SegmentPayloadDigest: second.SegmentPayloadDigest,
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, second, record)
+
+	missing := second
+	missing.SegmentPayloadDigest[0] = 9
+	_, found, err = node.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
+		EpochID:              missing.EpochID,
+		SegmentRoot:          missing.SegmentRoot,
+		SegmentPayloadDigest: missing.SegmentPayloadDigest,
+	})
+	require.NoError(t, err)
+	require.False(t, found)
+}
+
+func TestWitnessNodeConcurrentDuplicateSegmentIsSingleWALRecord(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsyncBatched)
+	defer cleanup()
+	scope := testAuthorityScope()
+	record := testSegmentRecord()
+	start := make(chan struct{})
+	errCh := make(chan error, 16)
+	for range 16 {
+		go func() {
+			<-start
+			errCh <- appendWitnessSegment(context.Background(), node, scope, record)
+		}()
+	}
+	close(start)
+	for range 16 {
+		require.NoError(t, <-errCh)
+	}
 
 	snapshot, err := node.Probe(context.Background(), 1)
 	require.NoError(t, err)
@@ -166,7 +328,7 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	})
 	require.NoError(t, err)
 	record := testSegmentRecord()
-	require.NoError(t, node.AppendSegment(context.Background(), testAuthorityScope(), record))
+	require.NoError(t, appendWitnessSegment(context.Background(), node, testAuthorityScope(), record))
 	require.NoError(t, manager.Close())
 
 	reopened, err := wal.Open(wal.Config{Dir: dir})
@@ -182,7 +344,7 @@ func TestWitnessNodeLoadsSegmentsFromWAL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, reopenedNode.AppendSegment(context.Background(), testAuthorityScope(), record))
+	require.NoError(t, appendWitnessSegment(context.Background(), reopenedNode, testAuthorityScope(), record))
 	snapshot, err := reopenedNode.Probe(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
@@ -194,11 +356,11 @@ func TestWitnessNodeContextCancellationStopsAppend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := node.AppendSegment(ctx, testAuthorityScope(), testSegmentRecord())
+	err := appendWitnessSegment(ctx, node, testAuthorityScope(), testSegmentRecord())
 	require.True(t, errors.Is(err, context.Canceled))
 }
 
-func BenchmarkWitnessNodeAppendSegment(b *testing.B) {
+func BenchmarkWitnessNodeAppendSegmentsSingleRecord(b *testing.B) {
 	node, cleanup := openBenchWitnessNode(b)
 	defer cleanup()
 	scope := testAuthorityScope()
@@ -207,10 +369,14 @@ func BenchmarkWitnessNodeAppendSegment(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		binary.BigEndian.PutUint64(record.SegmentRoot[:8], uint64(i+1))
-		if err := node.AppendSegment(context.Background(), scope, record); err != nil {
+		if err := appendWitnessSegment(context.Background(), node, scope, record); err != nil {
 			b.Fatal(err)
 		}
 	}
+}
+
+func appendWitnessSegment(ctx context.Context, node *WitnessNode, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+	return node.AppendSegments(ctx, scope, []fsperas.SegmentWitnessRecord{record})
 }
 
 func openTestWitnessNode(t *testing.T, durability wal.DurabilityPolicy) (*WitnessNode, func()) {
@@ -268,11 +434,17 @@ func testActiveAuthorities(tb testing.TB, now time.Time) *runtimeperas.ActiveAut
 
 func testAuthorityGrant() rootproto.PerasAuthorityGrant {
 	return rootproto.PerasAuthorityGrant{
-		GrantID:         "grant-1",
-		EpochID:         1,
-		HolderID:        "holder-a",
-		Scope:           runtimeperas.AuthorityScopeFromDelta(testAuthorityScope()),
-		ExpiresUnixNano: time.Unix(101, 0).UnixNano(),
+		GrantID:          "grant-1",
+		EpochID:          1,
+		HolderID:         "holder-a",
+		Scope:            runtimeperas.AuthorityScopeFromDelta(testAuthorityScope()),
+		ExpiresUnixNano:  time.Unix(101, 0).UnixNano(),
+		RootClusterEpoch: 1,
+		IssuedRootToken: rootproto.AuthorityRootToken{
+			Term:     1,
+			Index:    1,
+			Revision: 1,
+		},
 	}
 }
 

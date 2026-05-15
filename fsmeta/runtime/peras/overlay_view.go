@@ -84,6 +84,9 @@ func completionMatchesOperation(completion fsperas.SegmentCompletion, op compile
 	if completion.DescriptorDigest != op.DescriptorDigest {
 		return false
 	}
+	if completion.PredicateProofDigest != compile.AdmissionProofSetDigest(op.PredicateProofs, op.GuardProofs) {
+		return false
+	}
 	return completion.ExecutionPlanDigest == compile.ExecutionPlanDigest(op.Segment, op.Atomicity, op.Durability)
 }
 
@@ -102,13 +105,21 @@ func (c *Runtime) segmentInstalled(root [32]byte) bool {
 }
 
 func (c *Runtime) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetPerasOverlayView(key)
+	if !ok {
+		return nil, false, false
+	}
+	return cloneBytes(value), deleted, true
+}
+
+func (c *Runtime) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
 	if c == nil || c.read == nil {
 		return nil, false, false
 	}
-	if value, deleted, ok := c.read.overlay.Get(key); ok {
+	if value, deleted, ok := c.read.overlay.GetView(key); ok {
 		return value, deleted, true
 	}
-	return c.read.sealed.Get(key)
+	return c.read.sealed.GetView(key)
 }
 
 func (c *Runtime) KeyState(key []byte) (present bool, known bool) {
@@ -164,6 +175,34 @@ func (c *Runtime) ScanPerasOverlay(start []byte, limit uint32) []fsperas.Overlay
 		return nil
 	}
 	return fsperas.MergeOverlayScans(c.read.sealed.Scan(start, limit), c.read.overlay.Scan(start, limit), limit)
+}
+
+func (c *Runtime) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	if c == nil || c.read == nil || limit == 0 {
+		return nil
+	}
+	return fsperas.MergeOverlayScans(c.read.sealed.ScanDirectory(prefix, start, limit), c.read.overlay.ScanDirectory(prefix, start, limit), limit)
+}
+
+func (c *Runtime) HasPerasDirectory(prefix []byte) bool {
+	if c == nil || c.read == nil {
+		return false
+	}
+	return c.read.overlay.HasDirectory(prefix) || c.read.sealed.HasDirectory(prefix)
+}
+
+func (c *Runtime) HasPerasVisibleDirectory(prefix []byte) bool {
+	if c == nil || c.read == nil {
+		return false
+	}
+	return c.read.overlay.HasDirectory(prefix)
+}
+
+func (c *Runtime) PerasDirectoryCacheFrontier(prefix []byte) uint64 {
+	if c == nil || c.read == nil {
+		return 0
+	}
+	return c.read.sealed.DirectoryFrontier(prefix)
 }
 
 func (c *Runtime) addOverlay(id fsperas.OperationID, op compile.MaterializedOp) error {

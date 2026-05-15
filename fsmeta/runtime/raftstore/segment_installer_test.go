@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,6 +81,14 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	require.NotEmpty(t, req.GetDependencyKeys())
 	require.NotEmpty(t, req.GetCatalogKeys())
 	require.Len(t, req.GetMaterializedKeys(), int(stats.EntryCount))
+	readHeader := segment.ReadHeaderView()
+	require.Equal(t, readHeader.FirstKey, req.GetReadFirstKey())
+	require.Equal(t, readHeader.LastKey, req.GetReadLastKey())
+	require.Equal(t, readHeader.DentryCount, req.GetReadDentryCount())
+	require.Equal(t, readHeader.InodeCount, req.GetReadInodeCount())
+	require.Equal(t, readHeader.SessionCount, req.GetReadSessionCount())
+	require.Equal(t, readHeader.TombstoneCount, req.GetReadTombstoneCount())
+	require.Equal(t, readHeader.DirectoryCount, req.GetReadDirectoryCount())
 }
 
 func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
@@ -177,6 +187,72 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 	require.Equal(t, int32(len(routingKeys)), kv.headerRouteCount())
 }
 
+func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	segment := testRaftstoreInstallSegment(t, testRaftstoreInstallKeysAcrossBuckets(t, 4))
+	routingKeys, err := runtimeperas.SegmentInstallRoutingKeys(segment, false)
+	require.NoError(t, err)
+	require.Greater(t, len(routingKeys), 2)
+	payload, digest := encodeRaftstoreInstallSegment(t, segment)
+
+	kv := &cancelingRaftstorePerasInstallKV{}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+	installer := newRaftstoreSegmentInstaller(runner, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := installer.InstallSegment(ctx, runtimeperas.SegmentInstallRequest{
+			Segment:       segment,
+			Payload:       payload,
+			PayloadDigest: digest,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("InstallSegment blocked after more route errors than install workers")
+	}
+	require.Equal(t, int32(len(routingKeys)), kv.callCount())
+}
+
+func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRetryable(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
+	payload, digest := encodeRaftstoreInstallSegment(t, segment)
+	kv := &fakeRaftstorePerasInstallKV{
+		err: &client.RetryExhaustedError{
+			Operation: "peras install segment",
+			Key:       dentryKey,
+			Detail:    "region 7 returned not_leader",
+		},
+	}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+	installer := newRaftstoreSegmentInstaller(runner, nil)
+
+	_, err = installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
+		Segment:         segment,
+		Payload:         payload,
+		PayloadDigest:   digest,
+		MaterializeMVCC: true,
+	})
+	require.Error(t, err)
+	require.True(t, client.IsRetryExhausted(err), "%T %v", err, err)
+	require.True(t, nokverrors.Retryable(err), "%T %v", err, err)
+}
+
 func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegment {
 	t.Helper()
 	mutations := make([]fsperas.ReplayMutation, 0, len(keys))
@@ -193,6 +269,25 @@ func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegme
 	})
 	require.NoError(t, err)
 	return segment
+}
+
+func testRaftstoreInstallKeysAcrossBuckets(t *testing.T, count int) [][]byte {
+	t.Helper()
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	seen := make(map[fsmeta.AffinityBucket]struct{}, count)
+	keys := make([][]byte, 0, count)
+	for inode := fsmeta.InodeID(1); len(keys) < count && inode < 1_000_000; inode++ {
+		bucket := fsmeta.BucketForInodeID(inode)
+		if _, ok := seen[bucket]; ok {
+			continue
+		}
+		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		require.NoError(t, err)
+		seen[bucket] = struct{}{}
+		keys = append(keys, key)
+	}
+	require.Len(t, keys, count)
+	return keys
 }
 
 func encodeRaftstoreInstallSegment(t *testing.T, segment fsperas.PerasSegment) ([]byte, [32]byte) {
@@ -299,4 +394,19 @@ func (f *parallelRaftstorePerasInstallKV) indexOnlyRouteCount() int32 {
 
 func (f *parallelRaftstorePerasInstallKV) headerRouteCount() int32 {
 	return f.headerRoutes.Load()
+}
+
+type cancelingRaftstorePerasInstallKV struct {
+	fakeRunnerKV
+	calls atomic.Int32
+}
+
+func (f *cancelingRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, _ *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+	f.calls.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (f *cancelingRaftstorePerasInstallKV) callCount() int32 {
+	return f.calls.Load()
 }

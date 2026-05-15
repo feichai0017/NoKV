@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
+	execperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/stretchr/testify/require"
 )
@@ -51,4 +52,20 @@ func TestOpenRejectsNegativePerasSegmentInstallParallelism(t *testing.T) {
 		PerasSegmentInstallParallelism: -1,
 	})
 	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
+}
+
+func TestOpenRejectsNegativePerasSegmentFlushParallelism(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:              "127.0.0.1:1",
+		PerasSegmentFlushParallelism: -1,
+	})
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
+}
+
+func TestOpenRejectsPerasWithoutVisibleLog(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr: "127.0.0.1:1",
+		PerasHolderID:   "holder-a",
+	})
+	require.ErrorIs(t, err, execperas.ErrVisibleLogRequired)
 }

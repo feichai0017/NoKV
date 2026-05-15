@@ -62,6 +62,7 @@ func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.P
 		EpochId:              record.EpochID,
 		SegmentRoot:          append([]byte(nil), record.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), record.SegmentPayloadDigest[:]...),
+		PredecessorDigest:    append([]byte(nil), record.PredecessorDigest[:]...),
 		SegmentPayloadSize:   record.SegmentPayloadSize,
 		SegmentPointer:       record.SegmentPointer,
 		SegmentPayload:       append([]byte(nil), record.SegmentPayload...),
@@ -70,6 +71,14 @@ func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.P
 		TimestampUnixNano:    record.TimestampUnixNano,
 		HolderId:             record.HolderID,
 	}
+}
+
+func SegmentWitnessRecordsToProto(records []fsperas.SegmentWitnessRecord) []*kvrpcpb.PerasSegmentWitnessRecord {
+	out := make([]*kvrpcpb.PerasSegmentWitnessRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, SegmentWitnessRecordToProto(record))
+	}
+	return out
 }
 
 func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsperas.SegmentWitnessRecord, error) {
@@ -91,6 +100,21 @@ func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsper
 	}
 	if err := copyFixed(out.SegmentPayloadDigest[:], in.GetSegmentPayloadDigest(), "segment_payload_digest"); err != nil {
 		return fsperas.SegmentWitnessRecord{}, err
+	}
+	if err := copyFixed(out.PredecessorDigest[:], in.GetPredecessorDigest(), "predecessor_digest"); err != nil {
+		return fsperas.SegmentWitnessRecord{}, err
+	}
+	return out, nil
+}
+
+func SegmentWitnessRecordsFromProto(in []*kvrpcpb.PerasSegmentWitnessRecord) ([]fsperas.SegmentWitnessRecord, error) {
+	out := make([]fsperas.SegmentWitnessRecord, 0, len(in))
+	for _, segment := range in {
+		record, err := SegmentWitnessRecordFromProto(segment)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
 	}
 	return out, nil
 }

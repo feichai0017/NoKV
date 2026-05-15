@@ -274,6 +274,8 @@ message RootPerasAuthorityGrant {
   bytes predecessor_digest = 6;
   int64 quota_credit_bytes = 7;
   int64 quota_credit_inodes = 8;
+  uint64 root_cluster_epoch = 9;
+  RootTailToken issued_root_token = 10;
 }
 
 message RootPerasAuthoritySeal {

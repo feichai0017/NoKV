@@ -18,8 +18,12 @@ import (
 )
 
 type PerasWitness interface {
-	AppendSegment(context.Context, compile.AuthorityScope, fsperas.SegmentWitnessRecord) error
+	AppendSegments(context.Context, compile.AuthorityScope, []fsperas.SegmentWitnessRecord) error
 	Probe(context.Context, uint64) (fsperas.WitnessSnapshot, error)
+}
+
+type perasWitnessStats interface {
+	Stats() map[string]any
 }
 
 type ServiceOption func(*Service)
@@ -53,11 +57,22 @@ func NewService(st *store.Store, opts ...ServiceOption) *Service {
 // Stats exposes low-cardinality StoreKV service counters for expvar and
 // benchmark artifacts.
 func (s *Service) Stats() map[string]any {
+	var stats map[string]any
 	if s == nil || s.writeBatcher == nil {
 		var empty *writeCommandBatcher
-		return empty.Stats()
+		stats = empty.Stats()
+	} else {
+		stats = s.writeBatcher.Stats()
 	}
-	return s.writeBatcher.Stats()
+	if s == nil || s.perasWitness == nil {
+		return stats
+	}
+	reporter, ok := s.perasWitness.(perasWitnessStats)
+	if !ok {
+		return stats
+	}
+	stats["peras_witness"] = reporter.Stats()
+	return stats
 }
 
 func servicePhysicalTimeMillis() uint64 {

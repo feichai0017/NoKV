@@ -5,13 +5,15 @@ package exec
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"sync/atomic"
-	"time"
 )
 
 const (
@@ -124,7 +126,26 @@ type PerasCommitter interface {
 
 type PerasOverlayReader interface {
 	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
+	// GetPerasOverlayView returns overlay-owned bytes. Callers must not mutate
+	// the returned value.
+	GetPerasOverlayView(key []byte) (value []byte, deleted bool, ok bool)
 	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
+}
+
+type PerasDirectoryOverlayReader interface {
+	ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV
+}
+
+type PerasDirectoryOverlayPresence interface {
+	HasPerasDirectory(prefix []byte) bool
+}
+
+type PerasVisibleDirectoryPresence interface {
+	HasPerasVisibleDirectory(prefix []byte) bool
+}
+
+type PerasDirectoryCacheFrontier interface {
+	PerasDirectoryCacheFrontier(prefix []byte) uint64
 }
 
 type PerasFlusher interface {
@@ -150,6 +171,10 @@ type NegativeCache interface {
 	Invalidate([]byte)
 }
 
+type negativeCacheClearer interface {
+	Clear()
+}
+
 // DirPageCache is the ReadDirPlus page memo surface.
 type DirPageCache interface {
 	CurrentEpoch(dirpage.DirectoryKey) uint64
@@ -172,6 +197,8 @@ type Executor struct {
 	perasClientID           string
 	negCache                NegativeCache
 	dirPages                DirPageCache
+	dirPagePerasMu          sync.Mutex
+	dirPagePerasFrontier    map[dirpage.DirectoryKey]uint64
 	lockTTL                 uint64
 	now                     func() time.Time
 	readRetriesTotal        atomic.Uint64
@@ -181,6 +208,7 @@ type Executor struct {
 	createTotal             atomic.Uint64
 	perasAdmission          perasAdmissionCounters
 	perasVisible            perasVisibleCounters
+	perasDirectoryRead      perasDirectoryReadCounters
 	perasSeq                atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
 }
@@ -230,9 +258,9 @@ func WithInodeAllocator(allocator InodeAllocator) Option {
 }
 
 // WithNegativeCache wires the visible-commit "this dentry does not exist" memo.
-// Lookup checks Has on the dentry primary key before consulting the runner;
-// misses are recorded via Remember; mutating ops call Invalidate on the
-// touched dentry keys after a successful commit.
+// Lookup checks Peras overlay first, then Has on the dentry primary key before
+// consulting the runner; misses are recorded via Remember; mutating ops call
+// Invalidate on the touched dentry keys after a successful commit.
 //
 // A nil cache disables the cache.
 func WithNegativeCache(cache NegativeCache) Option {
@@ -306,6 +334,9 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 		if opt != nil {
 			opt(executor)
 		}
+	}
+	if executor.perasCommitter != nil {
+		executor.clearNegativeCache()
 	}
 	return executor, nil
 }

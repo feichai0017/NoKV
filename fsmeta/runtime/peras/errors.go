@@ -20,6 +20,7 @@ var (
 	ErrNotHeld         = nokverrors.New(nokverrors.KindNotLeader, "fsmeta/runtime/peras: authority is held by another holder")
 	ErrRuntimeInvalid  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/peras: runtime config is invalid")
 	ErrRuntimeClosed   = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/runtime/peras: runtime is closed")
+	ErrPublishRequired = nokverrors.New(nokverrors.KindStaleEpoch, "fsmeta/runtime/peras: published flush requires active publish authority")
 )
 
 func IsNotHeld(err error) bool {

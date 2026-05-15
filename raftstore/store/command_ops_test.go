@@ -1251,15 +1251,27 @@ func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:           []byte("c"),
-			SegmentRoot:          append([]byte(nil), segment.Root[:]...),
-			SegmentPayloadDigest: append([]byte(nil), digest[:]...),
-			SegmentPayload:       payload,
-			InstallVersion:       10,
-			MaterializeMvcc:      true,
+			RoutingKey:            []byte("c"),
+			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
+			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
+			SegmentPayload:        payload,
+			InstallVersion:        10,
+			MaterializeMvcc:       true,
+			SegmentEpochId:        segment.EpochID,
+			SegmentOperationCount: segment.Stats().OperationCount,
+			SegmentEntryCount:     segment.Stats().EntryCount,
+			SegmentPayloadSize:    uint64(len(payload)),
+			ReadFirstKey:          readHeader.FirstKey,
+			ReadLastKey:           readHeader.LastKey,
+			ReadDentryCount:       readHeader.DentryCount,
+			ReadInodeCount:        readHeader.InodeCount,
+			ReadSessionCount:      readHeader.SessionCount,
+			ReadTombstoneCount:    readHeader.TombstoneCount,
+			ReadDirectoryCount:    readHeader.DirectoryCount,
 		}},
 	}}}
 
@@ -1294,6 +1306,7 @@ func TestValidateRequestKeysRejectsPerasHeaderThatHidesOutOfRegionPayload(t *tes
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
@@ -1309,6 +1322,13 @@ func TestValidateRequestKeysRejectsPerasHeaderThatHidesOutOfRegionPayload(t *tes
 			SegmentEpochId:        1,
 			SegmentOperationCount: 1,
 			SegmentPayloadSize:    uint64(len(payload)),
+			ReadFirstKey:          readHeader.FirstKey,
+			ReadLastKey:           readHeader.LastKey,
+			ReadDentryCount:       readHeader.DentryCount,
+			ReadInodeCount:        readHeader.InodeCount,
+			ReadSessionCount:      readHeader.SessionCount,
+			ReadTombstoneCount:    readHeader.TombstoneCount,
+			ReadDirectoryCount:    readHeader.DirectoryCount,
 		}},
 	}}}
 
@@ -1343,6 +1363,7 @@ func TestValidateRequestKeysRejectsPerasMaterializedHeaderMismatch(t *testing.T)
 	require.NoError(t, err)
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
+	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
 		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
 		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
@@ -1358,6 +1379,13 @@ func TestValidateRequestKeysRejectsPerasMaterializedHeaderMismatch(t *testing.T)
 			SegmentEpochId:        1,
 			SegmentOperationCount: 1,
 			SegmentPayloadSize:    uint64(len(payload)),
+			ReadFirstKey:          readHeader.FirstKey,
+			ReadLastKey:           readHeader.LastKey,
+			ReadDentryCount:       readHeader.DentryCount,
+			ReadInodeCount:        readHeader.InodeCount,
+			ReadSessionCount:      readHeader.SessionCount,
+			ReadTombstoneCount:    readHeader.TombstoneCount,
+			ReadDirectoryCount:    readHeader.DirectoryCount,
 		}},
 	}}}
 
@@ -1387,6 +1415,8 @@ func TestValidateRequestKeysAcceptsPayloadlessPerasCatalogIndexRoute(t *testing.
 			SegmentEntryCount:     1,
 			SegmentPayloadSize:    128,
 			CanonicalObjectKey:    canonicalKey,
+			ReadFirstKey:          []byte("k"),
+			ReadLastKey:           []byte("k"),
 		}},
 	}}}
 

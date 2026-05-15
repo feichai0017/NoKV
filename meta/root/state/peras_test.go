@@ -20,7 +20,10 @@ func TestApplyPerasAuthorityGrantLifecycleToState(t *testing.T) {
 	rootstate.ApplyEventToState(&st, cursor, rootevent.PerasAuthorityGranted(grant))
 	found, ok := st.ActivePerasGrantByID(grant.GrantID)
 	require.True(t, ok)
-	require.Equal(t, grant, found)
+	expected := grant
+	expected.RootClusterEpoch = 1
+	expected.IssuedRootToken = rootproto.AuthorityRootToken{Term: 1, Index: 1, Revision: 1}
+	require.Equal(t, expected, found)
 	require.Equal(t, cursor, st.LastCommitted)
 	require.Equal(t, grant.EpochID, st.PerasAuthorityEpoch)
 

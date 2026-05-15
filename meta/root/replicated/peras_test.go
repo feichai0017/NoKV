@@ -23,8 +23,13 @@ func TestReplicatedStoreApplyPerasAuthorityAcquireRetire(t *testing.T) {
 	state, grant, err := store.ApplyPerasAuthority(context.Background(), cmd)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), grant.EpochID)
+	require.NotZero(t, grant.RootClusterEpoch)
+	require.NotZero(t, grant.IssuedRootToken.Term)
+	require.NotZero(t, grant.IssuedRootToken.Index)
+	require.NotZero(t, grant.IssuedRootToken.Revision)
 	require.Equal(t, grant, state.ActivePerasGrants[0])
 	require.Equal(t, uint64(1), state.PerasAuthorityEpoch)
+	require.Equal(t, grant, latestPerasGrantEvent(t, store))
 
 	state, held, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
 		Kind:            rootproto.PerasAuthorityActAcquire,
@@ -257,4 +262,18 @@ func testPerasAcquireCommand(holderID string, bucket uint16) rootproto.PerasAuth
 		ExpiresUnixNano: 1_000,
 		NowUnixNano:     100,
 	}
+}
+
+func latestPerasGrantEvent(t *testing.T, store *Store) rootproto.PerasAuthorityGrant {
+	t.Helper()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	for i := len(store.records) - 1; i >= 0; i-- {
+		event := store.records[i].Event
+		if event.PerasGrant != nil {
+			return rootproto.ClonePerasAuthorityGrant(*event.PerasGrant)
+		}
+	}
+	t.Fatal("missing peras grant event")
+	return rootproto.PerasAuthorityGrant{}
 }

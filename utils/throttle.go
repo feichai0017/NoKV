@@ -10,7 +10,7 @@ import "sync"
 type Throttle struct {
 	once      sync.Once
 	wg        sync.WaitGroup
-	errCh     chan error
+	errMu     sync.Mutex
 	finishErr error
 	pool      *Pool
 }
@@ -21,8 +21,7 @@ func NewThrottle(max int) *Throttle {
 		max = 1
 	}
 	return &Throttle{
-		errCh: make(chan error, max),
-		pool:  NewPool(max, "Throttle"),
+		pool: NewPool(max, "Throttle"),
 	}
 }
 
@@ -32,12 +31,17 @@ func (t *Throttle) Go(fn func() error) error {
 		return nil
 	}
 	t.wg.Add(1)
-	return t.pool.Submit(func() {
+	if err := t.pool.Submit(func() {
 		defer t.wg.Done()
 		if err := fn(); err != nil {
-			t.errCh <- err
+			t.recordError(err)
 		}
-	})
+	}); err != nil {
+		t.wg.Done()
+		t.recordError(err)
+		return err
+	}
+	return nil
 }
 
 // Finish waits until all workers have finished working. It returns the first
@@ -45,16 +49,26 @@ func (t *Throttle) Go(fn func() error) error {
 func (t *Throttle) Finish() error {
 	t.once.Do(func() {
 		t.wg.Wait()
-		close(t.errCh)
-		for err := range t.errCh {
-			if err != nil {
-				t.finishErr = err
-				break
-			}
-		}
 		if t.pool != nil {
 			t.pool.Release()
 		}
 	})
+	return t.firstError()
+}
+
+func (t *Throttle) recordError(err error) {
+	if err == nil {
+		return
+	}
+	t.errMu.Lock()
+	defer t.errMu.Unlock()
+	if t.finishErr == nil {
+		t.finishErr = err
+	}
+}
+
+func (t *Throttle) firstError() error {
+	t.errMu.Lock()
+	defer t.errMu.Unlock()
 	return t.finishErr
 }

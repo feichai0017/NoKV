@@ -37,7 +37,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	now := nowTime.UnixNano()
-	if existing, ok, err := view.readSession(plan.ReadKeys[1]); err != nil {
+	if existing, ok, err := view.readSession(mount, plan.ReadKeys[1]); err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	} else if ok {
 		if sessionLive(existing, now) {
@@ -49,7 +49,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	if index := e.perasPredicateIndex(); !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[2], index) {
-		if owner, ok, err := view.readSession(plan.ReadKeys[2]); err != nil {
+		if owner, ok, err := view.readSession(mount, plan.ReadKeys[2]); err != nil {
 			return fsmeta.SessionRecord{}, false, err
 		} else if ok {
 			if sessionLive(owner, now) {
@@ -81,7 +81,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 	return record, true, nil
 }
 
-func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
 	delta := program.Compiled.Delta
 	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
@@ -94,14 +94,14 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, pro
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	now := nowTime.UnixNano()
-	session, ok, err := view.readSession(plan.ReadKeys[0])
+	session, ok, err := view.readSession(mount, plan.ReadKeys[0])
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
 	if !ok || !sessionLive(session, now) || session.Inode != req.Inode {
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	owner, ok, err := view.readSession(plan.ReadKeys[1])
+	owner, ok, err := view.readSession(mount, plan.ReadKeys[1])
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
@@ -138,7 +138,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program
 	}
 	plan := delta.Plan
 	view := e.newPerasReadView(ctx)
-	session, ok, err := view.readSession(plan.ReadKeys[0])
+	session, ok, err := view.readSession(mount, plan.ReadKeys[0])
 	if err != nil {
 		return false, err
 	}
@@ -150,7 +150,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program
 	if err != nil {
 		return false, err
 	}
-	if owner, ok, err := view.readSession(ownerKey); err != nil {
+	if owner, ok, err := view.readSession(mount, ownerKey); err != nil {
 		return false, err
 	} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 		deleteOwner = true
@@ -260,7 +260,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
 		now := nowTime.UnixNano()
 		predicates := make([]*kvrpcpb.AtomicPredicate, 0, 4)
-		if existing, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion); err != nil {
+		if existing, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[1], startVersion); err != nil {
 			return err
 		} else if ok && sessionLive(existing, now) {
 			return fsmeta.ErrExists
@@ -274,7 +274,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 			predicates = append(predicates, atomicNotExists(plan.ReadKeys[1]))
 		}
 		mutations := make([]*kvrpcpb.Mutation, 0, 3)
-		if owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[2], startVersion); err != nil {
+		if owner, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[2], startVersion); err != nil {
 			return err
 		} else if ok {
 			if sessionLive(owner, now) {
@@ -344,7 +344,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, program, req); committed || err != nil {
+	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
@@ -359,7 +359,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		}
 		candidate := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: expiresUnixNs}
 		now := nowTime.UnixNano()
-		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
+		session, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
 		}
@@ -370,7 +370,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		if err != nil {
 			return err
 		}
-		owner, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[1], startVersion)
+		owner, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[1], startVersion)
 		if err != nil {
 			return err
 		}
@@ -425,7 +425,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		return err
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
-		session, ok, err := e.readSessionByKey(ctx, plan.ReadKeys[0], startVersion)
+		session, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
 		}
@@ -445,7 +445,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		if err != nil {
 			return err
 		}
-		if owner, ok, err := e.readSessionByKey(ctx, ownerKey, startVersion); err != nil {
+		if owner, ok, err := e.readSessionByKey(ctx, mount, ownerKey, startVersion); err != nil {
 			return err
 		} else if ok && owner.Session == req.Session && owner.Inode == session.Inode {
 			ownerValue, err := fsmeta.EncodeSessionValue(owner)

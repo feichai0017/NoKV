@@ -1678,6 +1678,17 @@ func clonePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) *k
 		SegmentEntryCount:     req.GetSegmentEntryCount(),
 		SegmentPayloadSize:    req.GetSegmentPayloadSize(),
 		CanonicalObjectKey:    append([]byte(nil), req.GetCanonicalObjectKey()...),
+		RoutingKeys:           cloneKeys(req.GetRoutingKeys()),
+		DependencyKeys:        cloneKeys(req.GetDependencyKeys()),
+		CatalogKeys:           cloneKeys(req.GetCatalogKeys()),
+		MaterializedKeys:      cloneKeys(req.GetMaterializedKeys()),
+		ReadFirstKey:          append([]byte(nil), req.GetReadFirstKey()...),
+		ReadLastKey:           append([]byte(nil), req.GetReadLastKey()...),
+		ReadDentryCount:       req.GetReadDentryCount(),
+		ReadInodeCount:        req.GetReadInodeCount(),
+		ReadSessionCount:      req.GetReadSessionCount(),
+		ReadTombstoneCount:    req.GetReadTombstoneCount(),
+		ReadDirectoryCount:    req.GetReadDirectoryCount(),
 	}
 }
 

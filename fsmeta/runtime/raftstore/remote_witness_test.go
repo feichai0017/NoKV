@@ -20,21 +20,44 @@ import (
 )
 
 type remotePerasWitnessStub struct {
-	segment fsperas.SegmentWitnessRecord
-	scope   compile.AuthorityScope
+	segment    fsperas.SegmentWitnessRecord
+	segments   []fsperas.SegmentWitnessRecord
+	scope      compile.AuthorityScope
+	snapshot   fsperas.WitnessSnapshot
+	probeCalls int
 }
 
-func (s *remotePerasWitnessStub) AppendSegment(_ context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
+func (s *remotePerasWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	s.scope = scope
-	s.segment = record
+	s.segments = append(s.segments, records...)
+	if len(records) > 0 {
+		s.segment = records[len(records)-1]
+	}
 	return nil
 }
 
 func (s *remotePerasWitnessStub) Probe(_ context.Context, _ uint64) (fsperas.WitnessSnapshot, error) {
-	return fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{s.segment}}, nil
+	s.probeCalls++
+	if len(s.snapshot.Segments) > 0 {
+		return s.snapshot, nil
+	}
+	return fsperas.WitnessSnapshot{Segments: append([]fsperas.SegmentWitnessRecord(nil), s.segments...)}, nil
 }
 
-func TestRemotePerasWitnessRoundTrip(t *testing.T) {
+func (s *remotePerasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	snapshot, err := s.Probe(context.Background(), ref.EpochID)
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	for _, record := range snapshot.Segments {
+		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
+			return record, true, nil
+		}
+	}
+	return fsperas.SegmentWitnessRecord{}, false, nil
+}
+
+func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID("m1"),
 		MountKeyID: 8,
@@ -50,7 +73,7 @@ func TestRemotePerasWitnessRoundTrip(t *testing.T) {
 	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
 	require.NoError(t, err)
 
-	require.NoError(t, remote.AppendSegment(context.Background(), scope, record))
+	require.NoError(t, remote.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{record}))
 	require.Equal(t, scope, stub.scope)
 	require.Equal(t, record, stub.segment)
 
@@ -59,7 +82,72 @@ func TestRemotePerasWitnessRoundTrip(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
 }
 
-func BenchmarkRemotePerasWitnessAppendSegment(b *testing.B) {
+func TestRemotePerasWitnessBatchRoundTrip(t *testing.T) {
+	scope := compile.AuthorityScope{
+		Mount:      fsmeta.MountID("m1"),
+		MountKeyID: 8,
+		Buckets:    []fsmeta.AffinityBucket{2},
+		Parents:    []fsmeta.InodeID{100},
+		Inodes:     []fsmeta.InodeID{200},
+	}
+	first := remotePerasSegmentRecordWithRoot(5)
+	second := remotePerasSegmentRecordWithRoot(7)
+	stub := &remotePerasWitnessStub{}
+	conn, closeServer := startPerasWitnessServer(t, stub)
+	defer closeServer()
+	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
+	require.NoError(t, err)
+
+	require.NoError(t, remote.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
+	require.Equal(t, scope, stub.scope)
+	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, stub.segments)
+
+	snapshot, err := remote.Probe(context.Background(), first.EpochID)
+	require.NoError(t, err)
+	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, snapshot.Segments)
+}
+
+func TestRemotePerasWitnessProbeSegment(t *testing.T) {
+	first := remotePerasSegmentRecordWithRoot(5)
+	second := remotePerasSegmentRecordWithRoot(7)
+	stub := &remotePerasWitnessStub{
+		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{first, second}},
+	}
+	conn, closeServer := startPerasWitnessServer(t, stub)
+	defer closeServer()
+	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
+	require.NoError(t, err)
+
+	record, found, err := remote.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
+		EpochID:              second.EpochID,
+		SegmentRoot:          second.SegmentRoot,
+		SegmentPayloadDigest: second.SegmentPayloadDigest,
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, second, record)
+}
+
+func TestRemotePerasWitnessProbeReadsPages(t *testing.T) {
+	records := make([]fsperas.SegmentWitnessRecord, 0, 40)
+	for i := range 40 {
+		records = append(records, remotePerasSegmentRecordWithRoot(byte(i+1)))
+	}
+	stub := &remotePerasWitnessStub{
+		snapshot: fsperas.WitnessSnapshot{Segments: records},
+	}
+	conn, closeServer := startPerasWitnessServer(t, stub)
+	defer closeServer()
+	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewStoreKVClient(conn))
+	require.NoError(t, err)
+
+	snapshot, err := remote.Probe(context.Background(), records[0].EpochID)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Segments, 40)
+	require.Greater(t, stub.probeCalls, 1)
+}
+
+func BenchmarkRemotePerasWitnessAppendSegmentsSingleRecord(b *testing.B) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID("m1"),
 		MountKeyID: 8,
@@ -77,7 +165,7 @@ func BenchmarkRemotePerasWitnessAppendSegment(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		require.NoError(b, remote.AppendSegment(context.Background(), scope, record))
+		require.NoError(b, remote.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{record}))
 	}
 }
 
@@ -105,10 +193,14 @@ func startPerasWitnessServer(tb testing.TB, witness kv.PerasWitness) (*grpc.Clie
 }
 
 func remotePerasSegmentRecord() fsperas.SegmentWitnessRecord {
+	return remotePerasSegmentRecordWithRoot(5)
+}
+
+func remotePerasSegmentRecordWithRoot(rootByte byte) fsperas.SegmentWitnessRecord {
 	var root [32]byte
-	root[0] = 5
+	root[0] = rootByte
 	var digest [32]byte
-	digest[0] = 6
+	digest[0] = rootByte + 1
 	return fsperas.SegmentWitnessRecord{
 		EpochID:              5,
 		SegmentRoot:          root,

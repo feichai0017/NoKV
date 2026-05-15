@@ -13,8 +13,10 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	execperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -102,6 +104,10 @@ type Options struct {
 	// bounds one installed segment.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentBatchSize int
+	// PerasAdmissionPendingLimit bounds pending visible Peras operations before
+	// foreground commits wait for background segment drain. Zero uses the
+	// runtime default; negative is rejected.
+	PerasAdmissionPendingLimit int
 	// PerasSegmentMaxReplayOperations bounds one segment install by logical
 	// operation count. Zero uses the runtime default; negative is rejected.
 	PerasSegmentMaxReplayOperations int
@@ -117,6 +123,10 @@ type Options struct {
 	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
 	// rejected.
 	PerasSegmentInstallParallelism int
+	// PerasSegmentFlushParallelism bounds how many frozen Peras flush batches
+	// may witness and install concurrently before ordered publish/commit. Zero
+	// follows PerasSegmentInstallParallelism; negative is rejected.
+	PerasSegmentFlushParallelism int
 	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentFlushEvery time.Duration
@@ -128,6 +138,13 @@ type Options struct {
 	// after a failed install so visible commits do not create retry
 	// storms against an unhealthy raftstore. Zero uses the runtime default.
 	PerasBackgroundErrorBackoff time.Duration
+	// PerasVisibleLog is the holder-local WAL surface written before a visible
+	// ack reaches clients. PerasVisibleLogDir wires the default WAL
+	// implementation when no explicit log is provided; the default durability
+	// policy is page-cache flush for the performance-first server profile.
+	PerasVisibleLog           execperas.VisibleLog
+	PerasVisibleLogDir        string
+	PerasVisibleLogDurability wal.DurabilityPolicy
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
@@ -176,9 +193,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, runtimeperas.ErrTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasAdmissionPendingLimit < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
+	}
+	if strings.TrimSpace(opts.PerasHolderID) != "" && opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) == "" {
+		return nil, execperas.ErrVisibleLogRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -263,9 +283,37 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	var witnessConns *witnessConnections
 	var perasRuntime *runtimeperas.Runtime
+	var visibleWAL *wal.Manager
 	if perasAuthorityManager != nil {
+		if opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) != "" {
+			durability := opts.PerasVisibleLogDurability
+			if durability == 0 {
+				durability = wal.DurabilityFlushed
+			}
+			visibleWAL, err = wal.Open(wal.Config{Dir: opts.PerasVisibleLogDir})
+			if err != nil {
+				_ = kv.Close()
+				_ = coord.Close()
+				return nil, fmt.Errorf("init peras visible log wal: %w", err)
+			}
+			opts.PerasVisibleLog, err = runtimeperas.NewWALVisibleLog(visibleWAL, durability)
+			if err != nil {
+				_ = visibleWAL.Close()
+				_ = kv.Close()
+				_ = coord.Close()
+				return nil, fmt.Errorf("init peras visible log: %w", err)
+			}
+		}
+		if opts.PerasVisibleLog == nil {
+			_ = kv.Close()
+			_ = coord.Close()
+			return nil, execperas.ErrVisibleLogRequired
+		}
 		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
 		if err != nil {
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, err
@@ -289,6 +337,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			if witnessConns != nil {
 				_ = witnessConns.Close()
 			}
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init negative cache: %w", err)
@@ -305,6 +356,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			if witnessConns != nil {
 				_ = witnessConns.Close()
 			}
+			if visibleWAL != nil {
+				_ = visibleWAL.Close()
+			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init dirpage cache: %w", err)
@@ -319,6 +373,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if witnessConns != nil {
 			_ = witnessConns.Close()
 		}
+		if visibleWAL != nil {
+			_ = visibleWAL.Close()
+		}
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init executor: %w", err)
@@ -331,6 +388,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if witnessConns != nil {
 			_ = witnessConns.Close()
+		}
+		if visibleWAL != nil {
+			_ = visibleWAL.Close()
 		}
 		_ = kv.Close()
 		_ = coord.Close()
@@ -384,6 +444,11 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		if perasRuntime != nil {
 			if err := perasRuntime.Shutdown(context.Background()); err != nil && first == nil {
+				first = err
+			}
+		}
+		if visibleWAL != nil {
+			if err := visibleWAL.Close(); err != nil && first == nil {
 				first = err
 			}
 		}

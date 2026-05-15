@@ -6,8 +6,10 @@ package peras
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
@@ -116,8 +118,9 @@ func (c *Runtime) LoadRootSealedSegments(ctx context.Context, scope compile.Auth
 	if len(seals) == 0 {
 		return nil
 	}
-	if err := c.LoadInstalledSegments(ctx, scope); err != nil {
-		return err
+	catalogErr := c.LoadInstalledSegments(ctx, scope)
+	if catalogErr != nil && (c.installer == nil || len(c.witnesses) == 0 || !recoverableCatalogLoadError(catalogErr)) {
+		return catalogErr
 	}
 	for _, seal := range seals {
 		if !seal.Valid() {
@@ -139,50 +142,92 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	if c == nil || c.installer == nil || len(c.witnesses) == 0 {
 		return fsperas.ErrInvalidPerasSegment
 	}
-	records, err := c.collectWitnessSegments(ctx, seal.EpochID)
+	record, found, err := c.collectRootSealedWitnessSegment(ctx, seal)
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		if record.SegmentRoot != seal.SegmentRoot || record.SegmentPayloadDigest != seal.SegmentPayloadDigest {
-			continue
-		}
-		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
-			return err
-		}
-		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
-		if err != nil {
-			return err
-		}
-		if !SegmentWithinScope(segment, scope) {
-			continue
-		}
-		stats := segment.Stats()
-		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
-			return fsperas.ErrInvalidWitnessRecord
-		}
-		if seal.OperationCount != 0 && seal.OperationCount != stats.OperationCount {
-			return fsperas.ErrInvalidPerasSegment
-		}
-		if seal.EntryCount != 0 && seal.EntryCount != stats.EntryCount {
-			return fsperas.ErrInvalidPerasSegment
-		}
-		job := perasFlushJob{
-			scope:   scope,
-			segment: segment,
-			payload: record.SegmentPayload,
-			digest:  record.SegmentPayloadDigest,
-		}
-		if _, err := c.submitInstallJob(ctx, job); err != nil {
-			return err
-		}
-		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
-			return err
-		}
-		c.metrics.recoveryInstallTotal.Add(1)
-		return nil
+	if !found {
+		return fmt.Errorf("epoch=%d root=%x digest=%x: %w", seal.EpochID, seal.SegmentRoot, seal.SegmentPayloadDigest, fsperas.ErrInvalidPerasSegment)
 	}
-	return fsperas.ErrInvalidPerasSegment
+	if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
+		return fmt.Errorf("verify witness record: %w", err)
+	}
+	segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
+	if err != nil {
+		return fmt.Errorf("verify witness payload: %w", err)
+	}
+	sealScope := ScopeFromSeal(seal)
+	if !SegmentWithinScope(segment, sealScope) {
+		return fmt.Errorf("segment outside root seal scope: %w", fsperas.ErrInvalidPerasSegment)
+	}
+	if !ScopeEmpty(scope) && !ScopesOverlap(scope, sealScope) {
+		return fmt.Errorf("root seal scope outside recovery scope: %w", fsperas.ErrInvalidPerasSegment)
+	}
+	stats := segment.Stats()
+	if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
+		return fmt.Errorf("witness stats mismatch: %w", fsperas.ErrInvalidWitnessRecord)
+	}
+	if seal.OperationCount != 0 && seal.OperationCount != stats.OperationCount {
+		return fmt.Errorf("root seal operation count mismatch: %w", fsperas.ErrInvalidPerasSegment)
+	}
+	if seal.EntryCount != 0 && seal.EntryCount != stats.EntryCount {
+		return fmt.Errorf("root seal entry count mismatch: %w", fsperas.ErrInvalidPerasSegment)
+	}
+	install, err := fsperas.PerasSegmentInstallPlan(segment, false)
+	if err != nil {
+		return fmt.Errorf("plan rooted segment install: %w", err)
+	}
+	job := perasFlushJob{
+		scope:   scope,
+		segment: segment,
+		payload: record.SegmentPayload,
+		digest:  record.SegmentPayloadDigest,
+		install: install,
+	}
+	if _, err := c.submitInstallJob(ctx, job); err != nil {
+		return err
+	}
+	if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
+		return err
+	}
+	c.metrics.recoveryInstallTotal.Add(1)
+	return nil
+}
+
+func recoverableCatalogLoadError(err error) bool {
+	return nokverrors.Retryable(err) || nokverrors.IsKind(err, nokverrors.KindRetryExhausted)
+}
+
+func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal rootproto.PerasAuthoritySeal) (fsperas.SegmentWitnessRecord, bool, error) {
+	ref := fsperas.WitnessSegmentRef{
+		EpochID:              seal.EpochID,
+		SegmentRoot:          seal.SegmentRoot,
+		SegmentPayloadDigest: seal.SegmentPayloadDigest,
+	}
+	record, found, err := c.collectWitnessSegment(ctx, ref)
+	if err != nil || found {
+		return record, found, err
+	}
+	records, err := c.collectWitnessSegments(ctx, seal.EpochID)
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	for _, candidate := range records {
+		if !witnessRecordMatchesRootSeal(candidate, seal) {
+			continue
+		}
+		if !found || len(candidate.SegmentPayload) > len(record.SegmentPayload) {
+			record = candidate
+			found = true
+		}
+	}
+	return record, found, nil
+}
+
+func witnessRecordMatchesRootSeal(record fsperas.SegmentWitnessRecord, seal rootproto.PerasAuthoritySeal) bool {
+	return record.EpochID == seal.EpochID &&
+		record.SegmentRoot == seal.SegmentRoot &&
+		record.SegmentPayloadDigest == seal.SegmentPayloadDigest
 }
 
 func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {
@@ -250,7 +295,11 @@ func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compil
 }
 
 func (c *Runtime) loadInstalledSegmentObject(ctx context.Context, index fsperas.SegmentCatalogIndexRecord) (fsperas.SegmentCatalogRecord, error) {
-	kvs, err := c.catalog.Scan(ctx, index.ObjectKey, 1, 0)
+	return c.loadInstalledSegmentObjectAtVersion(ctx, index, 0)
+}
+
+func (c *Runtime) loadInstalledSegmentObjectAtVersion(ctx context.Context, index fsperas.SegmentCatalogIndexRecord, version uint64) (fsperas.SegmentCatalogRecord, error) {
+	kvs, err := c.catalog.Scan(ctx, index.ObjectKey, 1, version)
 	if err != nil {
 		return fsperas.SegmentCatalogRecord{}, err
 	}

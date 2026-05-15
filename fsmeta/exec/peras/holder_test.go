@@ -223,10 +223,10 @@ func (r *fakeWitnessReplica) ID() string {
 	return r.id
 }
 
-func (r *fakeWitnessReplica) AppendSegment(_ context.Context, _ compile.AuthorityScope, record SegmentWitnessRecord) error {
+func (r *fakeWitnessReplica) AppendSegments(_ context.Context, _ compile.AuthorityScope, records []SegmentWitnessRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.segments = append(r.segments, record)
+	r.segments = append(r.segments, records...)
 	return nil
 }
 

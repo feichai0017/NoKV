@@ -76,6 +76,17 @@ type SegmentStats struct {
 	OperationsPerSegment float64
 }
 
+type SegmentReadHeader struct {
+	FirstKey       []byte
+	LastKey        []byte
+	EntryCount     uint64
+	DentryCount    uint64
+	InodeCount     uint64
+	SessionCount   uint64
+	TombstoneCount uint64
+	DirectoryCount uint64
+}
+
 // PerasSegment is the authority-local install unit produced by sealing a
 // batch of Peras operations. It is queryable before later materialization into
 // the ordinary LSM layout.
@@ -93,6 +104,7 @@ type PerasSegment struct {
 	Tombstones []SegmentKV
 
 	Completions []SegmentCompletion
+	ReadHeader  SegmentReadHeader
 
 	entries            []SegmentKV
 	completionIndex    map[OperationID]int
@@ -225,6 +237,7 @@ func DecodePerasSegment(payload []byte) (PerasSegment, error) {
 		segment.completionIndex[completion.OpID] = i
 	}
 	segment.assignRuns(entries)
+	segment.ReadHeader = buildSegmentReadHeader(entries)
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return PerasSegment{}, err
 	}
@@ -336,6 +349,7 @@ func BuildPerasSegmentFromReplayPlan(plan ReplayPlan) (PerasSegment, error) {
 		segment.completionIndex[completion.OpID] = i
 	}
 	segment.assignRuns(entries)
+	segment.ReadHeader = buildSegmentReadHeader(entries)
 	segment.Root = segmentRoot(segment)
 	return segment, nil
 }
@@ -439,6 +453,13 @@ func (s PerasSegment) Stats() SegmentStats {
 		stats.CompressionRatio = float64(s.inputMutationCount) / float64(entryCount)
 	}
 	return stats
+}
+
+func (s PerasSegment) ReadHeaderView() SegmentReadHeader {
+	header := s.ReadHeader
+	header.FirstKey = cloneBytes(header.FirstKey)
+	header.LastKey = cloneBytes(header.LastKey)
+	return header
 }
 
 func validatePerasSegmentPayload(segment PerasSegment) error {
@@ -833,6 +854,36 @@ func (s *PerasSegment) assignRuns(entries []SegmentKV) {
 			s.Other = append(s.Other, entry)
 		}
 	}
+}
+
+func buildSegmentReadHeader(entries []SegmentKV) SegmentReadHeader {
+	if len(entries) == 0 {
+		return SegmentReadHeader{}
+	}
+	header := SegmentReadHeader{
+		FirstKey:   cloneBytes(entries[0].Key),
+		LastKey:    cloneBytes(entries[len(entries)-1].Key),
+		EntryCount: uint64(len(entries)),
+	}
+	directories := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.Delete {
+			header.TombstoneCount++
+		}
+		switch entry.Class {
+		case SegmentRecordDentry:
+			header.DentryCount++
+			if prefix, ok := dentryDirectoryPrefix(entry.Key); ok {
+				directories[prefix] = struct{}{}
+			}
+		case SegmentRecordInode:
+			header.InodeCount++
+		case SegmentRecordSession:
+			header.SessionCount++
+		}
+	}
+	header.DirectoryCount = uint64(len(directories))
+	return header
 }
 
 func (s PerasSegment) find(key []byte) (int, bool) {

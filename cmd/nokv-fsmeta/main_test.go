@@ -7,6 +7,8 @@ import (
 	"expvar"
 	"fmt"
 	"testing"
+
+	"github.com/feichai0017/NoKV/engine/wal"
 )
 
 func TestPublishExpvarOnceDoesNotOverwriteExistingMetric(t *testing.T) {
@@ -23,5 +25,29 @@ func TestPublishExpvarOnceDoesNotOverwriteExistingMetric(t *testing.T) {
 	}
 	if got.String() != `"first"` {
 		t.Fatalf("metric was overwritten, got %s", got.String())
+	}
+}
+
+func TestParsePerasVisibleLogPolicy(t *testing.T) {
+	cases := map[string]wal.DurabilityPolicy{
+		"":              wal.DurabilityFlushed,
+		"flushed":       wal.DurabilityFlushed,
+		"fsync-batched": wal.DurabilityFsyncBatched,
+		"fsync_batched": wal.DurabilityFsyncBatched,
+		"batched":       wal.DurabilityFsyncBatched,
+		"fsync":         wal.DurabilityFsync,
+		"buffered":      wal.DurabilityBuffered,
+	}
+	for input, want := range cases {
+		got, err := parsePerasVisibleLogPolicy(input)
+		if err != nil {
+			t.Fatalf("parse %q: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("parse %q got %v want %v", input, got, want)
+		}
+	}
+	if _, err := parsePerasVisibleLogPolicy("bad"); err == nil {
+		t.Fatal("expected invalid policy to fail")
 	}
 }

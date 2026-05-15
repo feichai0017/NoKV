@@ -434,6 +434,8 @@ func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
 		PredecessorDigest: predecessor,
 		QuotaCreditBytes:  4096,
 		QuotaCreditInodes: 8,
+		RootClusterEpoch:  3,
+		IssuedRootToken:   rootproto.AuthorityRootToken{Term: 1, Index: 9, Revision: 11},
 	}
 }
 

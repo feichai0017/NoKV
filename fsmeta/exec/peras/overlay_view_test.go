@@ -24,6 +24,11 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, op.Effects[0].Value, value)
+	value[0] ^= 0xff
+	viewValue, deleted, ok := view.GetView(dentryKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, op.Effects[0].Value, viewValue)
 	present, known := view.KeyState(dentryKey)
 	require.True(t, present)
 	require.True(t, known)
@@ -69,4 +74,31 @@ func TestOverlayViewScanReusesSortedIndexAcrossReads(t *testing.T) {
 	require.Len(t, first, 3)
 	require.Less(t, string(first[0].Key), string(first[1].Key))
 	require.Less(t, string(first[1].Key), string(first[2].Key))
+}
+
+func TestOverlayViewScanDirectoryUsesDirectoryIndex(t *testing.T) {
+	view := NewOverlayView()
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 1}, testGeneratedCreateOpForInodes(t, 9, 21, "b")))
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 2}, testGeneratedCreateOpForInodes(t, 10, 22, "a")))
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 3}, testGeneratedCreateOpForInodes(t, 9, 23, "a")))
+	prefix, err := fsmeta.EncodeDentryPrefix(testMount, 9)
+	require.NoError(t, err)
+
+	first := view.ScanDirectory(prefix, prefix, 8)
+	second := view.ScanDirectory(prefix, prefix, 8)
+	require.Equal(t, first, second)
+	require.Len(t, first, 2)
+	require.Equal(t, "a", mustDentryName(t, first[0].Key))
+	require.Equal(t, "b", mustDentryName(t, first[1].Key))
+
+	dirs, dirty := view.ReadIndexStats()
+	require.Equal(t, 2, dirs)
+	require.Equal(t, 1, dirty)
+}
+
+func mustDentryName(t *testing.T, key []byte) string {
+	t.Helper()
+	name, ok := fsmeta.DentryNameOfKey(key)
+	require.True(t, ok)
+	return name
 }

@@ -29,6 +29,14 @@ type InstallRequestInfo struct {
 	SegmentEntryCount     uint64
 	SegmentPayloadSize    uint64
 
+	ReadFirstKey       []byte
+	ReadLastKey        []byte
+	ReadDentryCount    uint64
+	ReadInodeCount     uint64
+	ReadSessionCount   uint64
+	ReadTombstoneCount uint64
+	ReadDirectoryCount uint64
+
 	HasPayload bool
 }
 
@@ -62,6 +70,13 @@ func InspectInstallRequest(req *kvrpcpb.PerasInstallSegmentRequest) (InstallRequ
 		SegmentOperationCount: req.GetSegmentOperationCount(),
 		SegmentEntryCount:     req.GetSegmentEntryCount(),
 		SegmentPayloadSize:    req.GetSegmentPayloadSize(),
+		ReadFirstKey:          req.GetReadFirstKey(),
+		ReadLastKey:           req.GetReadLastKey(),
+		ReadDentryCount:       req.GetReadDentryCount(),
+		ReadInodeCount:        req.GetReadInodeCount(),
+		ReadSessionCount:      req.GetReadSessionCount(),
+		ReadTombstoneCount:    req.GetReadTombstoneCount(),
+		ReadDirectoryCount:    req.GetReadDirectoryCount(),
 		HasPayload:            len(req.GetSegmentPayload()) > 0,
 	}
 	return info, nil
@@ -77,6 +92,9 @@ func DecodeInstallSegmentPayload(req *kvrpcpb.PerasInstallSegmentRequest) (fsper
 	}
 	segment, err := fsperas.VerifyPerasSegmentPayload(info.Payload, info.Root, info.PayloadDigest)
 	if err != nil {
+		return fsperas.PerasSegment{}, [32]byte{}, err
+	}
+	if err := ValidateInstallReadHeader(info, segment); err != nil {
 		return fsperas.PerasSegment{}, [32]byte{}, err
 	}
 	return segment, info.PayloadDigest, nil
@@ -102,6 +120,9 @@ func InstallKeys(req *kvrpcpb.PerasInstallSegmentRequest) ([][]byte, error) {
 	if len(info.RoutingKey) == 0 {
 		return nil, ErrInvalidInstallRequest
 	}
+	if err := ValidateInstallReadHeaderShape(info); err != nil {
+		return nil, err
+	}
 	if len(info.DependencyKeys) > 0 {
 		return validateInstallDependencyHeader(info)
 	}
@@ -113,6 +134,45 @@ func InstallKeys(req *kvrpcpb.PerasInstallSegmentRequest) ([][]byte, error) {
 		return nil, err
 	}
 	return fsperas.PerasSegmentInstallKeys(segment, info.RoutingKey, true)
+}
+
+func ValidateInstallReadHeader(info InstallRequestInfo, segment fsperas.PerasSegment) error {
+	if err := ValidateInstallReadHeaderShape(info); err != nil {
+		return err
+	}
+	stats := segment.Stats()
+	if info.SegmentEpochID != segment.EpochID ||
+		info.SegmentOperationCount != stats.OperationCount ||
+		info.SegmentEntryCount != stats.EntryCount ||
+		info.SegmentPayloadSize != uint64(len(info.Payload)) {
+		return ErrInvalidInstallRequest
+	}
+	header := segment.ReadHeaderView()
+	if header.EntryCount != info.SegmentEntryCount ||
+		header.DentryCount != info.ReadDentryCount ||
+		header.InodeCount != info.ReadInodeCount ||
+		header.SessionCount != info.ReadSessionCount ||
+		header.TombstoneCount != info.ReadTombstoneCount ||
+		header.DirectoryCount != info.ReadDirectoryCount ||
+		!bytes.Equal(header.FirstKey, info.ReadFirstKey) ||
+		!bytes.Equal(header.LastKey, info.ReadLastKey) {
+		return ErrInvalidInstallRequest
+	}
+	return nil
+}
+
+func ValidateInstallReadHeaderShape(info InstallRequestInfo) error {
+	if info.SegmentEpochID == 0 || info.SegmentOperationCount == 0 || info.SegmentEntryCount == 0 || info.SegmentPayloadSize == 0 {
+		return ErrInvalidInstallRequest
+	}
+	if len(info.ReadFirstKey) == 0 || len(info.ReadLastKey) == 0 || bytes.Compare(info.ReadFirstKey, info.ReadLastKey) > 0 {
+		return ErrInvalidInstallRequest
+	}
+	indexed := info.ReadDentryCount + info.ReadInodeCount + info.ReadSessionCount
+	if indexed > info.SegmentEntryCount || info.ReadTombstoneCount > info.SegmentEntryCount || info.ReadDirectoryCount > info.ReadDentryCount {
+		return ErrInvalidInstallRequest
+	}
+	return nil
 }
 
 func WatchKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {

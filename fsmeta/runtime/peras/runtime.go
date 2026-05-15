@@ -6,6 +6,7 @@ package peras
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ const (
 	defaultPerasSegmentMaxReplayOperations = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	defaultPerasSegmentMaxPayloadBytes     = 512 << 10
+	defaultPerasWitnessBatchMaxBytes       = 32 << 20
 	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
@@ -48,10 +50,12 @@ type Config struct {
 	Installer                  SegmentInstaller
 	CatalogScanner             SegmentCatalogScanner
 	WatchPublisher             perasWatchPublisher
+	VisibleLog                 fsperas.VisibleLog
 	Quorum                     int
 	SegmentWitnessRetries      int
 	SegmentWitnessRetryBackoff time.Duration
 	SegmentBatchSize           int
+	AdmissionPendingLimit      int
 	SegmentMaxReplayOperations int
 	SegmentMaxReplayMutations  int
 	SegmentMaxPayloadBytes     uint64
@@ -59,6 +63,7 @@ type Config struct {
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
 	SegmentInstallParallelism  int
+	SegmentFlushParallelism    int
 	Now                        func() time.Time
 }
 
@@ -72,14 +77,17 @@ type Runtime struct {
 	installer  SegmentInstaller
 	catalog    SegmentCatalogScanner
 	watch      perasWatchPublisher
+	visibleLog fsperas.VisibleLog
 	quorum     int
 	retries    int
 	backoff    time.Duration
 	batchSize  int
+	admitLimit int
 	maxOps     int
 	maxReplay  int
 	maxPayload uint64
 	installN   int
+	flushN     int
 	flushEvery time.Duration
 	bgTimeout  time.Duration
 	bgBackoff  time.Duration
@@ -91,6 +99,7 @@ type Runtime struct {
 	bgRunning  atomic.Bool
 	bgNext     atomic.Int64
 	visibleSeq atomic.Uint64
+	witnessSeq atomic.Int64
 	closed     atomic.Bool
 	closer     *utils.Closer
 	flushTask  *utils.PeriodicTask
@@ -99,13 +108,16 @@ type Runtime struct {
 	sealQ      *perasSealLane
 
 	// Lock order for multi-lock paths:
-	// commitMu -> flushMu -> drainMu -> epochTable.mu -> readState.mu -> runtimeMetrics.statsMu.
+	// commitMu -> flushMu -> drainMu -> admissionMu -> epochTable.mu -> readState.mu -> runtimeMetrics.statsMu.
 	// Lane workers communicate through queues and must not take commitMu.
 	drainMu     sync.Mutex
 	drainCond   *sync.Cond
 	drainNextID uint64
 	drainUses   []perasAuthorityUse
 	drainScopes []compile.AuthorityScope
+
+	admissionMu   sync.Mutex
+	admissionCond *sync.Cond
 
 	epochs  *epochTable
 	latches *fsperas.AdmissionLatches
@@ -132,10 +144,13 @@ type perasFlushJob struct {
 }
 
 type perasFlushBatch struct {
-	holder *fsperas.Holder
-	scope  compile.AuthorityScope
-	plan   fsperas.ReplayPlan
-	jobs   []perasFlushJob
+	holder          *fsperas.Holder
+	scope           compile.AuthorityScope
+	plan            fsperas.ReplayPlan
+	jobs            []perasFlushJob
+	witnessUnixNano int64
+	publishDecision publishDecision
+	publishErr      error
 }
 
 type perasFrozenPlan struct {
@@ -188,6 +203,13 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if batchSize < 0 {
 		return nil, ErrRuntimeInvalid
 	}
+	admitLimit := cfg.AdmissionPendingLimit
+	if admitLimit == 0 {
+		admitLimit = defaultPerasAdmissionPendingLimit(batchSize, cfg.SegmentMaxReplayOperations, cfg.SegmentInstallParallelism)
+	}
+	if admitLimit < 0 {
+		return nil, ErrRuntimeInvalid
+	}
 	maxOps := cfg.SegmentMaxReplayOperations
 	if maxOps == 0 {
 		maxOps = defaultPerasSegmentMaxReplayOperations
@@ -212,6 +234,16 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	if installN < 0 {
 		return nil, ErrRuntimeInvalid
+	}
+	flushN := cfg.SegmentFlushParallelism
+	if flushN == 0 {
+		flushN = installN
+	}
+	if flushN < 0 {
+		return nil, ErrRuntimeInvalid
+	}
+	if flushN == 0 {
+		flushN = 1
 	}
 	flushEvery := cfg.SegmentFlushEvery
 	if flushEvery == 0 {
@@ -246,14 +278,17 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		installer:  cfg.Installer,
 		catalog:    cfg.CatalogScanner,
 		watch:      cfg.WatchPublisher,
+		visibleLog: cfg.VisibleLog,
 		quorum:     quorum,
 		retries:    retries,
 		backoff:    backoff,
 		batchSize:  batchSize,
+		admitLimit: admitLimit,
 		maxOps:     maxOps,
 		maxReplay:  maxReplay,
 		maxPayload: maxPayload,
 		installN:   installN,
+		flushN:     flushN,
 		flushEvery: flushEvery,
 		bgTimeout:  bgTimeout,
 		bgBackoff:  bgBackoff,
@@ -264,11 +299,16 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		read:       newReadState(),
 	}
 	c.drainCond = sync.NewCond(&c.drainMu)
+	c.admissionCond = sync.NewCond(&c.admissionMu)
 	if c.installer != nil {
 		c.installQ = newPerasInstallLane(c, c.installN)
 	}
 	if _, ok := c.authority.(SealPublisher); ok {
 		c.sealQ = newPerasSealLane(c, c.installN)
+	}
+	recoveredVisible, err := c.recoverVisibleLog(context.Background())
+	if err != nil {
+		return nil, err
 	}
 	if c.watch != nil {
 		c.watchQueue = utils.NewMPSCQueue[fsmeta.WatchEvent](defaultPerasVisibleWatchQueue)
@@ -291,12 +331,18 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		})
 		c.flushTask.Start()
 	}
+	if recoveredVisible > 0 && c.installer != nil {
+		c.triggerBackgroundFlush()
+	}
 	return c, nil
 }
 
 func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
 	if c == nil || c.authority == nil {
 		return fsperas.VisibleAck{}, ErrRuntimeInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, ErrRuntimeClosed
@@ -310,6 +356,9 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	delta := op.Delta
 	leaveAuthority := c.enterAuthority(delta.Authority)
 	defer leaveAuthority()
+	if err := c.waitForAdmissionCapacity(ctx); err != nil {
+		return fsperas.VisibleAck{}, err
+	}
 	c.commitMu.RLock()
 	defer c.commitMu.RUnlock()
 	if c.closed.Load() {
@@ -355,8 +404,14 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	if err != nil {
 		return fsperas.VisibleAck{}, c.recordError(err)
 	}
+	if err := c.appendVisibleLog(ctx, grant, holder, id, op); err != nil {
+		holder.MarkAppliedIDs(id)
+		c.signalAdmissionCapacity()
+		return fsperas.VisibleAck{}, c.recordError(err)
+	}
 	if err := c.addOverlay(id, op); err != nil {
 		holder.MarkAppliedIDs(id)
+		c.signalAdmissionCapacity()
 		return fsperas.VisibleAck{}, c.recordError(err)
 	}
 	c.publishVisibleWatch(op, ack)
@@ -365,6 +420,32 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 		c.triggerBackgroundFlush()
 	}
 	return ack, nil
+}
+
+func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, id fsperas.OperationID, op compile.MaterializedOp) error {
+	if c == nil || c.visibleLog == nil {
+		return fsperas.ErrVisibleLogRequired
+	}
+	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
+	if err != nil {
+		return err
+	}
+	record := fsperas.VisibleOperationRecord{
+		EpochID:           holder.EpochID(),
+		HolderID:          holder.HolderID(),
+		GrantID:           grant.GrantID,
+		GrantExpiresNanos: grant.ExpiresUnixNano,
+		PredecessorDigest: grant.PredecessorDigest,
+		RootLineage:       visibleRootLineageFromGrant(grant),
+		Scope:             op.Delta.Authority,
+		Operation:         replay,
+		TimestampUnixNano: c.now().UnixNano(),
+	}
+	if err := c.visibleLog.AppendVisible(ctx, record); err != nil {
+		return fmt.Errorf("append peras visible record kind=%s op=%s/%d epoch=%d holder=%s lineage_valid=%t mutations=%d predicates=%d guards=%d: %w",
+			replay.Kind, replay.OpID.ClientID, replay.OpID.Seq, record.EpochID, record.HolderID, record.RootLineage.Valid(), len(replay.Mutations), len(replay.PredicateProofs), len(replay.GuardProofs), err)
+	}
+	return nil
 }
 
 func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
@@ -451,6 +532,41 @@ func defaultPerasSegmentInstallParallelism() int {
 	return n
 }
 
+func defaultPerasAdmissionPendingLimit(batchSize, maxOps, installN int) int {
+	if batchSize <= 0 {
+		batchSize = defaultPerasSegmentBatchSize
+	}
+	if maxOps <= 0 {
+		maxOps = defaultPerasSegmentMaxReplayOperations
+	}
+	if installN <= 0 {
+		installN = defaultPerasSegmentInstallParallelism()
+	}
+	window := max(multiplyIntSaturated(maxOps, installN), batchSize)
+	limit := multiplyIntSaturated(window, 4)
+	if limit <= 0 {
+		return window
+	}
+	return limit
+}
+
+func (c *Runtime) nextWitnessUnixNano() int64 {
+	if c == nil {
+		return time.Now().UnixNano()
+	}
+	now := c.now().UnixNano()
+	for {
+		old := c.witnessSeq.Load()
+		next := now
+		if next <= old {
+			next = old + 1
+		}
+		if c.witnessSeq.CompareAndSwap(old, next) {
+			return next
+		}
+	}
+}
+
 func (c *Runtime) flushBackground() {
 	if c == nil {
 		return
@@ -486,7 +602,11 @@ func (c *Runtime) flushBackground() {
 		batches, err = c.buildFlushBatches(plans, false)
 	}
 	if err == nil {
-		err = (flushPipeline{runtime: c, level: fsperas.SegmentPersistencePublished}).run(ctx, batches)
+		err = (flushPipeline{
+			runtime:                 c,
+			level:                   fsperas.SegmentPersistencePublished,
+			allowDurableOldEpochRun: true,
+		}).run(ctx, batches)
 	}
 	if err != nil {
 		c.metrics.bgErrorTotal.Add(1)
@@ -508,6 +628,66 @@ func (c *Runtime) pendingOperations() int {
 		total += holder.Pending()
 	}
 	return total
+}
+
+func (c *Runtime) waitForAdmissionCapacity(ctx context.Context) error {
+	if c == nil || c.admitLimit <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var stopContextWake chan struct{}
+	if done := ctx.Done(); done != nil {
+		stopContextWake = make(chan struct{})
+		go func() {
+			select {
+			case <-done:
+				c.signalAdmissionCapacity()
+			case <-stopContextWake:
+			}
+		}()
+		defer close(stopContextWake)
+	}
+	var waitStarted time.Time
+	waiting := false
+	defer func() {
+		if !waiting {
+			return
+		}
+		c.recordAdmissionWait(time.Since(waitStarted))
+		c.metrics.admissionWaiting.Add(-1)
+	}()
+	c.admissionMu.Lock()
+	defer c.admissionMu.Unlock()
+	for {
+		if c.closed.Load() {
+			return ErrRuntimeClosed
+		}
+		if c.pendingOperations() < c.admitLimit {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !waiting {
+			waiting = true
+			waitStarted = time.Now()
+			c.metrics.admissionWaitTotal.Add(1)
+			c.metrics.admissionWaiting.Add(1)
+		}
+		c.triggerBackgroundFlush()
+		c.admissionCond.Wait()
+	}
+}
+
+func (c *Runtime) signalAdmissionCapacity() {
+	if c == nil || c.admissionCond == nil {
+		return
+	}
+	c.admissionMu.Lock()
+	c.admissionCond.Broadcast()
+	c.admissionMu.Unlock()
 }
 
 func (c *Runtime) backgroundFlushMaxOpsPerHolder() int {
@@ -543,6 +723,7 @@ func (c *Runtime) Close() {
 		return
 	}
 	c.closed.Store(true)
+	c.signalAdmissionCapacity()
 	if c.flushTask != nil {
 		c.flushTask.Close()
 	}
