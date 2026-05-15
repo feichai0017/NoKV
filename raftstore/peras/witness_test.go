@@ -184,6 +184,34 @@ func TestWitnessNodeDuplicateSegmentIsIdempotent(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
 }
 
+func TestWitnessNodeCachesLoadedEpoch(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, node.AppendSegment(context.Background(), scope, first))
+	node.mu.Lock()
+	_, loaded := node.loaded[first.EpochID]
+	require.True(t, loaded)
+	require.Len(t, node.loaded, 1)
+	node.mu.Unlock()
+
+	require.NoError(t, node.AppendSegment(context.Background(), scope, second))
+	node.mu.Lock()
+	_, loaded = node.loaded[first.EpochID]
+	require.True(t, loaded)
+	require.Len(t, node.loaded, 1)
+	node.mu.Unlock()
+
+	snapshot, err := node.Probe(context.Background(), first.EpochID)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Segments, 2)
+}
+
 func TestWitnessNodeConcurrentDuplicateSegmentIsSingleWALRecord(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsyncBatched)
 	defer cleanup()

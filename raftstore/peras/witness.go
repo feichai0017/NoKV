@@ -32,6 +32,7 @@ type WitnessNode struct {
 	mu       sync.Mutex
 	segments map[witnessSegmentKey]struct{}
 	inflight map[witnessSegmentKey]*witnessAppendCall
+	loaded   map[uint64]struct{}
 }
 
 type witnessSegmentKey struct {
@@ -61,6 +62,7 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		now:           now,
 		segments:      make(map[witnessSegmentKey]struct{}),
 		inflight:      make(map[witnessSegmentKey]*witnessAppendCall),
+		loaded:        make(map[uint64]struct{}),
 	}, nil
 }
 
@@ -89,9 +91,11 @@ func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.Authority
 		n.mu.Unlock()
 		return n.waitAppendCall(ctx, key, call)
 	}
-	if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
-		n.mu.Unlock()
-		return err
+	if _, loaded := n.loaded[record.EpochID]; !loaded {
+		if err := n.loadEpochLocked(ctx, record.EpochID); err != nil {
+			n.mu.Unlock()
+			return err
+		}
 	}
 	if _, ok := n.segments[key]; ok {
 		n.mu.Unlock()
@@ -158,6 +162,9 @@ func (n *WitnessNode) checkAuthority(scope compile.AuthorityScope, record fspera
 }
 
 func (n *WitnessNode) loadEpochLocked(ctx context.Context, epochID uint64) error {
+	if _, loaded := n.loaded[epochID]; loaded {
+		return nil
+	}
 	snapshot, err := n.log.Probe(ctx, epochID)
 	if err != nil {
 		return err
@@ -165,6 +172,7 @@ func (n *WitnessNode) loadEpochLocked(ctx context.Context, epochID uint64) error
 	for _, segment := range snapshot.Segments {
 		n.segments[witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}] = struct{}{}
 	}
+	n.loaded[epochID] = struct{}{}
 	return nil
 }
 
