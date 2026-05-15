@@ -35,9 +35,9 @@ func TestVisibleAppliedRecordRoundTrip(t *testing.T) {
 	record := VisibleAppliedRecord{
 		EpochID:  7,
 		HolderID: "holder-a",
-		Operations: []VisibleOperationReference{
-			requireVisibleReference(t, testVisibleReplayOperation(OperationID{ClientID: "client", Seq: 9}, []byte("a"))),
-			requireVisibleReference(t, testVisibleReplayOperation(OperationID{ClientID: "client", Seq: 10}, []byte("b"))),
+		Ranges: []VisibleAppliedRange{
+			{SegmentID: 1, StartOffset: 128, EndOffset: 256},
+			{SegmentID: 2, StartOffset: 64, EndOffset: 96},
 		},
 	}
 	payload, err := EncodeVisibleAppliedRecord(record)
@@ -214,13 +214,6 @@ func testVisibleReplayOperation(id OperationID, key []byte) ReplayOperation {
 		Durability:           compile.DurabilityVisibleOnly,
 		Mutations:            []ReplayMutation{{Key: key, Value: []byte("value")}},
 	}
-}
-
-func requireVisibleReference(t *testing.T, op ReplayOperation) VisibleOperationReference {
-	t.Helper()
-	ref, err := VisibleOperationReferenceFromReplay(op)
-	require.NoError(t, err)
-	return ref
 }
 
 func testVisibleAuthorityScope() compile.AuthorityScope {

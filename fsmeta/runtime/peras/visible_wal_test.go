@@ -29,13 +29,7 @@ func TestWALVisibleLogReplaySkipsAppliedRecords(t *testing.T) {
 
 	require.NoError(t, log.AppendVisible(ctx, first))
 	require.NoError(t, log.AppendVisible(ctx, second))
-	ref, err := fsperas.VisibleOperationReferenceFromReplay(first.Operation)
-	require.NoError(t, err)
-	require.NoError(t, log.AppendVisibleApplied(ctx, fsperas.VisibleAppliedRecord{
-		EpochID:    7,
-		HolderID:   "holder-a",
-		Operations: []fsperas.VisibleOperationReference{ref},
-	}))
+	require.NoError(t, log.AppendVisibleReplayPlanApplied(ctx, first.EpochID, first.HolderID, testVisibleReplayPlan(first)))
 	require.Len(t, log.Records(), 1)
 
 	replayed, err := log.ReplayVisible(ctx)
@@ -65,13 +59,7 @@ func TestWALVisibleLogCompactsAppliedSegments(t *testing.T) {
 	replayed, err := log.ReplayVisible(ctx)
 	require.NoError(t, err)
 	require.Len(t, replayed, 1)
-	ref, err := fsperas.VisibleOperationReferenceFromReplay(record.Operation)
-	require.NoError(t, err)
-	require.NoError(t, log.AppendVisibleApplied(ctx, fsperas.VisibleAppliedRecord{
-		EpochID:    record.EpochID,
-		HolderID:   record.HolderID,
-		Operations: []fsperas.VisibleOperationReference{ref},
-	}))
+	require.NoError(t, log.AppendVisibleReplayPlanApplied(ctx, record.EpochID, record.HolderID, testVisibleReplayPlan(record)))
 
 	files, err := mgr.ListSegments()
 	require.NoError(t, err)
@@ -80,6 +68,41 @@ func TestWALVisibleLogCompactsAppliedSegments(t *testing.T) {
 	replayed, err = log.ReplayVisible(ctx)
 	require.NoError(t, err)
 	require.Empty(t, replayed)
+}
+
+func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	ctx := context.Background()
+	first := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 1}, []byte("a"))
+	second := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 2}, []byte("b"))
+	third := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 3}, []byte("c"))
+
+	require.NoError(t, log.AppendVisible(ctx, first))
+	require.NoError(t, log.AppendVisible(ctx, second))
+	require.NoError(t, log.AppendVisible(ctx, third))
+	require.NoError(t, log.AppendVisibleReplayPlanApplied(ctx, first.EpochID, first.HolderID, testVisibleReplayPlan(first, third)))
+
+	replayed, err := log.ReplayVisible(ctx)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1)
+	require.Equal(t, second.Operation.OpID, replayed[0].Operation.OpID)
+}
+
+func testVisibleReplayPlan(records ...fsperas.VisibleOperationRecord) fsperas.ReplayPlan {
+	operations := make([]fsperas.ReplayOperation, 0, len(records))
+	for _, record := range records {
+		operations = append(operations, record.Operation)
+	}
+	return fsperas.ReplayPlan{
+		EpochID:    7,
+		Operations: operations,
+	}
 }
 
 func testVisibleRecord(id fsperas.OperationID, key []byte) fsperas.VisibleOperationRecord {

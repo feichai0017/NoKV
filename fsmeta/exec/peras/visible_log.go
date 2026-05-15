@@ -44,10 +44,16 @@ type VisibleOperationReference struct {
 	ExecutionPlanDigest  [32]byte
 }
 
+type VisibleAppliedRange struct {
+	SegmentID   uint32
+	StartOffset uint64
+	EndOffset   uint64
+}
+
 type VisibleAppliedRecord struct {
-	EpochID    uint64
-	HolderID   string
-	Operations []VisibleOperationReference
+	EpochID  uint64
+	HolderID string
+	Ranges   []VisibleAppliedRange
 }
 
 type VisibleLog interface {
@@ -86,13 +92,13 @@ func EncodeVisibleAppliedRecord(record VisibleAppliedRecord) ([]byte, error) {
 		return nil, err
 	}
 	var out bytes.Buffer
-	out.Grow(len(visibleAppliedMagic) + 8 + stringEncodedSize(record.HolderID) + 8 + len(record.Operations)*(24+32*3))
+	out.Grow(len(visibleAppliedMagic) + 8 + stringEncodedSize(record.HolderID) + 8 + len(record.Ranges)*(8+8+8))
 	writeFixed(&out, visibleAppliedMagic[:])
 	writeUint64(&out, record.EpochID)
 	writeString(&out, record.HolderID)
-	writeUint64(&out, uint64(len(record.Operations)))
-	for _, op := range record.Operations {
-		writeVisibleOperationReference(&out, op)
+	writeUint64(&out, uint64(len(record.Ranges)))
+	for _, applied := range record.Ranges {
+		writeVisibleAppliedRange(&out, applied)
 	}
 	return out.Bytes(), nil
 }
@@ -165,13 +171,13 @@ func DecodeVisibleAppliedRecord(payload []byte) (VisibleAppliedRecord, error) {
 	if err != nil || count > uint64(maxSegmentSliceLen()) {
 		return VisibleAppliedRecord{}, ErrInvalidWitnessRecord
 	}
-	record.Operations = make([]VisibleOperationReference, 0, count)
+	record.Ranges = make([]VisibleAppliedRange, 0, count)
 	for range count {
-		op, err := readVisibleOperationReference(&r)
+		applied, err := readVisibleAppliedRange(&r)
 		if err != nil {
 			return VisibleAppliedRecord{}, ErrInvalidWitnessRecord
 		}
-		record.Operations = append(record.Operations, op)
+		record.Ranges = append(record.Ranges, applied)
 	}
 	if !r.done() {
 		return VisibleAppliedRecord{}, ErrInvalidWitnessRecord
@@ -196,22 +202,19 @@ func validateVisibleOperationRecord(record VisibleOperationRecord) error {
 }
 
 func validateVisibleAppliedRecord(record VisibleAppliedRecord) error {
-	if record.EpochID == 0 || record.HolderID == "" || len(record.Operations) == 0 {
+	if record.EpochID == 0 || record.HolderID == "" || len(record.Ranges) == 0 {
 		return ErrInvalidWitnessRecord
 	}
-	for _, op := range record.Operations {
-		if err := validateVisibleOperationReference(op); err != nil {
+	for _, applied := range record.Ranges {
+		if err := validateVisibleAppliedRange(applied); err != nil {
 			return ErrInvalidWitnessRecord
 		}
 	}
 	return nil
 }
 
-func validateVisibleOperationReference(ref VisibleOperationReference) error {
-	if !ref.OpID.Valid() ||
-		ref.DescriptorDigest == ([32]byte{}) ||
-		ref.PredicateProofDigest == ([32]byte{}) ||
-		ref.ExecutionPlanDigest == ([32]byte{}) {
+func validateVisibleAppliedRange(applied VisibleAppliedRange) error {
+	if applied.SegmentID == 0 || applied.EndOffset <= applied.StartOffset {
 		return ErrInvalidWitnessRecord
 	}
 	return nil
@@ -316,11 +319,10 @@ func VisibleOperationReferenceFromReplay(op ReplayOperation) (VisibleOperationRe
 	}, nil
 }
 
-func writeVisibleOperationReference(out *bytes.Buffer, ref VisibleOperationReference) {
-	writeOperationID(out, ref.OpID)
-	writeFixed(out, ref.DescriptorDigest[:])
-	writeFixed(out, ref.PredicateProofDigest[:])
-	writeFixed(out, ref.ExecutionPlanDigest[:])
+func writeVisibleAppliedRange(out *bytes.Buffer, applied VisibleAppliedRange) {
+	writeUint64(out, uint64(applied.SegmentID))
+	writeUint64(out, applied.StartOffset)
+	writeUint64(out, applied.EndOffset)
 }
 
 func writeAuthorityScope(out *bytes.Buffer, scope compile.AuthorityScope) {
@@ -573,22 +575,28 @@ func atomicityGroupEncodedSize(group compile.AtomicityGroup) int {
 	return 8 + len(group.Members)*8 + 1 + 8 + 32
 }
 
-func readVisibleOperationReference(r *witnessReader) (VisibleOperationReference, error) {
-	id, err := r.readOperationID()
+func readVisibleAppliedRange(r *witnessReader) (VisibleAppliedRange, error) {
+	segmentID, err := r.readUint64()
 	if err != nil {
-		return VisibleOperationReference{}, err
+		return VisibleAppliedRange{}, err
 	}
-	ref := VisibleOperationReference{OpID: id}
-	if err := r.readFixed(ref.DescriptorDigest[:]); err != nil {
-		return VisibleOperationReference{}, err
+	startOffset, err := r.readUint64()
+	if err != nil {
+		return VisibleAppliedRange{}, err
 	}
-	if err := r.readFixed(ref.PredicateProofDigest[:]); err != nil {
-		return VisibleOperationReference{}, err
+	endOffset, err := r.readUint64()
+	if err != nil {
+		return VisibleAppliedRange{}, err
 	}
-	if err := r.readFixed(ref.ExecutionPlanDigest[:]); err != nil {
-		return VisibleOperationReference{}, err
+	if segmentID == 0 || segmentID > uint64(^uint32(0)) {
+		return VisibleAppliedRange{}, ErrInvalidWitnessRecord
 	}
-	return ref, validateVisibleOperationReference(ref)
+	applied := VisibleAppliedRange{
+		SegmentID:   uint32(segmentID),
+		StartOffset: startOffset,
+		EndOffset:   endOffset,
+	}
+	return applied, validateVisibleAppliedRange(applied)
 }
 
 func readVisibleReplayOperation(r *witnessReader) (ReplayOperation, error) {

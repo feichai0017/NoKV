@@ -120,33 +120,22 @@ func visibleRootLineageAtOrAfter(active, record fsperas.VisibleRootLineage) bool
 	return active.Revision >= record.Revision
 }
 
+type visibleReplayPlanApplier interface {
+	AppendVisibleReplayPlanApplied(context.Context, uint64, string, fsperas.ReplayPlan) error
+}
+
 func (c *Runtime) markVisibleLogApplied(ctx context.Context, holder *fsperas.Holder, plan fsperas.ReplayPlan) error {
 	if c == nil || c.visibleLog == nil || holder == nil || len(plan.Operations) == 0 {
 		return nil
 	}
-	applier, ok := c.visibleLog.(fsperas.VisibleLogApplier)
+	applier, ok := c.visibleLog.(visibleReplayPlanApplier)
 	if !ok {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	operations := make([]fsperas.VisibleOperationReference, 0, len(plan.Operations))
-	for _, op := range plan.Operations {
-		if !op.OpID.Valid() {
-			return fsperas.ErrInvalidOperationID
-		}
-		ref, err := fsperas.VisibleOperationReferenceFromReplay(op)
-		if err != nil {
-			return err
-		}
-		operations = append(operations, ref)
-	}
-	err := applier.AppendVisibleApplied(context.WithoutCancel(ctx), fsperas.VisibleAppliedRecord{
-		EpochID:    holder.EpochID(),
-		HolderID:   holder.HolderID(),
-		Operations: operations,
-	})
+	err := applier.AppendVisibleReplayPlanApplied(context.WithoutCancel(ctx), holder.EpochID(), holder.HolderID(), plan)
 	if err != nil {
 		c.metrics.visibleLogApplyErrorTotal.Add(1)
 		return c.recordErrorf("mark peras visible log applied: %w", err)

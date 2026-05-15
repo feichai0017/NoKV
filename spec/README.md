@@ -43,6 +43,7 @@ counterexamples.
 | `RaftstoreApplyPublish.tla` | Raft Ready apply/publish/advance/send and snapshot publish boundary. | Publish requires apply, send requires advance, snapshot publish requires completed installation, aborted install is never published. | `raftstore/peer/peer_test.go`, `raftstore/integration/snapshot_interruption_test.go`. |
 | `RootReplayWatch.tla` | Root epoch, snapshot replay, follower catch-up, and watch gap reconciliation. | Snapshot/follower/watch cursor never ahead of root, no silent watch gap, replay lag is explicit through pending replay or reconcile. | `coordinator/integration/root_model_test.go`, `meta/root/state/*_test.go`, `fsmeta/exec/watch/*_test.go`. |
 | `FSMetaNamespace.tla` | Small root-directory namespace model for create/link/unlink/rename/snapshot/session. | Dentries point to live inodes, link counts match dentries, sessions target live non-expired inodes, snapshots only reference known inodes. | `fsmeta/contract/*`, `fsmeta/integration/history_contract_test.go`. |
+| `PerasVisibleCommit.tla` | Peras visible-log, witness, store-install, optional root-seal, runtime-install, visible-applied marker, GC, and holder handoff boundary. | Acked ops retain a recovery source until runtime install, store install requires witness, publish-required root seal requires store install, visible-log compaction requires applied marker, successor handoff requires drained acked ops. | `fsmeta/runtime/peras/*_test.go`, `fsmeta/exec/peras/*_test.go`. |
 
 ## Contrast Models
 
