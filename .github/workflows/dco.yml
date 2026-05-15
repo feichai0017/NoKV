@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   signoff:
@@ -25,6 +26,8 @@ jobs:
 
       - name: Check commit sign-offs
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -81,9 +84,66 @@ jobs:
             grep -Eiq '^Signed-off-by: .+ <[^>]+>$' <<<"$last_paragraph"
           }
 
+          verify_pr_commits_have_signoff() {
+            local pr="$1"
+            local page=1
+            local checked=0
+
+            while :; do
+              local response
+              response="$(curl -fsSL \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$pr/commits?per_page=100&page=$page")"
+
+              local page_count
+              page_count="$(jq 'length' <<<"$response")"
+              if [[ "$page_count" -eq 0 ]]; then
+                break
+              fi
+
+              while IFS= read -r encoded; do
+                local message
+                message="$(base64 -d <<<"$encoded" | jq -r '.commit.message')"
+                checked=$((checked + 1))
+                if ! has_signoff "$message"; then
+                  return 1
+                fi
+              done < <(jq -r '.[] | select((.parents | length) <= 1) | @base64' <<<"$response")
+
+              if [[ "$page_count" -lt 100 ]]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+
+            [[ "$checked" -gt 0 ]]
+          }
+
+          accepts_signed_pr_squash() {
+            local commit="$1"
+            local subject
+            subject="$(git show -s --format=%s "$commit")"
+
+            if [[ "${{ github.event_name }}" != "push" || "${{ github.ref }}" != "refs/heads/main" ]]; then
+              return 1
+            fi
+            if [[ ! "$subject" =~ \(\#([0-9]+)\)$ ]]; then
+              return 1
+            fi
+
+            local pr="${BASH_REMATCH[1]}"
+            if verify_pr_commits_have_signoff "$pr"; then
+              echo "::notice title=DCO checked on PR commits::Accepted unsigned squash commit $commit because PR #$pr commits include Signed-off-by trailers."
+              return 0
+            fi
+            return 1
+          }
+
           while IFS= read -r commit; do
             message="$(git show -s --format=%B "$commit")"
-            if ! has_signoff "$message"; then
+            if ! has_signoff "$message" && ! accepts_signed_pr_squash "$commit"; then
               echo "::error title=Missing DCO sign-off::Commit $commit is missing a Signed-off-by trailer."
               git show -s --format='%h %s' "$commit"
               missing=1
