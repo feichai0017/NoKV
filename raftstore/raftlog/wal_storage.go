@@ -69,10 +69,13 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 				return nil, err
 			}
 			ws.pointer = ptr
+			if err := ws.restoreCompactedPrefix(ptr); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	var replayPtr localmeta.RaftLogPointer
+	replayPtr := ws.pointer
 
 	if err := cfg.WAL.ReplayFiltered(func(info wal.EntryInfo) bool {
 		switch info.Type {
@@ -91,7 +94,7 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 			if gid != cfg.GroupID || len(entries) == 0 {
 				return nil
 			}
-			if err := ws.mem.Append(entries); err != nil {
+			if err := ws.appendReplayEntries(trimCompactedEntries(entries, ws.pointer.TruncatedIndex)); err != nil {
 				return err
 			}
 			ws.recordEntrySpan(info, payload, entries)
@@ -171,6 +174,49 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 	}
 
 	return ws, nil
+}
+
+func (ws *WALStorage) restoreCompactedPrefix(ptr localmeta.RaftLogPointer) error {
+	if ptr.TruncatedIndex == 0 {
+		return nil
+	}
+	term := ptr.TruncatedTerm
+	if term == 0 && ptr.SnapshotIndex == ptr.TruncatedIndex {
+		term = ptr.SnapshotTerm
+	}
+	return ws.mem.ApplySnapshot(myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: ptr.TruncatedIndex,
+			Term:  term,
+		},
+	})
+}
+
+func (ws *WALStorage) appendReplayEntries(entries []myraft.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	last, err := ws.mem.LastIndex()
+	if err != nil {
+		return err
+	}
+	if first := entries[0].Index; first > last+1 {
+		return fmt.Errorf("raftstore: raft WAL replay gap for group %d: first entry %d after last %d",
+			ws.groupID, first, last)
+	}
+	return ws.mem.Append(entries)
+}
+
+func trimCompactedEntries(entries []myraft.Entry, truncated uint64) []myraft.Entry {
+	if truncated == 0 {
+		return entries
+	}
+	for idx, entry := range entries {
+		if entry.Index > truncated {
+			return entries[idx:]
+		}
+	}
+	return nil
 }
 
 // Append persists raft entries via WAL.
