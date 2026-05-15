@@ -152,6 +152,7 @@ func (m *inodeMappingExecutor) CloseWriteSession(ctx context.Context, req fsmeta
 	return m.base.CloseWriteSession(ctx, req)
 }
 
+// forwarding-ok: inode-remap adapter passes ExpireWriteSessions through unchanged (no inode rewrite needed).
 func (m *inodeMappingExecutor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
 	return m.base.ExpireWriteSessions(ctx, req)
 }

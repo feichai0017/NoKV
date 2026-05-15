@@ -119,7 +119,7 @@ make test
 Add targeted tests for the changed subsystem. Examples:
 
 ```bash
-make test-architecture
+make lint
 go test ./meta/root/... ./meta/root/server -count=1
 go test ./fsmeta/exec/compile ./fsmeta/exec/peras ./fsmeta/runtime/peras -count=1
 go generate ./fsmeta/exec/compile

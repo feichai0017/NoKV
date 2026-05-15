@@ -10,7 +10,6 @@
 package router
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -18,13 +17,6 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-)
-
-var (
-	// ErrRegisterNilPeer indicates Register received a nil peer.
-	ErrRegisterNilPeer = errors.New("raftstore/router: cannot register nil peer")
-	// ErrNilCommandRequest indicates SendCommand received a nil request.
-	ErrNilCommandRequest = errors.New("raftstore/router: nil raft command request")
 )
 
 // ErrPeerNotFound is returned when no peer is registered under the given ID.

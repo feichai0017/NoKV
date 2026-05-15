@@ -382,6 +382,8 @@ func (o ObservedCommitted) RetainFrom() rootstate.Cursor {
 }
 
 // Window returns the retained committed-tail window in the observed view.
+//
+// forwarding-ok: ObservedCommitted projects the Tail.Window() view; the type composition is the API.
 func (o ObservedCommitted) Window() TailWindow {
 	return o.Tail.Window()
 }
@@ -397,11 +399,15 @@ func (o ObservedCommitted) Advance(after, token TailToken) TailAdvance {
 }
 
 // LastCursor returns the last committed cursor visible in the observed tail.
+//
+// forwarding-ok: TailAdvance projects the Observed view; the type composition is the API.
 func (a TailAdvance) LastCursor() rootstate.Cursor {
 	return a.Observed.LastCursor()
 }
 
 // Window returns the retained committed-tail window visible in this advance.
+//
+// forwarding-ok: TailAdvance projects the Observed view; the type composition is the API.
 func (a TailAdvance) Window() TailWindow {
 	return a.Observed.Window()
 }

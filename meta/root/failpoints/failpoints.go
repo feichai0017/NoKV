@@ -3,10 +3,7 @@
 
 package failpoints
 
-import (
-	"errors"
-	"sync/atomic"
-)
+import "sync/atomic"
 
 // Mode configures rooted control-plane failure injection hooks. Modes can be
 // ORed together to simulate multiple failures in one test.
@@ -30,13 +27,6 @@ const (
 )
 
 var currentMode atomic.Uint32
-
-var (
-	ErrBeforeApplyGrantIssue                = errors.New("meta/root failpoint: before apply coordinator grant")
-	ErrBeforeApplyGrantRetirement           = errors.New("meta/root failpoint: before apply coordinator grant retirement")
-	ErrBeforeGrantStorageRead               = errors.New("meta/root failpoint: before coordinator grant storage read")
-	ErrAfterAppendCommittedBeforeCheckpoint = errors.New("meta/root failpoint: after append committed before checkpoint")
-)
 
 // Set configures the active rooted control-plane failpoint mode. Passing None
 // clears all previously configured failpoints.

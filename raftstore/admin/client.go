@@ -41,14 +41,17 @@ type grpcClient struct {
 	client adminpb.RaftAdminClient
 }
 
+// forwarding-ok: grpcClient adapts adminpb.RaftAdminClient onto the local admin.Client interface.
 func (c *grpcClient) AddPeer(ctx context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
 	return c.client.AddPeer(ctx, req)
 }
 
+// forwarding-ok: grpcClient adapts adminpb.RaftAdminClient onto the local admin.Client interface.
 func (c *grpcClient) RemovePeer(ctx context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
 	return c.client.RemovePeer(ctx, req)
 }
 
+// forwarding-ok: grpcClient adapts adminpb.RaftAdminClient onto the local admin.Client interface.
 func (c *grpcClient) TransferLeader(ctx context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
 	return c.client.TransferLeader(ctx, req)
 }
@@ -126,10 +129,12 @@ func (c *grpcClient) ImportRegionSnapshotStream(ctx context.Context, header []by
 	return stream.CloseAndRecv()
 }
 
+// forwarding-ok: grpcClient adapts adminpb.RaftAdminClient onto the local admin.Client interface.
 func (c *grpcClient) RegionRuntimeStatus(ctx context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
 	return c.client.RegionRuntimeStatus(ctx, req)
 }
 
+// forwarding-ok: grpcClient adapts adminpb.RaftAdminClient onto the local admin.Client interface.
 func (c *grpcClient) ExecutionStatus(ctx context.Context, req *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {
 	return c.client.ExecutionStatus(ctx, req)
 }

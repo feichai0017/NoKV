@@ -15,8 +15,8 @@ This document inventories NoKV's automated coverage and provides guidance for ex
 # All unit + integration tests, matching CI's package-serial default
 make test
 
-# Package dependency boundary guards
-make test-architecture
+# Package dependency boundary guards (run as part of `make lint`)
+make lint
 
 # Same full sweep with local module caches
 GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test -p 1 ./...
@@ -119,7 +119,7 @@ NOKV_RUN_BENCHMARKS=1 YCSB_RECORDS=10000 YCSB_OPS=50000 YCSB_WARM_OPS=0 \
 | Scripts & Tooling | `cmd/nokv-config/main_test.go`, `cmd/nokv/serve_test.go` | `nokv-config` JSON/simple formats, catalog bootstrap CLI, serve bootstrap behavior. | Add direct shell-script golden tests (currently not present) and failure-path diagnostics for `cluster.sh`. |
 | Distributed Migration & Membership | `raftstore/integration/*_test.go`, `raftstore/migrate/*_test.go`, `raftstore/admin/service_test.go` | Standalone -> seeded -> cluster flow, snapshot install, add/remove peer, leader transfer, restart/dehost recovery, Coordinator outage after startup, quorum-loss context propagation, multi-region 2PC deadline propagation, repeated link flap during membership changes, partitioned follower catch-up, deterministic split-region simulation schedules, and snapshot-install interruption before publish. | Keep expanding publish-boundary coverage and larger fault matrices around runtime/transport interleavings. |
 | Benchmark | `benchmark/ycsb/ycsb_test.go`, `benchmark/ycsb/ycsb_runner.go` | YCSB throughput/latency comparisons across engines (A-F) with detailed percentile + operation mix reporting. | Automate multi-node deployments and add longer-running, multi-GB stability baselines. |
-| Architecture Boundaries | `architecture/dependencies_test.go` | CI guard for fsmeta executor neutrality, local/distributed separation, meta-root/coordinator separation, removed package paths, and the single raftstore-backed fsmeta runtime adapter. | Add new rules whenever a module boundary becomes a correctness contract. |
+| Architecture Boundaries | `tools/lint/analyzers/importboundary/` (run via `make lint`) | CI guard for fsmeta executor neutrality, local/distributed separation, meta-root/coordinator separation, removed package paths, and the single raftstore-backed fsmeta runtime adapter. | Add new rules whenever a module boundary becomes a correctness contract. |
 
 ---
 

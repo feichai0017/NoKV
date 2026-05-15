@@ -198,23 +198,6 @@ func (c *Runtime) recordInstallJobShape(job perasFlushJob) {
 	c.recordInstallShape(len(job.payload), len(routeKeys))
 }
 
-func (c *Runtime) recordInstallRetry(err error) {
-	if c == nil {
-		return
-	}
-	c.metrics.retryTotal.Add(1)
-	switch nokverrors.KindOf(err) {
-	case nokverrors.KindUnavailable, nokverrors.KindRouteUnavailable:
-		c.metrics.retryUnavailable.Add(1)
-	case nokverrors.KindRegionRouting, nokverrors.KindNotLeader:
-		c.metrics.retryRouting.Add(1)
-	case nokverrors.KindStaleEpoch:
-		c.metrics.retryStaleEpoch.Add(1)
-	default:
-		c.metrics.retryOther.Add(1)
-	}
-}
-
 func (c *Runtime) submitInstallJob(ctx context.Context, job perasFlushJob) (InstallCursor, error) {
 	if c == nil || c.installer == nil {
 		return InstallCursor{}, ErrRuntimeInvalid

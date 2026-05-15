@@ -8,17 +8,10 @@
 package observer
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
-)
-
-// Sentinel errors returned by Runtime.Register.
-var (
-	ErrNilObserver = errors.New("raftstore/observer: nil observer")
-	ErrClosed      = errors.New("raftstore/observer: runtime closed")
 )
 
 // defaultBuffer is the per-observer channel capacity used when the

@@ -338,10 +338,12 @@ make lint
 make test
 ```
 
-For dependency-boundary work:
+Dependency-boundary checks are part of `make lint` (the `importboundary`
+analyzer in the `nokvcontract` plugin). Run the full lint pipeline before any
+PR that moves an import:
 
 ```bash
-make test-architecture
+make lint
 ```
 
 For generated code:

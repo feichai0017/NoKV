@@ -60,6 +60,8 @@ func (r *RefCount) Init(n int32) {
 // Load returns the current reference count. Intended for tests and
 // diagnostics only; callers must not make lifecycle decisions based on
 // the returned value because it may be stale.
+//
+// forwarding-ok: RefCount exposes its atomic counter via the standard Load name.
 func (r *RefCount) Load() int32 {
 	return r.ref.Load()
 }

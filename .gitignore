@@ -4,8 +4,13 @@
 .vscode
 work_test
 testdata
+!tools/lint/analyzers/*/testdata/
+!tools/lint/analyzers/*/testdata/**
 .idea
 .DS_Store
+
+# golangci-lint custom plugin build artifact
+/bin/custom-gcl
 
 test_results
 benchmark/ycsb/results/

@@ -107,40 +107,6 @@ type rangeFilterMetrics struct {
 	fallbacks         atomic.Uint64
 }
 
-func (lm *levelManager) recordRangeFilterPoint(total, candidates int, fallback bool) {
-	if lm == nil {
-		return
-	}
-	if candidates < 0 {
-		candidates = 0
-	}
-	if total < candidates {
-		total = candidates
-	}
-	lm.rangeFilter.pointCandidates.Add(uint64(candidates))
-	lm.rangeFilter.pointPruned.Add(uint64(total - candidates))
-	if fallback {
-		lm.rangeFilter.fallbacks.Add(1)
-	}
-}
-
-func (lm *levelManager) recordRangeFilterBounded(total, candidates int, fallback bool) {
-	if lm == nil {
-		return
-	}
-	if candidates < 0 {
-		candidates = 0
-	}
-	if total < candidates {
-		total = candidates
-	}
-	lm.rangeFilter.boundedCandidates.Add(uint64(candidates))
-	lm.rangeFilter.boundedPruned.Add(uint64(total - candidates))
-	if fallback {
-		lm.rangeFilter.fallbacks.Add(1)
-	}
-}
-
 func (lm *levelManager) rangeFilterDiagnostics() RangeFilterDiagnostics {
 	if lm == nil {
 		return RangeFilterDiagnostics{}

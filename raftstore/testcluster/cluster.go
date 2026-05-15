@@ -467,6 +467,7 @@ func StartPeers(tb testing.TB, node *Node) {
 	}
 }
 
+// forwarding-ok: test-cluster Node surface intentionally mirrors Server.Addr().
 func (n *Node) Addr() string {
 	return n.Server.Addr()
 }

@@ -42,6 +42,8 @@ func main() {
 		err = runMountCmd(os.Stdout, args)
 	case "quota":
 		err = runQuotaCmd(os.Stdout, args)
+	case "audit":
+		err = runAuditCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -68,6 +70,7 @@ func printUsage(w io.Writer) {
 	  meta-root Start metadata root gRPC service
 	  mount     Register, retire, or list rooted fsmeta mounts
 	  quota     Set, clear, or list rooted fsmeta quota fences
+	  audit     Surface rooted authority/finality anomalies from a meta-root snapshot
 
 Run "nokv <command> -h" for command-specific flags.`)
 }
