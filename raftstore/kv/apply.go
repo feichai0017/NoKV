@@ -155,6 +155,9 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 			if err != nil {
 				return nil, err
 			}
+			if len(results) != len(batch) {
+				return nil, fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
+			}
 			for _, result := range results {
 				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
 			}
@@ -329,6 +332,9 @@ func applyBatchRun(
 		results, err := applyPerasInstallSegmentBatch(db, batch)
 		if err != nil {
 			return err
+		}
+		if len(results) != len(batch) {
+			return fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
 		}
 		for i, result := range results {
 			resps[i] = &raftcmdpb.RaftCmdResponse{

@@ -73,7 +73,7 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	require.Greater(t, ptr.TruncatedOffset, uint64(0))
 }
 
-func TestWALStorageReplaySkipsSnapshotAtRestoredCompactedPrefix(t *testing.T) {
+func TestWALStorageReplayPreservesSnapshotAtRestoredCompactedPrefix(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
 	localMeta := openLocalMetaStore(t, dir)
@@ -95,9 +95,14 @@ func TestWALStorageReplaySkipsSnapshotAtRestoredCompactedPrefix(t *testing.T) {
 			Term:      1,
 			ConfState: raftpb.ConfState{Voters: []uint64{1}},
 		},
+		Data: []byte("snapshot-payload"),
 	}
 	require.NoError(t, ws.ApplySnapshot(snap))
-	require.NoError(t, ws.SetHardState(myraft.HardState{Term: 1, Commit: 1}))
+	require.NoError(t, ws.Append([]myraft.Entry{
+		{Index: 2, Term: 1, Data: []byte("after-snapshot-2")},
+		{Index: 3, Term: 2, Data: []byte("after-snapshot-3")},
+	}))
+	require.NoError(t, ws.SetHardState(myraft.HardState{Term: 2, Commit: 3}))
 
 	require.NoError(t, localMeta.Close())
 	require.NoError(t, walMgr.Close())
@@ -118,8 +123,15 @@ func TestWALStorageReplaySkipsSnapshotAtRestoredCompactedPrefix(t *testing.T) {
 	require.Equal(t, uint64(1), term)
 	hs, cs, err := reopened.InitialState()
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), hs.Commit)
+	require.Equal(t, uint64(3), hs.Commit)
 	require.Equal(t, []uint64{1}, cs.Voters)
+	restored, err := reopened.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, snap.Metadata.Index, restored.Metadata.Index)
+	require.Equal(t, snap.Data, restored.Data)
+	last, err := reopened.LastIndex()
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), last)
 }
 
 func TestWALStorageCompactUpdatesLocalMeta(t *testing.T) {

@@ -133,18 +133,24 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 				return nil
 			}
 			meta := snap.Metadata
-			if ws.pointer.TruncatedIndex > 0 && meta.Index <= ws.pointer.TruncatedIndex {
+			if ws.pointer.TruncatedIndex > 0 && meta.Index < ws.pointer.TruncatedIndex {
 				return nil
 			}
-			if err := ws.mem.ApplySnapshot(snap); err != nil {
-				return err
+			if ws.pointer.TruncatedIndex > 0 && meta.Index == ws.pointer.TruncatedIndex {
+				if err := ws.hydrateCompactedPrefixSnapshot(snap); err != nil {
+					return err
+				}
+			} else {
+				if err := ws.mem.ApplySnapshot(snap); err != nil {
+					return err
+				}
 			}
 			replayPtr.GroupID = cfg.GroupID
 			replayPtr.Segment = info.SegmentID
 			replayPtr.Offset = recordEnd(info)
 			replayPtr.SnapshotIndex = meta.Index
 			replayPtr.SnapshotTerm = meta.Term
-			if meta.Index > 0 {
+			if meta.Index > replayPtr.AppliedIndex {
 				replayPtr.AppliedIndex = meta.Index
 				replayPtr.AppliedTerm = meta.Term
 			}
@@ -194,6 +200,39 @@ func (ws *WALStorage) restoreCompactedPrefix(ptr localmeta.RaftLogPointer) error
 			ConfState: ws.compactedPrefixConfState(),
 		},
 	})
+}
+
+func (ws *WALStorage) hydrateCompactedPrefixSnapshot(snap myraft.Snapshot) error {
+	index := snap.Metadata.Index
+	hs, _, err := ws.mem.InitialState()
+	if err != nil {
+		return err
+	}
+	last, err := ws.mem.LastIndex()
+	if err != nil {
+		return err
+	}
+	var suffix []myraft.Entry
+	if last > index {
+		suffix, err = ws.mem.Entries(index+1, last+1, ^uint64(0))
+		if err != nil {
+			return err
+		}
+	}
+	mem := myraft.NewMemoryStorage()
+	if err := mem.ApplySnapshot(snap); err != nil {
+		return err
+	}
+	if err := mem.SetHardState(hs); err != nil {
+		return err
+	}
+	if len(suffix) > 0 {
+		if err := mem.Append(suffix); err != nil {
+			return err
+		}
+	}
+	ws.mem = mem
+	return nil
 }
 
 func (ws *WALStorage) compactedPrefixConfState() raftpb.ConfState {
