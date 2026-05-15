@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
@@ -118,7 +119,7 @@ func (c *Runtime) LoadRootSealedSegments(ctx context.Context, scope compile.Auth
 		return nil
 	}
 	catalogErr := c.LoadInstalledSegments(ctx, scope)
-	if catalogErr != nil && (c.installer == nil || len(c.witnesses) == 0) {
+	if catalogErr != nil && (c.installer == nil || len(c.witnesses) == 0 || !recoverableCatalogLoadError(catalogErr)) {
 		return catalogErr
 	}
 	for _, seal := range seals {
@@ -172,11 +173,16 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	if seal.EntryCount != 0 && seal.EntryCount != stats.EntryCount {
 		return fmt.Errorf("root seal entry count mismatch: %w", fsperas.ErrInvalidPerasSegment)
 	}
+	install, err := fsperas.PerasSegmentInstallPlan(segment, false)
+	if err != nil {
+		return fmt.Errorf("plan rooted segment install: %w", err)
+	}
 	job := perasFlushJob{
 		scope:   scope,
 		segment: segment,
 		payload: record.SegmentPayload,
 		digest:  record.SegmentPayloadDigest,
+		install: install,
 	}
 	if _, err := c.submitInstallJob(ctx, job); err != nil {
 		return err
@@ -186,6 +192,10 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	}
 	c.metrics.recoveryInstallTotal.Add(1)
 	return nil
+}
+
+func recoverableCatalogLoadError(err error) bool {
+	return nokverrors.Retryable(err) || nokverrors.IsKind(err, nokverrors.KindRetryExhausted)
 }
 
 func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal rootproto.PerasAuthoritySeal) (fsperas.SegmentWitnessRecord, bool, error) {

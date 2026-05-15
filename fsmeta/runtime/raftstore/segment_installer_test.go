@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,6 +221,36 @@ func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing
 		t.Fatal("InstallSegment blocked after more route errors than install workers")
 	}
 	require.Equal(t, int32(len(routingKeys)), kv.callCount())
+}
+
+func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRetryable(t *testing.T) {
+	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	require.NoError(t, err)
+	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
+	payload, digest := encodeRaftstoreInstallSegment(t, segment)
+	kv := &fakeRaftstorePerasInstallKV{
+		err: &client.RetryExhaustedError{
+			Operation: "peras install segment",
+			Key:       dentryKey,
+			Detail:    "region 7 returned not_leader",
+		},
+	}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+	installer := newRaftstoreSegmentInstaller(runner, nil)
+
+	_, err = installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
+		Segment:         segment,
+		Payload:         payload,
+		PayloadDigest:   digest,
+		MaterializeMVCC: true,
+	})
+	require.Error(t, err)
+	require.True(t, client.IsRetryExhausted(err), "%T %v", err, err)
+	require.True(t, nokverrors.Retryable(err), "%T %v", err, err)
 }
 
 func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegment {

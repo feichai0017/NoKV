@@ -16,6 +16,7 @@ import (
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/utils"
 )
 
@@ -168,6 +169,9 @@ func (i *raftstoreSegmentInstaller) installSegmentRoute(
 		ReadDirectoryCount:    readHeader.DirectoryCount,
 	})
 	if err != nil {
+		if client.IsRetryExhausted(err) {
+			return perasRouteInstallResult{}, perasInstallRouteRetryExhaustedError{cause: err}
+		}
 		return perasRouteInstallResult{}, err
 	}
 	if resp == nil {

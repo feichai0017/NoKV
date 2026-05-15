@@ -166,7 +166,7 @@ sequenceDiagram
 | `Prewrite` / `Commit` / `BatchRollback` / `ResolveLock` / `CheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
 | `PerasInstallSegment` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Installs Peras segment catalog/index records or materialized MVCC entries. Ordinary writes are fenced by active Peras authority for covered keys. |
 
-`PerasWitnessSegment` and `PerasWitnessProbe` are StoreKV sidecar RPCs backed by the configured witness node. They provide segment evidence for Peras recovery; they are not a second Raft quorum and do not replace replicated install.
+`PerasWitnessSegments` and `PerasWitnessProbe` are StoreKV sidecar RPCs backed by the configured witness node. They provide segment evidence for Peras recovery; they are not a second Raft quorum and do not replace replicated install.
 
 The `cmd/nokv serve` command uses `server.Node` internally and prints a local peer catalog summary (key ranges, peers) so operators can verify the node’s recovery view at startup.
 

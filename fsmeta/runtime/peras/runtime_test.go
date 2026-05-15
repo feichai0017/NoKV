@@ -1303,7 +1303,7 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 	seal.EntryCount = segment.Stats().EntryCount
 	provider.seals = []rootproto.PerasAuthoritySeal{seal}
 	installer := &fakeRuntimePerasSegmentInstaller{}
-	scanner := &fakeRuntimePerasCatalogScanner{err: errors.New("catalog region unavailable")}
+	scanner := &fakeRuntimePerasCatalogScanner{err: nokverrors.New(nokverrors.KindRetryExhausted, "catalog scan retries exhausted")}
 	recoverer, err := NewRuntime(Config{
 		Authority:         provider,
 		Witnesses:         witnesses,
@@ -1319,6 +1319,7 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 	require.Positive(t, scanner.calls)
 	require.Equal(t, 1, installer.calls)
 	require.Equal(t, segment.Root, installer.segment.Root)
+	require.NotEmpty(t, installer.install.RoutingKeys)
 	stats := recoverer.Stats()
 	require.Equal(t, uint64(1), stats["root_sealed_segment_missing_total"])
 	require.Equal(t, uint64(1), stats["segment_recovery_install_total"])
@@ -1326,6 +1327,33 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, deleted)
 	require.Equal(t, []byte("dentry-value"), value)
+}
+
+func TestRuntimeReturnsUnrecoverableRootSealedCatalogScanError(t *testing.T) {
+	segment := testRuntimePerasRootSegment(t)
+	scope := compile.AuthorityScope{Mount: "vol", MountKeyID: 7}
+	seal := testRuntimePerasRootSeal("grant-1", "holder-a", scope, time.Now())
+	seal.SegmentRoot = segment.Root
+	seal.SegmentPayloadDigest = [32]byte{1}
+	provider := &fakeRuntimePerasGrantProvider{
+		holderID: "holder-a",
+		grant:    testRuntimeCommitterGrant(),
+		seals:    []rootproto.PerasAuthoritySeal{seal},
+	}
+	scanErr := errors.New("catalog decode failed")
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         &fakeRuntimePerasSegmentInstaller{},
+		CatalogScanner:    &fakeRuntimePerasCatalogScanner{err: scanErr},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	err = committer.LoadRootSealedSegments(context.Background(), scope)
+	require.ErrorIs(t, err, scanErr)
 }
 
 func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
@@ -2261,6 +2289,7 @@ type fakeRuntimePerasSegmentInstaller struct {
 	segment     fsperas.PerasSegment
 	payload     []byte
 	digest      [32]byte
+	install     compile.InstallPlan
 	materialize bool
 	modes       []bool
 }
@@ -2273,6 +2302,7 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req
 	i.segment = req.Segment
 	i.payload = append([]byte(nil), req.Payload...)
 	i.digest = req.PayloadDigest
+	i.install = req.Install
 	i.materialize = req.MaterializeMVCC
 	i.modes = append(i.modes, req.MaterializeMVCC)
 	return testPerasInstallCursor(uint64(i.calls)), nil
@@ -2295,22 +2325,29 @@ func (l *recordingVisibleLog) AppendVisible(_ context.Context, record fsperas.Vi
 }
 
 type replayingVisibleLog struct {
+	mu      sync.Mutex
 	records []fsperas.VisibleOperationRecord
 	applied []fsperas.VisibleAppliedRecord
 }
 
 func (l *replayingVisibleLog) AppendVisible(_ context.Context, record fsperas.VisibleOperationRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.records = append(l.records, record)
 	return nil
 }
 
 func (l *replayingVisibleLog) ReplayVisible(context.Context) ([]fsperas.VisibleOperationRecord, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	out := make([]fsperas.VisibleOperationRecord, len(l.records))
 	copy(out, l.records)
 	return out, nil
 }
 
 func (l *replayingVisibleLog) AppendVisibleApplied(_ context.Context, record fsperas.VisibleAppliedRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.applied = append(l.applied, record)
 	return nil
 }

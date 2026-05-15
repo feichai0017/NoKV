@@ -179,10 +179,7 @@ func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) 
 	if err := c.appendSegmentWitnessBatchWithRetry(ctx, batch); err != nil {
 		return c.recordErrorf("append peras segment witness batch: %w", err)
 	}
-	elapsed := time.Since(witnessStart)
-	for range batch.jobs {
-		c.recordWitnessLatency(elapsed)
-	}
+	c.recordWitnessLatency(time.Since(witnessStart))
 	return nil
 }
 

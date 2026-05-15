@@ -97,6 +97,7 @@ func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.Witne
 		EpochId:              ref.EpochID,
 		SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		Limit:                1,
 	})
 	if err != nil {
 		return fsperas.SegmentWitnessRecord{}, false, err
