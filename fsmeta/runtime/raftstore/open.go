@@ -99,8 +99,9 @@ type Options struct {
 	// PerasSegmentWitnessRetryBackoff controls retry spacing for transient missing
 	// authority state on remote witnesses. Zero uses the default.
 	PerasSegmentWitnessRetryBackoff time.Duration
-	// PerasSegmentBatchSize controls how many visible Peras operations are
-	// compressed into one segment before opportunistic background flush starts.
+	// PerasSegmentBatchSize controls how many pending visible Peras operations
+	// trigger opportunistic background flush. SegmentMaxReplayOperations still
+	// bounds one installed segment.
 	// Zero uses the runtime default; negative is rejected.
 	PerasSegmentBatchSize int
 	// PerasSegmentMaxReplayOperations bounds one segment install by logical

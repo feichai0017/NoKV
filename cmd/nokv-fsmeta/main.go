@@ -64,7 +64,7 @@ func main() {
 		perasWitnessQuorum              = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
 		perasSegmentWitnessRetries      = flag.Int("peras-segment-witness-retries", 3, "Peras segment witness retries for transient authority lag")
 		perasSegmentWitnessRetryBackoff = flag.Duration("peras-segment-witness-retry-backoff", 20*time.Millisecond, "Peras segment witness retry backoff")
-		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras visible operations per segment before background flush; zero uses runtime default")
+		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras pending visible operations that trigger background flush; zero uses runtime default")
 		perasSegmentMaxReplayMutations  = flag.Int("peras-segment-max-replay-mutations", 0, "Peras replay mutations per installed segment; zero uses runtime default")
 		perasSegmentInstallParallelism  = flag.Int("peras-segment-install-parallelism", 0, "Peras segment installs per flush; zero uses GOMAXPROCS")
 		perasSegmentFlushParallelism    = flag.Int("peras-segment-flush-parallelism", 0, "Peras flush batches prepared concurrently; zero follows install parallelism")

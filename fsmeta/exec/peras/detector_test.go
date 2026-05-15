@@ -85,6 +85,41 @@ func TestConflictDetectorRemoveRetiresPendingOperation(t *testing.T) {
 	require.Equal(t, 1, detector.Len())
 }
 
+func TestConflictDetectorIDsLimitReturnsOldestPendingWindow(t *testing.T) {
+	detector := NewConflictDetector()
+	ids := []OperationID{
+		opID("c1", 1),
+		opID("c2", 1),
+		opID("c3", 1),
+	}
+	for idx, id := range ids {
+		require.NoError(t, mustAdmit(detector, id, opWithWrites(keyForBench(idx))))
+	}
+
+	require.Equal(t, ids[:2], detector.IDsLimit(2))
+	require.Equal(t, ids, detector.IDsLimit(0))
+}
+
+func TestConflictDetectorRemoveManyRetiresPendingWindow(t *testing.T) {
+	detector := NewConflictDetector()
+	first := opID("c1", 1)
+	second := opID("c2", 1)
+	third := opID("c3", 1)
+	fourth := opID("c4", 1)
+	require.NoError(t, mustAdmit(detector, first, opWithWrites("a")))
+	require.NoError(t, mustAdmit(detector, second, opWithWrites("b")))
+	require.NoError(t, mustAdmit(detector, third, opWithWrites("c")))
+
+	detector.RemoveMany(first, second)
+
+	require.Equal(t, []OperationID{third}, detector.IDs())
+	require.Equal(t, 1, detector.Len())
+	predecessors, err := detector.Admit(fourth, opWithWrites("a"))
+	require.NoError(t, err)
+	require.Empty(t, predecessors)
+	require.Equal(t, []OperationID{third, fourth}, detector.IDs())
+}
+
 func TestConflictDetectorRejectsInvalidAndDuplicateIDs(t *testing.T) {
 	detector := NewConflictDetector()
 	_, err := detector.Admit(OperationID{}, opWithWrites("a"))

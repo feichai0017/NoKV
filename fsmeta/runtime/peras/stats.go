@@ -209,7 +209,7 @@ func (c *Runtime) Stats() map[string]any {
 		"pending":                             pending,
 		"segment_install_parallelism":         c.installN,
 		"segment_flush_parallelism":           c.flushN,
-		"background_flush_operation_limit":    c.backgroundFlushOperationLimit(),
+		"background_flush_operation_limit":    c.backgroundFlushMaxOpsPerHolder(),
 		"segment_install_queue_depth":         installQueueDepth,
 		"segment_install_queue_capacity":      installQueueCapacity,
 		"segment_seal_queue_depth":            sealQueueDepth,
