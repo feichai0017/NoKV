@@ -121,6 +121,7 @@ func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.Witne
 const (
 	perasWitnessDiscoveryTimeout = 45 * time.Second
 	perasWitnessDiscoveryBackoff = 100 * time.Millisecond
+	perasWitnessDiscoverySettle  = 2 * time.Second
 )
 
 type witnessStoreLister interface {
@@ -148,10 +149,15 @@ func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dia
 			allowed[id] = struct{}{}
 		}
 	}
+	var stableIDs []string
+	var stableSince time.Time
 	for {
 		out, complete, err := tryBuildWitnessConnections(ctx, lister, dialOpts, allowed)
 		if err != nil {
 			return nil, err
+		}
+		if len(allowed) == 0 {
+			stableIDs, stableSince, complete = witnessDiscoverySettled(stableIDs, stableSince, witnessConnectionIDs(out), time.Now())
 		}
 		if complete {
 			return out, nil
@@ -167,6 +173,31 @@ func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dia
 		case <-timer.C:
 		}
 	}
+}
+
+func witnessConnectionIDs(conns *witnessConnections) []string {
+	if conns == nil || len(conns.witnesses) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(conns.witnesses))
+	for _, witness := range conns.witnesses {
+		if witness == nil {
+			continue
+		}
+		ids = append(ids, witness.ID())
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func witnessDiscoverySettled(previous []string, stableSince time.Time, current []string, now time.Time) ([]string, time.Time, bool) {
+	if len(current) == 0 {
+		return nil, time.Time{}, false
+	}
+	if len(previous) == 0 || !slices.Equal(previous, current) {
+		return slices.Clone(current), now, false
+	}
+	return previous, stableSince, now.Sub(stableSince) >= perasWitnessDiscoverySettle
 }
 
 func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*witnessConnections, bool, error) {
