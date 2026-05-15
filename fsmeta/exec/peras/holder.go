@@ -141,9 +141,7 @@ func (h *Holder) MarkAppliedIDs(ids ...OperationID) {
 	if h == nil || h.detector == nil {
 		return
 	}
-	for _, id := range ids {
-		h.detector.Remove(id)
-	}
+	h.detector.RemoveMany(ids...)
 	h.mu.Lock()
 	for _, id := range ids {
 		delete(h.pending, id)
@@ -179,12 +177,9 @@ func (h *Holder) BuildPendingReplayPlanForScope(firstVersion uint64, target comp
 }
 
 func (h *Holder) buildPendingReplayPlan(firstVersion uint64, include func(compile.AuthorityScope) bool, maxOps int) (ReplayPlan, compile.AuthorityScope, bool, error) {
-	ids := h.detector.IDs()
+	ids := h.detector.IDsLimit(maxOps)
 	if len(ids) == 0 {
 		return ReplayPlan{}, compile.AuthorityScope{}, false, nil
-	}
-	if maxOps > 0 && len(ids) > maxOps {
-		ids = ids[:maxOps]
 	}
 	plan := ReplayPlan{
 		EpochID:    h.epochID,

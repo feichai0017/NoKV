@@ -224,15 +224,15 @@ func (c *Runtime) buildFlushPlan(holder *fsperas.Holder, target *compile.Authori
 		}
 		return plan, scope, ok, nil
 	}
-	pending := holder.PendingIDs()
-	if len(pending) == 0 {
+	pending := holder.Pending()
+	if pending == 0 {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, nil
 	}
 	plan, scope, err := holder.BuildPendingReplayPlanLimit(0, maxOps)
 	if err != nil {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordErrorf("build peras replay plan: %w", err)
 	}
-	if maxOps <= 0 && len(plan.Operations) != len(pending) {
+	if maxOps <= 0 && len(plan.Operations) != pending {
 		return fsperas.ReplayPlan{}, compile.AuthorityScope{}, false, c.recordError(fsperas.ErrInvalidPerasSegment)
 	}
 	return plan, scope, true, nil

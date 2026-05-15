@@ -1173,6 +1173,40 @@ func TestRuntimeBackgroundFlushTimesOutAndBacksOff(t *testing.T) {
 	require.Equal(t, 2, committer.Stats()["pending"])
 }
 
+func TestRuntimeBackgroundFlushDrainsInstallParallelWindow(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:                  provider,
+		Witnesses:                  testRuntimePerasWitnesses(t, 3),
+		Installer:                  installer,
+		SegmentBatchSize:           1 << 30,
+		SegmentMaxReplayOperations: 2,
+		SegmentInstallParallelism:  3,
+		SegmentFlushEvery:          time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	for i := range 6 {
+		seq := uint64(i + 1)
+		require.NoError(t, commitRuntimePeras(ctx, committer, seq, appendUvarintKey("dentry/", seq), appendUvarintKey("inode/", seq)))
+	}
+	require.Equal(t, 6, committer.Stats()["pending"])
+
+	committer.batchSize = 2
+	committer.flushBackground()
+
+	stats := committer.Stats()
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, uint64(1), stats["flush_batch_total"])
+	require.Equal(t, uint64(3), stats["flush_jobs_total"])
+	require.Equal(t, uint64(3), stats["flush_jobs_last"])
+	require.Equal(t, uint64(3), stats["flush_jobs_max"])
+	require.Equal(t, 3, installer.calls)
+}
+
 func TestRuntimeCloseCancelsInstallLane(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &blockingRuntimePerasSegmentInstaller{}

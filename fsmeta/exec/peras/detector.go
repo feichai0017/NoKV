@@ -97,13 +97,55 @@ func (d *ConflictDetector) Remove(id OperationID) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if op, ok := d.pending[id]; ok {
-		d.unindexOperation(op)
+	if !d.removeLocked(id) {
+		return
 	}
-	delete(d.pending, id)
 	d.order = slices.DeleteFunc(d.order, func(current OperationID) bool {
 		return current == id
 	})
+}
+
+// RemoveMany retires pending operations and compacts detector order once.
+func (d *ConflictDetector) RemoveMany(ids ...OperationID) {
+	if d == nil {
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	removed := make(map[OperationID]struct{}, len(ids))
+	for _, id := range ids {
+		if d.removeLocked(id) {
+			removed[id] = struct{}{}
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	write := 0
+	for _, current := range d.order {
+		if _, ok := removed[current]; ok {
+			continue
+		}
+		d.order[write] = current
+		write++
+	}
+	for i := write; i < len(d.order); i++ {
+		d.order[i] = OperationID{}
+	}
+	d.order = d.order[:write]
+}
+
+func (d *ConflictDetector) removeLocked(id OperationID) bool {
+	op, ok := d.pending[id]
+	if !ok {
+		return false
+	}
+	d.unindexOperation(op)
+	delete(d.pending, id)
+	return true
 }
 
 func (d *ConflictDetector) Len() int {
@@ -116,15 +158,28 @@ func (d *ConflictDetector) Len() int {
 }
 
 func (d *ConflictDetector) IDs() []OperationID {
+	return d.IDsLimit(0)
+}
+
+// IDsLimit returns pending operation IDs in admission order. A non-positive
+// limit returns every pending ID.
+func (d *ConflictDetector) IDsLimit(maxIDs int) []OperationID {
 	if d == nil {
 		return nil
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]OperationID, 0, len(d.order))
+	capacity := len(d.order)
+	if maxIDs > 0 && maxIDs < capacity {
+		capacity = maxIDs
+	}
+	out := make([]OperationID, 0, capacity)
 	for _, id := range d.order {
 		if _, ok := d.pending[id]; ok {
 			out = append(out, id)
+			if maxIDs > 0 && len(out) >= maxIDs {
+				break
+			}
 		}
 	}
 	return out
