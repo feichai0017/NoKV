@@ -15,6 +15,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/wal"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
 	myraft "github.com/feichai0017/NoKV/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
 	raftpb "go.etcd.io/raft/v3/raftpb"
@@ -24,6 +25,11 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	dir := t.TempDir()
 	walMgr := openWalManager(t, dir)
 	localMeta := openLocalMetaStore(t, dir)
+	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
+		ID:    1,
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State: metaregion.ReplicaStateRunning,
+	}))
 
 	ws, err := OpenWALStorage(WALStorageConfig{
 		GroupID:   1,
@@ -65,6 +71,55 @@ func TestWALStorageSnapshotTracksTruncateSegment(t *testing.T) {
 	require.Equal(t, uint32(2), ptr.Segment)
 	require.Equal(t, uint64(1), ptr.SegmentIndex)
 	require.Greater(t, ptr.TruncatedOffset, uint64(0))
+}
+
+func TestWALStorageReplaySkipsSnapshotAtRestoredCompactedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	walMgr := openWalManager(t, dir)
+	localMeta := openLocalMetaStore(t, dir)
+	require.NoError(t, localMeta.SaveRegion(localmeta.RegionMeta{
+		ID:    1,
+		Peers: []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State: metaregion.ReplicaStateRunning,
+	}))
+
+	ws, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	snap := myraft.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index:     1,
+			Term:      1,
+			ConfState: raftpb.ConfState{Voters: []uint64{1}},
+		},
+	}
+	require.NoError(t, ws.ApplySnapshot(snap))
+	require.NoError(t, ws.SetHardState(myraft.HardState{Term: 1, Commit: 1}))
+
+	require.NoError(t, localMeta.Close())
+	require.NoError(t, walMgr.Close())
+
+	walMgr = openWalManager(t, dir)
+	defer func() { _ = walMgr.Close() }()
+	localMeta = openLocalMetaStore(t, dir)
+	defer func() { _ = localMeta.Close() }()
+
+	reopened, err := OpenWALStorage(WALStorageConfig{
+		GroupID:   1,
+		WAL:       walMgr,
+		LocalMeta: localMeta,
+	})
+	require.NoError(t, err)
+	term, err := reopened.Term(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), term)
+	hs, cs, err := reopened.InitialState()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), hs.Commit)
+	require.Equal(t, []uint64{1}, cs.Voters)
 }
 
 func TestWALStorageCompactUpdatesLocalMeta(t *testing.T) {

@@ -124,7 +124,7 @@ func TestWriteCommandBatcherCapsPerasInstallSegmentBatchSize(t *testing.T) {
 		return &raftcmdpb.RaftCmdResponse{Responses: responses}, nil
 	}, 64, time.Hour)
 
-	results := make(chan writeBatchTestResult, 8)
+	results := make(chan writeBatchTestResult, perasInstallSegmentBatchMaxSize*2)
 	for i := 0; i < cap(results); i++ {
 		go func() {
 			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPerasInstallRequest())
@@ -142,7 +142,42 @@ func TestWriteCommandBatcherCapsPerasInstallSegmentBatchSize(t *testing.T) {
 	require.Len(t, proposed[0].GetRequests(), perasInstallSegmentBatchMaxSize)
 	require.Len(t, proposed[1].GetRequests(), perasInstallSegmentBatchMaxSize)
 	require.Equal(t, uint64(2), batcher.Stats()["write_command_batch_batches_by_command"].(map[string]uint64)["peras_install_segment"])
-	require.Equal(t, uint64(8), batcher.Stats()["write_command_batch_batched_requests_by_command"].(map[string]uint64)["peras_install_segment"])
+	require.Equal(t, uint64(perasInstallSegmentBatchMaxSize*2), batcher.Stats()["write_command_batch_batched_requests_by_command"].(map[string]uint64)["peras_install_segment"])
+}
+
+func TestWriteCommandBatcherSplitsLargePerasInstallSegmentBatchesByBytes(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		proposed []*raftcmdpb.RaftCmdRequest
+	)
+	batcher := newWriteCommandBatcher(func(_ context.Context, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
+		mu.Lock()
+		proposed = append(proposed, req)
+		mu.Unlock()
+		responses := make([]*raftcmdpb.Response, 0, len(req.GetRequests()))
+		for range req.GetRequests() {
+			responses = append(responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{}}})
+		}
+		return &raftcmdpb.RaftCmdResponse{Responses: responses}, nil
+	}, 64, time.Millisecond)
+
+	results := make(chan writeBatchTestResult, 2)
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPerasInstallRequestWithPayload(perasInstallSegmentBatchMaxBytes/2+1))
+			results <- writeBatchTestResult{response: resp, regionError: regionErr, err: err}
+		}()
+	}
+	for i := 0; i < cap(results); i++ {
+		result := receiveWriteBatchResult(t, results)
+		require.NotNil(t, result.response.GetPerasInstallSegment())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, proposed, 2)
+	require.Len(t, proposed[0].GetRequests(), 1)
+	require.Len(t, proposed[1].GetRequests(), 1)
 }
 
 func TestWriteCommandBatcherSkipsCanceledBeforeFlush(t *testing.T) {
@@ -334,9 +369,15 @@ func writeBatchAtomicRequest(key string) *raftcmdpb.Request {
 }
 
 func writeBatchPerasInstallRequest() *raftcmdpb.Request {
+	return writeBatchPerasInstallRequestWithPayload(0)
+}
+
+func writeBatchPerasInstallRequestWithPayload(payloadSize int) *raftcmdpb.Request {
 	return &raftcmdpb.Request{
 		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd:     &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{}},
+		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+			SegmentPayload: make([]byte, payloadSize),
+		}},
 	}
 }
 

@@ -13,12 +13,14 @@ import (
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
-	defaultWriteCommandBatchMaxSize = 64
-	defaultWriteCommandBatchMaxWait = 200 * time.Microsecond
-	perasInstallSegmentBatchMaxSize = 4
+	defaultWriteCommandBatchMaxSize  = 64
+	defaultWriteCommandBatchMaxWait  = 200 * time.Microsecond
+	perasInstallSegmentBatchMaxSize  = 16
+	perasInstallSegmentBatchMaxBytes = 8 << 20
 )
 
 var batchedWriteCommandTypes = []raftcmdpb.CmdType{
@@ -60,11 +62,13 @@ type writeCommandCounters struct {
 }
 
 type writeCommandBatch struct {
-	header  *raftcmdpb.CmdHeader
-	cmdType raftcmdpb.CmdType
-	maxSize int
-	items   []*writeCommandBatchItem
-	timer   *time.Timer
+	header   *raftcmdpb.CmdHeader
+	cmdType  raftcmdpb.CmdType
+	maxSize  int
+	maxBytes int
+	bytes    int
+	items    []*writeCommandBatchItem
+	timer    *time.Timer
 }
 
 type writeCommandBatchItem struct {
@@ -118,17 +122,27 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 	cmdType := request.GetCmdType()
 	b.addRequest(cmdType)
 	key := writeBatchKey(header, cmdType)
-	var flush *writeCommandBatch
+	requestBytes := writeCommandRequestBytes(cmdType, request)
+	var flushes []*writeCommandBatch
 
 	b.mu.Lock()
 	batch := b.batches[key]
+	if batch != nil && batch.shouldFlushBefore(requestBytes) {
+		delete(b.batches, key)
+		if batch.timer != nil {
+			batch.timer.Stop()
+		}
+		flushes = append(flushes, batch)
+		batch = nil
+	}
 	if batch == nil {
-		maxSize := writeCommandBatchMaxSize(cmdType, b.maxSize)
+		maxSize, maxBytes := writeCommandBatchLimits(cmdType, b.maxSize)
 		batch = &writeCommandBatch{
-			header:  cloneCmdHeader(header),
-			cmdType: cmdType,
-			maxSize: maxSize,
-			items:   make([]*writeCommandBatchItem, 0, maxSize),
+			header:   cloneCmdHeader(header),
+			cmdType:  cmdType,
+			maxSize:  maxSize,
+			maxBytes: maxBytes,
+			items:    make([]*writeCommandBatchItem, 0, maxSize),
 		}
 		b.batches[key] = batch
 		batch.timer = time.AfterFunc(b.maxWait, func() {
@@ -136,16 +150,17 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 		})
 	}
 	batch.items = append(batch.items, item)
+	batch.bytes += requestBytes
 	if len(batch.items) >= batch.maxSize {
 		delete(b.batches, key)
 		if batch.timer != nil {
 			batch.timer.Stop()
 		}
-		flush = batch
+		flushes = append(flushes, batch)
 	}
 	b.mu.Unlock()
 
-	if flush != nil {
+	for _, flush := range flushes {
 		b.flush(flush)
 	}
 
@@ -157,11 +172,35 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 	}
 }
 
-func writeCommandBatchMaxSize(cmdType raftcmdpb.CmdType, fallback int) int {
-	if cmdType == raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT && fallback > perasInstallSegmentBatchMaxSize {
-		return perasInstallSegmentBatchMaxSize
+func writeCommandBatchLimits(cmdType raftcmdpb.CmdType, fallback int) (int, int) {
+	if cmdType == raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+		if fallback > perasInstallSegmentBatchMaxSize {
+			fallback = perasInstallSegmentBatchMaxSize
+		}
+		return fallback, perasInstallSegmentBatchMaxBytes
 	}
-	return fallback
+	return fallback, 0
+}
+
+func writeCommandRequestBytes(cmdType raftcmdpb.CmdType, request *raftcmdpb.Request) int {
+	if request == nil {
+		return 0
+	}
+	if cmdType != raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+		return 0
+	}
+	size := proto.Size(request)
+	if size <= 0 {
+		return 1
+	}
+	return size
+}
+
+func (b *writeCommandBatch) shouldFlushBefore(nextBytes int) bool {
+	if b == nil || len(b.items) == 0 || b.maxBytes <= 0 || nextBytes <= 0 {
+		return false
+	}
+	return b.bytes+nextBytes > b.maxBytes
 }
 
 func (b *writeCommandBatcher) flushKey(key writeCommandBatchKey) {

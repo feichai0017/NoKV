@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -32,10 +33,11 @@ type raftstoreSegmentInstaller struct {
 	runner             *Runner
 	router             *fsmetawatch.Router
 	nextInstallVersion atomic.Uint64
+	routeLimiter       *perasInstallRouteLimiter
 }
 
 func newRaftstoreSegmentInstaller(runner *Runner, router *fsmetawatch.Router) *raftstoreSegmentInstaller {
-	return &raftstoreSegmentInstaller{runner: runner, router: router}
+	return &raftstoreSegmentInstaller{runner: runner, router: router, routeLimiter: newPerasInstallRouteLimiter()}
 }
 
 func raftstoreSegmentInstallParallelism() int {
@@ -85,7 +87,7 @@ func (i *raftstoreSegmentInstaller) InstallSegment(ctx context.Context, req runt
 	for idx, group := range routeGroups {
 		idx, group := idx, cloneRouteKeyGroup(group)
 		err := throttle.Go(func() error {
-			result, err := i.installSegmentRouteGroup(ctx, kv, group.Keys, install, canonicalObjectKey, req.Segment, req.Payload, req.PayloadDigest, installVersion, req.MaterializeMVCC)
+			result, err := i.installSegmentRouteGroup(ctx, kv, group, install, canonicalObjectKey, req.Segment, req.Payload, req.PayloadDigest, installVersion, req.MaterializeMVCC)
 			if err != nil {
 				return fmt.Errorf("peras install segment route group %d: %w", idx, err)
 			}
@@ -162,7 +164,7 @@ func (i *raftstoreSegmentInstaller) installRouteGroups(ctx context.Context, kv p
 func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 	ctx context.Context,
 	kv perasSegmentInstallClient,
-	routingKeys [][]byte,
+	group client.RouteKeyGroup,
 	install compile.InstallPlan,
 	canonicalObjectKey []byte,
 	segment fsperas.PerasSegment,
@@ -171,6 +173,7 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 	installVersion uint64,
 	materialize bool,
 ) (perasRouteInstallResult, error) {
+	routingKeys := group.Keys
 	if len(routingKeys) == 0 || len(routingKeys[0]) == 0 {
 		return perasRouteInstallResult{}, runtimeperas.ErrRuntimeInvalid
 	}
@@ -185,6 +188,11 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 	}
 	stats := segment.Stats()
 	readHeader := segment.ReadHeaderView()
+	release, err := i.acquireInstallRoute(ctx, group.LeaderStoreID)
+	if err != nil {
+		return perasRouteInstallResult{}, err
+	}
+	defer release()
 	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
 		RoutingKey:            runtimeCloneBytes(routingKey),
 		SegmentRoot:           append([]byte(nil), segment.Root[:]...),
@@ -229,6 +237,13 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 		return perasRouteInstallResult{}, runtimeperas.ErrRuntimeInvalid
 	}
 	return perasRouteInstallResult{routingKeys: cloneRuntimeKeySet(routingKeys), cursor: cursor, resp: resp}, nil
+}
+
+func (i *raftstoreSegmentInstaller) acquireInstallRoute(ctx context.Context, storeID uint64) (func(), error) {
+	if i == nil || i.routeLimiter == nil {
+		return func() {}, nil
+	}
+	return i.routeLimiter.acquire(ctx, storeID)
 }
 
 func normalizedSegmentInstallPlan(segment fsperas.PerasSegment, plan compile.InstallPlan, materialize bool) (compile.InstallPlan, error) {
@@ -392,6 +407,71 @@ func cloneRouteKeyGroups(groups []client.RouteKeyGroup) []client.RouteKeyGroup {
 		out = append(out, cloneRouteKeyGroup(group))
 	}
 	return out
+}
+
+type perasInstallRouteLimiter struct {
+	global   chan struct{}
+	perStore int
+	mu       sync.Mutex
+	stores   map[uint64]chan struct{}
+}
+
+func newPerasInstallRouteLimiter() *perasInstallRouteLimiter {
+	global := raftstoreSegmentInstallParallelism()
+	if global <= 0 {
+		global = 1
+	}
+	perStore := max(global/3, 1)
+	return &perasInstallRouteLimiter{
+		global:   make(chan struct{}, global),
+		perStore: perStore,
+		stores:   make(map[uint64]chan struct{}),
+	}
+}
+
+func (l *perasInstallRouteLimiter) acquire(ctx context.Context, storeID uint64) (func(), error) {
+	if l == nil {
+		return func() {}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case l.global <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	releaseGlobal := true
+	var store chan struct{}
+	if storeID != 0 {
+		store = l.storeTokens(storeID)
+		select {
+		case store <- struct{}{}:
+		case <-ctx.Done():
+			<-l.global
+			return nil, ctx.Err()
+		}
+	}
+	return func() {
+		if store != nil {
+			<-store
+		}
+		if releaseGlobal {
+			<-l.global
+			releaseGlobal = false
+		}
+	}, nil
+}
+
+func (l *perasInstallRouteLimiter) storeTokens(storeID uint64) chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	tokens := l.stores[storeID]
+	if tokens == nil {
+		tokens = make(chan struct{}, l.perStore)
+		l.stores[storeID] = tokens
+	}
+	return tokens
 }
 
 type raftstoreSegmentCatalogScanner struct {

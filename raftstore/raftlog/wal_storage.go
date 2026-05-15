@@ -132,10 +132,13 @@ func OpenWALStorage(cfg WALStorageConfig) (*WALStorage, error) {
 			if gid != cfg.GroupID || myraft.IsEmptySnap(snap) {
 				return nil
 			}
+			meta := snap.Metadata
+			if ws.pointer.TruncatedIndex > 0 && meta.Index <= ws.pointer.TruncatedIndex {
+				return nil
+			}
 			if err := ws.mem.ApplySnapshot(snap); err != nil {
 				return err
 			}
-			meta := snap.Metadata
 			replayPtr.GroupID = cfg.GroupID
 			replayPtr.Segment = info.SegmentID
 			replayPtr.Offset = recordEnd(info)
@@ -186,10 +189,28 @@ func (ws *WALStorage) restoreCompactedPrefix(ptr localmeta.RaftLogPointer) error
 	}
 	return ws.mem.ApplySnapshot(myraft.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
-			Index: ptr.TruncatedIndex,
-			Term:  term,
+			Index:     ptr.TruncatedIndex,
+			Term:      term,
+			ConfState: ws.compactedPrefixConfState(),
 		},
 	})
+}
+
+func (ws *WALStorage) compactedPrefixConfState() raftpb.ConfState {
+	if ws == nil || ws.localMeta == nil || ws.groupID == 0 {
+		return raftpb.ConfState{}
+	}
+	meta := ws.localMeta.Snapshot()[ws.groupID]
+	if len(meta.Peers) == 0 {
+		return raftpb.ConfState{}
+	}
+	voters := make([]uint64, 0, len(meta.Peers))
+	for _, peer := range meta.Peers {
+		if peer.PeerID != 0 {
+			voters = append(voters, peer.PeerID)
+		}
+	}
+	return raftpb.ConfState{Voters: voters}
 }
 
 func (ws *WALStorage) appendReplayEntries(entries []myraft.Entry) error {

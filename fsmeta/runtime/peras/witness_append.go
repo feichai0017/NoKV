@@ -133,10 +133,7 @@ func (c *Runtime) appendSegmentWitnessRecords(ctx context.Context, scope compile
 		return len(acks) >= c.quorum
 	}
 
-	preferred := c.quorum
-	if preferred > len(witnesses) {
-		preferred = len(witnesses)
-	}
+	preferred := min(c.quorum, len(witnesses))
 	if appendTo(witnesses[:preferred]) || appendTo(witnesses[preferred:]) {
 		slices.Sort(acks)
 		c.recordWitnessQuorum(time.Since(start), len(acks))

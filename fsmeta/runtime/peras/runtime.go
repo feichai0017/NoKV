@@ -27,6 +27,7 @@ const (
 	defaultPerasSegmentMaxReplayOperations = 512
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	defaultPerasSegmentMaxPayloadBytes     = 512 << 10
+	defaultPerasSegmentCatalogRouteBudget  = 4
 	defaultPerasWitnessBatchMaxBytes       = 32 << 20
 	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
@@ -60,6 +61,7 @@ type Config struct {
 	SegmentMaxReplayOperations int
 	SegmentMaxReplayMutations  int
 	SegmentMaxPayloadBytes     uint64
+	SegmentCatalogRouteBudget  int
 	SegmentFlushEvery          time.Duration
 	BackgroundFlushTimeout     time.Duration
 	BackgroundErrorBackoff     time.Duration
@@ -72,27 +74,28 @@ type Config struct {
 // remote durable witnesses. It keeps an in-process read overlay until segment
 // apply lands.
 type Runtime struct {
-	authority  GrantProvider
-	seals      SealProvider
-	witnesses  []fsperas.WitnessReplica
-	installer  SegmentInstaller
-	catalog    SegmentCatalogScanner
-	watch      perasWatchPublisher
-	visibleLog fsperas.VisibleLog
-	quorum     int
-	retries    int
-	backoff    time.Duration
-	batchSize  int
-	admitLimit int
-	maxOps     int
-	maxReplay  int
-	maxPayload uint64
-	installN   int
-	flushN     int
-	flushEvery time.Duration
-	bgTimeout  time.Duration
-	bgBackoff  time.Duration
-	now        func() time.Time
+	authority   GrantProvider
+	seals       SealProvider
+	witnesses   []fsperas.WitnessReplica
+	installer   SegmentInstaller
+	catalog     SegmentCatalogScanner
+	watch       perasWatchPublisher
+	visibleLog  fsperas.VisibleLog
+	quorum      int
+	retries     int
+	backoff     time.Duration
+	batchSize   int
+	admitLimit  int
+	maxOps      int
+	maxReplay   int
+	maxPayload  uint64
+	routeBudget int
+	installN    int
+	flushN      int
+	flushEvery  time.Duration
+	bgTimeout   time.Duration
+	bgBackoff   time.Duration
+	now         func() time.Time
 
 	commitMu   sync.RWMutex
 	flushMu    sync.Mutex
@@ -229,6 +232,13 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if maxPayload == 0 {
 		maxPayload = defaultPerasSegmentMaxPayloadBytes
 	}
+	routeBudget := cfg.SegmentCatalogRouteBudget
+	if routeBudget == 0 {
+		routeBudget = defaultPerasSegmentCatalogRouteBudget
+	}
+	if routeBudget < 0 {
+		return nil, ErrRuntimeInvalid
+	}
 	installN := cfg.SegmentInstallParallelism
 	if installN == 0 {
 		installN = defaultPerasSegmentInstallParallelism()
@@ -273,31 +283,32 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	seals, _ := cfg.Authority.(SealProvider)
 	c := &Runtime{
-		authority:  cfg.Authority,
-		seals:      seals,
-		witnesses:  witnesses,
-		installer:  cfg.Installer,
-		catalog:    cfg.CatalogScanner,
-		watch:      cfg.WatchPublisher,
-		visibleLog: cfg.VisibleLog,
-		quorum:     quorum,
-		retries:    retries,
-		backoff:    backoff,
-		batchSize:  batchSize,
-		admitLimit: admitLimit,
-		maxOps:     maxOps,
-		maxReplay:  maxReplay,
-		maxPayload: maxPayload,
-		installN:   installN,
-		flushN:     flushN,
-		flushEvery: flushEvery,
-		bgTimeout:  bgTimeout,
-		bgBackoff:  bgBackoff,
-		now:        now,
-		closer:     utils.NewCloser(),
-		epochs:     newEpochTable(),
-		latches:    fsperas.NewAdmissionLatches(),
-		read:       newReadState(),
+		authority:   cfg.Authority,
+		seals:       seals,
+		witnesses:   witnesses,
+		installer:   cfg.Installer,
+		catalog:     cfg.CatalogScanner,
+		watch:       cfg.WatchPublisher,
+		visibleLog:  cfg.VisibleLog,
+		quorum:      quorum,
+		retries:     retries,
+		backoff:     backoff,
+		batchSize:   batchSize,
+		admitLimit:  admitLimit,
+		maxOps:      maxOps,
+		maxReplay:   maxReplay,
+		maxPayload:  maxPayload,
+		routeBudget: routeBudget,
+		installN:    installN,
+		flushN:      flushN,
+		flushEvery:  flushEvery,
+		bgTimeout:   bgTimeout,
+		bgBackoff:   bgBackoff,
+		now:         now,
+		closer:      utils.NewCloser(),
+		epochs:      newEpochTable(),
+		latches:     fsperas.NewAdmissionLatches(),
+		read:        newReadState(),
 	}
 	c.drainCond = sync.NewCond(&c.drainMu)
 	c.admissionCond = sync.NewCond(&c.admissionMu)

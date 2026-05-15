@@ -62,6 +62,14 @@ func TestOpenRejectsNegativePerasSegmentFlushParallelism(t *testing.T) {
 	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }
 
+func TestOpenRejectsNegativePerasSegmentCatalogRouteBudget(t *testing.T) {
+	_, err := Open(context.Background(), Options{
+		CoordinatorAddr:                "127.0.0.1:1",
+		PerasSegmentCatalogRouteBudget: -1,
+	})
+	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
+}
+
 func TestOpenRejectsPerasWithoutVisibleLog(t *testing.T) {
 	_, err := Open(context.Background(), Options{
 		CoordinatorAddr: "127.0.0.1:1",

@@ -222,6 +222,44 @@ func TestRaftstoreSegmentInstallerGroupsCatalogRoutesByRegion(t *testing.T) {
 	require.Equal(t, []int{2, len(routingKeys) - 2}, kv.requestRouteCounts())
 }
 
+func TestRaftstoreSegmentInstallerLimitsRouteFanoutPerStore(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(6)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	segment := testRaftstoreInstallSegment(t, testRaftstoreInstallKeysAcrossBuckets(t, 4))
+	routingKeys, err := runtimeperas.SegmentInstallRoutingKeys(segment, false)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(routingKeys), 4)
+	payload, digest := encodeRaftstoreInstallSegment(t, segment)
+
+	groups := make([]client.RouteKeyGroup, 0, 4)
+	for _, key := range routingKeys[:4] {
+		groups = append(groups, client.RouteKeyGroup{RegionID: uint64(len(groups) + 1), LeaderStoreID: 1, Keys: [][]byte{runtimeCloneBytes(key)}})
+	}
+	kv := &groupingRaftstorePerasInstallKV{
+		parallelRaftstorePerasInstallKV: parallelRaftstorePerasInstallKV{
+			stats: segment.Stats(),
+			root:  segment.Root,
+			delay: 20 * time.Millisecond,
+		},
+		groups: groups,
+	}
+	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	require.NoError(t, err)
+
+	installer := newRaftstoreSegmentInstaller(runner, nil)
+	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
+		Segment:       segment,
+		Payload:       payload,
+		PayloadDigest: digest,
+	})
+	require.NoError(t, err)
+	require.True(t, cursor.Valid())
+	require.Equal(t, 4, kv.callCount())
+	require.LessOrEqual(t, kv.maxInFlight(), int32(2))
+	require.Greater(t, kv.maxInFlight(), int32(1))
+}
+
 func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing.T) {
 	oldProcs := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(oldProcs)
@@ -255,7 +293,8 @@ func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("InstallSegment blocked after more route errors than install workers")
 	}
-	require.Equal(t, int32(len(routingKeys)), kv.callCount())
+	require.Positive(t, kv.callCount())
+	require.LessOrEqual(t, kv.callCount(), int32(len(routingKeys)))
 }
 
 func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRoutingRetryable(t *testing.T) {

@@ -104,8 +104,8 @@ func (c *Runtime) replaySegmentCatalogRouteBudget(materialize bool) int {
 	if materialize {
 		return 0
 	}
-	if c.installN > 0 {
-		return c.installN
+	if c.routeBudget > 0 {
+		return c.routeBudget
 	}
 	return 1
 }

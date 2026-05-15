@@ -119,6 +119,10 @@ type Options struct {
 	// PerasSegmentMaxPayloadBytes bounds one segment by compiler-estimated
 	// payload bytes. Zero uses the runtime default.
 	PerasSegmentMaxPayloadBytes uint64
+	// PerasSegmentCatalogRouteBudget bounds how many catalog buckets/routes one
+	// catalog-only segment install may span. Zero uses the runtime default;
+	// negative is rejected.
+	PerasSegmentCatalogRouteBudget int
 	// PerasSegmentInstallParallelism bounds how many sealed segments from one
 	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
 	// rejected.
@@ -193,7 +197,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.PerasAuthorityTTL < 0 {
 		return nil, runtimeperas.ErrTTLInvalid
 	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasAdmissionPendingLimit < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
+	if opts.PerasSegmentBatchSize < 0 || opts.PerasAdmissionPendingLimit < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentCatalogRouteBudget < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
 		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}

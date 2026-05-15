@@ -302,7 +302,8 @@ func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 		}}}
 	}
 
-	resps, err := ApplyBatch(db, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
+	store := &countingAtomicApplyStore{base: db}
+	resps, err := ApplyBatch(store, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
 	require.NoError(t, err)
 	require.Len(t, resps, 2)
 	for _, resp := range resps {
@@ -311,6 +312,8 @@ func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
 		require.Nil(t, install.GetError())
 		require.Equal(t, segment.Root[:], install.GetSegmentRoot())
 	}
+	require.Equal(t, 1, store.applyCalls)
+	require.Len(t, store.appliedEntryCounts, 1)
 	records, err := LoadPerasSegmentCatalogs(db)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
