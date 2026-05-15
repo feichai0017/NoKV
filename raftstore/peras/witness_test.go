@@ -20,6 +20,7 @@ import (
 )
 
 var _ fsperas.WitnessReplica = (*WitnessNode)(nil)
+var _ fsperas.WitnessSegmentProber = (*WitnessNode)(nil)
 
 func TestWitnessNodeAppendSegmentAndProbe(t *testing.T) {
 	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
@@ -210,6 +211,38 @@ func TestWitnessNodeCachesLoadedEpoch(t *testing.T) {
 	snapshot, err := node.Probe(context.Background(), first.EpochID)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Segments, 2)
+}
+
+func TestWitnessNodeProbeSegmentReturnsTargetOnly(t *testing.T) {
+	node, cleanup := openTestWitnessNode(t, wal.DurabilityFsync)
+	defer cleanup()
+	scope := testAuthorityScope()
+	first := testSegmentRecord()
+	second := testSegmentRecord()
+	second.SegmentRoot[0] = 3
+	second.SegmentPayloadDigest[0] = 4
+
+	require.NoError(t, node.AppendSegment(context.Background(), scope, first))
+	require.NoError(t, node.AppendSegment(context.Background(), scope, second))
+
+	record, found, err := node.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
+		EpochID:              second.EpochID,
+		SegmentRoot:          second.SegmentRoot,
+		SegmentPayloadDigest: second.SegmentPayloadDigest,
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, second, record)
+
+	missing := second
+	missing.SegmentPayloadDigest[0] = 9
+	_, found, err = node.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
+		EpochID:              missing.EpochID,
+		SegmentRoot:          missing.SegmentRoot,
+		SegmentPayloadDigest: missing.SegmentPayloadDigest,
+	})
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
 func TestWitnessNodeConcurrentDuplicateSegmentIsSingleWALRecord(t *testing.T) {

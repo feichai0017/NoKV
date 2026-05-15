@@ -31,6 +31,7 @@ type WitnessNode struct {
 
 	mu       sync.Mutex
 	segments map[witnessSegmentKey]struct{}
+	records  map[witnessSegmentKey]fsperas.SegmentWitnessRecord
 	inflight map[witnessSegmentKey]*witnessAppendCall
 	loaded   map[uint64]struct{}
 }
@@ -61,6 +62,7 @@ func NewWitnessNode(cfg WitnessNodeConfig) (*WitnessNode, error) {
 		refresh:       cfg.AuthorityRefresh,
 		now:           now,
 		segments:      make(map[witnessSegmentKey]struct{}),
+		records:       make(map[witnessSegmentKey]fsperas.SegmentWitnessRecord),
 		inflight:      make(map[witnessSegmentKey]*witnessAppendCall),
 		loaded:        make(map[uint64]struct{}),
 	}, nil
@@ -110,6 +112,7 @@ func (n *WitnessNode) AppendSegment(ctx context.Context, scope compile.Authority
 	n.mu.Lock()
 	if err == nil {
 		n.segments[key] = struct{}{}
+		n.records[key] = record
 	}
 	call.err = err
 	delete(n.inflight, key)
@@ -123,6 +126,42 @@ func (n *WitnessNode) Probe(ctx context.Context, epochID uint64) (fsperas.Witnes
 		return fsperas.WitnessSnapshot{}, ErrWitnessNodeConfigInvalid
 	}
 	return n.log.Probe(ctx, epochID)
+}
+
+func (n *WitnessNode) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if n == nil || n.log == nil {
+		return fsperas.SegmentWitnessRecord{}, false, ErrWitnessNodeConfigInvalid
+	}
+	if !ref.Valid() {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrInvalidWitnessRecord
+	}
+	if err := ctx.Err(); err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	key := witnessSegmentKey{epochID: ref.EpochID, root: ref.SegmentRoot, digest: ref.SegmentPayloadDigest}
+	n.mu.Lock()
+	if record, ok := n.records[key]; ok {
+		n.mu.Unlock()
+		return record, true, nil
+	}
+	_, loaded := n.loaded[ref.EpochID]
+	n.mu.Unlock()
+	if loaded {
+		return fsperas.SegmentWitnessRecord{}, false, nil
+	}
+	record, found, err := n.log.ProbeSegment(ctx, ref)
+	if err != nil || !found {
+		return record, found, err
+	}
+	n.mu.Lock()
+	if current, ok := n.records[key]; ok {
+		n.mu.Unlock()
+		return current, true, nil
+	}
+	n.segments[key] = struct{}{}
+	n.records[key] = record
+	n.mu.Unlock()
+	return record, true, nil
 }
 
 func (n *WitnessNode) validateAuthority(ctx context.Context, scope compile.AuthorityScope, record fsperas.SegmentWitnessRecord) error {
@@ -170,7 +209,9 @@ func (n *WitnessNode) loadEpochLocked(ctx context.Context, epochID uint64) error
 		return err
 	}
 	for _, segment := range snapshot.Segments {
-		n.segments[witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}] = struct{}{}
+		key := witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}
+		n.segments[key] = struct{}{}
+		n.records[key] = segment
 	}
 	n.loaded[epochID] = struct{}{}
 	return nil

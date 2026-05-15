@@ -18,6 +18,20 @@ type WitnessReplica interface {
 	Probe(context.Context, uint64) (WitnessSnapshot, error)
 }
 
+type WitnessSegmentRef struct {
+	EpochID              uint64
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+}
+
+func (r WitnessSegmentRef) Valid() bool {
+	return r.EpochID != 0 && r.SegmentRoot != ([32]byte{}) && r.SegmentPayloadDigest != ([32]byte{})
+}
+
+type WitnessSegmentProber interface {
+	ProbeSegment(context.Context, WitnessSegmentRef) (SegmentWitnessRecord, bool, error)
+}
+
 type WitnessRecordKind uint8
 
 const WitnessRecordSegment WitnessRecordKind = 1

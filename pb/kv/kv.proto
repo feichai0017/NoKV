@@ -439,10 +439,18 @@ message PerasWitnessSegmentResponse {}
 
 message PerasWitnessProbeRequest {
   uint64 epoch_id = 1;
+  bytes segment_root = 2;
+  bytes segment_payload_digest = 3;
+  uint32 limit = 4;
+  bytes after_segment_root = 5;
+  bytes after_segment_payload_digest = 6;
 }
 
 message PerasWitnessProbeResponse {
   repeated PerasSegmentWitnessRecord segments = 1;
+  bytes next_segment_root = 2;
+  bytes next_segment_payload_digest = 3;
+  bool more = 4;
 }
 
 service StoreKV {

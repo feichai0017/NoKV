@@ -1061,9 +1061,14 @@ func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testin
 	require.NoError(t, err)
 	defer recoverer.Close()
 
-	require.NoError(t, recoverer.RecoverWitnessSegments(context.Background(), scope, holder.EpochID()))
+	require.NoError(t, recoverer.LoadRootSealedSegments(context.Background(), scope))
 	require.Equal(t, 1, installer.calls)
 	require.Equal(t, segment.Root, installer.segment.Root)
+	for _, witness := range witnesses {
+		recording := witness.(*recordingRuntimePerasWitness)
+		require.Zero(t, recording.probeCalls)
+		require.Equal(t, 1, recording.probeSegmentCalls)
+	}
 	stats := recoverer.Stats()
 	require.Equal(t, uint64(1), stats["root_sealed_segment_total"])
 	require.Equal(t, uint64(1), stats["root_sealed_segment_missing_total"])
@@ -2114,9 +2119,11 @@ func testRuntimePerasWitnesses(tb testing.TB, n int) []fsperas.WitnessReplica {
 }
 
 type recordingRuntimePerasWitness struct {
-	id      string
-	mu      sync.Mutex
-	records []fsperas.SegmentWitnessRecord
+	id                string
+	mu                sync.Mutex
+	records           []fsperas.SegmentWitnessRecord
+	probeCalls        int
+	probeSegmentCalls int
 }
 
 func (w *recordingRuntimePerasWitness) ID() string { return w.id }
@@ -2131,6 +2138,7 @@ func (w *recordingRuntimePerasWitness) AppendSegment(_ context.Context, _ compil
 func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.probeCalls++
 	out := fsperas.WitnessSnapshot{}
 	for _, record := range w.records {
 		if record.EpochID == epochID {
@@ -2138,6 +2146,18 @@ func (w *recordingRuntimePerasWitness) Probe(_ context.Context, epochID uint64) 
 		}
 	}
 	return out, nil
+}
+
+func (w *recordingRuntimePerasWitness) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.probeSegmentCalls++
+	for _, record := range w.records {
+		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
+			return record, true, nil
+		}
+	}
+	return fsperas.SegmentWitnessRecord{}, false, nil
 }
 
 type authorityRenewCheckingRuntimePerasWitness struct {

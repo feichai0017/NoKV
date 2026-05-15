@@ -139,50 +139,51 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	if c == nil || c.installer == nil || len(c.witnesses) == 0 {
 		return fsperas.ErrInvalidPerasSegment
 	}
-	records, err := c.collectWitnessSegments(ctx, seal.EpochID)
+	record, found, err := c.collectWitnessSegment(ctx, fsperas.WitnessSegmentRef{
+		EpochID:              seal.EpochID,
+		SegmentRoot:          seal.SegmentRoot,
+		SegmentPayloadDigest: seal.SegmentPayloadDigest,
+	})
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		if record.SegmentRoot != seal.SegmentRoot || record.SegmentPayloadDigest != seal.SegmentPayloadDigest {
-			continue
-		}
-		if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
-			return err
-		}
-		segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
-		if err != nil {
-			return err
-		}
-		if !SegmentWithinScope(segment, scope) {
-			continue
-		}
-		stats := segment.Stats()
-		if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
-			return fsperas.ErrInvalidWitnessRecord
-		}
-		if seal.OperationCount != 0 && seal.OperationCount != stats.OperationCount {
-			return fsperas.ErrInvalidPerasSegment
-		}
-		if seal.EntryCount != 0 && seal.EntryCount != stats.EntryCount {
-			return fsperas.ErrInvalidPerasSegment
-		}
-		job := perasFlushJob{
-			scope:   scope,
-			segment: segment,
-			payload: record.SegmentPayload,
-			digest:  record.SegmentPayloadDigest,
-		}
-		if _, err := c.submitInstallJob(ctx, job); err != nil {
-			return err
-		}
-		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
-			return err
-		}
-		c.metrics.recoveryInstallTotal.Add(1)
-		return nil
+	if !found {
+		return fsperas.ErrInvalidPerasSegment
 	}
-	return fsperas.ErrInvalidPerasSegment
+	if err := fsperas.VerifySegmentWitnessRecord(record); err != nil {
+		return err
+	}
+	segment, err := fsperas.VerifyPerasSegmentPayload(record.SegmentPayload, record.SegmentRoot, record.SegmentPayloadDigest)
+	if err != nil {
+		return err
+	}
+	if !SegmentWithinScope(segment, scope) {
+		return fsperas.ErrInvalidPerasSegment
+	}
+	stats := segment.Stats()
+	if record.OperationCount != stats.OperationCount || record.EntryCount != stats.EntryCount {
+		return fsperas.ErrInvalidWitnessRecord
+	}
+	if seal.OperationCount != 0 && seal.OperationCount != stats.OperationCount {
+		return fsperas.ErrInvalidPerasSegment
+	}
+	if seal.EntryCount != 0 && seal.EntryCount != stats.EntryCount {
+		return fsperas.ErrInvalidPerasSegment
+	}
+	job := perasFlushJob{
+		scope:   scope,
+		segment: segment,
+		payload: record.SegmentPayload,
+		digest:  record.SegmentPayloadDigest,
+	}
+	if _, err := c.submitInstallJob(ctx, job); err != nil {
+		return err
+	}
+	if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
+		return err
+	}
+	c.metrics.recoveryInstallTotal.Add(1)
+	return nil
 }
 
 func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compile.AuthorityScope) ([]fsperas.SegmentCatalogRecord, error) {

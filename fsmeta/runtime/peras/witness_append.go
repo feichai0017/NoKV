@@ -162,3 +162,67 @@ func (c *Runtime) collectWitnessSegments(ctx context.Context, epochID uint64) ([
 	})
 	return out, nil
 }
+
+func (c *Runtime) collectWitnessSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	if !ref.Valid() {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrInvalidWitnessRecord
+	}
+	type result struct {
+		id     string
+		record fsperas.SegmentWitnessRecord
+		found  bool
+		err    error
+	}
+	resultCh := make(chan result, len(c.witnesses))
+	for _, witness := range c.witnesses {
+		go func(witness fsperas.WitnessReplica) {
+			record, found, err := probeWitnessSegment(ctx, witness, ref)
+			resultCh <- result{id: witness.ID(), record: record, found: found, err: err}
+		}(witness)
+	}
+	failures := make([]error, 0, len(c.witnesses))
+	successes := 0
+	var selected fsperas.SegmentWitnessRecord
+	found := false
+	for range c.witnesses {
+		res := <-resultCh
+		if res.err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", res.id, res.err))
+			continue
+		}
+		successes++
+		if !res.found {
+			continue
+		}
+		if !found || len(res.record.SegmentPayload) > len(selected.SegmentPayload) {
+			selected = res.record
+			found = true
+		}
+	}
+	if successes == 0 {
+		if len(failures) == 0 {
+			return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrSegmentWitnessQuorumUnavailable
+		}
+		return fsperas.SegmentWitnessRecord{}, false, errors.Join(append([]error{fsperas.ErrSegmentWitnessQuorumUnavailable}, failures...)...)
+	}
+	return selected, found, nil
+}
+
+func probeWitnessSegment(ctx context.Context, witness fsperas.WitnessReplica, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if prober, ok := witness.(fsperas.WitnessSegmentProber); ok {
+		return prober.ProbeSegment(ctx, ref)
+	}
+	snapshot, err := witness.Probe(ctx, ref.EpochID)
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	for _, record := range snapshot.Segments {
+		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
+			return record, true, nil
+		}
+	}
+	return fsperas.SegmentWitnessRecord{}, false, nil
+}

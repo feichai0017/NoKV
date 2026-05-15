@@ -23,6 +23,8 @@ type remotePerasWitness struct {
 	client kvrpcpb.StoreKVClient
 }
 
+const remotePerasWitnessProbePageLimit = 32
+
 func newRemotePerasWitness(id string, client kvrpcpb.StoreKVClient) (*remotePerasWitness, error) {
 	if id == "" || client == nil {
 		return nil, runtimeperas.ErrRuntimeInvalid
@@ -52,11 +54,64 @@ func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas
 	if w == nil || w.client == nil {
 		return fsperas.WitnessSnapshot{}, runtimeperas.ErrRuntimeInvalid
 	}
-	resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{EpochId: epochID})
-	if err != nil {
-		return fsperas.WitnessSnapshot{}, err
+	var out fsperas.WitnessSnapshot
+	var afterRoot []byte
+	var afterDigest []byte
+	for {
+		resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{
+			EpochId:                   epochID,
+			Limit:                     remotePerasWitnessProbePageLimit,
+			AfterSegmentRoot:          afterRoot,
+			AfterSegmentPayloadDigest: afterDigest,
+		})
+		if err != nil {
+			return fsperas.WitnessSnapshot{}, err
+		}
+		page, err := rsperas.SnapshotFromProto(resp)
+		if err != nil {
+			return fsperas.WitnessSnapshot{}, err
+		}
+		out.Segments = append(out.Segments, page.Segments...)
+		if !resp.GetMore() {
+			return out, nil
+		}
+		afterRoot = append(afterRoot[:0], resp.GetNextSegmentRoot()...)
+		afterDigest = append(afterDigest[:0], resp.GetNextSegmentPayloadDigest()...)
+		if len(afterRoot) != 32 || len(afterDigest) != 32 || len(page.Segments) == 0 {
+			return fsperas.WitnessSnapshot{}, fmt.Errorf("peras witness probe returned invalid cursor: %w", runtimeperas.ErrRuntimeInvalid)
+		}
 	}
-	return rsperas.SnapshotFromProto(resp)
+}
+
+func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if w == nil || w.client == nil {
+		return fsperas.SegmentWitnessRecord{}, false, runtimeperas.ErrRuntimeInvalid
+	}
+	if !ref.Valid() {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrInvalidWitnessRecord
+	}
+	resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{
+		EpochId:              ref.EpochID,
+		SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
+		SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+	})
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	if len(resp.GetSegments()) == 0 {
+		return fsperas.SegmentWitnessRecord{}, false, nil
+	}
+	if len(resp.GetSegments()) != 1 {
+		return fsperas.SegmentWitnessRecord{}, false, fmt.Errorf("peras witness targeted probe returned %d records: %w", len(resp.GetSegments()), runtimeperas.ErrRuntimeInvalid)
+	}
+	record, err := rsperas.SegmentWitnessRecordFromProto(resp.GetSegments()[0])
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	if record.EpochID != ref.EpochID || record.SegmentRoot != ref.SegmentRoot || record.SegmentPayloadDigest != ref.SegmentPayloadDigest {
+		return fsperas.SegmentWitnessRecord{}, false, fmt.Errorf("peras witness targeted probe returned mismatched record: %w", runtimeperas.ErrRuntimeInvalid)
+	}
+	return record, true, nil
 }
 
 const (

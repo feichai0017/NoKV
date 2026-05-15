@@ -4094,10 +4094,15 @@ func (*PerasWitnessSegmentResponse) Descriptor() ([]byte, []int) {
 }
 
 type PerasWitnessProbeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EpochId       uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	EpochId                   uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	SegmentRoot               []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
+	SegmentPayloadDigest      []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
+	Limit                     uint32                 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	AfterSegmentRoot          []byte                 `protobuf:"bytes,5,opt,name=after_segment_root,json=afterSegmentRoot,proto3" json:"after_segment_root,omitempty"`
+	AfterSegmentPayloadDigest []byte                 `protobuf:"bytes,6,opt,name=after_segment_payload_digest,json=afterSegmentPayloadDigest,proto3" json:"after_segment_payload_digest,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *PerasWitnessProbeRequest) Reset() {
@@ -4137,11 +4142,49 @@ func (x *PerasWitnessProbeRequest) GetEpochId() uint64 {
 	return 0
 }
 
+func (x *PerasWitnessProbeRequest) GetSegmentRoot() []byte {
+	if x != nil {
+		return x.SegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasWitnessProbeRequest) GetSegmentPayloadDigest() []byte {
+	if x != nil {
+		return x.SegmentPayloadDigest
+	}
+	return nil
+}
+
+func (x *PerasWitnessProbeRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *PerasWitnessProbeRequest) GetAfterSegmentRoot() []byte {
+	if x != nil {
+		return x.AfterSegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasWitnessProbeRequest) GetAfterSegmentPayloadDigest() []byte {
+	if x != nil {
+		return x.AfterSegmentPayloadDigest
+	}
+	return nil
+}
+
 type PerasWitnessProbeResponse struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	Segments      []*PerasSegmentWitnessRecord `protobuf:"bytes,1,rep,name=segments,proto3" json:"segments,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                    protoimpl.MessageState       `protogen:"open.v1"`
+	Segments                 []*PerasSegmentWitnessRecord `protobuf:"bytes,1,rep,name=segments,proto3" json:"segments,omitempty"`
+	NextSegmentRoot          []byte                       `protobuf:"bytes,2,opt,name=next_segment_root,json=nextSegmentRoot,proto3" json:"next_segment_root,omitempty"`
+	NextSegmentPayloadDigest []byte                       `protobuf:"bytes,3,opt,name=next_segment_payload_digest,json=nextSegmentPayloadDigest,proto3" json:"next_segment_payload_digest,omitempty"`
+	More                     bool                         `protobuf:"varint,4,opt,name=more,proto3" json:"more,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *PerasWitnessProbeResponse) Reset() {
@@ -4179,6 +4222,27 @@ func (x *PerasWitnessProbeResponse) GetSegments() []*PerasSegmentWitnessRecord {
 		return x.Segments
 	}
 	return nil
+}
+
+func (x *PerasWitnessProbeResponse) GetNextSegmentRoot() []byte {
+	if x != nil {
+		return x.NextSegmentRoot
+	}
+	return nil
+}
+
+func (x *PerasWitnessProbeResponse) GetNextSegmentPayloadDigest() []byte {
+	if x != nil {
+		return x.NextSegmentPayloadDigest
+	}
+	return nil
+}
+
+func (x *PerasWitnessProbeResponse) GetMore() bool {
+	if x != nil {
+		return x.More
+	}
+	return false
 }
 
 type KeyError struct {
@@ -4814,11 +4878,19 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x1aPerasWitnessSegmentRequest\x125\n" +
 	"\x05scope\x18\x01 \x01(\v2\x1f.nokv.kv.v1.PerasAuthorityScopeR\x05scope\x12=\n" +
 	"\x06record\x18\x02 \x01(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\x06record\"\x1d\n" +
-	"\x1bPerasWitnessSegmentResponse\"5\n" +
+	"\x1bPerasWitnessSegmentResponse\"\x93\x02\n" +
 	"\x18PerasWitnessProbeRequest\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\"^\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
+	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x124\n" +
+	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\x12,\n" +
+	"\x12after_segment_root\x18\x05 \x01(\fR\x10afterSegmentRoot\x12?\n" +
+	"\x1cafter_segment_payload_digest\x18\x06 \x01(\fR\x19afterSegmentPayloadDigest\"\xdd\x01\n" +
 	"\x19PerasWitnessProbeResponse\x12A\n" +
-	"\bsegments\x18\x01 \x03(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\bsegments\"\xba\x02\n" +
+	"\bsegments\x18\x01 \x03(\v2%.nokv.kv.v1.PerasSegmentWitnessRecordR\bsegments\x12*\n" +
+	"\x11next_segment_root\x18\x02 \x01(\fR\x0fnextSegmentRoot\x12=\n" +
+	"\x1bnext_segment_payload_digest\x18\x03 \x01(\fR\x18nextSegmentPayloadDigest\x12\x12\n" +
+	"\x04more\x18\x04 \x01(\bR\x04more\"\xba\x02\n" +
 	"\bKeyError\x12*\n" +
 	"\x06locked\x18\x01 \x01(\v2\x12.nokv.kv.v1.LockedR\x06locked\x12@\n" +
 	"\x0ewrite_conflict\x18\x02 \x01(\v2\x19.nokv.kv.v1.WriteConflictR\rwriteConflict\x12C\n" +

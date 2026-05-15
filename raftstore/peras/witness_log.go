@@ -46,6 +46,13 @@ func (r *LocalWitnessReplica) Probe(ctx context.Context, epochID uint64) (fspera
 	return r.log.Probe(ctx, epochID)
 }
 
+func (r *LocalWitnessReplica) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if r == nil || r.log == nil {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrWitnessLogRequired
+	}
+	return r.log.ProbeSegment(ctx, ref)
+}
+
 type WALWitnessLog struct {
 	wal        *wal.Manager
 	durability wal.DurabilityPolicy
@@ -82,7 +89,7 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (fsperas.Witn
 	if l == nil || l.wal == nil {
 		return fsperas.WitnessSnapshot{}, fsperas.ErrWitnessLogRequired
 	}
-	segments := make(map[[32]byte]fsperas.SegmentWitnessRecord)
+	segments := make(map[witnessSegmentKey]fsperas.SegmentWitnessRecord)
 	err := l.wal.ReplayFiltered(
 		func(info wal.EntryInfo) bool {
 			return info.Type == wal.RecordTypePerasWitness
@@ -99,7 +106,8 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (fsperas.Witn
 				return fsperas.ErrInvalidWitnessRecord
 			}
 			if frame.Segment.EpochID == epochID {
-				segments[frame.Segment.SegmentRoot] = frame.Segment
+				key := witnessSegmentKey{epochID: frame.Segment.EpochID, root: frame.Segment.SegmentRoot, digest: frame.Segment.SegmentPayloadDigest}
+				segments[key] = frame.Segment
 			}
 			return nil
 		},
@@ -110,7 +118,8 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (fsperas.Witn
 	l.mu.RLock()
 	for _, segment := range l.segments {
 		if segment.EpochID == epochID {
-			segments[segment.SegmentRoot] = segment
+			key := witnessSegmentKey{epochID: segment.EpochID, root: segment.SegmentRoot, digest: segment.SegmentPayloadDigest}
+			segments[key] = segment
 		}
 	}
 	l.mu.RUnlock()
@@ -119,6 +128,55 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (fsperas.Witn
 		out.Segments = append(out.Segments, segment)
 	}
 	return out, nil
+}
+
+func (l *WALWitnessLog) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+	if l == nil || l.wal == nil {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrWitnessLogRequired
+	}
+	if !ref.Valid() {
+		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrInvalidWitnessRecord
+	}
+	var out fsperas.SegmentWitnessRecord
+	found := false
+	err := l.wal.ReplayFiltered(
+		func(info wal.EntryInfo) bool {
+			return info.Type == wal.RecordTypePerasWitness
+		},
+		func(_ wal.EntryInfo, payload []byte) error {
+			if err := ctxErr(ctx); err != nil {
+				return err
+			}
+			frame, err := fsperas.DecodeWitnessFrame(payload)
+			if err != nil {
+				return err
+			}
+			if frame.Kind != fsperas.WitnessRecordSegment {
+				return fsperas.ErrInvalidWitnessRecord
+			}
+			if witnessRecordMatchesRef(frame.Segment, ref) {
+				out = frame.Segment
+				found = true
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return fsperas.SegmentWitnessRecord{}, false, err
+	}
+	l.mu.RLock()
+	for _, segment := range l.segments {
+		if witnessRecordMatchesRef(segment, ref) {
+			out = segment
+			found = true
+		}
+	}
+	l.mu.RUnlock()
+	return out, found, nil
+}
+
+func witnessRecordMatchesRef(record fsperas.SegmentWitnessRecord, ref fsperas.WitnessSegmentRef) bool {
+	return record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest
 }
 
 func (l *WALWitnessLog) appendPayload(payload []byte) (wal.EntryInfo, error) {
