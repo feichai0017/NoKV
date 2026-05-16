@@ -221,6 +221,7 @@ type fakePerasAuthorityFlusher struct {
 type fakePerasVisibleSnapshotCapturer struct {
 	fakePerasAuthorityFlusher
 	capture         bool
+	segmentRefs     []fsmeta.PerasSnapshotSegmentRef
 	err             error
 	captureVersions []uint64
 	captureScopes   []compile.AuthorityScope
@@ -580,13 +581,13 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (bool, error) {
+func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
 	f.captureVersions = append(f.captureVersions, version)
 	f.captureScopes = append(f.captureScopes, scope)
 	if f.err != nil {
-		return false, f.err
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, f.err
 	}
-	return f.capture, nil
+	return fsmeta.PerasVisibleSnapshotCapture{SegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), f.segmentRefs...)}, f.capture, nil
 }
 
 func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.MaterializedOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {

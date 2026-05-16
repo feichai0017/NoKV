@@ -5,6 +5,7 @@ package state
 
 import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/feichai0017/NoKV/meta/topology"
 )
 
@@ -258,18 +259,24 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 		return
 	}
 	epoch := SnapshotEpoch{
-		SnapshotID:  event.SnapshotEpoch.SnapshotID,
-		Mount:       event.SnapshotEpoch.Mount,
-		MountKeyID:  event.SnapshotEpoch.MountKeyID,
-		RootInode:   event.SnapshotEpoch.RootInode,
-		ReadVersion: event.SnapshotEpoch.ReadVersion,
-		PublishedAt: cursor,
+		SnapshotID:       event.SnapshotEpoch.SnapshotID,
+		Mount:            event.SnapshotEpoch.Mount,
+		MountKeyID:       event.SnapshotEpoch.MountKeyID,
+		RootInode:        event.SnapshotEpoch.RootInode,
+		ReadVersion:      event.SnapshotEpoch.ReadVersion,
+		PublishedAt:      cursor,
+		PerasSegmentRefs: rootproto.ClonePerasSnapshotSegmentRefs(event.SnapshotEpoch.PerasSegmentRefs),
 	}
 	if epoch.SnapshotID == "" {
 		epoch.SnapshotID = rootevent.SnapshotEpochID(epoch.Mount, epoch.RootInode, epoch.ReadVersion)
 	}
 	if epoch.Mount == "" || epoch.MountKeyID == 0 || epoch.RootInode == 0 || epoch.ReadVersion == 0 {
 		return
+	}
+	for _, ref := range epoch.PerasSegmentRefs {
+		if !ref.Valid() {
+			return
+		}
 	}
 	snapshot.SnapshotEpochs[epoch.SnapshotID] = epoch
 }

@@ -153,19 +153,19 @@ func (c *Runtime) CapturePerasSnapshot(version uint64) error {
 }
 
 // CapturePerasVisibleSnapshot records a visible snapshot when configured.
-func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope) (bool, error) {
+func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
 	if c == nil || c.read == nil || version == 0 {
-		return false, ErrRuntimeInvalid
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if !c.visibleSnapshots && !c.quorumVisibleSnapshots {
-		return false, nil
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, nil
 	}
 	mount, prefix, ok := visibleSnapshotDirectory(scope)
 	if !ok {
-		return false, nil
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, nil
 	}
 	if c.quorumVisibleSnapshots && c.usesSegmentWitness() {
 		return c.captureQuorumVisibleSnapshot(ctx, version, scope, mount, prefix)
@@ -174,17 +174,17 @@ func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint6
 	c.captureVisibleSnapshotLocked(version, mount, prefix)
 	c.commitMu.Unlock()
 	c.triggerSnapshotFlush()
-	return true, nil
+	return fsmeta.PerasVisibleSnapshotCapture{}, true, nil
 }
 
-func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope, mount fsmeta.MountIdentity, prefix []byte) (bool, error) {
+func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope, mount fsmeta.MountIdentity, prefix []byte) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
 	c.flushMu.Lock()
 	c.commitMu.Lock()
 	plans, err := c.freezeReplayPlansLocked(&scope, 0)
 	if err != nil {
 		c.commitMu.Unlock()
 		c.flushMu.Unlock()
-		return false, err
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, err
 	}
 	c.captureVisibleSnapshotLocked(version, mount, prefix)
 	c.commitMu.Unlock()
@@ -192,24 +192,27 @@ func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint
 	if err != nil {
 		c.retirePerasSnapshot(version)
 		c.flushMu.Unlock()
-		return false, err
+		return fsmeta.PerasVisibleSnapshotCapture{}, false, err
 	}
 	pipeline := flushPipeline{runtime: c, level: fsperas.SegmentPersistenceDurable, materialize: c.materialize}
 	for _, batch := range batches {
 		if err := pipeline.renewBatchAuthority(ctx, batch); err != nil {
 			c.retirePerasSnapshot(version)
 			c.flushMu.Unlock()
-			return false, err
+			return fsmeta.PerasVisibleSnapshotCapture{}, false, err
 		}
 		if err := pipeline.witnessBatch(ctx, batch); err != nil {
 			c.retirePerasSnapshot(version)
 			c.flushMu.Unlock()
-			return false, err
+			return fsmeta.PerasVisibleSnapshotCapture{}, false, err
 		}
+	}
+	capture := fsmeta.PerasVisibleSnapshotCapture{
+		SegmentRefs: perasSnapshotSegmentRefsFromBatches(batches),
 	}
 	c.flushMu.Unlock()
 	c.triggerSnapshotFlush()
-	return true, nil
+	return capture, true, nil
 }
 
 func (c *Runtime) triggerSnapshotFlush() {
@@ -229,6 +232,23 @@ func (c *Runtime) captureVisibleSnapshotLocked(version uint64, mount fsmeta.Moun
 		visible:        c.read.overlay.SnapshotDirectory(mount, prefix),
 	}
 	c.read.mu.Unlock()
+}
+
+func perasSnapshotSegmentRefsFromBatches(batches []perasFlushBatch) []fsmeta.PerasSnapshotSegmentRef {
+	if len(batches) == 0 {
+		return nil
+	}
+	refs := make([]fsmeta.PerasSnapshotSegmentRef, 0)
+	for _, batch := range batches {
+		for _, job := range batch.jobs {
+			refs = append(refs, fsmeta.PerasSnapshotSegmentRef{
+				EpochID:              job.segment.EpochID,
+				SegmentRoot:          job.segment.Root,
+				SegmentPayloadDigest: job.digest,
+			})
+		}
+	}
+	return refs
 }
 
 func (c *Runtime) RetirePerasSnapshot(version uint64) {

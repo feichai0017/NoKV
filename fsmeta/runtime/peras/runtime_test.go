@@ -352,13 +352,14 @@ func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) 
 
 	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a")))
 	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, opB))
-	captured, err := committer.CapturePerasVisibleSnapshot(context.Background(), 11, compile.AuthorityScope{
+	capture, captured, err := committer.CapturePerasVisibleSnapshot(context.Background(), 11, compile.AuthorityScope{
 		Mount:      testRuntimeMount.MountID,
 		MountKeyID: testRuntimeMount.MountKeyID,
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 	})
 	require.NoError(t, err)
 	require.True(t, captured)
+	require.Empty(t, capture.SegmentRefs)
 	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "c", 43, []byte("visible-c"), nil)))
 
 	_, _, ok := committer.GetPerasSnapshotOverlayView(11, keyC)
@@ -392,13 +393,20 @@ func TestRuntimeCaptureQuorumVisibleSnapshotWitnessesPendingFrontier(t *testing.
 	ctx := context.Background()
 	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "a", 41, nil, nil), nil)
 	require.NoError(t, err)
-	captured, err := committer.CapturePerasVisibleSnapshot(ctx, 12, compile.AuthorityScope{
+	capture, captured, err := committer.CapturePerasVisibleSnapshot(ctx, 12, compile.AuthorityScope{
 		Mount:      testRuntimeMount.MountID,
 		MountKeyID: testRuntimeMount.MountKeyID,
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 	})
 	require.NoError(t, err)
 	require.True(t, captured)
+	require.NotEmpty(t, capture.SegmentRefs)
+	witnessSnapshot, err := witness.Probe(ctx, capture.SegmentRefs[0].EpochID)
+	require.NoError(t, err)
+	require.NotEmpty(t, witnessSnapshot.Segments)
+	require.Equal(t, witnessSnapshot.Segments[0].EpochID, capture.SegmentRefs[0].EpochID)
+	require.Equal(t, witnessSnapshot.Segments[0].SegmentRoot, capture.SegmentRefs[0].SegmentRoot)
+	require.Equal(t, witnessSnapshot.Segments[0].SegmentPayloadDigest, capture.SegmentRefs[0].SegmentPayloadDigest)
 	require.Greater(t, witness.recordCount(), 0)
 	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil), nil)
 	require.NoError(t, err)

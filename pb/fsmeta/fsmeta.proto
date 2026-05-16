@@ -189,16 +189,24 @@ message SnapshotSubtreeRequest {
   uint64 root_inode = 2;
 }
 
+message PerasSnapshotSegmentRef {
+  uint64 epoch_id = 1;
+  bytes segment_root = 2;
+  bytes segment_payload_digest = 3;
+}
+
 message SnapshotSubtreeResponse {
   string mount = 1;
   uint64 root_inode = 2;
   uint64 read_version = 3;
+  repeated PerasSnapshotSegmentRef peras_segment_refs = 4;
 }
 
 message RetireSnapshotSubtreeRequest {
   string mount = 1;
   uint64 root_inode = 2;
   uint64 read_version = 3;
+  repeated PerasSnapshotSegmentRef peras_segment_refs = 4;
 }
 
 message RetireSnapshotSubtreeResponse {}

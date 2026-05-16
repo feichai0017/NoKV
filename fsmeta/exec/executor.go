@@ -158,7 +158,7 @@ type PerasSnapshotCapturer interface {
 // without forcing an authority flush. Runtimes return captured=false when the
 // snapshot cannot be made durable at the visible boundary.
 type PerasVisibleSnapshotCapturer interface {
-	CapturePerasVisibleSnapshot(context.Context, uint64, compile.AuthorityScope) (captured bool, err error)
+	CapturePerasVisibleSnapshot(context.Context, uint64, compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error)
 }
 
 // PerasSnapshotOverlayReader serves a captured Peras overlay for a snapshot

@@ -9,6 +9,7 @@ import (
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 )
@@ -20,7 +21,13 @@ type rootPublisher struct {
 }
 
 func (p rootPublisher) PublishSnapshotSubtree(ctx context.Context, t fsmeta.SnapshotSubtreeToken) error {
-	return p.send(ctx, rootevent.SnapshotEpochPublished(string(t.Mount), uint64(t.MountKeyID), uint64(t.RootInode), t.ReadVersion))
+	return p.send(ctx, rootevent.SnapshotEpochPublishedWithPerasRefs(
+		string(t.Mount),
+		uint64(t.MountKeyID),
+		uint64(t.RootInode),
+		t.ReadVersion,
+		rootPerasSnapshotSegmentRefsFromToken(t.PerasSegmentRefs),
+	))
 }
 
 func (p rootPublisher) RetireSnapshotSubtree(ctx context.Context, t fsmeta.SnapshotSubtreeToken) error {
@@ -49,4 +56,19 @@ func (p rootPublisher) send(ctx context.Context, event rootevent.Event) error {
 		return errRootEventNotAccepted
 	}
 	return nil
+}
+
+func rootPerasSnapshotSegmentRefsFromToken(refs []fsmeta.PerasSnapshotSegmentRef) []rootproto.PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]rootproto.PerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, rootproto.PerasSnapshotSegmentRef{
+			EpochID:              ref.EpochID,
+			SegmentRoot:          ref.SegmentRoot,
+			SegmentPayloadDigest: ref.SegmentPayloadDigest,
+		})
+	}
+	return out
 }

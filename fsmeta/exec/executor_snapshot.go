@@ -30,16 +30,17 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
-		captured, err := capturer.CapturePerasVisibleSnapshot(ctx, version, delta.Authority)
+		capture, captured, err := capturer.CapturePerasVisibleSnapshot(ctx, version, delta.Authority)
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
 		if captured {
 			return fsmeta.SnapshotSubtreeToken{
-				Mount:       req.Mount,
-				MountKeyID:  mountRecord.MountKeyID,
-				RootInode:   req.RootInode,
-				ReadVersion: version,
+				Mount:            req.Mount,
+				MountKeyID:       mountRecord.MountKeyID,
+				RootInode:        req.RootInode,
+				ReadVersion:      version,
+				PerasSegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), capture.SegmentRefs...),
 			}, nil
 		}
 	}
@@ -71,8 +72,13 @@ func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta
 	if token.RootInode == 0 || token.ReadVersion == 0 {
 		return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
 	}
+	for _, ref := range token.PerasSegmentRefs {
+		if !ref.Valid() {
+			return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
+		}
+	}
 	token.MountKeyID = record.MountKeyID
-	return token, nil
+	return token.Clone(), nil
 }
 
 func (e *Executor) RetirePerasSnapshot(version uint64) {

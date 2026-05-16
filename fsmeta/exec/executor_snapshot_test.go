@@ -60,7 +60,8 @@ func TestExecutorSnapshotSubtreeFlushesPerasAuthorityBeforeToken(t *testing.T) {
 
 func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
 	runner := newFakeRunner()
-	capturer := &fakePerasVisibleSnapshotCapturer{capture: true}
+	ref := testPerasSnapshotSegmentRef(3, 0xaa)
+	capturer := &fakePerasVisibleSnapshotCapturer{capture: true, segmentRefs: []fsmeta.PerasSnapshotSegmentRef{ref}}
 	executor, err := newTestExecutor(runner,
 		WithPerasCommitter(capturer),
 		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
@@ -76,6 +77,7 @@ func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
 	require.Equal(t, []uint64{1}, capturer.captureVersions)
 	require.Len(t, capturer.captureScopes, 1)
 	require.Equal(t, []fsmeta.InodeID{7}, capturer.captureScopes[0].Parents)
+	require.Equal(t, []fsmeta.PerasSnapshotSegmentRef{ref}, token.PerasSegmentRefs)
 	require.Equal(t, 0, capturer.flushCalls)
 }
 
@@ -94,6 +96,32 @@ func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 9, RootInode: 7, ReadVersion: 42}, token)
+}
+
+func TestExecutorResolveSnapshotSubtreeTokenRejectsInvalidPerasRef(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	_, err = executor.ResolveSnapshotSubtreeToken(context.Background(), fsmeta.SnapshotSubtreeToken{
+		Mount:            "vol",
+		RootInode:        7,
+		ReadVersion:      42,
+		PerasSegmentRefs: []fsmeta.PerasSnapshotSegmentRef{{EpochID: 1}},
+	})
+	require.ErrorIs(t, err, fsmeta.ErrInvalidRequest)
+}
+
+func testPerasSnapshotSegmentRef(epoch uint64, seed byte) fsmeta.PerasSnapshotSegmentRef {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = seed
+	digest[0] = seed + 1
+	return fsmeta.PerasSnapshotSegmentRef{
+		EpochID:              epoch,
+		SegmentRoot:          root,
+		SegmentPayloadDigest: digest,
+	}
 }
 
 func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {

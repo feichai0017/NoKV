@@ -54,6 +54,14 @@ type PerasAuthoritySeal struct {
 	InstallVersion       uint64
 }
 
+// PerasSnapshotSegmentRef is rooted snapshot evidence pointing at one witness
+// segment that must be retained for a visible fsmeta snapshot frontier.
+type PerasSnapshotSegmentRef struct {
+	EpochID              uint64
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+}
+
 type PerasAuthorityAct uint8
 
 const (
@@ -107,6 +115,11 @@ func (s PerasAuthoritySeal) Valid() bool {
 		s.SealedUnixNano > 0
 }
 
+func (r PerasSnapshotSegmentRef) Valid() bool {
+	var zero [32]byte
+	return r.EpochID != 0 && r.SegmentRoot != zero && r.SegmentPayloadDigest != zero
+}
+
 func (g PerasAuthorityGrant) ActiveAt(nowUnixNano int64) bool {
 	return g.ExpiresUnixNano > 0 && nowUnixNano < g.ExpiresUnixNano
 }
@@ -145,6 +158,15 @@ func ClonePerasAuthorityGrant(grant PerasAuthorityGrant) PerasAuthorityGrant {
 func ClonePerasAuthoritySeal(seal PerasAuthoritySeal) PerasAuthoritySeal {
 	seal.Scope = ClonePerasAuthorityScope(seal.Scope)
 	return seal
+}
+
+func ClonePerasSnapshotSegmentRefs(refs []PerasSnapshotSegmentRef) []PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]PerasSnapshotSegmentRef, len(refs))
+	copy(out, refs)
+	return out
 }
 
 func ClonePerasAuthorityScope(scope PerasAuthorityScope) PerasAuthorityScope {

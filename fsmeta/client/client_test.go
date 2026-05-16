@@ -26,6 +26,7 @@ type fakeExecutor struct {
 	err              error
 	lookupCount      int
 	readDirPlusCount int
+	snapshotRefs     []fsmeta.PerasSnapshotSegmentRef
 }
 
 func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
@@ -184,7 +185,13 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
 	}
-	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, MountKeyID: 1, RootInode: req.RootInode, ReadVersion: 5678}, nil
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:            req.Mount,
+		MountKeyID:       1,
+		RootInode:        req.RootInode,
+		ReadVersion:      5678,
+		PerasSegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), e.snapshotRefs...),
+	}, nil
 }
 
 func (e *fakeExecutor) ResolveSnapshotSubtreeToken(_ context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error) {
@@ -531,7 +538,8 @@ func TestWatchSessionHelpers(t *testing.T) {
 
 func TestTypedClientSnapshotSubtree(t *testing.T) {
 	publisher := &fakeSnapshotPublisher{}
-	cli, cleanup := openBufconnClient(t, &fakeExecutor{}, fsmetaserver.WithSnapshotPublisher(publisher))
+	ref := testClientPerasSnapshotSegmentRef(4, 0x10)
+	cli, cleanup := openBufconnClient(t, &fakeExecutor{snapshotRefs: []fsmeta.PerasSnapshotSegmentRef{ref}}, fsmetaserver.WithSnapshotPublisher(publisher))
 	defer cleanup()
 
 	token, err := cli.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
@@ -539,12 +547,13 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 		RootInode: 42,
 	})
 	require.NoError(t, err)
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678}, token)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", RootInode: 42, ReadVersion: 5678, PerasSegmentRefs: []fsmeta.PerasSnapshotSegmentRef{ref}}, token)
 	require.NoError(t, cli.RetireSnapshotSubtree(context.Background(), token))
 	require.Equal(t, token.Mount, publisher.retired.Mount)
 	require.Equal(t, fsmeta.MountKeyID(1), publisher.retired.MountKeyID)
 	require.Equal(t, token.RootInode, publisher.retired.RootInode)
 	require.Equal(t, token.ReadVersion, publisher.retired.ReadVersion)
+	require.Equal(t, []fsmeta.PerasSnapshotSegmentRef{ref}, publisher.retired.PerasSegmentRefs)
 }
 
 func TestTypedClientGetReadVersion(t *testing.T) {
@@ -576,6 +585,14 @@ func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(context.Context, fsmeta.S
 func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	p.retired = token
 	return nil
+}
+
+func testClientPerasSnapshotSegmentRef(epoch uint64, seed byte) fsmeta.PerasSnapshotSegmentRef {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = seed
+	digest[0] = seed + 1
+	return fsmeta.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
 }
 
 type fakeWatcher struct {

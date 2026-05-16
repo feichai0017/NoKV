@@ -90,9 +90,10 @@ func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmet
 
 func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.SnapshotSubtreeResponse {
 	return &fsmetapb.SnapshotSubtreeResponse{
-		Mount:       string(token.Mount),
-		RootInode:   uint64(token.RootInode),
-		ReadVersion: token.ReadVersion,
+		Mount:            string(token.Mount),
+		RootInode:        uint64(token.RootInode),
+		ReadVersion:      token.ReadVersion,
+		PerasSegmentRefs: perasSnapshotSegmentRefsToProto(token.PerasSegmentRefs),
 	}
 }
 
@@ -101,10 +102,43 @@ func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRe
 		return fsmeta.SnapshotSubtreeToken{}
 	}
 	return fsmeta.SnapshotSubtreeToken{
-		Mount:       fsmeta.MountID(req.GetMount()),
-		RootInode:   fsmeta.InodeID(req.GetRootInode()),
-		ReadVersion: req.GetReadVersion(),
+		Mount:            fsmeta.MountID(req.GetMount()),
+		RootInode:        fsmeta.InodeID(req.GetRootInode()),
+		ReadVersion:      req.GetReadVersion(),
+		PerasSegmentRefs: perasSnapshotSegmentRefsFromProto(req.GetPerasSegmentRefs()),
 	}
+}
+
+func perasSnapshotSegmentRefsToProto(refs []fsmeta.PerasSnapshotSegmentRef) []*fsmetapb.PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]*fsmetapb.PerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, &fsmetapb.PerasSnapshotSegmentRef{
+			EpochId:              ref.EpochID,
+			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
+			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		})
+	}
+	return out
+}
+
+func perasSnapshotSegmentRefsFromProto(refs []*fsmetapb.PerasSnapshotSegmentRef) []fsmeta.PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]fsmeta.PerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		var parsed fsmeta.PerasSnapshotSegmentRef
+		if ref != nil {
+			parsed.EpochID = ref.GetEpochId()
+			copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
+			copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
+		}
+		out = append(out, parsed)
+	}
+	return out
 }
 
 func quotaUsageRequestFromProto(req *fsmetapb.QuotaUsageRequest) fsmeta.QuotaUsageRequest {

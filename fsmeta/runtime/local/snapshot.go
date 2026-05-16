@@ -17,15 +17,22 @@ import (
 // state to still exist.
 type SnapshotRegistry struct {
 	mu     sync.Mutex
-	active map[fsmeta.SnapshotSubtreeToken]struct{}
+	active map[localSnapshotKey]struct{}
 
 	publishTotal atomic.Uint64
 	retireTotal  atomic.Uint64
 }
 
+type localSnapshotKey struct {
+	mount       fsmeta.MountID
+	mountKeyID  fsmeta.MountKeyID
+	rootInode   fsmeta.InodeID
+	readVersion uint64
+}
+
 // NewSnapshotRegistry constructs an empty local snapshot registry.
 func NewSnapshotRegistry() *SnapshotRegistry {
-	return &SnapshotRegistry{active: make(map[fsmeta.SnapshotSubtreeToken]struct{})}
+	return &SnapshotRegistry{active: make(map[localSnapshotKey]struct{})}
 }
 
 // PublishSnapshotSubtree records a local snapshot token.
@@ -38,9 +45,9 @@ func (r *SnapshotRegistry) PublishSnapshotSubtree(_ context.Context, token fsmet
 	}
 	r.mu.Lock()
 	if r.active == nil {
-		r.active = make(map[fsmeta.SnapshotSubtreeToken]struct{})
+		r.active = make(map[localSnapshotKey]struct{})
 	}
-	r.active[token] = struct{}{}
+	r.active[localSnapshotKeyFromToken(token)] = struct{}{}
 	r.mu.Unlock()
 	r.publishTotal.Add(1)
 	return nil
@@ -55,7 +62,7 @@ func (r *SnapshotRegistry) RetireSnapshotSubtree(_ context.Context, token fsmeta
 		return nil
 	}
 	r.mu.Lock()
-	delete(r.active, token)
+	delete(r.active, localSnapshotKeyFromToken(token))
 	r.mu.Unlock()
 	r.retireTotal.Add(1)
 	return nil
@@ -86,5 +93,19 @@ func validateSnapshotToken(token fsmeta.SnapshotSubtreeToken) error {
 	if token.Mount == "" || token.MountKeyID == 0 || token.RootInode == 0 || token.ReadVersion == 0 {
 		return fsmeta.ErrInvalidRequest
 	}
+	for _, ref := range token.PerasSegmentRefs {
+		if !ref.Valid() {
+			return fsmeta.ErrInvalidRequest
+		}
+	}
 	return nil
+}
+
+func localSnapshotKeyFromToken(token fsmeta.SnapshotSubtreeToken) localSnapshotKey {
+	return localSnapshotKey{
+		mount:       token.Mount,
+		mountKeyID:  token.MountKeyID,
+		rootInode:   token.RootInode,
+		readVersion: token.ReadVersion,
+	}
 }
