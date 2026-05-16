@@ -38,7 +38,7 @@ import { withBase } from 'vitepress'
           >
             View on GitHub
           </a>
-          <a class="nokv-btn nokv-btn--ghost" href="mailto:eric@nokv.io">
+          <a class="nokv-btn nokv-btn--ghost" href="mailto:contact@nokv.io">
             Contact the team
           </a>
         </div>
