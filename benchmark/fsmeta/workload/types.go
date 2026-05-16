@@ -48,6 +48,10 @@ type MetadataClient interface {
 	CloseWriteSession(context.Context, fsmeta.CloseWriteSessionRequest) error
 }
 
+type LookupPlusMetadataClient interface {
+	LookupPlus(context.Context, fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error)
+}
+
 type MDTestConfig struct {
 	Mount             fsmeta.MountID
 	RunID             string

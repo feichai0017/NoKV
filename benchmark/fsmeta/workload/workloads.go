@@ -74,6 +74,10 @@ func runMDTest(ctx context.Context, cli MetadataClient, cfg MDTestConfig, name s
 			return
 		}
 		rec.recordCall(name+"_stat", func() error {
+			if cli, ok := cli.(LookupPlusMetadataClient); ok {
+				_, err := cli.LookupPlus(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: file.parent, Name: file.name})
+				return err
+			}
 			_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: file.parent, Name: file.name})
 			return err
 		})
@@ -280,6 +284,10 @@ func RunMimesisNamespace(ctx context.Context, cli MetadataClient, cfg MimesisNam
 		file.name = renamed
 		files[idx] = file
 		rec.recordCall("mimesis_lookup", func() error {
+			if cli, ok := cli.(LookupPlusMetadataClient); ok {
+				_, err := cli.LookupPlus(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: file.parent, Name: file.name})
+				return err
+			}
 			_, err := cli.Lookup(ctx, fsmeta.LookupRequest{Mount: cfg.Mount, Parent: file.parent, Name: file.name})
 			return err
 		})

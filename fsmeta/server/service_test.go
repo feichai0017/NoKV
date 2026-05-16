@@ -82,6 +82,23 @@ func (e *fakeExecutor) Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.Den
 	}, nil
 }
 
+func (e *fakeExecutor) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	dentry, err := e.Lookup(ctx, req)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	return fsmeta.DentryAttrPair{
+		Dentry: dentry,
+		Inode: fsmeta.InodeRecord{
+			Inode:     dentry.Inode,
+			Type:      dentry.Type,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
+	}, nil
+}
+
 func (e *fakeExecutor) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	e.readDirReq = req
 	if e.err != nil {
@@ -254,6 +271,15 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.Equal(t, "checkpoint", resp.GetEntries()[0].GetDentry().GetName())
 	require.Equal(t, uint64(4096), resp.GetEntries()[0].GetInode().GetSize())
 	require.Equal(t, []byte(nil), resp.GetEntries()[0].GetInode().GetOpaqueAttrs())
+
+	lookupPlus, err := client.LookupPlus(context.Background(), &fsmetapb.LookupRequest{
+		Mount:  "vol",
+		Parent: uint64(fsmeta.RootInode),
+		Name:   "checkpoint",
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), lookupPlus.GetEntry().GetDentry().GetInode())
+	require.Equal(t, uint64(4096), lookupPlus.GetEntry().GetInode().GetSize())
 }
 
 func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {

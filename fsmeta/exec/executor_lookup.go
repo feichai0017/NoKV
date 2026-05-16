@@ -56,6 +56,95 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	return fsmeta.DecodeDentryValue(value)
 }
 
+// LookupPlus returns one dentry and its inode attributes at the same read
+// version, merged with visible Peras overlay rows.
+func (e *Executor) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	mount := mountRecord.Identity()
+	program, err := compile.CompileLookupReadProgram(req, mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	plan := program.Plan
+	if value, deleted, ok := e.readPerasProgram(program); ok {
+		e.invalidateNegative(plan.PrimaryKey)
+		if deleted {
+			return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+		}
+		dentry, err := fsmeta.DecodeDentryValue(value)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+		return e.readLookupPlusInode(ctx, mount, dentry, 0)
+	}
+	if e.negCache != nil && e.negCache.Has(plan.PrimaryKey) {
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	value, ok, err := e.runner.Get(ctx, plan.PrimaryKey, version)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if !ok {
+		if e.negCache != nil {
+			e.negCache.Remember(plan.PrimaryKey)
+		}
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	dentry, err := fsmeta.DecodeDentryValue(value)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	return e.readLookupPlusInode(ctx, mount, dentry, version)
+}
+
+func (e *Executor) readLookupPlusInode(ctx context.Context, mount fsmeta.MountIdentity, dentry fsmeta.DentryRecord, version uint64) (fsmeta.DentryAttrPair, error) {
+	program, err := compile.CompileGetAttrReadProgram(mount, dentry.Inode)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if value, deleted, ok := e.readPerasProgram(program); ok {
+		if deleted {
+			return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+		}
+		inode, err := fsmeta.DecodeInodeValue(value)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+		if inode.Inode != dentry.Inode {
+			return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+		}
+		return fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode}, nil
+	}
+	if version == 0 {
+		version, err = e.reserveReadVersion(ctx)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+	}
+	value, ok, err := e.runner.Get(ctx, program.Key, version)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if !ok {
+		return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+	}
+	inode, err := fsmeta.DecodeInodeValue(value)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if inode.Inode != dentry.Inode {
+		return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+	}
+	return fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode}, nil
+}
+
 // invalidateNegative drops cached "missing" memos for every dentry key that
 // was just mutated, so the next Lookup re-issues against the runner instead
 // of returning a stale ErrNotFound. Safe with a nil cache.

@@ -44,6 +44,7 @@ type Client interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
+	LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req fsmeta.WatchRequest) (WatchSubscription, error)
@@ -180,6 +181,19 @@ func (c *GRPCClient) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsme
 	record := dentryFromProto(resp.GetDentry())
 	c.lookup.Put(req.Mount, record)
 	return record, nil
+}
+
+func (c *GRPCClient) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	if err := c.requireRPC(); err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	resp, err := c.rpc.LookupPlus(ctx, lookupRequestToProto(req))
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, translateRPCError(err)
+	}
+	pair := pairFromProto(resp.GetEntry())
+	c.lookup.Put(req.Mount, pair.Dentry)
+	return pair, nil
 }
 
 func (c *GRPCClient) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
