@@ -38,7 +38,7 @@ import { withBase } from 'vitepress'
           >
             View on GitHub
           </a>
-          <a class="nokv-btn nokv-btn--ghost" href="mailto:songguocheng348@gmail.com">
+          <a class="nokv-btn nokv-btn--ghost" href="mailto:contact@nokv.io">
             Contact the team
           </a>
         </div>
@@ -49,11 +49,11 @@ import { withBase } from 'vitepress'
         <ul class="cta-side-list">
           <li>
             <strong>Eric</strong>
-            <a href="mailto:songguocheng348@gmail.com">songguocheng348@gmail.com</a>
+            <a href="mailto:eric@nokv.io">eric@nokv.io</a>
           </li>
           <li>
             <strong>Jason</strong>
-            <a href="mailto:wch19961116@gmail.com">wch19961116@gmail.com</a>
+            <a href="mailto:jason@nokv.io">jason@nokv.io</a>
           </li>
         </ul>
       </aside>

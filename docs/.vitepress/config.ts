@@ -4,12 +4,12 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
-const SITE_URL = 'https://feichai0017.github.io/NoKV'
+const SITE_URL = 'https://nokv.io'
 const OG_IMAGE = `${SITE_URL}/img/og.png`
 
 export default withMermaid(
   defineConfig({
-    base: '/NoKV/',
+    base: '/',
     title: 'NoKV',
     titleTemplate: ':title — NoKV',
     description:
@@ -23,7 +23,7 @@ export default withMermaid(
     ignoreDeadLinks: 'localhostLinks',
 
     head: [
-      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/NoKV/img/logo.svg' }],
+      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/img/logo.svg' }],
       ['link', { rel: 'preconnect', href: 'https://rsms.me/' }],
       ['link', { rel: 'stylesheet', href: 'https://rsms.me/inter/inter.css' }],
       ['meta', { name: 'theme-color', content: '#3b82f6' }],
@@ -201,7 +201,7 @@ export default withMermaid(
     },
 
     sitemap: {
-      hostname: 'https://feichai0017.github.io/NoKV/',
+      hostname: 'https://nokv.io/',
     },
 
     vite: {
