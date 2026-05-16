@@ -36,6 +36,10 @@ type Executor interface {
 	ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
 }
 
+type CreateBatchExecutor interface {
+	CreateBatch(ctx context.Context, req fsmeta.CreateBatchRequest) (fsmeta.CreateBatchResult, error)
+}
+
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
 // It is intentionally a thin transport layer; all transaction semantics stay in
 // the Executor implementation.
@@ -95,6 +99,31 @@ func (s *Service) Create(ctx context.Context, req *fsmetapb.CreateRequest) (*fsm
 		Dentry: dentryToProto(result.Dentry),
 		Inode:  inodeToProto(result.Inode),
 	}, nil
+}
+
+func (s *Service) CreateBatch(ctx context.Context, req *fsmetapb.CreateBatchRequest) (*fsmetapb.CreateBatchResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta create batch request is required")
+	}
+	batcher, ok := s.executor.(CreateBatchExecutor)
+	if !ok {
+		return nil, rpcInvalidArgument("fsmeta create batch is not supported")
+	}
+	result, err := batcher.CreateBatch(ctx, createBatchRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	resp := &fsmetapb.CreateBatchResponse{Entries: make([]*fsmetapb.CreateResponse, 0, len(result.Entries))}
+	for _, entry := range result.Entries {
+		resp.Entries = append(resp.Entries, &fsmetapb.CreateResponse{
+			Dentry: dentryToProto(entry.Dentry),
+			Inode:  inodeToProto(entry.Inode),
+		})
+	}
+	return resp, nil
 }
 
 func (s *Service) UpdateInode(ctx context.Context, req *fsmetapb.UpdateInodeRequest) (*fsmetapb.UpdateInodeResponse, error) {

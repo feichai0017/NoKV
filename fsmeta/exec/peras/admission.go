@@ -21,6 +21,11 @@ type AdmissionContext struct {
 
 type AdmissionFunc func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error)
 
+type VisibleSubmission struct {
+	ID OperationID
+	Op compile.MaterializedOp
+}
+
 type AuthorityRetirer interface {
 	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
 }

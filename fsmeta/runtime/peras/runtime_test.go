@@ -49,6 +49,40 @@ func TestRuntimeCommitsAndServesOverlay(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
+func TestRuntimeSubmitVisibleBatchCommitsOverlay(t *testing.T) {
+	log := &recordingVisibleLog{}
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	first := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	second := testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b"))
+	acks, err := committer.SubmitVisibleBatch(context.Background(), []fsperas.VisibleSubmission{
+		{ID: fsperas.OperationID{ClientID: "client", Seq: 1}, Op: first},
+		{ID: fsperas.OperationID{ClientID: "client", Seq: 2}, Op: second},
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, acks, 2)
+
+	value, deleted, ok := committer.GetPerasOverlay(first.Effects[0].Key)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+	value, deleted, ok = committer.GetPerasOverlay(second.Effects[0].Key)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("dentry-value"), value)
+	require.Len(t, log.records, 2)
+	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
+}
+
 func TestRuntimeSubmitVisibleRequiresVisibleLog(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRuntime(Config{

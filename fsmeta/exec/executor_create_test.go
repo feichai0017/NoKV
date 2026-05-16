@@ -88,6 +88,38 @@ func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	requirePerasVisibleStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
+func TestExecutorCreateBatchUsesPerasBatchCommitter(t *testing.T) {
+	runner := newFakeRunner()
+	committer := &fakePerasBatchCommitter{}
+	firstInode := testInodeForParentBucket(t, fsmeta.RootInode)
+	secondInode := testInodeForParentBucket(t, fsmeta.RootInode, firstInode)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{firstInode, secondInode}}),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+
+	result, err := executor.CreateBatch(context.Background(), fsmeta.CreateBatchRequest{Entries: []fsmeta.CreateRequest{
+		{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-a", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}},
+		{Mount: "vol", Parent: fsmeta.RootInode, Name: "file-b", Attrs: fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile}},
+	}})
+	require.NoError(t, err)
+
+	require.Len(t, result.Entries, 2)
+	require.Equal(t, firstInode, result.Entries[0].Inode.Inode)
+	require.Equal(t, secondInode, result.Entries[1].Inode.Inode)
+	require.Equal(t, 1, committer.batchCalls)
+	require.Equal(t, []int{2}, committer.batchSizes)
+	require.Equal(t, 2, committer.calls)
+	require.Empty(t, runner.mutations, "batch visible commit success must bypass the current Raft commit")
+
+	stats := executor.Stats()
+	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
+	requirePerasVisibleStatUint(t, stats, "success_total", 2)
+}
+
 func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 21)

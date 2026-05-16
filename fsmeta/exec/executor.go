@@ -124,6 +124,10 @@ type PerasCommitter interface {
 	SubmitVisible(context.Context, fsperas.OperationID, compile.MaterializedOp, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
 }
 
+type PerasBatchCommitter interface {
+	SubmitVisibleBatch(context.Context, []fsperas.VisibleSubmission, fsperas.AdmissionFunc) ([]fsperas.VisibleAck, error)
+}
+
 type PerasOverlayReader interface {
 	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
 	// GetPerasOverlayView returns overlay-owned bytes. Callers must not mutate

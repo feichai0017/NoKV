@@ -512,6 +512,153 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	return ack, nil
 }
 
+func (c *Runtime) SubmitVisibleBatch(ctx context.Context, submissions []fsperas.VisibleSubmission, admission fsperas.AdmissionFunc) ([]fsperas.VisibleAck, error) {
+	if c == nil || c.authority == nil {
+		return nil, ErrRuntimeInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(submissions) == 0 {
+		return nil, nil
+	}
+	if c.closed.Load() {
+		return nil, ErrRuntimeClosed
+	}
+	scopes := make([]compile.AuthorityScope, 0, len(submissions))
+	for _, submission := range submissions {
+		if !submission.ID.Valid() {
+			return nil, fsperas.ErrInvalidOperationID
+		}
+		op := submission.Op
+		if err := op.ValidateForAdmissionIntent(); err != nil {
+			return nil, fsperas.ErrIneligibleOperation
+		}
+		if !op.Placement.CanSegment {
+			return nil, fsperas.ErrIneligibleOperation
+		}
+		scopes = append(scopes, op.Delta.Authority)
+	}
+	scope, ok := UnionScopes(scopes...)
+	if !ok {
+		return nil, fsperas.ErrIneligibleOperation
+	}
+	leaveAuthority := c.enterAuthority(scope)
+	defer leaveAuthority()
+	for range submissions {
+		if err := c.waitForAdmissionCapacity(ctx); err != nil {
+			return nil, err
+		}
+	}
+	c.commitMu.RLock()
+	defer c.commitMu.RUnlock()
+	if c.closed.Load() {
+		return nil, ErrRuntimeClosed
+	}
+	acks := make([]fsperas.VisibleAck, len(submissions))
+	pending := make([]fsperas.VisibleSubmission, 0, len(submissions))
+	for idx, submission := range submissions {
+		if completion, ok := c.completionForOperation(submission.ID); ok {
+			if !completionMatchesOperation(completion.completion, submission.Op) {
+				return nil, fsperas.ErrDuplicateOperation
+			}
+			acks[idx] = fsperas.VisibleAck{EpochID: completion.epochID, OpID: submission.ID, HolderID: c.authority.HolderID()}
+			continue
+		}
+		pending = append(pending, submission)
+	}
+	if len(pending) == 0 {
+		return acks, nil
+	}
+	grant, owned, err := c.authority.Acquire(ctx, scope)
+	if err != nil {
+		return nil, c.recordError(err)
+	}
+	if !owned {
+		return nil, c.recordError(ErrNotHeld)
+	}
+	holder, err := c.holderForGrant(ctx, grant, scope)
+	if err != nil {
+		return nil, c.recordError(err)
+	}
+	admissionOps := make([]compile.MaterializedOp, 0, len(pending))
+	for _, submission := range pending {
+		if ack, ok, err := holder.PendingAck(submission.ID, submission.Op); ok || err != nil {
+			if err != nil {
+				return nil, c.recordError(err)
+			}
+			for idx := range submissions {
+				if submissions[idx].ID == submission.ID {
+					acks[idx] = ack
+					break
+				}
+			}
+			continue
+		}
+		admissionOps = append(admissionOps, submission.Op)
+	}
+	unlockAdmission := c.latches.LockMany(admissionOps)
+	defer unlockAdmission()
+	admitted := make([]fsperas.VisibleSubmission, 0, len(pending))
+	for _, submission := range pending {
+		if acksForID(acks, submission.ID) {
+			continue
+		}
+		admissionCtx := fsperas.AdmissionContext{
+			ProofFrontier: proof.ProofFrontier{EpochID: holder.EpochID(), Sequence: submission.ID.Seq},
+		}
+		op, err := fsperas.AdmitAndSeal(ctx, submission.Op, admission, admissionCtx)
+		if err != nil {
+			if !errors.Is(err, fsperas.ErrAdmissionRejected) && !isAdmissionTerminalError(err) {
+				return nil, c.recordError(err)
+			}
+			return nil, err
+		}
+		admitted = append(admitted, fsperas.VisibleSubmission{ID: submission.ID, Op: op})
+	}
+	for _, submission := range admitted {
+		ack, err := holder.Submit(ctx, submission.ID, submission.Op)
+		if err != nil {
+			return nil, c.recordError(err)
+		}
+		for idx := range submissions {
+			if submissions[idx].ID == submission.ID {
+				acks[idx] = ack
+				break
+			}
+		}
+	}
+	if err := c.appendVisibleLogBatch(ctx, grant, holder, admitted); err != nil {
+		ids := make([]fsperas.OperationID, 0, len(admitted))
+		for _, submission := range admitted {
+			ids = append(ids, submission.ID)
+		}
+		holder.MarkAppliedIDs(ids...)
+		c.signalAdmissionCapacity()
+		return nil, c.recordError(err)
+	}
+	for _, submission := range admitted {
+		if err := c.addOverlay(submission.ID, submission.Op); err != nil {
+			holder.MarkAppliedIDs(submission.ID)
+			c.signalAdmissionCapacity()
+			return nil, c.recordError(err)
+		}
+	}
+	for _, submission := range admitted {
+		for _, ack := range acks {
+			if ack.OpID == submission.ID {
+				c.publishVisibleWatch(submission.Op, ack)
+				break
+			}
+		}
+	}
+	c.metrics.commitTotal.Add(uint64(len(admitted)))
+	if c.batchSize > 0 && holder.Pending() >= c.batchSize {
+		c.triggerBackgroundFlush()
+	}
+	return acks, nil
+}
+
 func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, id fsperas.OperationID, op compile.MaterializedOp) error {
 	if c == nil || c.visibleLog == nil {
 		return fsperas.ErrVisibleLogRequired
@@ -536,6 +683,56 @@ func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAut
 			replay.Kind, replay.OpID.ClientID, replay.OpID.Seq, record.EpochID, record.HolderID, record.RootLineage.Valid(), len(replay.Mutations), len(replay.PredicateProofs), len(replay.GuardProofs), err)
 	}
 	return nil
+}
+
+func (c *Runtime) appendVisibleLogBatch(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, submissions []fsperas.VisibleSubmission) error {
+	if c == nil || c.visibleLog == nil {
+		return fsperas.ErrVisibleLogRequired
+	}
+	if len(submissions) == 0 {
+		return nil
+	}
+	records := make([]fsperas.VisibleOperationRecord, 0, len(submissions))
+	for _, submission := range submissions {
+		replay, err := fsperas.ReplayOperationFromMaterialized(submission.ID, submission.Op)
+		if err != nil {
+			return err
+		}
+		records = append(records, fsperas.VisibleOperationRecord{
+			EpochID:           holder.EpochID(),
+			HolderID:          holder.HolderID(),
+			GrantID:           grant.GrantID,
+			GrantExpiresNanos: grant.ExpiresUnixNano,
+			PredecessorDigest: grant.PredecessorDigest,
+			RootLineage:       visibleRootLineageFromGrant(grant),
+			Scope:             submission.Op.Delta.Authority,
+			Operation:         replay,
+			TimestampUnixNano: c.now().UnixNano(),
+		})
+	}
+	if batch, ok := c.visibleLog.(fsperas.VisibleLogBatch); ok {
+		if err := batch.AppendVisibleBatch(ctx, records); err != nil {
+			return fmt.Errorf("append peras visible batch records=%d epoch=%d holder=%s: %w",
+				len(records), holder.EpochID(), holder.HolderID(), err)
+		}
+		return nil
+	}
+	for _, record := range records {
+		if err := c.visibleLog.AppendVisible(ctx, record); err != nil {
+			return fmt.Errorf("append peras visible batch record kind=%s op=%s/%d epoch=%d holder=%s lineage_valid=%t mutations=%d predicates=%d guards=%d: %w",
+				record.Operation.Kind, record.Operation.OpID.ClientID, record.Operation.OpID.Seq, record.EpochID, record.HolderID, record.RootLineage.Valid(), len(record.Operation.Mutations), len(record.Operation.PredicateProofs), len(record.Operation.GuardProofs), err)
+		}
+	}
+	return nil
+}
+
+func acksForID(acks []fsperas.VisibleAck, id fsperas.OperationID) bool {
+	for _, ack := range acks {
+		if ack.OpID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
