@@ -199,12 +199,6 @@ type fakePerasCommitter struct {
 	deltas          []compile.SemanticDelta
 }
 
-type fakePerasBatchCommitter struct {
-	fakePerasCommitter
-	batchCalls int
-	batchSizes []int
-}
-
 type testVersionAllocator interface {
 	ReserveTimestamp(context.Context, uint64) (uint64, error)
 }
@@ -415,20 +409,6 @@ func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 		return fsperas.VisibleAck{}, c.err
 	}
 	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
-}
-
-func (c *fakePerasBatchCommitter) SubmitVisibleBatch(ctx context.Context, submissions []fsperas.VisibleSubmission, admission fsperas.AdmissionFunc) ([]fsperas.VisibleAck, error) {
-	c.batchCalls++
-	c.batchSizes = append(c.batchSizes, len(submissions))
-	acks := make([]fsperas.VisibleAck, 0, len(submissions))
-	for _, submission := range submissions {
-		ack, err := c.SubmitVisible(ctx, submission.ID, submission.Op, admission)
-		if err != nil {
-			return nil, err
-		}
-		acks = append(acks, ack)
-	}
-	return acks, nil
 }
 
 func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {

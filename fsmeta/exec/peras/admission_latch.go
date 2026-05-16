@@ -79,61 +79,6 @@ func (l *AdmissionLatches) Lock(op compile.MaterializedOp) func() {
 	}
 }
 
-func (l *AdmissionLatches) LockMany(ops []compile.MaterializedOp) func() {
-	if l == nil || len(ops) == 0 {
-		return func() {}
-	}
-	keySet := make(map[string]struct{})
-	for _, op := range ops {
-		keys, broad := admissionLatchKeys(op)
-		if broad {
-			l.global.Lock()
-			return l.global.Unlock
-		}
-		for _, key := range keys {
-			keySet[key] = struct{}{}
-		}
-	}
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	l.global.RLock()
-	held := make([]heldAdmissionLatch, 0, len(keys))
-	for _, key := range keys {
-		stripe := &l.stripes[admissionLatchStripeIndex(key)]
-		stripe.mu.Lock()
-		if stripe.latches == nil {
-			stripe.latches = make(map[string]*admissionLatch)
-		}
-		latch := stripe.latches[key]
-		if latch == nil {
-			latch = &admissionLatch{}
-			stripe.latches[key] = latch
-		}
-		latch.refs++
-		stripe.mu.Unlock()
-		held = append(held, heldAdmissionLatch{key: key, stripe: stripe, latch: latch})
-	}
-	for _, item := range held {
-		item.latch.mu.Lock()
-	}
-	return func() {
-		for i := len(held) - 1; i >= 0; i-- {
-			item := held[i]
-			item.latch.mu.Unlock()
-			item.stripe.mu.Lock()
-			item.latch.refs--
-			if item.latch.refs == 0 {
-				delete(item.stripe.latches, item.key)
-			}
-			item.stripe.mu.Unlock()
-		}
-		l.global.RUnlock()
-	}
-}
-
 func admissionLatchKeys(op compile.MaterializedOp) ([]string, bool) {
 	keys := make([]string, 0, len(op.Footprint.ConflictKeys))
 	for _, ref := range op.Footprint.ConflictKeys {

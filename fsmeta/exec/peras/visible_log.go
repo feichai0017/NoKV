@@ -60,10 +60,6 @@ type VisibleLog interface {
 	AppendVisible(context.Context, VisibleOperationRecord) error
 }
 
-type VisibleLogBatch interface {
-	AppendVisibleBatch(context.Context, []VisibleOperationRecord) error
-}
-
 type VisibleLogReplayer interface {
 	ReplayVisible(context.Context) ([]VisibleOperationRecord, error)
 }

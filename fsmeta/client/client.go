@@ -42,7 +42,6 @@ const (
 // Client is the typed fsmeta client surface consumed by demos and benchmarks.
 type Client interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
-	CreateBatch(ctx context.Context, req fsmeta.CreateBatchRequest) (fsmeta.CreateBatchResult, error)
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
@@ -153,31 +152,6 @@ func (c *GRPCClient) Create(ctx context.Context, req fsmeta.CreateRequest) (fsme
 		Inode:  inodeFromProto(resp.GetInode()),
 	}
 	c.lookup.Put(req.Mount, result.Dentry)
-	return result, nil
-}
-
-func (c *GRPCClient) CreateBatch(ctx context.Context, req fsmeta.CreateBatchRequest) (fsmeta.CreateBatchResult, error) {
-	if err := c.requireRPC(); err != nil {
-		return fsmeta.CreateBatchResult{}, err
-	}
-	resp, err := c.rpc.CreateBatch(ctx, createBatchRequestToProto(req))
-	if err != nil {
-		return fsmeta.CreateBatchResult{}, translateRPCError(err)
-	}
-	if len(resp.GetEntries()) != len(req.Entries) {
-		return fsmeta.CreateBatchResult{}, fmt.Errorf("fsmeta create batch returned %d results for %d requests", len(resp.GetEntries()), len(req.Entries))
-	}
-	result := fsmeta.CreateBatchResult{Entries: make([]fsmeta.CreateResult, 0, len(resp.GetEntries()))}
-	for i, entry := range resp.GetEntries() {
-		item := fsmeta.CreateResult{
-			Dentry: dentryFromProto(entry.GetDentry()),
-			Inode:  inodeFromProto(entry.GetInode()),
-		}
-		result.Entries = append(result.Entries, item)
-		if i < len(req.Entries) {
-			c.lookup.Put(req.Entries[i].Mount, item.Dentry)
-		}
-	}
 	return result, nil
 }
 

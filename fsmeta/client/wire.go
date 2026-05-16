@@ -17,14 +17,6 @@ func createRequestToProto(req fsmeta.CreateRequest) *fsmetapb.CreateRequest {
 	}
 }
 
-func createBatchRequestToProto(req fsmeta.CreateBatchRequest) *fsmetapb.CreateBatchRequest {
-	out := &fsmetapb.CreateBatchRequest{Entries: make([]*fsmetapb.CreateRequest, 0, len(req.Entries))}
-	for _, entry := range req.Entries {
-		out.Entries = append(out.Entries, createRequestToProto(entry))
-	}
-	return out
-}
-
 func createAttrsToProto(attrs fsmeta.CreateAttrs) *fsmetapb.CreateInodeAttrs {
 	return &fsmetapb.CreateInodeAttrs{
 		Type:          inodeTypeToProto(attrs.Type),

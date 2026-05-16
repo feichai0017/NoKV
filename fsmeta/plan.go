@@ -69,14 +69,6 @@ type CreateResult struct {
 	Inode  InodeRecord
 }
 
-type CreateBatchRequest struct {
-	Entries []CreateRequest
-}
-
-type CreateBatchResult struct {
-	Entries []CreateResult
-}
-
 type UpdateInodeRequest struct {
 	Mount            MountID
 	Parent           InodeID
@@ -187,29 +179,6 @@ func ValidateCreateRequest(req CreateRequest) error {
 	}
 	_, err := EncodeInodeValue(req.Attrs.InodeRecord(RootInode))
 	return err
-}
-
-func ValidateCreateBatchRequest(req CreateBatchRequest) error {
-	if len(req.Entries) == 0 {
-		return ErrInvalidRequest
-	}
-	type createBatchKey struct {
-		mount  MountID
-		parent InodeID
-		name   string
-	}
-	seen := make(map[createBatchKey]struct{}, len(req.Entries))
-	for _, entry := range req.Entries {
-		if err := ValidateCreateRequest(entry); err != nil {
-			return err
-		}
-		key := createBatchKey{mount: entry.Mount, parent: entry.Parent, name: entry.Name}
-		if _, ok := seen[key]; ok {
-			return ErrInvalidRequest
-		}
-		seen[key] = struct{}{}
-	}
-	return nil
 }
 
 func ValidateRenameRequest(req RenameRequest) error {

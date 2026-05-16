@@ -12,8 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
-const mdtestCreateBatchSize = 64
-
 type fileRef struct {
 	parent fsmeta.InodeID
 	inode  fsmeta.InodeID
@@ -52,7 +50,24 @@ func runMDTest(ctx context.Context, cli MetadataClient, cfg MDTestConfig, name s
 		totalFiles = cfg.FilesPerDirectory
 	}
 	files := make([]fileRef, totalFiles)
-	createMDTestFiles(ctx, cli, cfg, name, shared, dirs, files, rec)
+	runParallel(cfg.Clients, totalFiles, func(idx int) {
+		parent, fileName := mdtestFileTarget(cfg, dirs, name, shared, idx)
+		size := mdtestFileSize(shared)
+		var created fsmeta.CreateResult
+		if err := recordCall(rec, name+"_create", func() error {
+			var err error
+			created, err = cli.Create(ctx, fsmeta.CreateRequest{
+				Mount:  cfg.Mount,
+				Parent: parent,
+				Name:   fileName,
+				Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644, Size: size},
+			})
+			return err
+		}); err != nil {
+			return
+		}
+		files[idx] = fileRef{parent: parent, inode: created.Inode.Inode, name: fileName}
+	})
 	runParallel(cfg.Clients, totalFiles, func(idx int) {
 		file := files[idx]
 		if file.parent == 0 {
@@ -80,68 +95,6 @@ func runMDTest(ctx context.Context, cli MetadataClient, cfg MDTestConfig, name s
 	})
 
 	return finishResult(name, cfg.RunID, started, rec.snapshot())
-}
-
-func createMDTestFiles(ctx context.Context, cli MetadataClient, cfg MDTestConfig, name string, shared bool, dirs []fsmeta.InodeID, files []fileRef, rec *recorder) {
-	batcher, ok := cli.(CreateBatchMetadataClient)
-	if !ok {
-		runMDTestCreateFilesSingle(ctx, cli, cfg, name, shared, dirs, files, rec)
-		return
-	}
-	totalFiles := len(files)
-	batchCount := (totalFiles + mdtestCreateBatchSize - 1) / mdtestCreateBatchSize
-	runParallel(cfg.Clients, batchCount, func(batchIdx int) {
-		start := batchIdx * mdtestCreateBatchSize
-		end := min(start+mdtestCreateBatchSize, totalFiles)
-		entries := make([]fsmeta.CreateRequest, 0, end-start)
-		for idx := start; idx < end; idx++ {
-			parent, fileName := mdtestFileTarget(cfg, dirs, name, shared, idx)
-			entries = append(entries, fsmeta.CreateRequest{
-				Mount:  cfg.Mount,
-				Parent: parent,
-				Name:   fileName,
-				Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644, Size: mdtestFileSize(shared)},
-			})
-		}
-		var created fsmeta.CreateBatchResult
-		duration, err := timeCall(func() error {
-			var err error
-			created, err = batcher.CreateBatch(ctx, fsmeta.CreateBatchRequest{Entries: entries})
-			return err
-		})
-		perEntryDuration := duration / time.Duration(len(entries))
-		for idx := start; idx < end; idx++ {
-			rec.record(name+"_create", perEntryDuration, err)
-		}
-		if err != nil || len(created.Entries) != len(entries) {
-			return
-		}
-		for offset, result := range created.Entries {
-			parent, fileName := mdtestFileTarget(cfg, dirs, name, shared, start+offset)
-			files[start+offset] = fileRef{parent: parent, inode: result.Inode.Inode, name: fileName}
-		}
-	})
-}
-
-func runMDTestCreateFilesSingle(ctx context.Context, cli MetadataClient, cfg MDTestConfig, name string, shared bool, dirs []fsmeta.InodeID, files []fileRef, rec *recorder) {
-	runParallel(cfg.Clients, len(files), func(idx int) {
-		parent, fileName := mdtestFileTarget(cfg, dirs, name, shared, idx)
-		size := mdtestFileSize(shared)
-		var created fsmeta.CreateResult
-		if err := recordCall(rec, name+"_create", func() error {
-			var err error
-			created, err = cli.Create(ctx, fsmeta.CreateRequest{
-				Mount:  cfg.Mount,
-				Parent: parent,
-				Name:   fileName,
-				Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644, Size: size},
-			})
-			return err
-		}); err != nil {
-			return
-		}
-		files[idx] = fileRef{parent: parent, inode: created.Inode.Inode, name: fileName}
-	})
 }
 
 func createMDTestDirs(ctx context.Context, cli MetadataClient, cfg MDTestConfig, workloadName string, shared bool, rec *recorder) ([]fsmeta.InodeID, error) {

@@ -119,27 +119,6 @@ func TestWALVisibleLogAppliedPlanMustMatchVisibleReference(t *testing.T) {
 	require.ErrorIs(t, err, fsperas.ErrInvalidWitnessRecord)
 }
 
-func TestWALVisibleLogAppendsVisibleBatch(t *testing.T) {
-	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, mgr.Close())
-	})
-	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
-	require.NoError(t, err)
-	t.Cleanup(log.Close)
-	ctx := context.Background()
-	first := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 1}, []byte("a"))
-	second := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 2}, []byte("b"))
-
-	require.NoError(t, log.AppendVisibleBatch(ctx, []fsperas.VisibleOperationRecord{first, second}))
-	require.Equal(t, []fsperas.VisibleOperationRecord{first, second}, log.Records())
-
-	replayed, err := log.ReplayVisible(ctx)
-	require.NoError(t, err)
-	require.Equal(t, []fsperas.VisibleOperationRecord{first, second}, replayed)
-}
-
 func TestWALVisibleLogBatchesConcurrentVisibleRecords(t *testing.T) {
 	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
 	require.NoError(t, err)

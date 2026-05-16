@@ -48,10 +48,6 @@ type MetadataClient interface {
 	CloseWriteSession(context.Context, fsmeta.CloseWriteSessionRequest) error
 }
 
-type CreateBatchMetadataClient interface {
-	CreateBatch(context.Context, fsmeta.CreateBatchRequest) (fsmeta.CreateBatchResult, error)
-}
-
 type MDTestConfig struct {
 	Mount             fsmeta.MountID
 	RunID             string

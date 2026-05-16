@@ -98,38 +98,6 @@ func CloneScopes(scopes []compile.AuthorityScope) []compile.AuthorityScope {
 	return out
 }
 
-func UnionScopes(scopes ...compile.AuthorityScope) (compile.AuthorityScope, bool) {
-	var out compile.AuthorityScope
-	for _, scope := range scopes {
-		if ScopeEmpty(scope) {
-			return compile.AuthorityScope{}, true
-		}
-		if out.Mount == "" {
-			out = CloneScope(scope)
-			continue
-		}
-		if out.Mount != scope.Mount || out.MountKeyID != scope.MountKeyID {
-			return compile.AuthorityScope{}, false
-		}
-		out.Buckets = unionBuckets(out.Buckets, scope.Buckets)
-		out.Parents = unionInodes(out.Parents, scope.Parents)
-		out.Inodes = unionInodes(out.Inodes, scope.Inodes)
-	}
-	return out, true
-}
-
-func unionBuckets(left, right []fsmeta.AffinityBucket) []fsmeta.AffinityBucket {
-	out := append(append([]fsmeta.AffinityBucket(nil), left...), right...)
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-func unionInodes(left, right []fsmeta.InodeID) []fsmeta.InodeID {
-	out := append(append([]fsmeta.InodeID(nil), left...), right...)
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
 func scopeCoversKeyParts(scope compile.AuthorityScope, parts fsmeta.KeyParts) bool {
 	if scope.MountKeyID == 0 || parts.MountKeyID != scope.MountKeyID {
 		return false

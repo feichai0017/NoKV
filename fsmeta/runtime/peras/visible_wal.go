@@ -163,38 +163,6 @@ func (l *WALVisibleLog) appendVisibleRecord(record fsperas.VisibleOperationRecor
 	return nil
 }
 
-func (l *WALVisibleLog) AppendVisibleBatch(ctx context.Context, records []fsperas.VisibleOperationRecord) error {
-	if err := visibleLogContextErr(ctx); err != nil {
-		return err
-	}
-	if len(records) == 0 {
-		return nil
-	}
-	payloads := make([][]byte, len(records))
-	releases := make([]func(), len(records))
-	for i, record := range records {
-		payload, release, err := encodeVisibleOperationPayload(record)
-		if err != nil {
-			for _, release := range releases[:i] {
-				if release != nil {
-					release()
-				}
-			}
-			return fmt.Errorf("encode peras visible record: %w", err)
-		}
-		payloads[i] = payload
-		releases[i] = release
-	}
-	defer func() {
-		for _, release := range releases {
-			if release != nil {
-				release()
-			}
-		}
-	}()
-	return l.appendVisibleRecords(records, payloads)
-}
-
 func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas.VisibleOperationRecord, payload []byte, release func()) error {
 	if l == nil || l.wal == nil {
 		if release != nil {
@@ -274,42 +242,32 @@ func (l *WALVisibleLog) appendVisibleBatchNow(batch []visibleAppendRequest) {
 	for i, req := range batch {
 		payloads[i] = req.payload
 	}
-	records := make([]fsperas.VisibleOperationRecord, len(batch))
-	for i, req := range batch {
-		records[i] = req.record
-	}
-	err := l.appendVisibleRecords(records, payloads)
+	infos, err := l.appendPayloads(payloads)
 	if err != nil {
 		completeVisibleAppendBatch(batch, err)
 		return
 	}
-	completeVisibleAppendBatch(batch, nil)
-}
-
-func (l *WALVisibleLog) appendVisibleRecords(records []fsperas.VisibleOperationRecord, payloads [][]byte) error {
-	infos, err := l.appendPayloads(payloads)
-	if err != nil {
-		return err
-	}
-	if len(infos) != len(records) {
-		return fsperas.ErrInvalidWitnessRecord
+	if len(infos) != len(batch) {
+		completeVisibleAppendBatch(batch, fsperas.ErrInvalidWitnessRecord)
+		return
 	}
 	positions := make([]visibleOperationLogPosition, len(infos))
-	references := make([]fsperas.VisibleOperationReference, len(records))
+	references := make([]fsperas.VisibleOperationReference, len(batch))
 	for i, info := range infos {
 		position, err := visibleOperationLogPositionFromEntry(info)
 		if err != nil {
-			return err
+			completeVisibleAppendBatch(batch, err)
+			return
 		}
 		positions[i] = position
-		references[i] = visibleOperationReferenceForRecord(records[i])
+		references[i] = visibleOperationReferenceForRecord(batch[i].record)
 	}
 	l.mu.Lock()
-	for i, record := range records {
-		l.rememberVisibleRecordLocked(record, references[i], positions[i])
+	for i, req := range batch {
+		l.rememberVisibleRecordLocked(req.record, references[i], positions[i])
 	}
 	l.mu.Unlock()
-	return nil
+	completeVisibleAppendBatch(batch, nil)
 }
 
 func completeVisibleAppendBatch(batch []visibleAppendRequest, err error) {

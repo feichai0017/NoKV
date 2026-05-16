@@ -25,7 +25,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	FSMetadata_Create_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Create"
-	FSMetadata_CreateBatch_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/CreateBatch"
 	FSMetadata_UpdateInode_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/UpdateInode"
 	FSMetadata_Lookup_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Lookup"
 	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
@@ -50,7 +49,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FSMetadataClient interface {
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
-	CreateBatch(ctx context.Context, in *CreateBatchRequest, opts ...grpc.CallOption) (*CreateBatchResponse, error)
 	UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*UpdateInodeResponse, error)
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
@@ -82,16 +80,6 @@ func (c *fSMetadataClient) Create(ctx context.Context, in *CreateRequest, opts .
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateResponse)
 	err := c.cc.Invoke(ctx, FSMetadata_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *fSMetadataClient) CreateBatch(ctx context.Context, in *CreateBatchRequest, opts ...grpc.CallOption) (*CreateBatchResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateBatchResponse)
-	err := c.cc.Invoke(ctx, FSMetadata_CreateBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +264,6 @@ func (c *fSMetadataClient) ExpireWriteSessions(ctx context.Context, in *ExpireWr
 // for forward compatibility.
 type FSMetadataServer interface {
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
-	CreateBatch(context.Context, *CreateBatchRequest) (*CreateBatchResponse, error)
 	UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error)
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
@@ -305,9 +292,6 @@ type UnimplementedFSMetadataServer struct{}
 
 func (UnimplementedFSMetadataServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedFSMetadataServer) CreateBatch(context.Context, *CreateBatchRequest) (*CreateBatchResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateBatch not implemented")
 }
 func (UnimplementedFSMetadataServer) UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateInode not implemented")
@@ -394,24 +378,6 @@ func _FSMetadata_Create_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FSMetadataServer).Create(ctx, req.(*CreateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _FSMetadata_CreateBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateBatchRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FSMetadataServer).CreateBatch(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: FSMetadata_CreateBatch_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FSMetadataServer).CreateBatch(ctx, req.(*CreateBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -721,10 +687,6 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _FSMetadata_Create_Handler,
-		},
-		{
-			MethodName: "CreateBatch",
-			Handler:    _FSMetadata_CreateBatch_Handler,
 		},
 		{
 			MethodName: "UpdateInode",

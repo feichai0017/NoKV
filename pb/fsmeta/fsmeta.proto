@@ -64,14 +64,6 @@ message CreateResponse {
   InodeRecord inode = 2;
 }
 
-message CreateBatchRequest {
-  repeated CreateRequest entries = 1;
-}
-
-message CreateBatchResponse {
-  repeated CreateResponse entries = 1;
-}
-
 message UpdateInodeRequest {
   string mount = 1;
   uint64 parent = 2;
@@ -302,7 +294,6 @@ message ExpireWriteSessionsResponse {
 
 service FSMetadata {
   rpc Create(CreateRequest) returns (CreateResponse);
-  rpc CreateBatch(CreateBatchRequest) returns (CreateBatchResponse);
   rpc UpdateInode(UpdateInodeRequest) returns (UpdateInodeResponse);
   rpc Lookup(LookupRequest) returns (LookupResponse);
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
