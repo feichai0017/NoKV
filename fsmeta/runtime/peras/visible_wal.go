@@ -281,9 +281,8 @@ func completeVisibleAppendBatch(batch []visibleAppendRequest, err error) {
 
 func (l *WALVisibleLog) rememberVisibleRecordLocked(record fsperas.VisibleOperationRecord, reference fsperas.VisibleOperationReference, position visibleOperationLogPosition) {
 	l.initPendingLocked()
-	cloned := cloneVisibleOperationRecord(record)
-	l.records = append(l.records, cloned)
-	l.pending[visibleOperationLogKeyForRecord(cloned)] = visibleOperationLogEntry{
+	l.records = append(l.records, record)
+	l.pending[visibleOperationLogKeyForRecord(record)] = visibleOperationLogEntry{
 		reference: reference,
 		position:  position,
 	}

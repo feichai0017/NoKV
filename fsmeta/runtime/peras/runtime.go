@@ -437,9 +437,6 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	if c.closed.Load() {
 		return fsperas.VisibleAck{}, ErrRuntimeClosed
 	}
-	if err := op.ValidateForAdmissionIntent(); err != nil {
-		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
-	}
 	if !op.Placement.CanSegment {
 		return fsperas.VisibleAck{}, fsperas.ErrIneligibleOperation
 	}
@@ -490,11 +487,11 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 		return fsperas.VisibleAck{}, err
 	}
 	op = admitted
-	ack, err := holder.Submit(ctx, id, op)
+	ack, replay, err := holder.Submit(ctx, id, op)
 	if err != nil {
 		return fsperas.VisibleAck{}, c.recordError(err)
 	}
-	if err := c.appendVisibleLog(ctx, grant, holder, id, op); err != nil {
+	if err := c.appendVisibleLog(ctx, grant, holder, op, replay); err != nil {
 		holder.MarkAppliedIDs(id)
 		c.signalAdmissionCapacity()
 		return fsperas.VisibleAck{}, c.recordError(err)
@@ -512,13 +509,9 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	return ack, nil
 }
 
-func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, id fsperas.OperationID, op compile.MaterializedOp) error {
+func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, op compile.MaterializedOp, replay fsperas.ReplayOperation) error {
 	if c == nil || c.visibleLog == nil {
 		return fsperas.ErrVisibleLogRequired
-	}
-	replay, err := fsperas.ReplayOperationFromMaterialized(id, op)
-	if err != nil {
-		return err
 	}
 	record := fsperas.VisibleOperationRecord{
 		EpochID:           holder.EpochID(),

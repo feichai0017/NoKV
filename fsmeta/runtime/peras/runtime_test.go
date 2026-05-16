@@ -1148,7 +1148,7 @@ func TestRuntimeRecoversWitnessSegment(t *testing.T) {
 	require.NoError(t, err)
 	delta := testRuntimePerasOp([]byte("dentry/recovered"), []byte("inode/recovered"))
 	recoveredKey := delta.Effects[0].Key
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1208,7 +1208,7 @@ func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{10},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1276,7 +1276,7 @@ func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testin
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{11},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1351,7 +1351,7 @@ func TestRuntimeRecoversRootSealedSegmentWithWitnessScanFallback(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{12},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1423,7 +1423,7 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{13},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1494,7 +1494,7 @@ func TestRuntimeRootSealedRecoveryWaitsOutRouteRetryExhaustion(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{14},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1600,9 +1600,9 @@ func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
 		Parents:    []fsmeta.InodeID{2},
 		Inodes:     []fsmeta.InodeID{12},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, first)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, first)
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 2}, second)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 2}, second)
 	require.NoError(t, err)
 	plan, _, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1799,7 +1799,7 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 		Inodes:     []fsmeta.InodeID{2},
 	})
 	recoveredKey := recoveredDelta.Effects[0].Key
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)

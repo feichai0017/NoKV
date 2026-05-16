@@ -41,6 +41,7 @@ type OverlayView struct {
 	epoch          uint64
 	known          map[string]bool
 	emptyDirs      map[string]struct{}
+	baseEmptyDirs  map[string]struct{}
 	emptySessions  map[string]struct{}
 }
 
@@ -53,6 +54,7 @@ func NewOverlayView() *OverlayView {
 		directoryEpoch: make(map[string]uint64),
 		known:          make(map[string]bool),
 		emptyDirs:      make(map[string]struct{}),
+		baseEmptyDirs:  make(map[string]struct{}),
 		emptySessions:  make(map[string]struct{}),
 	}
 }
@@ -90,7 +92,7 @@ func (v *OverlayView) Add(id OperationID, op compile.MaterializedOp) error {
 		v.sortedDirty = true
 		v.indexDirectoryKeyLocked(effect.Key)
 	}
-	return RememberOperationFacts(v.known, v.emptyDirs, v.emptySessions, op)
+	return RememberOperationFacts(v.known, v.emptyDirs, v.baseEmptyDirs, v.emptySessions, op)
 }
 
 func (v *OverlayView) AddReplayOperation(op ReplayOperation) error {
@@ -184,6 +186,7 @@ func (v *OverlayView) Clone() *OverlayView {
 		out.known[key] = present
 	}
 	out.emptyDirs = cloneOverlayStringSet(v.emptyDirs)
+	out.baseEmptyDirs = cloneOverlayStringSet(v.baseEmptyDirs)
 	out.emptySessions = cloneOverlayStringSet(v.emptySessions)
 	return out
 }
@@ -240,6 +243,16 @@ func (v *OverlayView) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.In
 	return ok
 }
 
+func (v *OverlayView) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if v == nil {
+		return false
+	}
+	v.mu.RLock()
+	_, ok := v.baseEmptyDirs[DirectoryBaseFactKey(mount, inode)]
+	v.mu.RUnlock()
+	return ok
+}
+
 func (v *OverlayView) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if v == nil {
 		return false
@@ -270,6 +283,7 @@ func (v *OverlayView) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode f
 	v.mu.Lock()
 	v.initLocked()
 	RememberEmptyDirectoryFact(v.emptyDirs, mount, inode)
+	RememberBaseEmptyDirectoryFact(v.baseEmptyDirs, mount, inode)
 	v.mu.Unlock()
 }
 
@@ -415,13 +429,13 @@ func (v *OverlayView) RemovePlan(plan ReplayPlan) {
 	}
 }
 
-func (v *OverlayView) Stats() (overlayKeys, knownKeys, emptyDirs, emptySessions int) {
+func (v *OverlayView) Stats() (overlayKeys, knownKeys, emptyDirs, baseEmptyDirs, emptySessions int) {
 	if v == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	return len(v.entries), len(v.known), len(v.emptyDirs), len(v.emptySessions)
+	return len(v.entries), len(v.known), len(v.emptyDirs), len(v.baseEmptyDirs), len(v.emptySessions)
 }
 
 func (v *OverlayView) ReadIndexStats() (directories, dirty int) {
@@ -464,6 +478,9 @@ func (v *OverlayView) initLocked() {
 	}
 	if v.emptyDirs == nil {
 		v.emptyDirs = make(map[string]struct{})
+	}
+	if v.baseEmptyDirs == nil {
+		v.baseEmptyDirs = make(map[string]struct{})
 	}
 	if v.emptySessions == nil {
 		v.emptySessions = make(map[string]struct{})

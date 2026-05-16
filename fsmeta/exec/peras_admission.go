@@ -284,7 +284,7 @@ func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compi
 	if !bytes.Equal(predicate.Key, delta.Plan.MutateKeys[0]) || len(delta.Authority.Parents) != 1 {
 		return false
 	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
+	return index.DirectoryBaseEmpty(fsmeta.MountIdentity{
 		MountID:    delta.Authority.Mount,
 		MountKeyID: delta.Authority.MountKeyID,
 	}, delta.Authority.Parents[0])
@@ -311,7 +311,7 @@ func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte,
 	if parts.Kind != fsmeta.KeyKindDentry {
 		return false
 	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
+	return index.DirectoryBaseEmpty(fsmeta.MountIdentity{
 		MountID:    scope.Mount,
 		MountKeyID: scope.MountKeyID,
 	}, parts.Parent)

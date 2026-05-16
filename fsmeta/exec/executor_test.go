@@ -424,7 +424,7 @@ func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 		return fsperas.VisibleAck{}, err
 	}
 	op = admitted
-	ack, err := c.holder.Submit(ctx, id, op)
+	ack, _, err := c.holder.Submit(ctx, id, op)
 	if err != nil {
 		return fsperas.VisibleAck{}, err
 	}
@@ -509,6 +509,13 @@ func (c *testPerasCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fs
 	return c.view.DirectoryEmpty(mount, inode)
 }
 
+func (c *testPerasCommitter) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil || c.view == nil {
+		return false
+	}
+	return c.view.DirectoryBaseEmpty(mount, inode)
+}
+
 func (c *testPerasCommitter) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.view == nil {
 		return false
@@ -528,6 +535,13 @@ func (c *testPerasCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, 
 		return
 	}
 	c.view.RememberEmptyDirectory(mount, inode)
+}
+
+func (c *testPerasCommitter) ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if c == nil || c.view == nil {
+		return
+	}
+	c.view.ForgetEmptyDirectory(mount, inode)
 }
 
 func (c *testPerasCommitter) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {

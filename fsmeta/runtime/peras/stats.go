@@ -99,6 +99,7 @@ func (c *Runtime) Stats() map[string]any {
 			"segment_directory_index_dirty":              0,
 			"predicate_known_keys":                       0,
 			"predicate_empty_dirs":                       0,
+			"predicate_base_empty_dirs":                  0,
 			"predicate_empty_sessions":                   0,
 			"holders":                                    0,
 			"pending":                                    0,
@@ -115,12 +116,12 @@ func (c *Runtime) Stats() map[string]any {
 			"quorum":                                     0,
 		}
 	}
-	var overlayKeys, knownKeys, emptyDirs, emptySessions int
+	var overlayKeys, knownKeys, emptyDirs, baseEmptyDirs, emptySessions int
 	var segmentKeys int
 	var overlayDirs, overlayDirty, segmentDirs, segmentDirty int
 	if c.read != nil {
-		overlayKeys, knownKeys, emptyDirs, emptySessions = c.read.overlay.Stats()
-		segmentKeys, _, _, _ = c.read.sealed.Stats()
+		overlayKeys, knownKeys, emptyDirs, baseEmptyDirs, emptySessions = c.read.overlay.Stats()
+		segmentKeys, _, _, _, _ = c.read.sealed.Stats()
 		overlayDirs, overlayDirty = c.read.overlay.ReadIndexStats()
 		segmentDirs, segmentDirty = c.read.sealed.ReadIndexStats()
 	}
@@ -252,6 +253,7 @@ func (c *Runtime) Stats() map[string]any {
 		"segment_directory_index_dirty":              segmentDirty,
 		"predicate_known_keys":                       knownKeys,
 		"predicate_empty_dirs":                       emptyDirs,
+		"predicate_base_empty_dirs":                  baseEmptyDirs,
 		"predicate_empty_sessions":                   emptySessions,
 		"holders":                                    holders,
 		"pending":                                    pending,

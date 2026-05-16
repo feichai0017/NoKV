@@ -17,6 +17,7 @@ import (
 type PredicateIndex interface {
 	KeyState(key []byte) (present bool, known bool)
 	DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool
+	DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool
 	SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool
 	RememberKey(key []byte, present bool)
 	RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID)
@@ -25,6 +26,10 @@ type PredicateIndex interface {
 
 func DirectoryFactKey(mount fsmeta.MountIdentity, inode fsmeta.InodeID) string {
 	return scopedInodeFactKey(mount, inode, "dir")
+}
+
+func DirectoryBaseFactKey(mount fsmeta.MountIdentity, inode fsmeta.InodeID) string {
+	return scopedInodeFactKey(mount, inode, "dirbase")
 }
 
 // Session namespace facts intentionally use MountKeyID rather than MountID.
@@ -53,7 +58,7 @@ func scopedInodeFactKey(mount fsmeta.MountIdentity, inode fsmeta.InodeID, class 
 	return string(buf)
 }
 
-func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}, emptySessions map[string]struct{}, op compile.MaterializedOp) error {
+func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}, baseEmptyDirs map[string]struct{}, emptySessions map[string]struct{}, op compile.MaterializedOp) error {
 	delta := op.Delta
 	for _, effect := range op.Effects {
 		if len(effect.Key) == 0 {
@@ -70,6 +75,7 @@ func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}
 		default:
 			return ErrInvalidPerasSegment
 		}
+		rememberDirectoryFactMutation(emptyDirs, delta.Authority, effect)
 		rememberSessionFactMutation(emptySessions, delta.Authority, effect)
 	}
 	if delta.Kind != fsmeta.OperationCreate || len(delta.Plan.MutateKeys) < 2 {
@@ -85,10 +91,12 @@ func RememberOperationFacts(known map[string]bool, emptyDirs map[string]struct{}
 			return err
 		}
 		if inode.Type == fsmeta.InodeTypeDirectory {
-			RememberEmptyDirectoryFact(emptyDirs, fsmeta.MountIdentity{
+			mount := fsmeta.MountIdentity{
 				MountID:    delta.Authority.Mount,
 				MountKeyID: delta.Authority.MountKeyID,
-			}, inode.Inode)
+			}
+			RememberEmptyDirectoryFact(emptyDirs, mount, inode.Inode)
+			RememberBaseEmptyDirectoryFact(baseEmptyDirs, mount, inode.Inode)
 		} else {
 			RememberEmptySessionNamespaceFact(emptySessions, fsmeta.MountIdentity{
 				MountID:    delta.Authority.Mount,
@@ -105,6 +113,13 @@ func RememberEmptyDirectoryFact(emptyDirs map[string]struct{}, mount fsmeta.Moun
 		return
 	}
 	emptyDirs[DirectoryFactKey(mount, inode)] = struct{}{}
+}
+
+func RememberBaseEmptyDirectoryFact(baseEmptyDirs map[string]struct{}, mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if baseEmptyDirs == nil || mount.MountID == "" || mount.MountKeyID == 0 || inode == 0 {
+		return
+	}
+	baseEmptyDirs[DirectoryBaseFactKey(mount, inode)] = struct{}{}
 }
 
 func ForgetEmptyDirectoryFact(emptyDirs map[string]struct{}, mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
@@ -145,6 +160,20 @@ func ForgetEmptySessionNamespaceForKey(emptySessions map[string]struct{}, key []
 		return
 	}
 	delete(emptySessions, SessionNamespaceFactKey(fsmeta.MountIdentity{MountKeyID: parts.MountKeyID}, parts.Inode))
+}
+
+func rememberDirectoryFactMutation(emptyDirs map[string]struct{}, scope compile.AuthorityScope, effect compile.EffectPlan) {
+	if effect.Kind != compile.EffectPut || emptyDirs == nil {
+		return
+	}
+	parts, ok := fsmeta.InspectKey(effect.Key)
+	if !ok || parts.Kind != fsmeta.KeyKindDentry || parts.MountKeyID != scope.MountKeyID {
+		return
+	}
+	ForgetEmptyDirectoryFact(emptyDirs, fsmeta.MountIdentity{
+		MountID:    scope.Mount,
+		MountKeyID: scope.MountKeyID,
+	}, parts.Parent)
 }
 
 func rememberSessionFactMutation(emptySessions map[string]struct{}, scope compile.AuthorityScope, effect compile.EffectPlan) {

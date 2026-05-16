@@ -278,9 +278,10 @@ func TestExecutorCreatePerasVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	committer := newTestPerasCommitter(t, runner)
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	childInode := testInodeForParentBucket(t, dirInode, dirInode)
+	nextChildInode := testInodeForParentBucket(t, dirInode, dirInode, childInode)
 	executor, err := newTestExecutor(
 		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode}}),
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode, nextChildInode}}),
 		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
 		WithPerasCommitter(committer),
 	)
@@ -305,8 +306,19 @@ func TestExecutorCreatePerasVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 
 	require.Equal(t, childInode, created.Inode.Inode)
 	require.Equal(t, getsAfterDir, runner.getCalls, "empty-directory admission should avoid per-child predicate reads")
+
+	nextCreated, err := executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: dirInode,
+		Name:   "part-001",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, nextChildInode, nextCreated.Inode.Inode)
+	require.Equal(t, getsAfterDir, runner.getCalls, "base-empty directory coverage should avoid later child predicate reads")
 	require.Empty(t, runner.mutations)
-	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
+	require.Equal(t, uint64(3), committer.Stats()["commit_total"])
 }
 
 func TestExecutorCreateFallsBackWhenPerasAuthorityHeldElsewhere(t *testing.T) {

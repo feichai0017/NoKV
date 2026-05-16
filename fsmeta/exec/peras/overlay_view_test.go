@@ -47,7 +47,7 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	view.RemovePlan(plan)
 	_, _, ok = view.Get(dentryKey)
 	require.False(t, ok)
-	overlayKeys, knownKeys, _, _ := view.Stats()
+	overlayKeys, knownKeys, _, _, _ := view.Stats()
 	require.Zero(t, overlayKeys)
 	require.NotZero(t, knownKeys)
 }
@@ -94,6 +94,20 @@ func TestOverlayViewScanDirectoryUsesDirectoryIndex(t *testing.T) {
 	dirs, dirty := view.ReadIndexStats()
 	require.Equal(t, 2, dirs)
 	require.Equal(t, 1, dirty)
+}
+
+func TestOverlayViewDirectoryBaseEmptySurvivesCurrentEmptyForget(t *testing.T) {
+	view := NewOverlayView()
+	view.RememberEmptyDirectory(testMount, 9)
+
+	require.True(t, view.DirectoryEmpty(testMount, 9))
+	require.True(t, view.DirectoryBaseEmpty(testMount, 9))
+
+	view.ForgetEmptyDirectory(testMount, 9)
+
+	require.False(t, view.DirectoryEmpty(testMount, 9))
+	require.True(t, view.DirectoryBaseEmpty(testMount, 9))
+	require.True(t, view.Clone().DirectoryBaseEmpty(testMount, 9))
 }
 
 func mustDentryName(t *testing.T, key []byte) string {

@@ -412,7 +412,7 @@ func (e *Executor) perasDirectoryBaseEmpty(mount fsmeta.MountIdentity, parent fs
 	if index == nil {
 		return false
 	}
-	return index.DirectoryEmpty(mount, parent)
+	return index.DirectoryBaseEmpty(mount, parent)
 }
 
 func (e *Executor) perasDirectoryHasOverlay(mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {

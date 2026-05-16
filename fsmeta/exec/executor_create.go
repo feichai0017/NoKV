@@ -65,10 +65,7 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		}
 	}
 	if quotaOK {
-		materialized, err := compile.MaterializeCreate(program, compile.CreateValues{})
-		if err != nil {
-			return fsmeta.CreateResult{}, err
-		}
+		materialized := compile.MaterializedOp{CompiledOp: program.Compiled}
 		if committed, err := e.tryPerasVisibleCommit(ctx, materialized); committed || err != nil {
 			if err != nil {
 				return fsmeta.CreateResult{}, err

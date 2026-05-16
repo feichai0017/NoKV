@@ -19,7 +19,7 @@ func TestHolderSubmitReturnsVisibleAckWithoutWitnessIO(t *testing.T) {
 	witness := newFakeWitnessReplica("store-1")
 	holder := newTestHolder(t)
 
-	ack, err := holder.Submit(context.Background(), opID("client-a", 1), opWithValueWrites("a", "v1"))
+	ack, _, err := holder.Submit(context.Background(), opID("client-a", 1), opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
 
 	require.Equal(t, uint64(1), ack.EpochID)
@@ -34,9 +34,9 @@ func TestHolderSubmitReturnsPendingAckForSameOperationID(t *testing.T) {
 	id := opID("client-a", 1)
 	delta := opWithValueWrites("a", "v1")
 
-	first, err := holder.Submit(context.Background(), id, delta)
+	first, _, err := holder.Submit(context.Background(), id, delta)
 	require.NoError(t, err)
-	second, err := holder.Submit(context.Background(), id, delta)
+	second, _, err := holder.Submit(context.Background(), id, delta)
 	require.NoError(t, err)
 
 	require.Equal(t, first, second)
@@ -53,7 +53,7 @@ func TestHolderPendingAckUsesIntentBeforeGuardProofs(t *testing.T) {
 	require.NoError(t, err)
 	sealed := sealTestMaterializedOp(unsealed)
 
-	first, err := holder.Submit(context.Background(), id, sealed)
+	first, _, err := holder.Submit(context.Background(), id, sealed)
 	require.NoError(t, err)
 	second, ok, err := holder.PendingAck(id, unsealed)
 	require.NoError(t, err)
@@ -65,9 +65,9 @@ func TestHolderSubmitRejectsSameOperationIDDifferentEffects(t *testing.T) {
 	holder := newTestHolder(t)
 	id := opID("client-a", 1)
 
-	_, err := holder.Submit(context.Background(), id, opWithValueWrites("a", "v1"))
+	_, _, err := holder.Submit(context.Background(), id, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), id, opWithValueWrites("a", "v2"))
+	_, _, err = holder.Submit(context.Background(), id, opWithValueWrites("a", "v2"))
 	require.ErrorIs(t, err, ErrDuplicateOperation)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -77,9 +77,9 @@ func TestHolderBuildPendingReplayPlanUsesAdmissionOrder(t *testing.T) {
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
 
-	_, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
+	_, _, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
+	_, _, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
 	require.NoError(t, err)
 
 	plan, _, err := holder.BuildPendingReplayPlan(100)
@@ -95,11 +95,11 @@ func TestHolderBuildPendingReplayPlanLimitKeepsLaterOperationsPending(t *testing
 	second := opID("client-b", 1)
 	third := opID("client-c", 1)
 
-	_, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
+	_, _, err := holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, opWithValueWrites("b", "v2"))
+	_, _, err = holder.Submit(context.Background(), second, opWithValueWrites("b", "v2"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), third, opWithValueWrites("c", "v3"))
+	_, _, err = holder.Submit(context.Background(), third, opWithValueWrites("c", "v3"))
 	require.NoError(t, err)
 
 	plan, _, err := holder.BuildPendingReplayPlanLimit(100, 2)
@@ -121,9 +121,9 @@ func TestHolderBuildPendingReplayPlanForScopeFiltersDisjointAuthority(t *testing
 	secondOp := testGeneratedCreateOpForInodes(t, 30, 40, "b")
 	firstScope := firstOp.Delta.Authority
 
-	_, err := holder.Submit(context.Background(), first, firstOp)
+	_, _, err := holder.Submit(context.Background(), first, firstOp)
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, secondOp)
+	_, _, err = holder.Submit(context.Background(), second, secondOp)
 	require.NoError(t, err)
 
 	plan, scope, ok, err := holder.BuildPendingReplayPlanForScope(100, firstScope)
@@ -154,9 +154,9 @@ func TestHolderBuildReplayPlanAndMarkApplied(t *testing.T) {
 
 	first := opID("client-a", 1)
 	second := opID("client-b", 1)
-	_, err = holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
+	_, _, err = holder.Submit(context.Background(), first, opWithValueWrites("a", "v1"))
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
+	_, _, err = holder.Submit(context.Background(), second, opWithValueWrites("a", "v2"))
 	require.NoError(t, err)
 	require.Equal(t, 2, holder.Pending())
 
@@ -176,7 +176,7 @@ func TestHolderRejectsIneligibleOperation(t *testing.T) {
 	op := opWithValueWrites("a", "v1")
 	op.Delta.Eligibility = compile.EligibilitySlowPath
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), op)
+	_, _, err := holder.Submit(context.Background(), opID("client-a", 1), op)
 	require.ErrorIs(t, err, ErrIneligibleOperation)
 }
 
@@ -189,7 +189,7 @@ func TestHolderAcceptsCrossBucketDelta(t *testing.T) {
 	require.Equal(t, mount.MountKeyID, op.Authority.Scope.MountKeyID)
 	require.Len(t, op.Authority.Scope.Buckets, 2)
 
-	_, err := holder.Submit(context.Background(), opID("client-a", 1), op)
+	_, _, err := holder.Submit(context.Background(), opID("client-a", 1), op)
 	require.NoError(t, err)
 	require.Equal(t, 1, holder.Pending())
 }
@@ -202,7 +202,7 @@ func BenchmarkHolderSubmitDisjoint(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		id := OperationID{ClientID: "bench", Seq: uint64(i + 1)}
-		if _, err := holder.Submit(ctx, id, delta); err != nil {
+		if _, _, err := holder.Submit(ctx, id, delta); err != nil {
 			b.Fatal(err)
 		}
 		holder.MarkAppliedIDs(id)

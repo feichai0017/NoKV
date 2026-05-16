@@ -198,6 +198,13 @@ func (c *Runtime) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeI
 	return c.read.overlay.DirectoryEmpty(mount, inode)
 }
 
+func (c *Runtime) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil || c.read == nil {
+		return false
+	}
+	return c.read.overlay.DirectoryBaseEmpty(mount, inode)
+}
+
 func (c *Runtime) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.read == nil {
 		return false
