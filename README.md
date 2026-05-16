@@ -61,8 +61,8 @@ NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus`
 
 We are looking for design partners, contributors, and research collaborators working on distributed filesystems, object-storage namespace layers, AI dataset infrastructure, or agent workspace metadata.
 
-- **Eric** — [songguocheng348@gmail.com](mailto:songguocheng348@gmail.com)
-- **Jason** — [wch19961116@gmail.com](mailto:wch19961116@gmail.com)
+- **Eric** — [eric@nokv.io](mailto:eric@nokv.io)
+- **Jason** — [jason@nokv.io](mailto:jason@nokv.io)
 
 <br/>
 
