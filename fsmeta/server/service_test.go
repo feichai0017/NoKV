@@ -39,6 +39,7 @@ type fakeExecutor struct {
 	closeReq         fsmeta.CloseWriteSessionRequest
 	expireReq        fsmeta.ExpireWriteSessionsRequest
 	err              error
+	snapshotRefs     []fsmeta.PerasSnapshotSegmentRef
 }
 
 func (e *fakeExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
@@ -79,6 +80,23 @@ func (e *fakeExecutor) Lookup(context.Context, fsmeta.LookupRequest) (fsmeta.Den
 		Name:   "checkpoint",
 		Inode:  42,
 		Type:   fsmeta.InodeTypeFile,
+	}, nil
+}
+
+func (e *fakeExecutor) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	dentry, err := e.Lookup(ctx, req)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	return fsmeta.DentryAttrPair{
+		Dentry: dentry,
+		Inode: fsmeta.InodeRecord{
+			Inode:     dentry.Inode,
+			Type:      dentry.Type,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
 	}, nil
 }
 
@@ -130,7 +148,13 @@ func (e *fakeExecutor) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSub
 	if e.err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, e.err
 	}
-	return fsmeta.SnapshotSubtreeToken{Mount: req.Mount, MountKeyID: 1, RootInode: req.RootInode, ReadVersion: 1234}, nil
+	return fsmeta.SnapshotSubtreeToken{
+		Mount:            req.Mount,
+		MountKeyID:       1,
+		RootInode:        req.RootInode,
+		ReadVersion:      1234,
+		PerasSegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), e.snapshotRefs...),
+	}, nil
 }
 
 func (e *fakeExecutor) ResolveSnapshotSubtreeToken(_ context.Context, token fsmeta.SnapshotSubtreeToken) (fsmeta.SnapshotSubtreeToken, error) {
@@ -254,6 +278,15 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.Equal(t, "checkpoint", resp.GetEntries()[0].GetDentry().GetName())
 	require.Equal(t, uint64(4096), resp.GetEntries()[0].GetInode().GetSize())
 	require.Equal(t, []byte(nil), resp.GetEntries()[0].GetInode().GetOpaqueAttrs())
+
+	lookupPlus, err := client.LookupPlus(context.Background(), &fsmetapb.LookupRequest{
+		Mount:  "vol",
+		Parent: uint64(fsmeta.RootInode),
+		Name:   "checkpoint",
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), lookupPlus.GetEntry().GetDentry().GetInode())
+	require.Equal(t, uint64(4096), lookupPlus.GetEntry().GetInode().GetSize())
 }
 
 func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {
@@ -482,7 +515,8 @@ func TestGRPCServiceWatchSubtree(t *testing.T) {
 }
 
 func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
-	executor := &fakeExecutor{}
+	ref := testServerPerasSnapshotSegmentRef(5, 0x20)
+	executor := &fakeExecutor{snapshotRefs: []fsmeta.PerasSnapshotSegmentRef{ref}}
 	publisher := &fakeSnapshotPublisher{}
 	client, cleanup := openBufconnClient(t, executor, WithSnapshotPublisher(publisher))
 	defer cleanup()
@@ -494,7 +528,16 @@ func TestGRPCServiceSnapshotSubtreePublishesToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.SnapshotSubtreeRequest{Mount: "vol", RootInode: 42}, executor.snapshotReq)
 	require.Equal(t, uint64(1234), resp.GetReadVersion())
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 42, ReadVersion: 1234}, publisher.token)
+	refs, err := perasSnapshotSegmentRefsFromProto(resp.GetPerasSegmentRefs())
+	require.NoError(t, err)
+	require.Equal(t, []fsmeta.PerasSnapshotSegmentRef{ref}, refs)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{
+		Mount:            "vol",
+		MountKeyID:       1,
+		RootInode:        42,
+		ReadVersion:      1234,
+		PerasSegmentRefs: []fsmeta.PerasSnapshotSegmentRef{ref},
+	}, publisher.token)
 }
 
 func TestGRPCServiceGetReadVersionDoesNotPublishSnapshot(t *testing.T) {
@@ -531,14 +574,42 @@ func TestGRPCServiceRetireSnapshotSubtree(t *testing.T) {
 	publisher := &fakeSnapshotPublisher{}
 	client, cleanup := openBufconnClient(t, &fakeExecutor{}, WithSnapshotPublisher(publisher))
 	defer cleanup()
+	ref := testServerPerasSnapshotSegmentRef(6, 0x30)
+
+	_, err := client.RetireSnapshotSubtree(context.Background(), &fsmetapb.RetireSnapshotSubtreeRequest{
+		Mount:            "vol",
+		RootInode:        42,
+		ReadVersion:      1234,
+		PerasSegmentRefs: perasSnapshotSegmentRefsToProto([]fsmeta.PerasSnapshotSegmentRef{ref}),
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.SnapshotSubtreeToken{
+		Mount:            "vol",
+		MountKeyID:       1,
+		RootInode:        42,
+		ReadVersion:      1234,
+		PerasSegmentRefs: []fsmeta.PerasSnapshotSegmentRef{ref},
+	}, publisher.retired)
+}
+
+func TestGRPCServiceRetireSnapshotSubtreeRejectsMalformedPerasRef(t *testing.T) {
+	publisher := &fakeSnapshotPublisher{}
+	client, cleanup := openBufconnClient(t, &fakeExecutor{}, WithSnapshotPublisher(publisher))
+	defer cleanup()
 
 	_, err := client.RetireSnapshotSubtree(context.Background(), &fsmetapb.RetireSnapshotSubtreeRequest{
 		Mount:       "vol",
 		RootInode:   42,
 		ReadVersion: 1234,
+		PerasSegmentRefs: []*fsmetapb.PerasSnapshotSegmentRef{{
+			EpochId:              6,
+			SegmentRoot:          []byte{1},
+			SegmentPayloadDigest: make([]byte, 32),
+		}},
 	})
-	require.NoError(t, err)
-	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 1, RootInode: 42, ReadVersion: 1234}, publisher.retired)
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Zero(t, publisher.retired)
 }
 
 func TestGRPCServiceGetQuotaUsage(t *testing.T) {
@@ -571,6 +642,14 @@ func (p *fakeSnapshotPublisher) PublishSnapshotSubtree(_ context.Context, token 
 func (p *fakeSnapshotPublisher) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	p.retired = token
 	return p.retireError
+}
+
+func testServerPerasSnapshotSegmentRef(epoch uint64, seed byte) fsmeta.PerasSnapshotSegmentRef {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = seed
+	digest[0] = seed + 1
+	return fsmeta.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
 }
 
 type fakeWatcher struct {

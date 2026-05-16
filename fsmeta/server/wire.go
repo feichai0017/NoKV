@@ -4,6 +4,7 @@
 package server
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -90,21 +91,68 @@ func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmet
 
 func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.SnapshotSubtreeResponse {
 	return &fsmetapb.SnapshotSubtreeResponse{
-		Mount:       string(token.Mount),
-		RootInode:   uint64(token.RootInode),
-		ReadVersion: token.ReadVersion,
+		Mount:            string(token.Mount),
+		RootInode:        uint64(token.RootInode),
+		ReadVersion:      token.ReadVersion,
+		PerasSegmentRefs: perasSnapshotSegmentRefsToProto(token.PerasSegmentRefs),
 	}
 }
 
-func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRequest) fsmeta.SnapshotSubtreeToken {
+func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
 	if req == nil {
-		return fsmeta.SnapshotSubtreeToken{}
+		return fsmeta.SnapshotSubtreeToken{}, nil
+	}
+	refs, err := perasSnapshotSegmentRefsFromProto(req.GetPerasSegmentRefs())
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	return fsmeta.SnapshotSubtreeToken{
-		Mount:       fsmeta.MountID(req.GetMount()),
-		RootInode:   fsmeta.InodeID(req.GetRootInode()),
-		ReadVersion: req.GetReadVersion(),
+		Mount:            fsmeta.MountID(req.GetMount()),
+		RootInode:        fsmeta.InodeID(req.GetRootInode()),
+		ReadVersion:      req.GetReadVersion(),
+		PerasSegmentRefs: refs,
+	}, nil
+}
+
+func perasSnapshotSegmentRefsToProto(refs []fsmeta.PerasSnapshotSegmentRef) []*fsmetapb.PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
 	}
+	out := make([]*fsmetapb.PerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, &fsmetapb.PerasSnapshotSegmentRef{
+			EpochId:              ref.EpochID,
+			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
+			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		})
+	}
+	return out
+}
+
+func perasSnapshotSegmentRefsFromProto(refs []*fsmetapb.PerasSnapshotSegmentRef) ([]fsmeta.PerasSnapshotSegmentRef, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	out := make([]fsmeta.PerasSnapshotSegmentRef, 0, len(refs))
+	for idx, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		root := ref.GetSegmentRoot()
+		digest := ref.GetSegmentPayloadDigest()
+		if len(root) != 32 || len(digest) != 32 {
+			return nil, fmt.Errorf("%w: peras snapshot segment ref %d epoch=%d root_len=%d digest_len=%d", fsmeta.ErrInvalidRequest, idx, ref.GetEpochId(), len(root), len(digest))
+		}
+		var parsed fsmeta.PerasSnapshotSegmentRef
+		parsed.EpochID = ref.GetEpochId()
+		copy(parsed.SegmentRoot[:], root)
+		copy(parsed.SegmentPayloadDigest[:], digest)
+		out = append(out, parsed)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func quotaUsageRequestFromProto(req *fsmetapb.QuotaUsageRequest) fsmeta.QuotaUsageRequest {

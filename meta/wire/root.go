@@ -437,6 +437,38 @@ func RootPerasAuthoritySealsFromProto(seals []*metapb.RootPerasAuthoritySeal) []
 	return out
 }
 
+func RootPerasSnapshotSegmentRefsToProto(refs []rootproto.PerasSnapshotSegmentRef) []*metapb.RootPerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]*metapb.RootPerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, &metapb.RootPerasSnapshotSegmentRef{
+			EpochId:              ref.EpochID,
+			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
+			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		})
+	}
+	return out
+}
+
+func RootPerasSnapshotSegmentRefsFromProto(refs []*metapb.RootPerasSnapshotSegmentRef) []rootproto.PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]rootproto.PerasSnapshotSegmentRef, 0, len(refs))
+	for _, ref := range refs {
+		var parsed rootproto.PerasSnapshotSegmentRef
+		if ref != nil {
+			parsed.EpochID = ref.GetEpochId()
+			copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
+			copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
+		}
+		out = append(out, parsed)
+	}
+	return out
+}
+
 func RootPerasAuthorityCommandToProto(cmd rootproto.PerasAuthorityCommand) *metapb.RootPerasAuthorityCommand {
 	return &metapb.RootPerasAuthorityCommand{
 		Kind:                 RootPerasAuthorityActToProto(cmd.Kind),
@@ -596,12 +628,13 @@ func rootEventSnapshotEpochToProto(epoch *rootevent.SnapshotEpoch) *metapb.RootS
 		return nil
 	}
 	return &metapb.RootSnapshotEpoch{
-		SnapshotId:  epoch.SnapshotID,
-		Mount:       epoch.Mount,
-		MountKeyId:  epoch.MountKeyID,
-		RootInode:   epoch.RootInode,
-		ReadVersion: epoch.ReadVersion,
-		PublishedAt: RootCursorToProto(epoch.PublishedAt),
+		SnapshotId:       epoch.SnapshotID,
+		Mount:            epoch.Mount,
+		MountKeyId:       epoch.MountKeyID,
+		RootInode:        epoch.RootInode,
+		ReadVersion:      epoch.ReadVersion,
+		PublishedAt:      RootCursorToProto(epoch.PublishedAt),
+		PerasSegmentRefs: RootPerasSnapshotSegmentRefsToProto(epoch.PerasSegmentRefs),
 	}
 }
 
@@ -610,12 +643,13 @@ func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent
 		return nil
 	}
 	return &rootevent.SnapshotEpoch{
-		SnapshotID:  epoch.GetSnapshotId(),
-		Mount:       epoch.GetMount(),
-		MountKeyID:  epoch.GetMountKeyId(),
-		RootInode:   epoch.GetRootInode(),
-		ReadVersion: epoch.GetReadVersion(),
-		PublishedAt: RootCursorFromProto(epoch.GetPublishedAt()),
+		SnapshotID:       epoch.GetSnapshotId(),
+		Mount:            epoch.GetMount(),
+		MountKeyID:       epoch.GetMountKeyId(),
+		RootInode:        epoch.GetRootInode(),
+		ReadVersion:      epoch.GetReadVersion(),
+		PublishedAt:      RootCursorFromProto(epoch.GetPublishedAt()),
+		PerasSegmentRefs: RootPerasSnapshotSegmentRefsFromProto(epoch.GetPerasSegmentRefs()),
 	}
 }
 
@@ -1283,12 +1317,13 @@ func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
 
 func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapshotEpoch {
 	return &metapb.RootSnapshotEpoch{
-		SnapshotId:  epoch.SnapshotID,
-		Mount:       epoch.Mount,
-		MountKeyId:  epoch.MountKeyID,
-		RootInode:   epoch.RootInode,
-		ReadVersion: epoch.ReadVersion,
-		PublishedAt: RootCursorToProto(epoch.PublishedAt),
+		SnapshotId:       epoch.SnapshotID,
+		Mount:            epoch.Mount,
+		MountKeyId:       epoch.MountKeyID,
+		RootInode:        epoch.RootInode,
+		ReadVersion:      epoch.ReadVersion,
+		PublishedAt:      RootCursorToProto(epoch.PublishedAt),
+		PerasSegmentRefs: RootPerasSnapshotSegmentRefsToProto(epoch.PerasSegmentRefs),
 	}
 }
 
@@ -1297,12 +1332,13 @@ func RootSnapshotEpochFromProto(pbEpoch *metapb.RootSnapshotEpoch) rootstate.Sna
 		return rootstate.SnapshotEpoch{}
 	}
 	return rootstate.SnapshotEpoch{
-		SnapshotID:  pbEpoch.GetSnapshotId(),
-		Mount:       pbEpoch.GetMount(),
-		MountKeyID:  pbEpoch.GetMountKeyId(),
-		RootInode:   pbEpoch.GetRootInode(),
-		ReadVersion: pbEpoch.GetReadVersion(),
-		PublishedAt: RootCursorFromProto(pbEpoch.GetPublishedAt()),
+		SnapshotID:       pbEpoch.GetSnapshotId(),
+		Mount:            pbEpoch.GetMount(),
+		MountKeyID:       pbEpoch.GetMountKeyId(),
+		RootInode:        pbEpoch.GetRootInode(),
+		ReadVersion:      pbEpoch.GetReadVersion(),
+		PublishedAt:      RootCursorFromProto(pbEpoch.GetPublishedAt()),
+		PerasSegmentRefs: RootPerasSnapshotSegmentRefsFromProto(pbEpoch.GetPerasSegmentRefs()),
 	}
 }
 

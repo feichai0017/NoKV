@@ -24,6 +24,7 @@ var (
 	ErrAmbiguousAuthority = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: ambiguous active authority")
 	ErrConflictingGrant   = nokverrors.New(nokverrors.KindConflict, "fsmeta/runtime/peras: conflicting authority grant")
 	ErrAuthorityViewStale = nokverrors.New(nokverrors.KindStaleEpoch, "fsmeta/runtime/peras: active authority view stale")
+	ErrVisibleLogClosed   = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/runtime/peras: visible log is closed")
 )
 
 func IsNotHeld(err error) bool {

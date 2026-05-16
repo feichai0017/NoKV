@@ -56,6 +56,95 @@ func (e *Executor) Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta
 	return fsmeta.DecodeDentryValue(value)
 }
 
+// LookupPlus returns one dentry and its inode attributes at the same read
+// version, merged with visible Peras overlay rows.
+func (e *Executor) LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	mount := mountRecord.Identity()
+	program, err := compile.CompileLookupReadProgram(req, mount)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	plan := program.Plan
+	if value, deleted, ok := e.readPerasProgram(program); ok {
+		e.invalidateNegative(plan.PrimaryKey)
+		if deleted {
+			return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+		}
+		dentry, err := fsmeta.DecodeDentryValue(value)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+		return e.readLookupPlusInode(ctx, mount, dentry, 0)
+	}
+	if e.negCache != nil && e.negCache.Has(plan.PrimaryKey) {
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	version, err := e.reserveReadVersion(ctx)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	value, ok, err := e.runner.Get(ctx, plan.PrimaryKey, version)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if !ok {
+		if e.negCache != nil {
+			e.negCache.Remember(plan.PrimaryKey)
+		}
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	dentry, err := fsmeta.DecodeDentryValue(value)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	return e.readLookupPlusInode(ctx, mount, dentry, version)
+}
+
+func (e *Executor) readLookupPlusInode(ctx context.Context, mount fsmeta.MountIdentity, dentry fsmeta.DentryRecord, version uint64) (fsmeta.DentryAttrPair, error) {
+	program, err := compile.CompileGetAttrReadProgram(mount, dentry.Inode)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if value, deleted, ok := e.readPerasProgram(program); ok {
+		if deleted {
+			return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+		}
+		inode, err := fsmeta.DecodeInodeValue(value)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+		if inode.Inode != dentry.Inode {
+			return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+		}
+		return fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode}, nil
+	}
+	if version == 0 {
+		version, err = e.reserveReadVersion(ctx)
+		if err != nil {
+			return fsmeta.DentryAttrPair{}, err
+		}
+	}
+	value, ok, err := e.runner.Get(ctx, program.Key, version)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if !ok {
+		return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: inode %d", fsmeta.ErrNotFound, dentry.Inode)
+	}
+	inode, err := fsmeta.DecodeInodeValue(value)
+	if err != nil {
+		return fsmeta.DentryAttrPair{}, err
+	}
+	if inode.Inode != dentry.Inode {
+		return fsmeta.DentryAttrPair{}, fmt.Errorf("%w: dentry inode=%d value inode=%d", fsmeta.ErrInvalidValue, dentry.Inode, inode.Inode)
+	}
+	return fsmeta.DentryAttrPair{Dentry: dentry, Inode: inode}, nil
+}
+
 // invalidateNegative drops cached "missing" memos for every dentry key that
 // was just mutated, so the next Lookup re-issues against the runner instead
 // of returning a stale ErrNotFound. Safe with a nil cache.
@@ -108,20 +197,22 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 		return nil, err
 	}
 	mount := mountRecord.Identity()
+	snapshotHasOverlay := req.SnapshotVersion != 0 && e.perasSnapshotDirectoryHasOverlay(req.SnapshotVersion, mount, req.Parent)
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
 	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
-	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	includeOverlay := snapshotHasOverlay || overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mountRecord.Identity(), includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
 	}
 	if overlayOnly {
-		return e.scanDentries(ctx, plan, 0)
+		return e.scanDentries(ctx, plan, 0, false)
 	}
 	var out []fsmeta.DentryRecord
+	snapshotRead := req.SnapshotVersion != 0
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
 		var err error
-		out, err = e.scanDentries(ctx, plan, version)
+		out, err = e.scanDentries(ctx, plan, version, snapshotRead)
 		return err
 	})
 	return out, err
@@ -147,9 +238,10 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		return nil, err
 	}
 	mount := mountRecord.Identity()
+	snapshotHasOverlay := req.SnapshotVersion != 0 && e.perasSnapshotDirectoryHasOverlay(req.SnapshotVersion, mount, req.Parent)
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
 	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
-	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	includeOverlay := snapshotHasOverlay || overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mount, includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
@@ -168,7 +260,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		}
 	}
 	if overlayOnly {
-		dentries, err := e.scanDentries(ctx, plan, 0)
+		dentries, err := e.scanDentries(ctx, plan, 0, false)
 		if err != nil {
 			return nil, err
 		}
@@ -183,8 +275,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	}
 
 	var out []fsmeta.DentryAttrPair
+	snapshotRead := req.SnapshotVersion != 0
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		dentries, err := e.scanDentries(ctx, plan, version)
+		dentries, err := e.scanDentries(ctx, plan, version, snapshotRead)
 		if err != nil {
 			return err
 		}
@@ -196,7 +289,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		if err != nil {
 			return err
 		}
-		inodeValues, inodePresent, err := e.batchGetMergedValuesOrdered(ctx, inodeKeys, version, includeOverlay)
+		inodeValues, inodePresent, err := e.batchGetMergedValuesOrdered(ctx, inodeKeys, version, includeOverlay, snapshotRead)
 		if err != nil {
 			return err
 		}
@@ -273,14 +366,14 @@ func (e *Executor) readDirPlusFromPerasView(mount fsmeta.MountIdentity, dentries
 	return pairs, true, nil
 }
 
-func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]fsmeta.DentryRecord, error) {
+func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool) ([]fsmeta.DentryRecord, error) {
 	var kvs []KV
 	stats := compile.DirectoryReadStats{UsedPerasOnly: plan.PerasOnly}
 	if !plan.PerasOnly {
 		if plan.IncludePeras {
 			var perasRows uint32
 			var err error
-			kvs, stats.BaseRows, perasRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRows(ctx, plan, version)
+			kvs, stats.BaseRows, perasRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRows(ctx, plan, version, snapshotRead)
 			if err != nil {
 				return nil, err
 			}
@@ -319,7 +412,7 @@ func (e *Executor) perasDirectoryBaseEmpty(mount fsmeta.MountIdentity, parent fs
 	if index == nil {
 		return false
 	}
-	return index.DirectoryEmpty(mount, parent)
+	return index.DirectoryBaseEmpty(mount, parent)
 }
 
 func (e *Executor) perasDirectoryHasOverlay(mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {
@@ -352,6 +445,18 @@ func (e *Executor) perasDirectoryHasVisibleOverlay(mount fsmeta.MountIdentity, p
 		return true
 	}
 	return presence.HasPerasVisibleDirectory(prefix)
+}
+
+func (e *Executor) perasSnapshotDirectoryHasOverlay(version uint64, mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {
+	reader := e.perasSnapshotOverlay()
+	if reader == nil {
+		return false
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	if err != nil {
+		return true
+	}
+	return reader.HasPerasSnapshotDirectory(version, prefix)
 }
 
 func (e *Executor) dirPageReadFrontier(directory dirpage.DirectoryKey, mount fsmeta.MountIdentity, parent fsmeta.InodeID) uint64 {

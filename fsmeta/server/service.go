@@ -20,6 +20,7 @@ type Executor interface {
 	Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error)
 	UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error)
 	Lookup(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error)
+	LookupPlus(ctx context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error)
 	ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error)
 	GetReadVersion(ctx context.Context, req fsmeta.ReadVersionRequest) (uint64, error)
@@ -34,6 +35,10 @@ type Executor interface {
 	HeartbeatWriteSession(ctx context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error)
 	CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteSessionRequest) error
 	ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
+}
+
+type perasSnapshotRetirer interface {
+	RetirePerasSnapshot(version uint64)
 }
 
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
@@ -123,6 +128,20 @@ func (s *Service) Lookup(ctx context.Context, req *fsmetapb.LookupRequest) (*fsm
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.LookupResponse{Dentry: dentryToProto(record)}, nil
+}
+
+func (s *Service) LookupPlus(ctx context.Context, req *fsmetapb.LookupRequest) (*fsmetapb.LookupPlusResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta lookup plus request is required")
+	}
+	pair, err := s.executor.LookupPlus(ctx, lookupRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.LookupPlusResponse{Entry: pairToProto(pair)}, nil
 }
 
 func (s *Service) ReadDir(ctx context.Context, req *fsmetapb.ReadDirRequest) (*fsmetapb.ReadDirResponse, error) {
@@ -269,12 +288,19 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 	if req == nil {
 		return nil, rpcInvalidArgument("fsmeta retire snapshot subtree request is required")
 	}
-	token, err := s.executor.ResolveSnapshotSubtreeToken(ctx, retireSnapshotSubtreeRequestFromProto(req))
+	retireToken, err := retireSnapshotSubtreeRequestFromProto(req)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	token, err := s.executor.ResolveSnapshotSubtreeToken(ctx, retireToken)
 	if err != nil {
 		return nil, rpcError(err)
 	}
 	if err := s.snapshot.RetireSnapshotSubtree(ctx, token); err != nil {
 		return nil, rpcError(err)
+	}
+	if retirer, ok := s.executor.(perasSnapshotRetirer); ok {
+		retirer.RetirePerasSnapshot(token.ReadVersion)
 	}
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
 }

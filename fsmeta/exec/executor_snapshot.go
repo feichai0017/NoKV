@@ -25,12 +25,36 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
+	if capturer, ok := e.perasCommitter.(PerasVisibleSnapshotCapturer); ok {
+		version, err := e.reserveReadVersion(ctx)
+		if err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
+		capture, captured, err := capturer.CapturePerasVisibleSnapshot(ctx, version, delta.Authority)
+		if err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
+		if captured {
+			return fsmeta.SnapshotSubtreeToken{
+				Mount:            req.Mount,
+				MountKeyID:       mountRecord.MountKeyID,
+				RootInode:        req.RootInode,
+				ReadVersion:      version,
+				PerasSegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), capture.SegmentRefs...),
+			}, nil
+		}
+	}
 	if err := e.flushPerasAuthority(ctx, delta.Authority); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
+	}
+	if capturer, ok := e.perasCommitter.(PerasSnapshotCapturer); ok {
+		if err := capturer.CapturePerasSnapshot(version); err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
 	}
 	return fsmeta.SnapshotSubtreeToken{
 		Mount:       req.Mount,
@@ -48,6 +72,22 @@ func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta
 	if token.RootInode == 0 || token.ReadVersion == 0 {
 		return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
 	}
+	for _, ref := range token.PerasSegmentRefs {
+		if !ref.Valid() {
+			return fsmeta.SnapshotSubtreeToken{}, fsmeta.ErrInvalidRequest
+		}
+	}
 	token.MountKeyID = record.MountKeyID
-	return token, nil
+	return token.Clone(), nil
+}
+
+func (e *Executor) RetirePerasSnapshot(version uint64) {
+	if e == nil || version == 0 {
+		return
+	}
+	retirer, ok := e.perasCommitter.(perasSnapshotRetirer)
+	if !ok {
+		return
+	}
+	retirer.RetirePerasSnapshot(version)
 }

@@ -828,7 +828,6 @@ func TestLinkAndUnlinkCompileRuntimeConcreteVisibleCommitDeltas(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EligibilityVisibleCommit, delta.Eligibility)
 	require.Empty(t, delta.SlowReason)
-	require.Contains(t, delta.RuntimeGuards, GuardNonDirectoryInode)
 	require.Equal(t, EffectDelete, delta.WriteEffects[0].Kind)
 	require.Equal(t, EffectDerivedPut, delta.WriteEffects[1].Kind)
 }

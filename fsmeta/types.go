@@ -56,6 +56,38 @@ type DentryAttrPair struct {
 	Inode  InodeRecord
 }
 
+// PerasSnapshotSegmentRef identifies one witnessed Peras segment retained by a
+// SnapshotSubtreeToken. The payload bytes are intentionally not part of the
+// public token; another gateway can probe the witness set by epoch/root/digest
+// to prove the visible snapshot frontier.
+type PerasSnapshotSegmentRef struct {
+	EpochID              uint64
+	SegmentRoot          [32]byte
+	SegmentPayloadDigest [32]byte
+}
+
+// PerasVisibleSnapshotCapture is the runtime-internal evidence returned when a
+// visible snapshot has been made durable without forcing immediate install.
+type PerasVisibleSnapshotCapture struct {
+	SegmentRefs []PerasSnapshotSegmentRef
+}
+
+// Valid reports whether ref can address a durable Peras witness segment.
+func (r PerasSnapshotSegmentRef) Valid() bool {
+	return r.EpochID != 0 &&
+		r.SegmentRoot != ([32]byte{}) &&
+		r.SegmentPayloadDigest != ([32]byte{})
+}
+
+func clonePerasSnapshotSegmentRefs(refs []PerasSnapshotSegmentRef) []PerasSnapshotSegmentRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]PerasSnapshotSegmentRef, len(refs))
+	copy(out, refs)
+	return out
+}
+
 // ReadVersionRequest asks for an ephemeral MVCC read version. It provides a
 // consistent read timestamp only; it does not publish a snapshot epoch or pin
 // GC state.
@@ -67,10 +99,17 @@ type ReadVersionRequest struct {
 // is published into rooted truth by the fsmeta service boundary and must be
 // retired by callers when its GC-retention contract is no longer needed.
 type SnapshotSubtreeToken struct {
-	Mount       MountID
-	MountKeyID  MountKeyID
-	RootInode   InodeID
-	ReadVersion uint64
+	Mount            MountID
+	MountKeyID       MountKeyID
+	RootInode        InodeID
+	ReadVersion      uint64
+	PerasSegmentRefs []PerasSnapshotSegmentRef
+}
+
+// Clone returns a detached snapshot token.
+func (t SnapshotSubtreeToken) Clone() SnapshotSubtreeToken {
+	t.PerasSegmentRefs = clonePerasSnapshotSegmentRefs(t.PerasSegmentRefs)
+	return t
 }
 
 // QuotaUsageRequest addresses one usage counter. Scope 0 is mount-wide;

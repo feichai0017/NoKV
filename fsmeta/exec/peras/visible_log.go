@@ -69,21 +69,26 @@ type VisibleLogApplier interface {
 }
 
 func EncodeVisibleOperationRecord(record VisibleOperationRecord) ([]byte, error) {
+	return EncodeVisibleOperationRecordTo(nil, record)
+}
+
+// EncodeVisibleOperationRecordTo encodes record into dst[:0] when capacity allows.
+func EncodeVisibleOperationRecordTo(dst []byte, record VisibleOperationRecord) ([]byte, error) {
 	if err := validateVisibleOperationRecord(record); err != nil {
 		return nil, err
 	}
-	var out bytes.Buffer
+	out := bytes.NewBuffer(dst[:0])
 	out.Grow(visibleOperationRecordEncodedSize(record))
-	writeFixed(&out, visibleRecordMagic[:])
-	writeUint64(&out, record.EpochID)
-	writeString(&out, record.HolderID)
-	writeString(&out, record.GrantID)
-	writeInt64(&out, record.GrantExpiresNanos)
-	writeFixed(&out, record.PredecessorDigest[:])
-	writeVisibleRootLineage(&out, record.RootLineage)
-	writeAuthorityScope(&out, record.Scope)
-	writeInt64(&out, record.TimestampUnixNano)
-	writeVisibleReplayOperation(&out, record.Operation)
+	writeFixed(out, visibleRecordMagic[:])
+	writeUint64(out, record.EpochID)
+	writeString(out, record.HolderID)
+	writeString(out, record.GrantID)
+	writeInt64(out, record.GrantExpiresNanos)
+	writeFixed(out, record.PredecessorDigest[:])
+	writeVisibleRootLineage(out, record.RootLineage)
+	writeAuthorityScope(out, record.Scope)
+	writeInt64(out, record.TimestampUnixNano)
+	writeVisibleReplayOperation(out, record.Operation)
 	return out.Bytes(), nil
 }
 

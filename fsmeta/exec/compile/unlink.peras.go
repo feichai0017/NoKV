@@ -30,7 +30,6 @@ func CompileUnlinkProgram(req fsmeta.UnlinkRequest, mount fsmeta.MountIdentity, 
 		{Kind: EffectDerivedPut},
 	}
 	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
-	delta.RuntimeGuards = append(delta.RuntimeGuards, GuardNonDirectoryInode)
 	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
 	if !validateUnlinkSemanticDelta(delta) {
 		return UnlinkProgram{}, fsmeta.ErrInvalidRequest
@@ -94,13 +93,10 @@ func validateUnlinkSemanticDelta(delta SemanticDelta) bool {
 	if !semanticKeyBindingMatches(delta, delta.WriteEffects[1].Key, "runtime") {
 		return false
 	}
-	if len(delta.RuntimeGuards) < 1 || len(delta.RuntimeGuards) > 2 {
+	if len(delta.RuntimeGuards) > 1 {
 		return false
 	}
-	if delta.RuntimeGuards[0] != GuardNonDirectoryInode {
-		return false
-	}
-	for _, guard := range delta.RuntimeGuards[1:] {
+	for _, guard := range delta.RuntimeGuards {
 		switch guard {
 		case GuardQuotaCredit:
 		default:

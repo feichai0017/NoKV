@@ -1,0 +1,295 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package local
+
+import (
+	"bytes"
+	"context"
+	"math"
+	"sync"
+	"sync/atomic"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+)
+
+// QuotaLedger maintains local usage counters without enforcing rooted limits.
+type QuotaLedger struct {
+	reserveTotal        atomic.Uint64
+	usageMutationsTotal atomic.Uint64
+	mu                  sync.RWMutex
+	overlay             fsmetaexec.PerasOverlayReader
+}
+
+type quotaSubject struct {
+	mount      fsmeta.MountID
+	mountKeyID fsmeta.MountKeyID
+	scope      fsmeta.InodeID
+}
+
+type quotaDelta struct {
+	bytes  int64
+	inodes int64
+}
+
+// NewQuotaLedger constructs an unlimited local quota ledger.
+func NewQuotaLedger() *QuotaLedger {
+	return &QuotaLedger{}
+}
+
+// SetPerasOverlay attaches the local Peras read plane used by read-derived
+// quota diagnostics.
+func (q *QuotaLedger) SetPerasOverlay(overlay fsmetaexec.PerasOverlayReader) {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.overlay = overlay
+	q.mu.Unlock()
+}
+
+// ReserveQuota implements fsmetaexec.QuotaResolver. Local quotas are unlimited
+// and read-derived, so the hot write path does not carry quota counter keys.
+func (q *QuotaLedger) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRunner, changes []fsmetaexec.QuotaChange, startVersion uint64) ([]*kvrpcpb.Mutation, error) {
+	if q == nil || runner == nil || len(changes) == 0 {
+		return nil, nil
+	}
+	if _, err := aggregateQuotaChanges(changes); err != nil {
+		return nil, err
+	}
+	q.reserveTotal.Add(1)
+	return nil, nil
+}
+
+// AllowPerasVisibleQuota lets quota-affecting operations use local Peras.
+// Unlimited local quota is derived from visible namespace state at read time,
+// so these writes do not need durable quota-counter side effects.
+func (q *QuotaLedger) AllowPerasVisibleQuota(context.Context, []fsmetaexec.QuotaChange) (bool, error) {
+	return true, nil
+}
+
+// ReadQuotaUsage derives local unlimited-quota diagnostics from visible dentries
+// instead of forcing every metadata write to update a mount-wide counter key.
+func (q *QuotaLedger) ReadQuotaUsage(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, scope fsmeta.InodeID, version uint64) (fsmeta.UsageRecord, bool, error) {
+	if q == nil || runner == nil {
+		return fsmeta.UsageRecord{}, false, nil
+	}
+	if version == 0 {
+		var err error
+		version, err = runner.ReserveTimestamp(ctx, 1)
+		if err != nil {
+			return fsmeta.UsageRecord{}, true, err
+		}
+	}
+	var (
+		prefix []byte
+		err    error
+	)
+	if scope == 0 {
+		prefix, err = fsmeta.EncodeMountPrefix(mount)
+	} else {
+		prefix, err = fsmeta.EncodeDentryPrefix(mount, scope)
+	}
+	if err != nil {
+		return fsmeta.UsageRecord{}, true, err
+	}
+	usage, err := q.deriveQuotaUsageFromDentries(ctx, runner, mount, prefix, version)
+	return usage, true, err
+}
+
+// Stats returns local quota diagnostics.
+func (q *QuotaLedger) Stats() map[string]any {
+	if q == nil {
+		return map[string]any{
+			"reserve_total":         uint64(0),
+			"usage_mutations_total": uint64(0),
+			"limit_policy":          "unlimited",
+		}
+	}
+	return map[string]any{
+		"reserve_total":         q.reserveTotal.Load(),
+		"usage_mutations_total": q.usageMutationsTotal.Load(),
+		"limit_policy":          "unlimited",
+	}
+}
+
+func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, prefix []byte, version uint64) (fsmeta.UsageRecord, error) {
+	var usage fsmeta.UsageRecord
+	start := append([]byte(nil), prefix...)
+	for {
+		rows, err := runner.Scan(ctx, start, 256, version)
+		if err != nil {
+			return fsmeta.UsageRecord{}, err
+		}
+		if len(rows) == 0 {
+			if err := q.addOverlayQuotaUsage(ctx, runner, mount, prefix, version, &usage); err != nil {
+				return fsmeta.UsageRecord{}, err
+			}
+			return usage, nil
+		}
+		for _, row := range rows {
+			if !bytes.HasPrefix(row.Key, prefix) {
+				if err := q.addOverlayQuotaUsage(ctx, runner, mount, prefix, version, &usage); err != nil {
+					return fsmeta.UsageRecord{}, err
+				}
+				return usage, nil
+			}
+			if overlay := q.overlayReader(); overlay != nil {
+				if _, _, ok := overlay.GetPerasOverlayView(row.Key); ok {
+					continue
+				}
+			}
+			parts, ok := fsmeta.InspectKey(row.Key)
+			if !ok || parts.Kind != fsmeta.KeyKindDentry {
+				continue
+			}
+			dentry, err := fsmeta.DecodeDentryValue(row.Value)
+			if err != nil {
+				return fsmeta.UsageRecord{}, err
+			}
+			inode, ok, err := q.readQuotaInode(ctx, runner, mount, dentry.Inode, version)
+			if err != nil {
+				return fsmeta.UsageRecord{}, err
+			}
+			if !ok {
+				continue
+			}
+			usage.Bytes = saturatingAddUint64(usage.Bytes, inode.Size)
+			usage.Inodes = saturatingAddUint64(usage.Inodes, 1)
+		}
+		start = nextQuotaScanKey(rows[len(rows)-1].Key)
+	}
+}
+
+func (q *QuotaLedger) addOverlayQuotaUsage(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, prefix []byte, version uint64, usage *fsmeta.UsageRecord) error {
+	if q == nil || usage == nil {
+		return nil
+	}
+	overlay := q.overlayReader()
+	if overlay == nil {
+		return nil
+	}
+	start := append([]byte(nil), prefix...)
+	for {
+		rows := overlay.ScanPerasOverlay(start, 256)
+		if len(rows) == 0 {
+			return nil
+		}
+		for _, row := range rows {
+			if !bytes.HasPrefix(row.Key, prefix) {
+				return nil
+			}
+			if row.Delete {
+				continue
+			}
+			parts, ok := fsmeta.InspectKey(row.Key)
+			if !ok || parts.Kind != fsmeta.KeyKindDentry {
+				continue
+			}
+			dentry, err := fsmeta.DecodeDentryValue(row.Value)
+			if err != nil {
+				return err
+			}
+			inode, ok, err := q.readQuotaInode(ctx, runner, mount, dentry.Inode, version)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			usage.Bytes = saturatingAddUint64(usage.Bytes, inode.Size)
+			usage.Inodes = saturatingAddUint64(usage.Inodes, 1)
+		}
+		start = nextQuotaScanKey(rows[len(rows)-1].Key)
+	}
+}
+
+func (q *QuotaLedger) readQuotaInode(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, inodeID fsmeta.InodeID, version uint64) (fsmeta.InodeRecord, bool, error) {
+	key, err := fsmeta.EncodeInodeKey(mount, inodeID)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	if overlay := q.overlayReader(); overlay != nil {
+		value, deleted, ok := overlay.GetPerasOverlayView(key)
+		if ok {
+			if deleted {
+				return fsmeta.InodeRecord{}, false, nil
+			}
+			inode, err := fsmeta.DecodeInodeValue(value)
+			if err != nil {
+				return fsmeta.InodeRecord{}, false, err
+			}
+			return inode, true, nil
+		}
+	}
+	value, ok, err := runner.Get(ctx, key, version)
+	if err != nil || !ok {
+		return fsmeta.InodeRecord{}, ok, err
+	}
+	inode, err := fsmeta.DecodeInodeValue(value)
+	if err != nil {
+		return fsmeta.InodeRecord{}, false, err
+	}
+	return inode, true, nil
+}
+
+func (q *QuotaLedger) overlayReader() fsmetaexec.PerasOverlayReader {
+	if q == nil {
+		return nil
+	}
+	q.mu.RLock()
+	overlay := q.overlay
+	q.mu.RUnlock()
+	return overlay
+}
+
+func nextQuotaScanKey(key []byte) []byte {
+	next := make([]byte, 0, len(key)+1)
+	next = append(next, key...)
+	return append(next, 0)
+}
+
+func aggregateQuotaChanges(changes []fsmetaexec.QuotaChange) (map[quotaSubject]quotaDelta, error) {
+	out := make(map[quotaSubject]quotaDelta)
+	for _, change := range changes {
+		if change.Mount == "" || change.MountKeyID == 0 {
+			return nil, fsmeta.ErrInvalidMountID
+		}
+		addQuotaDelta(out, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID}, change.Bytes, change.Inodes)
+		if change.Scope != 0 {
+			addQuotaDelta(out, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID, scope: change.Scope}, change.Bytes, change.Inodes)
+		}
+	}
+	for subject, delta := range out {
+		if delta.bytes == 0 && delta.inodes == 0 {
+			delete(out, subject)
+		}
+	}
+	return out, nil
+}
+
+func addQuotaDelta(out map[quotaSubject]quotaDelta, subject quotaSubject, bytesDelta, inodesDelta int64) {
+	delta := out[subject]
+	delta.bytes = saturatingAddInt64(delta.bytes, bytesDelta)
+	delta.inodes = saturatingAddInt64(delta.inodes, inodesDelta)
+	out[subject] = delta
+}
+
+func saturatingAddInt64(current, delta int64) int64 {
+	if delta > 0 && current > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	if delta < 0 && current < math.MinInt64-delta {
+		return math.MinInt64
+	}
+	return current + delta
+}
+
+func saturatingAddUint64(current, delta uint64) uint64 {
+	if delta > math.MaxUint64-current {
+		return math.MaxUint64
+	}
+	return current + delta
+}

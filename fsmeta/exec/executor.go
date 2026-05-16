@@ -148,6 +148,31 @@ type PerasDirectoryCacheFrontier interface {
 	PerasDirectoryCacheFrontier(prefix []byte) uint64
 }
 
+// PerasSnapshotCapturer records the installed Peras overlay visible at an MVCC
+// snapshot token so later snapshot reads do not consult live overlay state.
+type PerasSnapshotCapturer interface {
+	CapturePerasSnapshot(version uint64) error
+}
+
+// PerasVisibleSnapshotCapturer lets a runtime capture visible Peras state
+// without forcing an authority flush. Runtimes return captured=false when the
+// snapshot cannot be made durable at the visible boundary.
+type PerasVisibleSnapshotCapturer interface {
+	CapturePerasVisibleSnapshot(context.Context, uint64, compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error)
+}
+
+// PerasSnapshotOverlayReader serves a captured Peras overlay for a snapshot
+// version. It is intentionally separate from the live overlay reader.
+type PerasSnapshotOverlayReader interface {
+	GetPerasSnapshotOverlayView(version uint64, key []byte) (value []byte, deleted bool, ok bool)
+	ScanPerasSnapshotDirectory(version uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV
+	HasPerasSnapshotDirectory(version uint64, prefix []byte) bool
+}
+
+type perasSnapshotRetirer interface {
+	RetirePerasSnapshot(version uint64)
+}
+
 type PerasFlusher interface {
 	FlushDurable(context.Context) error
 }

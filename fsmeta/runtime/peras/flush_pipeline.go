@@ -16,7 +16,7 @@ import (
 )
 
 func (c *Runtime) flushLocked(ctx context.Context, scope *compile.AuthorityScope, level fsperas.SegmentPersistenceLevel) error {
-	pipeline := flushPipeline{runtime: c, level: level}
+	pipeline := flushPipeline{runtime: c, level: level, materialize: c.materialize}
 	batches, err := pipeline.freeze(scope)
 	if err != nil {
 		return err
@@ -27,6 +27,7 @@ func (c *Runtime) flushLocked(ctx context.Context, scope *compile.AuthorityScope
 type flushPipeline struct {
 	runtime                 *Runtime
 	level                   fsperas.SegmentPersistenceLevel
+	materialize             bool
 	allowDurableOldEpochRun bool
 }
 
@@ -46,7 +47,7 @@ func (p flushPipeline) freeze(scope *compile.AuthorityScope) ([]perasFlushBatch,
 	if err != nil {
 		return nil, err
 	}
-	return c.buildFlushBatches(plans, false)
+	return c.buildFlushBatches(plans, p.materialize)
 }
 
 func (p flushPipeline) run(ctx context.Context, batches []perasFlushBatch) error {
@@ -175,6 +176,9 @@ func (p flushPipeline) renewBatchAuthority(ctx context.Context, batch perasFlush
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
 	c := p.runtime
+	if !c.usesSegmentWitness() {
+		return nil
+	}
 	witnessStart := time.Now()
 	if err := c.appendSegmentWitnessBatchWithRetry(ctx, batch); err != nil {
 		return c.recordErrorf("append peras segment witness batch: %w", err)
@@ -234,7 +238,7 @@ func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) e
 		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	}
 	for _, job := range batch.jobs {
-		if err := c.installSegment(job.plan, job.segment); err != nil {
+		if err := c.installSegment(job.plan, job.segment, job.materialize); err != nil {
 			return err
 		}
 	}

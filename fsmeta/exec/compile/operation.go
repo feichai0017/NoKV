@@ -276,6 +276,8 @@ type SegmentDecision struct {
 	Reason SlowReason
 }
 
+const smallPredicateEvidenceLimit = 4
+
 // MaterializeCompiledOpWithEvidence recompiles a generated descriptor with
 // concrete runtime effects and predicate evidence, without reinterpreting the
 // operation semantics at admission time.
@@ -305,6 +307,9 @@ func MaterializeCompiledOpWithEvidence(op CompiledOp, effects []WriteEffect, evi
 
 func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (SemanticDelta, error) {
 	delta = cloneDelta(delta)
+	if len(evidence.Proofs) <= smallPredicateEvidenceLimit {
+		return applySmallPredicateEvidence(delta, evidence.Proofs)
+	}
 	proofs, err := predicateProofMap(evidence.Proofs)
 	if err != nil {
 		return SemanticDelta{}, err
@@ -339,6 +344,65 @@ func applyPredicateEvidence(delta SemanticDelta, evidence PredicateEvidence) (Se
 		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
 	}
 	return delta, nil
+}
+
+func applySmallPredicateEvidence(delta SemanticDelta, proofs []proof.PredicateProof) (SemanticDelta, error) {
+	var usedStack [smallPredicateEvidenceLimit]bool
+	used := usedStack[:len(proofs)]
+	for i, predicateProof := range proofs {
+		if err := validatePredicateProof(predicateProof); err != nil {
+			return SemanticDelta{}, err
+		}
+		for _, previous := range proofs[:i] {
+			if bytes.Equal(previous.Key, predicateProof.Key) {
+				return SemanticDelta{}, ValidationError{Kind: ValidationPredicateProofMismatch, Key: predicateProof.Key}
+			}
+		}
+	}
+	for i := range delta.ReadPredicates {
+		predicate := &delta.ReadPredicates[i]
+		if predicate.Kind == PredicatePrefixScan {
+			continue
+		}
+		if len(predicate.Key) == 0 {
+			return SemanticDelta{}, fsmeta.ErrInvalidRequest
+		}
+		for proofIndex, predicateProof := range proofs {
+			if !bytes.Equal(predicateProof.Key, predicate.Key) {
+				continue
+			}
+			applyPredicateProof(predicate, predicateProof)
+			used[proofIndex] = true
+			break
+		}
+	}
+	var extraStack [smallPredicateEvidenceLimit]proof.PredicateProof
+	extra := extraStack[:0]
+	for i, predicateProof := range proofs {
+		if used[i] {
+			continue
+		}
+		extra = append(extra, predicateProof)
+	}
+	slices.SortFunc(extra, func(left, right proof.PredicateProof) int {
+		return bytes.Compare(left.Key, right.Key)
+	})
+	for _, predicateProof := range extra {
+		predicate := Predicate{Key: cloneBytes(predicateProof.Key)}
+		applyPredicateProof(&predicate, predicateProof)
+		delta.ReadPredicates = append(delta.ReadPredicates, predicate)
+	}
+	return delta, nil
+}
+
+func validatePredicateProof(predicateProof proof.PredicateProof) error {
+	if len(predicateProof.Key) == 0 {
+		return ValidationError{Kind: ValidationPredicateProofMismatch}
+	}
+	if err := proof.VerifyPredicateProof(predicateProof); err != nil {
+		return ValidationError{Kind: ValidationPredicateProofMismatch, Key: predicateProof.Key}
+	}
+	return nil
 }
 
 func applyPredicateProof(predicate *Predicate, proof proof.PredicateProof) {
@@ -407,7 +471,7 @@ func CanAppendSegment(current, next CompiledOp, budget SegmentBudget) SegmentDec
 }
 
 func CanAppendSegmentPlans(current, next SegmentPlan, nextDurability DurabilityClass, budget SegmentBudget) SegmentDecision {
-	if nextDurability != DurabilityVisibleOnly {
+	if nextDurability != DurabilityVisibleOnly && current.MergeKey.Durability != nextDurability {
 		return SegmentDecision{Kind: SegmentDecisionFlushBeforeAndAfter, Reason: SlowReasonDurabilityBarrier}
 	}
 	if !current.CanAppend || !next.CanAppend {

@@ -80,7 +80,7 @@ func TestUsageValueRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "usage", ValueKindUsage.String())
-	require.Equal(t, "unknown(120)", ValueKind('x').String())
+	require.Equal(t, "unknown(122)", ValueKind('z').String())
 
 	kind, err := ValueKindOf(value)
 	require.NoError(t, err)
@@ -89,6 +89,31 @@ func TestUsageValueRoundTrip(t *testing.T) {
 	record, err := DecodeUsageValue(value)
 	require.NoError(t, err)
 	require.Equal(t, UsageRecord{Bytes: 4096, Inodes: 12}, record)
+}
+
+func TestSnapshotValueRoundTrip(t *testing.T) {
+	var ref PerasSnapshotSegmentRef
+	ref.EpochID = 7
+	ref.SegmentRoot[0] = 1
+	ref.SegmentPayloadDigest[0] = 2
+	token := SnapshotSubtreeToken{
+		Mount:            "vol",
+		MountKeyID:       9,
+		RootInode:        RootInode,
+		ReadVersion:      42,
+		PerasSegmentRefs: []PerasSnapshotSegmentRef{ref},
+	}
+	value, err := EncodeSnapshotValue(token)
+	require.NoError(t, err)
+	require.Equal(t, "snapshot", ValueKindSnapshot.String())
+
+	kind, err := ValueKindOf(value)
+	require.NoError(t, err)
+	require.Equal(t, ValueKindSnapshot, kind)
+
+	decoded, err := DecodeSnapshotValue(value)
+	require.NoError(t, err)
+	require.Equal(t, token, decoded)
 }
 
 func TestValueDecodersRejectWrongKind(t *testing.T) {
@@ -103,7 +128,7 @@ func TestValueKindOfRejectsInvalidValues(t *testing.T) {
 	_, err := ValueKindOf([]byte("not-fsmeta-value"))
 	require.ErrorIs(t, err, ErrInvalidValue)
 
-	value := encodeValue(ValueKind('x'), []byte("body"))
+	value := encodeValue(ValueKind('z'), []byte("body"))
 	_, err = ValueKindOf(value)
 	require.ErrorIs(t, err, ErrInvalidValueKind)
 }

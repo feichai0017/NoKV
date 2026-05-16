@@ -254,6 +254,22 @@ func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.O
 	index.RememberEmptySessionNamespace(mount, inode.Inode)
 }
 
+type perasEmptyDirectoryForgetter interface {
+	ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID)
+}
+
+func (e *Executor) forgetPerasEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	index := e.perasPredicateIndex()
+	if index == nil {
+		return
+	}
+	forgetter, ok := index.(perasEmptyDirectoryForgetter)
+	if !ok {
+		return
+	}
+	forgetter.ForgetEmptyDirectory(mount, inode)
+}
+
 func perasDeltaAllowsAbsentObservedValue(delta compile.SemanticDelta) bool {
 	return slices.Contains(delta.RuntimeGuards, compile.GuardExpiredSessionOwner)
 }
@@ -268,7 +284,7 @@ func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compi
 	if !bytes.Equal(predicate.Key, delta.Plan.MutateKeys[0]) || len(delta.Authority.Parents) != 1 {
 		return false
 	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
+	return index.DirectoryBaseEmpty(fsmeta.MountIdentity{
 		MountID:    delta.Authority.Mount,
 		MountKeyID: delta.Authority.MountKeyID,
 	}, delta.Authority.Parents[0])
@@ -295,7 +311,7 @@ func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte,
 	if parts.Kind != fsmeta.KeyKindDentry {
 		return false
 	}
-	return index.DirectoryEmpty(fsmeta.MountIdentity{
+	return index.DirectoryBaseEmpty(fsmeta.MountIdentity{
 		MountID:    scope.Mount,
 		MountKeyID: scope.MountKeyID,
 	}, parts.Parent)

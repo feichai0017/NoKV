@@ -54,33 +54,33 @@ type holderPendingOperation struct {
 	op           ReplayOperation
 }
 
-func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.MaterializedOp) (VisibleAck, error) {
+func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.MaterializedOp) (VisibleAck, ReplayOperation, error) {
 	if h == nil || h.detector == nil {
-		return VisibleAck{}, ErrHolderConfigInvalid
+		return VisibleAck{}, ReplayOperation{}, ErrHolderConfigInvalid
 	}
 	if err := ctxErr(ctx); err != nil {
-		return VisibleAck{}, err
+		return VisibleAck{}, ReplayOperation{}, err
 	}
 	delta := op.Delta
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		return VisibleAck{}, ErrIneligibleOperation
+		return VisibleAck{}, ReplayOperation{}, ErrIneligibleOperation
 	}
 	replay, err := replayOperationFromMaterialized(id, op)
 	if err != nil {
-		return VisibleAck{}, err
+		return VisibleAck{}, ReplayOperation{}, err
 	}
 	h.submitMu.Lock()
 	defer h.submitMu.Unlock()
 	if ack, ok, err := h.pendingAckForOperation(id, replay); ok || err != nil {
-		return ack, err
+		return ack, replay, err
 	}
 	if _, err := h.detector.Admit(id, op); err != nil {
 		if errors.Is(err, ErrDuplicateOperation) {
 			if ack, ok, pendingErr := h.pendingAckForOperation(id, replay); ok || pendingErr != nil {
-				return ack, pendingErr
+				return ack, replay, pendingErr
 			}
 		}
-		return VisibleAck{}, err
+		return VisibleAck{}, ReplayOperation{}, err
 	}
 	h.mu.Lock()
 	h.pending[id] = holderPendingOperation{
@@ -89,7 +89,7 @@ func (h *Holder) Submit(ctx context.Context, id OperationID, op compile.Material
 		op:           replay,
 	}
 	h.mu.Unlock()
-	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, nil
+	return VisibleAck{EpochID: h.epochID, OpID: id, HolderID: h.holderID}, replay, nil
 }
 
 func (h *Holder) RestoreVisible(scope compile.AuthorityScope, op ReplayOperation) error {

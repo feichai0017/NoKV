@@ -209,7 +209,7 @@ func compareResult(got, want Result) error {
 	if got.Err != nil || want.Err != nil {
 		return nil
 	}
-	if got.Token != want.Token {
+	if !reflect.DeepEqual(got.Token, want.Token) {
 		return fmt.Errorf("token mismatch: got %+v want %+v", got.Token, want.Token)
 	}
 	if got.Dentry != want.Dentry {

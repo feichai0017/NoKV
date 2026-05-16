@@ -47,7 +47,7 @@ func TestOverlayViewGetScanFactsAndRemove(t *testing.T) {
 	view.RemovePlan(plan)
 	_, _, ok = view.Get(dentryKey)
 	require.False(t, ok)
-	overlayKeys, knownKeys, _, _ := view.Stats()
+	overlayKeys, knownKeys, _, _, _ := view.Stats()
 	require.Zero(t, overlayKeys)
 	require.NotZero(t, knownKeys)
 }
@@ -94,6 +94,81 @@ func TestOverlayViewScanDirectoryUsesDirectoryIndex(t *testing.T) {
 	dirs, dirty := view.ReadIndexStats()
 	require.Equal(t, 2, dirs)
 	require.Equal(t, 1, dirty)
+}
+
+func TestOverlaySnapshotDirectoryPinsGenerationWithoutCloningValues(t *testing.T) {
+	view := NewOverlayView()
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 1}, testGeneratedCreateOpForInodes(t, 9, 21, "a")))
+	prefix, err := fsmeta.EncodeDentryPrefix(testMount, 9)
+	require.NoError(t, err)
+	inodeKey, err := fsmeta.EncodeInodeKey(testMount, 21)
+	require.NoError(t, err)
+
+	snapshot := view.SnapshotDirectory(testMount, prefix)
+	require.NotNil(t, snapshot)
+	plan := ReplayPlan{Operations: []ReplayOperation{{
+		OpID: OperationID{ClientID: "c", Seq: 1},
+		Mutations: []ReplayMutation{
+			{Key: mustDentryKey(t, 9, "a")},
+			{Key: inodeKey},
+		},
+	}}}
+	view.RemovePlan(plan)
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 2}, testGeneratedCreateOpForInodes(t, 9, 22, "b")))
+
+	rows := snapshot.ScanDirectory(prefix, prefix, 8)
+	require.Len(t, rows, 1)
+	require.Equal(t, "a", mustDentryName(t, rows[0].Key))
+	_, deleted, ok := snapshot.GetView(inodeKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.True(t, snapshot.HasDirectory(prefix))
+}
+
+func TestOverlayViewPrunesRetiredHistoryBeforeGeneration(t *testing.T) {
+	view := NewOverlayView()
+	require.NoError(t, view.Add(OperationID{ClientID: "c", Seq: 1}, testGeneratedCreateOpForInodes(t, 9, 21, "a")))
+	prefix, err := fsmeta.EncodeDentryPrefix(testMount, 9)
+	require.NoError(t, err)
+	snapshot := view.SnapshotDirectory(testMount, prefix)
+	require.NotNil(t, snapshot)
+	inodeKey, err := fsmeta.EncodeInodeKey(testMount, 21)
+	require.NoError(t, err)
+	plan := ReplayPlan{Operations: []ReplayOperation{{
+		OpID: OperationID{ClientID: "c", Seq: 1},
+		Mutations: []ReplayMutation{
+			{Key: mustDentryKey(t, 9, "a")},
+			{Key: inodeKey},
+		},
+	}}}
+
+	view.RemovePlan(plan)
+	require.NotZero(t, view.HistoryLen())
+	view.PruneHistoryBefore(snapshot.Generation())
+	require.NotZero(t, view.HistoryLen())
+	view.PruneHistoryBefore(^uint64(0))
+	require.Zero(t, view.HistoryLen())
+}
+
+func TestOverlayViewDirectoryBaseEmptySurvivesCurrentEmptyForget(t *testing.T) {
+	view := NewOverlayView()
+	view.RememberEmptyDirectory(testMount, 9)
+
+	require.True(t, view.DirectoryEmpty(testMount, 9))
+	require.True(t, view.DirectoryBaseEmpty(testMount, 9))
+
+	view.ForgetEmptyDirectory(testMount, 9)
+
+	require.False(t, view.DirectoryEmpty(testMount, 9))
+	require.True(t, view.DirectoryBaseEmpty(testMount, 9))
+	require.True(t, view.Clone().DirectoryBaseEmpty(testMount, 9))
+}
+
+func mustDentryKey(t *testing.T, parent fsmeta.InodeID, name string) []byte {
+	t.Helper()
+	key, err := fsmeta.EncodeDentryKey(testMount, parent, name)
+	require.NoError(t, err)
+	return key
 }
 
 func mustDentryName(t *testing.T, key []byte) string {

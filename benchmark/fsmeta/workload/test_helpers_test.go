@@ -102,6 +102,20 @@ func (c *fakeMetadataClient) Lookup(_ context.Context, req fsmeta.LookupRequest)
 	return entry, nil
 }
 
+func (c *fakeMetadataClient) LookupPlus(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
+	if !ok {
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	inode, ok := c.inodes[entry.Inode]
+	if !ok {
+		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+	}
+	return fsmeta.DentryAttrPair{Dentry: entry, Inode: inode}, nil
+}
+
 func (c *fakeMetadataClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

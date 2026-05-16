@@ -24,6 +24,12 @@ import (
 //	  session 's' : session_len uvarint | session bytes | inode be64 |
 //	                expires_unix_ns be64
 //	  usage   'u' : bytes be64 | inodes be64
+//	  snapshot 'x' : mount_len uvarint | mount bytes | mount_key_id be64 |
+//	                 root inode be64 | read version be64 | ref_count uvarint |
+//	                 refs...
+//
+//	snapshot ref:
+//	  epoch_id be64 | segment_root[32] | segment_payload_digest[32]
 //
 // Decode rejects unsupported versions and wrong value families at the public
 // decode entry points, keeping namespace corruption visible to callers.
@@ -35,10 +41,11 @@ const valueSchemaVersion byte = 1
 type ValueKind byte
 
 const (
-	ValueKindInode   ValueKind = 'i'
-	ValueKindDentry  ValueKind = 'd'
-	ValueKindSession ValueKind = 's'
-	ValueKindUsage   ValueKind = 'u'
+	ValueKindInode    ValueKind = 'i'
+	ValueKindDentry   ValueKind = 'd'
+	ValueKindSession  ValueKind = 's'
+	ValueKindUsage    ValueKind = 'u'
+	ValueKindSnapshot ValueKind = 'x'
 )
 
 // InodeType describes the user-visible inode kind tracked by fsmeta.
@@ -108,6 +115,8 @@ func (k ValueKind) String() string {
 		return "session"
 	case ValueKindUsage:
 		return "usage"
+	case ValueKindSnapshot:
+		return "snapshot"
 	default:
 		return fmt.Sprintf("unknown(%d)", byte(k))
 	}
@@ -222,6 +231,36 @@ func DecodeUsageValue(value []byte) (UsageRecord, error) {
 	return record, nil
 }
 
+// EncodeSnapshotValue returns the canonical hidden value encoding for one
+// active snapshot-retention token.
+func EncodeSnapshotValue(token SnapshotSubtreeToken) ([]byte, error) {
+	if err := validateSnapshotValue(token); err != nil {
+		return nil, err
+	}
+	body := make([]byte, 0, binary.MaxVarintLen64+len(token.Mount)+24+binary.MaxVarintLen64+len(token.PerasSegmentRefs)*72)
+	body = binary.AppendUvarint(body, uint64(len(token.Mount)))
+	body = append(body, string(token.Mount)...)
+	body = binary.BigEndian.AppendUint64(body, uint64(token.MountKeyID))
+	body = binary.BigEndian.AppendUint64(body, uint64(token.RootInode))
+	body = binary.BigEndian.AppendUint64(body, token.ReadVersion)
+	body = binary.AppendUvarint(body, uint64(len(token.PerasSegmentRefs)))
+	for _, ref := range token.PerasSegmentRefs {
+		body = binary.BigEndian.AppendUint64(body, ref.EpochID)
+		body = append(body, ref.SegmentRoot[:]...)
+		body = append(body, ref.SegmentPayloadDigest[:]...)
+	}
+	return encodeValue(ValueKindSnapshot, body), nil
+}
+
+// DecodeSnapshotValue decodes one hidden snapshot-retention token.
+func DecodeSnapshotValue(value []byte) (SnapshotSubtreeToken, error) {
+	var token SnapshotSubtreeToken
+	if err := decodeValue(value, ValueKindSnapshot, &token); err != nil {
+		return SnapshotSubtreeToken{}, err
+	}
+	return token, nil
+}
+
 // ValueKindOf returns the kind byte encoded in a fsmeta value.
 func ValueKindOf(value []byte) (ValueKind, error) {
 	pos, err := decodeValueHeader(value)
@@ -233,7 +272,7 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 	}
 	kind := ValueKind(value[pos])
 	switch kind {
-	case ValueKindInode, ValueKindDentry, ValueKindSession, ValueKindUsage:
+	case ValueKindInode, ValueKindDentry, ValueKindSession, ValueKindUsage, ValueKindSnapshot:
 		return kind, nil
 	default:
 		return 0, ErrInvalidValueKind
@@ -308,6 +347,16 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 			return err
 		}
 		*record = decoded
+	case ValueKindSnapshot:
+		token, ok := out.(*SnapshotSubtreeToken)
+		if !ok {
+			return ErrInvalidValue
+		}
+		decoded, err := decodeSnapshotBody(body)
+		if err != nil {
+			return err
+		}
+		*token = decoded
 	default:
 		return ErrInvalidValueKind
 	}
@@ -425,6 +474,72 @@ func decodeUsageBody(body []byte) (UsageRecord, error) {
 		Bytes:  binary.BigEndian.Uint64(body[:8]),
 		Inodes: binary.BigEndian.Uint64(body[8:16]),
 	}, nil
+}
+
+func decodeSnapshotBody(body []byte) (SnapshotSubtreeToken, error) {
+	mountLen, n := binary.Uvarint(body)
+	if n <= 0 {
+		return SnapshotSubtreeToken{}, ErrInvalidValue
+	}
+	pos := n
+	if mountLen == 0 || mountLen > uint64(len(body)-pos) {
+		return SnapshotSubtreeToken{}, ErrInvalidValue
+	}
+	token := SnapshotSubtreeToken{
+		Mount: MountID(string(body[pos : pos+int(mountLen)])),
+	}
+	pos += int(mountLen)
+	if len(body)-pos < 24 {
+		return SnapshotSubtreeToken{}, ErrInvalidValue
+	}
+	token.MountKeyID = MountKeyID(binary.BigEndian.Uint64(body[pos : pos+8]))
+	token.RootInode = InodeID(binary.BigEndian.Uint64(body[pos+8 : pos+16]))
+	token.ReadVersion = binary.BigEndian.Uint64(body[pos+16 : pos+24])
+	pos += 24
+	refCount, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return SnapshotSubtreeToken{}, ErrInvalidValue
+	}
+	pos += n
+	if refCount > uint64((len(body)-pos)/72) || int(refCount)*72 != len(body)-pos {
+		return SnapshotSubtreeToken{}, ErrInvalidValue
+	}
+	if refCount > 0 {
+		token.PerasSegmentRefs = make([]PerasSnapshotSegmentRef, 0, refCount)
+	}
+	for range refCount {
+		var ref PerasSnapshotSegmentRef
+		ref.EpochID = binary.BigEndian.Uint64(body[pos : pos+8])
+		copy(ref.SegmentRoot[:], body[pos+8:pos+40])
+		copy(ref.SegmentPayloadDigest[:], body[pos+40:pos+72])
+		pos += 72
+		token.PerasSegmentRefs = append(token.PerasSegmentRefs, ref)
+	}
+	if err := validateSnapshotValue(token); err != nil {
+		return SnapshotSubtreeToken{}, err
+	}
+	return token, nil
+}
+
+func validateSnapshotValue(token SnapshotSubtreeToken) error {
+	if err := validateMountID(token.Mount); err != nil {
+		return err
+	}
+	if err := validateMountKeyID(token.MountKeyID); err != nil {
+		return err
+	}
+	if err := validateInodeID(token.RootInode); err != nil {
+		return err
+	}
+	if token.ReadVersion == 0 {
+		return ErrInvalidValue
+	}
+	for _, ref := range token.PerasSegmentRefs {
+		if !ref.Valid() {
+			return ErrInvalidValue
+		}
+	}
+	return nil
 }
 
 func decodeValueHeader(value []byte) (int, error) {

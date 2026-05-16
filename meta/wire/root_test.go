@@ -190,11 +190,12 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 		},
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
 			"vol/42/99": {
-				SnapshotID:  "vol/42/99",
-				Mount:       "vol",
-				RootInode:   42,
-				ReadVersion: 99,
-				PublishedAt: rootproto.Cursor{Term: 2, Index: 9},
+				SnapshotID:       "vol/42/99",
+				Mount:            "vol",
+				RootInode:        42,
+				ReadVersion:      99,
+				PublishedAt:      rootproto.Cursor{Term: 2, Index: 9},
+				PerasSegmentRefs: []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(8, 0x70)},
 			},
 		},
 		Mounts: map[string]rootstate.MountRecord{
@@ -329,7 +330,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
 		rootevent.PerasAuthoritySealed(testWirePerasAuthoritySeal(testWirePerasAuthorityGrant())),
 		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
-		rootevent.SnapshotEpochPublished("vol", 1, 42, 99),
+		rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)}),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
 		rootevent.MountRetired("vol"),
@@ -459,6 +460,14 @@ func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.P
 		InstallIndex:         99,
 		InstallVersion:       1234,
 	}
+}
+
+func testWirePerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+	var root [32]byte
+	var digest [32]byte
+	root[0] = seed
+	digest[0] = seed + 1
+	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
 }
 
 func testWireDescriptor(id uint64, start, end []byte) topology.Descriptor {

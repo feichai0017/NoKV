@@ -108,6 +108,7 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		if err != nil {
 			return err
 		}
+		e.forgetPerasEmptyDirectory(mount, req.ToParent)
 		e.invalidateNegative(plan.ReadKeys[1])
 		e.invalidateDirPages(req.Mount, req.ToParent)
 		return nil
@@ -209,8 +210,10 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	// Link writes a fresh dentry at ReadKeys[1]; drop any negative memo
-	// and bump the destination parent's dirpage epoch so the new dentry
-	// shows up on the next ReadDirPlus.
+	// and Peras-derived empty-directory fact, then bump the destination
+	// parent's dirpage epoch so the new dentry shows up on the next
+	// ReadDirPlus.
+	e.forgetPerasEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys[1])
 	e.invalidateDirPages(req.Mount, req.ToParent)
 	return nil

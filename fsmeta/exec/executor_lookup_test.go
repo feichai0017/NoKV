@@ -540,6 +540,37 @@ func TestExecutorReadDirPlusReturnsDentriesAndAttrs(t *testing.T) {
 	}, pairs)
 }
 
+func TestExecutorLookupPlusReturnsDentryAndAttrs(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", 7, "a", 21)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{
+		Inode:     21,
+		Type:      fsmeta.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	pair, err := executor.LookupPlus(context.Background(), fsmeta.LookupRequest{
+		Mount:  "vol",
+		Parent: 7,
+		Name:   "a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryAttrPair{
+		Dentry: fsmeta.DentryRecord{Parent: 7, Name: "a", Inode: 21, Type: fsmeta.InodeTypeFile},
+		Inode: fsmeta.InodeRecord{
+			Inode:     21,
+			Type:      fsmeta.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
+	}, pair)
+}
+
 func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)

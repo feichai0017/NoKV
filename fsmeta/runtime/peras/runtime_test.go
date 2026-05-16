@@ -166,6 +166,99 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	visibleLog := &replayingVisibleLog{}
+	committer, err := NewRuntime(Config{
+		Authority:          provider,
+		SegmentWitnessMode: SegmentWitnessModeBypass,
+		Installer:          installer,
+		VisibleLog:         visibleLog,
+		SegmentBatchSize:   1024,
+		SegmentFlushEvery:  time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, "bypass", stats["witness_mode"])
+	require.Equal(t, 0, stats["witness_count"])
+	require.Equal(t, 0, stats["quorum"])
+	require.Equal(t, uint64(0), stats["witness_batch_total"])
+	require.Equal(t, uint64(0), stats["witness_quorum_total"])
+	require.Equal(t, uint64(1), stats["visible_log_apply_marker_total"])
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, 1, installer.calls)
+	require.Len(t, visibleLog.applied, 1)
+}
+
+func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	_, err := NewRuntime(Config{
+		Authority:         provider,
+		Installer:         &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.ErrorIs(t, err, ErrRuntimeInvalid)
+}
+
+func TestRuntimeWitnessBypassRejectsRootSealAuthority(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
+			holderID: "holder-a",
+			grant:    testRuntimeCommitterGrant(),
+		},
+	}
+	_, err := NewRuntime(Config{
+		Authority:          provider,
+		SegmentWitnessMode: SegmentWitnessModeBypass,
+		Installer:          &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:         &recordingVisibleLog{},
+		SegmentBatchSize:   1024,
+		SegmentFlushEvery:  time.Hour,
+	})
+	require.ErrorIs(t, err, ErrRuntimeInvalid)
+}
+
+func TestRuntimeMaterializedFlushRemovesReadOverlay(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:           provider,
+		Witnesses:           testRuntimePerasWitnesses(t, 3),
+		Installer:           installer,
+		VisibleLog:          &recordingVisibleLog{},
+		SegmentBatchSize:    1024,
+		SegmentFlushEvery:   time.Hour,
+		MaterializeSegments: true,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, 0, stats["overlay_keys"])
+	require.Equal(t, 0, stats["segment_keys"])
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, 1, installer.calls)
+	require.True(t, installer.materialize)
+
+	_, _, ok := committer.GetPerasOverlay(testRuntimeDentryKeyForLabel("a"))
+	require.False(t, ok)
+	require.Empty(t, committer.ScanPerasOverlay(testRuntimeRootDentryPrefix(), 2))
+}
+
 func TestRuntimeScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRuntime(Config{
@@ -220,6 +313,109 @@ func TestRuntimeScanPerasDirectoryUsesDirectoryIndex(t *testing.T) {
 		{Key: keyA, Value: []byte("overlay-a")},
 		{Key: keyB, Value: []byte("sealed-b")},
 	}, scan)
+}
+
+func TestRuntimeCapturePerasSnapshotUsesSealedSegmentGeneration(t *testing.T) {
+	committer := &Runtime{read: newReadState()}
+	prefix := testRuntimeRootDentryPrefix()
+	keyA := testRuntimeDentryKeyForLabel("a")
+	keyB := testRuntimeDentryKeyForLabel("b")
+
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a-v1")))
+	require.NoError(t, committer.CapturePerasSnapshot(10))
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a-v2")))
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyB, []byte("sealed-b")))
+
+	value, deleted, ok := committer.GetPerasSnapshotOverlayView(10, keyA)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("sealed-a-v1"), value)
+
+	_, _, ok = committer.GetPerasSnapshotOverlayView(10, keyB)
+	require.False(t, ok)
+	require.True(t, committer.HasPerasSnapshotDirectory(10, prefix))
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: keyA, Value: []byte("sealed-a-v1")},
+	}, committer.ScanPerasSnapshotDirectory(10, prefix, prefix, 8))
+}
+
+func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) {
+	committer := &Runtime{read: newReadState(), visibleSnapshots: true}
+	prefix := testRuntimeRootDentryPrefix()
+	keyA := testRuntimeDentryKeyForLabel("a")
+	keyB := testRuntimeDentryKeyForLabel("b")
+	keyC := testRuntimeDentryKeyForLabel("c")
+	inodeBKey, err := fsmeta.EncodeInodeKey(testRuntimeMount, 42)
+	require.NoError(t, err)
+	opB := testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil)
+	dentryBValue := opB.Effects[0].Value
+
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a")))
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, opB))
+	capture, captured, err := committer.CapturePerasVisibleSnapshot(context.Background(), 11, compile.AuthorityScope{
+		Mount:      testRuntimeMount.MountID,
+		MountKeyID: testRuntimeMount.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+	})
+	require.NoError(t, err)
+	require.True(t, captured)
+	require.Empty(t, capture.SegmentRefs)
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "c", 43, []byte("visible-c"), nil)))
+
+	_, _, ok := committer.GetPerasSnapshotOverlayView(11, keyC)
+	require.False(t, ok)
+	value, deleted, ok := committer.GetPerasSnapshotOverlayView(11, inodeBKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	_, err = fsmeta.DecodeInodeValue(value)
+	require.NoError(t, err)
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: keyA, Value: []byte("sealed-a")},
+		{Key: keyB, Value: dentryBValue},
+	}, committer.ScanPerasSnapshotDirectory(11, prefix, prefix, 8))
+}
+
+func TestRuntimeCaptureQuorumVisibleSnapshotWitnessesPendingFrontier(t *testing.T) {
+	witness := &recordingRuntimePerasWitness{id: "witness-1"}
+	committer, err := NewRuntime(Config{
+		Authority:                    &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+		Witnesses:                    []fsperas.WitnessReplica{witness},
+		Installer:                    &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:                   &recordingVisibleLog{},
+		Quorum:                       1,
+		SegmentBatchSize:             1024,
+		SegmentFlushEvery:            time.Hour,
+		QuorumVisibleSnapshotCapture: true,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "a", 41, nil, nil), nil)
+	require.NoError(t, err)
+	capture, captured, err := committer.CapturePerasVisibleSnapshot(ctx, 12, compile.AuthorityScope{
+		Mount:      testRuntimeMount.MountID,
+		MountKeyID: testRuntimeMount.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+	})
+	require.NoError(t, err)
+	require.True(t, captured)
+	require.NotEmpty(t, capture.SegmentRefs)
+	witnessSnapshot, err := witness.Probe(ctx, capture.SegmentRefs[0].EpochID)
+	require.NoError(t, err)
+	require.NotEmpty(t, witnessSnapshot.Segments)
+	require.Equal(t, witnessSnapshot.Segments[0].EpochID, capture.SegmentRefs[0].EpochID)
+	require.Equal(t, witnessSnapshot.Segments[0].SegmentRoot, capture.SegmentRefs[0].SegmentRoot)
+	require.Equal(t, witnessSnapshot.Segments[0].SegmentPayloadDigest, capture.SegmentRefs[0].SegmentPayloadDigest)
+	require.Greater(t, witness.recordCount(), 0)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil), nil)
+	require.NoError(t, err)
+
+	prefix := testRuntimeRootDentryPrefix()
+	rows := committer.ScanPerasSnapshotDirectory(12, prefix, prefix, 8)
+	require.Len(t, rows, 1)
+	require.Equal(t, testRuntimeDentryKeyForLabel("a"), rows[0].Key)
+	require.True(t, committer.HasPerasSnapshotDirectory(12, prefix))
 }
 
 func TestRuntimeAppendsVisibleLogBeforeOverlay(t *testing.T) {
@@ -1055,7 +1251,7 @@ func TestRuntimeRecoversWitnessSegment(t *testing.T) {
 	require.NoError(t, err)
 	delta := testRuntimePerasOp([]byte("dentry/recovered"), []byte("inode/recovered"))
 	recoveredKey := delta.Effects[0].Key
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1115,7 +1311,7 @@ func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{10},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1183,7 +1379,7 @@ func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testin
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{11},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1258,7 +1454,7 @@ func TestRuntimeRecoversRootSealedSegmentWithWitnessScanFallback(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{12},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1330,7 +1526,7 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{13},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1401,7 +1597,7 @@ func TestRuntimeRootSealedRecoveryWaitsOutRouteRetryExhaustion(t *testing.T) {
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
 		Inodes:     []fsmeta.InodeID{14},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1507,9 +1703,9 @@ func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
 		Parents:    []fsmeta.InodeID{2},
 		Inodes:     []fsmeta.InodeID{12},
 	})
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, first)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, first)
 	require.NoError(t, err)
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 2}, second)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 2}, second)
 	require.NoError(t, err)
 	plan, _, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -1706,7 +1902,7 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 		Inodes:     []fsmeta.InodeID{2},
 	})
 	recoveredKey := recoveredDelta.Effects[0].Key
-	_, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
+	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
 	require.NoError(t, err)
 	plan, scope, err := holder.BuildPendingReplayPlan(10)
 	require.NoError(t, err)
@@ -2359,6 +2555,17 @@ func testRuntimePerasSegmentForOverlay(key, value []byte) fsperas.PerasSegment {
 	return segment
 }
 
+func installRuntimeSealedSegment(tb testing.TB, committer *Runtime, segment fsperas.PerasSegment) {
+	tb.Helper()
+	committer.read.mu.Lock()
+	err := committer.read.sealed.AddSegment(segment)
+	if err == nil {
+		committer.read.sealedSegments = append(committer.read.sealedSegments, segment)
+	}
+	committer.read.mu.Unlock()
+	require.NoError(tb, err)
+}
+
 func testRuntimePerasCatalogRows(tb testing.TB, segment fsperas.PerasSegment, installVersion uint64) []KV {
 	tb.Helper()
 	payload, err := fsperas.EncodePerasSegment(segment)
@@ -2662,6 +2869,25 @@ type fakeRuntimePerasGrantProvider struct {
 	sealErr  error
 
 	acquireCalls atomic.Int64
+}
+
+type nonSealingRuntimePerasGrantProvider struct {
+	holderID string
+	grant    rootproto.PerasAuthorityGrant
+	owned    bool
+	err      error
+}
+
+func (p *nonSealingRuntimePerasGrantProvider) HolderID() string {
+	return p.holderID
+}
+
+func (p *nonSealingRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
+	owned := p.owned
+	if !owned {
+		owned = true
+	}
+	return p.grant, owned, p.err
 }
 
 func (p *fakeRuntimePerasGrantProvider) HolderID() string {

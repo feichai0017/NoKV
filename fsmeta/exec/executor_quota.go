@@ -19,11 +19,17 @@ func (e *Executor) GetQuotaUsage(ctx context.Context, req fsmeta.QuotaUsageReque
 	if err != nil {
 		return fsmeta.UsageRecord{}, err
 	}
-	key, err := fsmeta.EncodeUsageKey(mountRecord.Identity(), req.Scope)
+	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return fsmeta.UsageRecord{}, err
 	}
-	version, err := e.reserveReadVersion(ctx)
+	if reader, ok := e.quotas.(QuotaUsageResolver); ok {
+		usage, handled, err := reader.ReadQuotaUsage(ctx, e.runner, mountRecord.Identity(), req.Scope, version)
+		if err != nil || handled {
+			return usage, err
+		}
+	}
+	key, err := fsmeta.EncodeUsageKey(mountRecord.Identity(), req.Scope)
 	if err != nil {
 		return fsmeta.UsageRecord{}, err
 	}

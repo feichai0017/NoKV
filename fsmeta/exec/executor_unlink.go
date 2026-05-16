@@ -26,7 +26,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.Un
 	if err != nil {
 		return false, err
 	}
-	if !ok || inode.Type == fsmeta.InodeTypeDirectory {
+	if !ok {
 		return false, nil
 	}
 	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
