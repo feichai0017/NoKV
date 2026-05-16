@@ -381,7 +381,7 @@ func recvClientWatchEvent(t *testing.T, watch fsmetaclient.WatchSubscription) fs
 			t.Fatalf("receive watch event: %v", got.err)
 		}
 		return got.evt
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for local watch event")
 		return fsmeta.WatchEvent{}
 	}

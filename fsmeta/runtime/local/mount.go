@@ -53,7 +53,10 @@ func (c *MountCatalog) ResolveMount(_ context.Context, mount fsmeta.MountID) (fs
 }
 
 // SameAuthority implements the local single-authority namespace model.
-func (c *MountCatalog) SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error) {
+func (c *MountCatalog) SameAuthority(_ context.Context, mount fsmeta.MountID, _ fsmeta.InodeID, _ fsmeta.InodeID) (bool, error) {
+	if c == nil || c.admission.MountID == "" || c.admission.MountID != mount {
+		return false, fsmeta.ErrMountNotRegistered
+	}
 	return true, nil
 }
 

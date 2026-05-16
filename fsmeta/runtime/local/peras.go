@@ -84,6 +84,9 @@ func (a *localPerasAuthority) Acquire(_ context.Context, scope compile.Authority
 	if !grant.Valid() {
 		return rootproto.PerasAuthorityGrant{}, false, runtimeperas.ErrRuntimeInvalid
 	}
+	if scope.Mount != "" && string(scope.Mount) != a.grant.Scope.MountID {
+		return rootproto.PerasAuthorityGrant{}, false, nil
+	}
 	if scope.MountKeyID != 0 && uint64(scope.MountKeyID) != a.grant.Scope.MountKeyID {
 		return rootproto.PerasAuthorityGrant{}, false, nil
 	}

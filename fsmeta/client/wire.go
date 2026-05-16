@@ -116,13 +116,17 @@ func perasSnapshotSegmentRefsFromProto(refs []*fsmetapb.PerasSnapshotSegmentRef)
 	}
 	out := make([]fsmeta.PerasSnapshotSegmentRef, 0, len(refs))
 	for _, ref := range refs {
-		var parsed fsmeta.PerasSnapshotSegmentRef
-		if ref != nil {
-			parsed.EpochID = ref.GetEpochId()
-			copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
-			copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
+		if ref == nil {
+			continue
 		}
+		var parsed fsmeta.PerasSnapshotSegmentRef
+		parsed.EpochID = ref.GetEpochId()
+		copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
+		copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
 		out = append(out, parsed)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

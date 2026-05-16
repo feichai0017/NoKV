@@ -131,6 +131,12 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	executor, err := fsmetaexec.New(runner, execOpts...)
 	if err != nil {
+		if perasRuntime != nil {
+			perasRuntime.Close()
+		}
+		if visibleWAL != nil {
+			_ = visibleWAL.Close()
+		}
 		if closeDB {
 			_ = db.Close()
 		}

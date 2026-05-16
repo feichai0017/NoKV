@@ -556,6 +556,16 @@ func TestTypedClientSnapshotSubtree(t *testing.T) {
 	require.Equal(t, []fsmeta.PerasSnapshotSegmentRef{ref}, publisher.retired.PerasSegmentRefs)
 }
 
+func TestClientPerasSnapshotRefsFromProtoSkipsNil(t *testing.T) {
+	ref := testClientPerasSnapshotSegmentRef(4, 0x10)
+	got := perasSnapshotSegmentRefsFromProto([]*fsmetapb.PerasSnapshotSegmentRef{
+		nil,
+		perasSnapshotSegmentRefsToProto([]fsmeta.PerasSnapshotSegmentRef{ref})[0],
+	})
+	require.Equal(t, []fsmeta.PerasSnapshotSegmentRef{ref}, got)
+	require.Nil(t, perasSnapshotSegmentRefsFromProto([]*fsmetapb.PerasSnapshotSegmentRef{nil}))
+}
+
 func TestTypedClientGetReadVersion(t *testing.T) {
 	cli, cleanup := openBufconnClient(t, &fakeExecutor{})
 	defer cleanup()

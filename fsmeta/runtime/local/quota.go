@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -18,6 +19,7 @@ import (
 type QuotaLedger struct {
 	reserveTotal        atomic.Uint64
 	usageMutationsTotal atomic.Uint64
+	mu                  sync.RWMutex
 	overlay             fsmetaexec.PerasOverlayReader
 }
 
@@ -43,7 +45,9 @@ func (q *QuotaLedger) SetPerasOverlay(overlay fsmetaexec.PerasOverlayReader) {
 	if q == nil {
 		return
 	}
+	q.mu.Lock()
 	q.overlay = overlay
+	q.mu.Unlock()
 }
 
 // ReserveQuota implements fsmetaexec.QuotaResolver. Local quotas are unlimited
@@ -132,8 +136,8 @@ func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner f
 				}
 				return usage, nil
 			}
-			if q != nil && q.overlay != nil {
-				if _, _, ok := q.overlay.GetPerasOverlayView(row.Key); ok {
+			if overlay := q.overlayReader(); overlay != nil {
+				if _, _, ok := overlay.GetPerasOverlayView(row.Key); ok {
 					continue
 				}
 			}
@@ -160,12 +164,16 @@ func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner f
 }
 
 func (q *QuotaLedger) addOverlayQuotaUsage(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, prefix []byte, version uint64, usage *fsmeta.UsageRecord) error {
-	if q == nil || q.overlay == nil || usage == nil {
+	if q == nil || usage == nil {
+		return nil
+	}
+	overlay := q.overlayReader()
+	if overlay == nil {
 		return nil
 	}
 	start := append([]byte(nil), prefix...)
 	for {
-		rows := q.overlay.ScanPerasOverlay(start, 256)
+		rows := overlay.ScanPerasOverlay(start, 256)
 		if len(rows) == 0 {
 			return nil
 		}
@@ -203,8 +211,8 @@ func (q *QuotaLedger) readQuotaInode(ctx context.Context, runner fsmetaexec.TxnR
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	if q != nil && q.overlay != nil {
-		value, deleted, ok := q.overlay.GetPerasOverlayView(key)
+	if overlay := q.overlayReader(); overlay != nil {
+		value, deleted, ok := overlay.GetPerasOverlayView(key)
 		if ok {
 			if deleted {
 				return fsmeta.InodeRecord{}, false, nil
@@ -225,6 +233,16 @@ func (q *QuotaLedger) readQuotaInode(ctx context.Context, runner fsmetaexec.TxnR
 		return fsmeta.InodeRecord{}, false, err
 	}
 	return inode, true, nil
+}
+
+func (q *QuotaLedger) overlayReader() fsmetaexec.PerasOverlayReader {
+	if q == nil {
+		return nil
+	}
+	q.mu.RLock()
+	overlay := q.overlay
+	q.mu.RUnlock()
+	return overlay
 }
 
 func nextQuotaScanKey(key []byte) []byte {

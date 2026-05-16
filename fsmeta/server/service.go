@@ -288,7 +288,11 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 	if req == nil {
 		return nil, rpcInvalidArgument("fsmeta retire snapshot subtree request is required")
 	}
-	token, err := s.executor.ResolveSnapshotSubtreeToken(ctx, retireSnapshotSubtreeRequestFromProto(req))
+	retireToken, err := retireSnapshotSubtreeRequestFromProto(req)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	token, err := s.executor.ResolveSnapshotSubtreeToken(ctx, retireToken)
 	if err != nil {
 		return nil, rpcError(err)
 	}

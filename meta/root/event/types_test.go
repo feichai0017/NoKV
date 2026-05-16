@@ -134,7 +134,9 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	idFence := rootevent.IDAllocatorFenced(11)
 	tsoFence := rootevent.TSOAllocatorFenced(29)
 	ref := testEventPerasSnapshotSegmentRef(7, 0x60)
-	snapshot := rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, []rootproto.PerasSnapshotSegmentRef{ref})
+	refs := []rootproto.PerasSnapshotSegmentRef{ref}
+	snapshot := rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, refs)
+	refs[0].SegmentRoot[0] = 0xff
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 1, 42, 99)
 	mount := rootevent.MountRegistered("vol", 1, 1, 1)
 	retiredMount := rootevent.MountRetired("vol")
