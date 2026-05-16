@@ -37,6 +37,10 @@ type Executor interface {
 	ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error)
 }
 
+type perasSnapshotRetirer interface {
+	RetirePerasSnapshot(version uint64)
+}
+
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
 // It is intentionally a thin transport layer; all transaction semantics stay in
 // the Executor implementation.
@@ -290,6 +294,9 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 	}
 	if err := s.snapshot.RetireSnapshotSubtree(ctx, token); err != nil {
 		return nil, rpcError(err)
+	}
+	if retirer, ok := s.executor.(perasSnapshotRetirer); ok {
+		retirer.RetirePerasSnapshot(token.ReadVersion)
 	}
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
 }

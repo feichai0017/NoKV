@@ -77,7 +77,12 @@ type Config struct {
 	// visible overlay without first flushing an authority. This is only safe
 	// for runtimes whose visible WAL is an accepted durability boundary.
 	VisibleSnapshotCapture bool
-	Now                    func() time.Time
+	// QuorumVisibleSnapshotCapture lets SnapshotSubtree capture a visible
+	// snapshot after pending operations in the snapshot authority scope have
+	// reached segment witness quorum. The actual segment install remains
+	// asynchronous.
+	QuorumVisibleSnapshotCapture bool
+	Now                          func() time.Time
 }
 
 type SegmentWitnessMode uint8
@@ -97,32 +102,33 @@ const (
 // evidence; local runtimes may bypass that stage when no rooted seal can be
 // published.
 type Runtime struct {
-	authority        GrantProvider
-	seals            SealProvider
-	witnesses        []fsperas.WitnessReplica
-	witnessMode      SegmentWitnessMode
-	installer        SegmentInstaller
-	catalog          SegmentCatalogScanner
-	watch            perasWatchPublisher
-	visibleLog       fsperas.VisibleLog
-	quorum           int
-	retries          int
-	backoff          time.Duration
-	batchSize        int
-	admitLimit       int
-	maxOps           int
-	maxReplay        int
-	maxPayload       uint64
-	routeBudget      int
-	installN         int
-	flushN           int
-	materialize      bool
-	catalogOnlyDrain bool
-	visibleSnapshots bool
-	flushEvery       time.Duration
-	bgTimeout        time.Duration
-	bgBackoff        time.Duration
-	now              func() time.Time
+	authority              GrantProvider
+	seals                  SealProvider
+	witnesses              []fsperas.WitnessReplica
+	witnessMode            SegmentWitnessMode
+	installer              SegmentInstaller
+	catalog                SegmentCatalogScanner
+	watch                  perasWatchPublisher
+	visibleLog             fsperas.VisibleLog
+	quorum                 int
+	retries                int
+	backoff                time.Duration
+	batchSize              int
+	admitLimit             int
+	maxOps                 int
+	maxReplay              int
+	maxPayload             uint64
+	routeBudget            int
+	installN               int
+	flushN                 int
+	materialize            bool
+	catalogOnlyDrain       bool
+	visibleSnapshots       bool
+	quorumVisibleSnapshots bool
+	flushEvery             time.Duration
+	bgTimeout              time.Duration
+	bgBackoff              time.Duration
+	now                    func() time.Time
 
 	commitMu   sync.RWMutex
 	flushMu    sync.Mutex
@@ -363,36 +369,37 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	seals, _ := cfg.Authority.(SealProvider)
 	c := &Runtime{
-		authority:        cfg.Authority,
-		seals:            seals,
-		witnesses:        witnesses,
-		witnessMode:      witnessMode,
-		installer:        cfg.Installer,
-		catalog:          cfg.CatalogScanner,
-		watch:            cfg.WatchPublisher,
-		visibleLog:       cfg.VisibleLog,
-		quorum:           quorum,
-		retries:          retries,
-		backoff:          backoff,
-		batchSize:        batchSize,
-		admitLimit:       admitLimit,
-		maxOps:           maxOps,
-		maxReplay:        maxReplay,
-		maxPayload:       maxPayload,
-		routeBudget:      routeBudget,
-		installN:         installN,
-		flushN:           flushN,
-		materialize:      cfg.MaterializeSegments,
-		catalogOnlyDrain: cfg.CatalogOnlyAuthorityDrain,
-		visibleSnapshots: cfg.VisibleSnapshotCapture,
-		flushEvery:       flushEvery,
-		bgTimeout:        bgTimeout,
-		bgBackoff:        bgBackoff,
-		now:              now,
-		closer:           utils.NewCloser(),
-		epochs:           newEpochTable(),
-		latches:          fsperas.NewAdmissionLatches(),
-		read:             newReadState(),
+		authority:              cfg.Authority,
+		seals:                  seals,
+		witnesses:              witnesses,
+		witnessMode:            witnessMode,
+		installer:              cfg.Installer,
+		catalog:                cfg.CatalogScanner,
+		watch:                  cfg.WatchPublisher,
+		visibleLog:             cfg.VisibleLog,
+		quorum:                 quorum,
+		retries:                retries,
+		backoff:                backoff,
+		batchSize:              batchSize,
+		admitLimit:             admitLimit,
+		maxOps:                 maxOps,
+		maxReplay:              maxReplay,
+		maxPayload:             maxPayload,
+		routeBudget:            routeBudget,
+		installN:               installN,
+		flushN:                 flushN,
+		materialize:            cfg.MaterializeSegments,
+		catalogOnlyDrain:       cfg.CatalogOnlyAuthorityDrain,
+		visibleSnapshots:       cfg.VisibleSnapshotCapture,
+		quorumVisibleSnapshots: cfg.QuorumVisibleSnapshotCapture,
+		flushEvery:             flushEvery,
+		bgTimeout:              bgTimeout,
+		bgBackoff:              bgBackoff,
+		now:                    now,
+		closer:                 utils.NewCloser(),
+		epochs:                 newEpochTable(),
+		latches:                fsperas.NewAdmissionLatches(),
+		read:                   newReadState(),
 	}
 	c.drainCond = sync.NewCond(&c.drainMu)
 	c.admissionCond = sync.NewCond(&c.admissionMu)

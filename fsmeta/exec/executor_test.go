@@ -580,7 +580,7 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(version uint64, scope compile.AuthorityScope) (bool, error) {
+func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (bool, error) {
 	f.captureVersions = append(f.captureVersions, version)
 	f.captureScopes = append(f.captureScopes, scope)
 	if f.err != nil {

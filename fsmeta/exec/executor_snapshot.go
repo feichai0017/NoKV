@@ -30,7 +30,7 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
-		captured, err := capturer.CapturePerasVisibleSnapshot(version, delta.Authority)
+		captured, err := capturer.CapturePerasVisibleSnapshot(ctx, version, delta.Authority)
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
@@ -73,4 +73,15 @@ func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta
 	}
 	token.MountKeyID = record.MountKeyID
 	return token, nil
+}
+
+func (e *Executor) RetirePerasSnapshot(version uint64) {
+	if e == nil || version == 0 {
+		return
+	}
+	retirer, ok := e.perasCommitter.(perasSnapshotRetirer)
+	if !ok {
+		return
+	}
+	retirer.RetirePerasSnapshot(version)
 }

@@ -352,7 +352,7 @@ func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) 
 
 	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a")))
 	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, opB))
-	captured, err := committer.CapturePerasVisibleSnapshot(11, compile.AuthorityScope{
+	captured, err := committer.CapturePerasVisibleSnapshot(context.Background(), 11, compile.AuthorityScope{
 		Mount:      testRuntimeMount.MountID,
 		MountKeyID: testRuntimeMount.MountKeyID,
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
@@ -372,6 +372,42 @@ func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) 
 		{Key: keyA, Value: []byte("sealed-a")},
 		{Key: keyB, Value: dentryBValue},
 	}, committer.ScanPerasSnapshotDirectory(11, prefix, prefix, 8))
+}
+
+func TestRuntimeCaptureQuorumVisibleSnapshotWitnessesPendingFrontier(t *testing.T) {
+	witness := &recordingRuntimePerasWitness{id: "witness-1"}
+	committer, err := NewRuntime(Config{
+		Authority:                    &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+		Witnesses:                    []fsperas.WitnessReplica{witness},
+		Installer:                    &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:                   &recordingVisibleLog{},
+		Quorum:                       1,
+		SegmentBatchSize:             1024,
+		SegmentFlushEvery:            time.Hour,
+		QuorumVisibleSnapshotCapture: true,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "a", 41, nil, nil), nil)
+	require.NoError(t, err)
+	captured, err := committer.CapturePerasVisibleSnapshot(ctx, 12, compile.AuthorityScope{
+		Mount:      testRuntimeMount.MountID,
+		MountKeyID: testRuntimeMount.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+	})
+	require.NoError(t, err)
+	require.True(t, captured)
+	require.Greater(t, witness.recordCount(), 0)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil), nil)
+	require.NoError(t, err)
+
+	prefix := testRuntimeRootDentryPrefix()
+	rows := committer.ScanPerasSnapshotDirectory(12, prefix, prefix, 8)
+	require.Len(t, rows, 1)
+	require.Equal(t, testRuntimeDentryKeyForLabel("a"), rows[0].Key)
+	require.True(t, committer.HasPerasSnapshotDirectory(12, prefix))
 }
 
 func TestRuntimeAppendsVisibleLogBeforeOverlay(t *testing.T) {

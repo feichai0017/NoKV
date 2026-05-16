@@ -5,6 +5,7 @@ package peras
 
 import (
 	"bytes"
+	"context"
 	"sort"
 	"sync"
 
@@ -15,7 +16,7 @@ import (
 
 type perasSnapshotView struct {
 	sealedSegments int
-	visible        *fsperas.OverlayView
+	visible        *fsperas.OverlaySnapshot
 }
 
 type readState struct {
@@ -151,30 +152,116 @@ func (c *Runtime) CapturePerasSnapshot(version uint64) error {
 	return nil
 }
 
-// CapturePerasVisibleSnapshot records a local visible snapshot when configured.
-func (c *Runtime) CapturePerasVisibleSnapshot(version uint64, scope compile.AuthorityScope) (bool, error) {
+// CapturePerasVisibleSnapshot records a visible snapshot when configured.
+func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope) (bool, error) {
 	if c == nil || c.read == nil || version == 0 {
 		return false, ErrRuntimeInvalid
 	}
-	if !c.visibleSnapshots {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !c.visibleSnapshots && !c.quorumVisibleSnapshots {
 		return false, nil
 	}
 	mount, prefix, ok := visibleSnapshotDirectory(scope)
 	if !ok {
 		return false, nil
 	}
+	if c.quorumVisibleSnapshots && c.usesSegmentWitness() {
+		return c.captureQuorumVisibleSnapshot(ctx, version, scope, mount, prefix)
+	}
 	c.commitMu.Lock()
-	defer c.commitMu.Unlock()
+	c.captureVisibleSnapshotLocked(version, mount, prefix)
+	c.commitMu.Unlock()
+	c.triggerSnapshotFlush()
+	return true, nil
+}
+
+func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope, mount fsmeta.MountIdentity, prefix []byte) (bool, error) {
+	c.flushMu.Lock()
+	c.commitMu.Lock()
+	plans, err := c.freezeReplayPlansLocked(&scope, 0)
+	if err != nil {
+		c.commitMu.Unlock()
+		c.flushMu.Unlock()
+		return false, err
+	}
+	c.captureVisibleSnapshotLocked(version, mount, prefix)
+	c.commitMu.Unlock()
+	batches, err := c.buildFlushBatches(plans, c.materialize)
+	if err != nil {
+		c.retirePerasSnapshot(version)
+		c.flushMu.Unlock()
+		return false, err
+	}
+	pipeline := flushPipeline{runtime: c, level: fsperas.SegmentPersistenceDurable, materialize: c.materialize}
+	for _, batch := range batches {
+		if err := pipeline.renewBatchAuthority(ctx, batch); err != nil {
+			c.retirePerasSnapshot(version)
+			c.flushMu.Unlock()
+			return false, err
+		}
+		if err := pipeline.witnessBatch(ctx, batch); err != nil {
+			c.retirePerasSnapshot(version)
+			c.flushMu.Unlock()
+			return false, err
+		}
+	}
+	c.flushMu.Unlock()
+	c.triggerSnapshotFlush()
+	return true, nil
+}
+
+func (c *Runtime) triggerSnapshotFlush() {
+	if c == nil || c.now == nil || c.installer == nil {
+		return
+	}
+	c.triggerBackgroundFlush()
+}
+
+func (c *Runtime) captureVisibleSnapshotLocked(version uint64, mount fsmeta.MountIdentity, prefix []byte) {
 	c.read.mu.Lock()
 	if c.read.snapshots == nil {
 		c.read.snapshots = make(map[uint64]perasSnapshotView)
 	}
 	c.read.snapshots[version] = perasSnapshotView{
 		sealedSegments: len(c.read.sealedSegments),
-		visible:        c.read.overlay.CloneForSnapshotDirectory(mount, prefix),
+		visible:        c.read.overlay.SnapshotDirectory(mount, prefix),
 	}
 	c.read.mu.Unlock()
-	return true, nil
+}
+
+func (c *Runtime) RetirePerasSnapshot(version uint64) {
+	c.retirePerasSnapshot(version)
+}
+
+func (c *Runtime) retirePerasSnapshot(version uint64) {
+	if c == nil || c.read == nil || version == 0 {
+		return
+	}
+	var minGeneration uint64
+	c.read.mu.Lock()
+	delete(c.read.snapshots, version)
+	for _, snapshot := range c.read.snapshots {
+		if snapshot.visible == nil {
+			continue
+		}
+		generation := snapshot.visible.Generation()
+		if generation == 0 {
+			continue
+		}
+		if minGeneration == 0 || generation < minGeneration {
+			minGeneration = generation
+		}
+	}
+	c.read.mu.Unlock()
+	if c.read.overlay == nil {
+		return
+	}
+	if minGeneration == 0 {
+		minGeneration = ^uint64(0)
+	}
+	c.read.overlay.PruneHistoryBefore(minGeneration)
 }
 
 // GetPerasSnapshotOverlayView returns snapshot overlay-owned bytes.
