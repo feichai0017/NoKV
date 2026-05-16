@@ -28,6 +28,7 @@ import (
 //	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
 //	  peras   'p' : record-kind byte | sealed segment root sha256
+//	  snapshot 'x' : root inode be64 | read version be64
 //
 // Big-endian integer fields preserve numeric order inside each key family.
 var keyMagic = []byte{'f', 's', 'm', 0}
@@ -47,13 +48,14 @@ type AffinityBucket uint16
 type KeyKind byte
 
 const (
-	KeyKindMount   KeyKind = 'm'
-	KeyKindInode   KeyKind = 'i'
-	KeyKindDentry  KeyKind = 'd'
-	KeyKindChunk   KeyKind = 'c'
-	KeyKindSession KeyKind = 's'
-	KeyKindUsage   KeyKind = 'u'
-	KeyKindPeras   KeyKind = 'p'
+	KeyKindMount    KeyKind = 'm'
+	KeyKindInode    KeyKind = 'i'
+	KeyKindDentry   KeyKind = 'd'
+	KeyKindChunk    KeyKind = 'c'
+	KeyKindSession  KeyKind = 's'
+	KeyKindUsage    KeyKind = 'u'
+	KeyKindPeras    KeyKind = 'p'
+	KeyKindSnapshot KeyKind = 'x'
 )
 
 const (
@@ -62,14 +64,16 @@ const (
 )
 
 type KeyParts struct {
-	MountKeyID  MountKeyID
-	Bucket      AffinityBucket
-	Kind        KeyKind
-	Parent      InodeID
-	Inode       InodeID
-	UsageScope  InodeID
-	PerasRecord byte
-	PerasRoot   [32]byte
+	MountKeyID          MountKeyID
+	Bucket              AffinityBucket
+	Kind                KeyKind
+	Parent              InodeID
+	Inode               InodeID
+	UsageScope          InodeID
+	PerasRecord         byte
+	PerasRoot           [32]byte
+	SnapshotRoot        InodeID
+	SnapshotReadVersion uint64
 }
 
 func (k KeyKind) String() string {
@@ -88,6 +92,8 @@ func (k KeyKind) String() string {
 		return "usage"
 	case KeyKindPeras:
 		return "peras"
+	case KeyKindSnapshot:
+		return "snapshot"
 	default:
 		return fmt.Sprintf("unknown(%d)", byte(k))
 	}
@@ -224,6 +230,28 @@ func EncodeUsageKey(mount MountIdentity, scope InodeID) ([]byte, error) {
 	return encodeKey(mount, BucketForInodeID(scope), KeyKindUsage, body[:])
 }
 
+// EncodeSnapshotKey returns the hidden local snapshot-retention record key.
+// Snapshot records intentionally live in the root affinity bucket so one local
+// runtime can recover all active snapshot tokens without scanning every fsmeta
+// affinity bucket.
+func EncodeSnapshotKey(mount MountIdentity, root InodeID, readVersion uint64) ([]byte, error) {
+	if err := validateInodeID(root); err != nil {
+		return nil, err
+	}
+	if readVersion == 0 {
+		return nil, ErrInvalidRequest
+	}
+	var body [16]byte
+	binary.BigEndian.PutUint64(body[:8], uint64(root))
+	binary.BigEndian.PutUint64(body[8:], readVersion)
+	return encodeKey(mount, RootAffinityBucket, KeyKindSnapshot, body[:])
+}
+
+// EncodeSnapshotPrefix returns the hidden local snapshot-retention key prefix.
+func EncodeSnapshotPrefix(mount MountIdentity) ([]byte, error) {
+	return encodeKey(mount, RootAffinityBucket, KeyKindSnapshot, nil)
+}
+
 // EncodePerasSegmentCatalogIndexKey returns the hidden per-bucket catalog key
 // that points reads at one durable Peras segment object. It deliberately takes
 // the rooted mount key id rather than a human mount name because recovery
@@ -277,7 +305,7 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 	kind := KeyKind(key[pos])
 	switch kind {
-	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindPeras:
+	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindPeras, KeyKindSnapshot:
 		return kind, nil
 	default:
 		return 0, ErrInvalidKeyKind
@@ -386,6 +414,13 @@ func InspectKey(key []byte) (KeyParts, bool) {
 		}
 		copy(parts.PerasRoot[:], body[1:])
 		return parts, true
+	case KeyKindSnapshot:
+		if len(body) != 16 {
+			return KeyParts{}, false
+		}
+		parts.SnapshotRoot = InodeID(binary.BigEndian.Uint64(body[:8]))
+		parts.SnapshotReadVersion = binary.BigEndian.Uint64(body[8:])
+		return parts, parts.SnapshotRoot != 0 && parts.SnapshotReadVersion != 0
 	default:
 		return KeyParts{}, false
 	}
@@ -431,6 +466,11 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 		shape.BloomPrefix = key[:bodyPos+8]
 	case KeyKindInode, KeyKindChunk, KeyKindSession, KeyKindUsage:
 		if len(key) < bodyPos+8 {
+			return localdb.UserKeyShape{}
+		}
+		shape.BloomPrefix = key[:bodyPos+8]
+	case KeyKindSnapshot:
+		if len(key) < bodyPos+16 {
 			return localdb.UserKeyShape{}
 		}
 		shape.BloomPrefix = key[:bodyPos+8]

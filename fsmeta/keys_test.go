@@ -79,6 +79,28 @@ func TestPerasSegmentCatalogIndexPrefixCoversCatalogKeys(t *testing.T) {
 	require.False(t, bytes.HasPrefix(key, otherBucketPrefix))
 }
 
+func TestSnapshotKeyRoundTrip(t *testing.T) {
+	key, err := EncodeSnapshotKey(testMount, RootInode, 42)
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindSnapshot, kind)
+	require.Equal(t, "snapshot", kind.String())
+
+	parts, ok := InspectKey(key)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, RootAffinityBucket, parts.Bucket)
+	require.Equal(t, KeyKindSnapshot, parts.Kind)
+	require.Equal(t, RootInode, parts.SnapshotRoot)
+	require.Equal(t, uint64(42), parts.SnapshotReadVersion)
+
+	prefix, err := EncodeSnapshotPrefix(testMount)
+	require.NoError(t, err)
+	require.True(t, bytes.HasPrefix(key, prefix))
+}
+
 func TestAuxiliaryKeyEncoders(t *testing.T) {
 	mount, err := EncodeMountKey(testMount)
 	require.NoError(t, err)
@@ -86,7 +108,7 @@ func TestAuxiliaryKeyEncoders(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, KeyKindMount, kind)
 	require.Equal(t, "mount", kind.String())
-	require.Equal(t, "unknown(120)", KeyKind('x').String())
+	require.Equal(t, "unknown(122)", KeyKind('z').String())
 
 	chunk, err := EncodeChunkKey(testMount, 22, 3)
 	require.NoError(t, err)
@@ -334,7 +356,7 @@ func TestKeyKindOfRejectsInvalidKeys(t *testing.T) {
 	_, err := KeyKindOf([]byte("not-fsmeta"))
 	require.ErrorIs(t, err, ErrInvalidKey)
 
-	key, err := encodeKey(testMount, RootAffinityBucket, KeyKind('x'), []byte("body"))
+	key, err := encodeKey(testMount, RootAffinityBucket, KeyKind('z'), []byte("body"))
 	require.NoError(t, err)
 	_, err = KeyKindOf(key)
 	require.ErrorIs(t, err, ErrInvalidKeyKind)

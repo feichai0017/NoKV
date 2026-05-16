@@ -12,6 +12,7 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/contract"
+	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -210,9 +211,9 @@ func TestLocalRuntimeWatchReplaysAfterResumeCursor(t *testing.T) {
 
 func TestLocalRuntimePublishesAndRetiresSnapshots(t *testing.T) {
 	ctx := context.Background()
-	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
+	dir := t.TempDir()
+	rt, err := Open(ctx, Options{WorkDir: dir, Mount: testMount()})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, rt.Close()) }()
 
 	token, err := rt.Executor.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{
 		Mount:     "vol",
@@ -220,12 +221,44 @@ func TestLocalRuntimePublishesAndRetiresSnapshots(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, rt.Snapshots.PublishSnapshotSubtree(ctx, token))
-	require.Equal(t, 1, rt.Snapshots.Stats()["active_snapshots"])
+	stats := rt.Snapshots.Stats()
+	require.Equal(t, 1, stats["active_snapshots"])
+	require.Equal(t, token.ReadVersion, stats["retention_floor"])
+	require.Equal(t, true, stats["persistent"])
+	floor, ok := rt.Snapshots.SnapshotRetentionFloor()
+	require.True(t, ok)
+	require.Equal(t, token.ReadVersion, floor)
+
+	gcKey, err := fsmeta.EncodeDentryKey(testMount(), fsmeta.RootInode, "pinned")
+	require.NoError(t, err)
+	policy := storemvcc.SafePointPolicy{
+		RequestedSafePoint: token.ReadVersion + 100,
+		SnapshotRetention:  rt.Snapshots.SnapshotRetentionIndex(),
+		Mount:              fsmeta.MountKeyResolver,
+	}
+	require.Equal(t, token.ReadVersion, policy.EffectiveForKey(gcKey))
+
+	require.NoError(t, rt.Close())
+
+	rt, err = Open(ctx, Options{WorkDir: dir, Mount: testMount()})
+	require.NoError(t, err)
+	stats = rt.Snapshots.Stats()
+	require.Equal(t, 1, stats["active_snapshots"])
+	require.Equal(t, token.ReadVersion, stats["retention_floor"])
+	require.Equal(t, uint64(1), stats["recovered_total"])
 
 	resolved, err := rt.Executor.ResolveSnapshotSubtreeToken(ctx, token)
 	require.NoError(t, err)
 	require.NoError(t, rt.Snapshots.RetireSnapshotSubtree(ctx, resolved))
 	require.Equal(t, 0, rt.Snapshots.Stats()["active_snapshots"])
+	require.NoError(t, rt.Close())
+
+	rt, err = Open(ctx, Options{WorkDir: dir, Mount: testMount()})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rt.Close()) }()
+	stats = rt.Snapshots.Stats()
+	require.Equal(t, 0, stats["active_snapshots"])
+	require.Equal(t, uint64(0), stats["retention_floor"])
 }
 
 func TestLocalRuntimeMaintainsQuotaUsage(t *testing.T) {

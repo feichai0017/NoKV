@@ -5,6 +5,7 @@ package peras
 
 import (
 	"bytes"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -233,18 +234,12 @@ func (v *OverlayView) Clone() *OverlayView {
 	out.directoryKeys = cloneOverlayStringSetMap(v.directoryKeys)
 	out.directoryRuns = cloneOverlayStringSliceMap(v.directoryRuns)
 	out.directoryDirty = make(map[string]bool, len(v.directoryDirty))
-	for key, dirty := range v.directoryDirty {
-		out.directoryDirty[key] = dirty
-	}
+	maps.Copy(out.directoryDirty, v.directoryDirty)
 	out.directoryEpoch = make(map[string]uint64, len(v.directoryEpoch))
-	for key, epoch := range v.directoryEpoch {
-		out.directoryEpoch[key] = epoch
-	}
+	maps.Copy(out.directoryEpoch, v.directoryEpoch)
 	out.epoch = v.epoch
 	out.known = make(map[string]bool, len(v.known))
-	for key, present := range v.known {
-		out.known[key] = present
-	}
+	maps.Copy(out.known, v.known)
 	out.emptyDirs = cloneOverlayStringSet(v.emptyDirs)
 	out.baseEmptyDirs = cloneOverlayStringSet(v.baseEmptyDirs)
 	out.emptySessions = cloneOverlayStringSet(v.emptySessions)

@@ -82,7 +82,13 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	watcher := NewWatcher(mounts)
 	runner.SetMutationObserver(watcher)
 	quotas := NewQuotaLedger()
-	snapshots := NewSnapshotRegistry()
+	snapshots, err := OpenSnapshotRegistry(ctx, runner, mounts.Admission().Identity())
+	if err != nil {
+		if closeDB {
+			_ = db.Close()
+		}
+		return nil, err
+	}
 	inodes, err := NewInodeAllocator(db, opts.Mount)
 	if err != nil {
 		if closeDB {

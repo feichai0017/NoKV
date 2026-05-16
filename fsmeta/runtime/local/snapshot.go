@@ -4,23 +4,30 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
 
+	"github.com/feichai0017/NoKV/engine/index"
+	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/fsmeta"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-// SnapshotRegistry tracks locally published snapshot tokens. Local fsmeta does
-// not have rooted truth or snapshot-driven GC yet, so retirement is idempotent:
-// a restarted server can retire a valid token without requiring old in-memory
-// state to still exist.
+// SnapshotRegistry tracks locally published snapshot tokens. When constructed
+// with OpenSnapshotRegistry, the active set is backed by hidden fsmeta MVCC
+// records and can be recovered after restart.
 type SnapshotRegistry struct {
 	mu     sync.Mutex
 	active map[localSnapshotKey]struct{}
+	runner *Runner
+	mount  fsmeta.MountIdentity
 
-	publishTotal atomic.Uint64
-	retireTotal  atomic.Uint64
+	publishTotal   atomic.Uint64
+	retireTotal    atomic.Uint64
+	recoveredTotal atomic.Uint64
 }
 
 type localSnapshotKey struct {
@@ -35,37 +42,135 @@ func NewSnapshotRegistry() *SnapshotRegistry {
 	return &SnapshotRegistry{active: make(map[localSnapshotKey]struct{})}
 }
 
+// OpenSnapshotRegistry loads the persisted local snapshot-retention records
+// for one mount.
+func OpenSnapshotRegistry(ctx context.Context, runner *Runner, mount fsmeta.MountIdentity) (*SnapshotRegistry, error) {
+	if runner == nil {
+		return nil, errDBRequired
+	}
+	if _, err := fsmeta.EncodeSnapshotPrefix(mount); err != nil {
+		return nil, err
+	}
+	r := &SnapshotRegistry{
+		active: make(map[localSnapshotKey]struct{}),
+		runner: runner,
+		mount:  mount,
+	}
+	if err := r.load(ctx); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 // PublishSnapshotSubtree records a local snapshot token.
-func (r *SnapshotRegistry) PublishSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+func (r *SnapshotRegistry) PublishSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	if err := validateSnapshotToken(token); err != nil {
 		return err
 	}
 	if r == nil {
 		return nil
 	}
+	key := localSnapshotKeyFromToken(token)
+	if r.hasActive(key) {
+		r.publishTotal.Add(1)
+		return nil
+	}
+	if err := r.validateRegistryMount(token); err != nil {
+		return err
+	}
+	if r.runner != nil {
+		storageKey, err := fsmeta.EncodeSnapshotKey(r.mount, token.RootInode, token.ReadVersion)
+		if err != nil {
+			return err
+		}
+		value, err := fsmeta.EncodeSnapshotValue(token)
+		if err != nil {
+			return err
+		}
+		if err := r.applySnapshotMutation(ctx, storageKey, &kvrpcpb.Mutation{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   storageKey,
+			Value: value,
+		}); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	if r.active == nil {
 		r.active = make(map[localSnapshotKey]struct{})
 	}
-	r.active[localSnapshotKeyFromToken(token)] = struct{}{}
+	r.active[key] = struct{}{}
 	r.mu.Unlock()
 	r.publishTotal.Add(1)
 	return nil
 }
 
 // RetireSnapshotSubtree removes a local snapshot token when it is still known.
-func (r *SnapshotRegistry) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+func (r *SnapshotRegistry) RetireSnapshotSubtree(ctx context.Context, token fsmeta.SnapshotSubtreeToken) error {
 	if err := validateSnapshotToken(token); err != nil {
 		return err
 	}
 	if r == nil {
 		return nil
 	}
+	key := localSnapshotKeyFromToken(token)
+	if !r.hasActive(key) {
+		r.retireTotal.Add(1)
+		return nil
+	}
+	if err := r.validateRegistryMount(token); err != nil {
+		return err
+	}
+	if r.runner != nil {
+		storageKey, err := fsmeta.EncodeSnapshotKey(r.mount, token.RootInode, token.ReadVersion)
+		if err != nil {
+			return err
+		}
+		if err := r.applySnapshotMutation(ctx, storageKey, &kvrpcpb.Mutation{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: storageKey,
+		}); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
-	delete(r.active, localSnapshotKeyFromToken(token))
+	delete(r.active, key)
 	r.mu.Unlock()
 	r.retireTotal.Add(1)
 	return nil
+}
+
+// SnapshotRetentionFloor returns the oldest active local snapshot read version.
+func (r *SnapshotRegistry) SnapshotRetentionFloor() (uint64, bool) {
+	index := r.SnapshotRetentionIndex()
+	return index.GlobalFloor, index.Active()
+}
+
+// SnapshotRetentionIndex returns the mount-scoped GC retention floors currently
+// pinned by active local snapshot tokens.
+func (r *SnapshotRegistry) SnapshotRetentionIndex() rootstate.SnapshotRetentionIndex {
+	index := rootstate.SnapshotRetentionIndex{MountFloors: make(map[uint64]uint64)}
+	if r == nil {
+		return index
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range r.active {
+		if key.readVersion == 0 {
+			continue
+		}
+		if index.GlobalFloor == 0 || key.readVersion < index.GlobalFloor {
+			index.GlobalFloor = key.readVersion
+		}
+		mountKeyID := uint64(key.mountKeyID)
+		if mountKeyID == 0 {
+			continue
+		}
+		if current := index.MountFloors[mountKeyID]; current == 0 || key.readVersion < current {
+			index.MountFloors[mountKeyID] = key.readVersion
+		}
+	}
+	return index
 }
 
 // Stats returns local snapshot registry diagnostics.
@@ -75,18 +180,140 @@ func (r *SnapshotRegistry) Stats() map[string]any {
 			"active_snapshots":     0,
 			"publish_total":        uint64(0),
 			"retire_total":         uint64(0),
-			"durability_authority": "local_mvcc",
+			"recovered_total":      uint64(0),
+			"retention_floor":      uint64(0),
+			"persistent":           false,
+			"durability_authority": "memory",
 		}
 	}
 	r.mu.Lock()
 	active := len(r.active)
+	floor, _ := r.snapshotRetentionFloorLocked()
 	r.mu.Unlock()
+	authority := "memory"
+	if r.runner != nil {
+		authority = "local_mvcc_snapshot_registry"
+	}
 	return map[string]any{
 		"active_snapshots":     active,
 		"publish_total":        r.publishTotal.Load(),
 		"retire_total":         r.retireTotal.Load(),
-		"durability_authority": "local_mvcc",
+		"recovered_total":      r.recoveredTotal.Load(),
+		"retention_floor":      floor,
+		"persistent":           r.runner != nil,
+		"durability_authority": authority,
 	}
+}
+
+func (r *SnapshotRegistry) load(ctx context.Context) error {
+	prefix, err := fsmeta.EncodeSnapshotPrefix(r.mount)
+	if err != nil {
+		return err
+	}
+	iter := r.runner.db.NewInternalIterator(&index.Options{IsAsc: true})
+	if iter == nil {
+		return nil
+	}
+	defer func() { _ = iter.Close() }()
+	var (
+		loaded      uint64
+		lastUserKey []byte
+	)
+	iter.Seek(kv.InternalKey(kv.CFWrite, prefix, kv.MaxVersion))
+	for iter.Valid() {
+		if err := ctxErr(ctx); err != nil {
+			return err
+		}
+		item := iter.Item()
+		if item == nil || item.Entry() == nil {
+			iter.Next()
+			continue
+		}
+		cf, userKey, _, ok := kv.SplitInternalKey(item.Entry().Key)
+		if !ok {
+			return errInvalidInternalEntry
+		}
+		if cf != kv.CFWrite || !bytes.HasPrefix(userKey, prefix) {
+			break
+		}
+		if bytes.Equal(userKey, lastUserKey) {
+			iter.Next()
+			continue
+		}
+		lastUserKey = cloneBytes(userKey)
+		token, ok, err := r.readSnapshotRecord(userKey)
+		if err != nil {
+			return err
+		}
+		if ok {
+			r.active[localSnapshotKeyFromToken(token)] = struct{}{}
+			loaded++
+		}
+		iter.Next()
+	}
+	r.recoveredTotal.Add(loaded)
+	return nil
+}
+
+func (r *SnapshotRegistry) readSnapshotRecord(key []byte) (fsmeta.SnapshotSubtreeToken, bool, error) {
+	parts, ok := fsmeta.InspectKey(key)
+	if !ok || parts.Kind != fsmeta.KeyKindSnapshot {
+		return fsmeta.SnapshotSubtreeToken{}, false, fsmeta.ErrInvalidKey
+	}
+	value, ok, err := r.runner.readValue(key, kv.MaxVersion)
+	if err != nil || !ok {
+		return fsmeta.SnapshotSubtreeToken{}, ok, err
+	}
+	token, err := fsmeta.DecodeSnapshotValue(value)
+	if err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, false, err
+	}
+	if err := r.validateRegistryMount(token); err != nil {
+		return fsmeta.SnapshotSubtreeToken{}, false, err
+	}
+	if token.RootInode != parts.SnapshotRoot || token.ReadVersion != parts.SnapshotReadVersion {
+		return fsmeta.SnapshotSubtreeToken{}, false, fsmeta.ErrInvalidValue
+	}
+	return token, true, nil
+}
+
+func (r *SnapshotRegistry) applySnapshotMutation(ctx context.Context, primary []byte, mutation *kvrpcpb.Mutation) error {
+	startVersion, err := r.runner.ReserveTimestamp(ctx, 2)
+	if err != nil {
+		return err
+	}
+	_, _, err = r.runner.applyMutationGroup(primary, []*kvrpcpb.Mutation{mutation}, startVersion, startVersion+1, false)
+	return err
+}
+
+func (r *SnapshotRegistry) validateRegistryMount(token fsmeta.SnapshotSubtreeToken) error {
+	if r == nil || r.runner == nil {
+		return nil
+	}
+	if token.Mount != r.mount.MountID || token.MountKeyID != r.mount.MountKeyID {
+		return fsmeta.ErrInvalidRequest
+	}
+	return nil
+}
+
+func (r *SnapshotRegistry) hasActive(key localSnapshotKey) bool {
+	r.mu.Lock()
+	_, ok := r.active[key]
+	r.mu.Unlock()
+	return ok
+}
+
+func (r *SnapshotRegistry) snapshotRetentionFloorLocked() (uint64, bool) {
+	var floor uint64
+	for key := range r.active {
+		if key.readVersion == 0 {
+			continue
+		}
+		if floor == 0 || key.readVersion < floor {
+			floor = key.readVersion
+		}
+	}
+	return floor, floor != 0
 }
 
 func validateSnapshotToken(token fsmeta.SnapshotSubtreeToken) error {

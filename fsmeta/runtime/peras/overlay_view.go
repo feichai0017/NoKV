@@ -346,10 +346,7 @@ func (c *Runtime) perasSnapshotView(version uint64) (perasSnapshotView, []fspera
 		c.read.mu.RUnlock()
 		return perasSnapshotView{}, nil, false
 	}
-	count := snapshot.sealedSegments
-	if count > len(c.read.sealedSegments) {
-		count = len(c.read.sealedSegments)
-	}
+	count := min(snapshot.sealedSegments, len(c.read.sealedSegments))
 	segments := append([]fsperas.PerasSegment(nil), c.read.sealedSegments[:count]...)
 	c.read.mu.RUnlock()
 	return snapshot, segments, true
