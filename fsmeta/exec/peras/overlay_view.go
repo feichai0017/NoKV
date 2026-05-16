@@ -191,6 +191,42 @@ func (v *OverlayView) Clone() *OverlayView {
 	return out
 }
 
+// CloneForSnapshotDirectory copies the pending rows needed to serve a direct
+// directory snapshot: matching dentries plus pending inode rows referenced by
+// those dentries.
+func (v *OverlayView) CloneForSnapshotDirectory(mount fsmeta.MountIdentity, prefix []byte) *OverlayView {
+	out := NewOverlayView()
+	if v == nil || len(prefix) == 0 {
+		return out
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	out.initLocked()
+	keys := v.directoryKeys[string(prefix)]
+	for key := range keys {
+		entry, ok := v.entries[key]
+		if !ok {
+			continue
+		}
+		out.addClonedEntryLocked(entry)
+		if entry.delete {
+			continue
+		}
+		dentry, err := fsmeta.DecodeDentryValue(entry.value)
+		if err != nil {
+			continue
+		}
+		inodeKey, err := fsmeta.EncodeInodeKey(mount, dentry.Inode)
+		if err != nil {
+			continue
+		}
+		if inodeEntry, ok := v.entries[string(inodeKey)]; ok {
+			out.addClonedEntryLocked(inodeEntry)
+		}
+	}
+	return out
+}
+
 func (v *OverlayView) Get(key []byte) (value []byte, deleted bool, ok bool) {
 	value, deleted, ok = v.GetView(key)
 	if !ok {
@@ -488,6 +524,19 @@ func (v *OverlayView) initLocked() {
 	if v.sortedKeys == nil {
 		v.sortedDirty = true
 	}
+}
+
+func (v *OverlayView) addClonedEntryLocked(entry overlayEntry) {
+	v.initLocked()
+	cloned := overlayEntry{
+		opID:   entry.opID,
+		key:    cloneBytes(entry.key),
+		value:  cloneBytes(entry.value),
+		delete: entry.delete,
+	}
+	v.entries[string(cloned.key)] = cloned
+	v.sortedDirty = true
+	v.indexDirectoryKeyLocked(cloned.key)
 }
 
 func (v *OverlayView) rebuildSortedKeysLocked() {

@@ -315,6 +315,65 @@ func TestRuntimeScanPerasDirectoryUsesDirectoryIndex(t *testing.T) {
 	}, scan)
 }
 
+func TestRuntimeCapturePerasSnapshotUsesSealedSegmentGeneration(t *testing.T) {
+	committer := &Runtime{read: newReadState()}
+	prefix := testRuntimeRootDentryPrefix()
+	keyA := testRuntimeDentryKeyForLabel("a")
+	keyB := testRuntimeDentryKeyForLabel("b")
+
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a-v1")))
+	require.NoError(t, committer.CapturePerasSnapshot(10))
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a-v2")))
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyB, []byte("sealed-b")))
+
+	value, deleted, ok := committer.GetPerasSnapshotOverlayView(10, keyA)
+	require.True(t, ok)
+	require.False(t, deleted)
+	require.Equal(t, []byte("sealed-a-v1"), value)
+
+	_, _, ok = committer.GetPerasSnapshotOverlayView(10, keyB)
+	require.False(t, ok)
+	require.True(t, committer.HasPerasSnapshotDirectory(10, prefix))
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: keyA, Value: []byte("sealed-a-v1")},
+	}, committer.ScanPerasSnapshotDirectory(10, prefix, prefix, 8))
+}
+
+func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) {
+	committer := &Runtime{read: newReadState(), visibleSnapshots: true}
+	prefix := testRuntimeRootDentryPrefix()
+	keyA := testRuntimeDentryKeyForLabel("a")
+	keyB := testRuntimeDentryKeyForLabel("b")
+	keyC := testRuntimeDentryKeyForLabel("c")
+	inodeBKey, err := fsmeta.EncodeInodeKey(testRuntimeMount, 42)
+	require.NoError(t, err)
+	opB := testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil)
+	dentryBValue := opB.Effects[0].Value
+
+	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a")))
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 1}, opB))
+	captured, err := committer.CapturePerasVisibleSnapshot(11, compile.AuthorityScope{
+		Mount:      testRuntimeMount.MountID,
+		MountKeyID: testRuntimeMount.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+	})
+	require.NoError(t, err)
+	require.True(t, captured)
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "c", 43, []byte("visible-c"), nil)))
+
+	_, _, ok := committer.GetPerasSnapshotOverlayView(11, keyC)
+	require.False(t, ok)
+	value, deleted, ok := committer.GetPerasSnapshotOverlayView(11, inodeBKey)
+	require.True(t, ok)
+	require.False(t, deleted)
+	_, err = fsmeta.DecodeInodeValue(value)
+	require.NoError(t, err)
+	require.Equal(t, []fsperas.OverlayKV{
+		{Key: keyA, Value: []byte("sealed-a")},
+		{Key: keyB, Value: dentryBValue},
+	}, committer.ScanPerasSnapshotDirectory(11, prefix, prefix, 8))
+}
+
 func TestRuntimeAppendsVisibleLogBeforeOverlay(t *testing.T) {
 	log := &recordingVisibleLog{}
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -2450,6 +2509,17 @@ func testRuntimePerasSegmentForOverlay(key, value []byte) fsperas.PerasSegment {
 		panic(err)
 	}
 	return segment
+}
+
+func installRuntimeSealedSegment(tb testing.TB, committer *Runtime, segment fsperas.PerasSegment) {
+	tb.Helper()
+	committer.read.mu.Lock()
+	err := committer.read.sealed.AddSegment(segment)
+	if err == nil {
+		committer.read.sealedSegments = append(committer.read.sealedSegments, segment)
+	}
+	committer.read.mu.Unlock()
+	require.NoError(tb, err)
 }
 
 func testRuntimePerasCatalogRows(tb testing.TB, segment fsperas.PerasSegment, installVersion uint64) []KV {

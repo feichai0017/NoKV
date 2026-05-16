@@ -58,6 +58,27 @@ func TestExecutorSnapshotSubtreeFlushesPerasAuthorityBeforeToken(t *testing.T) {
 	require.Equal(t, []fsmeta.InodeID{7}, flusher.flushScopes[0].Parents)
 }
 
+func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
+	runner := newFakeRunner()
+	capturer := &fakePerasVisibleSnapshotCapturer{capture: true}
+	executor, err := newTestExecutor(runner,
+		WithPerasCommitter(capturer),
+		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+	)
+	require.NoError(t, err)
+
+	token, err := executor.SnapshotSubtree(context.Background(), fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), token.ReadVersion)
+	require.Equal(t, []uint64{1}, capturer.captureVersions)
+	require.Len(t, capturer.captureScopes, 1)
+	require.Equal(t, []fsmeta.InodeID{7}, capturer.captureScopes[0].Parents)
+	require.Equal(t, 0, capturer.flushCalls)
+}
+
 func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
 	runner := newFakeRunner()
 	resolver := &fakeMountResolver{records: map[fsmeta.MountID]MountAdmission{

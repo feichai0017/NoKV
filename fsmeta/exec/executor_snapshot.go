@@ -25,6 +25,24 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if err := e.admitPerasAuthority(ctx, delta); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
+	if capturer, ok := e.perasCommitter.(PerasVisibleSnapshotCapturer); ok {
+		version, err := e.reserveReadVersion(ctx)
+		if err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
+		captured, err := capturer.CapturePerasVisibleSnapshot(version, delta.Authority)
+		if err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
+		if captured {
+			return fsmeta.SnapshotSubtreeToken{
+				Mount:       req.Mount,
+				MountKeyID:  mountRecord.MountKeyID,
+				RootInode:   req.RootInode,
+				ReadVersion: version,
+			}, nil
+		}
+	}
 	if err := e.flushPerasAuthority(ctx, delta.Authority); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}

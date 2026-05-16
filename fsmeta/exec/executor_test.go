@@ -218,6 +218,14 @@ type fakePerasAuthorityFlusher struct {
 	flushScopes []compile.AuthorityScope
 }
 
+type fakePerasVisibleSnapshotCapturer struct {
+	fakePerasAuthorityFlusher
+	capture         bool
+	err             error
+	captureVersions []uint64
+	captureScopes   []compile.AuthorityScope
+}
+
 type noopPerasCommitter struct{}
 
 type ownedPerasAdmitter struct{}
@@ -570,6 +578,15 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 		Inodes:     append([]fsmeta.InodeID(nil), scope.Inodes...),
 	})
 	return nil
+}
+
+func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(version uint64, scope compile.AuthorityScope) (bool, error) {
+	f.captureVersions = append(f.captureVersions, version)
+	f.captureScopes = append(f.captureScopes, scope)
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.capture, nil
 }
 
 func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.MaterializedOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {

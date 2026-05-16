@@ -73,7 +73,11 @@ type Config struct {
 	// MaterializeSegments is false. Distributed runtimes leave this disabled
 	// so authority retirement still drains into base MVCC.
 	CatalogOnlyAuthorityDrain bool
-	Now                       func() time.Time
+	// VisibleSnapshotCapture lets SnapshotSubtree capture the holder-local
+	// visible overlay without first flushing an authority. This is only safe
+	// for runtimes whose visible WAL is an accepted durability boundary.
+	VisibleSnapshotCapture bool
+	Now                    func() time.Time
 }
 
 type SegmentWitnessMode uint8
@@ -114,6 +118,7 @@ type Runtime struct {
 	flushN           int
 	materialize      bool
 	catalogOnlyDrain bool
+	visibleSnapshots bool
 	flushEvery       time.Duration
 	bgTimeout        time.Duration
 	bgBackoff        time.Duration
@@ -379,6 +384,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		flushN:           flushN,
 		materialize:      cfg.MaterializeSegments,
 		catalogOnlyDrain: cfg.CatalogOnlyAuthorityDrain,
+		visibleSnapshots: cfg.VisibleSnapshotCapture,
 		flushEvery:       flushEvery,
 		bgTimeout:        bgTimeout,
 		bgBackoff:        bgBackoff,

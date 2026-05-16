@@ -154,6 +154,13 @@ type PerasSnapshotCapturer interface {
 	CapturePerasSnapshot(version uint64) error
 }
 
+// PerasVisibleSnapshotCapturer lets a runtime capture visible Peras state
+// without forcing an authority flush. Runtimes return captured=false when the
+// snapshot cannot be made durable at the visible boundary.
+type PerasVisibleSnapshotCapturer interface {
+	CapturePerasVisibleSnapshot(version uint64, scope compile.AuthorityScope) (captured bool, err error)
+}
+
 // PerasSnapshotOverlayReader serves a captured Peras overlay for a snapshot
 // version. It is intentionally separate from the live overlay reader.
 type PerasSnapshotOverlayReader interface {

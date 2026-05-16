@@ -201,6 +201,7 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 		SegmentFlushParallelism:    localPerasSegmentInstallParallelism(),
 		SegmentFlushEvery:          localPerasSegmentFlushEvery,
 		CatalogOnlyAuthorityDrain:  true,
+		VisibleSnapshotCapture:     true,
 		Now:                        opts.Clock,
 	})
 	if err != nil {
