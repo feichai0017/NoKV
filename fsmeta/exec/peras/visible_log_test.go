@@ -31,6 +31,26 @@ func TestVisibleOperationRecordRoundTrip(t *testing.T) {
 	require.Equal(t, record, decoded)
 }
 
+func TestVisibleOperationRecordEncodeToReusesScratch(t *testing.T) {
+	record := VisibleOperationRecord{
+		EpochID:           7,
+		HolderID:          "holder-a",
+		GrantID:           "grant-a",
+		GrantExpiresNanos: 123456789,
+		RootLineage:       VisibleRootLineage{ClusterEpoch: 1, Term: 2, Index: 3, Revision: 4},
+		Scope:             testVisibleAuthorityScope(),
+		Operation:         testVisibleReplayOperation(OperationID{ClientID: "client", Seq: 9}, []byte("a")),
+		TimestampUnixNano: 1234,
+	}
+	scratch := make([]byte, 0, visibleOperationRecordEncodedSize(record))
+	payload, err := EncodeVisibleOperationRecordTo(scratch, record)
+	require.NoError(t, err)
+	require.Equal(t, &scratch[:cap(scratch)][0], &payload[:cap(payload)][0])
+	decoded, err := DecodeVisibleOperationRecord(payload)
+	require.NoError(t, err)
+	require.Equal(t, record, decoded)
+}
+
 func TestVisibleAppliedRecordRoundTrip(t *testing.T) {
 	record := VisibleAppliedRecord{
 		EpochID:  7,

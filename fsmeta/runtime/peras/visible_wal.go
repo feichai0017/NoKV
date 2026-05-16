@@ -38,7 +38,33 @@ type WALVisibleLog struct {
 const (
 	visibleLogAppendQueueSize = 4096
 	visibleLogAppendBatchSize = 256
+	visibleLogPayloadPoolCap  = 256 << 10
 )
+
+var visibleLogPayloadPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, 4<<10)
+		return &buf
+	},
+}
+
+func encodeVisibleOperationPayload(record fsperas.VisibleOperationRecord) ([]byte, func(), error) {
+	bufRef := visibleLogPayloadPool.Get().(*[]byte)
+	payload, err := fsperas.EncodeVisibleOperationRecordTo((*bufRef)[:0], record)
+	if err != nil {
+		releaseVisibleOperationPayload((*bufRef)[:0])
+		return nil, nil, err
+	}
+	return payload, func() { releaseVisibleOperationPayload(payload) }, nil
+}
+
+func releaseVisibleOperationPayload(payload []byte) {
+	if cap(payload) > visibleLogPayloadPoolCap {
+		return
+	}
+	buf := payload[:0]
+	visibleLogPayloadPool.Put(&buf)
+}
 
 type visibleOperationLogKey struct {
 	epoch  uint64
@@ -52,13 +78,14 @@ type visibleAppliedLogKey struct {
 }
 
 type visibleOperationLogEntry struct {
-	record   fsperas.VisibleOperationRecord
-	position visibleOperationLogPosition
+	reference fsperas.VisibleOperationReference
+	position  visibleOperationLogPosition
 }
 
 type visibleAppendRequest struct {
 	record  fsperas.VisibleOperationRecord
 	payload []byte
+	release func()
 	result  chan error
 }
 
@@ -99,14 +126,19 @@ func (l *WALVisibleLog) AppendVisible(ctx context.Context, record fsperas.Visibl
 	if err := visibleLogContextErr(ctx); err != nil {
 		return err
 	}
-	payload, err := fsperas.EncodeVisibleOperationRecord(record)
-	if err != nil {
-		return fmt.Errorf("encode peras visible record: %w", err)
-	}
 	var appendErr error
 	if l != nil && l.batchAppend {
-		appendErr = l.enqueueVisibleRecord(ctx, record, payload)
+		payload, release, err := encodeVisibleOperationPayload(record)
+		if err != nil {
+			return fmt.Errorf("encode peras visible record: %w", err)
+		}
+		appendErr = l.enqueueVisibleRecord(ctx, record, payload, release)
 	} else {
+		payload, release, err := encodeVisibleOperationPayload(record)
+		if err != nil {
+			return fmt.Errorf("encode peras visible record: %w", err)
+		}
+		defer release()
 		appendErr = l.appendVisibleRecord(record, payload)
 	}
 	if appendErr != nil {
@@ -124,14 +156,18 @@ func (l *WALVisibleLog) appendVisibleRecord(record fsperas.VisibleOperationRecor
 	if err != nil {
 		return err
 	}
+	reference := visibleOperationReferenceForRecord(record)
 	l.mu.Lock()
-	l.rememberVisibleRecordLocked(record, position)
+	l.rememberVisibleRecordLocked(record, reference, position)
 	l.mu.Unlock()
 	return nil
 }
 
-func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas.VisibleOperationRecord, payload []byte) error {
+func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas.VisibleOperationRecord, payload []byte, release func()) error {
 	if l == nil || l.wal == nil {
+		if release != nil {
+			release()
+		}
 		return fsperas.ErrVisibleLogRequired
 	}
 	if ctx == nil {
@@ -141,12 +177,16 @@ func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas
 	req := visibleAppendRequest{
 		record:  record,
 		payload: payload,
+		release: release,
 		result:  result,
 	}
 	l.appendMu.Lock()
 	select {
 	case <-l.closed:
 		l.appendMu.Unlock()
+		if release != nil {
+			release()
+		}
 		return ErrVisibleLogClosed
 	default:
 	}
@@ -155,6 +195,9 @@ func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas
 		l.appendMu.Unlock()
 	case <-ctx.Done():
 		l.appendMu.Unlock()
+		if release != nil {
+			release()
+		}
 		return ctx.Err()
 	}
 	return <-result
@@ -209,6 +252,7 @@ func (l *WALVisibleLog) appendVisibleBatchNow(batch []visibleAppendRequest) {
 		return
 	}
 	positions := make([]visibleOperationLogPosition, len(infos))
+	references := make([]fsperas.VisibleOperationReference, len(batch))
 	for i, info := range infos {
 		position, err := visibleOperationLogPositionFromEntry(info)
 		if err != nil {
@@ -216,10 +260,11 @@ func (l *WALVisibleLog) appendVisibleBatchNow(batch []visibleAppendRequest) {
 			return
 		}
 		positions[i] = position
+		references[i] = visibleOperationReferenceForRecord(batch[i].record)
 	}
 	l.mu.Lock()
 	for i, req := range batch {
-		l.rememberVisibleRecordLocked(req.record, positions[i])
+		l.rememberVisibleRecordLocked(req.record, references[i], positions[i])
 	}
 	l.mu.Unlock()
 	completeVisibleAppendBatch(batch, nil)
@@ -227,17 +272,20 @@ func (l *WALVisibleLog) appendVisibleBatchNow(batch []visibleAppendRequest) {
 
 func completeVisibleAppendBatch(batch []visibleAppendRequest, err error) {
 	for _, req := range batch {
+		if req.release != nil {
+			req.release()
+		}
 		req.result <- err
 	}
 }
 
-func (l *WALVisibleLog) rememberVisibleRecordLocked(record fsperas.VisibleOperationRecord, position visibleOperationLogPosition) {
+func (l *WALVisibleLog) rememberVisibleRecordLocked(record fsperas.VisibleOperationRecord, reference fsperas.VisibleOperationReference, position visibleOperationLogPosition) {
 	l.initPendingLocked()
 	cloned := cloneVisibleOperationRecord(record)
 	l.records = append(l.records, cloned)
 	l.pending[visibleOperationLogKeyForRecord(cloned)] = visibleOperationLogEntry{
-		record:   cloneVisibleOperationRecord(cloned),
-		position: position,
+		reference: reference,
+		position:  position,
 	}
 }
 
@@ -293,7 +341,7 @@ func (l *WALVisibleLog) visibleAppliedRecordForReplayPlan(epochID uint64, holder
 		if !ok {
 			return fsperas.VisibleAppliedRecord{}, fsperas.ErrInvalidWitnessRecord
 		}
-		if err := visibleOperationMatchesReplay(entry.record.Operation, op); err != nil {
+		if err := visibleOperationMatchesReplay(entry.reference, op); err != nil {
 			return fsperas.VisibleAppliedRecord{}, err
 		}
 		positions = append(positions, entry.position)
@@ -339,7 +387,11 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 		if err != nil {
 			return err
 		}
-		pending[key] = visibleOperationLogEntry{record: cloneVisibleOperationRecord(record), position: position}
+		reference, err := fsperas.VisibleOperationReferenceFromReplay(record.Operation)
+		if err != nil {
+			return err
+		}
+		pending[key] = visibleOperationLogEntry{reference: reference, position: position}
 		return nil
 	})
 	if err != nil {
@@ -450,19 +502,25 @@ func visibleLogContextErr(ctx context.Context) error {
 	return nil
 }
 
-func visibleOperationMatchesReplay(current, applied fsperas.ReplayOperation) error {
-	currentRef, err := fsperas.VisibleOperationReferenceFromReplay(current)
-	if err != nil {
-		return err
-	}
+func visibleOperationMatchesReplay(current fsperas.VisibleOperationReference, applied fsperas.ReplayOperation) error {
 	appliedRef, err := fsperas.VisibleOperationReferenceFromReplay(applied)
 	if err != nil {
 		return err
 	}
-	if currentRef != appliedRef {
+	if current != appliedRef {
 		return fsperas.ErrInvalidWitnessRecord
 	}
 	return nil
+}
+
+func visibleOperationReferenceForRecord(record fsperas.VisibleOperationRecord) fsperas.VisibleOperationReference {
+	op := record.Operation
+	return fsperas.VisibleOperationReference{
+		OpID:                 op.OpID,
+		DescriptorDigest:     op.DescriptorDigest,
+		PredicateProofDigest: op.PredicateProofDigest,
+		ExecutionPlanDigest:  op.ExecutionPlanDigest,
+	}
 }
 
 func visibleOperationLogPositionFromEntry(info wal.EntryInfo) (visibleOperationLogPosition, error) {

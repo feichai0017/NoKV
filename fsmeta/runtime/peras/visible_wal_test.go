@@ -98,6 +98,27 @@ func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
 	require.Equal(t, second.Operation.OpID, replayed[0].Operation.OpID)
 }
 
+func TestWALVisibleLogAppliedPlanMustMatchVisibleReference(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	t.Cleanup(log.Close)
+	record := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 1}, []byte("a"))
+	require.NoError(t, log.AppendVisible(context.Background(), record))
+
+	mismatched := record.Operation
+	mismatched.DescriptorDigest[0] ^= 0xff
+	err = log.AppendVisibleReplayPlanApplied(context.Background(), record.EpochID, record.HolderID, fsperas.ReplayPlan{
+		EpochID:    record.EpochID,
+		Operations: []fsperas.ReplayOperation{mismatched},
+	})
+	require.ErrorIs(t, err, fsperas.ErrInvalidWitnessRecord)
+}
+
 func TestWALVisibleLogBatchesConcurrentVisibleRecords(t *testing.T) {
 	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
 	require.NoError(t, err)
