@@ -32,6 +32,11 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
+	if capturer, ok := e.perasCommitter.(PerasSnapshotCapturer); ok {
+		if err := capturer.CapturePerasSnapshot(version); err != nil {
+			return fsmeta.SnapshotSubtreeToken{}, err
+		}
+	}
 	return fsmeta.SnapshotSubtreeToken{
 		Mount:       req.Mount,
 		MountKeyID:  mountRecord.MountKeyID,

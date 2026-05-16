@@ -110,6 +110,7 @@ func (c *Runtime) Stats() map[string]any {
 			"segment_install_queue_capacity":             0,
 			"segment_seal_queue_depth":                   0,
 			"segment_seal_queue_capacity":                0,
+			"witness_mode":                               "disabled",
 			"witness_count":                              0,
 			"quorum":                                     0,
 		}
@@ -262,6 +263,7 @@ func (c *Runtime) Stats() map[string]any {
 		"segment_install_queue_capacity":             installQueueCapacity,
 		"segment_seal_queue_depth":                   sealQueueDepth,
 		"segment_seal_queue_capacity":                sealQueueCapacity,
+		"witness_mode":                               c.witnessMode.String(),
 		"witness_count":                              len(c.witnesses),
 		"quorum":                                     c.quorum,
 	}

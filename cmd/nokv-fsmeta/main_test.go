@@ -4,11 +4,23 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"expvar"
 	"fmt"
+	"net"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
+	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestPublishExpvarOnceDoesNotOverwriteExistingMetric(t *testing.T) {
@@ -49,5 +61,328 @@ func TestParsePerasVisibleLogPolicy(t *testing.T) {
 	}
 	if _, err := parsePerasVisibleLogPolicy("bad"); err == nil {
 		t.Fatal("expected invalid policy to fail")
+	}
+}
+
+func TestParseFSMetaBackend(t *testing.T) {
+	cases := map[string]fsmetaBackend{
+		"":          fsmetaBackendRaftstore,
+		"raftstore": fsmetaBackendRaftstore,
+		"RAFTSTORE": fsmetaBackendRaftstore,
+		"local":     fsmetaBackendLocal,
+		" LOCAL ":   fsmetaBackendLocal,
+	}
+	for input, want := range cases {
+		got, err := parseFSMetaBackend(input)
+		if err != nil {
+			t.Fatalf("parse %q: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("parse %q got %q want %q", input, got, want)
+		}
+	}
+	if _, err := parseFSMetaBackend("memory"); err == nil {
+		t.Fatal("expected invalid backend to fail")
+	}
+}
+
+func TestLocalMountIdentity(t *testing.T) {
+	got, err := localMountIdentity(" vol ", 7)
+	if err != nil {
+		t.Fatalf("local mount identity: %v", err)
+	}
+	if got != (fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}) {
+		t.Fatalf("got %+v", got)
+	}
+	if _, err := localMountIdentity("", 1); !errors.Is(err, fsmeta.ErrInvalidMountID) {
+		t.Fatalf("empty mount err=%v", err)
+	}
+	if _, err := localMountIdentity("vol", 0); !errors.Is(err, fsmeta.ErrInvalidMountID) {
+		t.Fatalf("zero mount key err=%v", err)
+	}
+}
+
+func TestLocalPerasFlagHelpers(t *testing.T) {
+	if got := localPerasMode(true); got != fsmetalocal.PerasModeEnabled {
+		t.Fatalf("enabled mode got %v", got)
+	}
+	if got := localPerasMode(false); got != fsmetalocal.PerasModeDisabled {
+		t.Fatalf("disabled mode got %v", got)
+	}
+	if got := localPerasHolderID(false, "holder-a"); got != "" {
+		t.Fatalf("disabled holder got %q", got)
+	}
+	if got := localPerasHolderID(true, " holder-a "); got != "holder-a" {
+		t.Fatalf("enabled holder got %q", got)
+	}
+	if got := localPerasVisibleLogDir(false, "/tmp/db", "visible"); got != "" {
+		t.Fatalf("disabled visible log dir got %q", got)
+	}
+	if got := localPerasVisibleLogDir(true, "/tmp/db", "visible"); got != filepath.Join("/tmp/db", "visible") {
+		t.Fatalf("relative visible log dir got %q", got)
+	}
+	if got := localPerasVisibleLogDir(true, "/tmp/db", "/var/visible"); got != "/var/visible" {
+		t.Fatalf("absolute visible log dir got %q", got)
+	}
+}
+
+func TestOpenConfiguredRuntimeLocal(t *testing.T) {
+	ctx := context.Background()
+	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Backend: fsmetaBackendLocal,
+		Local: fsmetalocal.Options{
+			WorkDir: t.TempDir(),
+			Mount:   fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open local runtime: %v", err)
+	}
+	defer func() {
+		if err := rt.close(); err != nil {
+			t.Fatalf("close local runtime: %v", err)
+		}
+	}()
+	if rt.executor == nil {
+		t.Fatal("expected executor")
+	}
+	if rt.watcher == nil {
+		t.Fatal("expected local watcher")
+	}
+	if rt.snapshot == nil {
+		t.Fatal("expected local snapshot publisher")
+	}
+	if !strings.Contains(rt.startupSummary, "peras=true") {
+		t.Fatalf("local runtime should enable peras by default: %s", rt.startupSummary)
+	}
+	result, err := rt.executor.Create(ctx, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "alpha",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	if err != nil {
+		t.Fatalf("create through local runtime: %v", err)
+	}
+	got, err := rt.executor.Lookup(ctx, fsmeta.LookupRequest{Mount: "vol", Parent: fsmeta.RootInode, Name: "alpha"})
+	if err != nil {
+		t.Fatalf("lookup through local runtime: %v", err)
+	}
+	if got != result.Dentry {
+		t.Fatalf("lookup got %+v want %+v", got, result.Dentry)
+	}
+}
+
+func TestOpenConfiguredRuntimeLocalDirectMVCC(t *testing.T) {
+	ctx := context.Background()
+	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Backend: fsmetaBackendLocal,
+		Local: fsmetalocal.Options{
+			WorkDir:   t.TempDir(),
+			Mount:     fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
+			PerasMode: fsmetalocal.PerasModeDisabled,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open local direct runtime: %v", err)
+	}
+	defer func() {
+		if err := rt.close(); err != nil {
+			t.Fatalf("close local direct runtime: %v", err)
+		}
+	}()
+	if !strings.Contains(rt.startupSummary, "peras=false") {
+		t.Fatalf("local direct runtime should disable peras: %s", rt.startupSummary)
+	}
+}
+
+func TestOpenConfiguredRuntimeLocalPeras(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Backend: fsmetaBackendLocal,
+		Local: fsmetalocal.Options{
+			WorkDir:                   filepath.Join(dir, "db"),
+			Mount:                     fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
+			PerasHolderID:             "local-holder",
+			PerasVisibleLogDir:        filepath.Join(dir, "visible-log"),
+			PerasVisibleLogDurability: wal.DurabilityFlushed,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open local peras runtime: %v", err)
+	}
+	defer func() {
+		if err := rt.close(); err != nil {
+			t.Fatalf("close local peras runtime: %v", err)
+		}
+	}()
+	_, err = rt.executor.Create(ctx, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "before",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	if err != nil {
+		t.Fatalf("create through local peras runtime: %v", err)
+	}
+	if err := rt.executor.Rename(ctx, fsmeta.RenameRequest{
+		Mount:      "vol",
+		FromParent: fsmeta.RootInode,
+		FromName:   "before",
+		ToParent:   fsmeta.RootInode,
+		ToName:     "after",
+	}); err != nil {
+		t.Fatalf("rename through local peras runtime: %v", err)
+	}
+	if got := perasVisibleSuccessTotalFromServer(t, rt); got != 2 {
+		t.Fatalf("local peras visible successes got %d want 2", got)
+	}
+}
+
+func TestLocalRuntimeRegistersWatchAndSnapshot(t *testing.T) {
+	ctx := context.Background()
+	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Backend: fsmetaBackendLocal,
+		Local: fsmetalocal.Options{
+			WorkDir: t.TempDir(),
+			Mount:   fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open local runtime: %v", err)
+	}
+	defer func() {
+		if err := rt.close(); err != nil {
+			t.Fatalf("close local runtime: %v", err)
+		}
+	}()
+
+	cli, cleanup := openLocalBufconnClient(t, rt)
+	defer cleanup()
+
+	watch, err := cli.WatchSubtree(ctx, fsmeta.WatchRequest{
+		Mount:     "vol",
+		RootInode: fsmeta.RootInode,
+	})
+	if err != nil {
+		t.Fatalf("watch local runtime: %v", err)
+	}
+	defer func() { _ = watch.Close() }()
+
+	_, err = cli.Create(ctx, fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "over-grpc",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	if err != nil {
+		t.Fatalf("create over local grpc: %v", err)
+	}
+	evt := recvClientWatchEvent(t, watch)
+	wantKey, err := fsmeta.EncodeDentryKey(fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}, fsmeta.RootInode, "over-grpc")
+	if err != nil {
+		t.Fatalf("encode dentry key: %v", err)
+	}
+	if string(evt.Key) != string(wantKey) {
+		t.Fatalf("watch key got %q want %q", evt.Key, wantKey)
+	}
+	if err := watch.Ack(evt.Cursor); err != nil {
+		t.Fatalf("ack watch event: %v", err)
+	}
+	usage, err := cli.GetQuotaUsage(ctx, fsmeta.QuotaUsageRequest{
+		Mount: "vol",
+		Scope: fsmeta.RootInode,
+	})
+	if err != nil {
+		t.Fatalf("get local quota usage: %v", err)
+	}
+	if usage.Inodes != 1 {
+		t.Fatalf("quota usage got %+v", usage)
+	}
+
+	token, err := cli.SnapshotSubtree(ctx, fsmeta.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: fsmeta.RootInode,
+	})
+	if err != nil {
+		t.Fatalf("snapshot over local grpc: %v", err)
+	}
+	if token.Mount != "vol" || token.RootInode != fsmeta.RootInode || token.ReadVersion == 0 {
+		t.Fatalf("bad snapshot token: %+v", token)
+	}
+	if err := cli.RetireSnapshotSubtree(ctx, token); err != nil {
+		t.Fatalf("retire local snapshot: %v", err)
+	}
+}
+
+func perasVisibleSuccessTotalFromServer(t *testing.T, rt *fsmetaServerRuntime) uint64 {
+	t.Helper()
+	statsProvider, ok := rt.executor.(interface{ Stats() map[string]any })
+	if !ok {
+		t.Fatal("executor does not expose stats")
+	}
+	stats := statsProvider.Stats()
+	raw, ok := stats["peras_visible_commit"]
+	if !ok {
+		t.Fatal("missing peras_visible_commit stats")
+	}
+	perasStats, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("peras_visible_commit has type %T", raw)
+	}
+	success, ok := perasStats["success_total"].(uint64)
+	if !ok {
+		t.Fatalf("peras visible success has type %T", perasStats["success_total"])
+	}
+	return success
+}
+
+func openLocalBufconnClient(t *testing.T, rt *fsmetaServerRuntime) (*fsmetaclient.GRPCClient, func()) {
+	t.Helper()
+	const bufSize = 1 << 20
+	listener := bufconn.Listen(bufSize)
+	grpcServer := grpc.NewServer()
+	registerFSMetadataServer(grpcServer, rt)
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return listener.Dial()
+	}
+	cli, err := fsmetaclient.NewGRPCClient(context.Background(), "passthrough:///fsmeta-local-bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("dial local bufconn fsmeta: %v", err)
+	}
+	return cli, func() {
+		_ = cli.Close()
+		grpcServer.Stop()
+		_ = listener.Close()
+	}
+}
+
+func recvClientWatchEvent(t *testing.T, watch fsmetaclient.WatchSubscription) fsmeta.WatchEvent {
+	t.Helper()
+	type result struct {
+		evt fsmeta.WatchEvent
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		evt, err := watch.Recv()
+		ch <- result{evt: evt, err: err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("receive watch event: %v", got.err)
+		}
+		return got.evt
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for local watch event")
+		return fsmeta.WatchEvent{}
 	}
 }

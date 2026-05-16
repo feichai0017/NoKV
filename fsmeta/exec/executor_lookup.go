@@ -108,20 +108,22 @@ func (e *Executor) ReadDir(ctx context.Context, req fsmeta.ReadDirRequest) ([]fs
 		return nil, err
 	}
 	mount := mountRecord.Identity()
+	snapshotHasOverlay := req.SnapshotVersion != 0 && e.perasSnapshotDirectoryHasOverlay(req.SnapshotVersion, mount, req.Parent)
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
 	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
-	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	includeOverlay := snapshotHasOverlay || overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mountRecord.Identity(), includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
 	}
 	if overlayOnly {
-		return e.scanDentries(ctx, plan, 0)
+		return e.scanDentries(ctx, plan, 0, false)
 	}
 	var out []fsmeta.DentryRecord
+	snapshotRead := req.SnapshotVersion != 0
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
 		var err error
-		out, err = e.scanDentries(ctx, plan, version)
+		out, err = e.scanDentries(ctx, plan, version, snapshotRead)
 		return err
 	})
 	return out, err
@@ -147,9 +149,10 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		return nil, err
 	}
 	mount := mountRecord.Identity()
+	snapshotHasOverlay := req.SnapshotVersion != 0 && e.perasSnapshotDirectoryHasOverlay(req.SnapshotVersion, mount, req.Parent)
 	overlayOnly := req.SnapshotVersion == 0 && e.perasDirectoryBaseEmpty(mount, req.Parent)
 	hasVisibleOverlay := req.SnapshotVersion == 0 && e.perasDirectoryHasVisibleOverlay(mount, req.Parent)
-	includeOverlay := overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
+	includeOverlay := snapshotHasOverlay || overlayOnly || hasVisibleOverlay || (req.SnapshotVersion == 0 && e.perasDirectoryHasOverlay(mount, req.Parent))
 	plan, err := compile.CompileDirectoryReadPlan(req, mount, includeOverlay, overlayOnly)
 	if err != nil {
 		return nil, err
@@ -168,7 +171,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		}
 	}
 	if overlayOnly {
-		dentries, err := e.scanDentries(ctx, plan, 0)
+		dentries, err := e.scanDentries(ctx, plan, 0, false)
 		if err != nil {
 			return nil, err
 		}
@@ -183,8 +186,9 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 	}
 
 	var out []fsmeta.DentryAttrPair
+	snapshotRead := req.SnapshotVersion != 0
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		dentries, err := e.scanDentries(ctx, plan, version)
+		dentries, err := e.scanDentries(ctx, plan, version, snapshotRead)
 		if err != nil {
 			return err
 		}
@@ -196,7 +200,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req fsmeta.ReadDirRequest) (
 		if err != nil {
 			return err
 		}
-		inodeValues, inodePresent, err := e.batchGetMergedValuesOrdered(ctx, inodeKeys, version, includeOverlay)
+		inodeValues, inodePresent, err := e.batchGetMergedValuesOrdered(ctx, inodeKeys, version, includeOverlay, snapshotRead)
 		if err != nil {
 			return err
 		}
@@ -273,14 +277,14 @@ func (e *Executor) readDirPlusFromPerasView(mount fsmeta.MountIdentity, dentries
 	return pairs, true, nil
 }
 
-func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]fsmeta.DentryRecord, error) {
+func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool) ([]fsmeta.DentryRecord, error) {
 	var kvs []KV
 	stats := compile.DirectoryReadStats{UsedPerasOnly: plan.PerasOnly}
 	if !plan.PerasOnly {
 		if plan.IncludePeras {
 			var perasRows uint32
 			var err error
-			kvs, stats.BaseRows, perasRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRows(ctx, plan, version)
+			kvs, stats.BaseRows, perasRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRows(ctx, plan, version, snapshotRead)
 			if err != nil {
 				return nil, err
 			}
@@ -352,6 +356,18 @@ func (e *Executor) perasDirectoryHasVisibleOverlay(mount fsmeta.MountIdentity, p
 		return true
 	}
 	return presence.HasPerasVisibleDirectory(prefix)
+}
+
+func (e *Executor) perasSnapshotDirectoryHasOverlay(version uint64, mount fsmeta.MountIdentity, parent fsmeta.InodeID) bool {
+	reader := e.perasSnapshotOverlay()
+	if reader == nil {
+		return false
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	if err != nil {
+		return true
+	}
+	return reader.HasPerasSnapshotDirectory(version, prefix)
 }
 
 func (e *Executor) dirPageReadFrontier(directory dirpage.DirectoryKey, mount fsmeta.MountIdentity, parent fsmeta.InodeID) uint64 {

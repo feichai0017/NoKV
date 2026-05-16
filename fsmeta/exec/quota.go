@@ -28,6 +28,13 @@ type QuotaResolver interface {
 	ReserveQuota(context.Context, TxnRunner, []QuotaChange, uint64) ([]*kvrpcpb.Mutation, error)
 }
 
+// QuotaUsageResolver lets a runtime derive usage without storing quota counter
+// keys in the write transaction. Runtimes that do not implement it keep the
+// persisted counter-key behavior in GetQuotaUsage.
+type QuotaUsageResolver interface {
+	ReadQuotaUsage(context.Context, TxnRunner, fsmeta.MountIdentity, fsmeta.InodeID, uint64) (fsmeta.UsageRecord, bool, error)
+}
+
 func inodeSizeDelta(size uint64) int64 {
 	if size > math.MaxInt64 {
 		return math.MaxInt64

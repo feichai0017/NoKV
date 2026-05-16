@@ -30,18 +30,19 @@ func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityR
 	defer endDrain()
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
+	materialize := c.authorityDrainMaterialize()
 	c.commitMu.Lock()
 	var batches []perasFlushBatch
 	if len(drainScopes) == 1 && ScopeEmpty(drainScopes[0]) {
 		var err error
-		batches, err = c.freezeFlushBatchesLocked(nil, true, 0)
+		batches, err = c.freezeFlushBatchesLocked(nil, materialize, 0)
 		if err != nil {
 			c.commitMu.Unlock()
 			return err
 		}
 	} else {
 		for _, scope := range drainScopes {
-			part, err := c.freezeFlushBatchesLocked(&scope, true, 0)
+			part, err := c.freezeFlushBatchesLocked(&scope, materialize, 0)
 			if err != nil {
 				c.commitMu.Unlock()
 				return err
@@ -54,6 +55,13 @@ func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityR
 		return err
 	}
 	return c.retireDrainedAuthority(ctx, retirer, scopes...)
+}
+
+func (c *Runtime) authorityDrainMaterialize() bool {
+	if c == nil || c.materialize {
+		return true
+	}
+	return !c.catalogOnlyDrain
 }
 
 func (c *Runtime) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {

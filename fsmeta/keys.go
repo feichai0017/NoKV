@@ -403,7 +403,7 @@ func MountKeyResolver(key []byte) (uint64, bool) {
 // bucket on the same local shard and gives prefix bloom filters record-family
 // prefixes that match the current key layout.
 func UserKeyShape(key []byte) localdb.UserKeyShape {
-	_, bucketPos, err := decodeMountPrefix(key)
+	mountKeyID, bucketPos, err := decodeMountPrefix(key)
 	if err != nil || len(key)-bucketPos < encodedBucketBytes+1 {
 		return localdb.UserKeyShape{}
 	}
@@ -418,7 +418,18 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 	switch kind {
 	case KeyKindMount:
 		shape.BloomPrefix = key[:bodyPos]
-	case KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage:
+	case KeyKindDentry:
+		if len(key) < bodyPos+8 {
+			return localdb.UserKeyShape{}
+		}
+		parent := InodeID(binary.BigEndian.Uint64(key[bodyPos : bodyPos+8]))
+		if parent == RootInode {
+			name := key[bodyPos+8:]
+			bucket := ChooseWorkspaceBucket(MountIdentity{MountKeyID: mountKeyID}, string(name))
+			shape.ShardKey = encodeKeyPrefixForMountKeyID(mountKeyID, bucket, KeyKindDentry, 0)[:kindPos]
+		}
+		shape.BloomPrefix = key[:bodyPos+8]
+	case KeyKindInode, KeyKindChunk, KeyKindSession, KeyKindUsage:
 		if len(key) < bodyPos+8 {
 			return localdb.UserKeyShape{}
 		}
@@ -427,11 +438,21 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 		if len(key) < bodyPos+33 {
 			return localdb.UserKeyShape{}
 		}
+		shape.ShardKey = perasSegmentShardKey(mountKeyID, key[bodyPos+1:bodyPos+33])
 		shape.BloomPrefix = key[:bodyPos+33]
 	default:
 		return localdb.UserKeyShape{}
 	}
 	return shape
+}
+
+func perasSegmentShardKey(mountKeyID MountKeyID, root []byte) []byte {
+	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+1+len(root))
+	out = append(out, keyMagic...)
+	out = append(out, keySchemaVersion)
+	out = binary.BigEndian.AppendUint64(out, uint64(mountKeyID))
+	out = append(out, byte(KeyKindPeras))
+	return append(out, root...)
 }
 
 // ShardForUserKey is the fsmeta physical placement policy used by local DB

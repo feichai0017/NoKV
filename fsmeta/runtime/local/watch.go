@@ -1,0 +1,136 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package local
+
+import (
+	"context"
+	"maps"
+	"sync/atomic"
+
+	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+)
+
+const (
+	localWatchRegionID uint64 = 1
+	localWatchTerm     uint64 = 1
+)
+
+// Watcher turns local MVCC commits into fsmeta watch events.
+type Watcher struct {
+	*fsmetawatch.Router
+	mounts fsmetaexec.MountResolver
+	next   atomic.Uint64
+}
+
+// NewWatcher constructs a local watch router.
+func NewWatcher(mounts fsmetaexec.MountResolver) *Watcher {
+	return &Watcher{
+		Router: fsmetawatch.NewRouter(),
+		mounts: mounts,
+	}
+}
+
+// Subscribe implements fsmeta.Watcher with local mount admission.
+func (w *Watcher) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+	if w == nil || w.Router == nil {
+		return nil, fsmeta.ErrInvalidRequest
+	}
+	if req.Mount != "" && w.mounts != nil {
+		record, err := w.mounts.ResolveMount(ctx, req.Mount)
+		if err != nil {
+			return nil, err
+		}
+		if record.MountID == "" {
+			return nil, fsmeta.ErrMountNotRegistered
+		}
+		if record.Retired {
+			return nil, fsmeta.ErrMountRetired
+		}
+		prefix, err := fsmeta.WatchPrefixForMount(req, record.Identity())
+		if err != nil {
+			return nil, err
+		}
+		req.KeyPrefix = prefix
+	}
+	return w.Router.Subscribe(ctx, req)
+}
+
+// ObserveMutation publishes one replayable local watch cursor after a mutation
+// group has been durably applied.
+func (w *Watcher) ObserveMutation(commitVersion uint64, mutations []*kvrpcpb.Mutation) {
+	if w == nil || w.Router == nil || commitVersion == 0 {
+		return
+	}
+	keys := mutationWatchKeys(mutations)
+	if len(keys) == 0 {
+		return
+	}
+	cursor := fsmeta.WatchCursor{
+		RegionID: localWatchRegionID,
+		Term:     localWatchTerm,
+		Index:    w.next.Add(1),
+	}
+	for _, key := range keys {
+		w.Publish(fsmeta.WatchEvent{
+			Cursor:        cursor,
+			CommitVersion: commitVersion,
+			Source:        fsmeta.WatchEventSourceCommit,
+			Key:           key,
+		})
+	}
+}
+
+// Stats returns local watch diagnostics.
+func (w *Watcher) Stats() map[string]any {
+	if w == nil || w.Router == nil {
+		return map[string]any{
+			"subscribers":     0,
+			"regions":         0,
+			"recent_events":   0,
+			"events_total":    uint64(0),
+			"delivered_total": uint64(0),
+			"dropped_total":   uint64(0),
+			"overflow_total":  uint64(0),
+			"next_cursor":     uint64(0),
+		}
+	}
+	out := copyStats(w.Router.Stats())
+	out["next_cursor"] = w.next.Load()
+	return out
+}
+
+func mutationWatchKeys(mutations []*kvrpcpb.Mutation) [][]byte {
+	seen := map[string]struct{}{}
+	keys := make([][]byte, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation == nil {
+			continue
+		}
+		switch mutation.GetOp() {
+		case kvrpcpb.Mutation_Put, kvrpcpb.Mutation_Delete:
+		default:
+			continue
+		}
+		key := mutation.GetKey()
+		if len(key) == 0 {
+			continue
+		}
+		id := string(key)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		keys = append(keys, cloneBytes(key))
+	}
+	return keys
+}
+
+func copyStats(src map[string]any) map[string]any {
+	out := make(map[string]any, len(src))
+	maps.Copy(out, src)
+	return out
+}

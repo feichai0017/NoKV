@@ -166,6 +166,99 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	visibleLog := &replayingVisibleLog{}
+	committer, err := NewRuntime(Config{
+		Authority:          provider,
+		SegmentWitnessMode: SegmentWitnessModeBypass,
+		Installer:          installer,
+		VisibleLog:         visibleLog,
+		SegmentBatchSize:   1024,
+		SegmentFlushEvery:  time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, "bypass", stats["witness_mode"])
+	require.Equal(t, 0, stats["witness_count"])
+	require.Equal(t, 0, stats["quorum"])
+	require.Equal(t, uint64(0), stats["witness_batch_total"])
+	require.Equal(t, uint64(0), stats["witness_quorum_total"])
+	require.Equal(t, uint64(1), stats["visible_log_apply_marker_total"])
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, 1, installer.calls)
+	require.Len(t, visibleLog.applied, 1)
+}
+
+func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	_, err := NewRuntime(Config{
+		Authority:         provider,
+		Installer:         &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.ErrorIs(t, err, ErrRuntimeInvalid)
+}
+
+func TestRuntimeWitnessBypassRejectsRootSealAuthority(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
+			holderID: "holder-a",
+			grant:    testRuntimeCommitterGrant(),
+		},
+	}
+	_, err := NewRuntime(Config{
+		Authority:          provider,
+		SegmentWitnessMode: SegmentWitnessModeBypass,
+		Installer:          &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:         &recordingVisibleLog{},
+		SegmentBatchSize:   1024,
+		SegmentFlushEvery:  time.Hour,
+	})
+	require.ErrorIs(t, err, ErrRuntimeInvalid)
+}
+
+func TestRuntimeMaterializedFlushRemovesReadOverlay(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{}
+	committer, err := NewRuntime(Config{
+		Authority:           provider,
+		Witnesses:           testRuntimePerasWitnesses(t, 3),
+		Installer:           installer,
+		VisibleLog:          &recordingVisibleLog{},
+		SegmentBatchSize:    1024,
+		SegmentFlushEvery:   time.Hour,
+		MaterializeSegments: true,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, []byte("dentry/a"), []byte("inode/a")))
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	stats := committer.Stats()
+	require.Equal(t, uint64(1), stats["flush_total"])
+	require.Equal(t, 0, stats["overlay_keys"])
+	require.Equal(t, 0, stats["segment_keys"])
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, 1, installer.calls)
+	require.True(t, installer.materialize)
+
+	_, _, ok := committer.GetPerasOverlay(testRuntimeDentryKeyForLabel("a"))
+	require.False(t, ok)
+	require.Empty(t, committer.ScanPerasOverlay(testRuntimeRootDentryPrefix(), 2))
+}
+
 func TestRuntimeScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	committer, err := NewRuntime(Config{
@@ -2662,6 +2755,25 @@ type fakeRuntimePerasGrantProvider struct {
 	sealErr  error
 
 	acquireCalls atomic.Int64
+}
+
+type nonSealingRuntimePerasGrantProvider struct {
+	holderID string
+	grant    rootproto.PerasAuthorityGrant
+	owned    bool
+	err      error
+}
+
+func (p *nonSealingRuntimePerasGrantProvider) HolderID() string {
+	return p.holderID
+}
+
+func (p *nonSealingRuntimePerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
+	owned := p.owned
+	if !owned {
+		owned = true
+	}
+	return p.grant, owned, p.err
 }
 
 func (p *fakeRuntimePerasGrantProvider) HolderID() string {

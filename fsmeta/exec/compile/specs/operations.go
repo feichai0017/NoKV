@@ -236,9 +236,6 @@ var Unlink = specdsl.OpSpec{
 		{Name: "dentry", Kind: "EffectDelete", Key: "mutate[0]"},
 		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
 	},
-	Guards: []specdsl.GuardSpec{
-		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
-	},
 	OptionalGuards: []specdsl.GuardSpec{
 		{Name: "quota_credit", Guard: "GuardQuotaCredit", Condition: "quota_escrow"},
 	},

@@ -121,6 +121,7 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 		if err != nil {
 			return err
 		}
+		e.forgetPerasEmptyDirectory(mount, req.ToParent)
 		e.invalidateNegative(plan.ReadKeys...)
 		e.invalidateNegative(plan.MutateKeys...)
 		e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
@@ -139,6 +140,7 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	}, delta.Authority); err != nil {
 		return err
 	}
+	e.forgetPerasEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys...)
 	e.invalidateNegative(plan.MutateKeys...)
 	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
@@ -211,6 +213,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	// Invalidate both old and new dentry keys plus the two parent directory
 	// epochs so negative and materialized directory-page caches cannot serve the
 	// pre-rename view.
+	e.forgetPerasEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys...)
 	e.invalidateNegative(plan.MutateKeys...)
 	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)

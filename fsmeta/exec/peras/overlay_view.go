@@ -149,6 +149,45 @@ func (v *OverlayView) AddSegment(segment PerasSegment) error {
 	return nil
 }
 
+// Clone returns a point-in-time copy of the overlay read plane.
+func (v *OverlayView) Clone() *OverlayView {
+	out := NewOverlayView()
+	if v == nil {
+		return out
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	out.entries = make(map[string]overlayEntry, len(v.entries))
+	for key, entry := range v.entries {
+		out.entries[key] = overlayEntry{
+			opID:   entry.opID,
+			key:    cloneBytes(entry.key),
+			value:  cloneBytes(entry.value),
+			delete: entry.delete,
+		}
+	}
+	out.sortedKeys = append(out.sortedKeys, v.sortedKeys...)
+	out.sortedDirty = v.sortedDirty
+	out.directoryKeys = cloneOverlayStringSetMap(v.directoryKeys)
+	out.directoryRuns = cloneOverlayStringSliceMap(v.directoryRuns)
+	out.directoryDirty = make(map[string]bool, len(v.directoryDirty))
+	for key, dirty := range v.directoryDirty {
+		out.directoryDirty[key] = dirty
+	}
+	out.directoryEpoch = make(map[string]uint64, len(v.directoryEpoch))
+	for key, epoch := range v.directoryEpoch {
+		out.directoryEpoch[key] = epoch
+	}
+	out.epoch = v.epoch
+	out.known = make(map[string]bool, len(v.known))
+	for key, present := range v.known {
+		out.known[key] = present
+	}
+	out.emptyDirs = cloneOverlayStringSet(v.emptyDirs)
+	out.emptySessions = cloneOverlayStringSet(v.emptySessions)
+	return out
+}
+
 func (v *OverlayView) Get(key []byte) (value []byte, deleted bool, ok bool) {
 	value, deleted, ok = v.GetView(key)
 	if !ok {
@@ -231,6 +270,15 @@ func (v *OverlayView) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode f
 	v.mu.Lock()
 	v.initLocked()
 	RememberEmptyDirectoryFact(v.emptyDirs, mount, inode)
+	v.mu.Unlock()
+}
+
+func (v *OverlayView) ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if v == nil {
+		return
+	}
+	v.mu.Lock()
+	ForgetEmptyDirectoryFact(v.emptyDirs, mount, inode)
 	v.mu.Unlock()
 }
 
@@ -517,4 +565,28 @@ func cloneOverlayKV(in OverlayKV) OverlayKV {
 		Value:  cloneBytes(in.Value),
 		Delete: in.Delete,
 	}
+}
+
+func cloneOverlayStringSet(in map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for key := range in {
+		out[key] = struct{}{}
+	}
+	return out
+}
+
+func cloneOverlayStringSetMap(in map[string]map[string]struct{}) map[string]map[string]struct{} {
+	out := make(map[string]map[string]struct{}, len(in))
+	for key, set := range in {
+		out[key] = cloneOverlayStringSet(set)
+	}
+	return out
+}
+
+func cloneOverlayStringSliceMap(in map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for key, values := range in {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }

@@ -141,7 +141,7 @@ func TestExecutorUnlinkLastReferencePerasVisibleCommitDeletesInode(t *testing.T)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkDirectorySkipsPerasVisibleCommit(t *testing.T) {
+func TestExecutorUnlinkDirectoryUsesPerasVisibleCommit(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentryType(t, runner, "vol", 7, "dir", inode, fsmeta.InodeTypeDirectory)
@@ -157,8 +157,8 @@ func TestExecutorUnlinkDirectorySkipsPerasVisibleCommit(t *testing.T) {
 	err = executor.Unlink(context.Background(), fsmeta.UnlinkRequest{Mount: "vol", Parent: 7, Name: "dir"})
 	require.NoError(t, err)
 
-	require.Len(t, runner.mutations, 1)
-	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
+	require.Empty(t, runner.mutations)
+	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
 func TestExecutorUnlinkMissingDentry(t *testing.T) {

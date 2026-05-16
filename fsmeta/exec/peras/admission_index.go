@@ -107,6 +107,13 @@ func RememberEmptyDirectoryFact(emptyDirs map[string]struct{}, mount fsmeta.Moun
 	emptyDirs[DirectoryFactKey(mount, inode)] = struct{}{}
 }
 
+func ForgetEmptyDirectoryFact(emptyDirs map[string]struct{}, mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if emptyDirs == nil || mount.MountID == "" || mount.MountKeyID == 0 || inode == 0 {
+		return
+	}
+	delete(emptyDirs, DirectoryFactKey(mount, inode))
+}
+
 func RememberEmptySessionNamespaceFact(emptySessions map[string]struct{}, mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
 	if emptySessions == nil || mount.MountID == "" || mount.MountKeyID == 0 || inode == 0 {
 		return

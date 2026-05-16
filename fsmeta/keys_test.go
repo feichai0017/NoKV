@@ -222,6 +222,7 @@ func TestShardForUserKeyKeepsWorkspaceMutationsLocal(t *testing.T) {
 	inode := findInodeOnBucket(t, testMount, targetBucket)
 	createInode, err := EncodeInodeKey(testMount, inode)
 	require.NoError(t, err)
+	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(createDentry, shards))
 
 	childA, err := EncodeDentryKey(testMount, inode, "scratch")
 	require.NoError(t, err)
@@ -229,6 +230,22 @@ func TestShardForUserKeyKeepsWorkspaceMutationsLocal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(childA, shards))
 	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(childB, shards))
+}
+
+func TestShardForUserKeyKeepsPerasCatalogSegmentAtomic(t *testing.T) {
+	const shards = 4
+	var root [32]byte
+	copy(root[:], []byte("segment-root"))
+	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 1, root)
+	require.NoError(t, err)
+	indexA, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 1, root)
+	require.NoError(t, err)
+	indexB, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 7, root)
+	require.NoError(t, err)
+
+	target := ShardForUserKey(object, shards)
+	require.Equal(t, target, ShardForUserKey(indexA, shards))
+	require.Equal(t, target, ShardForUserKey(indexB, shards))
 }
 
 func TestUserKeyShapeExtractsAffinityAndBloomPrefixes(t *testing.T) {

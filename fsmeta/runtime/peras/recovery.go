@@ -64,7 +64,7 @@ func (c *Runtime) RecoverWitnessSegments(ctx context.Context, scope compile.Auth
 		if _, err := c.submitRecoveryInstallJob(ctx, job); err != nil {
 			return c.recordErrorf("recover peras segment install: %w", err)
 		}
-		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
+		if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 			return err
 		}
 		c.metrics.recoveryInstallTotal.Add(1)
@@ -94,7 +94,7 @@ func (c *Runtime) LoadInstalledSegments(ctx context.Context, scope compile.Autho
 		if !SegmentWithinScope(segment, scope) {
 			continue
 		}
-		if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
+		if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 			return err
 		}
 		c.metrics.catalogLoadTotal.Add(1)
@@ -188,7 +188,7 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	if _, err := c.submitRootRecoveryInstallJob(ctx, job); err != nil {
 		return err
 	}
-	if err := c.installSegment(fsperas.ReplayPlan{}, segment); err != nil {
+	if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 		return err
 	}
 	c.metrics.recoveryInstallTotal.Add(1)

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
@@ -26,11 +28,29 @@ import (
 )
 
 var (
-	exit         = os.Exit
-	listen       = net.Listen
-	signalNotify = signal.Notify
-	openRuntime  = fsmetaraftstore.Open
+	exit                 = os.Exit
+	listen               = net.Listen
+	signalNotify         = signal.Notify
+	openRaftstoreRuntime = fsmetaraftstore.Open
+	openLocalRuntime     = fsmetalocal.Open
 )
+
+type fsmetaBackend string
+
+const (
+	fsmetaBackendRaftstore fsmetaBackend = "raftstore"
+	fsmetaBackendLocal     fsmetaBackend = "local"
+)
+
+type fsmetaServerRuntime struct {
+	executor       fsmetaserver.Executor
+	watcher        fsmeta.Watcher
+	snapshot       fsmeta.SnapshotPublisher
+	close          func() error
+	publishStats   func()
+	contractLog    string
+	startupSummary string
+}
 
 func fatalf(format string, args ...any) {
 	log.Printf(format, args...)
@@ -50,8 +70,14 @@ func defaultPerasHolderID() string {
 func main() {
 	var (
 		addr                            = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
+		backendName                     = flag.String("backend", string(fsmetaBackendRaftstore), "fsmeta storage backend: raftstore|local")
 		coordAddr                       = flag.String("coordinator-addr", "", "coordinator gRPC endpoint used for TSO, routing, and store discovery")
 		metricsAddr                     = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+		localWorkDir                    = flag.String("local-work-dir", "", "embedded DB work directory when --backend=local")
+		localMountID                    = flag.String("local-mount-id", "default", "single mount id admitted by --backend=local")
+		localMountKeyID                 = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by --backend=local")
+		localRootInode                  = flag.Uint64("local-root-inode", uint64(fsmeta.RootInode), "root inode for --backend=local")
+		localPeras                      = flag.Bool("local-peras", true, "enable the local Peras visible commit path when --backend=local; use --local-peras=false for direct embedded MVCC")
 		negCacheDir                     = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
 		dirPageDir                      = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
 		affinityBuckets                 = flag.Int("affinity-buckets", fsmeta.DefaultAffinityBucketCount, "fsmeta placement bucket count used to choose Create inode IDs")
@@ -77,6 +103,11 @@ func main() {
 		perasVisibleLogPolicy           = flag.String("peras-visible-log-policy", "flushed", "holder visible WAL sync policy: flushed|fsync-batched|fsync|buffered")
 	)
 	flag.Parse()
+	backend, err := parseFSMetaBackend(*backendName)
+	if err != nil {
+		fatalf("parse backend: %v", err)
+		return
+	}
 	if *lockTTL < 0 {
 		fatalf("lock-ttl must be non-negative")
 		return
@@ -105,42 +136,63 @@ func main() {
 	if holderID == "" {
 		holderID = defaultPerasHolderID()
 	}
+	var localMount fsmeta.MountIdentity
+	if backend == fsmetaBackendLocal {
+		localMount, err = localMountIdentity(*localMountID, *localMountKeyID)
+		if err != nil {
+			fatalf("parse local mount: %v", err)
+			return
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rt, err := openRuntime(ctx, fsmetaraftstore.Options{
-		CoordinatorAddr:                 *coordAddr,
-		NegativeCacheDir:                *negCacheDir,
-		DirPageCacheDir:                 *dirPageDir,
-		AffinityBuckets:                 *affinityBuckets,
-		LockTTL:                         *lockTTL,
-		SessionCleanupInterval:          *sessionCleanupInterval,
-		SessionCleanupLimit:             uint32(*sessionCleanupLimit),
-		PerasHolderID:                   holderID,
-		PerasAuthorityTTL:               *perasAuthorityTTL,
-		PerasWitnessStoreIDs:            perasStoreIDs,
-		PerasWitnessQuorum:              *perasWitnessQuorum,
-		PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
-		PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
-		PerasSegmentBatchSize:           *perasSegmentBatchSize,
-		PerasAdmissionPendingLimit:      *perasAdmissionPendingLimit,
-		PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
-		PerasSegmentCatalogRouteBudget:  *perasSegmentCatalogRouteBudget,
-		PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
-		PerasSegmentFlushParallelism:    *perasSegmentFlushParallelism,
-		PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
-		PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
-		PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
-		PerasVisibleLogDir:              *perasVisibleLogDir,
-		PerasVisibleLogDurability:       visibleLogDurability,
+	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Backend: backend,
+		Raftstore: fsmetaraftstore.Options{
+			CoordinatorAddr:                 *coordAddr,
+			NegativeCacheDir:                *negCacheDir,
+			DirPageCacheDir:                 *dirPageDir,
+			AffinityBuckets:                 *affinityBuckets,
+			LockTTL:                         *lockTTL,
+			SessionCleanupInterval:          *sessionCleanupInterval,
+			SessionCleanupLimit:             uint32(*sessionCleanupLimit),
+			PerasHolderID:                   holderID,
+			PerasAuthorityTTL:               *perasAuthorityTTL,
+			PerasWitnessStoreIDs:            perasStoreIDs,
+			PerasWitnessQuorum:              *perasWitnessQuorum,
+			PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
+			PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
+			PerasSegmentBatchSize:           *perasSegmentBatchSize,
+			PerasAdmissionPendingLimit:      *perasAdmissionPendingLimit,
+			PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
+			PerasSegmentCatalogRouteBudget:  *perasSegmentCatalogRouteBudget,
+			PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
+			PerasSegmentFlushParallelism:    *perasSegmentFlushParallelism,
+			PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
+			PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
+			PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
+			PerasVisibleLogDir:              *perasVisibleLogDir,
+			PerasVisibleLogDurability:       visibleLogDurability,
+		},
+		Local: fsmetalocal.Options{
+			WorkDir:                   *localWorkDir,
+			Mount:                     localMount,
+			RootInode:                 fsmeta.InodeID(*localRootInode),
+			LockTTL:                   *lockTTL,
+			PerasMode:                 localPerasMode(*localPeras),
+			PerasHolderID:             localPerasHolderID(*localPeras, holderID),
+			PerasVisibleLogDir:        localPerasVisibleLogDir(*localPeras, *localWorkDir, *perasVisibleLogDir),
+			PerasVisibleLogDurability: visibleLogDurability,
+		},
 	})
 	if err != nil {
 		fatalf("open fsmeta runtime: %v", err)
 		return
 	}
 	defer func() {
-		if err := rt.Close(); err != nil {
+		if err := rt.close(); err != nil {
 			log.Printf("close fsmeta runtime: %v", err)
 		}
 	}()
@@ -154,30 +206,12 @@ func main() {
 	defer func() { _ = ln.Close() }()
 
 	srv := grpc.NewServer()
-	fsmetaserver.Register(srv, rt.Executor,
-		fsmetaserver.WithWatcher(rt.Watcher),
-		fsmetaserver.WithSnapshotPublisher(rt.SnapshotPublisher),
-	)
+	registerFSMetadataServer(srv, rt)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 
 	if *metricsAddr != "" {
-		publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return rt.Executor.Stats() }))
-		if stats, ok := rt.Watcher.(interface{ Stats() map[string]any }); ok {
-			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
-		}
-		if stats, ok := rt.MountResolver.(interface{ Stats() map[string]any }); ok {
-			publishExpvarOnce("nokv_fsmeta_mount", expvar.Func(func() any { return stats.Stats() }))
-		}
-		if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
-			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
-		}
-		if rt.Peras != nil {
-			publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
-		}
-		if rt.SessionCleaner != nil {
-			publishExpvarOnce("nokv_fsmeta_sessions", expvar.Func(func() any { return rt.SessionCleaner.Stats() }))
-		}
+		rt.publishStats()
 		mln, err := metricspkg.StartExpvarServer(*metricsAddr)
 		if err != nil {
 			log.Printf("start metrics endpoint: %v", err)
@@ -193,7 +227,8 @@ func main() {
 	}
 
 	log.Printf("NoKV FSMetadata server listening on %s", ln.Addr().String())
-	log.Printf("fsmeta commit contract: Peras is the default write path; successful metadata writes are visible immediately, while durable completion is reached by witness/segment install and explicit FlushDurable/FlushTo in embedded APIs")
+	log.Print(rt.startupSummary)
+	log.Print(rt.contractLog)
 
 	sigCh := make(chan os.Signal, 1)
 	signalNotify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -208,6 +243,167 @@ func main() {
 	}
 	cancel()
 	srv.GracefulStop()
+}
+
+type configuredRuntimeOptions struct {
+	Backend   fsmetaBackend
+	Raftstore fsmetaraftstore.Options
+	Local     fsmetalocal.Options
+}
+
+func openConfiguredRuntime(ctx context.Context, opts configuredRuntimeOptions) (*fsmetaServerRuntime, error) {
+	switch opts.Backend {
+	case fsmetaBackendRaftstore:
+		rt, err := openRaftstoreRuntime(ctx, opts.Raftstore)
+		if err != nil {
+			return nil, err
+		}
+		return raftstoreServerRuntime(rt), nil
+	case fsmetaBackendLocal:
+		rt, err := openLocalRuntime(ctx, opts.Local)
+		if err != nil {
+			return nil, err
+		}
+		return localServerRuntime(rt, opts.Local), nil
+	default:
+		return nil, fmt.Errorf("unsupported fsmeta backend %q", opts.Backend)
+	}
+}
+
+func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
+	return &fsmetaServerRuntime{
+		executor: rt.Executor,
+		watcher:  rt.Watcher,
+		snapshot: rt.SnapshotPublisher,
+		close:    rt.Close,
+		publishStats: func() {
+			publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return rt.Executor.Stats() }))
+			if stats, ok := rt.Watcher.(interface{ Stats() map[string]any }); ok {
+				publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return stats.Stats() }))
+			}
+			if stats, ok := rt.MountResolver.(interface{ Stats() map[string]any }); ok {
+				publishExpvarOnce("nokv_fsmeta_mount", expvar.Func(func() any { return stats.Stats() }))
+			}
+			if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
+				publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
+			}
+			if rt.Peras != nil {
+				publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
+			}
+			if rt.SessionCleaner != nil {
+				publishExpvarOnce("nokv_fsmeta_sessions", expvar.Func(func() any { return rt.SessionCleaner.Stats() }))
+			}
+		},
+		startupSummary: "fsmeta backend: raftstore",
+		contractLog:    "fsmeta commit contract: Peras is the default write path; successful metadata writes are visible immediately, while durable completion is reached by witness/segment install and explicit FlushDurable/FlushTo in embedded APIs",
+	}
+}
+
+func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsmetaServerRuntime {
+	contractLog := "fsmeta commit contract: local backend uses one embedded MVCC store; successful metadata writes are durable after the local WAL/apply group completes"
+	if rt.Peras != nil {
+		contractLog = "fsmeta commit contract: local backend uses Peras as the default visible write path over embedded MVCC; eligible operations become durable after local segment install"
+	}
+	return &fsmetaServerRuntime{
+		executor: rt.Executor,
+		watcher:  rt.Watcher,
+		snapshot: rt.Snapshots,
+		close:    rt.Close,
+		publishStats: func() {
+			publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return localExecutorStats(rt) }))
+			publishExpvarOnce("nokv_fsmeta_local_runner", expvar.Func(func() any { return rt.Runner.Stats() }))
+			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return rt.Quotas.Stats() }))
+			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return rt.Watcher.Stats() }))
+			publishExpvarOnce("nokv_fsmeta_local_snapshot", expvar.Func(func() any { return rt.Snapshots.Stats() }))
+			if rt.Peras != nil {
+				publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
+			}
+		},
+		startupSummary: fmt.Sprintf("fsmeta backend: local work_dir=%q mount=%q mount_key_id=%d peras=%t", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID, rt.Peras != nil),
+		contractLog:    contractLog,
+	}
+}
+
+func localExecutorStats(rt *fsmetalocal.Runtime) map[string]any {
+	if rt == nil || rt.Executor == nil {
+		return map[string]any{"commit_contract": localCommitContractStats(false)}
+	}
+	stats := rt.Executor.Stats()
+	stats["commit_contract"] = localCommitContractStats(rt.Peras != nil)
+	return stats
+}
+
+func localCommitContractStats(perasEnabled bool) map[string]any {
+	if perasEnabled {
+		return map[string]any{
+			"default_write_path":        "peras",
+			"successful_write_boundary": "visible",
+			"durable_boundary":          "embedded_mvcc_segment_install",
+		}
+	}
+	return map[string]any{
+		"default_write_path":        "local_mvcc",
+		"successful_write_boundary": "durable",
+		"durable_boundary":          "embedded_mvcc_apply_group",
+	}
+}
+
+func registerFSMetadataServer(reg grpc.ServiceRegistrar, rt *fsmetaServerRuntime) {
+	opts := make([]fsmetaserver.Option, 0, 2)
+	if rt.watcher != nil {
+		opts = append(opts, fsmetaserver.WithWatcher(rt.watcher))
+	}
+	if rt.snapshot != nil {
+		opts = append(opts, fsmetaserver.WithSnapshotPublisher(rt.snapshot))
+	}
+	fsmetaserver.Register(reg, rt.executor, opts...)
+}
+
+func parseFSMetaBackend(value string) (fsmetaBackend, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(fsmetaBackendRaftstore):
+		return fsmetaBackendRaftstore, nil
+	case string(fsmetaBackendLocal):
+		return fsmetaBackendLocal, nil
+	default:
+		return "", fmt.Errorf("invalid fsmeta backend %q", value)
+	}
+}
+
+func localMountIdentity(mountID string, mountKeyID uint64) (fsmeta.MountIdentity, error) {
+	id := fsmeta.MountID(strings.TrimSpace(mountID))
+	if id == "" {
+		return fsmeta.MountIdentity{}, fsmeta.ErrInvalidMountID
+	}
+	if mountKeyID == 0 {
+		return fsmeta.MountIdentity{}, fsmeta.ErrInvalidMountID
+	}
+	return fsmeta.MountIdentity{MountID: id, MountKeyID: fsmeta.MountKeyID(mountKeyID)}, nil
+}
+
+func localPerasMode(enabled bool) fsmetalocal.PerasMode {
+	if enabled {
+		return fsmetalocal.PerasModeEnabled
+	}
+	return fsmetalocal.PerasModeDisabled
+}
+
+func localPerasHolderID(enabled bool, holderID string) string {
+	if !enabled {
+		return ""
+	}
+	return strings.TrimSpace(holderID)
+}
+
+func localPerasVisibleLogDir(enabled bool, workDir, visibleLogDir string) string {
+	if !enabled {
+		return ""
+	}
+	visibleLogDir = strings.TrimSpace(visibleLogDir)
+	if visibleLogDir == "" || filepath.IsAbs(visibleLogDir) || strings.TrimSpace(workDir) == "" {
+		return visibleLogDir
+	}
+	return filepath.Join(workDir, visibleLogDir)
 }
 
 func publishExpvarOnce(name string, value expvar.Var) {

@@ -254,6 +254,22 @@ func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.O
 	index.RememberEmptySessionNamespace(mount, inode.Inode)
 }
 
+type perasEmptyDirectoryForgetter interface {
+	ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID)
+}
+
+func (e *Executor) forgetPerasEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	index := e.perasPredicateIndex()
+	if index == nil {
+		return
+	}
+	forgetter, ok := index.(perasEmptyDirectoryForgetter)
+	if !ok {
+		return
+	}
+	forgetter.ForgetEmptyDirectory(mount, inode)
+}
+
 func perasDeltaAllowsAbsentObservedValue(delta compile.SemanticDelta) bool {
 	return slices.Contains(delta.RuntimeGuards, compile.GuardExpiredSessionOwner)
 }

@@ -17,6 +17,7 @@ type readState struct {
 	sealed    *fsperas.OverlayView
 	segments  []fsperas.PerasSegment
 	completed map[fsperas.OperationID]perasCompletion
+	snapshots map[uint64]*fsperas.OverlayView
 }
 
 func newReadState() *readState {
@@ -24,16 +25,19 @@ func newReadState() *readState {
 		overlay:   fsperas.NewOverlayView(),
 		sealed:    fsperas.NewOverlayView(),
 		completed: make(map[fsperas.OperationID]perasCompletion),
+		snapshots: make(map[uint64]*fsperas.OverlayView),
 	}
 }
 
-func (c *Runtime) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment) error {
+func (c *Runtime) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment, materialize bool) error {
 	if c == nil || c.read == nil {
 		return ErrRuntimeInvalid
 	}
 	stats := segment.Stats()
-	if err := c.read.sealed.AddSegment(segment); err != nil {
-		return c.recordError(err)
+	if !materialize {
+		if err := c.read.sealed.AddSegment(segment); err != nil {
+			return c.recordError(err)
+		}
 	}
 	c.read.overlay.RemovePlan(plan)
 	c.read.mu.Lock()
@@ -122,6 +126,58 @@ func (c *Runtime) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
 	return c.read.sealed.GetView(key)
 }
 
+// CapturePerasSnapshot records the installed catalog overlay visible to one
+// MVCC snapshot version.
+func (c *Runtime) CapturePerasSnapshot(version uint64) error {
+	if c == nil || c.read == nil || version == 0 {
+		return ErrRuntimeInvalid
+	}
+	c.read.mu.Lock()
+	if c.read.snapshots == nil {
+		c.read.snapshots = make(map[uint64]*fsperas.OverlayView)
+	}
+	c.read.snapshots[version] = c.read.sealed.Clone()
+	c.read.mu.Unlock()
+	return nil
+}
+
+// GetPerasSnapshotOverlayView returns snapshot overlay-owned bytes.
+func (c *Runtime) GetPerasSnapshotOverlayView(version uint64, key []byte) ([]byte, bool, bool) {
+	snapshot := c.perasSnapshotOverlay(version)
+	if snapshot == nil {
+		return nil, false, false
+	}
+	return snapshot.GetView(key)
+}
+
+// ScanPerasSnapshotDirectory scans a captured snapshot directory overlay.
+func (c *Runtime) ScanPerasSnapshotDirectory(version uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	snapshot := c.perasSnapshotOverlay(version)
+	if snapshot == nil {
+		return nil
+	}
+	return snapshot.ScanDirectory(prefix, start, limit)
+}
+
+// HasPerasSnapshotDirectory reports whether a snapshot captured rows for a directory.
+func (c *Runtime) HasPerasSnapshotDirectory(version uint64, prefix []byte) bool {
+	snapshot := c.perasSnapshotOverlay(version)
+	if snapshot == nil {
+		return false
+	}
+	return snapshot.HasDirectory(prefix)
+}
+
+func (c *Runtime) perasSnapshotOverlay(version uint64) *fsperas.OverlayView {
+	if c == nil || c.read == nil || version == 0 {
+		return nil
+	}
+	c.read.mu.RLock()
+	snapshot := c.read.snapshots[version]
+	c.read.mu.RUnlock()
+	return snapshot
+}
+
 func (c *Runtime) KeyState(key []byte) (present bool, known bool) {
 	if c == nil || c.read == nil {
 		return false, false
@@ -161,6 +217,13 @@ func (c *Runtime) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmet
 		return
 	}
 	c.read.overlay.RememberEmptyDirectory(mount, inode)
+}
+
+func (c *Runtime) ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	if c == nil || c.read == nil {
+		return
+	}
+	c.read.overlay.ForgetEmptyDirectory(mount, inode)
 }
 
 func (c *Runtime) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
