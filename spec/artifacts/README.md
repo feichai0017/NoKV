@@ -16,6 +16,7 @@ This directory stores sanitized, checked-in outputs from the current TLA+ runs.
 - `tlc-raftstore-apply-publish.out`: positive `RaftstoreApplyPublish.tla` run
 - `tlc-root-replay-watch.out`: positive `RootReplayWatch.tla` run
 - `tlc-fsmeta-namespace.out`: positive `FSMetaNamespace.tla` run
+- `tlc-peras-visible-commit.out`: positive `PerasVisibleCommit.tla` run
 - `tlc-leaseonly.out`: counterexample for `LeaseOnly.tla`
 - `tlc-leasestart.out`: counterexample for `LeaseStartOnly.tla`
 - `tlc-tokenonly.out`: counterexample for `TokenOnly.tla`

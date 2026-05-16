@@ -2468,6 +2468,21 @@ func (l *replayingVisibleLog) AppendVisibleApplied(_ context.Context, record fsp
 	return nil
 }
 
+func (l *replayingVisibleLog) AppendVisibleReplayPlanApplied(_ context.Context, epochID uint64, holderID string, plan fsperas.ReplayPlan) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.applied = append(l.applied, fsperas.VisibleAppliedRecord{
+		EpochID:  epochID,
+		HolderID: holderID,
+		Ranges: []fsperas.VisibleAppliedRange{{
+			SegmentID:   1,
+			StartOffset: uint64(len(l.applied)),
+			EndOffset:   uint64(len(l.applied) + len(plan.Operations)),
+		}},
+	})
+	return nil
+}
+
 type fakeRuntimePerasCatalogScanner struct {
 	rows  []KV
 	calls int

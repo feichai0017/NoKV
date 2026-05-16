@@ -8,9 +8,9 @@
 .PHONY: test-contract-smoke test-raftstore-contract-smoke test-history-smoke test-model-smoke test-crash-matrix-smoke test-deterministic-simulation-smoke test-correctness-smoke test-correctness-nightly test-docker-chaos test-soak-smoke test-soak-24h test-soak-72h
 .PHONY: install-tools install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: proto proto-check proto-breaking-check
-.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish tlc-root-replay-watch tlc-fsmeta-namespace
+.PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish tlc-root-replay-watch tlc-fsmeta-namespace tlc-peras-visible-commit
 .PHONY: tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample tlc-contrast-models
-.PHONY: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-percolator2pc record-tlc-mvccgc record-tlc-raftstore-apply-publish record-tlc-root-replay-watch record-tlc-fsmeta-namespace
+.PHONY: record-tlc-eunomia record-tlc-eunomiamultidim record-tlc-mountlifecycle record-tlc-subtreeauthority record-tlc-percolator2pc record-tlc-mvccgc record-tlc-raftstore-apply-publish record-tlc-root-replay-watch record-tlc-fsmeta-namespace record-tlc-peras-visible-commit
 .PHONY: record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal record-formal-artifacts
 
 GOLANGCI_LINT_VERSION ?= v2.9.0
@@ -270,7 +270,7 @@ install-tla-tools:
 
 test-tla-smoke: tlc-eunomia tlc-mountlifecycle tlc-subtreeauthority \
 	tlc-percolator2pc tlc-mvccgc tlc-raftstore-apply-publish \
-	tlc-root-replay-watch tlc-fsmeta-namespace
+	tlc-root-replay-watch tlc-fsmeta-namespace tlc-peras-visible-commit
 
 test-tla-nightly: test-tla-smoke tlc-eunomiamultidim tlc-contrast-models
 
@@ -296,6 +296,7 @@ $(eval $(call TLC_SPEC_TARGET,tlc-mvccgc,MVCCGC))
 $(eval $(call TLC_SPEC_TARGET,tlc-raftstore-apply-publish,RaftstoreApplyPublish))
 $(eval $(call TLC_SPEC_TARGET,tlc-root-replay-watch,RootReplayWatch))
 $(eval $(call TLC_SPEC_TARGET,tlc-fsmeta-namespace,FSMetaNamespace))
+$(eval $(call TLC_SPEC_TARGET,tlc-peras-visible-commit,PerasVisibleCommit))
 
 $(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leaseonly-counterexample,LeaseOnly,expecting stale reply counterexample))
 $(eval $(call TLC_COUNTEREXAMPLE_TARGET,tlc-leasestart-counterexample,LeaseStartOnly,expecting lease-start coverage counterexample))
@@ -343,6 +344,7 @@ $(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-mvccgc,MVCCGC,tlc-mvccgc))
 $(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-raftstore-apply-publish,RaftstoreApplyPublish,tlc-raftstore-apply-publish))
 $(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-root-replay-watch,RootReplayWatch,tlc-root-replay-watch))
 $(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-fsmeta-namespace,FSMetaNamespace,tlc-fsmeta-namespace))
+$(eval $(call RECORD_TLC_SUCCESS_TARGET,record-tlc-peras-visible-commit,PerasVisibleCommit,tlc-peras-visible-commit))
 
 $(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-leaseonly,LeaseOnly,tlc-leaseonly))
 $(eval $(call RECORD_TLC_COUNTEREXAMPLE_TARGET,record-tlc-tokenonly,TokenOnly,tlc-tokenonly))
@@ -355,8 +357,8 @@ record-formal-artifacts: record-tlc-eunomia record-tlc-eunomiamultidim \
 	record-tlc-mountlifecycle record-tlc-subtreeauthority \
 	record-tlc-percolator2pc record-tlc-mvccgc \
 	record-tlc-raftstore-apply-publish record-tlc-root-replay-watch \
-	record-tlc-fsmeta-namespace record-tlc-leaseonly record-tlc-tokenonly \
-	record-tlc-chubbyfenced record-tlc-leasestart \
+	record-tlc-fsmeta-namespace record-tlc-peras-visible-commit \
+	record-tlc-leaseonly record-tlc-tokenonly record-tlc-chubbyfenced record-tlc-leasestart \
 	record-tlc-subtreewithoutfrontiercoverage record-tlc-subtreewithoutseal
 
 # Start Docker Compose cluster

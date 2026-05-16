@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,16 +34,31 @@ type visibleOperationLogKey struct {
 	id     fsperas.OperationID
 }
 
+type visibleAppliedLogKey struct {
+	epoch  uint64
+	holder string
+}
+
 type visibleOperationLogEntry struct {
-	record    fsperas.VisibleOperationRecord
-	segmentID uint32
+	record   fsperas.VisibleOperationRecord
+	position visibleOperationLogPosition
+}
+
+type visibleOperationLogPosition struct {
+	segmentID   uint32
+	startOffset uint64
+	endOffset   uint64
 }
 
 func NewWALVisibleLog(manager *wal.Manager, durability wal.DurabilityPolicy) (*WALVisibleLog, error) {
 	if manager == nil {
 		return nil, fsperas.ErrVisibleLogRequired
 	}
-	return &WALVisibleLog{wal: manager, durability: durability, pending: make(map[visibleOperationLogKey]visibleOperationLogEntry)}, nil
+	return &WALVisibleLog{
+		wal:        manager,
+		durability: durability,
+		pending:    make(map[visibleOperationLogKey]visibleOperationLogEntry),
+	}, nil
 }
 
 func (l *WALVisibleLog) VisibleLogPolicy() string {
@@ -60,19 +76,35 @@ func (l *WALVisibleLog) AppendVisible(ctx context.Context, record fsperas.Visibl
 	if err != nil {
 		return fmt.Errorf("encode peras visible record: %w", err)
 	}
-	info, err := l.appendPayload(payload)
-	if err != nil {
+	if err := l.appendVisibleRecord(record, payload); err != nil {
 		return fmt.Errorf("append peras visible WAL: %w", err)
 	}
-	l.mu.Lock()
-	l.records = append(l.records, cloneVisibleOperationRecord(record))
-	l.initPendingLocked()
-	l.pending[visibleOperationLogKeyForRecord(record)] = visibleOperationLogEntry{
-		record:    cloneVisibleOperationRecord(record),
-		segmentID: info.SegmentID,
+	return nil
+}
+
+func (l *WALVisibleLog) appendVisibleRecord(record fsperas.VisibleOperationRecord, payload []byte) error {
+	info, err := l.appendPayload(payload)
+	if err != nil {
+		return err
 	}
+	position, err := visibleOperationLogPositionFromEntry(info)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	l.rememberVisibleRecordLocked(record, position)
 	l.mu.Unlock()
 	return nil
+}
+
+func (l *WALVisibleLog) rememberVisibleRecordLocked(record fsperas.VisibleOperationRecord, position visibleOperationLogPosition) {
+	l.initPendingLocked()
+	cloned := cloneVisibleOperationRecord(record)
+	l.records = append(l.records, cloned)
+	l.pending[visibleOperationLogKeyForRecord(cloned)] = visibleOperationLogEntry{
+		record:   cloneVisibleOperationRecord(cloned),
+		position: position,
+	}
 }
 
 func (l *WALVisibleLog) AppendVisibleApplied(ctx context.Context, record fsperas.VisibleAppliedRecord) error {
@@ -87,7 +119,7 @@ func (l *WALVisibleLog) AppendVisibleApplied(ctx context.Context, record fsperas
 		return err
 	}
 	l.mu.Lock()
-	l.records = removeVisibleAppliedRecords(l.records, record)
+	l.records = removeVisibleAppliedRecords(l.records, l.pending, record)
 	l.removeAppliedPendingLocked(record)
 	canCompact := l.replayed
 	l.mu.Unlock()
@@ -97,6 +129,48 @@ func (l *WALVisibleLog) AppendVisibleApplied(ctx context.Context, record fsperas
 	return nil
 }
 
+func (l *WALVisibleLog) AppendVisibleReplayPlanApplied(ctx context.Context, epochID uint64, holderID string, plan fsperas.ReplayPlan) error {
+	if err := visibleLogContextErr(ctx); err != nil {
+		return err
+	}
+	record, err := l.visibleAppliedRecordForReplayPlan(epochID, holderID, plan)
+	if err != nil {
+		return err
+	}
+	return l.AppendVisibleApplied(ctx, record)
+}
+
+func (l *WALVisibleLog) visibleAppliedRecordForReplayPlan(epochID uint64, holderID string, plan fsperas.ReplayPlan) (fsperas.VisibleAppliedRecord, error) {
+	if l == nil || l.wal == nil {
+		return fsperas.VisibleAppliedRecord{}, fsperas.ErrVisibleLogRequired
+	}
+	if epochID == 0 || holderID == "" || len(plan.Operations) == 0 {
+		return fsperas.VisibleAppliedRecord{}, fsperas.ErrInvalidWitnessRecord
+	}
+	positions := make([]visibleOperationLogPosition, 0, len(plan.Operations))
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, op := range plan.Operations {
+		if !op.OpID.Valid() {
+			return fsperas.VisibleAppliedRecord{}, fsperas.ErrInvalidOperationID
+		}
+		key := visibleOperationLogKey{epoch: epochID, holder: holderID, id: op.OpID}
+		entry, ok := l.pending[key]
+		if !ok {
+			return fsperas.VisibleAppliedRecord{}, fsperas.ErrInvalidWitnessRecord
+		}
+		if err := visibleOperationMatchesReplay(entry.record.Operation, op); err != nil {
+			return fsperas.VisibleAppliedRecord{}, err
+		}
+		positions = append(positions, entry.position)
+	}
+	return fsperas.VisibleAppliedRecord{
+		EpochID:  epochID,
+		HolderID: holderID,
+		Ranges:   coalesceVisibleAppliedRanges(positions),
+	}, nil
+}
+
 func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOperationRecord, error) {
 	if l == nil || l.wal == nil {
 		return nil, fsperas.ErrVisibleLogRequired
@@ -104,7 +178,7 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 	records := make([]fsperas.VisibleOperationRecord, 0)
 	latest := make(map[visibleOperationLogKey]int)
 	pending := make(map[visibleOperationLogKey]visibleOperationLogEntry)
-	applied := make(map[visibleOperationLogKey]fsperas.VisibleOperationReference)
+	applied := make(map[visibleAppliedLogKey][]fsperas.VisibleAppliedRange)
 	err := l.wal.ReplayFiltered(func(info wal.EntryInfo) bool {
 		return info.Type == wal.RecordTypePerasVisible
 	}, func(info wal.EntryInfo, payload []byte) error {
@@ -112,9 +186,8 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 			return err
 		}
 		if record, err := fsperas.DecodeVisibleAppliedRecord(payload); err == nil {
-			for _, ref := range record.Operations {
-				applied[visibleOperationLogKey{epoch: record.EpochID, holder: record.HolderID, id: ref.OpID}] = ref
-			}
+			key := visibleAppliedLogKey{epoch: record.EpochID, holder: record.HolderID}
+			applied[key] = append(applied[key], record.Ranges...)
 			return nil
 		}
 		record, err := fsperas.DecodeVisibleOperationRecord(payload)
@@ -128,7 +201,11 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 			latest[key] = len(records)
 			records = append(records, record)
 		}
-		pending[key] = visibleOperationLogEntry{record: cloneVisibleOperationRecord(record), segmentID: info.SegmentID}
+		position, err := visibleOperationLogPositionFromEntry(info)
+		if err != nil {
+			return err
+		}
+		pending[key] = visibleOperationLogEntry{record: cloneVisibleOperationRecord(record), position: position}
 		return nil
 	})
 	if err != nil {
@@ -137,13 +214,10 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 	out := records[:0]
 	for _, record := range records {
 		key := visibleOperationLogKeyForRecord(record)
-		ref, ok := applied[key]
-		if ok {
-			current, err := fsperas.VisibleOperationReferenceFromReplay(record.Operation)
-			if err == nil && current == ref {
-				delete(pending, key)
-				continue
-			}
+		entry, ok := pending[key]
+		if ok && visibleOperationPositionApplied(entry.position, applied[visibleAppliedLogKey{epoch: key.epoch, holder: key.holder}]) {
+			delete(pending, key)
+			continue
 		}
 		out = append(out, record)
 	}
@@ -194,11 +268,11 @@ func (l *WALVisibleLog) firstRetainedSegment() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	for _, entry := range l.pending {
-		if entry.segmentID == 0 {
+		if entry.position.segmentID == 0 {
 			continue
 		}
-		if retain == 0 || entry.segmentID < retain {
-			retain = entry.segmentID
+		if retain == 0 || entry.position.segmentID < retain {
+			retain = entry.position.segmentID
 		}
 	}
 	return retain
@@ -231,22 +305,96 @@ func visibleLogContextErr(ctx context.Context) error {
 	return nil
 }
 
-func removeVisibleAppliedRecords(records []fsperas.VisibleOperationRecord, applied fsperas.VisibleAppliedRecord) []fsperas.VisibleOperationRecord {
-	if len(records) == 0 || len(applied.Operations) == 0 {
-		return records
+func visibleOperationMatchesReplay(current, applied fsperas.ReplayOperation) error {
+	currentRef, err := fsperas.VisibleOperationReferenceFromReplay(current)
+	if err != nil {
+		return err
 	}
-	refs := make(map[fsperas.OperationID]fsperas.VisibleOperationReference, len(applied.Operations))
-	for _, ref := range applied.Operations {
-		refs[ref.OpID] = ref
+	appliedRef, err := fsperas.VisibleOperationReferenceFromReplay(applied)
+	if err != nil {
+		return err
+	}
+	if currentRef != appliedRef {
+		return fsperas.ErrInvalidWitnessRecord
+	}
+	return nil
+}
+
+func visibleOperationLogPositionFromEntry(info wal.EntryInfo) (visibleOperationLogPosition, error) {
+	if info.SegmentID == 0 || info.Offset < 0 || info.Length == 0 {
+		return visibleOperationLogPosition{}, fsperas.ErrInvalidWitnessRecord
+	}
+	start := uint64(info.Offset)
+	end := start + uint64(info.Length)
+	if end <= start {
+		return visibleOperationLogPosition{}, fsperas.ErrInvalidWitnessRecord
+	}
+	return visibleOperationLogPosition{
+		segmentID:   info.SegmentID,
+		startOffset: start,
+		endOffset:   end,
+	}, nil
+}
+
+func coalesceVisibleAppliedRanges(positions []visibleOperationLogPosition) []fsperas.VisibleAppliedRange {
+	if len(positions) == 0 {
+		return nil
+	}
+	sort.Slice(positions, func(i, j int) bool {
+		if positions[i].segmentID != positions[j].segmentID {
+			return positions[i].segmentID < positions[j].segmentID
+		}
+		if positions[i].startOffset != positions[j].startOffset {
+			return positions[i].startOffset < positions[j].startOffset
+		}
+		return positions[i].endOffset < positions[j].endOffset
+	})
+	ranges := make([]fsperas.VisibleAppliedRange, 0, len(positions))
+	for _, position := range positions {
+		if len(ranges) > 0 {
+			last := &ranges[len(ranges)-1]
+			if last.SegmentID == position.segmentID && last.EndOffset == position.startOffset {
+				last.EndOffset = position.endOffset
+				continue
+			}
+			if last.SegmentID == position.segmentID && last.StartOffset == position.startOffset && last.EndOffset == position.endOffset {
+				continue
+			}
+		}
+		ranges = append(ranges, fsperas.VisibleAppliedRange{
+			SegmentID:   position.segmentID,
+			StartOffset: position.startOffset,
+			EndOffset:   position.endOffset,
+		})
+	}
+	return ranges
+}
+
+func visibleOperationPositionApplied(position visibleOperationLogPosition, ranges []fsperas.VisibleAppliedRange) bool {
+	if position.segmentID == 0 || len(ranges) == 0 {
+		return false
+	}
+	for _, applied := range ranges {
+		if applied.SegmentID == position.segmentID &&
+			applied.StartOffset <= position.startOffset &&
+			applied.EndOffset >= position.endOffset {
+			return true
+		}
+	}
+	return false
+}
+
+func removeVisibleAppliedRecords(records []fsperas.VisibleOperationRecord, pending map[visibleOperationLogKey]visibleOperationLogEntry, applied fsperas.VisibleAppliedRecord) []fsperas.VisibleOperationRecord {
+	if len(records) == 0 || len(applied.Ranges) == 0 {
+		return records
 	}
 	out := records[:0]
 	for _, record := range records {
 		if record.EpochID == applied.EpochID && record.HolderID == applied.HolderID {
-			if ref, ok := refs[record.Operation.OpID]; ok {
-				current, err := fsperas.VisibleOperationReferenceFromReplay(record.Operation)
-				if err == nil && current == ref {
-					continue
-				}
+			key := visibleOperationLogKeyForRecord(record)
+			entry, ok := pending[key]
+			if ok && visibleOperationPositionApplied(entry.position, applied.Ranges) {
+				continue
 			}
 		}
 		out = append(out, record)
@@ -256,14 +404,8 @@ func removeVisibleAppliedRecords(records []fsperas.VisibleOperationRecord, appli
 
 func (l *WALVisibleLog) removeAppliedPendingLocked(applied fsperas.VisibleAppliedRecord) {
 	l.initPendingLocked()
-	for _, ref := range applied.Operations {
-		key := visibleOperationLogKey{epoch: applied.EpochID, holder: applied.HolderID, id: ref.OpID}
-		entry, ok := l.pending[key]
-		if !ok {
-			continue
-		}
-		current, err := fsperas.VisibleOperationReferenceFromReplay(entry.record.Operation)
-		if err == nil && current == ref {
+	for key, entry := range l.pending {
+		if key.epoch == applied.EpochID && key.holder == applied.HolderID && visibleOperationPositionApplied(entry.position, applied.Ranges) {
 			delete(l.pending, key)
 		}
 	}
@@ -365,4 +507,5 @@ var (
 	_ fsperas.VisibleLog         = (*WALVisibleLog)(nil)
 	_ fsperas.VisibleLogApplier  = (*WALVisibleLog)(nil)
 	_ fsperas.VisibleLogReplayer = (*WALVisibleLog)(nil)
+	_ visibleReplayPlanApplier   = (*WALVisibleLog)(nil)
 )
