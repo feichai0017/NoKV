@@ -5,6 +5,8 @@ package local
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/kv"
@@ -152,6 +154,61 @@ func TestRunnerTryAtomicMutateFallsBackWhenCallerOwnedDBIsNotAtomic(t *testing.T
 	require.NoError(t, err)
 	require.False(t, handled)
 	require.Equal(t, uint64(1), runner.Stats()["atomic_apply_group_rejected_total"])
+}
+
+func TestRunnerTryAtomicMutateSerializesConcurrentSameKey(t *testing.T) {
+	db := openTestDB(t, nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := []byte("same-dentry")
+	start := make(chan struct{})
+	errCh := make(chan error, 32)
+	var successes atomic.Uint64
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ts, reserveErr := runner.ReserveTimestamp(ctx, 2)
+			if reserveErr != nil {
+				errCh <- reserveErr
+				return
+			}
+			handled, mutateErr := runner.TryAtomicMutate(ctx, key, []*kvrpcpb.AtomicPredicate{{
+				Key:  key,
+				Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+			}}, []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   key,
+				Value: []byte{byte(i)},
+			}}, ts, ts+1)
+			if !handled {
+				errCh <- errNonAtomicApplyGroup
+				return
+			}
+			if mutateErr == nil {
+				successes.Add(1)
+				return
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, uint64(1), successes.Load())
+	readVersion, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	_, ok, err := runner.Get(ctx, key, readVersion)
+	require.NoError(t, err)
+	require.True(t, ok)
 }
 
 func keysOnDifferentLocalShards(t *testing.T, db *localdb.DB, shards int) ([]byte, []byte) {

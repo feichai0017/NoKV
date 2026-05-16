@@ -6,6 +6,7 @@ package peras
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/feichai0017/NoKV/engine/wal"
@@ -23,6 +24,7 @@ func TestWALVisibleLogReplaySkipsAppliedRecords(t *testing.T) {
 	})
 	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
 	require.NoError(t, err)
+	t.Cleanup(log.Close)
 	ctx := context.Background()
 	first := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 9}, []byte("a"))
 	second := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 10}, []byte("b"))
@@ -51,6 +53,7 @@ func TestWALVisibleLogCompactsAppliedSegments(t *testing.T) {
 	})
 	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
 	require.NoError(t, err)
+	t.Cleanup(log.Close)
 	ctx := context.Background()
 	record := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 9}, []byte("a"))
 
@@ -78,6 +81,7 @@ func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
 	})
 	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
 	require.NoError(t, err)
+	t.Cleanup(log.Close)
 	ctx := context.Background()
 	first := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 1}, []byte("a"))
 	second := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 2}, []byte("b"))
@@ -92,6 +96,58 @@ func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, replayed, 1)
 	require.Equal(t, second.Operation.OpID, replayed[0].Operation.OpID)
+}
+
+func TestWALVisibleLogBatchesConcurrentVisibleRecords(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFsyncBatched)
+	require.NoError(t, err)
+	require.True(t, log.batchAppend)
+	t.Cleanup(log.Close)
+	ctx := context.Background()
+
+	const records = 128
+	var wg sync.WaitGroup
+	errCh := make(chan error, records)
+	for i := range records {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			record := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: uint64(i + 1)}, []byte{byte(i)})
+			if err := log.AppendVisible(ctx, record); err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	require.Len(t, log.Records(), records)
+
+	replayed, err := log.ReplayVisible(ctx)
+	require.NoError(t, err)
+	require.Len(t, replayed, records)
+}
+
+func TestWALVisibleLogCloseRejectsFsyncBatchAppend(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFsyncBatched)
+	require.NoError(t, err)
+	require.True(t, log.batchAppend)
+	log.Close()
+
+	err = log.AppendVisible(context.Background(), testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 1}, []byte("a")))
+	require.ErrorIs(t, err, ErrVisibleLogClosed)
 }
 
 func testVisibleReplayPlan(records ...fsperas.VisibleOperationRecord) fsperas.ReplayPlan {

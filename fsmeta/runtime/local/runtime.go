@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -16,6 +17,15 @@ import (
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	localdb "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+)
+
+const (
+	localPerasSegmentBatchSize          = 4096
+	localPerasAdmissionPendingLimit     = localPerasSegmentBatchSize * 8
+	localPerasSegmentMaxReplayOps       = 1024
+	localPerasSegmentMaxReplayMutations = localPerasSegmentBatchSize * 4
+	localPerasSegmentMaxPayloadBytes    = 128 << 10
+	localPerasSegmentFlushEvery         = 250 * time.Millisecond
 )
 
 // Runtime is a complete fsmeta runtime backed by one embedded local.DB.
@@ -175,14 +185,23 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 		}
 	}
 	committer, err := runtimeperas.NewRuntime(runtimeperas.Config{
-		Authority:                 authority,
-		SegmentWitnessMode:        runtimeperas.SegmentWitnessModeBypass,
-		Installer:                 localPerasSegmentInstaller{runner: runner},
-		CatalogScanner:            localPerasCatalogScanner{runner: runner},
-		WatchPublisher:            watcher.Router,
-		VisibleLog:                visibleLog,
-		CatalogOnlyAuthorityDrain: true,
-		Now:                       opts.Clock,
+		Authority:                  authority,
+		SegmentWitnessMode:         runtimeperas.SegmentWitnessModeBypass,
+		Installer:                  localPerasSegmentInstaller{runner: runner},
+		CatalogScanner:             localPerasCatalogScanner{runner: runner},
+		WatchPublisher:             watcher.Router,
+		VisibleLog:                 visibleLog,
+		SegmentBatchSize:           localPerasSegmentBatchSize,
+		AdmissionPendingLimit:      localPerasAdmissionPendingLimit,
+		SegmentMaxReplayOperations: localPerasSegmentMaxReplayOps,
+		SegmentMaxReplayMutations:  localPerasSegmentMaxReplayMutations,
+		SegmentMaxPayloadBytes:     localPerasSegmentMaxPayloadBytes,
+		SegmentCatalogRouteBudget:  fsmeta.DefaultAffinityBucketCount,
+		SegmentInstallParallelism:  localPerasSegmentInstallParallelism(),
+		SegmentFlushParallelism:    localPerasSegmentInstallParallelism(),
+		SegmentFlushEvery:          localPerasSegmentFlushEvery,
+		CatalogOnlyAuthorityDrain:  true,
+		Now:                        opts.Clock,
 	})
 	if err != nil {
 		if visibleWAL != nil {
@@ -199,6 +218,14 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 		return nil, nil, fmt.Errorf("load local peras segments: %w", err)
 	}
 	return committer, visibleWAL, nil
+}
+
+func localPerasSegmentInstallParallelism() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 func bootstrapRootInode(ctx context.Context, runner *Runner, mount fsmetaexec.MountAdmission, now func() time.Time) error {

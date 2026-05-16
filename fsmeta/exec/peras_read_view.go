@@ -103,7 +103,7 @@ func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
 	if overlay == nil {
 		return nil, false, false
 	}
-	return overlay.GetPerasOverlay(key)
+	return overlay.GetPerasOverlayView(key)
 }
 
 func (e *Executor) perasSnapshotOverlay() PerasSnapshotOverlayReader {
@@ -149,7 +149,8 @@ type perasReadView struct {
 	ctx         context.Context
 	version     uint64
 	haveVersion bool
-	observed    map[string]perasObservedValue
+	observed    map[string]int
+	proofs      []proof.PredicateProof
 }
 
 func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
@@ -159,7 +160,7 @@ func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
 	return &perasReadView{
 		executor: e,
 		ctx:      ctx,
-		observed: make(map[string]perasObservedValue),
+		observed: make(map[string]int),
 	}
 }
 
@@ -198,23 +199,18 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	return value, ok, nil
 }
 
-type perasObservedValue struct {
-	value   []byte
-	present bool
-	source  proof.ReadSource
-	version uint64
-}
-
 func (v *perasReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
 	if v == nil {
 		return
 	}
-	v.observed[string(key)] = perasObservedValue{
-		value:   cloneBytes(value),
-		present: present,
-		source:  source,
-		version: version,
+	predicateProof := proof.NewPredicateProof(key, value, present, version, source, proof.ProofFrontier{})
+	keyString := string(key)
+	if index, ok := v.observed[keyString]; ok {
+		v.proofs[index] = predicateProof
+		return
 	}
+	v.observed[keyString] = len(v.proofs)
+	v.proofs = append(v.proofs, predicateProof)
 }
 
 func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, effects []compile.WriteEffect) (compile.MaterializedOp, error) {
@@ -225,20 +221,24 @@ func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, 
 }
 
 func (v *perasReadView) predicateProofs() []proof.PredicateProof {
-	if v == nil || len(v.observed) == 0 {
+	if v == nil || len(v.proofs) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(v.observed))
-	for key := range v.observed {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	proofs := make([]proof.PredicateProof, 0, len(keys))
-	for _, key := range keys {
-		observed := v.observed[key]
-		proofs = append(proofs, proof.NewPredicateProof([]byte(key), observed.value, observed.present, observed.version, observed.source, proof.ProofFrontier{}))
+	proofs := make([]proof.PredicateProof, len(v.proofs))
+	copy(proofs, v.proofs)
+	sort.Slice(proofs, func(i, j int) bool {
+		return bytes.Compare(proofs[i].Key, proofs[j].Key) < 0
+	})
+	for i := range proofs {
+		proofs[i] = clonePredicateProof(proofs[i])
 	}
 	return proofs
+}
+
+func clonePredicateProof(predicateProof proof.PredicateProof) proof.PredicateProof {
+	predicateProof.Key = cloneBytes(predicateProof.Key)
+	predicateProof.Value = cloneBytes(predicateProof.Value)
+	return predicateProof
 }
 
 func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) compile.PredicateEvidence {

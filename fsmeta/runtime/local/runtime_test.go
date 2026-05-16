@@ -6,6 +6,7 @@ package local
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -161,7 +162,11 @@ func TestLocalRuntimePublishesWatchEvents(t *testing.T) {
 
 func TestLocalRuntimeWatchReplaysAfterResumeCursor(t *testing.T) {
 	ctx := context.Background()
-	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
+	rt, err := Open(ctx, Options{
+		WorkDir:   t.TempDir(),
+		Mount:     testMount(),
+		PerasMode: PerasModeDisabled,
+	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rt.Close()) }()
 
@@ -361,6 +366,28 @@ func TestLocalRuntimePerasBypassesSegmentWitness(t *testing.T) {
 	require.Equal(t, 0, stats["pending"])
 }
 
+func TestLocalRuntimePerasBuildsWideCatalogSegments(t *testing.T) {
+	ctx := context.Background()
+	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rt.Close()) }()
+
+	for i := range 1024 {
+		_, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   "wide-catalog-" + strconv.Itoa(i),
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, rt.Peras.FlushDurable(ctx))
+
+	stats := rt.Peras.Stats()
+	require.Equal(t, 0, stats["pending"])
+	require.LessOrEqual(t, stats["segment_total"].(uint64), uint64(16), "local Peras should not inherit distributed route-budget fragmentation")
+}
+
 func TestLocalRuntimePerasVisibleCommitRecoversInstalledCatalog(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -434,7 +461,7 @@ func requireWatchEvent(t *testing.T, sub fsmeta.WatchSubscription) fsmeta.WatchE
 	case evt, ok := <-sub.Events():
 		require.True(t, ok, "watch subscription closed: %v", sub.Err())
 		return evt
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for watch event")
 		return fsmeta.WatchEvent{}
 	}

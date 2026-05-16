@@ -26,7 +26,19 @@ type WALVisibleLog struct {
 	records    []fsperas.VisibleOperationRecord
 	pending    map[visibleOperationLogKey]visibleOperationLogEntry
 	replayed   bool
+
+	appendMu    sync.Mutex
+	appendQ     chan visibleAppendRequest
+	closed      chan struct{}
+	appendDone  chan struct{}
+	closeOnce   sync.Once
+	batchAppend bool
 }
+
+const (
+	visibleLogAppendQueueSize = 4096
+	visibleLogAppendBatchSize = 256
+)
 
 type visibleOperationLogKey struct {
 	epoch  uint64
@@ -44,6 +56,12 @@ type visibleOperationLogEntry struct {
 	position visibleOperationLogPosition
 }
 
+type visibleAppendRequest struct {
+	record  fsperas.VisibleOperationRecord
+	payload []byte
+	result  chan error
+}
+
 type visibleOperationLogPosition struct {
 	segmentID   uint32
 	startOffset uint64
@@ -54,11 +72,20 @@ func NewWALVisibleLog(manager *wal.Manager, durability wal.DurabilityPolicy) (*W
 	if manager == nil {
 		return nil, fsperas.ErrVisibleLogRequired
 	}
-	return &WALVisibleLog{
+	log := &WALVisibleLog{
 		wal:        manager,
 		durability: durability,
 		pending:    make(map[visibleOperationLogKey]visibleOperationLogEntry),
-	}, nil
+	}
+	switch durability {
+	case wal.DurabilityFsync, wal.DurabilityFsyncBatched:
+		log.appendQ = make(chan visibleAppendRequest, visibleLogAppendQueueSize)
+		log.closed = make(chan struct{})
+		log.appendDone = make(chan struct{})
+		log.batchAppend = true
+		go log.runVisibleAppendLoop()
+	}
+	return log, nil
 }
 
 func (l *WALVisibleLog) VisibleLogPolicy() string {
@@ -76,8 +103,14 @@ func (l *WALVisibleLog) AppendVisible(ctx context.Context, record fsperas.Visibl
 	if err != nil {
 		return fmt.Errorf("encode peras visible record: %w", err)
 	}
-	if err := l.appendVisibleRecord(record, payload); err != nil {
-		return fmt.Errorf("append peras visible WAL: %w", err)
+	var appendErr error
+	if l != nil && l.batchAppend {
+		appendErr = l.enqueueVisibleRecord(ctx, record, payload)
+	} else {
+		appendErr = l.appendVisibleRecord(record, payload)
+	}
+	if appendErr != nil {
+		return fmt.Errorf("append peras visible WAL: %w", appendErr)
 	}
 	return nil
 }
@@ -95,6 +128,107 @@ func (l *WALVisibleLog) appendVisibleRecord(record fsperas.VisibleOperationRecor
 	l.rememberVisibleRecordLocked(record, position)
 	l.mu.Unlock()
 	return nil
+}
+
+func (l *WALVisibleLog) enqueueVisibleRecord(ctx context.Context, record fsperas.VisibleOperationRecord, payload []byte) error {
+	if l == nil || l.wal == nil {
+		return fsperas.ErrVisibleLogRequired
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := make(chan error, 1)
+	req := visibleAppendRequest{
+		record:  record,
+		payload: payload,
+		result:  result,
+	}
+	l.appendMu.Lock()
+	select {
+	case <-l.closed:
+		l.appendMu.Unlock()
+		return ErrVisibleLogClosed
+	default:
+	}
+	select {
+	case l.appendQ <- req:
+		l.appendMu.Unlock()
+	case <-ctx.Done():
+		l.appendMu.Unlock()
+		return ctx.Err()
+	}
+	return <-result
+}
+
+func (l *WALVisibleLog) runVisibleAppendLoop() {
+	defer close(l.appendDone)
+	for {
+		select {
+		case req := <-l.appendQ:
+			l.appendVisibleBatch(req)
+		case <-l.closed:
+			for {
+				select {
+				case req := <-l.appendQ:
+					l.appendVisibleBatch(req)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+func (l *WALVisibleLog) appendVisibleBatch(first visibleAppendRequest) {
+	batch := make([]visibleAppendRequest, 0, visibleLogAppendBatchSize)
+	batch = append(batch, first)
+	for len(batch) < visibleLogAppendBatchSize {
+		select {
+		case req := <-l.appendQ:
+			batch = append(batch, req)
+		default:
+			l.appendVisibleBatchNow(batch)
+			return
+		}
+	}
+	l.appendVisibleBatchNow(batch)
+}
+
+func (l *WALVisibleLog) appendVisibleBatchNow(batch []visibleAppendRequest) {
+	payloads := make([][]byte, len(batch))
+	for i, req := range batch {
+		payloads[i] = req.payload
+	}
+	infos, err := l.appendPayloads(payloads)
+	if err != nil {
+		completeVisibleAppendBatch(batch, err)
+		return
+	}
+	if len(infos) != len(batch) {
+		completeVisibleAppendBatch(batch, fsperas.ErrInvalidWitnessRecord)
+		return
+	}
+	positions := make([]visibleOperationLogPosition, len(infos))
+	for i, info := range infos {
+		position, err := visibleOperationLogPositionFromEntry(info)
+		if err != nil {
+			completeVisibleAppendBatch(batch, err)
+			return
+		}
+		positions[i] = position
+	}
+	l.mu.Lock()
+	for i, req := range batch {
+		l.rememberVisibleRecordLocked(req.record, positions[i])
+	}
+	l.mu.Unlock()
+	completeVisibleAppendBatch(batch, nil)
+}
+
+func completeVisibleAppendBatch(batch []visibleAppendRequest, err error) {
+	for _, req := range batch {
+		req.result <- err
+	}
 }
 
 func (l *WALVisibleLog) rememberVisibleRecordLocked(record fsperas.VisibleOperationRecord, position visibleOperationLogPosition) {
@@ -279,13 +413,7 @@ func (l *WALVisibleLog) firstRetainedSegment() uint32 {
 }
 
 func (l *WALVisibleLog) appendPayload(payload []byte) (wal.EntryInfo, error) {
-	if l == nil || l.wal == nil {
-		return wal.EntryInfo{}, fsperas.ErrVisibleLogRequired
-	}
-	infos, err := l.wal.AppendRecords(l.durability, wal.Record{
-		Type:    wal.RecordTypePerasVisible,
-		Payload: payload,
-	})
+	infos, err := l.appendPayloads([][]byte{payload})
 	if err != nil {
 		return wal.EntryInfo{}, err
 	}
@@ -293,6 +421,23 @@ func (l *WALVisibleLog) appendPayload(payload []byte) (wal.EntryInfo, error) {
 		return wal.EntryInfo{}, fsperas.ErrInvalidWitnessRecord
 	}
 	return infos[0], nil
+}
+
+func (l *WALVisibleLog) appendPayloads(payloads [][]byte) ([]wal.EntryInfo, error) {
+	if l == nil || l.wal == nil {
+		return nil, fsperas.ErrVisibleLogRequired
+	}
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	records := make([]wal.Record, len(payloads))
+	for i, payload := range payloads {
+		records[i] = wal.Record{
+			Type:    wal.RecordTypePerasVisible,
+			Payload: payload,
+		}
+	}
+	return l.wal.AppendRecords(l.durability, records...)
 }
 
 func visibleLogContextErr(ctx context.Context) error {
@@ -448,6 +593,21 @@ func walDurabilityPolicyName(policy wal.DurabilityPolicy) string {
 	default:
 		return "unknown"
 	}
+}
+
+func (l *WALVisibleLog) Close() {
+	if l == nil {
+		return
+	}
+	l.closeOnce.Do(func() {
+		if !l.batchAppend {
+			return
+		}
+		l.appendMu.Lock()
+		close(l.closed)
+		l.appendMu.Unlock()
+		<-l.appendDone
+	})
 }
 
 func cloneVisibleOperationRecords(in []fsperas.VisibleOperationRecord) []fsperas.VisibleOperationRecord {

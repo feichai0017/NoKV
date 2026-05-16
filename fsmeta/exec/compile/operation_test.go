@@ -134,6 +134,15 @@ func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
 	decision = CanAppendSegment(testCompileAOT(t, left), testCompileAOT(t, snapshot), SegmentBudget{})
 	require.Equal(t, SegmentDecisionFlushBeforeAndAfter, decision.Kind)
 	require.Equal(t, SlowReasonDurabilityBarrier, decision.Reason)
+
+	closeLeft := testMaterializedCloseWriteSession(t, "writer-left", 44)
+	closeRight := testMaterializedCloseWriteSession(t, "writer-right", 45)
+	decision = CanAppendSegment(closeLeft.CompiledOp, closeRight.CompiledOp, SegmentBudget{MaxMutations: 4})
+	require.Equal(t, SegmentDecisionAppend, decision.Kind)
+
+	decision = CanAppendSegment(testCompileAOT(t, left), closeLeft.CompiledOp, SegmentBudget{})
+	require.Equal(t, SegmentDecisionFlushBeforeAndAfter, decision.Kind)
+	require.Equal(t, SlowReasonDurabilityBarrier, decision.Reason)
 }
 
 func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
@@ -170,4 +179,39 @@ func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, SegmentInstallSingleBucket, materializePlan.Install)
 	require.NotZero(t, materializePlan.MergeKey.PrimaryBucket)
+}
+
+func testMaterializedCloseWriteSession(t *testing.T, session fsmeta.SessionID, inode fsmeta.InodeID) MaterializedOp {
+	t.Helper()
+	req := fsmeta.CloseWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   inode,
+		Session: session,
+	}
+	program, err := CompileCloseWriteSessionProgram(req, testMount)
+	require.NoError(t, err)
+	sessionValue, err := fsmeta.EncodeSessionValue(fsmeta.SessionRecord{
+		Session:       session,
+		Inode:         inode,
+		ExpiresUnixNs: 100,
+	})
+	require.NoError(t, err)
+	ownerValue, err := fsmeta.EncodeSessionValue(fsmeta.SessionRecord{
+		Session:       session,
+		Inode:         inode,
+		ExpiresUnixNs: 100,
+	})
+	require.NoError(t, err)
+	sessionKey := program.Compiled.Delta.ReadPredicates[0].Key
+	ownerKey := program.Compiled.Delta.ReadPredicates[1].Key
+	proofs := []proof.PredicateProof{
+		testPredicateProof(sessionKey, sessionValue, true, 12, proof.ReadSourceBase),
+		testPredicateProof(ownerKey, ownerValue, true, 12, proof.ReadSourceBase),
+	}
+	materialized, err := MaterializeCloseWriteSession(program, CloseWriteSessionValues{
+		DeleteOwner:     true,
+		PredicateProofs: proofs,
+	})
+	require.NoError(t, err)
+	return materialized
 }

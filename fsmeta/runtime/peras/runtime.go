@@ -827,6 +827,9 @@ func (c *Runtime) Close() {
 	if c.sealQ != nil {
 		c.sealQ.close()
 	}
+	if visibleLog, ok := c.visibleLog.(interface{ Close() }); ok {
+		visibleLog.Close()
+	}
 	c.bgLaunchMu.Lock()
 	closer := c.closer
 	c.bgLaunchMu.Unlock()

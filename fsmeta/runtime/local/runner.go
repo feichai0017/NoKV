@@ -16,9 +16,12 @@ import (
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	localdb "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/utils"
 )
+
+const localRunnerLatchStripes = 1024
 
 // Runner adapts local.DB to fsmetaexec.TxnRunner with single-node MVCC commits.
 type Runner struct {
@@ -28,6 +31,7 @@ type Runner struct {
 	nextTS           uint64
 	latestObservedTS uint64
 	observer         mutationObserver
+	latches          *latch.Manager
 
 	atomicMutateTotal            atomic.Uint64
 	atomicPredicateRejectedTotal atomic.Uint64
@@ -52,6 +56,7 @@ func NewRunner(db *localdb.DB) (*Runner, error) {
 		db:               db,
 		nextTS:           maxVersion + 1,
 		latestObservedTS: maxVersion,
+		latches:          latch.NewManager(localRunnerLatchStripes),
 	}, nil
 }
 
@@ -234,15 +239,9 @@ func (r *Runner) mutate(ctx context.Context, primary []byte, mutations []*kvrpcp
 }
 
 func (r *Runner) applyMutationGroup(primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, mutationObserver, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	effectiveCommitVersion := commitVersion
-	if allowCommitPush && r.latestObservedTS >= effectiveCommitVersion {
-		effectiveCommitVersion = r.latestObservedTS + 1
-		if r.nextTS <= effectiveCommitVersion {
-			r.nextTS = effectiveCommitVersion + 1
-		}
-	}
+	guard := r.latches.Acquire(mutationLatchKeys(primary, nil, mutations))
+	defer guard.Release()
+	effectiveCommitVersion := r.reserveMutationCommitVersion(commitVersion, allowCommitPush)
 	if err := r.validateMutations(primary, mutations, startVersion, commitVersion); err != nil {
 		return 0, nil, err
 	}
@@ -258,24 +257,17 @@ func (r *Runner) applyMutationGroup(primary []byte, mutations []*kvrpcpb.Mutatio
 	if err := r.db.ApplyInternalEntries(entries); err != nil {
 		return 0, nil, err
 	}
-	r.mutateTotal.Add(1)
-	if effectiveCommitVersion > r.latestObservedTS {
-		r.latestObservedTS = effectiveCommitVersion
-	}
-	if r.nextTS <= effectiveCommitVersion {
-		r.nextTS = effectiveCommitVersion + 1
-	}
-	return effectiveCommitVersion, r.observer, nil
+	return effectiveCommitVersion, r.completeMutationApply(effectiveCommitVersion, false), nil
 }
 
 func (r *Runner) applyAtomicMutationGroup(primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (uint64, mutationObserver, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	guard := r.latches.Acquire(mutationLatchKeys(primary, predicates, mutations))
+	defer guard.Release()
 	if applied, err := r.atomicMutationAlreadyApplied(mutations, startVersion, commitVersion); err != nil {
 		return 0, nil, true, txnRetryable(err)
 	} else if applied {
-		r.atomicMutateTotal.Add(1)
-		return commitVersion, r.observer, true, nil
+		r.recordAtomicMutationMetric()
+		return commitVersion, r.currentObserver(), true, nil
 	}
 	if err := r.validateAtomicPredicates(predicates, startVersion); err != nil {
 		r.atomicPredicateRejectedTotal.Add(1)
@@ -296,15 +288,68 @@ func (r *Runner) applyAtomicMutationGroup(primary []byte, predicates []*kvrpcpb.
 	if err := r.db.ApplyInternalEntries(entries); err != nil {
 		return 0, nil, true, err
 	}
-	r.atomicMutateTotal.Add(1)
-	r.mutateTotal.Add(1)
+	return commitVersion, r.completeMutationApply(commitVersion, true), true, nil
+}
+
+func mutationLatchKeys(primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation) [][]byte {
+	keys := make([][]byte, 0, 1+len(predicates)+len(mutations))
+	if len(primary) > 0 {
+		keys = append(keys, primary)
+	}
+	for _, pred := range predicates {
+		if pred != nil && len(pred.GetKey()) > 0 {
+			keys = append(keys, pred.GetKey())
+		}
+	}
+	for _, mutation := range mutations {
+		if mutation != nil && len(mutation.GetKey()) > 0 {
+			keys = append(keys, mutation.GetKey())
+		}
+	}
+	return keys
+}
+
+func (r *Runner) reserveMutationCommitVersion(commitVersion uint64, allowCommitPush bool) uint64 {
+	if !allowCommitPush {
+		return commitVersion
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	effective := commitVersion
+	if r.latestObservedTS >= effective {
+		effective = r.latestObservedTS + 1
+	}
+	if r.nextTS > effective {
+		effective = r.nextTS
+	}
+	if effective > r.latestObservedTS {
+		r.latestObservedTS = effective
+	}
+	if r.nextTS <= effective {
+		r.nextTS = effective + 1
+	}
+	return effective
+}
+
+func (r *Runner) completeMutationApply(commitVersion uint64, atomic bool) mutationObserver {
+	r.recordMutationMetrics(atomic)
+	r.mu.Lock()
 	if commitVersion > r.latestObservedTS {
 		r.latestObservedTS = commitVersion
 	}
 	if r.nextTS <= commitVersion {
 		r.nextTS = commitVersion + 1
 	}
-	return commitVersion, r.observer, true, nil
+	observer := r.observer
+	r.mu.Unlock()
+	return observer
+}
+
+func (r *Runner) currentObserver() mutationObserver {
+	r.mu.Lock()
+	observer := r.observer
+	r.mu.Unlock()
+	return observer
 }
 
 func (r *Runner) validateAtomicPredicates(predicates []*kvrpcpb.AtomicPredicate, startVersion uint64) error {

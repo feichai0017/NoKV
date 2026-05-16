@@ -182,10 +182,10 @@ func (c *Runtime) KeyState(key []byte) (present bool, known bool) {
 	if c == nil || c.read == nil {
 		return false, false
 	}
-	if _, deleted, ok := c.read.overlay.Get(key); ok {
+	if _, deleted, ok := c.read.overlay.GetView(key); ok {
 		return !deleted, true
 	}
-	if _, deleted, ok := c.read.sealed.Get(key); ok {
+	if _, deleted, ok := c.read.sealed.GetView(key); ok {
 		return !deleted, true
 	}
 	return c.read.overlay.KeyState(key)
