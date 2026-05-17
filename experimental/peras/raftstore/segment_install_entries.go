@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package kv
+package peras
 
 import (
 	"bytes"
@@ -177,22 +177,6 @@ func buildMVCCSegmentCatalogIndexInstallEntries(root, digest [32]byte, epochID, 
 		return nil, err
 	}
 	return []*entrykv.Entry{entrykv.NewInternalEntry(entrykv.CFDefault, indexKey, version, indexValue, 0, 0)}, nil
-}
-
-func buildMVCCSegmentCatalogIndexInstallEntriesForObjectKeys(root, digest [32]byte, epochID, version, payloadSize uint64, routingKeys [][]byte, canonicalObjectKey []byte) ([]*entrykv.Entry, error) {
-	if len(routingKeys) == 0 {
-		return nil, fsperas.ErrInvalidPerasSegment
-	}
-	entries := make([]*entrykv.Entry, 0, len(routingKeys))
-	for _, routingKey := range routingKeys {
-		routeEntries, err := buildMVCCSegmentCatalogIndexInstallEntries(root, digest, epochID, version, payloadSize, routingKey, canonicalObjectKey)
-		if err != nil {
-			releaseMVCCReplayEntries(entries)
-			return nil, err
-		}
-		entries = append(entries, routeEntries...)
-	}
-	return dedupeInternalEntries(entries), nil
 }
 
 func buildMVCCSegmentCatalogInstallEntries(segment fsperas.PerasSegment, version uint64, objectValue []byte, digest [32]byte, payloadSize uint64) ([]*entrykv.Entry, error) {

@@ -86,11 +86,11 @@ directly.
 ## 4. Distributed Write Path
 
 Raftstore and Percolator ultimately reuse the same embedded write path. The
-prepared-MVCC install command also uses this path. The current Peras segment
-install command is a legacy experimental adapter that lowers segment payloads
-into prepared MVCC entries during the `experimental/` cleanup.
+prepared-MVCC install command also uses this path. Experimental Peras adapters
+lower segment payloads into prepared MVCC entries before crossing the stable
+raftstore boundary.
 
-1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` by region. Experimental Peras profiles may still issue `InstallPerasSegment` while the migration is in progress.
+1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` / `InstallPreparedMVCCEntries` by region.
 2. `kv.Service` routes the command through `Store.ProposeCommand`.
 3. Raft replication commits the command.
 4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, resolve, or

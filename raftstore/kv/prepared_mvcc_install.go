@@ -113,91 +113,11 @@ func preparedMVCCColumnFamily(cf kvrpcpb.PreparedMVCCEntry_ColumnFamily) (entryk
 	}
 }
 
-func internalColumnFamilyToPreparedMVCC(cf entrykv.ColumnFamily) (kvrpcpb.PreparedMVCCEntry_ColumnFamily, bool) {
-	switch cf {
-	case entrykv.CFDefault:
-		return kvrpcpb.PreparedMVCCEntry_DEFAULT, true
-	case entrykv.CFLock:
-		return kvrpcpb.PreparedMVCCEntry_LOCK, true
-	case entrykv.CFWrite:
-		return kvrpcpb.PreparedMVCCEntry_WRITE, true
-	default:
-		return kvrpcpb.PreparedMVCCEntry_DEFAULT, false
-	}
-}
-
-func buildInstallPreparedMVCCEntriesRequest(
-	routingKey []byte,
-	commitVersion uint64,
-	entries []*entrykv.Entry,
-	dependencyKeys [][]byte,
-	idempotencyKey []byte,
-	diagnosticLabel string,
-) (*kvrpcpb.InstallPreparedMVCCEntriesRequest, *kvrpcpb.KeyError) {
-	req := &kvrpcpb.InstallPreparedMVCCEntriesRequest{
-		RoutingKey:      append([]byte(nil), routingKey...),
-		CommitVersion:   commitVersion,
-		Entries:         make([]*kvrpcpb.PreparedMVCCEntry, 0, len(entries)),
-		DependencyKeys:  cloneByteSlices(dependencyKeys),
-		IdempotencyKey:  append([]byte(nil), idempotencyKey...),
-		DiagnosticLabel: diagnosticLabel,
-	}
-	for _, entry := range entries {
-		prepared, keyErr := preparedMVCCEntryFromInternal(commitVersion, entry)
-		if keyErr != nil {
-			return nil, keyErr
-		}
-		req.Entries = append(req.Entries, prepared)
-	}
-	return req, nil
-}
-
-func preparedMVCCEntryFromInternal(commitVersion uint64, entry *entrykv.Entry) (*kvrpcpb.PreparedMVCCEntry, *kvrpcpb.KeyError) {
-	if entry == nil {
-		return nil, installPreparedMVCCAbort("nil internal entry")
-	}
-	cf, userKey, version, ok := entrykv.SplitInternalKey(entry.Key)
-	if !ok {
-		return nil, installPreparedMVCCAbort("malformed internal key")
-	}
-	if version != commitVersion {
-		return nil, installPreparedMVCCAbort("entry version does not match commit version")
-	}
-	outCF, ok := internalColumnFamilyToPreparedMVCC(cf)
-	if !ok {
-		return nil, installPreparedMVCCAbort("invalid column family")
-	}
-	var value []byte
-	if entry.Value != nil {
-		value = clonePreparedMVCCValue(entry.Value)
-	}
-	return &kvrpcpb.PreparedMVCCEntry{
-		ColumnFamily: outCF,
-		Key:          append([]byte(nil), userKey...),
-		Version:      version,
-		Value:        value,
-		Meta:         uint32(entry.Meta),
-		ExpiresAt:    entry.ExpiresAt,
-		HasValue:     entry.Value != nil,
-	}, nil
-}
-
 func clonePreparedMVCCValue(value []byte) []byte {
 	if value == nil {
 		return []byte{}
 	}
 	return append([]byte(nil), value...)
-}
-
-func cloneByteSlices(in [][]byte) [][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([][]byte, 0, len(in))
-	for _, item := range in {
-		out = append(out, append([]byte(nil), item...))
-	}
-	return out
 }
 
 func installPreparedMVCCAbort(msg string) *kvrpcpb.KeyError {

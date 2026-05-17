@@ -162,23 +162,6 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result}})
 			}
 			i = end - 1
-		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT)
-			batch := []*kvrpcpb.PerasInstallSegmentRequest{r.GetPerasInstallSegment()}
-			for j := i + 1; j < end; j++ {
-				batch = append(batch, req.Requests[j].GetPerasInstallSegment())
-			}
-			results, err := applyPerasInstallSegmentBatch(db, batch)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) != len(batch) {
-				return nil, fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
-			}
-			for _, result := range results {
-				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
-			}
-			i = end - 1
 		case raftcmdpb.CmdType_CMD_SCAN:
 			result, err := handleScan(db, r.GetScan())
 			if err != nil {
@@ -244,8 +227,7 @@ func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, b
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
-		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
-		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
 		return r.GetCmdType(), true
 	default:
 		return 0, false
@@ -359,26 +341,6 @@ func applyBatchRun(
 				Header: reqs[i].GetHeader(),
 				Responses: []*raftcmdpb.Response{{
 					Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result},
-				}},
-			}
-		}
-	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		batch := make([]*kvrpcpb.PerasInstallSegmentRequest, 0, len(reqs))
-		for _, req := range reqs {
-			batch = append(batch, req.GetRequests()[0].GetPerasInstallSegment())
-		}
-		results, err := applyPerasInstallSegmentBatch(db, batch)
-		if err != nil {
-			return err
-		}
-		if len(results) != len(batch) {
-			return fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
-		}
-		for i, result := range results {
-			resps[i] = &raftcmdpb.RaftCmdResponse{
-				Header: reqs[i].GetHeader(),
-				Responses: []*raftcmdpb.Response{{
-					Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result},
 				}},
 			}
 		}

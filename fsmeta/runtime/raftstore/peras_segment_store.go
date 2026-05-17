@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -22,7 +23,7 @@ import (
 )
 
 type perasSegmentInstallClient interface {
-	InstallPerasSegment(context.Context, []byte, *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error)
+	InstallPreparedMVCCEntries(context.Context, []byte, *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error)
 }
 
 type perasSegmentRouteGrouper interface {
@@ -114,7 +115,7 @@ func (i *raftstoreSegmentInstaller) InstallSegment(ctx context.Context, req runt
 type perasRouteInstallResult struct {
 	routingKeys [][]byte
 	cursor      runtimeperas.InstallCursor
-	resp        *kvrpcpb.PerasInstallSegmentResponse
+	resp        *kvrpcpb.InstallPreparedMVCCEntriesResponse
 }
 
 func choosePerasInstallResult(results []perasRouteInstallResult, canonicalObjectKey []byte, materialize bool) perasRouteInstallResult {
@@ -178,45 +179,31 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 		return perasRouteInstallResult{}, runtimeperas.ErrRuntimeInvalid
 	}
 	routingKey := routingKeys[0]
-	routePayload := payload
-	if !materialize && len(canonicalObjectKey) > 0 && !keySetContains(routingKeys, canonicalObjectKey) {
-		routePayload = nil
-	}
-	dependencyKeys, catalogKeys, materializedKeys, err := routeInstallHeaderKeys(install, segment.Root, routingKeys, materialize)
+	dependencyKeys, _, materializedKeys, err := routeInstallHeaderKeys(install, segment.Root, routingKeys, materialize)
 	if err != nil {
 		return perasRouteInstallResult{}, err
 	}
-	stats := segment.Stats()
-	readHeader := segment.ReadHeaderView()
+	installReq, err := rsperas.BuildSegmentPreparedInstallRequest(rsperas.SegmentPreparedInstallRequest{
+		RoutingKey:         runtimeCloneBytes(routingKey),
+		RoutingKeys:        cloneRuntimeKeySet(routingKeys),
+		DependencyKeys:     dependencyKeys,
+		MaterializedKeys:   materializedKeys,
+		CanonicalObjectKey: runtimeCloneBytes(canonicalObjectKey),
+		Segment:            segment,
+		Payload:            payload,
+		PayloadDigest:      digest,
+		InstallVersion:     installVersion,
+		MaterializeMVCC:    materialize,
+	})
+	if err != nil {
+		return perasRouteInstallResult{}, err
+	}
 	release, err := i.acquireInstallRoute(ctx, group.LeaderStoreID)
 	if err != nil {
 		return perasRouteInstallResult{}, err
 	}
 	defer release()
-	resp, err := kv.InstallPerasSegment(ctx, routingKey, &kvrpcpb.PerasInstallSegmentRequest{
-		RoutingKey:            runtimeCloneBytes(routingKey),
-		SegmentRoot:           append([]byte(nil), segment.Root[:]...),
-		SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
-		SegmentPayload:        routePayload,
-		InstallVersion:        installVersion,
-		MaterializeMvcc:       materialize,
-		SegmentEpochId:        segment.EpochID,
-		SegmentOperationCount: stats.OperationCount,
-		SegmentEntryCount:     stats.EntryCount,
-		SegmentPayloadSize:    uint64(len(payload)),
-		CanonicalObjectKey:    runtimeCloneBytes(canonicalObjectKey),
-		RoutingKeys:           cloneRuntimeKeySet(routingKeys),
-		DependencyKeys:        dependencyKeys,
-		CatalogKeys:           catalogKeys,
-		MaterializedKeys:      materializedKeys,
-		ReadFirstKey:          readHeader.FirstKey,
-		ReadLastKey:           readHeader.LastKey,
-		ReadDentryCount:       readHeader.DentryCount,
-		ReadInodeCount:        readHeader.InodeCount,
-		ReadSessionCount:      readHeader.SessionCount,
-		ReadTombstoneCount:    readHeader.TombstoneCount,
-		ReadDirectoryCount:    readHeader.DirectoryCount,
-	})
+	resp, err := kv.InstallPreparedMVCCEntries(ctx, routingKey, installReq)
 	if err != nil {
 		if client.IsRetryExhausted(err) {
 			return perasRouteInstallResult{}, perasInstallRouteRetryExhaustedError{cause: err}
@@ -229,7 +216,7 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 	if keyErr := resp.GetError(); keyErr != nil {
 		return perasRouteInstallResult{}, runnerKeyError("peras install segment", keyErr)
 	}
-	if err := validatePerasSegmentInstallResponse(segment, resp); err != nil {
+	if err := validatePreparedSegmentInstallResponse(installReq, resp); err != nil {
 		return perasRouteInstallResult{}, err
 	}
 	cursor := perasInstallCursorFromResponse(resp)
@@ -294,23 +281,23 @@ func (i *raftstoreSegmentInstaller) reserveInstallVersion(ctx context.Context) (
 	return i.nextInstallVersion.Add(1), nil
 }
 
-func validatePerasSegmentInstallResponse(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) error {
+func validatePreparedSegmentInstallResponse(req *kvrpcpb.InstallPreparedMVCCEntriesRequest, resp *kvrpcpb.InstallPreparedMVCCEntriesResponse) error {
+	if req == nil {
+		return runtimeperas.ErrRuntimeInvalid
+	}
 	if resp == nil {
 		return runtimeperas.ErrRuntimeInvalid
 	}
-	if !bytes.Equal(resp.GetSegmentRoot(), segment.Root[:]) {
+	if resp.GetCommitVersion() != req.GetCommitVersion() {
 		return runtimeperas.ErrRuntimeInvalid
 	}
-	stats := segment.Stats()
-	if resp.GetOperationCount() != stats.OperationCount ||
-		resp.GetEntryCount() != stats.EntryCount ||
-		(stats.EntryCount > 0 && resp.GetAppliedEntries() == 0) {
+	if len(req.GetEntries()) > 0 && resp.GetAppliedEntries() != uint64(len(req.GetEntries())) {
 		return runtimeperas.ErrRuntimeInvalid
 	}
 	return nil
 }
 
-func perasInstallCursorFromResponse(resp *kvrpcpb.PerasInstallSegmentResponse) runtimeperas.InstallCursor {
+func perasInstallCursorFromResponse(resp *kvrpcpb.InstallPreparedMVCCEntriesResponse) runtimeperas.InstallCursor {
 	if resp == nil {
 		return runtimeperas.InstallCursor{}
 	}
@@ -322,7 +309,7 @@ func perasInstallCursorFromResponse(resp *kvrpcpb.PerasInstallSegmentResponse) r
 	}
 }
 
-func (i *raftstoreSegmentInstaller) publishInstalledSegment(segment fsperas.PerasSegment, resp *kvrpcpb.PerasInstallSegmentResponse) {
+func (i *raftstoreSegmentInstaller) publishInstalledSegment(segment fsperas.PerasSegment, resp *kvrpcpb.InstallPreparedMVCCEntriesResponse) {
 	if i == nil || i.router == nil || resp == nil || resp.GetRegionId() == 0 || resp.GetIndex() == 0 {
 		return
 	}

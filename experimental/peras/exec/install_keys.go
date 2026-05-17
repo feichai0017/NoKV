@@ -11,9 +11,9 @@ import (
 )
 
 // PerasSegmentInstallKeys returns the exact metadata keys written by a segment
-// install command. The apply scheduler uses this set as the dependency surface
-// for CMD_PERAS_INSTALL_SEGMENT, so malformed or mismatched routing state fails
-// closed instead of producing a partial key set.
+// install command. The raftstore adapter uses this set as the dependency
+// surface for prepared-MVCC installs, so malformed or mismatched routing state
+// fails closed instead of producing a partial key set.
 func PerasSegmentInstallKeys(segment PerasSegment, routingKey []byte, materialize bool) ([][]byte, error) {
 	if err := validatePerasSegmentPayload(segment); err != nil {
 		return nil, err

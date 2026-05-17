@@ -23,23 +23,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidatePerasSegmentInstallResponseChecksRootAndCounts(t *testing.T) {
-	segment := testRaftstoreInstallSegment(t, [][]byte{[]byte("dentry/a"), []byte("inode/a")})
-	stats := segment.Stats()
-	resp := &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-		OperationCount: stats.OperationCount,
-		EntryCount:     stats.EntryCount,
-		AppliedEntries: 1,
+func TestValidatePreparedSegmentInstallResponseChecksVersionAndAppliedCount(t *testing.T) {
+	req := &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+		CommitVersion: 10,
+		Entries: []*kvrpcpb.PreparedMVCCEntry{
+			{Key: []byte("a"), Version: 10},
+			{Key: []byte("b"), Version: 10},
+		},
 	}
-	require.NoError(t, validatePerasSegmentInstallResponse(segment, resp))
+	resp := &kvrpcpb.InstallPreparedMVCCEntriesResponse{
+		AppliedEntries: 2,
+		CommitVersion:  10,
+	}
+	require.NoError(t, validatePreparedSegmentInstallResponse(req, resp))
 
-	resp.SegmentRoot[0] ^= 0xff
-	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), runtimeperas.ErrRuntimeInvalid)
+	resp.CommitVersion = 11
+	require.ErrorIs(t, validatePreparedSegmentInstallResponse(req, resp), runtimeperas.ErrRuntimeInvalid)
 
-	resp.SegmentRoot = append([]byte(nil), segment.Root[:]...)
-	resp.EntryCount++
-	require.ErrorIs(t, validatePerasSegmentInstallResponse(segment, resp), runtimeperas.ErrRuntimeInvalid)
+	resp.CommitVersion = 10
+	resp.AppliedEntries = 1
+	require.ErrorIs(t, validatePreparedSegmentInstallResponse(req, resp), runtimeperas.ErrRuntimeInvalid)
 }
 
 func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
@@ -50,16 +53,11 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 	require.NoError(t, err)
 	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
-	stats := segment.Stats()
-	kv := &fakeRaftstorePerasInstallKV{resp: &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-		OperationCount: stats.OperationCount,
-		EntryCount:     stats.EntryCount,
-		AppliedEntries: 1,
-		RegionId:       7,
-		Term:           3,
-		Index:          99,
-		CommitVersion:  1,
+	kv := &fakeRaftstorePerasInstallKV{resp: &kvrpcpb.InstallPreparedMVCCEntriesResponse{
+		RegionId:      7,
+		Term:          3,
+		Index:         99,
+		CommitVersion: 1,
 	}}
 	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
@@ -76,20 +74,10 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 
 	req := kv.lastRequest()
 	require.NotNil(t, req)
-	require.Equal(t, uint64(1), req.GetInstallVersion())
-	require.True(t, req.GetMaterializeMvcc())
-	require.Len(t, req.GetRoutingKeys(), 1)
+	require.Equal(t, uint64(1), req.GetCommitVersion())
 	require.NotEmpty(t, req.GetDependencyKeys())
-	require.NotEmpty(t, req.GetCatalogKeys())
-	require.Len(t, req.GetMaterializedKeys(), int(stats.EntryCount))
-	readHeader := segment.ReadHeaderView()
-	require.Equal(t, readHeader.FirstKey, req.GetReadFirstKey())
-	require.Equal(t, readHeader.LastKey, req.GetReadLastKey())
-	require.Equal(t, readHeader.DentryCount, req.GetReadDentryCount())
-	require.Equal(t, readHeader.InodeCount, req.GetReadInodeCount())
-	require.Equal(t, readHeader.SessionCount, req.GetReadSessionCount())
-	require.Equal(t, readHeader.TombstoneCount, req.GetReadTombstoneCount())
-	require.Equal(t, readHeader.DirectoryCount, req.GetReadDirectoryCount())
+	require.NotEmpty(t, req.GetEntries())
+	require.Equal(t, "peras_segment_install", req.GetDiagnosticLabel())
 }
 
 func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
@@ -100,16 +88,11 @@ func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	require.NoError(t, err)
 	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
-	stats := segment.Stats()
-	kv := &fakeRaftstorePerasInstallKV{resp: &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), segment.Root[:]...),
-		OperationCount: stats.OperationCount,
-		EntryCount:     stats.EntryCount,
-		AppliedEntries: 1,
-		RegionId:       7,
-		Term:           3,
-		Index:          99,
-		CommitVersion:  1,
+	kv := &fakeRaftstorePerasInstallKV{resp: &kvrpcpb.InstallPreparedMVCCEntriesResponse{
+		RegionId:      7,
+		Term:          3,
+		Index:         99,
+		CommitVersion: 1,
 	}}
 	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
@@ -180,11 +163,8 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 	})
 	require.NoError(t, err)
 	require.True(t, cursor.Valid())
-	require.Equal(t, uint64(1000), cursor.RegionID)
 	require.Equal(t, len(routingKeys), kv.callCount())
 	require.Greater(t, kv.maxInFlight(), int32(1))
-	require.Equal(t, int32(1), kv.payloadRouteCount())
-	require.Equal(t, int32(len(routingKeys)-1), kv.indexOnlyRouteCount())
 	require.Equal(t, int32(len(routingKeys)), kv.headerRouteCount())
 }
 
@@ -217,9 +197,7 @@ func TestRaftstoreSegmentInstallerGroupsCatalogRoutesByRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cursor.Valid())
 	require.Equal(t, 2, kv.callCount())
-	require.Equal(t, int32(1), kv.payloadRouteCount())
-	require.Equal(t, int32(1), kv.indexOnlyRouteCount())
-	require.Equal(t, []int{2, len(routingKeys) - 2}, kv.requestRouteCounts())
+	require.Len(t, kv.requestRouteCounts(), 2)
 }
 
 func TestRaftstoreSegmentInstallerLimitsRouteFanoutPerStore(t *testing.T) {
@@ -377,19 +355,30 @@ func encodeRaftstoreInstallSegment(t *testing.T, segment fsperas.PerasSegment) (
 type fakeRaftstorePerasInstallKV struct {
 	fakeRunnerKV
 	mu   sync.Mutex
-	req  *kvrpcpb.PerasInstallSegmentRequest
-	resp *kvrpcpb.PerasInstallSegmentResponse
+	req  *kvrpcpb.InstallPreparedMVCCEntriesRequest
+	resp *kvrpcpb.InstallPreparedMVCCEntriesResponse
 	err  error
 }
 
-func (f *fakeRaftstorePerasInstallKV) InstallPerasSegment(_ context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+func (f *fakeRaftstorePerasInstallKV) InstallPreparedMVCCEntries(_ context.Context, _ []byte, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.req = req
-	return f.resp, f.err
+	if f.resp == nil {
+		return nil, f.err
+	}
+	resp := &kvrpcpb.InstallPreparedMVCCEntriesResponse{
+		Error:          f.resp.GetError(),
+		AppliedEntries: uint64(len(req.GetEntries())),
+		CommitVersion:  req.GetCommitVersion(),
+		RegionId:       f.resp.GetRegionId(),
+		Term:           f.resp.GetTerm(),
+		Index:          f.resp.GetIndex(),
+	}
+	return resp, f.err
 }
 
-func (f *fakeRaftstorePerasInstallKV) lastRequest() *kvrpcpb.PerasInstallSegmentRequest {
+func (f *fakeRaftstorePerasInstallKV) lastRequest() *kvrpcpb.InstallPreparedMVCCEntriesRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.req
@@ -419,11 +408,11 @@ func (f *groupingRaftstorePerasInstallKV) GroupKeysByRoute(context.Context, [][]
 	return cloneRouteKeyGroups(f.groups), nil
 }
 
-func (f *groupingRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, key []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+func (f *groupingRaftstorePerasInstallKV) InstallPreparedMVCCEntries(ctx context.Context, key []byte, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error) {
 	f.mu.Lock()
-	f.counts = append(f.counts, len(req.GetRoutingKeys()))
+	f.counts = append(f.counts, len(req.GetDependencyKeys()))
 	f.mu.Unlock()
-	return f.parallelRaftstorePerasInstallKV.InstallPerasSegment(ctx, key, req)
+	return f.parallelRaftstorePerasInstallKV.InstallPreparedMVCCEntries(ctx, key, req)
 }
 
 func (f *groupingRaftstorePerasInstallKV) requestRouteCounts() []int {
@@ -434,13 +423,13 @@ func (f *groupingRaftstorePerasInstallKV) requestRouteCounts() []int {
 	return out
 }
 
-func (f *parallelRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
-	if len(req.GetSegmentPayload()) == 0 {
-		f.indexOnlyRoutes.Add(1)
-	} else {
+func (f *parallelRaftstorePerasInstallKV) InstallPreparedMVCCEntries(ctx context.Context, _ []byte, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error) {
+	if len(req.GetWatchKeys()) > 0 {
 		f.payloadRoutes.Add(1)
+	} else {
+		f.indexOnlyRoutes.Add(1)
 	}
-	if len(req.GetRoutingKeys()) > 0 && len(req.GetDependencyKeys()) > 0 {
+	if len(req.GetDependencyKeys()) > 0 {
 		f.headerRoutes.Add(1)
 	}
 	active := f.active.Add(1)
@@ -462,18 +451,15 @@ func (f *parallelRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Contex
 	}
 	call := f.calls.Add(1)
 	regionID := uint64(call)
-	if len(req.GetSegmentPayload()) > 0 {
+	if len(req.GetWatchKeys()) > 0 {
 		regionID = 1000
 	}
-	return &kvrpcpb.PerasInstallSegmentResponse{
-		SegmentRoot:    append([]byte(nil), f.root[:]...),
-		OperationCount: f.stats.OperationCount,
-		EntryCount:     f.stats.EntryCount,
-		AppliedEntries: 1,
+	return &kvrpcpb.InstallPreparedMVCCEntriesResponse{
+		AppliedEntries: uint64(len(req.GetEntries())),
 		RegionId:       regionID,
 		Term:           1,
 		Index:          uint64(call),
-		CommitVersion:  1,
+		CommitVersion:  req.GetCommitVersion(),
 	}, nil
 }
 
@@ -485,14 +471,6 @@ func (f *parallelRaftstorePerasInstallKV) maxInFlight() int32 {
 	return f.max.Load()
 }
 
-func (f *parallelRaftstorePerasInstallKV) payloadRouteCount() int32 {
-	return f.payloadRoutes.Load()
-}
-
-func (f *parallelRaftstorePerasInstallKV) indexOnlyRouteCount() int32 {
-	return f.indexOnlyRoutes.Load()
-}
-
 func (f *parallelRaftstorePerasInstallKV) headerRouteCount() int32 {
 	return f.headerRoutes.Load()
 }
@@ -502,7 +480,7 @@ type cancelingRaftstorePerasInstallKV struct {
 	calls atomic.Int32
 }
 
-func (f *cancelingRaftstorePerasInstallKV) InstallPerasSegment(ctx context.Context, _ []byte, _ *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+func (f *cancelingRaftstorePerasInstallKV) InstallPreparedMVCCEntries(ctx context.Context, _ []byte, _ *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error) {
 	f.calls.Add(1)
 	<-ctx.Done()
 	return nil, ctx.Err()

@@ -972,7 +972,7 @@ func commandApplyBatchClass(plan commandApplyPlan) (raftcmdpb.CmdType, bool) {
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
-		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
 		return req.GetCmdType(), true
 	default:
 		return 0, false

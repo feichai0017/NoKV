@@ -108,7 +108,7 @@ func TestWriteCommandBatcherDoesNotMixHeaders(t *testing.T) {
 	}
 }
 
-func TestWriteCommandBatcherCapsPerasInstallSegmentBatchSize(t *testing.T) {
+func TestWriteCommandBatcherCapsPreparedMVCCInstallBatchSize(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		proposed []*raftcmdpb.RaftCmdRequest
@@ -119,33 +119,33 @@ func TestWriteCommandBatcherCapsPerasInstallSegmentBatchSize(t *testing.T) {
 		mu.Unlock()
 		responses := make([]*raftcmdpb.Response, 0, len(req.GetRequests()))
 		for range req.GetRequests() {
-			responses = append(responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{}}})
+			responses = append(responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesResponse{}}})
 		}
 		return &raftcmdpb.RaftCmdResponse{Responses: responses}, nil
 	}, 64, time.Hour)
 
-	results := make(chan writeBatchTestResult, perasInstallSegmentBatchMaxSize*2)
+	results := make(chan writeBatchTestResult, preparedMVCCInstallBatchMaxSize*2)
 	for i := 0; i < cap(results); i++ {
 		go func() {
-			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPerasInstallRequest())
+			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPreparedMVCCInstallRequest())
 			results <- writeBatchTestResult{response: resp, regionError: regionErr, err: err}
 		}()
 	}
 	for i := 0; i < cap(results); i++ {
 		result := receiveWriteBatchResult(t, results)
-		require.NotNil(t, result.response.GetPerasInstallSegment())
+		require.NotNil(t, result.response.GetInstallPreparedMvcc())
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, proposed, 2)
-	require.Len(t, proposed[0].GetRequests(), perasInstallSegmentBatchMaxSize)
-	require.Len(t, proposed[1].GetRequests(), perasInstallSegmentBatchMaxSize)
-	require.Equal(t, uint64(2), batcher.Stats()["write_command_batch_batches_by_command"].(map[string]uint64)["peras_install_segment"])
-	require.Equal(t, uint64(perasInstallSegmentBatchMaxSize*2), batcher.Stats()["write_command_batch_batched_requests_by_command"].(map[string]uint64)["peras_install_segment"])
+	require.Len(t, proposed[0].GetRequests(), preparedMVCCInstallBatchMaxSize)
+	require.Len(t, proposed[1].GetRequests(), preparedMVCCInstallBatchMaxSize)
+	require.Equal(t, uint64(2), batcher.Stats()["write_command_batch_batches_by_command"].(map[string]uint64)["install_prepared_mvcc"])
+	require.Equal(t, uint64(preparedMVCCInstallBatchMaxSize*2), batcher.Stats()["write_command_batch_batched_requests_by_command"].(map[string]uint64)["install_prepared_mvcc"])
 }
 
-func TestWriteCommandBatcherSplitsLargePerasInstallSegmentBatchesByBytes(t *testing.T) {
+func TestWriteCommandBatcherSplitsLargePreparedMVCCInstallBatchesByBytes(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		proposed []*raftcmdpb.RaftCmdRequest
@@ -156,7 +156,7 @@ func TestWriteCommandBatcherSplitsLargePerasInstallSegmentBatchesByBytes(t *test
 		mu.Unlock()
 		responses := make([]*raftcmdpb.Response, 0, len(req.GetRequests()))
 		for range req.GetRequests() {
-			responses = append(responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{}}})
+			responses = append(responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesResponse{}}})
 		}
 		return &raftcmdpb.RaftCmdResponse{Responses: responses}, nil
 	}, 64, time.Millisecond)
@@ -164,13 +164,13 @@ func TestWriteCommandBatcherSplitsLargePerasInstallSegmentBatchesByBytes(t *test
 	results := make(chan writeBatchTestResult, 2)
 	for i := 0; i < cap(results); i++ {
 		go func() {
-			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPerasInstallRequestWithPayload(perasInstallSegmentBatchMaxBytes/2+1))
+			resp, regionErr, err := batcher.submit(context.Background(), writeBatchTestHeader(7), writeBatchPreparedMVCCInstallRequestWithPayload(preparedMVCCInstallBatchMaxBytes/2+1))
 			results <- writeBatchTestResult{response: resp, regionError: regionErr, err: err}
 		}()
 	}
 	for i := 0; i < cap(results); i++ {
 		result := receiveWriteBatchResult(t, results)
-		require.NotNil(t, result.response.GetPerasInstallSegment())
+		require.NotNil(t, result.response.GetInstallPreparedMvcc())
 	}
 
 	mu.Lock()
@@ -368,15 +368,23 @@ func writeBatchAtomicRequest(key string) *raftcmdpb.Request {
 	}
 }
 
-func writeBatchPerasInstallRequest() *raftcmdpb.Request {
-	return writeBatchPerasInstallRequestWithPayload(0)
+func writeBatchPreparedMVCCInstallRequest() *raftcmdpb.Request {
+	return writeBatchPreparedMVCCInstallRequestWithPayload(0)
 }
 
-func writeBatchPerasInstallRequestWithPayload(payloadSize int) *raftcmdpb.Request {
+func writeBatchPreparedMVCCInstallRequestWithPayload(payloadSize int) *raftcmdpb.Request {
 	return &raftcmdpb.Request{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			SegmentPayload: make([]byte, payloadSize),
+		CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+		Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+			RoutingKey:    []byte("route"),
+			CommitVersion: 10,
+			Entries: []*kvrpcpb.PreparedMVCCEntry{{
+				ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+				Key:          []byte("key"),
+				Version:      10,
+				Value:        make([]byte, payloadSize),
+				HasValue:     true,
+			}},
 		}},
 	}
 }
@@ -393,6 +401,8 @@ func writeBatchResponse(cmdType raftcmdpb.CmdType, value uint64) *raftcmdpb.Resp
 		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_ResolveLock{ResolveLock: &kvrpcpb.ResolveLockResponse{}}}
 	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
 		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{AppliedKeys: value}}}
+	case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesResponse{AppliedEntries: value}}}
 	default:
 		return &raftcmdpb.Response{}
 	}

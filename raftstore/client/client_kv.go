@@ -675,13 +675,13 @@ func (c *Client) tryAtomicMutateRegionOnce(ctx context.Context, region regionSna
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
 
-func (c *Client) InstallPerasSegment(ctx context.Context, routingKey []byte, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, error) {
+func (c *Client) InstallPreparedMVCCEntries(ctx context.Context, routingKey []byte, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, error) {
 	if len(routingKey) == 0 {
-		return nil, &ProtocolError{Operation: "peras install segment", Detail: "routing key required"}
+		return nil, &ProtocolError{Operation: "prepared mvcc install", Detail: "routing key required"}
 	}
-	cleaned := clonePerasInstallSegmentRequest(req)
+	cleaned := cloneInstallPreparedMVCCEntriesRequest(req)
 	if cleaned == nil {
-		return nil, &ProtocolError{Operation: "peras install segment", Detail: "request required"}
+		return nil, &ProtocolError{Operation: "prepared mvcc install", Detail: "request required"}
 	}
 	cleaned.RoutingKey = append(cleaned.RoutingKey[:0], routingKey...)
 	var lastErr error
@@ -691,7 +691,7 @@ func (c *Client) InstallPerasSegment(ctx context.Context, routingKey []byte, req
 		if err != nil {
 			return nil, err
 		}
-		resp, regionErr, err := c.installPerasSegmentRegionOnce(ctx, region, cleaned)
+		resp, regionErr, err := c.installPreparedMVCCEntriesRegionOnce(ctx, region, cleaned)
 		if err != nil {
 			if isTransportUnavailable(err) {
 				lastErr = err
@@ -725,13 +725,13 @@ func (c *Client) InstallPerasSegment(ctx context.Context, routingKey []byte, req
 		return nil, err
 	}
 	return nil, &RetryExhaustedError{
-		Operation: "peras install segment",
+		Operation: "prepared mvcc install",
 		Key:       append([]byte(nil), routingKey...),
 		Detail:    lastRetryDetail,
 	}
 }
 
-func (c *Client) installPerasSegmentRegionOnce(ctx context.Context, region regionSnapshot, req *kvrpcpb.PerasInstallSegmentRequest) (*kvrpcpb.PerasInstallSegmentResponse, *errorpb.RegionError, error) {
+func (c *Client) installPreparedMVCCEntriesRegionOnce(ctx context.Context, region regionSnapshot, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*kvrpcpb.InstallPreparedMVCCEntriesResponse, *errorpb.RegionError, error) {
 	cl, err := c.storeClient(ctx, region.leader)
 	if err != nil {
 		return nil, nil, err
@@ -740,7 +740,7 @@ func (c *Client) installPerasSegmentRegionOnce(ctx context.Context, region regio
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := cl.PerasInstallSegment(ctx, &kvrpcpb.KvPerasInstallSegmentRequest{
+	resp, err := cl.InstallPreparedMVCCEntries(ctx, &kvrpcpb.KvInstallPreparedMVCCEntriesRequest{
 		Context: header,
 		Request: req,
 	})
@@ -748,10 +748,10 @@ func (c *Client) installPerasSegmentRegionOnce(ctx context.Context, region regio
 		return nil, nil, normalizeRPCError(err)
 	}
 	if resp == nil {
-		return nil, nil, kvPayloadProtocolError("peras install segment", region.desc.RegionID, "nil kv response")
+		return nil, nil, kvPayloadProtocolError("prepared mvcc install", region.desc.RegionID, "nil kv response")
 	}
 	if resp.GetRegionError() == nil && resp.GetResponse() == nil {
-		return nil, nil, kvPayloadProtocolError("peras install segment", region.desc.RegionID, "missing install payload")
+		return nil, nil, kvPayloadProtocolError("prepared mvcc install", region.desc.RegionID, "missing install payload")
 	}
 	return resp.GetResponse(), resp.GetRegionError(), nil
 }
@@ -1663,34 +1663,11 @@ func cloneAtomicPredicates(predicates []*kvrpcpb.AtomicPredicate) []*kvrpcpb.Ato
 	return out
 }
 
-func clonePerasInstallSegmentRequest(req *kvrpcpb.PerasInstallSegmentRequest) *kvrpcpb.PerasInstallSegmentRequest {
+func cloneInstallPreparedMVCCEntriesRequest(req *kvrpcpb.InstallPreparedMVCCEntriesRequest) *kvrpcpb.InstallPreparedMVCCEntriesRequest {
 	if req == nil {
 		return nil
 	}
-	return &kvrpcpb.PerasInstallSegmentRequest{
-		RoutingKey:            append([]byte(nil), req.GetRoutingKey()...),
-		SegmentRoot:           append([]byte(nil), req.GetSegmentRoot()...),
-		SegmentPayloadDigest:  append([]byte(nil), req.GetSegmentPayloadDigest()...),
-		SegmentPayload:        append([]byte(nil), req.GetSegmentPayload()...),
-		InstallVersion:        req.GetInstallVersion(),
-		MaterializeMvcc:       req.GetMaterializeMvcc(),
-		SegmentEpochId:        req.GetSegmentEpochId(),
-		SegmentOperationCount: req.GetSegmentOperationCount(),
-		SegmentEntryCount:     req.GetSegmentEntryCount(),
-		SegmentPayloadSize:    req.GetSegmentPayloadSize(),
-		CanonicalObjectKey:    append([]byte(nil), req.GetCanonicalObjectKey()...),
-		RoutingKeys:           cloneKeys(req.GetRoutingKeys()),
-		DependencyKeys:        cloneKeys(req.GetDependencyKeys()),
-		CatalogKeys:           cloneKeys(req.GetCatalogKeys()),
-		MaterializedKeys:      cloneKeys(req.GetMaterializedKeys()),
-		ReadFirstKey:          append([]byte(nil), req.GetReadFirstKey()...),
-		ReadLastKey:           append([]byte(nil), req.GetReadLastKey()...),
-		ReadDentryCount:       req.GetReadDentryCount(),
-		ReadInodeCount:        req.GetReadInodeCount(),
-		ReadSessionCount:      req.GetReadSessionCount(),
-		ReadTombstoneCount:    req.GetReadTombstoneCount(),
-		ReadDirectoryCount:    req.GetReadDirectoryCount(),
-	}
+	return proto.Clone(req).(*kvrpcpb.InstallPreparedMVCCEntriesRequest)
 }
 
 func cloneKeys(keys [][]byte) [][]byte {

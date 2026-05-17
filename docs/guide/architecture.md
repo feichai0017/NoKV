@@ -47,7 +47,7 @@ At a high level, the codebase is organized around four long-lived layers:
 │ kv.Apply dispatch       │
 │  ├ Get / Scan           │
 │  ├ Percolator MVCC      │
-│  ├ PerasInstallSegment  │  ← legacy experimental path during migration
+│  ├ Prepared MVCC install│
 │  └ Latch manager        │
 └───────────┬─────────────┘
             │
@@ -156,7 +156,7 @@ flowchart TD
 
 ### 2.5 Distributed Transaction And Experimental Install Path
 - `percolator` implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` dispatches raft commands to these helpers.
-- `PerasInstallSegment` currently installs fsmeta semantic segments through raftstore; catalog-only installs write segment/index records, while materialized installs expand entries into MVCC internal records. This is the path targeted by the experimental-boundary cleanup.
+- Experimental Peras code lowers fsmeta semantic segments into prepared MVCC entries before calling raftstore. Raftstore installs only the prepared entries and no longer decodes Peras segment payloads.
 - MVCC timestamps come from the distributed client/Coordinator TSO flow, not from an embedded standalone transaction API.
 - Watermarks (`utils.WaterMark`) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.
 
@@ -250,7 +250,7 @@ Then read:
 | `Commit` | `store.ProposeCommand` → `percolator.Commit` | `pb.CommitResponse` |
 | `ResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
 | `CheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
-| `PerasInstallSegment` | `store.ProposeCommand` → legacy experimental install branch | `pb.PerasInstallSegmentResponse` |
+| `InstallPreparedMVCCEntries` | `store.ProposeCommand` → prepared-entry install branch | `pb.InstallPreparedMVCCEntriesResponse` |
 
 `nokv serve` is the CLI entry point—open the DB, construct `server.Node`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/dev/cluster.sh` builds the CLI, seeds local peer catalogs, and launches the 333 separated layout (3 meta-root peers + 1 coordinator + all configured stores) on localhost, handling cleanup on Ctrl+C.
 

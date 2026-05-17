@@ -115,7 +115,7 @@ Strict semantics: if any inode is missing or fails to decode, the whole page ret
 
 - a successful `CMD_COMMIT`;
 - `CMD_RESOLVE_LOCK` with `commit_version != 0`;
-- a successful `CMD_PERAS_INSTALL_SEGMENT` with an install version.
+- a successful `CMD_INSTALL_PREPARED_MVCC` carrying `watch_keys`.
 
 `CMD_PREWRITE`, rollback, and diagnostic commands do not produce visible events.
 
