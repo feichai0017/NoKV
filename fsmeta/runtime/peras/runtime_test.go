@@ -169,17 +169,16 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
-func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
+func TestRuntimeWithoutWitnessLayerFlushesVisibleLogToInstall(t *testing.T) {
 	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
 	visibleLog := &replayingVisibleLog{}
 	committer, err := NewRuntime(Config{
-		Authority:          provider,
-		SegmentWitnessMode: SegmentWitnessModeBypass,
-		Installer:          installer,
-		VisibleLog:         visibleLog,
-		SegmentBatchSize:   1024,
-		SegmentFlushEvery:  time.Hour,
+		Authority:         provider,
+		Installer:         installer,
+		VisibleLog:        visibleLog,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 	defer committer.Close()
@@ -189,7 +188,7 @@ func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
 	require.NoError(t, committer.FlushDurable(ctx))
 
 	stats := committer.Stats()
-	require.Equal(t, "bypass", stats["witness_mode"])
+	require.Equal(t, "disabled", stats["witness_mode"])
 	require.Equal(t, 0, stats["witness_count"])
 	require.Equal(t, 0, stats["quorum"])
 	require.Equal(t, uint64(0), stats["witness_batch_total"])
@@ -200,8 +199,13 @@ func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
 	require.Len(t, visibleLog.applied, 1)
 }
 
-func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
-	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+func TestRuntimeRootSealAuthorityRequiresWitnessLayer(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
+			holderID: "holder-a",
+			grant:    testRuntimeCommitterGrant(),
+		},
+	}
 	_, err := NewRuntime(Config{
 		Authority:         provider,
 		Installer:         &fakeRuntimePerasSegmentInstaller{},
@@ -212,49 +216,28 @@ func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
 	require.ErrorIs(t, err, ErrRuntimeInvalid)
 }
 
-func TestRuntimeWitnessBypassRejectsRootSealAuthority(t *testing.T) {
-	provider := &publishingRuntimePerasGrantProvider{
-		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
-			holderID: "holder-a",
-			grant:    testRuntimeCommitterGrant(),
-		},
-	}
-	_, err := NewRuntime(Config{
-		Authority:          provider,
-		SegmentWitnessMode: SegmentWitnessModeBypass,
-		Installer:          &fakeRuntimePerasSegmentInstaller{},
-		VisibleLog:         &recordingVisibleLog{},
-		SegmentBatchSize:   1024,
-		SegmentFlushEvery:  time.Hour,
-	})
-	require.ErrorIs(t, err, ErrRuntimeInvalid)
-}
-
 func TestRuntimeMaterializedNoCatalogRequiresAppliedVisibleReplay(t *testing.T) {
 	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	_, err := NewRuntime(Config{
-		Authority:           provider,
-		SegmentWitnessMode:  SegmentWitnessModeBypass,
-		Installer:           &fakeRuntimePerasSegmentInstaller{},
-		VisibleLog:          &recordingVisibleLog{},
-		SegmentBatchSize:    1024,
-		SegmentFlushEvery:   time.Hour,
-		MaterializeSegments: true,
+		Authority:         provider,
+		Installer:         &fakeRuntimePerasSegmentInstaller{materializes: true},
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.ErrorIs(t, err, ErrRuntimeInvalid)
 }
 
 func TestRuntimeMaterializedFlushRemovesReadOverlay(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
-	installer := &fakeRuntimePerasSegmentInstaller{}
+	installer := &fakeRuntimePerasSegmentInstaller{materializes: true}
 	committer, err := NewRuntime(Config{
-		Authority:           provider,
-		Witnesses:           testRuntimePerasWitnesses(t, 3),
-		Installer:           installer,
-		VisibleLog:          &replayingVisibleLog{},
-		SegmentBatchSize:    1024,
-		SegmentFlushEvery:   time.Hour,
-		MaterializeSegments: true,
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		VisibleLog:        &replayingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 	defer committer.Close()
@@ -996,15 +979,13 @@ func TestRuntimeRecoversAppliedVisibleCompletionWhenMaterialized(t *testing.T) {
 	require.NoError(t, err)
 	log.SetRetainAppliedRecords(true)
 	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
-	installer := &fakeRuntimePerasSegmentInstaller{}
+	installer := &fakeRuntimePerasSegmentInstaller{materializes: true}
 	committer, err := NewRuntime(Config{
-		Authority:           provider,
-		SegmentWitnessMode:  SegmentWitnessModeBypass,
-		Installer:           installer,
-		VisibleLog:          log,
-		MaterializeSegments: true,
-		SegmentBatchSize:    1024,
-		SegmentFlushEvery:   time.Hour,
+		Authority:         provider,
+		Installer:         installer,
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 
@@ -1025,15 +1006,13 @@ func TestRuntimeRecoversAppliedVisibleCompletionWhenMaterialized(t *testing.T) {
 	require.NoError(t, err)
 	reopenLog.SetRetainAppliedRecords(true)
 	defer reopenLog.Close()
-	reopenedInstaller := &fakeRuntimePerasSegmentInstaller{}
+	reopenedInstaller := &fakeRuntimePerasSegmentInstaller{materializes: true}
 	reopened, err := NewRuntime(Config{
-		Authority:           provider,
-		SegmentWitnessMode:  SegmentWitnessModeBypass,
-		Installer:           reopenedInstaller,
-		VisibleLog:          reopenLog,
-		MaterializeSegments: true,
-		SegmentBatchSize:    1024,
-		SegmentFlushEvery:   time.Hour,
+		Authority:         provider,
+		Installer:         reopenedInstaller,
+		VisibleLog:        reopenLog,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 	defer reopened.Close()
@@ -2690,15 +2669,16 @@ func runtimePerasCatalogRows(segment fsperas.PerasSegment, installVersion uint64
 }
 
 type fakeRuntimePerasSegmentInstaller struct {
-	mu          sync.Mutex
-	calls       int
-	scope       compile.AuthorityScope
-	segment     fsperas.PerasSegment
-	payload     []byte
-	digest      [32]byte
-	install     compile.InstallPlan
-	materialize bool
-	modes       []bool
+	mu           sync.Mutex
+	calls        int
+	scope        compile.AuthorityScope
+	segment      fsperas.PerasSegment
+	payload      []byte
+	digest       [32]byte
+	install      compile.InstallPlan
+	materialize  bool
+	materializes bool
+	modes        []bool
 }
 
 func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req SegmentInstallRequest) (InstallCursor, error) {
@@ -2713,6 +2693,10 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req
 	i.materialize = req.MaterializeMVCC
 	i.modes = append(i.modes, req.MaterializeMVCC)
 	return testPerasInstallCursor(uint64(i.calls)), nil
+}
+
+func (i *fakeRuntimePerasSegmentInstaller) MaterializesSegments() bool {
+	return i != nil && i.materializes
 }
 
 type recordingVisibleLog struct {

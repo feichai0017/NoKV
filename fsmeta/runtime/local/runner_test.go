@@ -119,7 +119,7 @@ func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
 	require.NoError(t, err)
 	const n = 64
 	mutations := make([]*kvrpcpb.Mutation, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		k := []byte("install-chunk-" + string(rune('A'+i/26)) + string(rune('a'+i%26)))
 		mutations = append(mutations, &kvrpcpb.Mutation{
 			Op:    kvrpcpb.Mutation_Put,

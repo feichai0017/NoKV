@@ -390,7 +390,7 @@ func TestLocalRuntimePerasBypassesSegmentWitness(t *testing.T) {
 	require.NoError(t, rt.Peras.FlushDurable(ctx))
 
 	stats := rt.Peras.Stats()
-	require.Equal(t, "bypass", stats["witness_mode"])
+	require.Equal(t, "disabled", stats["witness_mode"])
 	require.Equal(t, 0, stats["witness_count"])
 	require.Equal(t, 0, stats["quorum"])
 	require.Equal(t, uint64(0), stats["witness_batch_total"])

@@ -243,16 +243,10 @@ func (r *Runner) chunkInstallMutations(mutations []*kvrpcpb.Mutation) ([][]*kvrp
 	// version markers can append). Keep the chunk strictly below the DB
 	// limit so the downstream Send() check never trips.
 	if maxCount > 0 {
-		maxCount = maxCount / 2
-		if maxCount < 1 {
-			maxCount = 1
-		}
+		maxCount = max(maxCount/2, 1)
 	}
 	if maxSize > 0 {
-		maxSize = maxSize - (maxSize / 8)
-		if maxSize < 1024 {
-			maxSize = 1024
-		}
+		maxSize = max(maxSize-(maxSize/8), 1024)
 	}
 	chunks := make([][]*kvrpcpb.Mutation, 0, 1)
 	start := 0

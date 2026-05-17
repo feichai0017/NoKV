@@ -3,7 +3,10 @@
 
 package peras
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // SegmentInstallLayer names one step of the segment install pipeline.
 // It is an alias for SegmentInstaller so that today's single-installer
@@ -65,12 +68,11 @@ func (c *installChain) InstallSegment(ctx context.Context, req SegmentInstallReq
 }
 
 func (c *installChain) NeedsSegmentPayload() bool {
-	for _, layer := range c.layers {
-		if segmentInstallerNeedsPayload(layer) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.layers, segmentInstallerNeedsPayload)
+}
+
+func (c *installChain) MaterializesSegments() bool {
+	return slices.ContainsFunc(c.layers, segmentInstallerMaterializes)
 }
 
 func segmentInstallerNeedsPayload(installer SegmentInstaller) bool {
@@ -82,4 +84,15 @@ func segmentInstallerNeedsPayload(installer SegmentInstaller) bool {
 		return true
 	}
 	return requirement.NeedsSegmentPayload()
+}
+
+func segmentInstallerMaterializes(installer SegmentInstaller) bool {
+	if installer == nil {
+		return false
+	}
+	requirement, ok := installer.(SegmentMaterializationRequirement)
+	if !ok {
+		return false
+	}
+	return requirement.MaterializesSegments()
 }

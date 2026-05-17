@@ -13,14 +13,13 @@ import (
 )
 
 // mvccEntryLayer applies a segment's entries directly to base MVCC for
-// the local runtime when req.MaterializeMVCC=true. It is the chain
-// counterpart of the materialize branch that used to live inside
-// localPerasSegmentInstaller.
+// the local runtime when req.MaterializeMVCC=true. The layer declares that it
+// materializes segments, so runtime construction derives the local flush shape
+// from install-chain composition.
 //
-// The local runtime now wires this as its only install layer and enables
-// MaterializeSegments. The false branch remains a no-op so tests or temporary
-// callers that use a non-materialized request fail closed instead of writing a
-// catalog record through the local path.
+// The false branch remains a no-op so tests or temporary callers that use a
+// non-materialized request fail closed instead of writing a catalog record
+// through the local path.
 type mvccEntryLayer struct {
 	runner *Runner
 }
@@ -62,6 +61,10 @@ func (l *mvccEntryLayer) InstallSegment(ctx context.Context, req runtimeperas.Se
 
 func (l *mvccEntryLayer) NeedsSegmentPayload() bool {
 	return false
+}
+
+func (l *mvccEntryLayer) MaterializesSegments() bool {
+	return true
 }
 
 // buildMVCCEntryMutations folds a segment's entries (across all kinds

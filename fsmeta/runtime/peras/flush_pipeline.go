@@ -176,11 +176,11 @@ func (p flushPipeline) renewBatchAuthority(ctx context.Context, batch perasFlush
 
 func (p flushPipeline) witnessBatch(ctx context.Context, batch perasFlushBatch) error {
 	c := p.runtime
-	if !c.usesSegmentWitness() {
+	if c == nil || c.witness == nil {
 		return nil
 	}
 	witnessStart := time.Now()
-	if err := c.appendSegmentWitnessBatchWithRetry(ctx, batch); err != nil {
+	if err := c.witness.signBatch(ctx, batch); err != nil {
 		return c.recordErrorf("append peras segment witness batch: %w", err)
 	}
 	c.recordWitnessLatency(time.Since(witnessStart))

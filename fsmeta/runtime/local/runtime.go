@@ -29,7 +29,8 @@ const (
 	localPerasSegmentMaxPayloadBytes    = 128 << 10
 	localPerasSegmentFlushEvery         = 250 * time.Millisecond
 	// localPerasMaterializeMaxReplayMutations caps mutations per install
-	// segment when MaterializeSegments=true. Each install translates each
+	// segment because the local install layer materializes into base MVCC.
+	// Each install translates each
 	// mutation into a base-MVCC commit chunk under the local DB's
 	// MaxBatchCount budget, so capping per-segment mutations keeps single
 	// installs bounded in wall-clock time and lets the install pipeline
@@ -282,7 +283,6 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 	}
 	committer, err := runtimeperas.NewRuntime(runtimeperas.Config{
 		Authority:                     authority,
-		SegmentWitnessMode:            runtimeperas.SegmentWitnessModeBypass,
 		Installer:                     runtimeperas.NewInstallChain(newMVCCEntryLayer(runner)),
 		WatchPublisher:                watcher.Router,
 		VisibleLog:                    visibleLog,
@@ -296,7 +296,6 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 		SegmentInstallParallelism:     localPerasSegmentInstallParallelism(),
 		SegmentFlushParallelism:       localPerasSegmentInstallParallelism(),
 		SegmentFlushEvery:             localPerasSegmentFlushEvery,
-		MaterializeSegments:           true,
 		VisibleSnapshotCapture:        true,
 		Now:                           opts.Clock,
 	})

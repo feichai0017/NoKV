@@ -265,10 +265,17 @@ func (c *Runtime) Stats() map[string]any {
 		"segment_install_queue_capacity":             installQueueCapacity,
 		"segment_seal_queue_depth":                   sealQueueDepth,
 		"segment_seal_queue_capacity":                sealQueueCapacity,
-		"witness_mode":                               c.witnessMode.String(),
+		"witness_mode":                               c.witnessModeName(),
 		"witness_count":                              len(c.witnesses),
 		"quorum":                                     c.quorum,
 	}
+}
+
+func (c *Runtime) witnessModeName() string {
+	if c == nil || c.witness == nil {
+		return "disabled"
+	}
+	return "quorum"
 }
 
 func (c *Runtime) visibleLogPolicy() string {

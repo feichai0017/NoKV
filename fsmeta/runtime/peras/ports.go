@@ -49,6 +49,14 @@ type SegmentPayloadRequirement interface {
 	NeedsSegmentPayload() bool
 }
 
+// SegmentMaterializationRequirement lets an install layer declare that flushed
+// segments are installed directly into the base MVCC view. This makes local vs.
+// distributed runtime shape a property of the composed install layers instead
+// of a parallel Config flag.
+type SegmentMaterializationRequirement interface {
+	MaterializesSegments() bool
+}
+
 // SegmentFinalizeRequest carries the installed segment and cursor into the
 // post-publish runtime finalize stage.
 type SegmentFinalizeRequest struct {

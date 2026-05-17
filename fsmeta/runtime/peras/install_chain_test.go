@@ -34,6 +34,15 @@ func (f *fakePayloadAwareInstallLayer) NeedsSegmentPayload() bool {
 	return f.needsPayload
 }
 
+type fakeMaterializingInstallLayer struct {
+	fakeInstallLayer
+	materializes bool
+}
+
+func (f *fakeMaterializingInstallLayer) MaterializesSegments() bool {
+	return f.materializes
+}
+
 func TestNewInstallChainReturnsNilWhenEmpty(t *testing.T) {
 	require.Nil(t, NewInstallChain())
 }
@@ -146,6 +155,24 @@ func TestInstallChainReportsPayloadRequirement(t *testing.T) {
 		&fakePayloadAwareInstallLayer{},
 	)
 	require.False(t, segmentInstallerNeedsPayload(chain))
+}
+
+func TestInstallChainReportsMaterializationRequirement(t *testing.T) {
+	require.False(t, segmentInstallerMaterializes(nil))
+	require.False(t, segmentInstallerMaterializes(&fakeInstallLayer{}))
+	require.False(t, segmentInstallerMaterializes(&fakeMaterializingInstallLayer{}))
+
+	chain := NewInstallChain(
+		&fakeMaterializingInstallLayer{},
+		&fakeMaterializingInstallLayer{materializes: true},
+	)
+	require.True(t, segmentInstallerMaterializes(chain))
+
+	chain = NewInstallChain(
+		&fakeMaterializingInstallLayer{},
+		&fakeMaterializingInstallLayer{},
+	)
+	require.False(t, segmentInstallerMaterializes(chain))
 }
 
 type fakeRequestObservingLayer struct {

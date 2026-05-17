@@ -49,7 +49,6 @@ const (
 type Config struct {
 	Authority                  GrantProvider
 	Witnesses                  []fsperas.WitnessReplica
-	SegmentWitnessMode         SegmentWitnessMode
 	Installer                  SegmentInstaller
 	CatalogScanner             SegmentCatalogScanner
 	WatchPublisher             perasWatchPublisher
@@ -62,7 +61,8 @@ type Config struct {
 	SegmentMaxReplayOperations int
 	SegmentMaxReplayMutations  int
 	// MaterializeMaxReplayMutations bounds the per-segment mutation count
-	// when MaterializeSegments=true. Zero falls back to
+	// when the install chain materializes segments into base MVCC. Zero falls
+	// back to
 	// defaultPerasMaterializeMaxReplayMutations, which is intentionally
 	// small (the distributed install path serializes each materialize
 	// install as one raft commit and prefers many small commits). Local
@@ -77,11 +77,6 @@ type Config struct {
 	BackgroundErrorBackoff        time.Duration
 	SegmentInstallParallelism     int
 	SegmentFlushParallelism       int
-	MaterializeSegments           bool
-	// CatalogOnlyAuthorityDrain keeps DrainAuthority on catalog install when
-	// MaterializeSegments is false. Distributed runtimes leave this disabled
-	// so authority retirement still drains into base MVCC.
-	CatalogOnlyAuthorityDrain bool
 	// VisibleSnapshotCapture lets SnapshotSubtree capture the holder-local
 	// visible overlay without first flushing an authority. This is only safe
 	// for runtimes whose visible WAL is an accepted durability boundary.
@@ -94,18 +89,6 @@ type Config struct {
 	Now                          func() time.Time
 }
 
-type SegmentWitnessMode uint8
-
-const (
-	SegmentWitnessModeDefault SegmentWitnessMode = iota
-	// SegmentWitnessModeQuorum requires a segment witness quorum before segment
-	// install can become durable. This is the distributed runtime default.
-	SegmentWitnessModeQuorum
-	// SegmentWitnessModeBypass skips the segment witness stage. It is only for
-	// runtimes whose authority is local and cannot publish rooted segment seals.
-	SegmentWitnessModeBypass
-)
-
 // Runtime is the fsmeta runtime bridge from compiler deltas to visible overlay
 // commits and segment install. Distributed runtimes require witness quorum
 // evidence; local runtimes may bypass that stage when no rooted seal can be
@@ -114,7 +97,7 @@ type Runtime struct {
 	authority              GrantProvider
 	seals                  SealProvider
 	witnesses              []fsperas.WitnessReplica
-	witnessMode            SegmentWitnessMode
+	witness                *witnessSignLayer
 	installer              SegmentInstaller
 	finalizer              SegmentFinalizer
 	catalog                SegmentCatalogScanner
@@ -133,7 +116,6 @@ type Runtime struct {
 	installN               int
 	flushN                 int
 	materialize            bool
-	catalogOnlyDrain       bool
 	visibleSnapshots       bool
 	quorumVisibleSnapshots bool
 	flushEvery             time.Duration
@@ -207,19 +189,8 @@ type perasFrozenPlan struct {
 	plan   fsperas.ReplayPlan
 }
 
-func normalizeSegmentWitnessMode(mode SegmentWitnessMode) (SegmentWitnessMode, error) {
-	switch mode {
-	case SegmentWitnessModeDefault:
-		return SegmentWitnessModeQuorum, nil
-	case SegmentWitnessModeQuorum, SegmentWitnessModeBypass:
-		return mode, nil
-	default:
-		return 0, ErrRuntimeInvalid
-	}
-}
-
-func configureSegmentWitnesses(cfg Config, mode SegmentWitnessMode) ([]fsperas.WitnessReplica, int, error) {
-	if mode == SegmentWitnessModeBypass {
+func configureSegmentWitnesses(cfg Config) ([]fsperas.WitnessReplica, int, error) {
+	if len(cfg.Witnesses) == 0 {
 		if cfg.Quorum != 0 {
 			return nil, 0, ErrRuntimeInvalid
 		}
@@ -230,9 +201,6 @@ func configureSegmentWitnesses(cfg Config, mode SegmentWitnessMode) ([]fsperas.W
 			return nil, 0, ErrRuntimeInvalid
 		}
 		return nil, 0, nil
-	}
-	if len(cfg.Witnesses) == 0 {
-		return nil, 0, ErrRuntimeInvalid
 	}
 	witnesses := make([]fsperas.WitnessReplica, 0, len(cfg.Witnesses))
 	seen := make(map[string]struct{}, len(cfg.Witnesses))
@@ -256,30 +224,15 @@ func configureSegmentWitnesses(cfg Config, mode SegmentWitnessMode) ([]fsperas.W
 	return witnesses, quorum, nil
 }
 
-func (mode SegmentWitnessMode) String() string {
-	switch mode {
-	case SegmentWitnessModeQuorum:
-		return "quorum"
-	case SegmentWitnessModeBypass:
-		return "bypass"
-	default:
-		return "unknown"
-	}
-}
-
 func (c *Runtime) usesSegmentWitness() bool {
-	return c != nil && c.witnessMode == SegmentWitnessModeQuorum
+	return c != nil && c.witness != nil
 }
 
 func NewRuntime(cfg Config) (*Runtime, error) {
 	if cfg.Authority == nil || cfg.Authority.HolderID() == "" {
 		return nil, ErrRuntimeInvalid
 	}
-	witnessMode, err := normalizeSegmentWitnessMode(cfg.SegmentWitnessMode)
-	if err != nil {
-		return nil, err
-	}
-	witnesses, quorum, err := configureSegmentWitnesses(cfg, witnessMode)
+	witnesses, quorum, err := configureSegmentWitnesses(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +334,8 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if bgBackoff < 0 {
 		return nil, ErrRuntimeInvalid
 	}
-	if cfg.MaterializeSegments && cfg.CatalogScanner == nil && cfg.VisibleLog != nil {
+	materialize := segmentInstallerMaterializes(cfg.Installer)
+	if materialize && cfg.CatalogScanner == nil && cfg.VisibleLog != nil {
 		if _, ok := cfg.VisibleLog.(visibleLogStateReplayer); !ok {
 			return nil, ErrRuntimeInvalid
 		}
@@ -402,7 +356,6 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		authority:              cfg.Authority,
 		seals:                  seals,
 		witnesses:              witnesses,
-		witnessMode:            witnessMode,
 		installer:              cfg.Installer,
 		catalog:                cfg.CatalogScanner,
 		watch:                  cfg.WatchPublisher,
@@ -419,8 +372,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		routeBudget:            routeBudget,
 		installN:               installN,
 		flushN:                 flushN,
-		materialize:            cfg.MaterializeSegments,
-		catalogOnlyDrain:       cfg.CatalogOnlyAuthorityDrain,
+		materialize:            materialize,
 		visibleSnapshots:       cfg.VisibleSnapshotCapture,
 		quorumVisibleSnapshots: cfg.QuorumVisibleSnapshotCapture,
 		flushEvery:             flushEvery,
@@ -432,6 +384,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		latches:                fsperas.NewAdmissionLatches(),
 		read:                   newReadState(),
 	}
+	c.witness = newWitnessSignLayer(c)
 	c.drainCond = sync.NewCond(&c.drainMu)
 	c.admissionCond = sync.NewCond(&c.admissionMu)
 	// Phase 3 composition: the caller-supplied installer owns durable

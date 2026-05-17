@@ -58,10 +58,7 @@ func (c *Runtime) DrainAuthority(ctx context.Context, retirer fsperas.AuthorityR
 }
 
 func (c *Runtime) authorityDrainMaterialize() bool {
-	if c == nil || c.materialize {
-		return true
-	}
-	return !c.catalogOnlyDrain
+	return true
 }
 
 func (c *Runtime) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {

@@ -161,12 +161,13 @@ WitnessSignLayer
   Responsibility: send segment witness records to configured witnesses;
                   collect signatures up to quorum.
   Inputs needed:  Segment.Root, PayloadDigest, EpochID, witness list.
-  Pre-condition:  CatalogLayer has run (witnesses identify segments via
-                  catalog references).
+  Pre-condition:  segment payload and digest have been derived for this
+                  flush batch.
   Failure mode:   abort install — without quorum the segment is not durable
                   by Peras' rules; visible commit must be marked failed.
-  Notes:          distributed-only. SegmentWitnessMode=Bypass means this
-                  layer is not in the chain.
+  Notes:          distributed-only. Local runtime omits this layer because
+                  the visible WAL and base-MVCC install are the local durable
+                  boundary.
 
 CompletionIndexLayer
   Stage:          post-publish finalize.
@@ -205,26 +206,22 @@ encoding because catalog and witness evidence still need payload identity.
 install := peras.NewInstallChain(
     local.MVCCEntryLayer(runner),
 )
-materializeSegments := true
+// MVCCEntryLayer implements SegmentMaterializationRequirement, so the runtime
+// derives MaterializeMVCC=true from chain composition.
 
-// fsmeta/runtime/raftstore/open.go (unchanged behavior)
-install := peras.NewInstallChain(
-    peras.MVCCEntryLayer(runner),
-    peras.CatalogLayer(runner),
-    peras.WitnessSignLayer(witnesses),
-)
-finalize := peras.NewFinalizeChain(
-    peras.SealedTrackingLayer(runtime),
-    peras.CompletionIndexLayer(),
-)
+// fsmeta/runtime/raftstore/peras_runtime.go
+cfg.Installer = newRaftstoreSegmentInstaller(runner, router)
+cfg.Witnesses = witnessConns.witnesses
+// Non-empty Witnesses makes NewRuntime install WitnessSignLayer.
 ```
 
 The order matters for failure-mode reasoning:
 
 - MVCCEntryLayer first: local materialization must be the first durable
   candidate because it owns the base-MVCC cursor when enabled.
-- CatalogLayer before WitnessSignLayer: witnesses sign a segment whose payload
-  and catalog identity are already known.
+- WitnessSignLayer before distributed store install: raftstore install only
+  proceeds after witness quorum. The subsequent root seal still requires a
+  valid install cursor and payload digest.
 - Root publish/seal after install evidence: distributed read visibility is not
   valid until authority accepts the seal.
 - SealedTrackingLayer after publish/seal: adding a segment to the sealed
@@ -265,20 +262,19 @@ Distributed recovery remains catalog/root/witness based. Root-sealed witness
 recovery still treats catalog payload identity as distributed evidence and is
 not replaced by the local visible-WAL shortcut.
 
-## Target configuration cleanup
+## Configuration cleanup
 
-The refactor makes these `Config` fields derivable from chain composition, but
-the fields are not all deleted yet:
+The refactor makes the former mode flags derivable from chain composition:
 
-- `MaterializeSegments` — implied by whether the runtime uses a base-MVCC
-  install layer plus local finalize, or catalog/witness install plus
-  distributed finalize.
-- `CatalogOnlyAuthorityDrain` — implied by chain composition.
-- `SegmentWitnessMode` enum — replaced by "is WitnessSignLayer in the chain".
+- segment materialization is implied by
+  `SegmentMaterializationRequirement.MaterializesSegments()`;
+- authority drain uses base-MVCC materialization;
+- witness signing is implied by whether witnesses are configured and a
+  `WitnessSignLayer` is present.
 
 `SegmentInstaller` remains the exported runtime boundary. The canonical wiring
 is chain composition, and unknown installers are treated conservatively as
-payload-requiring until they declare otherwise.
+payload-requiring and non-materializing until they declare otherwise.
 
 ## Migration plan
 
@@ -287,14 +283,14 @@ payload-requiring until they declare otherwise.
 | 1 | Introduce `SegmentInstallLayer` interface and `NewInstallChain` constructor. Make `NewRuntime` wrap `cfg.Installer` so future phases can compose multiple layers without further changes. | ~150 | low — no behavior change | **landed** (`3885377e`) |
 | 1.5 | Compiler unblock for cross-bucket materialize. Add `Config.MaterializeMaxReplayMutations` so callers can override the distributed-routing 20-mutation cap. Distributed defaults preserve current behavior. | ~190 | low | **landed** (`6ed3d704`) |
 | 1.6 | Cross-shard install path: `runner.InstallMutationsAtCommit` + `applyInstallMutationGroup` bypass the percolator atomicity guard. Auto-chunk under the local DB's `MaxBatchCount` / `MaxBatchSize` budget. Percolator commits keep the guard. `LSMShardCount=4` default preserved. | ~218 | medium | **landed** (`fcbb0f8b`) |
-| 1.7 | Catalog-skip in `localPerasSegmentInstaller` when `MaterializeMVCC=true` — when data lives in base MVCC the catalog record is redundant for local-only recovery. Catalog-mode (materialize=false) unchanged. **Default stays MaterializeSegments=false** until Phase 4 detaches install from the catalog pipeline entirely. | ~60 | low | **landed** (`fb685424`) |
+| 1.7 | Catalog-skip in `localPerasSegmentInstaller` when `MaterializeMVCC=true` — when data lives in base MVCC the catalog record is redundant for local-only recovery. Catalog-mode (materialize=false) unchanged. The default stayed catalog-mode until Phase 4 detached local install from the catalog pipeline entirely. | ~60 | low | **landed** (`fb685424`) |
 | 2 | Extract MVCCEntryLayer (local) + CompletionIndexLayer (both runtimes). Chain semantics relaxed to "first valid cursor wins" so the cursor producer switches on `MaterializeMVCC`. Single `readState.mergeCompletions` helper owns the completion index — chain layer uses it on the live path, recovery's `LoadInstalledSegments` (which bypasses the chain because the catalog already exists) calls it explicitly. | ~270 | low — split, no behavior change on default settings | **landed** |
 | 3 | Split pre-publish install from post-publish finalize. Move SealedTrackingLayer and CompletionIndexLayer out of pre-publish `installBatch`; run them after root seal for distributed and after base-MVCC materialization for local. | ~220 | medium — moving this boundary too early exposes unsealed segments to reads; moving completion too early can make retry dedup lie | **landed** |
 | 4 | Local opts out of catalog install/scanner and defaults to base-MVCC materialization. WAL-backed visible logs retain applied records and replay both pending and applied state so restart keeps retry deduplication without catalog records. Distributed catalog/root recovery is unchanged. | ~260 | medium-high — recovery contract changes for local | **landed** |
-| 5 | Extract WitnessSignLayer. Wire raftstore. Witness mode enum deleted. | ~150 | low — already gated by Bypass mode | pending |
+| 5 | Extract WitnessSignLayer. Wire raftstore. Witness mode enum deleted. | ~150 | low — already gated by the no-witness local path | **landed** |
 | 6a | Skip segment payload encoding when the local install chain does not require it. Unknown/distributed installers still encode by default. | ~80 | low | **landed** |
-| 6b | Delete `MaterializeSegments` / `CatalogOnlyAuthorityDrain` flags after raftstore and tests no longer rely on them directly. | ~40 | low | pending |
-| 7 | TLA spec — verify safety is not order-dependent across legitimate chain compositions. | ~100 spec | medium | pending |
+| 6b | Delete `MaterializeSegments` / `CatalogOnlyAuthorityDrain` flags after raftstore and tests no longer rely on them directly. | ~40 | low | **landed** |
+| 7 | TLA spec — verify safety is not order-dependent across legitimate chain compositions. | ~100 spec | medium | **landed** |
 
 Phases 1, 2, 3, 5, and 6 are intended to be byte-identical for distributed.
 Phase 3 changes runtime staging but keeps distributed visibility identical:
@@ -303,14 +299,14 @@ changes local's behavior (no sealedSegments, no catalog) while keeping
 raftstore on the catalog/witness/root-seal path. Phase 7 verifies that the
 safety argument is not order-dependent across legitimate compositions.
 
-Total remaining: witness-layer extraction, config deletion, and the TLA/crash
-matrix. The local materialization boundary is no longer the blocker.
+The witness-layer extraction, config deletion, and TLA composition matrix have
+landed. The local materialization boundary is no longer the blocker.
 
 ## What Phase 4 changed
 
 A measurement during foundation work confirms the layering matters more
 than the flag. With Phases 1.5 + 1.6 + 1.7 landed, flipping
-`MaterializeSegments=true` on local makes the test
+local base-MVCC materialization on makes the test
 `TestLocalRuntimePerasVisibleCommitRecoversInstalledCatalog` pass
 correctly — every multi-bucket op materializes into base MVCC, the
 catalog record is skipped, and visibleLog replay covers recovery. But
@@ -331,7 +327,7 @@ under sustained varmail+ai-checkpoint load:
 The root cause is structural, not a tuning miss: the segment install
 pipeline was built to write one small catalog record per segment. Every
 segment retires its ops from `holder.pending` only once that single
-install completes. With `MaterializeSegments=true` each install now
+install completes. With local base-MVCC materialization each install now
 drives N MVCC commit chunks (one per segment entry) through the
 pipeline, and the pipeline serializes per-holder. Pending grows faster
 than installs complete and admission backpressure pins the workload.
@@ -402,18 +398,14 @@ well under any human-perceptible bound.
 
 ## Open questions
 
-1. WitnessSignLayer is still represented through the existing witness mode
-   instead of a first-class install layer.
-2. `MaterializeSegments` and `CatalogOnlyAuthorityDrain` are still config
-   switches. They should disappear once composition alone expresses the mode.
-3. Local visible WAL now retains applied records as completion evidence.
+1. Local visible WAL now retains applied records as completion evidence.
    A future GC path needs a durable completion-retention boundary before those
    records can be compacted safely.
 
 ## Resolved prerequisite: compiler supports multi-bucket materialize
 
 A field experiment in this branch originally confirmed that simply flipping
-`MaterializeSegments=true` on the local runtime breaks the existing
+local base-MVCC materialization on breaks the existing
 `TestLocalRuntimePerasVisibleCommitRecoversInstalledCatalog` test with
 `split peras replay plan by install budget: invalid peras segment`. The
 root cause is at the compiler layer, not the runtime:
@@ -477,5 +469,5 @@ existing code does not do is *plan* for that case.
 - Phase 3 has moved read/dedup finalize after publish or local materialization.
 - Phase 4 has removed local's catalog dependency and added WAL-state recovery
   for applied visible records.
-- The next implementation PR should extract WitnessSignLayer and remove the
-  now-derivable mode flags.
+- WitnessSignLayer and the now-derivable mode flags are no longer separate
+  runtime configuration switches.
