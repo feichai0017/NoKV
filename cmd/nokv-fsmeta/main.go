@@ -297,7 +297,6 @@ func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
 				publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
 			}
 			for _, stats := range rt.ExtensionStats {
-				stats := stats
 				if stats.Name == "" || stats.Snapshot == nil {
 					continue
 				}
