@@ -1,28 +1,29 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fsmeta is NoKV's filesystem-metadata plane.
+// Package fsmeta is NoKV's workspace namespace metadata plane.
 //
-// fsmeta sits on top of NoKV as a consumer. It uses the DB, percolator, and
-// raftstore-client surfaces to host the schema and semantics a distributed
-// filesystem needs: inodes, dentries, xattrs, atomic cross-directory rename,
-// multi-mount namespace routing, and subtree-scoped operations.
+// fsmeta sits on top of NoKV as a consumer. It exposes filesystem-shaped
+// metadata semantics for AI agent workspaces: inodes, dentries, xattrs, atomic
+// cross-directory rename, multi-mount namespace routing, snapshots, and watch
+// streams. The same contract can also serve distributed filesystems that need a
+// standalone metadata service.
 //
 // Scope boundary:
 //
-//   - fsmeta is not a filesystem. It is the metadata kernel that a DFS
-//     (JuiceFS, SeaweedFS, or a native FUSE frontend) consumes. NoKV's pitch is
-//     "metadata backend", not "another distributed filesystem".
+//   - fsmeta is not a filesystem. It is the namespace metadata kernel that an
+//     agent workspace layer, a DFS, or a FUSE frontend consumes. NoKV's pitch is
+//     "workspace metadata engine", not "another distributed filesystem".
 //
 //   - fsmeta does not live under meta/. meta/root is NoKV's own rooted cluster
 //     truth: region descriptors, authority grants, and allocator fences.
 //     User-facing filesystem metadata is application data: a consumer of NoKV,
 //     not part of NoKV's internal truth.
 //
-//   - fsmeta reuses percolator for cross-row atomicity, and may reuse
-//     meta/root's rooted-event substrate only for namespace-level authority
-//     where Eunomia semantics apply. Per-inode and per-dentry mutations are
-//     data-plane writes, never rooted events.
+//   - fsmeta uses runtime adapters for local and distributed storage. It may
+//     reuse meta/root's rooted-event substrate only for namespace-level
+//     authority where Eunomia semantics apply. Per-inode and per-dentry
+//     mutations are data-plane writes, never rooted events.
 package fsmeta
 
 // MountID identifies one filesystem namespace hosted inside fsmeta.
@@ -56,34 +57,34 @@ type DentryAttrPair struct {
 	Inode  InodeRecord
 }
 
-// PerasSnapshotSegmentRef identifies one witnessed Peras segment retained by a
+// SnapshotEvidenceRef identifies one runtime-visible artifact retained by a
 // SnapshotSubtreeToken. The payload bytes are intentionally not part of the
-// public token; another gateway can probe the witness set by epoch/root/digest
-// to prove the visible snapshot frontier.
-type PerasSnapshotSegmentRef struct {
-	EpochID              uint64
-	SegmentRoot          [32]byte
-	SegmentPayloadDigest [32]byte
+// public token; another gateway can use the runtime evidence to prove that the
+// visible snapshot frontier is still recoverable.
+type SnapshotEvidenceRef struct {
+	EpochID       uint64
+	EvidenceRoot  [32]byte
+	PayloadDigest [32]byte
 }
 
-// PerasVisibleSnapshotCapture is the runtime-internal evidence returned when a
+// VisibleSnapshotCapture is the runtime-internal evidence returned when a
 // visible snapshot has been made durable without forcing immediate install.
-type PerasVisibleSnapshotCapture struct {
-	SegmentRefs []PerasSnapshotSegmentRef
+type VisibleSnapshotCapture struct {
+	Evidence []SnapshotEvidenceRef
 }
 
-// Valid reports whether ref can address a durable Peras witness segment.
-func (r PerasSnapshotSegmentRef) Valid() bool {
+// Valid reports whether ref can address durable runtime snapshot evidence.
+func (r SnapshotEvidenceRef) Valid() bool {
 	return r.EpochID != 0 &&
-		r.SegmentRoot != ([32]byte{}) &&
-		r.SegmentPayloadDigest != ([32]byte{})
+		r.EvidenceRoot != ([32]byte{}) &&
+		r.PayloadDigest != ([32]byte{})
 }
 
-func clonePerasSnapshotSegmentRefs(refs []PerasSnapshotSegmentRef) []PerasSnapshotSegmentRef {
+func cloneSnapshotEvidenceRefs(refs []SnapshotEvidenceRef) []SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]PerasSnapshotSegmentRef, len(refs))
+	out := make([]SnapshotEvidenceRef, len(refs))
 	copy(out, refs)
 	return out
 }
@@ -99,16 +100,16 @@ type ReadVersionRequest struct {
 // is published into rooted truth by the fsmeta service boundary and must be
 // retired by callers when its GC-retention contract is no longer needed.
 type SnapshotSubtreeToken struct {
-	Mount            MountID
-	MountKeyID       MountKeyID
-	RootInode        InodeID
-	ReadVersion      uint64
-	PerasSegmentRefs []PerasSnapshotSegmentRef
+	Mount           MountID
+	MountKeyID      MountKeyID
+	RootInode       InodeID
+	ReadVersion     uint64
+	RuntimeEvidence []SnapshotEvidenceRef
 }
 
 // Clone returns a detached snapshot token.
 func (t SnapshotSubtreeToken) Clone() SnapshotSubtreeToken {
-	t.PerasSegmentRefs = clonePerasSnapshotSegmentRefs(t.PerasSegmentRefs)
+	t.RuntimeEvidence = cloneSnapshotEvidenceRefs(t.RuntimeEvidence)
 	return t
 }
 

@@ -79,50 +79,50 @@ func snapshotSubtreeTokenFromProto(resp *fsmetapb.SnapshotSubtreeResponse) fsmet
 		return fsmeta.SnapshotSubtreeToken{}
 	}
 	return fsmeta.SnapshotSubtreeToken{
-		Mount:            fsmeta.MountID(resp.GetMount()),
-		RootInode:        fsmeta.InodeID(resp.GetRootInode()),
-		ReadVersion:      resp.GetReadVersion(),
-		PerasSegmentRefs: perasSnapshotSegmentRefsFromProto(resp.GetPerasSegmentRefs()),
+		Mount:           fsmeta.MountID(resp.GetMount()),
+		RootInode:       fsmeta.InodeID(resp.GetRootInode()),
+		ReadVersion:     resp.GetReadVersion(),
+		RuntimeEvidence: snapshotEvidenceRefsFromProto(resp.GetRuntimeEvidence()),
 	}
 }
 
 func retireSnapshotSubtreeRequestToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.RetireSnapshotSubtreeRequest {
 	return &fsmetapb.RetireSnapshotSubtreeRequest{
-		Mount:            string(token.Mount),
-		RootInode:        uint64(token.RootInode),
-		ReadVersion:      token.ReadVersion,
-		PerasSegmentRefs: perasSnapshotSegmentRefsToProto(token.PerasSegmentRefs),
+		Mount:           string(token.Mount),
+		RootInode:       uint64(token.RootInode),
+		ReadVersion:     token.ReadVersion,
+		RuntimeEvidence: snapshotEvidenceRefsToProto(token.RuntimeEvidence),
 	}
 }
 
-func perasSnapshotSegmentRefsToProto(refs []fsmeta.PerasSnapshotSegmentRef) []*fsmetapb.PerasSnapshotSegmentRef {
+func snapshotEvidenceRefsToProto(refs []fsmeta.SnapshotEvidenceRef) []*fsmetapb.SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]*fsmetapb.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]*fsmetapb.SnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
-		out = append(out, &fsmetapb.PerasSnapshotSegmentRef{
-			EpochId:              ref.EpochID,
-			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
-			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		out = append(out, &fsmetapb.SnapshotEvidenceRef{
+			EpochId:       ref.EpochID,
+			EvidenceRoot:  append([]byte(nil), ref.EvidenceRoot[:]...),
+			PayloadDigest: append([]byte(nil), ref.PayloadDigest[:]...),
 		})
 	}
 	return out
 }
 
-func perasSnapshotSegmentRefsFromProto(refs []*fsmetapb.PerasSnapshotSegmentRef) []fsmeta.PerasSnapshotSegmentRef {
+func snapshotEvidenceRefsFromProto(refs []*fsmetapb.SnapshotEvidenceRef) []fsmeta.SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]fsmeta.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]fsmeta.SnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
 		if ref == nil {
 			continue
 		}
-		var parsed fsmeta.PerasSnapshotSegmentRef
+		var parsed fsmeta.SnapshotEvidenceRef
 		parsed.EpochID = ref.GetEpochId()
-		copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
-		copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
+		copy(parsed.EvidenceRoot[:], ref.GetEvidenceRoot())
+		copy(parsed.PayloadDigest[:], ref.GetPayloadDigest())
 		out = append(out, parsed)
 	}
 	if len(out) == 0 {
@@ -313,8 +313,8 @@ func watchEventSourceFromProto(source fsmetapb.WatchEventSource) fsmeta.WatchEve
 		return fsmeta.WatchEventSourceCommit
 	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK:
 		return fsmeta.WatchEventSourceResolveLock
-	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_PERAS_VISIBLE:
-		return fsmeta.WatchEventSourcePerasVisible
+	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RUNTIME_VISIBLE:
+		return fsmeta.WatchEventSourceRuntimeVisible
 	default:
 		return 0
 	}

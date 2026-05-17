@@ -1197,16 +1197,16 @@ func (x *RootStore) GetRetiredAt() *RootCursor {
 }
 
 type RootSnapshotEpoch struct {
-	state            protoimpl.MessageState         `protogen:"open.v1"`
-	SnapshotId       string                         `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
-	Mount            string                         `protobuf:"bytes,2,opt,name=mount,proto3" json:"mount,omitempty"`
-	RootInode        uint64                         `protobuf:"varint,3,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
-	ReadVersion      uint64                         `protobuf:"varint,4,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
-	PublishedAt      *RootCursor                    `protobuf:"bytes,5,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
-	MountKeyId       uint64                         `protobuf:"varint,6,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
-	PerasSegmentRefs []*RootPerasSnapshotSegmentRef `protobuf:"bytes,7,rep,name=peras_segment_refs,json=perasSegmentRefs,proto3" json:"peras_segment_refs,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state           protoimpl.MessageState     `protogen:"open.v1"`
+	SnapshotId      string                     `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	Mount           string                     `protobuf:"bytes,2,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode       uint64                     `protobuf:"varint,3,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	ReadVersion     uint64                     `protobuf:"varint,4,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
+	PublishedAt     *RootCursor                `protobuf:"bytes,5,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	MountKeyId      uint64                     `protobuf:"varint,6,opt,name=mount_key_id,json=mountKeyId,proto3" json:"mount_key_id,omitempty"`
+	RuntimeEvidence []*RootSnapshotEvidenceRef `protobuf:"bytes,7,rep,name=runtime_evidence,json=runtimeEvidence,proto3" json:"runtime_evidence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RootSnapshotEpoch) Reset() {
@@ -1281,36 +1281,36 @@ func (x *RootSnapshotEpoch) GetMountKeyId() uint64 {
 	return 0
 }
 
-func (x *RootSnapshotEpoch) GetPerasSegmentRefs() []*RootPerasSnapshotSegmentRef {
+func (x *RootSnapshotEpoch) GetRuntimeEvidence() []*RootSnapshotEvidenceRef {
 	if x != nil {
-		return x.PerasSegmentRefs
+		return x.RuntimeEvidence
 	}
 	return nil
 }
 
-type RootPerasSnapshotSegmentRef struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	EpochId              uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	SegmentRoot          []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
-	SegmentPayloadDigest []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+type RootSnapshotEvidenceRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EpochId       uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	EvidenceRoot  []byte                 `protobuf:"bytes,2,opt,name=evidence_root,json=evidenceRoot,proto3" json:"evidence_root,omitempty"`
+	PayloadDigest []byte                 `protobuf:"bytes,3,opt,name=payload_digest,json=payloadDigest,proto3" json:"payload_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RootPerasSnapshotSegmentRef) Reset() {
-	*x = RootPerasSnapshotSegmentRef{}
+func (x *RootSnapshotEvidenceRef) Reset() {
+	*x = RootSnapshotEvidenceRef{}
 	mi := &file_meta_root_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RootPerasSnapshotSegmentRef) String() string {
+func (x *RootSnapshotEvidenceRef) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RootPerasSnapshotSegmentRef) ProtoMessage() {}
+func (*RootSnapshotEvidenceRef) ProtoMessage() {}
 
-func (x *RootPerasSnapshotSegmentRef) ProtoReflect() protoreflect.Message {
+func (x *RootSnapshotEvidenceRef) ProtoReflect() protoreflect.Message {
 	mi := &file_meta_root_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1322,28 +1322,28 @@ func (x *RootPerasSnapshotSegmentRef) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RootPerasSnapshotSegmentRef.ProtoReflect.Descriptor instead.
-func (*RootPerasSnapshotSegmentRef) Descriptor() ([]byte, []int) {
+// Deprecated: Use RootSnapshotEvidenceRef.ProtoReflect.Descriptor instead.
+func (*RootSnapshotEvidenceRef) Descriptor() ([]byte, []int) {
 	return file_meta_root_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *RootPerasSnapshotSegmentRef) GetEpochId() uint64 {
+func (x *RootSnapshotEvidenceRef) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *RootPerasSnapshotSegmentRef) GetSegmentRoot() []byte {
+func (x *RootSnapshotEvidenceRef) GetEvidenceRoot() []byte {
 	if x != nil {
-		return x.SegmentRoot
+		return x.EvidenceRoot
 	}
 	return nil
 }
 
-func (x *RootPerasSnapshotSegmentRef) GetSegmentPayloadDigest() []byte {
+func (x *RootSnapshotEvidenceRef) GetPayloadDigest() []byte {
 	if x != nil {
-		return x.SegmentPayloadDigest
+		return x.PayloadDigest
 	}
 	return nil
 }
@@ -5511,7 +5511,7 @@ const file_meta_root_proto_rawDesc = "" +
 	"\x05state\x18\x02 \x01(\x0e2\x1c.nokv.meta.v1.RootStoreStateR\x05state\x125\n" +
 	"\tjoined_at\x18\x03 \x01(\v2\x18.nokv.meta.v1.RootCursorR\bjoinedAt\x127\n" +
 	"\n" +
-	"retired_at\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xc4\x02\n" +
+	"retired_at\x18\x04 \x01(\v2\x18.nokv.meta.v1.RootCursorR\tretiredAt\"\xbd\x02\n" +
 	"\x11RootSnapshotEpoch\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
 	"snapshotId\x12\x14\n" +
@@ -5521,12 +5521,12 @@ const file_meta_root_proto_rawDesc = "" +
 	"\fread_version\x18\x04 \x01(\x04R\vreadVersion\x12;\n" +
 	"\fpublished_at\x18\x05 \x01(\v2\x18.nokv.meta.v1.RootCursorR\vpublishedAt\x12 \n" +
 	"\fmount_key_id\x18\x06 \x01(\x04R\n" +
-	"mountKeyId\x12W\n" +
-	"\x12peras_segment_refs\x18\a \x03(\v2).nokv.meta.v1.RootPerasSnapshotSegmentRefR\x10perasSegmentRefs\"\x91\x01\n" +
-	"\x1bRootPerasSnapshotSegmentRef\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
-	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x124\n" +
-	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\"\xba\x02\n" +
+	"mountKeyId\x12P\n" +
+	"\x10runtime_evidence\x18\a \x03(\v2%.nokv.meta.v1.RootSnapshotEvidenceRefR\x0fruntimeEvidence\"\x80\x01\n" +
+	"\x17RootSnapshotEvidenceRef\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12#\n" +
+	"\revidence_root\x18\x02 \x01(\fR\fevidenceRoot\x12%\n" +
+	"\x0epayload_digest\x18\x03 \x01(\fR\rpayloadDigest\"\xba\x02\n" +
 	"\tRootMount\x12\x19\n" +
 	"\bmount_id\x18\x01 \x01(\tR\amountId\x12\x1d\n" +
 	"\n" +
@@ -6005,7 +6005,7 @@ var file_meta_root_proto_goTypes = []any{
 	(*RootStoreMembership)(nil),                     // 16: nokv.meta.v1.RootStoreMembership
 	(*RootStore)(nil),                               // 17: nokv.meta.v1.RootStore
 	(*RootSnapshotEpoch)(nil),                       // 18: nokv.meta.v1.RootSnapshotEpoch
-	(*RootPerasSnapshotSegmentRef)(nil),             // 19: nokv.meta.v1.RootPerasSnapshotSegmentRef
+	(*RootSnapshotEvidenceRef)(nil),                 // 19: nokv.meta.v1.RootSnapshotEvidenceRef
 	(*RootMount)(nil),                               // 20: nokv.meta.v1.RootMount
 	(*RootSubtreeAuthority)(nil),                    // 21: nokv.meta.v1.RootSubtreeAuthority
 	(*RootQuotaFence)(nil),                          // 22: nokv.meta.v1.RootQuotaFence
@@ -6085,7 +6085,7 @@ var file_meta_root_proto_depIdxs = []int32{
 	13,  // 17: nokv.meta.v1.RootStore.joined_at:type_name -> nokv.meta.v1.RootCursor
 	13,  // 18: nokv.meta.v1.RootStore.retired_at:type_name -> nokv.meta.v1.RootCursor
 	13,  // 19: nokv.meta.v1.RootSnapshotEpoch.published_at:type_name -> nokv.meta.v1.RootCursor
-	19,  // 20: nokv.meta.v1.RootSnapshotEpoch.peras_segment_refs:type_name -> nokv.meta.v1.RootPerasSnapshotSegmentRef
+	19,  // 20: nokv.meta.v1.RootSnapshotEpoch.runtime_evidence:type_name -> nokv.meta.v1.RootSnapshotEvidenceRef
 	2,   // 21: nokv.meta.v1.RootMount.state:type_name -> nokv.meta.v1.RootMountState
 	13,  // 22: nokv.meta.v1.RootMount.registered_at:type_name -> nokv.meta.v1.RootCursor
 	13,  // 23: nokv.meta.v1.RootMount.retired_at:type_name -> nokv.meta.v1.RootCursor

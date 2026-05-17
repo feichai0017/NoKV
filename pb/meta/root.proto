@@ -108,13 +108,13 @@ message RootSnapshotEpoch {
   uint64 read_version = 4;
   RootCursor published_at = 5;
   uint64 mount_key_id = 6;
-  repeated RootPerasSnapshotSegmentRef peras_segment_refs = 7;
+  repeated RootSnapshotEvidenceRef runtime_evidence = 7;
 }
 
-message RootPerasSnapshotSegmentRef {
+message RootSnapshotEvidenceRef {
   uint64 epoch_id = 1;
-  bytes segment_root = 2;
-  bytes segment_payload_digest = 3;
+  bytes evidence_root = 2;
+  bytes payload_digest = 3;
 }
 
 enum RootMountState {

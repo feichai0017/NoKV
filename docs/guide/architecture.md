@@ -16,7 +16,7 @@ At a high level, the codebase is organized around four long-lived layers:
 - **Local DB facade and runtime internals** – the `local.DB` API plus local-only commit, iterator, stats, and background service wiring.
 - **Single-node engine substrate** – `engine/*` owns WAL, LSM, manifest, slab sidecars, file, and VFS mechanics.
 - **Distributed execution and control plane** – `raftstore/*`, `meta/*`, and `coordinator/*` host replicated execution, rooted metadata, and cluster control logic.
-- **Experiment and evidence layer** – `benchmark/*`, scripts, and docs keep evaluation and design claims attached to the implementation.
+- **Experiment and evidence layer** – `experimental/*`, `benchmark/*`, scripts, and docs keep research mechanisms and evaluation claims attached to the implementation without making them part of the stable product path.
 
 ## Reader Map
 
@@ -47,7 +47,7 @@ At a high level, the codebase is organized around four long-lived layers:
 │ kv.Apply dispatch       │
 │  ├ Get / Scan           │
 │  ├ Percolator MVCC      │
-│  ├ PerasInstallSegment  │
+│  ├ PerasInstallSegment  │  ← legacy experimental path during migration
 │  └ Latch manager        │
 └───────────┬─────────────┘
             │
@@ -62,7 +62,7 @@ At a high level, the codebase is organized around four long-lived layers:
 ```
 
 - **Embedded mode** uses `local.Open` directly: WAL→MemTable→SST durability, inline metadata values, non-transactional APIs with internal version ordering, and rich stats.
-- **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve StoreKV RPCs including Percolator MVCC and Peras segment install commands.
+- **Distributed mode** layers `raftstore` on top: multi-Raft regions reuse the same WAL, keep store-local recovery metadata separate from storage manifest state, expose metrics, and serve StoreKV RPCs including Percolator MVCC. The current Peras segment install command is a legacy experimental path that should move behind a generic install boundary.
 - **Control plane split**: `raft_config` provides bootstrap topology; Coordinator provides runtime routing/TSO/control-plane state in cluster mode.
 - **Clients** obtain leader-aware routing, automatic NotLeader/EpochNotMatch retries, and two-phase commit helpers.
 
@@ -154,9 +154,9 @@ flowchart TD
   Landing -->|LandingKeep: landing-merge| Landing
 ```
 
-### 2.5 Distributed Transaction And Peras Install Path
+### 2.5 Distributed Transaction And Experimental Install Path
 - `percolator` implements Prewrite/Commit/ResolveLock/CheckTxnStatus; `kv.Apply` dispatches raft commands to these helpers.
-- `PerasInstallSegment` installs fsmeta semantic segments through raftstore; catalog-only installs write segment/index records, while materialized installs expand entries into MVCC internal records.
+- `PerasInstallSegment` currently installs fsmeta semantic segments through raftstore; catalog-only installs write segment/index records, while materialized installs expand entries into MVCC internal records. This is the path targeted by the experimental-boundary cleanup.
 - MVCC timestamps come from the distributed client/Coordinator TSO flow, not from an embedded standalone transaction API.
 - Watermarks (`utils.WaterMark`) are used in durability/visibility coordination; they have no background goroutine and advance via mutex + atomics.
 
@@ -218,7 +218,7 @@ Then read:
 | [`peer`](https://github.com/feichai0017/NoKV/blob/main/raftstore/peer) | Wraps etcd/raft `RawNode`, handles Ready pipeline, snapshot resend queue, backlog instrumentation. |
 | [`raftlog`](https://github.com/feichai0017/NoKV/blob/main/raftstore/raftlog) | WALStorage/DiskStorage/MemoryStorage, reusing the DB's WAL while keeping store-local raft replay metadata in sync. |
 | [`transport`](https://github.com/feichai0017/NoKV/blob/main/raftstore/transport) | gRPC transport for Raft Step messages, connection management, retries/blocks/TLS. Also acts as the host for StoreKV RPC. |
-| [`kv`](https://github.com/feichai0017/NoKV/blob/main/raftstore/kv) | StoreKV RPC handler plus `kv.Apply` bridging Raft commands to MVCC logic and Peras segment install. |
+| [`kv`](https://github.com/feichai0017/NoKV/blob/main/raftstore/kv) | StoreKV RPC handler plus `kv.Apply` bridging Raft commands to MVCC logic. It still carries the legacy experimental Peras install path during migration. |
 | [`server`](https://github.com/feichai0017/NoKV/blob/main/raftstore/server) | `Config` + `NewNode` combine DB, Store, transport, and StoreKV service into a reusable node instance. |
 
 ### 3.1 Bootstrap Sequence
@@ -230,7 +230,7 @@ Then read:
 
 ### 3.2 Command Paths
 - **ReadCommand** (`Get`/`Scan`): validate Region & leader, execute Raft ReadIndex (`LinearizableRead`) and `WaitApplied`, then run `commandApplier` (i.e. `kv.Apply` in read mode) to fetch data from the DB. This yields leader-strong reads with an explicit Raft linearizability barrier.
-- **ProposeCommand** (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in `kv.Apply` which maps to MVCC operations or Peras segment install.
+- **ProposeCommand** (write): encode the request, push through Router to the leader peer, replicate via Raft, and apply in `kv.Apply` which maps to MVCC operations. The current Peras install command is a legacy experimental branch in this apply path.
 
 ### 3.3 Transport
 - gRPC server handles Step RPCs and StoreKV RPCs on the same endpoint; peers are registered via `SetPeer`.
@@ -250,7 +250,7 @@ Then read:
 | `Commit` | `store.ProposeCommand` → `percolator.Commit` | `pb.CommitResponse` |
 | `ResolveLock` | `percolator.ResolveLock` | `pb.ResolveLockResponse` |
 | `CheckTxnStatus` | `percolator.CheckTxnStatus` | `pb.CheckTxnStatusResponse` |
-| `PerasInstallSegment` | `store.ProposeCommand` → `kv.Apply` Peras install | `pb.PerasInstallSegmentResponse` |
+| `PerasInstallSegment` | `store.ProposeCommand` → legacy experimental install branch | `pb.PerasInstallSegmentResponse` |
 
 `nokv serve` is the CLI entry point—open the DB, construct `server.Node`, register peers, start local Raft peers, and display a local peer catalog summary (Regions, key ranges, peers). `scripts/dev/cluster.sh` builds the CLI, seeds local peer catalogs, and launches the 333 separated layout (3 meta-root peers + 1 coordinator + all configured stores) on localhost, handling cleanup on Ctrl+C.
 

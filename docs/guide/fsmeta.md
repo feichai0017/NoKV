@@ -7,14 +7,16 @@ SPDX-License-Identifier: Apache-2.0
 
 ## TL;DR
 
-- Topic: NoKV's namespace metadata substrate.
+- Topic: NoKV's workspace namespace metadata substrate.
 - Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
-- Call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> TxnRunner/Peras -> raftstore + txn/percolator/CMD_PERAS_INSTALL_SEGMENT + coordinator/meta-root`.
-- Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, and the default NoKV runtime adapter is `fsmeta/runtime/raftstore.Open`.
+- Default local call chain: `fsmeta/runtime/local -> fsmeta/exec -> local MVCC TxnRunner`.
+- Distributed call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> fsmeta/runtime/raftstore -> raftstore + txn/percolator + coordinator/meta-root`.
+- Experimental Peras call chain: `fsmeta/exec -> Peras visible runtime -> witness quorum + segment install`.
+- Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, local runtime is `fsmeta/runtime/local.Open`, and the scale-out adapter is `fsmeta/runtime/raftstore.Open`.
 
 ## 1. Conclusion
 
-`fsmeta` is NoKV's native metadata service. It isn't a FUSE frontend, it doesn't handle object body I/O, and it doesn't promise full POSIX. What it provides is a metadata substrate that distributed filesystems, object-storage namespaces, and AI dataset metadata can all reuse.
+`fsmeta` is NoKV's native workspace metadata service. It isn't a FUSE frontend, it doesn't handle object body I/O, and it doesn't promise full POSIX. What it provides is a durable, versioned, watchable namespace shaped like filesystem metadata. Agent workspaces are the primary product path; distributed filesystems and object-storage namespaces can consume the same contract when they need a metadata service.
 
 The value of this layer isn't picking a few keys to encode inode/dentry. The real boundary is: common namespace operations are exposed as server-side primitives, instead of asking each upper-layer application to stitch a protocol out of `Get` / `Put` / `Scan`.
 
@@ -75,9 +77,11 @@ type TxnRunner interface {
 }
 ```
 
-The default runtime uses `fsmeta/runtime/raftstore.Open` to wire up coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, subtree handoff publisher, and Peras. Embedded users can use this entry point directly; tests and custom deployments can keep passing in their own `TxnRunner`.
+The default product runtime is `fsmeta/runtime/local.Open`. It wires one embedded database, one local mount admission record, a local inode allocator, a durable MVCC runner, and local watch/snapshot adapters. This is the path for demos, agent workspace integrations, and small deployments.
 
-For the `nokv-fsmeta` server, Peras is the default write path. A successful compiler-proven metadata mutation returns at the **visible** boundary: readers and watches observe it through the holder overlay immediately. The **durable** boundary is reached later by witness quorum plus segment install into raftstore; embedded callers that need a synchronous durability fence use `FlushDurable` / `FlushTo`. Cross-authority or otherwise ineligible operations still use the durable Percolator path directly. This is a user-facing commit contract, not a startup mode flag.
+The scale-out runtime is `fsmeta/runtime/raftstore.Open`. It wires coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. It exists for DFS-scale metadata and multi-node agent platforms.
+
+Peras is an experimental runtime path for visible-before-durable metadata execution. A Peras write may return at a **visible** boundary before the **durable** boundary is reached by witness quorum plus segment install into raftstore. That mechanism should not be required to understand the stable fsmeta API.
 
 `fsmeta/runtime/raftstore.Open` can also wire two derived slab caches when explicitly configured:
 
@@ -89,9 +93,10 @@ Both caches are derived state. They can be dropped or rebuilt without changing a
 The layering constraints are:
 
 - `Executor` does not directly know about raft region / store routing.
-- `fsmeta/runtime/raftstore` is NoKV's default adapter; it owns the raftstore wiring.
+- `fsmeta/runtime/local` is the default embedded adapter.
+- `fsmeta/runtime/raftstore` is the scale-out adapter; it owns the raftstore wiring.
 - `meta/root` does not store high-frequency inode/dentry data — only lifecycle / authority truth.
-- `raftstore` and `percolator` don't understand fsmeta operations; they provide transactions, Peras segment install, and apply observation.
+- `raftstore` and `percolator` don't understand fsmeta operations; they provide transactions and apply observation. Existing Peras install support is being isolated behind the experimental boundary.
 
 ## 5. Native primitives
 

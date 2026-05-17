@@ -437,39 +437,39 @@ func RootPerasAuthoritySealsFromProto(seals []*metapb.RootPerasAuthoritySeal) []
 	return out
 }
 
-func RootPerasSnapshotSegmentRefsToProto(refs []rootproto.PerasSnapshotSegmentRef) []*metapb.RootPerasSnapshotSegmentRef {
+func RootSnapshotEvidenceRefsToProto(refs []rootproto.SnapshotEvidenceRef) []*metapb.RootSnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]*metapb.RootPerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]*metapb.RootSnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
-		out = append(out, &metapb.RootPerasSnapshotSegmentRef{
-			EpochId:              ref.EpochID,
-			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
-			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		out = append(out, &metapb.RootSnapshotEvidenceRef{
+			EpochId:       ref.EpochID,
+			EvidenceRoot:  append([]byte(nil), ref.EvidenceRoot[:]...),
+			PayloadDigest: append([]byte(nil), ref.PayloadDigest[:]...),
 		})
 	}
 	return out
 }
 
-func RootPerasSnapshotSegmentRefsFromProto(refs []*metapb.RootPerasSnapshotSegmentRef) []rootproto.PerasSnapshotSegmentRef {
+func RootSnapshotEvidenceRefsFromProto(refs []*metapb.RootSnapshotEvidenceRef) []rootproto.SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]rootproto.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]rootproto.SnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
 		if ref == nil {
 			continue
 		}
-		root := ref.GetSegmentRoot()
-		digest := ref.GetSegmentPayloadDigest()
-		if len(root) != len(rootproto.PerasSnapshotSegmentRef{}.SegmentRoot) ||
-			len(digest) != len(rootproto.PerasSnapshotSegmentRef{}.SegmentPayloadDigest) {
+		root := ref.GetEvidenceRoot()
+		digest := ref.GetPayloadDigest()
+		if len(root) != len(rootproto.SnapshotEvidenceRef{}.EvidenceRoot) ||
+			len(digest) != len(rootproto.SnapshotEvidenceRef{}.PayloadDigest) {
 			continue
 		}
-		parsed := rootproto.PerasSnapshotSegmentRef{EpochID: ref.GetEpochId()}
-		copy(parsed.SegmentRoot[:], root)
-		copy(parsed.SegmentPayloadDigest[:], digest)
+		parsed := rootproto.SnapshotEvidenceRef{EpochID: ref.GetEpochId()}
+		copy(parsed.EvidenceRoot[:], root)
+		copy(parsed.PayloadDigest[:], digest)
 		if !parsed.Valid() {
 			continue
 		}
@@ -640,13 +640,13 @@ func rootEventSnapshotEpochToProto(epoch *rootevent.SnapshotEpoch) *metapb.RootS
 		return nil
 	}
 	return &metapb.RootSnapshotEpoch{
-		SnapshotId:       epoch.SnapshotID,
-		Mount:            epoch.Mount,
-		MountKeyId:       epoch.MountKeyID,
-		RootInode:        epoch.RootInode,
-		ReadVersion:      epoch.ReadVersion,
-		PublishedAt:      RootCursorToProto(epoch.PublishedAt),
-		PerasSegmentRefs: RootPerasSnapshotSegmentRefsToProto(epoch.PerasSegmentRefs),
+		SnapshotId:      epoch.SnapshotID,
+		Mount:           epoch.Mount,
+		MountKeyId:      epoch.MountKeyID,
+		RootInode:       epoch.RootInode,
+		ReadVersion:     epoch.ReadVersion,
+		PublishedAt:     RootCursorToProto(epoch.PublishedAt),
+		RuntimeEvidence: RootSnapshotEvidenceRefsToProto(epoch.RuntimeEvidence),
 	}
 }
 
@@ -655,13 +655,13 @@ func rootEventSnapshotEpochFromProto(epoch *metapb.RootSnapshotEpoch) *rootevent
 		return nil
 	}
 	return &rootevent.SnapshotEpoch{
-		SnapshotID:       epoch.GetSnapshotId(),
-		Mount:            epoch.GetMount(),
-		MountKeyID:       epoch.GetMountKeyId(),
-		RootInode:        epoch.GetRootInode(),
-		ReadVersion:      epoch.GetReadVersion(),
-		PublishedAt:      RootCursorFromProto(epoch.GetPublishedAt()),
-		PerasSegmentRefs: RootPerasSnapshotSegmentRefsFromProto(epoch.GetPerasSegmentRefs()),
+		SnapshotID:      epoch.GetSnapshotId(),
+		Mount:           epoch.GetMount(),
+		MountKeyID:      epoch.GetMountKeyId(),
+		RootInode:       epoch.GetRootInode(),
+		ReadVersion:     epoch.GetReadVersion(),
+		PublishedAt:     RootCursorFromProto(epoch.GetPublishedAt()),
+		RuntimeEvidence: RootSnapshotEvidenceRefsFromProto(epoch.GetRuntimeEvidence()),
 	}
 }
 
@@ -1329,13 +1329,13 @@ func RootMountFromProto(pbMount *metapb.RootMount) rootstate.MountRecord {
 
 func RootSnapshotEpochToProto(epoch rootstate.SnapshotEpoch) *metapb.RootSnapshotEpoch {
 	return &metapb.RootSnapshotEpoch{
-		SnapshotId:       epoch.SnapshotID,
-		Mount:            epoch.Mount,
-		MountKeyId:       epoch.MountKeyID,
-		RootInode:        epoch.RootInode,
-		ReadVersion:      epoch.ReadVersion,
-		PublishedAt:      RootCursorToProto(epoch.PublishedAt),
-		PerasSegmentRefs: RootPerasSnapshotSegmentRefsToProto(epoch.PerasSegmentRefs),
+		SnapshotId:      epoch.SnapshotID,
+		Mount:           epoch.Mount,
+		MountKeyId:      epoch.MountKeyID,
+		RootInode:       epoch.RootInode,
+		ReadVersion:     epoch.ReadVersion,
+		PublishedAt:     RootCursorToProto(epoch.PublishedAt),
+		RuntimeEvidence: RootSnapshotEvidenceRefsToProto(epoch.RuntimeEvidence),
 	}
 }
 
@@ -1344,13 +1344,13 @@ func RootSnapshotEpochFromProto(pbEpoch *metapb.RootSnapshotEpoch) rootstate.Sna
 		return rootstate.SnapshotEpoch{}
 	}
 	return rootstate.SnapshotEpoch{
-		SnapshotID:       pbEpoch.GetSnapshotId(),
-		Mount:            pbEpoch.GetMount(),
-		MountKeyID:       pbEpoch.GetMountKeyId(),
-		RootInode:        pbEpoch.GetRootInode(),
-		ReadVersion:      pbEpoch.GetReadVersion(),
-		PublishedAt:      RootCursorFromProto(pbEpoch.GetPublishedAt()),
-		PerasSegmentRefs: RootPerasSnapshotSegmentRefsFromProto(pbEpoch.GetPerasSegmentRefs()),
+		SnapshotID:      pbEpoch.GetSnapshotId(),
+		Mount:           pbEpoch.GetMount(),
+		MountKeyID:      pbEpoch.GetMountKeyId(),
+		RootInode:       pbEpoch.GetRootInode(),
+		ReadVersion:     pbEpoch.GetReadVersion(),
+		PublishedAt:     RootCursorFromProto(pbEpoch.GetPublishedAt()),
+		RuntimeEvidence: RootSnapshotEvidenceRefsFromProto(pbEpoch.GetRuntimeEvidence()),
 	}
 }
 

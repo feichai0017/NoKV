@@ -237,17 +237,17 @@ func EncodeSnapshotValue(token SnapshotSubtreeToken) ([]byte, error) {
 	if err := validateSnapshotValue(token); err != nil {
 		return nil, err
 	}
-	body := make([]byte, 0, binary.MaxVarintLen64+len(token.Mount)+24+binary.MaxVarintLen64+len(token.PerasSegmentRefs)*72)
+	body := make([]byte, 0, binary.MaxVarintLen64+len(token.Mount)+24+binary.MaxVarintLen64+len(token.RuntimeEvidence)*72)
 	body = binary.AppendUvarint(body, uint64(len(token.Mount)))
 	body = append(body, string(token.Mount)...)
 	body = binary.BigEndian.AppendUint64(body, uint64(token.MountKeyID))
 	body = binary.BigEndian.AppendUint64(body, uint64(token.RootInode))
 	body = binary.BigEndian.AppendUint64(body, token.ReadVersion)
-	body = binary.AppendUvarint(body, uint64(len(token.PerasSegmentRefs)))
-	for _, ref := range token.PerasSegmentRefs {
+	body = binary.AppendUvarint(body, uint64(len(token.RuntimeEvidence)))
+	for _, ref := range token.RuntimeEvidence {
 		body = binary.BigEndian.AppendUint64(body, ref.EpochID)
-		body = append(body, ref.SegmentRoot[:]...)
-		body = append(body, ref.SegmentPayloadDigest[:]...)
+		body = append(body, ref.EvidenceRoot[:]...)
+		body = append(body, ref.PayloadDigest[:]...)
 	}
 	return encodeValue(ValueKindSnapshot, body), nil
 }
@@ -505,15 +505,15 @@ func decodeSnapshotBody(body []byte) (SnapshotSubtreeToken, error) {
 		return SnapshotSubtreeToken{}, ErrInvalidValue
 	}
 	if refCount > 0 {
-		token.PerasSegmentRefs = make([]PerasSnapshotSegmentRef, 0, refCount)
+		token.RuntimeEvidence = make([]SnapshotEvidenceRef, 0, refCount)
 	}
 	for range refCount {
-		var ref PerasSnapshotSegmentRef
+		var ref SnapshotEvidenceRef
 		ref.EpochID = binary.BigEndian.Uint64(body[pos : pos+8])
-		copy(ref.SegmentRoot[:], body[pos+8:pos+40])
-		copy(ref.SegmentPayloadDigest[:], body[pos+40:pos+72])
+		copy(ref.EvidenceRoot[:], body[pos+8:pos+40])
+		copy(ref.PayloadDigest[:], body[pos+40:pos+72])
 		pos += 72
-		token.PerasSegmentRefs = append(token.PerasSegmentRefs, ref)
+		token.RuntimeEvidence = append(token.RuntimeEvidence, ref)
 	}
 	if err := validateSnapshotValue(token); err != nil {
 		return SnapshotSubtreeToken{}, err
@@ -534,7 +534,7 @@ func validateSnapshotValue(token SnapshotSubtreeToken) error {
 	if token.ReadVersion == 0 {
 		return ErrInvalidValue
 	}
-	for _, ref := range token.PerasSegmentRefs {
+	for _, ref := range token.RuntimeEvidence {
 		if !ref.Valid() {
 			return ErrInvalidValue
 		}

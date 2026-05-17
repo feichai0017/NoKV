@@ -36,7 +36,7 @@ func (c *Runtime) publishVisibleWatch(op compile.MaterializedOp, ack fsperas.Vis
 		seen[keyID] = struct{}{}
 		evt := fsmeta.WatchEvent{
 			Cursor: cursor,
-			Source: fsmeta.WatchEventSourcePerasVisible,
+			Source: fsmeta.WatchEventSourceRuntimeVisible,
 			Key:    cloneBytes(projection.Key),
 		}
 		if c.watchQueue != nil && c.watchQueue.TryPush(evt) {

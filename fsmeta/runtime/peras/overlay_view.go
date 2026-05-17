@@ -199,19 +199,19 @@ func (c *Runtime) CapturePerasSnapshot(version uint64) error {
 }
 
 // CapturePerasVisibleSnapshot records a visible snapshot when configured.
-func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
+func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.VisibleSnapshotCapture, bool, error) {
 	if c == nil || c.read == nil || version == 0 {
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, ErrRuntimeInvalid
+		return fsmeta.VisibleSnapshotCapture{}, false, ErrRuntimeInvalid
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if !c.visibleSnapshots && !c.quorumVisibleSnapshots {
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, nil
+		return fsmeta.VisibleSnapshotCapture{}, false, nil
 	}
 	mount, prefix, ok := visibleSnapshotDirectory(scope)
 	if !ok {
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, nil
+		return fsmeta.VisibleSnapshotCapture{}, false, nil
 	}
 	if c.quorumVisibleSnapshots && c.usesSegmentWitness() {
 		return c.captureQuorumVisibleSnapshot(ctx, version, scope, mount, prefix)
@@ -219,17 +219,17 @@ func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint6
 	c.commitMu.Lock()
 	c.captureVisibleSnapshotLocked(version, mount, prefix)
 	c.commitMu.Unlock()
-	return fsmeta.PerasVisibleSnapshotCapture{}, true, nil
+	return fsmeta.VisibleSnapshotCapture{}, true, nil
 }
 
-func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope, mount fsmeta.MountIdentity, prefix []byte) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
+func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint64, scope compile.AuthorityScope, mount fsmeta.MountIdentity, prefix []byte) (fsmeta.VisibleSnapshotCapture, bool, error) {
 	c.flushMu.Lock()
 	c.commitMu.Lock()
 	plans, err := c.freezeReplayPlansLocked(&scope, 0)
 	if err != nil {
 		c.commitMu.Unlock()
 		c.flushMu.Unlock()
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, err
+		return fsmeta.VisibleSnapshotCapture{}, false, err
 	}
 	c.captureVisibleSnapshotLocked(version, mount, prefix)
 	c.commitMu.Unlock()
@@ -237,23 +237,23 @@ func (c *Runtime) captureQuorumVisibleSnapshot(ctx context.Context, version uint
 	if err != nil {
 		c.retirePerasSnapshot(version)
 		c.flushMu.Unlock()
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, err
+		return fsmeta.VisibleSnapshotCapture{}, false, err
 	}
 	pipeline := flushPipeline{runtime: c, level: fsperas.SegmentPersistenceDurable, materialize: c.materialize}
 	for _, batch := range batches {
 		if err := pipeline.renewBatchAuthority(ctx, batch); err != nil {
 			c.retirePerasSnapshot(version)
 			c.flushMu.Unlock()
-			return fsmeta.PerasVisibleSnapshotCapture{}, false, err
+			return fsmeta.VisibleSnapshotCapture{}, false, err
 		}
 		if err := pipeline.witnessBatch(ctx, batch); err != nil {
 			c.retirePerasSnapshot(version)
 			c.flushMu.Unlock()
-			return fsmeta.PerasVisibleSnapshotCapture{}, false, err
+			return fsmeta.VisibleSnapshotCapture{}, false, err
 		}
 	}
-	capture := fsmeta.PerasVisibleSnapshotCapture{
-		SegmentRefs: perasSnapshotSegmentRefsFromBatches(batches),
+	capture := fsmeta.VisibleSnapshotCapture{
+		Evidence: snapshotEvidenceRefsFromBatches(batches),
 	}
 	c.flushMu.Unlock()
 	c.triggerSnapshotFlush()
@@ -279,17 +279,17 @@ func (c *Runtime) captureVisibleSnapshotLocked(version uint64, mount fsmeta.Moun
 	c.read.mu.Unlock()
 }
 
-func perasSnapshotSegmentRefsFromBatches(batches []perasFlushBatch) []fsmeta.PerasSnapshotSegmentRef {
+func snapshotEvidenceRefsFromBatches(batches []perasFlushBatch) []fsmeta.SnapshotEvidenceRef {
 	if len(batches) == 0 {
 		return nil
 	}
-	refs := make([]fsmeta.PerasSnapshotSegmentRef, 0)
+	refs := make([]fsmeta.SnapshotEvidenceRef, 0)
 	for _, batch := range batches {
 		for _, job := range batch.jobs {
-			refs = append(refs, fsmeta.PerasSnapshotSegmentRef{
-				EpochID:              job.segment.EpochID,
-				SegmentRoot:          job.segment.Root,
-				SegmentPayloadDigest: job.digest,
+			refs = append(refs, fsmeta.SnapshotEvidenceRef{
+				EpochID:       job.segment.EpochID,
+				EvidenceRoot:  job.segment.Root,
+				PayloadDigest: job.digest,
 			})
 		}
 	}

@@ -129,7 +129,7 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 }
 
 func eventIsReplayable(evt fsmeta.WatchEvent) bool {
-	return evt.Source != fsmeta.WatchEventSourcePerasVisible
+	return evt.Source != fsmeta.WatchEventSourceRuntimeVisible
 }
 
 // OnApply publishes one storage-apply event after the runtime adapter has

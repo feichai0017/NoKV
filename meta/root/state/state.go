@@ -281,13 +281,13 @@ func CloneQuotaFences(in map[string]QuotaFence) map[string]QuotaFence {
 }
 
 type SnapshotEpoch struct {
-	SnapshotID       string
-	Mount            string
-	MountKeyID       uint64
-	RootInode        uint64
-	ReadVersion      uint64
-	PublishedAt      Cursor
-	PerasSegmentRefs []rootproto.PerasSnapshotSegmentRef
+	SnapshotID      string
+	Mount           string
+	MountKeyID      uint64
+	RootInode       uint64
+	ReadVersion     uint64
+	PublishedAt     Cursor
+	RuntimeEvidence []rootproto.SnapshotEvidenceRef
 }
 
 // SnapshotRetentionIndex summarizes active snapshot read-version floors.
@@ -360,7 +360,7 @@ func CloneSnapshotEpochs(in map[string]SnapshotEpoch) map[string]SnapshotEpoch {
 	}
 	out := make(map[string]SnapshotEpoch, len(in))
 	for id, epoch := range in {
-		epoch.PerasSegmentRefs = rootproto.ClonePerasSnapshotSegmentRefs(epoch.PerasSegmentRefs)
+		epoch.RuntimeEvidence = rootproto.CloneSnapshotEvidenceRefs(epoch.RuntimeEvidence)
 		out[id] = epoch
 	}
 	return out

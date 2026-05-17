@@ -133,10 +133,10 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	retired := rootevent.StoreRetired(7)
 	idFence := rootevent.IDAllocatorFenced(11)
 	tsoFence := rootevent.TSOAllocatorFenced(29)
-	ref := testEventPerasSnapshotSegmentRef(7, 0x60)
-	refs := []rootproto.PerasSnapshotSegmentRef{ref}
-	snapshot := rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, refs)
-	refs[0].SegmentRoot[0] = 0xff
+	ref := testEventSnapshotEvidenceRef(7, 0x60)
+	refs := []rootproto.SnapshotEvidenceRef{ref}
+	snapshot := rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 99, refs)
+	refs[0].EvidenceRoot[0] = 0xff
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 1, 42, 99)
 	mount := rootevent.MountRegistered("vol", 1, 1, 1)
 	retiredMount := rootevent.MountRetired("vol")
@@ -162,7 +162,7 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(1), snapshot.SnapshotEpoch.MountKeyID)
 	require.Equal(t, uint64(42), snapshot.SnapshotEpoch.RootInode)
 	require.Equal(t, uint64(99), snapshot.SnapshotEpoch.ReadVersion)
-	require.Equal(t, []rootproto.PerasSnapshotSegmentRef{ref}, snapshot.SnapshotEpoch.PerasSegmentRefs)
+	require.Equal(t, []rootproto.SnapshotEvidenceRef{ref}, snapshot.SnapshotEpoch.RuntimeEvidence)
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retiredSnapshot.Kind)
 	require.Equal(t, snapshot.SnapshotEpoch.SnapshotID, retiredSnapshot.SnapshotEpoch.SnapshotID)
 	require.Equal(t, uint64(1), retiredSnapshot.SnapshotEpoch.MountKeyID)
@@ -191,12 +191,12 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(99), quota.QuotaFence.Frontier)
 }
 
-func testEventPerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+func testEventSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = seed
 	digest[0] = seed + 1
-	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
+	return rootproto.SnapshotEvidenceRef{EpochID: epoch, EvidenceRoot: root, PayloadDigest: digest}
 }
 
 func TestRegionLifecycleConstructors(t *testing.T) {

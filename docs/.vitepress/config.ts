@@ -105,6 +105,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: 'Architecture', link: '/guide/architecture' },
+              { text: 'Experimental Boundary Plan', link: '/guide/experimental_boundary_plan' },
               { text: 'Runtime Call Chains', link: '/guide/runtime' },
               {
                 text: 'Control & Execution Protocols',
@@ -143,9 +144,19 @@ export default withMermaid(
               { text: 'File', link: '/guide/file' },
               { text: 'Cache', link: '/guide/cache' },
               { text: 'Range Filter', link: '/guide/range_filter' },
-              { text: 'Thermos', link: '/guide/thermos' },
               { text: 'Entry', link: '/guide/entry' },
               { text: 'Error Handling', link: '/guide/errors' },
+            ],
+          },
+          {
+            text: 'Experimental',
+            collapsed: true,
+            items: [
+              {
+                text: 'Experimental Boundary Plan',
+                link: '/guide/experimental_boundary_plan',
+              },
+              { text: 'Thermos', link: '/guide/thermos' },
             ],
           },
           {

@@ -41,7 +41,7 @@ func CloneEvent(in Event) Event {
 	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch
-		cp.PerasSegmentRefs = rootproto.ClonePerasSnapshotSegmentRefs(in.SnapshotEpoch.PerasSegmentRefs)
+		cp.RuntimeEvidence = rootproto.CloneSnapshotEvidenceRefs(in.SnapshotEpoch.RuntimeEvidence)
 		out.SnapshotEpoch = &cp
 	}
 	if in.Mount != nil {

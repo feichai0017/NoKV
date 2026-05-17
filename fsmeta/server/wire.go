@@ -91,10 +91,10 @@ func snapshotSubtreeRequestFromProto(req *fsmetapb.SnapshotSubtreeRequest) fsmet
 
 func snapshotSubtreeResponseToProto(token fsmeta.SnapshotSubtreeToken) *fsmetapb.SnapshotSubtreeResponse {
 	return &fsmetapb.SnapshotSubtreeResponse{
-		Mount:            string(token.Mount),
-		RootInode:        uint64(token.RootInode),
-		ReadVersion:      token.ReadVersion,
-		PerasSegmentRefs: perasSnapshotSegmentRefsToProto(token.PerasSegmentRefs),
+		Mount:           string(token.Mount),
+		RootInode:       uint64(token.RootInode),
+		ReadVersion:     token.ReadVersion,
+		RuntimeEvidence: snapshotEvidenceRefsToProto(token.RuntimeEvidence),
 	}
 }
 
@@ -102,51 +102,51 @@ func retireSnapshotSubtreeRequestFromProto(req *fsmetapb.RetireSnapshotSubtreeRe
 	if req == nil {
 		return fsmeta.SnapshotSubtreeToken{}, nil
 	}
-	refs, err := perasSnapshotSegmentRefsFromProto(req.GetPerasSegmentRefs())
+	refs, err := snapshotEvidenceRefsFromProto(req.GetRuntimeEvidence())
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	return fsmeta.SnapshotSubtreeToken{
-		Mount:            fsmeta.MountID(req.GetMount()),
-		RootInode:        fsmeta.InodeID(req.GetRootInode()),
-		ReadVersion:      req.GetReadVersion(),
-		PerasSegmentRefs: refs,
+		Mount:           fsmeta.MountID(req.GetMount()),
+		RootInode:       fsmeta.InodeID(req.GetRootInode()),
+		ReadVersion:     req.GetReadVersion(),
+		RuntimeEvidence: refs,
 	}, nil
 }
 
-func perasSnapshotSegmentRefsToProto(refs []fsmeta.PerasSnapshotSegmentRef) []*fsmetapb.PerasSnapshotSegmentRef {
+func snapshotEvidenceRefsToProto(refs []fsmeta.SnapshotEvidenceRef) []*fsmetapb.SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]*fsmetapb.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]*fsmetapb.SnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
-		out = append(out, &fsmetapb.PerasSnapshotSegmentRef{
-			EpochId:              ref.EpochID,
-			SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
-			SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
+		out = append(out, &fsmetapb.SnapshotEvidenceRef{
+			EpochId:       ref.EpochID,
+			EvidenceRoot:  append([]byte(nil), ref.EvidenceRoot[:]...),
+			PayloadDigest: append([]byte(nil), ref.PayloadDigest[:]...),
 		})
 	}
 	return out
 }
 
-func perasSnapshotSegmentRefsFromProto(refs []*fsmetapb.PerasSnapshotSegmentRef) ([]fsmeta.PerasSnapshotSegmentRef, error) {
+func snapshotEvidenceRefsFromProto(refs []*fsmetapb.SnapshotEvidenceRef) ([]fsmeta.SnapshotEvidenceRef, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	out := make([]fsmeta.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]fsmeta.SnapshotEvidenceRef, 0, len(refs))
 	for idx, ref := range refs {
 		if ref == nil {
 			continue
 		}
-		root := ref.GetSegmentRoot()
-		digest := ref.GetSegmentPayloadDigest()
+		root := ref.GetEvidenceRoot()
+		digest := ref.GetPayloadDigest()
 		if len(root) != 32 || len(digest) != 32 {
-			return nil, fmt.Errorf("%w: peras snapshot segment ref %d epoch=%d root_len=%d digest_len=%d", fsmeta.ErrInvalidRequest, idx, ref.GetEpochId(), len(root), len(digest))
+			return nil, fmt.Errorf("%w: snapshot evidence ref %d epoch=%d root_len=%d digest_len=%d", fsmeta.ErrInvalidRequest, idx, ref.GetEpochId(), len(root), len(digest))
 		}
-		var parsed fsmeta.PerasSnapshotSegmentRef
+		var parsed fsmeta.SnapshotEvidenceRef
 		parsed.EpochID = ref.GetEpochId()
-		copy(parsed.SegmentRoot[:], root)
-		copy(parsed.SegmentPayloadDigest[:], digest)
+		copy(parsed.EvidenceRoot[:], root)
+		copy(parsed.PayloadDigest[:], digest)
 		out = append(out, parsed)
 	}
 	if len(out) == 0 {
@@ -340,8 +340,8 @@ func watchEventSourceToProto(source fsmeta.WatchEventSource) fsmetapb.WatchEvent
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_COMMIT
 	case fsmeta.WatchEventSourceResolveLock:
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK
-	case fsmeta.WatchEventSourcePerasVisible:
-		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_PERAS_VISIBLE
+	case fsmeta.WatchEventSourceRuntimeVisible:
+		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RUNTIME_VISIBLE
 	default:
 		return fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED
 	}

@@ -190,12 +190,12 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 		},
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
 			"vol/42/99": {
-				SnapshotID:       "vol/42/99",
-				Mount:            "vol",
-				RootInode:        42,
-				ReadVersion:      99,
-				PublishedAt:      rootproto.Cursor{Term: 2, Index: 9},
-				PerasSegmentRefs: []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(8, 0x70)},
+				SnapshotID:      "vol/42/99",
+				Mount:           "vol",
+				RootInode:       42,
+				ReadVersion:     99,
+				PublishedAt:     rootproto.Cursor{Term: 2, Index: 9},
+				RuntimeEvidence: []rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(8, 0x70)},
 			},
 		},
 		Mounts: map[string]rootstate.MountRecord{
@@ -300,21 +300,21 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 	require.Equal(t, rootstate.AllocatorKindUnknown, kind)
 }
 
-func TestRootPerasSnapshotSegmentRefsFromProtoSkipsInvalidRefs(t *testing.T) {
-	valid := testWirePerasSnapshotSegmentRef(8, 0x70)
-	validProto := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{valid})[0]
-	shortRoot := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)})[0]
-	shortRoot.SegmentRoot = shortRoot.SegmentRoot[:31]
-	zeroEpoch := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(10, 0x90)})[0]
+func TestRootSnapshotEvidenceRefsFromProtoSkipsInvalidRefs(t *testing.T) {
+	valid := testWireSnapshotEvidenceRef(8, 0x70)
+	validProto := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{valid})[0]
+	shortRoot := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(9, 0x80)})[0]
+	shortRoot.EvidenceRoot = shortRoot.EvidenceRoot[:31]
+	zeroEpoch := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(10, 0x90)})[0]
 	zeroEpoch.EpochId = 0
 
-	require.Equal(t, []rootproto.PerasSnapshotSegmentRef{valid}, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{
+	require.Equal(t, []rootproto.SnapshotEvidenceRef{valid}, RootSnapshotEvidenceRefsFromProto([]*metapb.RootSnapshotEvidenceRef{
 		nil,
 		shortRoot,
 		zeroEpoch,
 		validProto,
 	}))
-	require.Nil(t, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{nil, shortRoot, zeroEpoch}))
+	require.Nil(t, RootSnapshotEvidenceRefsFromProto([]*metapb.RootSnapshotEvidenceRef{nil, shortRoot, zeroEpoch}))
 }
 
 func TestRootEventRoundTripAndKindMappings(t *testing.T) {
@@ -347,7 +347,7 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
 		rootevent.PerasAuthoritySealed(testWirePerasAuthoritySeal(testWirePerasAuthorityGrant())),
 		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
-		rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)}),
+		rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 99, []rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(9, 0x80)}),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
 		rootevent.MountRetired("vol"),
@@ -479,12 +479,12 @@ func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.P
 	}
 }
 
-func testWirePerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+func testWireSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = seed
 	digest[0] = seed + 1
-	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
+	return rootproto.SnapshotEvidenceRef{EpochID: epoch, EvidenceRoot: root, PayloadDigest: digest}
 }
 
 func testWireDescriptor(id uint64, start, end []byte) topology.Descriptor {

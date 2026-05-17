@@ -136,7 +136,7 @@ func TestRouterPublishesPerasVisibleEventsLiveOnly(t *testing.T) {
 			Term:  9,
 			Index: 1,
 		},
-		Source: fsmeta.WatchEventSourcePerasVisible,
+		Source: fsmeta.WatchEventSourceRuntimeVisible,
 		Key:    []byte("k/a"),
 	}
 	router.Publish(visible)

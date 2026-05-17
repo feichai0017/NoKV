@@ -5,9 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Documentation
 
-**NoKV** is the open-source counterpart of the *"stateless schema layer + transactional KV"* pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`** — a namespace metadata API for distributed filesystems, object storage, and AI dataset metadata.
+**NoKV** is the open-source counterpart of the *"stateless schema layer + transactional KV"* pattern that powers Meta Tectonic (over ZippyDB), Google Colossus (over Bigtable), and DeepSeek 3FS (over FoundationDB). The headline service is **`fsmeta`** — a filesystem-shaped metadata API for AI agent workspaces, with the same contract available to distributed filesystems and object-storage namespace layers.
 
-The interesting part is not the feature list. The interesting part is that **layer separation is enforced in code**: the fsmeta executor consumes a narrow `TxnRunner`; the default `fsmeta/runtime/raftstore` adapter owns raftstore wiring; `meta/root` keeps only lifecycle / authority truth; the storage engine never learns that a namespace exists.
+The interesting part is not the feature list. The interesting part is that **layer separation is enforced in code**: the fsmeta executor consumes a narrow `TxnRunner`; `fsmeta/runtime/local` is the default embedded runtime; `fsmeta/runtime/raftstore` owns scale-out raftstore wiring; `meta/root` keeps only lifecycle / authority truth; the storage engine never learns that a namespace exists.
 
 > Looking for the landing page, headline benchmarks, and the `Why NoKV vs X?` matrix? See the [homepage](/).
 
@@ -19,15 +19,17 @@ The interesting part is not the feature list. The interesting part is that **lay
 2. **[Architecture](./architecture)** — layered architecture. Where each module lives, what each layer is allowed to know.
 3. **[Control & Execution Protocols](./control_and_execution_protocols)** — the contract between control plane (`coordinator/`), execution plane (`raftstore/`), and rooted truth (`meta/root/`).
 
+Current cleanup roadmap: [Product Core And Experimental Boundary Plan](./experimental_boundary_plan).
+
 ---
 
 ## Three audiences, one substrate
 
-|  | DFS frontend | Object storage namespace | AI dataset metadata |
+|  | Agent workspace | DFS frontend | Object storage namespace |
 |---|---|---|---|
-| **Consumer shape** | FUSE / NFS / SMB driver | S3-compatible HTTP gateway | training pipeline / scheduler |
-| **Primitives used** | `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, `RenameSubtree` | `ReadDirPlus` for LIST, `WatchSubtree` for bucket events, `SnapshotSubtree` for versions, `RenameSubtree` for prefix moves | `SnapshotSubtree` for dataset versions, `WatchSubtree` for checkpoint notification, `ReadDirPlus` for batch metadata fetch |
-| **Comparable industrial pattern** | Tectonic / Colossus / 3FS / HopsFS | Tectonic / Colossus over object layer | Mooncake / Quiver / 3FS dataset layer |
+| **Consumer shape** | LangGraph-style workspace, artifact index, checkpoint catalog | FUSE / NFS / SMB driver | S3-compatible HTTP gateway |
+| **Primitives used** | `WatchSubtree` for channels, `SnapshotSubtree` for checkpoints, `ReadDirPlus` for workspace discovery | `ReadDirPlus`, `WatchSubtree`, `SnapshotSubtree`, `RenameSubtree` | `ReadDirPlus` for LIST, `WatchSubtree` for bucket events, `SnapshotSubtree` for versions, `RenameSubtree` for prefix moves |
+| **Comparable industrial pattern** | workspace metadata plane, dataset metadata layer | Tectonic / Colossus / 3FS / HopsFS | Tectonic / Colossus over object layer |
 
 All three consume the **same** rooted truth in `meta/root` and the **same** native primitives in `fsmeta` — schema is not specialized to any single consumer.
 
@@ -70,8 +72,17 @@ The single-node substrate everything sits on. Independently usable as an embedde
 | Range filter | [Range Filter](./range_filter) |
 | Block / row cache | [Cache](./cache) |
 | VFS abstraction + FaultFS | [VFS](./vfs) · [File](./file) |
-| Hot-key observer (Thermos) | [Thermos](./thermos) |
 | Entry / error model | [Entry](./entry) · [Error Handling](./errors) |
+
+### 🧪 Experimental mechanisms
+
+These are useful research paths, but they are not required to understand the
+stable fsmeta product contract.
+
+| Topic | Doc |
+|---|---|
+| Product core vs experimental boundary | [Experimental Boundary Plan](./experimental_boundary_plan) |
+| Hot-key observer (Thermos) | [Thermos](./thermos) |
 
 ### 🛠️ Operations and tooling
 
@@ -98,7 +109,7 @@ The single-node substrate everything sits on. Independently usable as an embedde
 <img src="/img/architecture.svg" alt="NoKV Architecture" />
 
 ```
-Layer 1  fsmeta            ← namespace primitives
+Layer 1  fsmeta            ← workspace namespace primitives
    │
 Layer 2  meta/root         ← rooted authority truth
          coordinator       ← routing, TSO, store discovery, root-event publish
@@ -106,6 +117,9 @@ Layer 2  meta/root         ← rooted authority truth
          percolator        ← 2PC + MVCC + AssertionNotExist + commit-ts retry
    │
 Layer 3  engine            ← LSM + ART memtable + WAL + slab sidecar substrate
+
+Experimental mechanisms such as Peras and Thermos live behind the stable
+contract and should move under `experimental/` as they are cleaned up.
 ```
 
 **Four boundaries enforced in code:**

@@ -59,13 +59,13 @@ type StoreMembership struct {
 // SnapshotEpoch publishes one fsmeta subtree MVCC read epoch into rooted truth.
 // It is an authority/retention claim, not a materialized filesystem snapshot.
 type SnapshotEpoch struct {
-	SnapshotID       string
-	Mount            string
-	MountKeyID       uint64
-	RootInode        uint64
-	ReadVersion      uint64
-	PublishedAt      RootCursor
-	PerasSegmentRefs []rootproto.PerasSnapshotSegmentRef
+	SnapshotID      string
+	Mount           string
+	MountKeyID      uint64
+	RootInode       uint64
+	ReadVersion     uint64
+	PublishedAt     RootCursor
+	RuntimeEvidence []rootproto.SnapshotEvidenceRef
 }
 
 // Mount records one filesystem metadata mount lifecycle event.
@@ -306,19 +306,19 @@ func SnapshotEpochID(mount string, rootInode, readVersion uint64) string {
 }
 
 func SnapshotEpochPublished(mount string, mountKeyID, rootInode, readVersion uint64) Event {
-	return SnapshotEpochPublishedWithPerasRefs(mount, mountKeyID, rootInode, readVersion, nil)
+	return SnapshotEpochPublishedWithRuntimeEvidence(mount, mountKeyID, rootInode, readVersion, nil)
 }
 
-func SnapshotEpochPublishedWithPerasRefs(mount string, mountKeyID, rootInode, readVersion uint64, refs []rootproto.PerasSnapshotSegmentRef) Event {
+func SnapshotEpochPublishedWithRuntimeEvidence(mount string, mountKeyID, rootInode, readVersion uint64, refs []rootproto.SnapshotEvidenceRef) Event {
 	return Event{
 		Kind: KindSnapshotEpochPublished,
 		SnapshotEpoch: &SnapshotEpoch{
-			SnapshotID:       SnapshotEpochID(mount, rootInode, readVersion),
-			Mount:            mount,
-			MountKeyID:       mountKeyID,
-			RootInode:        rootInode,
-			ReadVersion:      readVersion,
-			PerasSegmentRefs: rootproto.ClonePerasSnapshotSegmentRefs(refs),
+			SnapshotID:      SnapshotEpochID(mount, rootInode, readVersion),
+			Mount:           mount,
+			MountKeyID:      mountKeyID,
+			RootInode:       rootInode,
+			ReadVersion:     readVersion,
+			RuntimeEvidence: rootproto.CloneSnapshotEvidenceRefs(refs),
 		},
 	}
 }

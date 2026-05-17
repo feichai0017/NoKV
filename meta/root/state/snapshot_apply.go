@@ -259,13 +259,13 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 		return
 	}
 	epoch := SnapshotEpoch{
-		SnapshotID:       event.SnapshotEpoch.SnapshotID,
-		Mount:            event.SnapshotEpoch.Mount,
-		MountKeyID:       event.SnapshotEpoch.MountKeyID,
-		RootInode:        event.SnapshotEpoch.RootInode,
-		ReadVersion:      event.SnapshotEpoch.ReadVersion,
-		PublishedAt:      cursor,
-		PerasSegmentRefs: rootproto.ClonePerasSnapshotSegmentRefs(event.SnapshotEpoch.PerasSegmentRefs),
+		SnapshotID:      event.SnapshotEpoch.SnapshotID,
+		Mount:           event.SnapshotEpoch.Mount,
+		MountKeyID:      event.SnapshotEpoch.MountKeyID,
+		RootInode:       event.SnapshotEpoch.RootInode,
+		ReadVersion:     event.SnapshotEpoch.ReadVersion,
+		PublishedAt:     cursor,
+		RuntimeEvidence: rootproto.CloneSnapshotEvidenceRefs(event.SnapshotEpoch.RuntimeEvidence),
 	}
 	if epoch.SnapshotID == "" {
 		epoch.SnapshotID = rootevent.SnapshotEpochID(epoch.Mount, epoch.RootInode, epoch.ReadVersion)
@@ -273,7 +273,7 @@ func applySnapshotEpochPublishedToSnapshot(snapshot *Snapshot, cursor Cursor, ev
 	if epoch.Mount == "" || epoch.MountKeyID == 0 || epoch.RootInode == 0 || epoch.ReadVersion == 0 {
 		return
 	}
-	for _, ref := range epoch.PerasSegmentRefs {
+	for _, ref := range epoch.RuntimeEvidence {
 		if !ref.Valid() {
 			return
 		}

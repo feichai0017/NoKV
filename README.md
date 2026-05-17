@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
   <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 
   <p>
-    <strong>An open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.</strong>
+    <strong>An open-source metadata engine for AI agent workspaces, with a filesystem-shaped namespace that can scale into DFS metadata service.</strong>
   </p>
 
   <p>
@@ -31,11 +31,11 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What is NoKV?
 
-**NoKV is the metadata substrate that filesystems, object storage, and AI dataset layers shouldn't have to build themselves.**
+**NoKV is the metadata engine for AI agent workspaces that need a durable, versioned, watchable namespace.**
 
 Meta Tectonic uses ZippyDB. Google Colossus uses Spanner. DeepSeek 3FS uses FoundationDB. Each big-tech system extracted a **separate metadata layer** from its data layer — because grafting namespace semantics onto a generic KV is the part that breaks under scale.
 
-NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` / `RenameSubtree`, formally-verified authority handoff, sub-second prefix-scoped change feeds. **You bring the data plane** (FUSE driver, S3 frontend, dataset SDK); **NoKV owns namespace truth.**
+NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus` / `WatchSubtree` / `SnapshotSubtree` / `RenameSubtree`, formally-verified authority handoff, sub-second prefix-scoped change feeds. **You bring the data plane** (agent artifact store, FUSE driver, S3 frontend, dataset SDK); **NoKV owns workspace namespace truth.**
 
 > Where it sits: NoKV is the layer **above** generic KV (FoundationDB / TiKV / etcd) and **below** filesystem-shaped consumers (CephFS / JuiceFS / S3 gateways / AI training pipelines). Apache-2.0.
 
@@ -49,9 +49,9 @@ NoKV is that layer, open-sourced and namespace-native: server-side `ReadDirPlus`
 
 **Three audiences that all sit on the same substrate:**
 
+- 🧪 **AI agent workspace metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), point-in-time namespace reads (`SnapshotSubtree`; long-lived retention is a GC boundary), prefix-scoped change feeds for shared workspaces and LangGraph-style channels (`WatchSubtree`) — without retrofitting them onto Redis keys, SQL tables, or generic KV scans
 - 🗂️ **Distributed filesystems** — DFS frontends (FUSE / NFS / SMB drivers, JuiceFS / CubeFS-style services) consume `fsmeta` for inode / dentry / mount / subtree authority instead of writing their own metadata layer on top of Redis / TiKV / FoundationDB
 - 🪣 **Object storage namespace layers** — S3-compatible gateways consume the same `fsmeta` for bucket / prefix / version metadata, getting fast `LIST` (server-side `ReadDirPlus`) and prefix-scoped event streams without client-side stitching
-- 🧪 **AI dataset and agent workspace metadata** — checkpoint storms (atomic multi-key `AssertionNotExist`), point-in-time namespace reads (`SnapshotSubtree`; long-lived retention is a GC boundary), prefix-scoped change feeds for training pipelines and shared agent workspaces (`WatchSubtree`) — without retrofitting them onto a generic KV
 
 > NoKV does for namespace metadata what etcd did for cluster state: a purpose-built coordination layer instead of forcing engineers to re-derive namespace semantics on every project.
 
@@ -109,9 +109,9 @@ NoKV's value comes from being **metadata-native, not generic-KV-with-metadata-gl
 
 <br/>
 
-## 🗂️ `fsmeta` — Namespace Metadata Service
+## 🗂️ `fsmeta` — Workspace Namespace Metadata Service
 
-Native API surface (gRPC at `nokv-fsmeta:8090`, also embedded Go via `fsmeta/runtime/raftstore.Open`):
+Native API surface (embedded Go via `fsmeta/runtime/local.Open`, distributed gRPC through `nokv-fsmeta:8090`):
 
 | Primitive | Semantics |
 |---|---|
@@ -136,6 +136,48 @@ Documentation: [`docs/guide/fsmeta.md`](docs/guide/fsmeta.md)
 
 ## 🚦 Quick Start
 
+### Use `fsmeta` locally
+
+```go
+package main
+
+import (
+    "context"
+
+    "github.com/feichai0017/NoKV/fsmeta"
+    fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
+)
+
+func main() {
+    ctx := context.Background()
+    rt, err := fsmetalocal.Open(ctx, fsmetalocal.Options{
+        WorkDir: "./nokv-fsmeta-local",
+        Mount:   fsmeta.MountIdentity{MountID: "default", MountKeyID: 1},
+    })
+    if err != nil {
+        panic(err)
+    }
+    defer rt.Close()
+
+    _, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
+        Mount:  "default",
+        Parent: fsmeta.RootInode,
+        Name:   "hello.txt",
+        Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Size: 13},
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    page, _ := rt.Executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
+        Mount: "default", Parent: fsmeta.RootInode, Limit: 100,
+    })
+    for _, e := range page {
+        println(e.Dentry.Name, e.Inode.Size)
+    }
+}
+```
+
 ### Run a full cluster
 
 ```bash
@@ -153,52 +195,7 @@ make docker-up
 ```
 
 
-### Use `fsmeta` from Go (embedded — same Executor as the gRPC server)
-
-```go
-package main
-
-import (
-    "context"
-
-    "github.com/feichai0017/NoKV/fsmeta"
-    fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
-)
-
-func main() {
-    ctx := context.Background()
-    rt, err := fsmetaraftstore.Open(ctx, fsmetaraftstore.Options{
-        CoordinatorAddr: "127.0.0.1:2379",
-    })
-    if err != nil {
-        panic(err)
-    }
-    defer rt.Close()
-
-    // mount must be registered first (see `nokv mount register`)
-    _, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-        Mount:  "default",
-        Parent: 1,
-        Name:   "hello.txt",
-        Attrs: fsmeta.CreateAttrs{
-            Type: fsmeta.InodeTypeFile,
-            Size: 13,
-        },
-    })
-    if err != nil {
-        panic(err)
-    }
-
-    page, _ := rt.Executor.ReadDirPlus(ctx, fsmeta.ReadDirRequest{
-        Mount: "default", Parent: 1, Limit: 100,
-    })
-    for _, e := range page {
-        println(e.Dentry.Name, e.Inode.Size)
-    }
-}
-```
-
-### Use `fsmeta` from any language (gRPC)
+### Use distributed `fsmeta` from any language (gRPC)
 
 ```bash
 # Bootstrap a mount (required before first write)
@@ -249,7 +246,8 @@ Full guide: [`docs/guide/getting_started.md`](docs/guide/getting_started.md) · 
 | [`engine/slab/`](./engine/slab) | Append-only mmap segment substrate for derived sidecar caches | [VFS](docs/guide/vfs.md) |
 | [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/guide/manifest.md) |
 | [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/guide/vfs.md) |
-| [`thermos/`](./thermos) | Hot-key observer | [Thermos](docs/guide/thermos.md) |
+| [`experimental/`](./experimental) | Boundary for research mechanisms such as Peras and Thermos | [Experimental Boundary Plan](docs/guide/experimental_boundary_plan.md) |
+| [`thermos/`](./thermos) | Optional hot-key observer; planned for `experimental/thermos` | [Thermos](docs/guide/thermos.md) |
 | [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, migrate, mount, quota | [CLI](docs/guide/cli.md) |
 | [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/guide/fsmeta.md) |
 
@@ -265,7 +263,7 @@ FSMetadata exports per-domain expvar namespaces when `--metrics-addr` is enabled
 | | `nokv_fsmeta_watch` | `subscribers`, `events_total`, `delivered_total`, `dropped_total`, `overflow_total` |
 | | `nokv_fsmeta_quota` | `checks_total`, `rejects_total`, `cache_hits_total`, `cache_misses_total`, `fence_updates_total`, `usage_mutations_total` |
 | | `nokv_fsmeta_mount` | `cache_hits`, `cache_misses`, `admission_rejects_total` |
-| | `nokv_fsmeta_peras` | `commit_total`, `flush_total`, `segment_total`, `witness_latency_*` |
+| | `nokv_fsmeta_peras` | Experimental Peras profile only: `commit_total`, `flush_total`, `segment_total`, `witness_latency_*` |
 | | `nokv_fsmeta_sessions` | stale writer-session cleanup runs, expired sessions, and last error |
 
 Plus structured logs from coordinator and each store. More: [`docs/guide/stats.md`](docs/guide/stats.md) · [`docs/guide/cli.md`](docs/guide/cli.md) · [`docs/guide/testing.md`](docs/guide/testing.md).

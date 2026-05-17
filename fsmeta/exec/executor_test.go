@@ -225,10 +225,10 @@ type fakePerasAuthorityFlusher struct {
 	flushScopes []compile.AuthorityScope
 }
 
-type fakePerasVisibleSnapshotCapturer struct {
+type fakeVisibleSnapshotCapturer struct {
 	fakePerasAuthorityFlusher
 	capture         bool
-	segmentRefs     []fsmeta.PerasSnapshotSegmentRef
+	segmentRefs     []fsmeta.SnapshotEvidenceRef
 	err             error
 	captureVersions []uint64
 	captureScopes   []compile.AuthorityScope
@@ -613,13 +613,13 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
+func (f *fakeVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.VisibleSnapshotCapture, bool, error) {
 	f.captureVersions = append(f.captureVersions, version)
 	f.captureScopes = append(f.captureScopes, cloneTestAuthorityScope(scope))
 	if f.err != nil {
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, f.err
+		return fsmeta.VisibleSnapshotCapture{}, false, f.err
 	}
-	return fsmeta.PerasVisibleSnapshotCapture{SegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), f.segmentRefs...)}, f.capture, nil
+	return fsmeta.VisibleSnapshotCapture{Evidence: append([]fsmeta.SnapshotEvidenceRef(nil), f.segmentRefs...)}, f.capture, nil
 }
 
 func cloneTestAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {

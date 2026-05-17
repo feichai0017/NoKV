@@ -78,10 +78,10 @@ func (InodeType) EnumDescriptor() ([]byte, []int) {
 type WatchEventSource int32
 
 const (
-	WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED   WatchEventSource = 0
-	WatchEventSource_WATCH_EVENT_SOURCE_COMMIT        WatchEventSource = 1
-	WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK  WatchEventSource = 2
-	WatchEventSource_WATCH_EVENT_SOURCE_PERAS_VISIBLE WatchEventSource = 3
+	WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED     WatchEventSource = 0
+	WatchEventSource_WATCH_EVENT_SOURCE_COMMIT          WatchEventSource = 1
+	WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK    WatchEventSource = 2
+	WatchEventSource_WATCH_EVENT_SOURCE_RUNTIME_VISIBLE WatchEventSource = 3
 )
 
 // Enum value maps for WatchEventSource.
@@ -90,13 +90,13 @@ var (
 		0: "WATCH_EVENT_SOURCE_UNSPECIFIED",
 		1: "WATCH_EVENT_SOURCE_COMMIT",
 		2: "WATCH_EVENT_SOURCE_RESOLVE_LOCK",
-		3: "WATCH_EVENT_SOURCE_PERAS_VISIBLE",
+		3: "WATCH_EVENT_SOURCE_RUNTIME_VISIBLE",
 	}
 	WatchEventSource_value = map[string]int32{
-		"WATCH_EVENT_SOURCE_UNSPECIFIED":   0,
-		"WATCH_EVENT_SOURCE_COMMIT":        1,
-		"WATCH_EVENT_SOURCE_RESOLVE_LOCK":  2,
-		"WATCH_EVENT_SOURCE_PERAS_VISIBLE": 3,
+		"WATCH_EVENT_SOURCE_UNSPECIFIED":     0,
+		"WATCH_EVENT_SOURCE_COMMIT":          1,
+		"WATCH_EVENT_SOURCE_RESOLVE_LOCK":    2,
+		"WATCH_EVENT_SOURCE_RUNTIME_VISIBLE": 3,
 	}
 )
 
@@ -1839,29 +1839,29 @@ func (x *SnapshotSubtreeRequest) GetRootInode() uint64 {
 	return 0
 }
 
-type PerasSnapshotSegmentRef struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	EpochId              uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	SegmentRoot          []byte                 `protobuf:"bytes,2,opt,name=segment_root,json=segmentRoot,proto3" json:"segment_root,omitempty"`
-	SegmentPayloadDigest []byte                 `protobuf:"bytes,3,opt,name=segment_payload_digest,json=segmentPayloadDigest,proto3" json:"segment_payload_digest,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+type SnapshotEvidenceRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EpochId       uint64                 `protobuf:"varint,1,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	EvidenceRoot  []byte                 `protobuf:"bytes,2,opt,name=evidence_root,json=evidenceRoot,proto3" json:"evidence_root,omitempty"`
+	PayloadDigest []byte                 `protobuf:"bytes,3,opt,name=payload_digest,json=payloadDigest,proto3" json:"payload_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PerasSnapshotSegmentRef) Reset() {
-	*x = PerasSnapshotSegmentRef{}
+func (x *SnapshotEvidenceRef) Reset() {
+	*x = SnapshotEvidenceRef{}
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PerasSnapshotSegmentRef) String() string {
+func (x *SnapshotEvidenceRef) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PerasSnapshotSegmentRef) ProtoMessage() {}
+func (*SnapshotEvidenceRef) ProtoMessage() {}
 
-func (x *PerasSnapshotSegmentRef) ProtoReflect() protoreflect.Message {
+func (x *SnapshotEvidenceRef) ProtoReflect() protoreflect.Message {
 	mi := &file_fsmeta_fsmeta_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1873,40 +1873,40 @@ func (x *PerasSnapshotSegmentRef) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PerasSnapshotSegmentRef.ProtoReflect.Descriptor instead.
-func (*PerasSnapshotSegmentRef) Descriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotEvidenceRef.ProtoReflect.Descriptor instead.
+func (*SnapshotEvidenceRef) Descriptor() ([]byte, []int) {
 	return file_fsmeta_fsmeta_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *PerasSnapshotSegmentRef) GetEpochId() uint64 {
+func (x *SnapshotEvidenceRef) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *PerasSnapshotSegmentRef) GetSegmentRoot() []byte {
+func (x *SnapshotEvidenceRef) GetEvidenceRoot() []byte {
 	if x != nil {
-		return x.SegmentRoot
+		return x.EvidenceRoot
 	}
 	return nil
 }
 
-func (x *PerasSnapshotSegmentRef) GetSegmentPayloadDigest() []byte {
+func (x *SnapshotEvidenceRef) GetPayloadDigest() []byte {
 	if x != nil {
-		return x.SegmentPayloadDigest
+		return x.PayloadDigest
 	}
 	return nil
 }
 
 type SnapshotSubtreeResponse struct {
-	state            protoimpl.MessageState     `protogen:"open.v1"`
-	Mount            string                     `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	RootInode        uint64                     `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
-	ReadVersion      uint64                     `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
-	PerasSegmentRefs []*PerasSnapshotSegmentRef `protobuf:"bytes,4,rep,name=peras_segment_refs,json=perasSegmentRefs,proto3" json:"peras_segment_refs,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Mount           string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode       uint64                 `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	ReadVersion     uint64                 `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
+	RuntimeEvidence []*SnapshotEvidenceRef `protobuf:"bytes,4,rep,name=runtime_evidence,json=runtimeEvidence,proto3" json:"runtime_evidence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SnapshotSubtreeResponse) Reset() {
@@ -1960,21 +1960,21 @@ func (x *SnapshotSubtreeResponse) GetReadVersion() uint64 {
 	return 0
 }
 
-func (x *SnapshotSubtreeResponse) GetPerasSegmentRefs() []*PerasSnapshotSegmentRef {
+func (x *SnapshotSubtreeResponse) GetRuntimeEvidence() []*SnapshotEvidenceRef {
 	if x != nil {
-		return x.PerasSegmentRefs
+		return x.RuntimeEvidence
 	}
 	return nil
 }
 
 type RetireSnapshotSubtreeRequest struct {
-	state            protoimpl.MessageState     `protogen:"open.v1"`
-	Mount            string                     `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	RootInode        uint64                     `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
-	ReadVersion      uint64                     `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
-	PerasSegmentRefs []*PerasSnapshotSegmentRef `protobuf:"bytes,4,rep,name=peras_segment_refs,json=perasSegmentRefs,proto3" json:"peras_segment_refs,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Mount           string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	RootInode       uint64                 `protobuf:"varint,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
+	ReadVersion     uint64                 `protobuf:"varint,3,opt,name=read_version,json=readVersion,proto3" json:"read_version,omitempty"`
+	RuntimeEvidence []*SnapshotEvidenceRef `protobuf:"bytes,4,rep,name=runtime_evidence,json=runtimeEvidence,proto3" json:"runtime_evidence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RetireSnapshotSubtreeRequest) Reset() {
@@ -2028,9 +2028,9 @@ func (x *RetireSnapshotSubtreeRequest) GetReadVersion() uint64 {
 	return 0
 }
 
-func (x *RetireSnapshotSubtreeRequest) GetPerasSegmentRefs() []*PerasSnapshotSegmentRef {
+func (x *RetireSnapshotSubtreeRequest) GetRuntimeEvidence() []*SnapshotEvidenceRef {
 	if x != nil {
-		return x.PerasSegmentRefs
+		return x.RuntimeEvidence
 	}
 	return nil
 }
@@ -3154,23 +3154,23 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x16SnapshotSubtreeRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1d\n" +
 	"\n" +
-	"root_inode\x18\x02 \x01(\x04R\trootInode\"\x8d\x01\n" +
-	"\x17PerasSnapshotSegmentRef\x12\x19\n" +
-	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12!\n" +
-	"\fsegment_root\x18\x02 \x01(\fR\vsegmentRoot\x124\n" +
-	"\x16segment_payload_digest\x18\x03 \x01(\fR\x14segmentPayloadDigest\"\xc8\x01\n" +
+	"root_inode\x18\x02 \x01(\x04R\trootInode\"|\n" +
+	"\x13SnapshotEvidenceRef\x12\x19\n" +
+	"\bepoch_id\x18\x01 \x01(\x04R\aepochId\x12#\n" +
+	"\revidence_root\x18\x02 \x01(\fR\fevidenceRoot\x12%\n" +
+	"\x0epayload_digest\x18\x03 \x01(\fR\rpayloadDigest\"\xc1\x01\n" +
 	"\x17SnapshotSubtreeResponse\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1d\n" +
 	"\n" +
 	"root_inode\x18\x02 \x01(\x04R\trootInode\x12!\n" +
-	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12U\n" +
-	"\x12peras_segment_refs\x18\x04 \x03(\v2'.nokv.fsmeta.v1.PerasSnapshotSegmentRefR\x10perasSegmentRefs\"\xcd\x01\n" +
+	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12N\n" +
+	"\x10runtime_evidence\x18\x04 \x03(\v2#.nokv.fsmeta.v1.SnapshotEvidenceRefR\x0fruntimeEvidence\"\xc6\x01\n" +
 	"\x1cRetireSnapshotSubtreeRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x1d\n" +
 	"\n" +
 	"root_inode\x18\x02 \x01(\x04R\trootInode\x12!\n" +
-	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12U\n" +
-	"\x12peras_segment_refs\x18\x04 \x03(\v2'.nokv.fsmeta.v1.PerasSnapshotSegmentRefR\x10perasSegmentRefs\"\x1f\n" +
+	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12N\n" +
+	"\x10runtime_evidence\x18\x04 \x03(\v2#.nokv.fsmeta.v1.SnapshotEvidenceRefR\x0fruntimeEvidence\"\x1f\n" +
 	"\x1dRetireSnapshotSubtreeResponse\"?\n" +
 	"\x11QuotaUsageRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x14\n" +
@@ -3234,12 +3234,12 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\tInodeType\x12\x1a\n" +
 	"\x16INODE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fINODE_TYPE_FILE\x10\x01\x12\x18\n" +
-	"\x14INODE_TYPE_DIRECTORY\x10\x02*\xa0\x01\n" +
+	"\x14INODE_TYPE_DIRECTORY\x10\x02*\xa2\x01\n" +
 	"\x10WatchEventSource\x12\"\n" +
 	"\x1eWATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12#\n" +
-	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x02\x12$\n" +
-	" WATCH_EVENT_SOURCE_PERAS_VISIBLE\x10\x032\xc3\r\n" +
+	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x02\x12&\n" +
+	"\"WATCH_EVENT_SOURCE_RUNTIME_VISIBLE\x10\x032\xc3\r\n" +
 	"\n" +
 	"FSMetadata\x12G\n" +
 	"\x06Create\x12\x1d.nokv.fsmeta.v1.CreateRequest\x1a\x1e.nokv.fsmeta.v1.CreateResponse\x12V\n" +
@@ -3307,7 +3307,7 @@ var file_fsmeta_fsmeta_proto_goTypes = []any{
 	(*GetReadVersionRequest)(nil),         // 26: nokv.fsmeta.v1.GetReadVersionRequest
 	(*GetReadVersionResponse)(nil),        // 27: nokv.fsmeta.v1.GetReadVersionResponse
 	(*SnapshotSubtreeRequest)(nil),        // 28: nokv.fsmeta.v1.SnapshotSubtreeRequest
-	(*PerasSnapshotSegmentRef)(nil),       // 29: nokv.fsmeta.v1.PerasSnapshotSegmentRef
+	(*SnapshotEvidenceRef)(nil),           // 29: nokv.fsmeta.v1.SnapshotEvidenceRef
 	(*SnapshotSubtreeResponse)(nil),       // 30: nokv.fsmeta.v1.SnapshotSubtreeResponse
 	(*RetireSnapshotSubtreeRequest)(nil),  // 31: nokv.fsmeta.v1.RetireSnapshotSubtreeRequest
 	(*RetireSnapshotSubtreeResponse)(nil), // 32: nokv.fsmeta.v1.RetireSnapshotSubtreeResponse
@@ -3356,8 +3356,8 @@ var file_fsmeta_fsmeta_proto_depIdxs = []int32{
 	22, // 22: nokv.fsmeta.v1.WatchSubtreeResponse.ready:type_name -> nokv.fsmeta.v1.WatchReady
 	18, // 23: nokv.fsmeta.v1.WatchAckOrSubscribe.subscribe:type_name -> nokv.fsmeta.v1.WatchSubtreeRequest
 	20, // 24: nokv.fsmeta.v1.WatchAckOrSubscribe.ack:type_name -> nokv.fsmeta.v1.WatchAck
-	29, // 25: nokv.fsmeta.v1.SnapshotSubtreeResponse.peras_segment_refs:type_name -> nokv.fsmeta.v1.PerasSnapshotSegmentRef
-	29, // 26: nokv.fsmeta.v1.RetireSnapshotSubtreeRequest.peras_segment_refs:type_name -> nokv.fsmeta.v1.PerasSnapshotSegmentRef
+	29, // 25: nokv.fsmeta.v1.SnapshotSubtreeResponse.runtime_evidence:type_name -> nokv.fsmeta.v1.SnapshotEvidenceRef
+	29, // 26: nokv.fsmeta.v1.RetireSnapshotSubtreeRequest.runtime_evidence:type_name -> nokv.fsmeta.v1.SnapshotEvidenceRef
 	3,  // 27: nokv.fsmeta.v1.OpenWriteSessionResponse.session:type_name -> nokv.fsmeta.v1.SessionRecord
 	3,  // 28: nokv.fsmeta.v1.HeartbeatWriteSessionResponse.session:type_name -> nokv.fsmeta.v1.SessionRecord
 	7,  // 29: nokv.fsmeta.v1.FSMetadata.Create:input_type -> nokv.fsmeta.v1.CreateRequest
