@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	"github.com/feichai0017/NoKV/local"
 	"github.com/stretchr/testify/require"
 )

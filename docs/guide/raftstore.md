@@ -50,7 +50,7 @@ flowchart TD
         Store --> Admin["admin service"]
         Store --> Meta["raftstore/localmeta"]
         Peer --> Engine["raftstore/raftlog"]
-        Peer --> Apply["kv.Apply / legacy experimental install"]
+        Peer --> Apply["kv.Apply / prepared MVCC install"]
     end
 
     Apply --> DB["NoKV DB"]
@@ -105,7 +105,7 @@ flowchart TD
 
 ### Write (via Propose)
 1. Write RPCs (Prewrite/Commit/…) call `Store.ProposeCommand`, encoding the command and routing to the leader peer.
-2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to `percolator`. The legacy experimental Peras command is still handled here during the migration.
+2. The leader appends the encoded request to raft, replicates, and once committed the command pipeline hands data to `kv.Apply`, which maps Prewrite/Commit/ResolveLock to `percolator` and `InstallPreparedMVCCEntries` to the generic prepared-entry installer. The legacy experimental Peras command is still accepted during the migration, but it lowers segment payloads into the same prepared-entry installer.
 3. `engine.WALStorage` persists raft entries/state snapshots and updates `raftstore/localmeta` raft pointers. This keeps WAL GC and raft truncation aligned without polluting the storage manifest.
 4. Raft apply only accepts command-encoded payloads (`RaftCmdRequest`). Legacy raw KV payloads are rejected as unsupported.
 
@@ -164,7 +164,8 @@ sequenceDiagram
 | --- | --- | --- |
 | `Get` / `Scan` | `ReadCommand` → `LinearizableRead(ReadIndex)` + `WaitApplied` → `kv.Apply` (read mode) | Leader-only strong read with Raft linearizability barrier.
 | `Prewrite` / `Commit` / `BatchRollback` / `ResolveLock` / `CheckTxnStatus` | `ProposeCommand` → command pipeline → raft log → `kv.Apply` | Pipeline matches proposals with apply results; MVCC latch manager prevents write conflicts.
-| `PerasInstallSegment` | `ProposeCommand` → command pipeline → raft log → legacy experimental install branch | Installs Peras segment catalog/index records or materialized MVCC entries while the Peras path is being isolated. |
+| `InstallPreparedMVCCEntries` | `ProposeCommand` → command pipeline → raft log → prepared-entry install branch | Installs caller-prepared MVCC entries without decoding fsmeta or Peras semantics. |
+| `PerasInstallSegment` | `ProposeCommand` → command pipeline → raft log → Peras adapter → prepared-entry install branch | Legacy experimental adapter that installs Peras segment catalog/index records or materialized MVCC entries while the Peras path is being isolated. |
 
 `PerasWitnessSegments` and `PerasWitnessProbe` are legacy StoreKV sidecar RPCs backed by the configured witness node. They provide segment evidence for Peras recovery; they are not a second Raft quorum and do not replace replicated install. The cleanup plan moves these RPCs behind an experimental service boundary.
 

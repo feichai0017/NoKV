@@ -11,12 +11,12 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/txn/percolator"
@@ -145,6 +145,23 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 				return nil, err
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
+		case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC)
+			batch := []*kvrpcpb.InstallPreparedMVCCEntriesRequest{r.GetInstallPreparedMvcc()}
+			for j := i + 1; j < end; j++ {
+				batch = append(batch, req.Requests[j].GetInstallPreparedMvcc())
+			}
+			results, err := applyInstallPreparedMVCCEntriesBatch(db, batch)
+			if err != nil {
+				return nil, err
+			}
+			if len(results) != len(batch) {
+				return nil, fmt.Errorf("kv: prepared mvcc install batch result mismatch: got %d want %d", len(results), len(batch))
+			}
+			for _, result := range results {
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result}})
+			}
+			i = end - 1
 		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT)
 			batch := []*kvrpcpb.PerasInstallSegmentRequest{r.GetPerasInstallSegment()}
@@ -227,6 +244,7 @@ func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, b
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
+		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
 		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 		return r.GetCmdType(), true
 	default:
@@ -321,6 +339,26 @@ func applyBatchRun(
 						AppliedKeys:              result.AppliedKeys,
 						FallbackToTwoPhaseCommit: result.Fallback,
 					}},
+				}},
+			}
+		}
+	case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+		batch := make([]*kvrpcpb.InstallPreparedMVCCEntriesRequest, 0, len(reqs))
+		for _, req := range reqs {
+			batch = append(batch, req.GetRequests()[0].GetInstallPreparedMvcc())
+		}
+		results, err := applyInstallPreparedMVCCEntriesBatch(db, batch)
+		if err != nil {
+			return err
+		}
+		if len(results) != len(batch) {
+			return fmt.Errorf("kv: prepared mvcc install batch result mismatch: got %d want %d", len(results), len(batch))
+		}
+		for i, result := range results {
+			resps[i] = &raftcmdpb.RaftCmdResponse{
+				Header: reqs[i].GetHeader(),
+				Responses: []*raftcmdpb.Response{{
+					Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result},
 				}},
 			}
 		}

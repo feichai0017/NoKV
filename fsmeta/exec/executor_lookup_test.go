@@ -13,8 +13,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,7 +112,7 @@ func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) 
 	}}, pairs)
 }
 
-func TestExecutorReadDirPlusPerasOnlyPathBypassesDirPageCache(t *testing.T) {
+func TestExecutorReadDirPlusOverlayOnlyPathBypassesDirPageCache(t *testing.T) {
 	runner := newFakeRunner()
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
@@ -362,7 +362,7 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *te
 	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "directory without Peras rows should still use dirpage cache")
 }
 
-func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasRowsAreInAnotherDirectory(t *testing.T) {
+func TestExecutorReadDirPlusUsesDirPageCacheWhenOverlayRowsAreInAnotherDirectory(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -790,7 +790,7 @@ func TestExecutorReadDirRefillsOverlayTombstonesBeforeBaseRows(t *testing.T) {
 	}, records)
 }
 
-func TestExecutorReadDirPerasOnlyRefillsOverlayAfterTombstone(t *testing.T) {
+func TestExecutorReadDirOverlayOnlyRefillsOverlayAfterTombstone(t *testing.T) {
 	prefix, err := fsmeta.EncodeDentryPrefix(testMountIdentityFor("vol"), 7)
 	require.NoError(t, err)
 	committer := scanOverlayCommitter{

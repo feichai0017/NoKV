@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
+	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/raftstore/kv"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 const perasWitnessControlWALBase uint64 = 1 << 63

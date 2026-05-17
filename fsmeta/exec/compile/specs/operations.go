@@ -7,7 +7,7 @@ import "github.com/feichai0017/NoKV/fsmeta/exec/compile/specdsl"
 
 var Create = specdsl.OpSpec{
 	Name:           "Create",
-	FileName:       "create.peras.go",
+	FileName:       "create.program.go",
 	ProgramType:    "CreateProgram",
 	ValuesType:     "CreateValues",
 	RequestType:    "fsmeta.CreateRequest",
@@ -37,7 +37,7 @@ var Create = specdsl.OpSpec{
 
 var UpdateInode = specdsl.OpSpec{
 	Name:           "UpdateInode",
-	FileName:       "inode.peras.go",
+	FileName:       "inode.program.go",
 	ProgramType:    "UpdateInodeProgram",
 	RequestType:    "fsmeta.UpdateInodeRequest",
 	CompileName:    "CompileUpdateInodeProgram",
@@ -69,7 +69,7 @@ var UpdateInode = specdsl.OpSpec{
 
 var Lookup = specdsl.OpSpec{
 	Name:           "Lookup",
-	FileName:       "lookup.peras.go",
+	FileName:       "lookup.program.go",
 	ProgramType:    "LookupProgram",
 	RequestType:    "fsmeta.LookupRequest",
 	CompileName:    "CompileLookupProgram",
@@ -89,7 +89,7 @@ var Lookup = specdsl.OpSpec{
 
 var ReadDir = specdsl.OpSpec{
 	Name:           "ReadDir",
-	FileName:       "readdir.peras.go",
+	FileName:       "readdir.program.go",
 	ProgramType:    "ReadDirProgram",
 	RequestType:    "fsmeta.ReadDirRequest",
 	CompileName:    "CompileReadDirProgram",
@@ -109,7 +109,7 @@ var ReadDir = specdsl.OpSpec{
 
 var SnapshotSubtree = specdsl.OpSpec{
 	Name:              "SnapshotSubtree",
-	FileName:          "snapshot.peras.go",
+	FileName:          "snapshot.program.go",
 	ProgramType:       "SnapshotSubtreeProgram",
 	RequestType:       "fsmeta.SnapshotSubtreeRequest",
 	CompileName:       "CompileSnapshotSubtreeProgram",
@@ -130,7 +130,7 @@ var SnapshotSubtree = specdsl.OpSpec{
 
 var Rename = specdsl.OpSpec{
 	Name:           "Rename",
-	FileName:       "rename.peras.go",
+	FileName:       "rename.program.go",
 	ProgramType:    "RenameProgram",
 	RequestType:    "fsmeta.RenameRequest",
 	CompileName:    "CompileRenameProgram",
@@ -155,7 +155,7 @@ var Rename = specdsl.OpSpec{
 
 var RenameSubtree = specdsl.OpSpec{
 	Name:              "RenameSubtree",
-	FileName:          "rename.peras.go",
+	FileName:          "rename.program.go",
 	ProgramType:       "RenameSubtreeProgram",
 	RequestType:       "fsmeta.RenameSubtreeRequest",
 	CompileName:       "CompileRenameSubtreeProgram",
@@ -182,7 +182,7 @@ var RenameSubtree = specdsl.OpSpec{
 
 var Link = specdsl.OpSpec{
 	Name:           "Link",
-	FileName:       "link.peras.go",
+	FileName:       "link.program.go",
 	ProgramType:    "LinkProgram",
 	RequestType:    "fsmeta.LinkRequest",
 	CompileName:    "CompileLinkProgram",
@@ -215,7 +215,7 @@ var Link = specdsl.OpSpec{
 
 var Unlink = specdsl.OpSpec{
 	Name:           "Unlink",
-	FileName:       "unlink.peras.go",
+	FileName:       "unlink.program.go",
 	ProgramType:    "UnlinkProgram",
 	RequestType:    "fsmeta.UnlinkRequest",
 	CompileName:    "CompileUnlinkProgram",
@@ -243,7 +243,7 @@ var Unlink = specdsl.OpSpec{
 
 var OpenWriteSession = specdsl.OpSpec{
 	Name:           "OpenWriteSession",
-	FileName:       "session.peras.go",
+	FileName:       "session.program.go",
 	ProgramType:    "OpenWriteSessionProgram",
 	ValuesType:     "OpenWriteSessionValues",
 	RequestType:    "fsmeta.OpenWriteSessionRequest",
@@ -276,7 +276,7 @@ var OpenWriteSession = specdsl.OpSpec{
 
 var HeartbeatWriteSession = specdsl.OpSpec{
 	Name:           "HeartbeatWriteSession",
-	FileName:       "session.peras.go",
+	FileName:       "session.program.go",
 	ProgramType:    "HeartbeatWriteSessionProgram",
 	ValuesType:     "HeartbeatWriteSessionValues",
 	RequestType:    "fsmeta.HeartbeatWriteSessionRequest",
@@ -307,7 +307,7 @@ var HeartbeatWriteSession = specdsl.OpSpec{
 
 var CloseWriteSession = specdsl.OpSpec{
 	Name:           "CloseWriteSession",
-	FileName:       "session.peras.go",
+	FileName:       "session.program.go",
 	ProgramType:    "CloseWriteSessionProgram",
 	ValuesType:     "CloseWriteSessionValues",
 	RequestType:    "fsmeta.CloseWriteSessionRequest",
@@ -337,7 +337,7 @@ var CloseWriteSession = specdsl.OpSpec{
 
 var ExpireWriteSessions = specdsl.OpSpec{
 	Name:           "ExpireWriteSessions",
-	FileName:       "session.peras.go",
+	FileName:       "session.program.go",
 	ProgramType:    "ExpireWriteSessionsProgram",
 	RequestType:    "fsmeta.ExpireWriteSessionsRequest",
 	CompileName:    "CompileExpireWriteSessionsProgram",

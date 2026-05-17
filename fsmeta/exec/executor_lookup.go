@@ -77,10 +77,10 @@ func (e *Executor) lookupMergedDentry(ctx context.Context, mount fsmeta.MountIde
 		return fsmeta.DentryRecord{}, false, err
 	}
 	plan := compile.DirectoryReadPlan{
-		Prefix:       prefix,
-		StartKey:     cloneBytes(key),
-		Limit:        1,
-		IncludePeras: true,
+		Prefix:         prefix,
+		StartKey:       cloneBytes(key),
+		Limit:          1,
+		IncludeOverlay: true,
 	}
 	var record fsmeta.DentryRecord
 	var found bool
@@ -444,22 +444,22 @@ func (e *Executor) readDirPlusFromPerasViewAt(mount fsmeta.MountIdentity, dentri
 }
 
 func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool) ([]fsmeta.DentryRecord, error) {
-	overlayGeneration, sealedGeneration := e.capturePerasOverlayRead(plan.IncludePeras && !snapshotRead)
+	overlayGeneration, sealedGeneration := e.capturePerasOverlayRead(plan.IncludeOverlay && !snapshotRead)
 	return e.scanDentriesAt(ctx, plan, version, snapshotRead, overlayGeneration, sealedGeneration)
 }
 
 func (e *Executor) scanDentriesAt(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool, overlayGeneration, sealedGeneration uint64) ([]fsmeta.DentryRecord, error) {
 	var kvs []KV
-	stats := compile.DirectoryReadStats{UsedPerasOnly: plan.PerasOnly}
-	if !plan.PerasOnly {
-		if plan.IncludePeras {
-			var perasRows uint32
+	stats := compile.DirectoryReadStats{UsedOverlayOnly: plan.OverlayOnly}
+	if !plan.OverlayOnly {
+		if plan.IncludeOverlay {
+			var overlayRows uint32
 			var err error
-			kvs, stats.BaseRows, perasRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRowsAt(ctx, plan, version, snapshotRead, overlayGeneration, sealedGeneration)
+			kvs, stats.BaseRows, overlayRows, stats.UsedDirIndex, err = e.scanMergedDirectoryRowsAt(ctx, plan, version, snapshotRead, overlayGeneration, sealedGeneration)
 			if err != nil {
 				return nil, err
 			}
-			stats.PerasRows = perasRows
+			stats.OverlayRows = overlayRows
 		} else {
 			var err error
 			kvs, err = e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
@@ -468,10 +468,10 @@ func (e *Executor) scanDentriesAt(ctx context.Context, plan compile.DirectoryRea
 			}
 			stats.BaseRows = uint32(len(kvs))
 		}
-	} else if plan.IncludePeras {
-		var perasRows uint32
-		kvs, perasRows, stats.UsedDirIndex = e.mergePerasDirectoryOverlayScanAt(kvs, plan.Prefix, plan.StartKey, plan.Limit, overlayGeneration, sealedGeneration)
-		stats.PerasRows = perasRows
+	} else if plan.IncludeOverlay {
+		var overlayRows uint32
+		kvs, overlayRows, stats.UsedDirIndex = e.mergePerasDirectoryOverlayScanAt(kvs, plan.Prefix, plan.StartKey, plan.Limit, overlayGeneration, sealedGeneration)
+		stats.OverlayRows = overlayRows
 	}
 	out := make([]fsmeta.DentryRecord, 0, len(kvs))
 	for _, kv := range kvs {

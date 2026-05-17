@@ -11,9 +11,9 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
+	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -146,6 +146,133 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NoError(t, err)
 	defer gotWrite.DecrRef()
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
+}
+
+func TestApplyInstallPreparedMVCCEntriesAppliesInternalEntries(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	version := uint64(33)
+	writeValue := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: version})
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    []byte("prepared-value"),
+				CommitVersion: version,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-value"),
+						Version:      version,
+						Value:        []byte("value"),
+						HasValue:     true,
+					},
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_WRITE,
+						Key:          []byte("prepared-value"),
+						Version:      version,
+						Value:        writeValue,
+						HasValue:     true,
+					},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	installResp := resp.GetResponses()[0].GetInstallPreparedMvcc()
+	require.Nil(t, installResp.GetError())
+	require.Equal(t, uint64(2), installResp.GetAppliedEntries())
+	require.Equal(t, version, installResp.GetCommitVersion())
+
+	gotDefault, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-value"), version)
+	require.NoError(t, err)
+	defer gotDefault.DecrRef()
+	require.Equal(t, []byte("value"), gotDefault.Value)
+
+	gotWrite, err := db.GetInternalEntry(entrykv.CFWrite, []byte("prepared-value"), version)
+	require.NoError(t, err)
+	defer gotWrite.DecrRef()
+	require.Equal(t, writeValue, gotWrite.Value)
+}
+
+func TestApplyInstallPreparedMVCCEntriesRejectsMalformedBatch(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    []byte("prepared-a"),
+				CommitVersion: 44,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-a"),
+						Version:      44,
+						Value:        []byte("value"),
+						HasValue:     true,
+					},
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-b"),
+						Version:      45,
+						Value:        []byte("must-not-apply"),
+						HasValue:     true,
+					},
+				},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetResponses(), 1)
+	keyErr := resp.GetResponses()[0].GetInstallPreparedMvcc().GetError()
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetAbort(), "version")
+	_, err = db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-a"), 44)
+	require.Error(t, err)
+	_, err = db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-b"), 45)
+	require.Error(t, err)
+}
+
+func TestApplyBatchHandlesInstallPreparedMVCCEntriesRequests(t *testing.T) {
+	opt := local.NewDefaultOptions()
+	opt.WorkDir = t.TempDir()
+	db, err := local.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	reqs := []*raftcmdpb.RaftCmdRequest{
+		installPreparedMVCCRequestForApplyTest(51, []byte("prepared-batch-a"), []byte("va")),
+		installPreparedMVCCRequestForApplyTest(52, []byte("prepared-batch-b"), []byte("vb")),
+	}
+	resps, err := ApplyBatch(db, nil, reqs)
+	require.NoError(t, err)
+	require.Len(t, resps, 2)
+	for idx, resp := range resps {
+		installResp := resp.GetResponses()[0].GetInstallPreparedMvcc()
+		require.Nil(t, installResp.GetError())
+		require.Equal(t, uint64(1), installResp.GetAppliedEntries())
+		require.Equal(t, uint64(51+idx), installResp.GetCommitVersion())
+	}
+
+	gotA, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-batch-a"), 51)
+	require.NoError(t, err)
+	defer gotA.DecrRef()
+	require.Equal(t, []byte("va"), gotA.Value)
+
+	gotB, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-batch-b"), 52)
+	require.NoError(t, err)
+	defer gotB.DecrRef()
+	require.Equal(t, []byte("vb"), gotB.Value)
 }
 
 func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
@@ -845,6 +972,25 @@ func atomicPutForApplyTest(startVersion, commitVersion uint64, key, value []byte
 		Mutations: []*kvrpcpb.Mutation{
 			{Op: kvrpcpb.Mutation_Put, Key: entrykv.SafeCopy(nil, key), Value: entrykv.SafeCopy(nil, value), AssertionNotExist: true},
 		},
+	}
+}
+
+func installPreparedMVCCRequestForApplyTest(version uint64, key, value []byte) *raftcmdpb.RaftCmdRequest {
+	return &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    entrykv.SafeCopy(nil, key),
+				CommitVersion: version,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{{
+					ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+					Key:          entrykv.SafeCopy(nil, key),
+					Version:      version,
+					Value:        entrykv.SafeCopy(nil, value),
+					HasValue:     true,
+				}},
+			}},
+		}},
 	}
 }
 

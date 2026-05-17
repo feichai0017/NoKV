@@ -86,14 +86,18 @@ directly.
 ## 4. Distributed Write Path
 
 Raftstore and Percolator ultimately reuse the same embedded write path. The
-current Peras segment install command also uses this path, but it is treated as
-a legacy experimental path during the `experimental/` cleanup.
+prepared-MVCC install command also uses this path. The current Peras segment
+install command is a legacy experimental adapter that lowers segment payloads
+into prepared MVCC entries during the `experimental/` cleanup.
 
 1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` by region. Experimental Peras profiles may still issue `InstallPerasSegment` while the migration is in progress.
 2. `kv.Service` routes the command through `Store.ProposeCommand`.
 3. Raft replication commits the command.
-4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, resolve, or the legacy experimental install handler.
-5. Percolator and materialized install paths build MVCC entries with `kv.NewInternalEntry`; catalog-only experimental installs write segment/index records.
+4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, resolve, or
+   `InstallPreparedMVCCEntries`.
+5. Percolator and Peras adapters build MVCC entries with `kv.NewInternalEntry`;
+   raftstore's stable install branch only validates and persists prepared
+   entries.
 6. `DB.ApplyInternalEntries` persists them through the commit queue, WAL, and
    memtable.
 

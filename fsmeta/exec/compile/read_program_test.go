@@ -83,24 +83,24 @@ func TestGeneratedReadDirPlusInodeKeysPreserveDentryOrder(t *testing.T) {
 	require.Equal(t, second, keys[1])
 }
 
-func TestGeneratedDirectoryReadPlanNormalizesPerasSource(t *testing.T) {
+func TestGeneratedDirectoryReadPlanNormalizesOverlaySource(t *testing.T) {
 	base, err := CompileDirectoryReadPlan(fsmeta.ReadDirRequest{Mount: "vol", Parent: 7, Limit: 16}, testMount, false, false)
 	require.NoError(t, err)
 	require.Equal(t, DirectoryReadSourceBase, base.Source)
-	require.False(t, base.IncludePeras)
-	require.False(t, base.PerasOnly)
+	require.False(t, base.IncludeOverlay)
+	require.False(t, base.OverlayOnly)
 	require.Len(t, base.Footprint.Reads, 1)
 	require.True(t, base.Footprint.HasPrefixRead)
 
 	overlay, err := CompileDirectoryReadPlan(fsmeta.ReadDirRequest{Mount: "vol", Parent: 7, Limit: 16}, testMount, true, false)
 	require.NoError(t, err)
-	require.Equal(t, DirectoryReadSourcePerasOverlay, overlay.Source)
-	require.True(t, overlay.IncludePeras)
-	require.False(t, overlay.PerasOnly)
+	require.Equal(t, DirectoryReadSourceOverlay, overlay.Source)
+	require.True(t, overlay.IncludeOverlay)
+	require.False(t, overlay.OverlayOnly)
 
-	perasOnly, err := CompileDirectoryReadPlan(fsmeta.ReadDirRequest{Mount: "vol", Parent: 7, Limit: 16}, testMount, false, true)
+	overlayOnly, err := CompileDirectoryReadPlan(fsmeta.ReadDirRequest{Mount: "vol", Parent: 7, Limit: 16}, testMount, false, true)
 	require.NoError(t, err)
-	require.Equal(t, DirectoryReadSourcePerasOnly, perasOnly.Source)
-	require.True(t, perasOnly.IncludePeras)
-	require.True(t, perasOnly.PerasOnly)
+	require.Equal(t, DirectoryReadSourceOverlayOnly, overlayOnly.Source)
+	require.True(t, overlayOnly.IncludeOverlay)
+	require.True(t, overlayOnly.OverlayOnly)
 }

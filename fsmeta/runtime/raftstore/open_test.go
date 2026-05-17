@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	execperas "github.com/feichai0017/NoKV/experimental/peras/exec"
+	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
-	execperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	"github.com/stretchr/testify/require"
 )
 

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	local "github.com/feichai0017/NoKV/local"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	errorpb "github.com/feichai0017/NoKV/pb/error"

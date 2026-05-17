@@ -247,7 +247,7 @@ Full guide: [`docs/guide/getting_started.md`](docs/guide/getting_started.md) · 
 | [`engine/manifest/`](./engine/manifest) | VersionEdit log, atomic CURRENT | [Manifest](docs/guide/manifest.md) |
 | [`engine/vfs/`](./engine/vfs) | VFS abstraction, FaultFS, cross-platform atomic rename | [VFS](docs/guide/vfs.md) |
 | [`experimental/`](./experimental) | Boundary for research mechanisms such as Peras and Thermos | [Experimental Boundary Plan](docs/guide/experimental_boundary_plan.md) |
-| [`thermos/`](./thermos) | Optional hot-key observer; planned for `experimental/thermos` | [Thermos](docs/guide/thermos.md) |
+| [`experimental/thermos/`](./experimental/thermos) | Optional hot-key observer | [Thermos](docs/guide/thermos.md) |
 | [`cmd/nokv/`](./cmd/nokv) | CLI: stats, manifest, regions, migrate, mount, quota | [CLI](docs/guide/cli.md) |
 | [`cmd/nokv-fsmeta/`](./cmd/nokv-fsmeta) | Standalone fsmeta gRPC gateway | [fsmeta](docs/guide/fsmeta.md) |
 

@@ -152,14 +152,14 @@ func commitContractStats(perasEnabled bool) map[string]any {
 
 func (s *perasDirectoryReadCounters) record(stats compile.DirectoryReadStats) {
 	s.total.Add(1)
-	if stats.UsedPerasOnly {
+	if stats.UsedOverlayOnly {
 		s.perasOnly.Add(1)
 	}
 	if stats.UsedDirIndex {
 		s.dirIndex.Add(1)
 	}
 	s.baseRows.Add(uint64(stats.BaseRows))
-	s.perasRows.Add(uint64(stats.PerasRows))
+	s.perasRows.Add(uint64(stats.OverlayRows))
 	s.outputRows.Add(uint64(stats.OutputRows))
 }
 

@@ -94,12 +94,11 @@ experimental/
   peras/
     exec/
     runtime/
+    raftstore/
     witness/
-    wire/
     spec/
     bench/
   thermos/
-    detector/
     bench/
     docs/
 ```
@@ -111,7 +110,9 @@ ownership rule should not change:
 - `local` and `raftstore` are stable storage/runtime substrates.
 - `experimental/peras` may depend on stable fsmeta and raftstore interfaces.
 - `experimental/thermos` may depend on stable engine observation interfaces.
-- stable lower layers must not import experimental packages.
+- stable lower layers should not import experimental packages except through
+  explicitly allowlisted migration adapters. The final target is no stable
+  imports from `experimental/peras`.
 
 ## Stable Versus Experimental
 
@@ -157,8 +158,10 @@ mechanism should be removable without changing the stable product API.
 
 ## Boundary Rules
 
-1. `fsmeta` must not import `experimental/peras`.
-2. `raftstore` must not import `fsmeta/exec/peras` or any experimental package.
+1. `fsmeta` must not import `experimental/peras` outside explicit migration
+   adapters.
+2. `raftstore` must not import `experimental/peras/exec` outside explicit
+   migration adapters.
 3. `meta/root` should store generic authority truth, not Peras-specific segment
    truth in the stable state path.
 4. `coordinator` should expose generic rooted events and routing views, not
@@ -241,7 +244,7 @@ Actions:
 Exit criteria:
 
 - `raftstore` can validate and apply prepared entries without importing
-  `fsmeta/exec/peras`.
+  `experimental/peras/exec`.
 - Existing Peras install path can be reimplemented through the generic command.
 - Raftstore tests cover the generic install primitive directly.
 
@@ -266,6 +269,14 @@ Exit criteria:
 - Peras imports stable fsmeta and raftstore interfaces.
 - Peras can be disabled without changing the stable runtime.
 
+Current migration state:
+
+- Peras implementation packages have moved to `experimental/peras/exec`,
+  `experimental/peras/runtime`, and `experimental/peras/raftstore`.
+- Stable packages still have explicit Peras adapter files. These imports are
+  temporary migration edges and should shrink as later phases remove the
+  old StoreKV/raft command surface.
+
 ### Phase 5: Move Witness Out Of StoreKV
 
 Witness is a Peras recovery/durability mechanism. It should not be a stable
@@ -273,7 +284,7 @@ StoreKV RPC surface.
 
 Actions:
 
-- Move witness node and witness WAL code from `raftstore/peras` into
+- Move witness node and witness WAL code from `experimental/peras/raftstore` into
   `experimental/peras/witness`.
 - Define an experimental witness service if remote witness RPC is still needed.
 - Remove `PerasWitnessSegments` and `PerasWitnessProbe` from the stable StoreKV
@@ -323,7 +334,7 @@ Actions:
 
 Exit criteria:
 
-- `rg "fsmeta/exec/peras" raftstore` returns no production imports.
+- `rg "experimental/peras/exec" raftstore` returns no production imports.
 - `rg "PerasInstallSegment" raftstore pb/raft pb/kv` returns no stable command
   surface.
 - Buf generation leaves the tree clean.
@@ -334,7 +345,7 @@ The new structure should be enforced mechanically.
 
 Actions:
 
-- Add an import-boundary test or script for:
+- Add an import-boundary script under `tools/lint` for:
   - `raftstore/...` must not import `fsmeta/...`
   - stable packages must not import `experimental/...`
   - `fsmeta` domain model must not import `fsmeta/runtime/...`
@@ -490,4 +501,3 @@ The code should match that story:
 - public fsmeta API does not expose Peras-specific internals
 - default benchmarks and CI measure the stable path
 - experimental benchmarks and CI are explicit
-

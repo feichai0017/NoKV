@@ -1,13 +1,13 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package compile turns fsmeta requests into generated Peras metadata programs.
+// Package compile turns fsmeta requests into generated semantic programs.
 //
 // The compiler is deliberately conservative. Generated programs describe the
-// static key footprint, concrete or symbolic effects, and the guards a Peras
-// holder must prove before bypassing the ordinary Percolator/Raft path. The
-// compiler does not execute reads, does not allocate timestamps, and does not
-// weaken the current fsmeta executor.
+// static key footprint, concrete or symbolic effects, and the guards an
+// optimized runtime must prove before bypassing the ordinary Percolator/Raft
+// path. The compiler does not execute reads, does not allocate timestamps, and
+// does not weaken the current fsmeta executor.
 package compile
 
 import (
@@ -16,8 +16,8 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 )
 
-// Eligibility describes whether a request can enter the Peras write path
-// after the listed runtime guards have been checked by the holder.
+// Eligibility describes whether a request can enter the visible optimized write
+// path after the listed runtime guards have been checked by the holder.
 type Eligibility uint8
 
 const (
@@ -51,8 +51,8 @@ const (
 	SlowReasonMaintenanceScan   SlowReason = "maintenance_scan"
 )
 
-// RuntimeGuard is a condition the future Peras holder must verify against
-// its merged holder view before it can issue a certificate.
+// RuntimeGuard is a condition an optimized runtime must verify against its
+// merged holder view before it can admit the operation.
 type RuntimeGuard string
 
 const (
@@ -84,7 +84,7 @@ type Predicate struct {
 	RuntimeChecked   bool
 }
 
-// EffectKind is the mutation class a Peras certificate would eventually
+// EffectKind is the mutation class an optimized runtime would eventually
 // replay.
 type EffectKind uint8
 

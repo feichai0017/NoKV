@@ -7,16 +7,16 @@ import (
 	"bytes"
 
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
 )
 
 type perasInstallSegmentApplyPlan struct {
 	response *kvrpcpb.PerasInstallSegmentResponse
-	entries  []*entrykv.Entry
+	install  *kvrpcpb.InstallPreparedMVCCEntriesRequest
 }
 
 type perasInstallBatchStaging struct {
@@ -28,21 +28,36 @@ func applyPerasInstallSegmentBatch(db txnstore.Store, reqs []*kvrpcpb.PerasInsta
 		return nil, nil
 	}
 	responses := make([]*kvrpcpb.PerasInstallSegmentResponse, len(reqs))
-	var entries []*entrykv.Entry
+	installs := make([]*kvrpcpb.InstallPreparedMVCCEntriesRequest, 0, len(reqs))
+	installIndexes := make([]int, 0, len(reqs))
 	staging := &perasInstallBatchStaging{catalogIndex: make(map[string][]byte)}
 	for idx, req := range reqs {
 		plan, err := planPerasInstallSegment(db, req, staging)
 		if err != nil {
-			releaseEntries(entries)
 			return nil, err
 		}
 		responses[idx] = plan.response
-		entries = append(entries, plan.entries...)
+		if plan.install != nil {
+			installs = append(installs, plan.install)
+			installIndexes = append(installIndexes, idx)
+		}
 	}
-	defer releaseEntries(entries)
-	if len(entries) > 0 {
-		if err := db.ApplyInternalEntries(entries); err != nil {
+	if len(installs) > 0 {
+		installResponses, err := applyInstallPreparedMVCCEntriesBatch(db, installs)
+		if err != nil {
 			return nil, err
+		}
+		if len(installResponses) != len(installs) {
+			return nil, rsperas.ErrInvalidInstallRequest
+		}
+		for idx, installResponse := range installResponses {
+			response := responses[installIndexes[idx]]
+			if installResponse.GetError() != nil {
+				response.Error = installResponse.GetError()
+				continue
+			}
+			response.AppliedEntries = installResponse.GetAppliedEntries()
+			response.CommitVersion = installResponse.GetCommitVersion()
 		}
 	}
 	return responses, nil
@@ -90,13 +105,17 @@ func planPerasInstallSegment(db txnstore.Store, req *kvrpcpb.PerasInstallSegment
 	if err != nil {
 		return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}}, nil
 	}
+	install, keyErr := perasPreparedMVCCInstallRequest(info, entries)
+	releaseEntries(entries)
+	if keyErr != nil {
+		return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}}, nil
+	}
 	if !info.MaterializeMVCC {
 		if err := staging.markCatalogInstall(segment.Root, catalogRoutingKeys, info.CanonicalObjectKey); err != nil {
-			releaseEntries(entries)
 			return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}}, nil
 		}
 	}
-	return perasInstallSegmentApplyPlan{response: perasInstallSegmentAppliedResponse(segment.Root, segment.Stats(), uint64(len(entries))), entries: entries}, nil
+	return perasInstallSegmentApplyPlan{response: perasInstallSegmentAppliedResponse(segment.Root, segment.Stats(), uint64(len(install.GetEntries()))), install: install}, nil
 }
 
 func planPerasInstallSegmentIndexRoutes(db txnstore.Store, info rsperas.InstallRequestInfo, staging *perasInstallBatchStaging) (perasInstallSegmentApplyPlan, error) {
@@ -126,11 +145,29 @@ func planPerasInstallSegmentIndexRoutes(db txnstore.Store, info rsperas.InstallR
 	if err != nil {
 		return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}}, nil
 	}
+	install, keyErr := perasPreparedMVCCInstallRequest(info, entries)
+	releaseEntries(entries)
+	if keyErr != nil {
+		return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}}, nil
+	}
 	if err := staging.markCatalogInstall(info.Root, routingKeys, info.CanonicalObjectKey); err != nil {
-		releaseEntries(entries)
 		return perasInstallSegmentApplyPlan{response: &kvrpcpb.PerasInstallSegmentResponse{Error: perasInstallAbort(err.Error())}}, nil
 	}
-	return perasInstallSegmentApplyPlan{response: perasInstallHeaderAppliedResponse(info, uint64(len(entries))), entries: entries}, nil
+	return perasInstallSegmentApplyPlan{response: perasInstallHeaderAppliedResponse(info, uint64(len(install.GetEntries()))), install: install}, nil
+}
+
+func perasPreparedMVCCInstallRequest(info rsperas.InstallRequestInfo, entries []*entrykv.Entry) (*kvrpcpb.InstallPreparedMVCCEntriesRequest, *kvrpcpb.KeyError) {
+	idempotencyKey := make([]byte, 0, len(info.Root)+len(info.RoutingKey))
+	idempotencyKey = append(idempotencyKey, info.Root[:]...)
+	idempotencyKey = append(idempotencyKey, info.RoutingKey...)
+	return buildInstallPreparedMVCCEntriesRequest(
+		info.RoutingKey,
+		info.InstallVersion,
+		entries,
+		info.DependencyKeys,
+		idempotencyKey,
+		"peras_segment_install",
+	)
 }
 
 func perasInstallSegmentAppliedResponse(root [32]byte, stats fsperas.SegmentStats, applied uint64) *kvrpcpb.PerasInstallSegmentResponse {

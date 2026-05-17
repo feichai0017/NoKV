@@ -9,8 +9,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	entrykv "github.com/feichai0017/NoKV/engine/kv"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 )
 
 type SegmentCatalogStore interface {

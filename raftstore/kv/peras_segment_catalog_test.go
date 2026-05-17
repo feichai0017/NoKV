@@ -6,7 +6,7 @@ package kv
 import (
 	"testing"
 
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/stretchr/testify/require"
 )
 

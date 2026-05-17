@@ -85,10 +85,13 @@ The current responsibility map is:
 - `meta/root/*`: rooted truth for cluster and metadata authority facts.
 - `coordinator/*`: rebuildable serving layer over root facts.
 - `fsmeta/*`: namespace API, key layout, values, and domain errors.
-- `fsmeta/exec/*`: semantic compiler, executor, holder, witness, and Peras
-  admission logic that is still runtime-neutral.
+- `fsmeta/exec/*`: semantic compiler, executor, and runtime-neutral holder
+  logic.
 - `fsmeta/runtime/*`: concrete runtime bindings from fsmeta execution to
   raftstore or other storage backends.
+- `experimental/peras/*`: Peras admission, visible-log, witness, segment, and
+  recovery experiments.
+- `experimental/thermos/*`: optional Thermos hotspot/admission experiments.
 - `metrics/*`: reusable metric value types, not subsystem ownership.
 - `*/stats/*`: subsystem-specific typed diagnostic adapters.
 
@@ -146,7 +149,7 @@ stage or data owner. Examples: `grant.go`, `seal.go`, `frontier.go`,
 
 - File names are lowercase snake_case.
 - Files should name the owner or behavior, not the implementation trick.
-- Generated files must have a stable suffix such as `.peras.go` or `.pb.go`.
+- Generated files must have a stable suffix such as `.program.go` or `.pb.go`.
 - Test files should mirror the behavior under test:
   - `store_test.go` for store-local invariants.
   - `service_test.go` for RPC/service behavior.
@@ -256,10 +259,10 @@ Metrics and stats are owned code, not incidental counters.
 - Do not keep two semantic sources of truth. A migration may temporarily keep
   old and generated paths, but the PR must state the removal condition.
 
-For fsmeta Peras codegen, the semantic contract is:
+For fsmeta semantic program generation, the contract is:
 
 ```text
-specs/operations.go -> internal/opgen -> *.peras.go -> materialized runtime descriptor
+specs/operations.go -> internal/opgen -> *.program.go -> materialized runtime descriptor
 ```
 
 Runtime code must consume generated descriptors rather than reinterpreting

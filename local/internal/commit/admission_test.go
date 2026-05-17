@@ -10,7 +10,7 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/kv"
 	"github.com/feichai0017/NoKV/engine/lsm"
-	"github.com/feichai0017/NoKV/thermos"
+	"github.com/feichai0017/NoKV/experimental/thermos"
 	"github.com/stretchr/testify/require"
 )
 

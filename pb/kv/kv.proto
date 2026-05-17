@@ -199,6 +199,37 @@ message MVCCMaintenanceResponse {
   uint64 applied_entries = 2;
 }
 
+message PreparedMVCCEntry {
+  enum ColumnFamily {
+    DEFAULT = 0;
+    LOCK = 1;
+    WRITE = 2;
+  }
+
+  ColumnFamily column_family = 1;
+  bytes key = 2;
+  uint64 version = 3;
+  bytes value = 4;
+  uint32 meta = 5;
+  uint64 expires_at = 6;
+  bool has_value = 7;
+}
+
+message InstallPreparedMVCCEntriesRequest {
+  bytes routing_key = 1;
+  uint64 commit_version = 2;
+  repeated PreparedMVCCEntry entries = 3;
+  repeated bytes dependency_keys = 4;
+  bytes idempotency_key = 5;
+  string diagnostic_label = 6;
+}
+
+message InstallPreparedMVCCEntriesResponse {
+  KeyError error = 1;
+  uint64 applied_entries = 2;
+  uint64 commit_version = 3;
+}
+
 enum AtomicPredicateKind {
   ATOMIC_PREDICATE_KIND_NOT_EXISTS = 0;
   ATOMIC_PREDICATE_KIND_EXISTS = 1;

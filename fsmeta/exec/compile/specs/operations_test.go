@@ -24,7 +24,7 @@ func TestOperationSpecsHaveStableGeneratedShape(t *testing.T) {
 		seenName[spec.Name] = struct{}{}
 
 		require.NotEmpty(t, spec.FileName, spec.Name)
-		require.True(t, strings.HasSuffix(spec.FileName, ".peras.go"), spec.Name)
+		require.True(t, strings.HasSuffix(spec.FileName, ".program.go"), spec.Name)
 		require.NotEmpty(t, spec.ProgramType, spec.Name)
 		require.NotEmpty(t, spec.RequestType, spec.Name)
 		require.NotEmpty(t, spec.CompileName, spec.Name)

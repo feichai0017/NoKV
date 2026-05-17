@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"slices"
 
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 const (

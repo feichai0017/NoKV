@@ -79,6 +79,7 @@ func perasFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.K
 	switch r.GetCmdType() {
 	case raftcmdpb.CmdType_CMD_GET,
 		raftcmdpb.CmdType_CMD_SCAN,
+		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
 		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 		return nil
 	case raftcmdpb.CmdType_CMD_PREWRITE:
@@ -202,6 +203,8 @@ func perasFenceResponseForCommand(r *raftcmdpb.Request, keyErr *kvrpcpb.KeyError
 		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_TryAtomicMutate{TryAtomicMutate: &kvrpcpb.TryAtomicMutateResponse{Error: keyErr}}}
 	case raftcmdpb.CmdType_CMD_MVCC_MAINTENANCE:
 		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: &kvrpcpb.MVCCMaintenanceResponse{Error: keyErr}}}
+	case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesResponse{Error: keyErr}}}
 	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
 		return &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentResponse{Error: keyErr}}}
 	default:
