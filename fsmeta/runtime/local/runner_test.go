@@ -4,6 +4,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -158,6 +159,38 @@ func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok, "key %q must be visible after chunked install", mutation.Key)
 		require.Equal(t, []byte("v"), got)
+	}
+}
+
+func TestRunnerInstallMutationsAtCommitRespectsSmallMaxBatchSize(t *testing.T) {
+	opts := localdb.NewDefaultOptions()
+	opts.WorkDir = t.TempDir()
+	opts.LSMShardCount = 1
+	opts.UserKeyShapeExtractor = nil
+	opts.MaxBatchCount = 10_000
+	opts.MaxBatchSize = 64
+	db := openTestDB(t, opts)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	mutations := make([]*kvrpcpb.Mutation, 0, 5)
+	for i := range 5 {
+		mutations = append(mutations, &kvrpcpb.Mutation{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte{byte('a' + i), byte('k')},
+			Value: bytes.Repeat([]byte{byte('v')}, 18),
+		})
+	}
+	chunks, err := runner.chunkInstallMutations(mutations)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for _, chunk := range chunks {
+		var size int64
+		for _, mutation := range chunk {
+			size += int64(len(mutation.GetKey()) + len(mutation.GetValue()))
+		}
+		require.LessOrEqual(t, size, int64(56))
 	}
 }
 

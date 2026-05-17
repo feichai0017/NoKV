@@ -247,7 +247,7 @@ func (r *Runner) chunkInstallMutations(mutations []*kvrpcpb.Mutation) ([][]*kvrp
 		maxCount = max((maxCount-1)/3, 1)
 	}
 	if maxSize > 0 {
-		maxSize = max(maxSize-(maxSize/8), 1024)
+		maxSize -= maxSize / 8
 	}
 	chunks := make([][]*kvrpcpb.Mutation, 0, 1)
 	start := 0

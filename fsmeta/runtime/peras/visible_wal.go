@@ -456,6 +456,12 @@ func (l *WALVisibleLog) CompactApplied() error {
 	if l == nil || l.wal == nil {
 		return fsperas.ErrVisibleLogRequired
 	}
+	l.mu.RLock()
+	retainApplied := l.retainAppliedRecords
+	l.mu.RUnlock()
+	if retainApplied {
+		return nil
+	}
 	retain := l.firstRetainedSegment()
 	if retain <= 1 {
 		return nil

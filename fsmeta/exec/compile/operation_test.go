@@ -139,6 +139,10 @@ func TestSegmentMergeDecisionUsesCompilerPlans(t *testing.T) {
 	closeRight := testMaterializedCloseWriteSession(t, "writer-right", 45)
 	decision = CanAppendSegment(closeLeft.CompiledOp, closeRight.CompiledOp, SegmentBudget{MaxMutations: 4})
 	require.Equal(t, SegmentDecisionAppend, decision.Kind)
+	closeInstallPlan, ok := SegmentPlanForInstall(closeLeft.Segment, true)
+	require.True(t, ok)
+	require.Equal(t, SegmentInstallSingleBucket, closeInstallPlan.Install)
+	require.Equal(t, closeLeft.Segment.MaterializeMergeKey, closeInstallPlan.MergeKey)
 
 	decision = CanAppendSegment(testCompileAOT(t, left), closeLeft.CompiledOp, SegmentBudget{})
 	require.Equal(t, SegmentDecisionFlushBeforeAndAfter, decision.Kind)
@@ -178,7 +182,25 @@ func TestSegmentPlanAPIPreservesCompilerBoundary(t *testing.T) {
 	materializePlan, ok := SegmentPlanForInstall(leftPlan, true)
 	require.True(t, ok)
 	require.Equal(t, SegmentInstallSingleBucket, materializePlan.Install)
-	require.NotZero(t, materializePlan.MergeKey.PrimaryBucket)
+	require.True(t, materializePlan.MergeKey.HasPrimaryBucket)
+}
+
+func TestSegmentMergeKeyDistinguishesBucketZeroFromNoPrimaryBucket(t *testing.T) {
+	singleBucketZero := SegmentMergeKey{
+		MountKeyID:       testMount.MountKeyID,
+		HasPrimaryBucket: true,
+		PrimaryBucket:    0,
+		Install:          SegmentInstallSingleBucket,
+		Durability:       DurabilityVisibleOnly,
+		FormatVersion:    segmentFormatVersion,
+	}
+	multiBucket := SegmentMergeKey{
+		MountKeyID:    testMount.MountKeyID,
+		Install:       SegmentInstallSingleBucket,
+		Durability:    DurabilityVisibleOnly,
+		FormatVersion: segmentFormatVersion,
+	}
+	require.NotEqual(t, singleBucketZero, multiBucket)
 }
 
 func testMaterializedCloseWriteSession(t *testing.T, session fsmeta.SessionID, inode fsmeta.InodeID) MaterializedOp {

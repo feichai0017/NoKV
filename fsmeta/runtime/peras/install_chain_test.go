@@ -53,6 +53,12 @@ func TestNewInstallChainPassesThroughSingleLayer(t *testing.T) {
 	require.Same(t, SegmentInstaller(layer), chain, "single-layer chain must not wrap")
 }
 
+func TestNewInstallChainFiltersNilLayers(t *testing.T) {
+	layer := &fakeInstallLayer{id: "only"}
+	require.Same(t, SegmentInstaller(layer), NewInstallChain(nil, layer, nil))
+	require.Nil(t, NewInstallChain(nil, nil))
+}
+
 func TestInstallChainRunsLayersInOrderAndReturnsFirstValidCursor(t *testing.T) {
 	calls := []string{}
 	a := &fakeInstallLayer{id: "a", cursor: InstallCursor{RegionID: 1, Term: 2, Index: 3, InstallVersion: 7}, calls: &calls}

@@ -26,13 +26,19 @@ type SegmentInstallLayer = SegmentInstaller
 // single-installer code paths incur no indirection. nil or zero-length
 // input returns nil.
 func NewInstallChain(layers ...SegmentInstallLayer) SegmentInstaller {
-	switch len(layers) {
+	filtered := make([]SegmentInstallLayer, 0, len(layers))
+	for _, layer := range layers {
+		if layer != nil {
+			filtered = append(filtered, layer)
+		}
+	}
+	switch len(filtered) {
 	case 0:
 		return nil
 	case 1:
-		return layers[0]
+		return filtered[0]
 	default:
-		return &installChain{layers: append([]SegmentInstallLayer(nil), layers...)}
+		return &installChain{layers: append([]SegmentInstallLayer(nil), filtered...)}
 	}
 }
 

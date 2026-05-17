@@ -83,11 +83,12 @@ const (
 )
 
 type SegmentMergeKey struct {
-	MountKeyID    fsmeta.MountKeyID
-	PrimaryBucket fsmeta.AffinityBucket
-	Install       SegmentInstallMode
-	Durability    DurabilityClass
-	FormatVersion uint16
+	MountKeyID       fsmeta.MountKeyID
+	HasPrimaryBucket bool
+	PrimaryBucket    fsmeta.AffinityBucket
+	Install          SegmentInstallMode
+	Durability       DurabilityClass
+	FormatVersion    uint16
 }
 
 type PlacementPlan struct {
@@ -1138,6 +1139,7 @@ func newDigestBuilder() digestBuilder {
 
 func (b *digestBuilder) writeSegmentMergeKey(key SegmentMergeKey) {
 	b.writeUint64(uint64(key.MountKeyID))
+	b.writeBool(key.HasPrimaryBucket)
 	b.writeUint64(uint64(key.PrimaryBucket))
 	b.writeUint64(uint64(key.Install))
 	b.writeUint64(uint64(key.Durability))

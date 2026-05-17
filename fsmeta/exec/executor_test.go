@@ -583,11 +583,19 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 
 func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
 	f.captureVersions = append(f.captureVersions, version)
-	f.captureScopes = append(f.captureScopes, scope)
+	f.captureScopes = append(f.captureScopes, cloneTestAuthorityScope(scope))
 	if f.err != nil {
 		return fsmeta.PerasVisibleSnapshotCapture{}, false, f.err
 	}
 	return fsmeta.PerasVisibleSnapshotCapture{SegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), f.segmentRefs...)}, f.capture, nil
+}
+
+func cloneTestAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {
+	out := scope
+	out.Buckets = append([]fsmeta.AffinityBucket(nil), scope.Buckets...)
+	out.Parents = append([]fsmeta.InodeID(nil), scope.Parents...)
+	out.Inodes = append([]fsmeta.InodeID(nil), scope.Inodes...)
+	return out
 }
 
 func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.MaterializedOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {

@@ -280,7 +280,7 @@ func compileCreateSegmentPlan(placement PlacementPlan, footprint KeyFootprint) S
 	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
 		// Multi-bucket catalog op (dentry + inode in different buckets is the
 		// common case). Materialize is safe because installer writes each

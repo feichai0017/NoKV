@@ -203,14 +203,15 @@ func requireVisibleOperationRecordEncodesMaterialized(t *testing.T, op compile.M
 func testVisibleReplayOperation(id OperationID, key []byte) ReplayOperation {
 	segment := compile.SegmentPlan{
 		MergeKey: compile.SegmentMergeKey{
-			MountKeyID:    1,
-			PrimaryBucket: 1,
-			Install:       compile.SegmentInstallSingleBucket,
-			Durability:    compile.DurabilityVisibleOnly,
-			FormatVersion: 1,
+			MountKeyID:       1,
+			HasPrimaryBucket: true,
+			PrimaryBucket:    1,
+			Install:          compile.SegmentInstallSingleBucket,
+			Durability:       compile.DurabilityVisibleOnly,
+			FormatVersion:    1,
 		},
 		Install:               compile.SegmentInstallSingleBucket,
-		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
+		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, HasPrimaryBucket: true, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
 		MaterializeInstall:    compile.SegmentInstallSingleBucket,
 		CanAppend:             true,
 		CanMaterialize:        true,

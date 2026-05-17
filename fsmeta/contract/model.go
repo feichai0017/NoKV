@@ -385,14 +385,22 @@ func (m *Model) unlink(op Operation) Result {
 	if !ok {
 		return Result{Err: fsmeta.ErrNotFound}
 	}
-	delete(m.dentries, key)
+	if record.Type == fsmeta.InodeTypeDirectory {
+		return Result{Err: fsmeta.ErrInvalidRequest}
+	}
 	if inode, ok := m.inodes[record.Inode]; ok {
+		if inode.Type == fsmeta.InodeTypeDirectory {
+			return Result{Err: fsmeta.ErrInvalidRequest}
+		}
+		delete(m.dentries, key)
 		if inode.LinkCount <= 1 {
 			delete(m.inodes, inode.Inode)
 		} else {
 			inode.LinkCount--
 			m.inodes[inode.Inode] = inode
 		}
+	} else {
+		delete(m.dentries, key)
 	}
 	return Result{}
 }

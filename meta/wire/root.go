@@ -458,13 +458,25 @@ func RootPerasSnapshotSegmentRefsFromProto(refs []*metapb.RootPerasSnapshotSegme
 	}
 	out := make([]rootproto.PerasSnapshotSegmentRef, 0, len(refs))
 	for _, ref := range refs {
-		var parsed rootproto.PerasSnapshotSegmentRef
-		if ref != nil {
-			parsed.EpochID = ref.GetEpochId()
-			copy(parsed.SegmentRoot[:], ref.GetSegmentRoot())
-			copy(parsed.SegmentPayloadDigest[:], ref.GetSegmentPayloadDigest())
+		if ref == nil {
+			continue
+		}
+		root := ref.GetSegmentRoot()
+		digest := ref.GetSegmentPayloadDigest()
+		if len(root) != len(rootproto.PerasSnapshotSegmentRef{}.SegmentRoot) ||
+			len(digest) != len(rootproto.PerasSnapshotSegmentRef{}.SegmentPayloadDigest) {
+			continue
+		}
+		parsed := rootproto.PerasSnapshotSegmentRef{EpochID: ref.GetEpochId()}
+		copy(parsed.SegmentRoot[:], root)
+		copy(parsed.SegmentPayloadDigest[:], digest)
+		if !parsed.Valid() {
+			continue
 		}
 		out = append(out, parsed)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

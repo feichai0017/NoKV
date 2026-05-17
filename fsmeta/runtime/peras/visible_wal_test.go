@@ -128,6 +128,11 @@ func TestWALVisibleLogRetainAppliedRecordsDisablesAppliedCompaction(t *testing.T
 	files, err := mgr.ListSegments()
 	require.NoError(t, err)
 	require.Len(t, files, 2)
+
+	require.NoError(t, log.CompactApplied())
+	files, err = mgr.ListSegments()
+	require.NoError(t, err)
+	require.Len(t, files, 2)
 }
 
 func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
@@ -259,14 +264,15 @@ func testVisibleRecord(id fsperas.OperationID, key []byte) fsperas.VisibleOperat
 func testVisibleReplayOperation(id fsperas.OperationID, key []byte) fsperas.ReplayOperation {
 	segment := compile.SegmentPlan{
 		MergeKey: compile.SegmentMergeKey{
-			MountKeyID:    1,
-			PrimaryBucket: 1,
-			Install:       compile.SegmentInstallSingleBucket,
-			Durability:    compile.DurabilityVisibleOnly,
-			FormatVersion: 1,
+			MountKeyID:       1,
+			HasPrimaryBucket: true,
+			PrimaryBucket:    1,
+			Install:          compile.SegmentInstallSingleBucket,
+			Durability:       compile.DurabilityVisibleOnly,
+			FormatVersion:    1,
 		},
 		Install:               compile.SegmentInstallSingleBucket,
-		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
+		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, HasPrimaryBucket: true, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
 		MaterializeInstall:    compile.SegmentInstallSingleBucket,
 		CanAppend:             true,
 		CanMaterialize:        true,

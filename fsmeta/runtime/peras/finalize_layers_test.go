@@ -151,6 +151,7 @@ func TestCompletionIndexLayerConcurrentInstallsAreSafe(t *testing.T) {
 	const workers = 16
 	const perWorker = 64
 	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
 	wg.Add(workers)
 	for w := range workers {
 		go func(client int) {
@@ -163,11 +164,14 @@ func TestCompletionIndexLayerConcurrentInstallsAreSafe(t *testing.T) {
 				}
 			}
 			req := SegmentFinalizeRequest{Segment: fsperas.PerasSegment{EpochID: 1, Completions: completions}}
-			err := layer.FinalizeSegment(context.Background(), req)
-			require.NoError(t, err)
+			errCh <- layer.FinalizeSegment(context.Background(), req)
 		}(w)
 	}
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 
 	read.mu.RLock()
 	defer read.mu.RUnlock()
