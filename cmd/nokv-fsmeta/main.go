@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -77,7 +76,6 @@ func main() {
 		localMountID                    = flag.String("local-mount-id", "default", "single mount id admitted by --backend=local")
 		localMountKeyID                 = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by --backend=local")
 		localRootInode                  = flag.Uint64("local-root-inode", uint64(fsmeta.RootInode), "root inode for --backend=local")
-		localPeras                      = flag.Bool("local-peras", true, "enable the local Peras visible commit path when --backend=local; use --local-peras=false for direct embedded MVCC")
 		localNegCache                   = flag.Bool("local-negative-cache", true, "enable the slab-backed negative dentry cache when --backend=local; use --local-negative-cache=false to disable")
 		localDirPageCache               = flag.Bool("local-dirpage-cache", true, "enable the slab-backed ReadDirPlus page cache when --backend=local; use --local-dirpage-cache=false to disable")
 		negCacheDir                     = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
@@ -179,18 +177,14 @@ func main() {
 			PerasVisibleLogDurability:       visibleLogDurability,
 		},
 		Local: fsmetalocal.Options{
-			WorkDir:                   *localWorkDir,
-			Mount:                     localMount,
-			RootInode:                 fsmeta.InodeID(*localRootInode),
-			LockTTL:                   *lockTTL,
-			PerasMode:                 localPerasMode(*localPeras),
-			PerasHolderID:             localPerasHolderID(*localPeras, holderID),
-			PerasVisibleLogDir:        localPerasVisibleLogDir(*localPeras, *localWorkDir, *perasVisibleLogDir),
-			PerasVisibleLogDurability: visibleLogDurability,
-			NegativeCacheMode:         localCacheMode(*localNegCache),
-			NegativeCacheDir:          *negCacheDir,
-			DirPageCacheMode:          localCacheMode(*localDirPageCache),
-			DirPageCacheDir:           *dirPageDir,
+			WorkDir:           *localWorkDir,
+			Mount:             localMount,
+			RootInode:         fsmeta.InodeID(*localRootInode),
+			LockTTL:           *lockTTL,
+			NegativeCacheMode: localCacheMode(*localNegCache),
+			NegativeCacheDir:  *negCacheDir,
+			DirPageCacheMode:  localCacheMode(*localDirPageCache),
+			DirPageCacheDir:   *dirPageDir,
 		},
 	})
 	if err != nil {
@@ -307,9 +301,6 @@ func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
 
 func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsmetaServerRuntime {
 	contractLog := "fsmeta commit contract: local backend uses one embedded MVCC store; successful metadata writes are durable after the local WAL/apply group completes"
-	if rt.Peras != nil {
-		contractLog = "fsmeta commit contract: local backend uses Peras as the default visible write path over embedded MVCC; eligible operations become durable after local segment install"
-	}
 	return &fsmetaServerRuntime{
 		executor: rt.Executor,
 		watcher:  rt.Watcher,
@@ -321,32 +312,22 @@ func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsme
 			publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return rt.Quotas.Stats() }))
 			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return rt.Watcher.Stats() }))
 			publishExpvarOnce("nokv_fsmeta_local_snapshot", expvar.Func(func() any { return rt.Snapshots.Stats() }))
-			if rt.Peras != nil {
-				publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
-			}
 		},
-		startupSummary: fmt.Sprintf("fsmeta backend: local work_dir=%q mount=%q mount_key_id=%d peras=%t", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID, rt.Peras != nil),
+		startupSummary: fmt.Sprintf("fsmeta backend: local work_dir=%q mount=%q mount_key_id=%d", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID),
 		contractLog:    contractLog,
 	}
 }
 
 func localExecutorStats(rt *fsmetalocal.Runtime) map[string]any {
 	if rt == nil || rt.Executor == nil {
-		return map[string]any{"commit_contract": localCommitContractStats(false)}
+		return map[string]any{"commit_contract": localCommitContractStats()}
 	}
 	stats := rt.Executor.Stats()
-	stats["commit_contract"] = localCommitContractStats(rt.Peras != nil)
+	stats["commit_contract"] = localCommitContractStats()
 	return stats
 }
 
-func localCommitContractStats(perasEnabled bool) map[string]any {
-	if perasEnabled {
-		return map[string]any{
-			"default_write_path":        "peras",
-			"successful_write_boundary": "visible",
-			"durable_boundary":          "embedded_mvcc_segment_install",
-		}
-	}
+func localCommitContractStats() map[string]any {
 	return map[string]any{
 		"default_write_path":        "local_mvcc",
 		"successful_write_boundary": "durable",
@@ -387,36 +368,11 @@ func localMountIdentity(mountID string, mountKeyID uint64) (fsmeta.MountIdentity
 	return fsmeta.MountIdentity{MountID: id, MountKeyID: fsmeta.MountKeyID(mountKeyID)}, nil
 }
 
-func localPerasMode(enabled bool) fsmetalocal.PerasMode {
-	if enabled {
-		return fsmetalocal.PerasModeEnabled
-	}
-	return fsmetalocal.PerasModeDisabled
-}
-
 func localCacheMode(enabled bool) fsmetalocal.CacheMode {
 	if enabled {
 		return fsmetalocal.CacheModeEnabled
 	}
 	return fsmetalocal.CacheModeDisabled
-}
-
-func localPerasHolderID(enabled bool, holderID string) string {
-	if !enabled {
-		return ""
-	}
-	return strings.TrimSpace(holderID)
-}
-
-func localPerasVisibleLogDir(enabled bool, workDir, visibleLogDir string) string {
-	if !enabled {
-		return ""
-	}
-	visibleLogDir = strings.TrimSpace(visibleLogDir)
-	if visibleLogDir == "" || filepath.IsAbs(visibleLogDir) || strings.TrimSpace(workDir) == "" {
-		return visibleLogDir
-	}
-	return filepath.Join(workDir, visibleLogDir)
 }
 
 func publishExpvarOnce(name string, value expvar.Var) {

@@ -5,8 +5,6 @@ package local
 
 import (
 	"context"
-	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -21,7 +19,6 @@ func TestOpenCreateLookupSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
 	rt, err := Open(ctx, Options{WorkDir: dir, Mount: testMount()})
 	require.NoError(t, err)
-	require.NotNil(t, rt.Peras)
 
 	created, err := rt.Executor.Create(ctx, fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -34,7 +31,6 @@ func TestOpenCreateLookupSurvivesRestart(t *testing.T) {
 
 	rt, err = Open(ctx, Options{WorkDir: dir, Mount: testMount()})
 	require.NoError(t, err)
-	require.NotNil(t, rt.Peras)
 	defer func() { require.NoError(t, rt.Close()) }()
 
 	got, err := rt.Executor.Lookup(ctx, fsmeta.LookupRequest{
@@ -80,16 +76,14 @@ func TestLocalInodeAllocatorChoosesWorkspaceShard(t *testing.T) {
 	require.Equal(t, fsmeta.ChooseWorkspaceBucket(testMount(), "workspace-a"), fsmeta.BucketForInodeID(created.Inode.Inode))
 }
 
-func TestOpenCanDisablePeras(t *testing.T) {
+func TestOpenUsesDirectMVCC(t *testing.T) {
 	ctx := context.Background()
 	rt, err := Open(ctx, Options{
-		WorkDir:   t.TempDir(),
-		Mount:     testMount(),
-		PerasMode: PerasModeDisabled,
+		WorkDir: t.TempDir(),
+		Mount:   testMount(),
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rt.Close()) }()
-	require.Nil(t, rt.Peras)
 
 	created, err := rt.Executor.Create(ctx, fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -152,8 +146,8 @@ func TestLocalRuntimePublishesWatchEvents(t *testing.T) {
 	require.NoError(t, err)
 	evt := requireWatchEvent(t, sub)
 	require.Equal(t, wantKey, evt.Key)
-	require.Equal(t, fsmeta.WatchEventSourcePerasVisible, evt.Source)
-	require.Equal(t, localPerasTerm, evt.Cursor.Term)
+	require.Equal(t, fsmeta.WatchEventSourceCommit, evt.Source)
+	require.Equal(t, localWatchTerm, evt.Cursor.Term)
 	require.NotZero(t, evt.Cursor.Index)
 
 	stats := rt.Watcher.Stats()
@@ -164,9 +158,8 @@ func TestLocalRuntimePublishesWatchEvents(t *testing.T) {
 func TestLocalRuntimeWatchReplaysAfterResumeCursor(t *testing.T) {
 	ctx := context.Background()
 	rt, err := Open(ctx, Options{
-		WorkDir:   t.TempDir(),
-		Mount:     testMount(),
-		PerasMode: PerasModeDisabled,
+		WorkDir: t.TempDir(),
+		Mount:   testMount(),
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rt.Close()) }()
@@ -290,14 +283,11 @@ func TestLocalRuntimeMaintainsQuotaUsage(t *testing.T) {
 	require.Equal(t, rootUsage, mountUsage)
 }
 
-func TestLocalRuntimePerasReadDirPlusSeesDirectCreateAfterEmptyRead(t *testing.T) {
+func TestLocalRuntimeReadDirPlusSeesCreateAfterEmptyRead(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
 	rt, err := Open(ctx, Options{
-		WorkDir:            filepath.Join(dir, "db"),
-		Mount:              testMount(),
-		PerasHolderID:      "local-holder",
-		PerasVisibleLogDir: filepath.Join(dir, "visible-log"),
+		WorkDir: t.TempDir(),
+		Mount:   testMount(),
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rt.Close()) }()
@@ -326,166 +316,6 @@ func TestLocalRuntimePerasReadDirPlusSeesDirectCreateAfterEmptyRead(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, pairs, 1)
 	require.Equal(t, "after-empty-read", pairs[0].Dentry.Name)
-}
-
-func TestLocalRuntimeDefaultPerasKeepsQuotaWritesOnVisiblePath(t *testing.T) {
-	ctx := context.Background()
-	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rt.Close()) }()
-	require.NotNil(t, rt.Peras)
-
-	_, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "before",
-		Attrs: fsmeta.CreateAttrs{
-			Type: fsmeta.InodeTypeFile,
-			Size: 4096,
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), perasVisibleSuccessTotal(t, rt.Executor.Stats()), "local quota is read-derived, so create can use Peras visible commit")
-
-	require.NoError(t, rt.Executor.Rename(ctx, fsmeta.RenameRequest{
-		Mount:      "vol",
-		FromParent: fsmeta.RootInode,
-		FromName:   "before",
-		ToParent:   fsmeta.RootInode,
-		ToName:     "after",
-	}))
-	require.Equal(t, uint64(2), perasVisibleSuccessTotal(t, rt.Executor.Stats()))
-
-	require.NoError(t, rt.Executor.Unlink(ctx, fsmeta.UnlinkRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "after",
-	}))
-	require.Equal(t, uint64(3), perasVisibleSuccessTotal(t, rt.Executor.Stats()))
-	_, err = rt.Executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "after",
-	})
-	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-	usage, err := rt.Executor.GetQuotaUsage(ctx, fsmeta.QuotaUsageRequest{Mount: "vol"})
-	require.NoError(t, err)
-	require.Equal(t, fsmeta.UsageRecord{}, usage)
-}
-
-func TestLocalRuntimePerasBypassesSegmentWitness(t *testing.T) {
-	ctx := context.Background()
-	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rt.Close()) }()
-	require.NotNil(t, rt.Peras)
-
-	_, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "local-visible",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	})
-	require.NoError(t, err)
-	require.NoError(t, rt.Peras.FlushDurable(ctx))
-
-	stats := rt.Peras.Stats()
-	require.Equal(t, "disabled", stats["witness_mode"])
-	require.Equal(t, 0, stats["witness_count"])
-	require.Equal(t, 0, stats["quorum"])
-	require.Equal(t, uint64(0), stats["witness_batch_total"])
-	require.Equal(t, uint64(0), stats["witness_quorum_total"])
-	require.Equal(t, uint64(1), stats["visible_log_apply_marker_total"])
-	require.Equal(t, 0, stats["pending"])
-}
-
-func TestLocalRuntimePerasBuildsWideMaterializedSegments(t *testing.T) {
-	ctx := context.Background()
-	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rt.Close()) }()
-
-	for i := range 1024 {
-		_, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-			Mount:  "vol",
-			Parent: fsmeta.RootInode,
-			Name:   "wide-catalog-" + strconv.Itoa(i),
-			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-		})
-		require.NoError(t, err)
-	}
-	require.NoError(t, rt.Peras.FlushDurable(ctx))
-
-	stats := rt.Peras.Stats()
-	require.Equal(t, 0, stats["pending"])
-	require.LessOrEqual(t, stats["segment_total"].(uint64), uint64(16), "local Peras should not inherit distributed route-budget fragmentation")
-}
-
-func TestLocalRuntimePerasVisibleCommitRecoversMaterializedData(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	opts := Options{
-		WorkDir:            filepath.Join(dir, "db"),
-		Mount:              testMount(),
-		PerasHolderID:      "local-holder",
-		PerasVisibleLogDir: filepath.Join(dir, "visible-log"),
-	}
-	rt, err := Open(ctx, opts)
-	require.NoError(t, err)
-	require.NotNil(t, rt.Peras)
-
-	_, err = rt.Executor.Create(ctx, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "before",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), perasVisibleSuccessTotal(t, rt.Executor.Stats()), "local quota is read-derived, so create can use Peras visible commit")
-
-	require.NoError(t, rt.Executor.Rename(ctx, fsmeta.RenameRequest{
-		Mount:      "vol",
-		FromParent: fsmeta.RootInode,
-		FromName:   "before",
-		ToParent:   fsmeta.RootInode,
-		ToName:     "after",
-	}))
-	require.Equal(t, uint64(2), perasVisibleSuccessTotal(t, rt.Executor.Stats()))
-	got, err := rt.Executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "after",
-	})
-	require.NoError(t, err)
-	require.Equal(t, "after", got.Name)
-	require.NoError(t, rt.Peras.FlushDurable(ctx))
-	require.NoError(t, rt.Close())
-
-	reopened, err := Open(ctx, opts)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, reopened.Close()) }()
-	got, err = reopened.Executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "after",
-	})
-	require.NoError(t, err)
-	require.Equal(t, "after", got.Name)
-	_, err = reopened.Executor.Lookup(ctx, fsmeta.LookupRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "before",
-	})
-	require.ErrorIs(t, err, fsmeta.ErrNotFound)
-}
-
-func perasVisibleSuccessTotal(t *testing.T, stats map[string]any) uint64 {
-	t.Helper()
-	visible, ok := stats["peras_visible_commit"].(map[string]any)
-	require.True(t, ok)
-	total, ok := visible["success_total"].(uint64)
-	require.True(t, ok)
-	return total
 }
 
 func requireWatchEvent(t *testing.T, sub fsmeta.WatchSubscription) fsmeta.WatchEvent {

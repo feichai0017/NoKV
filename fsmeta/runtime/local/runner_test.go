@@ -229,10 +229,7 @@ func TestRunnerInstallMutationsAtCommitEmptyGroupIsNoop(t *testing.T) {
 // commitVersion is intentionally not supported — the runner's nextTS
 // advances past the commit on the first successful call and the second
 // call returns commit_ts_expired. The crash-recovery story uses a fresh
-// Runner instance (process restart), where nextTS is rebuilt from disk
-// state and the replayed install at the original commitVersion is
-// admitted again. TestLocalRuntimePerasVisibleCommitRecoversMaterializedData
-// covers that end-to-end path.
+// Runner instance (process restart), where nextTS is rebuilt from disk state.
 
 func TestRunnerTryAtomicMutateAppliesPredicateCheckedGroup(t *testing.T) {
 	db := openTestDB(t, nil)
