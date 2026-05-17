@@ -47,10 +47,10 @@ func PerasSegmentCatalogRouteInstallKeys(root [32]byte, routingKey []byte) ([][]
 		return nil, ErrInvalidPerasSegment
 	}
 	parts, ok := fsmeta.InspectKey(routingKey)
-	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
+	if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordObject || parts.SegmentRoot != root {
 		return nil, ErrInvalidPerasSegment
 	}
-	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(parts.MountKeyID, parts.Bucket, root)
+	indexKey, err := fsmeta.EncodeSegmentCatalogIndexKey(parts.MountKeyID, parts.Bucket, root)
 	if err != nil {
 		return nil, err
 	}
@@ -169,10 +169,10 @@ func perasSegmentCatalogInstallKeys(segment PerasSegment, routingKey []byte) ([]
 		return nil, err
 	}
 	parts, ok := fsmeta.InspectKey(routingKey)
-	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != segment.Root {
+	if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordObject || parts.SegmentRoot != segment.Root {
 		return nil, ErrInvalidPerasSegment
 	}
-	indexKey, err := fsmeta.EncodePerasSegmentCatalogIndexKey(parts.MountKeyID, parts.Bucket, segment.Root)
+	indexKey, err := fsmeta.EncodeSegmentCatalogIndexKey(parts.MountKeyID, parts.Bucket, segment.Root)
 	if err != nil {
 		return nil, err
 	}

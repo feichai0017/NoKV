@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package raftstore
 
 import (
 	"context"
@@ -23,33 +23,34 @@ import (
 	"google.golang.org/grpc"
 )
 
-func TestStartServePerasWitnessUsesRootAuthorityFeed(t *testing.T) {
-	scope := servePerasAuthorityScope()
-	source := &servePerasAuthoritySource{
-		grants: []rootproto.PerasAuthorityGrant{servePerasAuthorityGrant(scope)},
+func TestStartStoreWitnessUsesRootAuthorityFeed(t *testing.T) {
+	scope := testStoreWitnessAuthorityScope()
+	source := &testStoreWitnessAuthoritySource{
+		grants: []rootproto.VisibleAuthorityGrant{testStoreWitnessAuthorityGrant(scope)},
 	}
-	opener := &servePerasTestWALOpener{dir: t.TempDir()}
+	opener := &testStoreWitnessWALOpener{dir: t.TempDir()}
 	defer opener.close(t)
 
-	witness, authorities, feed, err := startServePerasWitness(t.Context(), 1, source, opener, wal.DurabilityFsync)
+	runtime, err := StartStoreWitness(t.Context(), 1, source, opener, wal.DurabilityFsync)
 	require.NoError(t, err)
-	require.NotNil(t, witness)
-	require.NotNil(t, authorities)
-	require.NotNil(t, feed)
-	defer func() { require.NoError(t, feed.Close()) }()
+	require.NotNil(t, runtime)
+	require.NotNil(t, runtime.Witness)
+	require.NotNil(t, runtime.Authorities)
+	require.NotNil(t, runtime.Feed)
+	defer func() { require.NoError(t, runtime.Close()) }()
 
-	record := servePerasSegmentRecord()
+	record := testStoreWitnessSegmentRecord()
 	require.Eventually(t, func() bool {
-		return witness.AppendSegments(t.Context(), scope, []fsperas.SegmentWitnessRecord{record}) == nil
+		return runtime.Witness.AppendSegments(t.Context(), scope, []fsperas.SegmentWitnessRecord{record}) == nil
 	}, time.Second, 10*time.Millisecond)
 }
 
-type servePerasTestWALOpener struct {
+type testStoreWitnessWALOpener struct {
 	dir      string
 	managers []*wal.Manager
 }
 
-func (o *servePerasTestWALOpener) OpenControlWAL(groupID uint64) (*wal.Manager, error) {
+func (o *testStoreWitnessWALOpener) OpenControlWAL(groupID uint64) (*wal.Manager, error) {
 	manager, err := wal.Open(wal.Config{Dir: filepath.Join(o.dir, "wal", fmt.Sprintf("group-%d", groupID))})
 	if err != nil {
 		return nil, err
@@ -58,40 +59,40 @@ func (o *servePerasTestWALOpener) OpenControlWAL(groupID uint64) (*wal.Manager, 
 	return manager, nil
 }
 
-func (o *servePerasTestWALOpener) close(t *testing.T) {
+func (o *testStoreWitnessWALOpener) close(t *testing.T) {
 	t.Helper()
 	for _, manager := range o.managers {
 		require.NoError(t, manager.Close())
 	}
 }
 
-type servePerasAuthoritySource struct {
-	grants []rootproto.PerasAuthorityGrant
+type testStoreWitnessAuthoritySource struct {
+	grants []rootproto.VisibleAuthorityGrant
 }
 
-func (s *servePerasAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
-	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(s.grants))
+func (s *testStoreWitnessAuthoritySource) ListVisibleAuthorityGrants(context.Context, *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
+	out := make([]*metapb.RootVisibleAuthorityGrant, 0, len(s.grants))
 	for _, grant := range s.grants {
-		out = append(out, metawire.RootPerasAuthorityGrantToProto(grant))
+		out = append(out, metawire.RootVisibleAuthorityGrantToProto(grant))
 	}
-	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
+	return &coordpb.ListVisibleAuthorityGrantsResponse{Grants: out}, nil
 }
 
-func (s *servePerasAuthoritySource) WatchRootEvents(ctx context.Context, _ *coordpb.WatchRootEventsRequest, _ ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
-	return servePerasWatchStream{ctx: ctx}, nil
+func (s *testStoreWitnessAuthoritySource) WatchRootEvents(ctx context.Context, _ *coordpb.WatchRootEventsRequest, _ ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
+	return testStoreWitnessWatchStream{ctx: ctx}, nil
 }
 
-type servePerasWatchStream struct {
+type testStoreWitnessWatchStream struct {
 	grpc.ClientStream
 	ctx context.Context
 }
 
-func (s servePerasWatchStream) Recv() (*coordpb.WatchRootEventsResponse, error) {
+func (s testStoreWitnessWatchStream) Recv() (*coordpb.WatchRootEventsResponse, error) {
 	<-s.ctx.Done()
 	return nil, s.ctx.Err()
 }
 
-func servePerasAuthorityScope() compile.AuthorityScope {
+func testStoreWitnessAuthorityScope() compile.AuthorityScope {
 	return compile.AuthorityScope{
 		Mount:      fsmeta.MountID("vol"),
 		MountKeyID: fsmeta.MountKeyID(7),
@@ -101,8 +102,8 @@ func servePerasAuthorityScope() compile.AuthorityScope {
 	}
 }
 
-func servePerasAuthorityGrant(scope compile.AuthorityScope) rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
+func testStoreWitnessAuthorityGrant(scope compile.AuthorityScope) rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:         "grant-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
@@ -111,7 +112,7 @@ func servePerasAuthorityGrant(scope compile.AuthorityScope) rootproto.PerasAutho
 	}
 }
 
-func servePerasSegmentRecord() fsperas.SegmentWitnessRecord {
+func testStoreWitnessSegmentRecord() fsperas.SegmentWitnessRecord {
 	var root [32]byte
 	root[0] = 1
 	var digest [32]byte

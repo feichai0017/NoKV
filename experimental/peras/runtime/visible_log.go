@@ -153,8 +153,8 @@ func (c *Runtime) recoverVisibleAppliedCompletion(ctx context.Context, record fs
 	return true, nil
 }
 
-func visibleRecordGrant(record fsperas.VisibleOperationRecord) rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
+func visibleRecordGrant(record fsperas.VisibleOperationRecord) rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:           record.GrantID,
 		EpochID:           record.EpochID,
 		HolderID:          record.HolderID,
@@ -170,7 +170,7 @@ func visibleRecordGrant(record fsperas.VisibleOperationRecord) rootproto.PerasAu
 	}
 }
 
-func visibleLogLineageCovers(record fsperas.VisibleOperationRecord, active rootproto.PerasAuthorityGrant) bool {
+func visibleLogLineageCovers(record fsperas.VisibleOperationRecord, active rootproto.VisibleAuthorityGrant) bool {
 	if !record.RootLineage.Valid() {
 		return false
 	}
@@ -190,7 +190,7 @@ func visibleLogLineageCovers(record fsperas.VisibleOperationRecord, active rootp
 	return visibleRootLineageAtOrAfter(activeLineage, record.RootLineage)
 }
 
-func visibleRootLineageFromGrant(grant rootproto.PerasAuthorityGrant) fsperas.VisibleRootLineage {
+func visibleRootLineageFromGrant(grant rootproto.VisibleAuthorityGrant) fsperas.VisibleRootLineage {
 	return fsperas.VisibleRootLineage{
 		ClusterEpoch: grant.RootClusterEpoch,
 		Term:         grant.IssuedRootToken.Term,

@@ -105,7 +105,7 @@ func TestWitnessNodeRefreshesAuthorityBeforeRejecting(t *testing.T) {
 		AuthorityView: authorities,
 		AuthorityRefresh: func(context.Context) error {
 			refreshed = true
-			return authorities.Replace([]rootproto.PerasAuthorityGrant{testAuthorityGrant()})
+			return authorities.Replace([]rootproto.VisibleAuthorityGrant{testAuthorityGrant()})
 		},
 		Now: func() time.Time { return now },
 	})
@@ -160,7 +160,7 @@ func TestWitnessNodeAcceptsSameHolderOldEpochDrain(t *testing.T) {
 	grant.GrantID = "grant-2"
 	grant.EpochID = 2
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(t, authorities.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
@@ -177,7 +177,7 @@ func TestWitnessNodeRejectsSameHolderOldEpochPredecessorMismatch(t *testing.T) {
 	grant.EpochID = 2
 	grant.PredecessorDigest[0] = 9
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(t, authorities.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
@@ -192,7 +192,7 @@ func TestWitnessNodeRejectsExpiredAuthority(t *testing.T) {
 	authorities := runtimeperas.NewActiveAuthorities()
 	expired := testAuthorityGrant()
 	expired.ExpiresUnixNano = now.Add(-time.Nanosecond).UnixNano()
-	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{expired}))
+	require.NoError(t, authorities.Replace([]rootproto.VisibleAuthorityGrant{expired}))
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
@@ -205,7 +205,7 @@ func TestWitnessNodeAcceptsRenewedSameEpochAuthority(t *testing.T) {
 	authorities := runtimeperas.NewActiveAuthorities()
 	renewed := testAuthorityGrant()
 	renewed.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(t, authorities.Replace([]rootproto.PerasAuthorityGrant{renewed}))
+	require.NoError(t, authorities.Replace([]rootproto.VisibleAuthorityGrant{renewed}))
 	node, cleanup := openTestWitnessNodeWithAuthorityView(t, wal.DurabilityFsync, authorities, func() time.Time { return now })
 	defer cleanup()
 
@@ -428,12 +428,12 @@ func testActiveAuthorities(tb testing.TB, now time.Time) *runtimeperas.ActiveAut
 	table := runtimeperas.NewActiveAuthorities()
 	grant := testAuthorityGrant()
 	grant.ExpiresUnixNano = now.Add(time.Hour).UnixNano()
-	require.NoError(tb, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(tb, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	return table
 }
 
-func testAuthorityGrant() rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
+func testAuthorityGrant() rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:          "grant-1",
 		EpochID:          1,
 		HolderID:         "holder-a",

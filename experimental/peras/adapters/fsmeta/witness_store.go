@@ -18,42 +18,42 @@ import (
 	"google.golang.org/grpc"
 )
 
-type remotePerasWitness struct {
+type remoteSegmentWitness struct {
 	id     string
-	client kvrpcpb.PerasWitnessClient
+	client kvrpcpb.SegmentWitnessClient
 }
 
-const remotePerasWitnessProbePageLimit = 32
+const remoteProbeSegmentWitnessPageLimit = 32
 
-func newRemotePerasWitness(id string, client kvrpcpb.PerasWitnessClient) (*remotePerasWitness, error) {
+func newRemoteSegmentWitness(id string, client kvrpcpb.SegmentWitnessClient) (*remoteSegmentWitness, error) {
 	if id == "" || client == nil {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}
-	return &remotePerasWitness{id: id, client: client}, nil
+	return &remoteSegmentWitness{id: id, client: client}, nil
 }
 
-func (w *remotePerasWitness) ID() string {
+func (w *remoteSegmentWitness) ID() string {
 	if w == nil {
 		return ""
 	}
 	return w.id
 }
 
-func (w *remotePerasWitness) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
+func (w *remoteSegmentWitness) AppendSegments(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	if w == nil || w.client == nil {
 		return runtimeperas.ErrRuntimeInvalid
 	}
 	if len(records) == 0 {
 		return nil
 	}
-	_, err := w.client.PerasWitnessSegments(ctx, &kvrpcpb.PerasWitnessSegmentsRequest{
+	_, err := w.client.AppendSegmentWitness(ctx, &kvrpcpb.AppendSegmentWitnessRequest{
 		Scope:   perasraftstore.ScopeToProto(scope),
 		Records: perasraftstore.SegmentWitnessRecordsToProto(records),
 	})
 	return err
 }
 
-func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+func (w *remoteSegmentWitness) Probe(ctx context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
 	if w == nil || w.client == nil {
 		return fsperas.WitnessSnapshot{}, runtimeperas.ErrRuntimeInvalid
 	}
@@ -61,9 +61,9 @@ func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas
 	var afterRoot []byte
 	var afterDigest []byte
 	for {
-		resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{
+		resp, err := w.client.ProbeSegmentWitness(ctx, &kvrpcpb.ProbeSegmentWitnessRequest{
 			EpochId:                   epochID,
-			Limit:                     remotePerasWitnessProbePageLimit,
+			Limit:                     remoteProbeSegmentWitnessPageLimit,
 			AfterSegmentRoot:          afterRoot,
 			AfterSegmentPayloadDigest: afterDigest,
 		})
@@ -86,14 +86,14 @@ func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas
 	}
 }
 
-func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+func (w *remoteSegmentWitness) ProbeSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
 	if w == nil || w.client == nil {
 		return fsperas.SegmentWitnessRecord{}, false, runtimeperas.ErrRuntimeInvalid
 	}
 	if !ref.Valid() {
 		return fsperas.SegmentWitnessRecord{}, false, fsperas.ErrInvalidWitnessRecord
 	}
-	resp, err := w.client.PerasWitnessProbe(ctx, &kvrpcpb.PerasWitnessProbeRequest{
+	resp, err := w.client.ProbeSegmentWitness(ctx, &kvrpcpb.ProbeSegmentWitnessRequest{
 		EpochId:              ref.EpochID,
 		SegmentRoot:          append([]byte(nil), ref.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), ref.SegmentPayloadDigest[:]...),
@@ -119,9 +119,9 @@ func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.Witne
 }
 
 const (
-	perasWitnessDiscoveryTimeout = 45 * time.Second
-	perasWitnessDiscoveryBackoff = 100 * time.Millisecond
-	perasWitnessDiscoverySettle  = 2 * time.Second
+	segmentWitnessDiscoveryTimeout = 45 * time.Second
+	segmentWitnessDiscoveryBackoff = 100 * time.Millisecond
+	segmentWitnessDiscoverySettle  = 2 * time.Second
 )
 
 type witnessStoreLister interface {
@@ -140,7 +140,7 @@ func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dia
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, perasWitnessDiscoveryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, segmentWitnessDiscoveryTimeout)
 	defer cancel()
 
 	allowed := make(map[uint64]struct{}, len(storeIDs))
@@ -165,7 +165,7 @@ func buildWitnessConnections(ctx context.Context, lister witnessStoreLister, dia
 		if out != nil {
 			_ = out.Close()
 		}
-		timer := time.NewTimer(perasWitnessDiscoveryBackoff)
+		timer := time.NewTimer(segmentWitnessDiscoveryBackoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -197,7 +197,7 @@ func witnessDiscoverySettled(previous []string, stableSince time.Time, current [
 	if len(previous) == 0 || !slices.Equal(previous, current) {
 		return slices.Clone(current), now, false
 	}
-	return previous, stableSince, now.Sub(stableSince) >= perasWitnessDiscoverySettle
+	return previous, stableSince, now.Sub(stableSince) >= segmentWitnessDiscoverySettle
 }
 
 func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, dialOpts []grpc.DialOption, allowed map[uint64]struct{}) (*witnessConnections, bool, error) {
@@ -219,9 +219,9 @@ func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, 
 			_ = out.Close()
 			return nil, false, fmt.Errorf("dial peras witness store %d: %w", store.GetStoreId(), err)
 		}
-		witness, err := newRemotePerasWitness(
+		witness, err := newRemoteSegmentWitness(
 			fmt.Sprintf("store-%d", store.GetStoreId()),
-			kvrpcpb.NewPerasWitnessClient(conn),
+			kvrpcpb.NewSegmentWitnessClient(conn),
 		)
 		if err != nil {
 			_ = conn.Close()

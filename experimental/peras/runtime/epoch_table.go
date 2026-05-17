@@ -13,17 +13,17 @@ import (
 type epochTable struct {
 	mu      sync.Mutex
 	holders map[uint64]*fsperas.Holder
-	grants  map[uint64]rootproto.PerasAuthorityGrant
+	grants  map[uint64]rootproto.VisibleAuthorityGrant
 }
 
 func newEpochTable() *epochTable {
 	return &epochTable{
 		holders: make(map[uint64]*fsperas.Holder),
-		grants:  make(map[uint64]rootproto.PerasAuthorityGrant),
+		grants:  make(map[uint64]rootproto.VisibleAuthorityGrant),
 	}
 }
 
-func (t *epochTable) holder(grant rootproto.PerasAuthorityGrant) (*fsperas.Holder, bool) {
+func (t *epochTable) holder(grant rootproto.VisibleAuthorityGrant) (*fsperas.Holder, bool) {
 	if t == nil {
 		return nil, false
 	}
@@ -37,7 +37,7 @@ func (t *epochTable) holder(grant rootproto.PerasAuthorityGrant) (*fsperas.Holde
 	return holder, true
 }
 
-func (t *epochTable) installHolder(grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder) *fsperas.Holder {
+func (t *epochTable) installHolder(grant rootproto.VisibleAuthorityGrant, holder *fsperas.Holder) *fsperas.Holder {
 	if t == nil || holder == nil {
 		return nil
 	}
@@ -52,9 +52,9 @@ func (t *epochTable) installHolder(grant rootproto.PerasAuthorityGrant, holder *
 	return holder
 }
 
-func (t *epochTable) grant(epochID uint64) (rootproto.PerasAuthorityGrant, bool) {
+func (t *epochTable) grant(epochID uint64) (rootproto.VisibleAuthorityGrant, bool) {
 	if t == nil {
-		return rootproto.PerasAuthorityGrant{}, false
+		return rootproto.VisibleAuthorityGrant{}, false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -62,7 +62,7 @@ func (t *epochTable) grant(epochID uint64) (rootproto.PerasAuthorityGrant, bool)
 	return grant, ok
 }
 
-func (t *epochTable) updateGrant(grant rootproto.PerasAuthorityGrant) {
+func (t *epochTable) updateGrant(grant rootproto.VisibleAuthorityGrant) {
 	if t == nil || !grant.Valid() {
 		return
 	}

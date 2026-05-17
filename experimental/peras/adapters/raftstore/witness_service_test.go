@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type perasWitnessStub struct {
+type segmentWitnessStub struct {
 	segmentScope compile.AuthorityScope
 	segment      fsperas.SegmentWitnessRecord
 	segments     []fsperas.SegmentWitnessRecord
@@ -26,16 +26,16 @@ type perasWitnessStub struct {
 	probeRef     fsperas.WitnessSegmentRef
 }
 
-type perasWitnessStatsStub struct {
-	perasWitnessStub
+type segmentWitnessStatsStub struct {
+	segmentWitnessStub
 	stats map[string]any
 }
 
-func (s *perasWitnessStatsStub) Stats() map[string]any {
+func (s *segmentWitnessStatsStub) Stats() map[string]any {
 	return s.stats
 }
 
-func (s *perasWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
+func (s *segmentWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	s.segmentScope = scope
 	s.segments = append(s.segments, records...)
 	if len(records) > 0 {
@@ -44,12 +44,12 @@ func (s *perasWitnessStub) AppendSegments(_ context.Context, scope compile.Autho
 	return nil
 }
 
-func (s *perasWitnessStub) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+func (s *segmentWitnessStub) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
 	s.probeEpoch = epochID
 	return s.snapshot, nil
 }
 
-func (s *perasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+func (s *segmentWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
 	s.probeRef = ref
 	for _, record := range s.snapshot.Segments {
 		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
@@ -59,7 +59,7 @@ func (s *perasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSe
 	return fsperas.SegmentWitnessRecord{}, false, nil
 }
 
-func TestServicePerasWitnessSegmentsSingleRecordProbe(t *testing.T) {
+func TestServiceAppendSegmentWitnessSingleRecordProbe(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID("m1"),
 		MountKeyID: 2,
@@ -68,20 +68,20 @@ func TestServicePerasWitnessSegmentsSingleRecordProbe(t *testing.T) {
 		Inodes:     []fsmeta.InodeID{20},
 	}
 	record := serviceTestSegmentRecord()
-	witness := &perasWitnessStub{
+	witness := &segmentWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{record}},
 	}
 	service := perasraftstore.NewWitnessService(witness)
 
-	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
+	_, err := service.AppendSegmentWitness(context.Background(), &kvrpcpb.AppendSegmentWitnessRequest{
 		Scope:   perasraftstore.ScopeToProto(scope),
-		Records: []*kvrpcpb.PerasSegmentWitnessRecord{perasraftstore.SegmentWitnessRecordToProto(record)},
+		Records: []*kvrpcpb.SegmentWitnessRecord{perasraftstore.SegmentWitnessRecordToProto(record)},
 	})
 	require.NoError(t, err)
 	require.Equal(t, scope, witness.segmentScope)
 	require.Equal(t, record, witness.segment)
 
-	resp, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{EpochId: record.EpochID})
+	resp, err := service.ProbeSegmentWitness(context.Background(), &kvrpcpb.ProbeSegmentWitnessRequest{EpochId: record.EpochID})
 	require.NoError(t, err)
 	require.Equal(t, record.EpochID, witness.probeEpoch)
 	decoded, err := perasraftstore.SnapshotFromProto(resp)
@@ -89,7 +89,7 @@ func TestServicePerasWitnessSegmentsSingleRecordProbe(t *testing.T) {
 	require.Equal(t, witness.snapshot, decoded)
 }
 
-func TestServicePerasWitnessSegments(t *testing.T) {
+func TestServiceAppendSegmentWitness(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID("m1"),
 		MountKeyID: 2,
@@ -99,12 +99,12 @@ func TestServicePerasWitnessSegments(t *testing.T) {
 	}
 	first := serviceTestSegmentRecordWithRoot(3)
 	second := serviceTestSegmentRecordWithRoot(4)
-	witness := &perasWitnessStub{}
+	witness := &segmentWitnessStub{}
 	service := perasraftstore.NewWitnessService(witness)
 
-	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
+	_, err := service.AppendSegmentWitness(context.Background(), &kvrpcpb.AppendSegmentWitnessRequest{
 		Scope: perasraftstore.ScopeToProto(scope),
-		Records: []*kvrpcpb.PerasSegmentWitnessRecord{
+		Records: []*kvrpcpb.SegmentWitnessRecord{
 			perasraftstore.SegmentWitnessRecordToProto(first),
 			perasraftstore.SegmentWitnessRecordToProto(second),
 		},
@@ -114,15 +114,15 @@ func TestServicePerasWitnessSegments(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, witness.segments)
 }
 
-func TestServicePerasWitnessProbeSegment(t *testing.T) {
+func TestServiceProbeSegmentWitnessSegment(t *testing.T) {
 	first := serviceTestSegmentRecordWithRoot(3)
 	second := serviceTestSegmentRecordWithRoot(4)
-	witness := &perasWitnessStub{
+	witness := &segmentWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{first, second}},
 	}
 	service := perasraftstore.NewWitnessService(witness)
 
-	resp, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{
+	resp, err := service.ProbeSegmentWitness(context.Background(), &kvrpcpb.ProbeSegmentWitnessRequest{
 		EpochId:              second.EpochID,
 		SegmentRoot:          append([]byte(nil), second.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), second.SegmentPayloadDigest[:]...),
@@ -135,16 +135,16 @@ func TestServicePerasWitnessProbeSegment(t *testing.T) {
 	require.Zero(t, witness.probeEpoch)
 }
 
-func TestServicePerasWitnessProbePagesSegments(t *testing.T) {
+func TestServiceProbeSegmentWitnessPagesSegments(t *testing.T) {
 	first := serviceTestSegmentRecordWithRoot(1)
 	second := serviceTestSegmentRecordWithRoot(2)
 	third := serviceTestSegmentRecordWithRoot(3)
-	witness := &perasWitnessStub{
+	witness := &segmentWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{third, first, second}},
 	}
 	service := perasraftstore.NewWitnessService(witness)
 
-	firstPage, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{
+	firstPage, err := service.ProbeSegmentWitness(context.Background(), &kvrpcpb.ProbeSegmentWitnessRequest{
 		EpochId: first.EpochID,
 		Limit:   2,
 	})
@@ -156,7 +156,7 @@ func TestServicePerasWitnessProbePagesSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, decoded.Segments)
 
-	secondPage, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{
+	secondPage, err := service.ProbeSegmentWitness(context.Background(), &kvrpcpb.ProbeSegmentWitnessRequest{
 		EpochId:                   first.EpochID,
 		Limit:                     2,
 		AfterSegmentRoot:          firstPage.GetNextSegmentRoot(),
@@ -169,15 +169,15 @@ func TestServicePerasWitnessProbePagesSegments(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{third}, decoded.Segments)
 }
 
-func TestServicePerasWitnessRequiresConfiguredNode(t *testing.T) {
+func TestServiceSegmentWitnessRequiresConfiguredNode(t *testing.T) {
 	service := perasraftstore.NewWitnessService(nil)
-	_, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{EpochId: 1})
+	_, err := service.ProbeSegmentWitness(context.Background(), &kvrpcpb.ProbeSegmentWitnessRequest{EpochId: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
 
-func TestServiceStatsIncludesPerasWitnessStats(t *testing.T) {
-	witness := &perasWitnessStatsStub{stats: map[string]any{
+func TestServiceStatsIncludesSegmentWitnessStats(t *testing.T) {
+	witness := &segmentWitnessStatsStub{stats: map[string]any{
 		"append_total": uint64(3),
 	}}
 	service := perasraftstore.NewWitnessService(witness)

@@ -12,7 +12,7 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
-func GrantHasPredecessor(grant rootproto.PerasAuthorityGrant) bool {
+func GrantHasPredecessor(grant rootproto.VisibleAuthorityGrant) bool {
 	var zero [32]byte
 	return grant.EpochID > 1 && grant.PredecessorDigest != zero
 }

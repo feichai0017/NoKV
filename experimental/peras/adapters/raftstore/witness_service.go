@@ -18,14 +18,14 @@ import (
 )
 
 const (
-	perasWitnessProbeMaxPageLimit      = 32
-	perasWitnessProbeMaxPayloadBytes   = 32 << 20
-	perasWitnessProbeRecordFixedBytes  = 32 + 32 + 32 + 8 + 8 + 8 + 8
-	perasWitnessProbeRecordStringBytes = 4
+	segmentWitnessProbeMaxPageLimit      = 32
+	segmentWitnessProbeMaxPayloadBytes   = 32 << 20
+	segmentWitnessProbeRecordFixedBytes  = 32 + 32 + 32 + 8 + 8 + 8 + 8
+	segmentWitnessProbeRecordStringBytes = 4
 )
 
 type WitnessService struct {
-	kvrpcpb.UnimplementedPerasWitnessServer
+	kvrpcpb.UnimplementedSegmentWitnessServer
 	witness Witness
 }
 
@@ -53,7 +53,7 @@ func (s *WitnessService) Stats() map[string]any {
 	return reporter.Stats()
 }
 
-func (s *WitnessService) PerasWitnessSegments(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentsRequest) (*kvrpcpb.PerasWitnessSegmentsResponse, error) {
+func (s *WitnessService) AppendSegmentWitness(ctx context.Context, req *kvrpcpb.AppendSegmentWitnessRequest) (*kvrpcpb.AppendSegmentWitnessResponse, error) {
 	if s == nil || s.witness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
@@ -69,60 +69,60 @@ func (s *WitnessService) PerasWitnessSegments(ctx context.Context, req *kvrpcpb.
 		return nil, rpcInvalidArgument("peras witness batch requires at least one record")
 	}
 	if err := s.witness.AppendSegments(ctx, scope, records); err != nil {
-		return nil, rpcPerasWitnessStatus(err)
+		return nil, rpcSegmentWitnessStatus(err)
 	}
-	return &kvrpcpb.PerasWitnessSegmentsResponse{}, nil
+	return &kvrpcpb.AppendSegmentWitnessResponse{}, nil
 }
 
-func (s *WitnessService) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {
+func (s *WitnessService) ProbeSegmentWitness(ctx context.Context, req *kvrpcpb.ProbeSegmentWitnessRequest) (*kvrpcpb.ProbeSegmentWitnessResponse, error) {
 	if s == nil || s.witness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
 	if req.GetEpochId() == 0 {
 		return nil, rpcInvalidArgument("peras witness probe requires epoch_id")
 	}
-	ref, targeted, err := perasWitnessProbeTarget(req)
+	ref, targeted, err := segmentWitnessProbeTarget(req)
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
 	if targeted {
-		return s.probePerasWitnessSegment(ctx, ref)
+		return s.probeSegmentWitnessSegment(ctx, ref)
 	}
 	snapshot, err := s.witness.Probe(ctx, req.GetEpochId())
 	if err != nil {
-		return nil, rpcPerasWitnessStatus(err)
+		return nil, rpcSegmentWitnessStatus(err)
 	}
-	return perasWitnessProbePage(snapshot, req)
+	return segmentWitnessProbePage(snapshot, req)
 }
 
-func (s *WitnessService) probePerasWitnessSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (*kvrpcpb.PerasWitnessProbeResponse, error) {
+func (s *WitnessService) probeSegmentWitnessSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (*kvrpcpb.ProbeSegmentWitnessResponse, error) {
 	if prober, ok := s.witness.(fsperas.WitnessSegmentProber); ok {
 		record, found, err := prober.ProbeSegment(ctx, ref)
 		if err != nil {
-			return nil, rpcPerasWitnessStatus(err)
+			return nil, rpcSegmentWitnessStatus(err)
 		}
 		if !found {
-			return &kvrpcpb.PerasWitnessProbeResponse{}, nil
+			return &kvrpcpb.ProbeSegmentWitnessResponse{}, nil
 		}
-		return &kvrpcpb.PerasWitnessProbeResponse{
-			Segments: []*kvrpcpb.PerasSegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
+		return &kvrpcpb.ProbeSegmentWitnessResponse{
+			Segments: []*kvrpcpb.SegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
 		}, nil
 	}
 	snapshot, err := s.witness.Probe(ctx, ref.EpochID)
 	if err != nil {
-		return nil, rpcPerasWitnessStatus(err)
+		return nil, rpcSegmentWitnessStatus(err)
 	}
 	for _, record := range snapshot.Segments {
 		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
-			return &kvrpcpb.PerasWitnessProbeResponse{
-				Segments: []*kvrpcpb.PerasSegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
+			return &kvrpcpb.ProbeSegmentWitnessResponse{
+				Segments: []*kvrpcpb.SegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
 			}, nil
 		}
 	}
-	return &kvrpcpb.PerasWitnessProbeResponse{}, nil
+	return &kvrpcpb.ProbeSegmentWitnessResponse{}, nil
 }
 
-func perasWitnessProbeTarget(req *kvrpcpb.PerasWitnessProbeRequest) (fsperas.WitnessSegmentRef, bool, error) {
+func segmentWitnessProbeTarget(req *kvrpcpb.ProbeSegmentWitnessRequest) (fsperas.WitnessSegmentRef, bool, error) {
 	root := req.GetSegmentRoot()
 	digest := req.GetSegmentPayloadDigest()
 	if len(root) == 0 && len(digest) == 0 {
@@ -144,14 +144,14 @@ func perasWitnessProbeTarget(req *kvrpcpb.PerasWitnessProbeRequest) (fsperas.Wit
 	return ref, true, nil
 }
 
-func perasWitnessProbePage(snapshot fsperas.WitnessSnapshot, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {
-	cursor, hasCursor, err := perasWitnessProbeCursor(req)
+func segmentWitnessProbePage(snapshot fsperas.WitnessSnapshot, req *kvrpcpb.ProbeSegmentWitnessRequest) (*kvrpcpb.ProbeSegmentWitnessResponse, error) {
+	cursor, hasCursor, err := segmentWitnessProbeCursor(req)
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
 	limit := int(req.GetLimit())
-	if limit <= 0 || limit > perasWitnessProbeMaxPageLimit {
-		limit = perasWitnessProbeMaxPageLimit
+	if limit <= 0 || limit > segmentWitnessProbeMaxPageLimit {
+		limit = segmentWitnessProbeMaxPageLimit
 	}
 	records := make([]fsperas.SegmentWitnessRecord, 0, len(snapshot.Segments))
 	for _, record := range snapshot.Segments {
@@ -170,13 +170,13 @@ func perasWitnessProbePage(snapshot fsperas.WitnessSnapshot, req *kvrpcpb.PerasW
 			}
 		}
 	}
-	resp := &kvrpcpb.PerasWitnessProbeResponse{}
+	resp := &kvrpcpb.ProbeSegmentWitnessResponse{}
 	payloadBytes := 0
 	end := start
 	for end < len(records) {
 		record := records[end]
 		recordBytes := witnessProbeRecordBytes(record)
-		if len(resp.Segments) > 0 && (len(resp.Segments) >= limit || payloadBytes+recordBytes > perasWitnessProbeMaxPayloadBytes) {
+		if len(resp.Segments) > 0 && (len(resp.Segments) >= limit || payloadBytes+recordBytes > segmentWitnessProbeMaxPayloadBytes) {
 			break
 		}
 		resp.Segments = append(resp.Segments, SegmentWitnessRecordToProto(record))
@@ -195,7 +195,7 @@ func perasWitnessProbePage(snapshot fsperas.WitnessSnapshot, req *kvrpcpb.PerasW
 	return resp, nil
 }
 
-func perasWitnessProbeCursor(req *kvrpcpb.PerasWitnessProbeRequest) (fsperas.WitnessSegmentRef, bool, error) {
+func segmentWitnessProbeCursor(req *kvrpcpb.ProbeSegmentWitnessRequest) (fsperas.WitnessSegmentRef, bool, error) {
 	root := req.GetAfterSegmentRoot()
 	digest := req.GetAfterSegmentPayloadDigest()
 	if len(root) == 0 && len(digest) == 0 {
@@ -240,13 +240,13 @@ func compareWitnessProbeRecordRef(record fsperas.SegmentWitnessRecord, ref fsper
 }
 
 func witnessProbeRecordBytes(record fsperas.SegmentWitnessRecord) int {
-	return perasWitnessProbeRecordFixedBytes +
-		perasWitnessProbeRecordStringBytes + len(record.SegmentPointer) +
-		perasWitnessProbeRecordStringBytes + len(record.HolderID) +
+	return segmentWitnessProbeRecordFixedBytes +
+		segmentWitnessProbeRecordStringBytes + len(record.SegmentPointer) +
+		segmentWitnessProbeRecordStringBytes + len(record.HolderID) +
 		len(record.SegmentPayload)
 }
 
-func rpcPerasWitnessStatus(err error) error {
+func rpcSegmentWitnessStatus(err error) error {
 	switch {
 	case errors.Is(err, ErrWitnessNodeConfigInvalid),
 		errors.Is(err, ErrWitnessAuthorityMissing),

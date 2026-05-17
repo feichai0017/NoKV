@@ -196,13 +196,13 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 }
 
 func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
-	if err := e.drainPerasAuthority(ctx, scopes...); err != nil {
+	if err := e.drainVisibleAuthority(ctx, scopes...); err != nil {
 		return err
 	}
-	return e.withTxnRetryNoPerasFlush(ctx, run)
+	return e.withTxnRetryNoVisibleFlush(ctx, run)
 }
 
-func (e *Executor) withTxnRetryNoPerasFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+func (e *Executor) withTxnRetryNoVisibleFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
 	started := time.Now()
 	for attempt := 0; ; attempt++ {

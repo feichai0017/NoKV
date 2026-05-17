@@ -46,9 +46,9 @@ const (
 	KindGrantSealed
 	KindGrantRetired
 	KindGrantInherited
-	KindPerasAuthorityGranted
-	KindPerasAuthoritySealed
-	KindPerasAuthorityRetired
+	KindVisibleAuthorityGranted
+	KindVisibleAuthoritySealed
+	KindVisibleAuthorityRetired
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -166,8 +166,8 @@ type Event struct {
 	Grant            *rootproto.AuthorityGrant
 	GrantRetirement  *rootproto.GrantRetirement
 	GrantInheritance *rootproto.GrantInheritance
-	PerasGrant       *rootproto.PerasAuthorityGrant
-	PerasSeal        *rootproto.PerasAuthoritySeal
+	VisibleGrant     *rootproto.VisibleAuthorityGrant
+	VisibleSeal      *rootproto.VisibleAuthoritySeal
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
@@ -199,19 +199,19 @@ func GrantInherited(inheritance rootproto.GrantInheritance) Event {
 	return Event{Kind: KindGrantInherited, GrantInheritance: &inheritance}
 }
 
-func PerasAuthorityGranted(grant rootproto.PerasAuthorityGrant) Event {
-	grant = rootproto.ClonePerasAuthorityGrant(grant)
-	return Event{Kind: KindPerasAuthorityGranted, PerasGrant: &grant}
+func VisibleAuthorityGranted(grant rootproto.VisibleAuthorityGrant) Event {
+	grant = rootproto.CloneVisibleAuthorityGrant(grant)
+	return Event{Kind: KindVisibleAuthorityGranted, VisibleGrant: &grant}
 }
 
-func PerasAuthorityRetired(grant rootproto.PerasAuthorityGrant) Event {
-	grant = rootproto.ClonePerasAuthorityGrant(grant)
-	return Event{Kind: KindPerasAuthorityRetired, PerasGrant: &grant}
+func VisibleAuthorityRetired(grant rootproto.VisibleAuthorityGrant) Event {
+	grant = rootproto.CloneVisibleAuthorityGrant(grant)
+	return Event{Kind: KindVisibleAuthorityRetired, VisibleGrant: &grant}
 }
 
-func PerasAuthoritySealed(seal rootproto.PerasAuthoritySeal) Event {
-	seal = rootproto.ClonePerasAuthoritySeal(seal)
-	return Event{Kind: KindPerasAuthoritySealed, PerasSeal: &seal}
+func VisibleAuthoritySealed(seal rootproto.VisibleAuthoritySeal) Event {
+	seal = rootproto.CloneVisibleAuthoritySeal(seal)
+	return Event{Kind: KindVisibleAuthoritySealed, VisibleSeal: &seal}
 }
 
 func MountRegistered(mountID string, mountKeyID, rootInode uint64, schemaVersion uint32) Event {

@@ -37,18 +37,18 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch        uint64
-	MembershipEpoch     uint64
-	LastCommitted       Cursor
-	IDFence             uint64
-	TSOFence            uint64
-	ActiveGrants        []rootproto.AuthorityGrant
-	RetiredGrants       []rootproto.GrantRetirement
-	GrantInheritances   []rootproto.GrantInheritance
-	RetiredEraFloors    []rootproto.AuthorityRetiredEraFloor
-	ActivePerasGrants   []rootproto.PerasAuthorityGrant
-	PerasAuthorityEpoch uint64
-	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
+	ClusterEpoch          uint64
+	MembershipEpoch       uint64
+	LastCommitted         Cursor
+	IDFence               uint64
+	TSOFence              uint64
+	ActiveGrants          []rootproto.AuthorityGrant
+	RetiredGrants         []rootproto.GrantRetirement
+	GrantInheritances     []rootproto.GrantInheritance
+	RetiredEraFloors      []rootproto.AuthorityRetiredEraFloor
+	ActiveVisibleGrants   []rootproto.VisibleAuthorityGrant
+	VisibleAuthorityEpoch uint64
+	VisibleAuthoritySeals []rootproto.VisibleAuthoritySeal
 }
 
 func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -242,8 +242,8 @@ func CloneState(state State) State {
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	state.RetiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(state.RetiredEraFloors)
-	state.ActivePerasGrants = clonePerasAuthorityGrants(state.ActivePerasGrants)
-	state.PerasAuthoritySeals = clonePerasAuthoritySeals(state.PerasAuthoritySeals)
+	state.ActiveVisibleGrants = cloneVisibleAuthorityGrants(state.ActiveVisibleGrants)
+	state.VisibleAuthoritySeals = cloneVisibleAuthoritySeals(state.VisibleAuthoritySeals)
 	return state
 }
 
@@ -474,12 +474,12 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyGrantRetirementToState(state, cursor, event)
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(state, cursor, event)
-	case rootevent.KindPerasAuthorityGranted:
-		applyPerasAuthorityGrantedToState(state, cursor, event)
-	case rootevent.KindPerasAuthoritySealed:
-		applyPerasAuthoritySealedToState(state, event)
-	case rootevent.KindPerasAuthorityRetired:
-		applyPerasAuthorityRetiredToState(state, event)
+	case rootevent.KindVisibleAuthorityGranted:
+		applyVisibleAuthorityGrantedToState(state, cursor, event)
+	case rootevent.KindVisibleAuthoritySealed:
+		applyVisibleAuthoritySealedToState(state, event)
+	case rootevent.KindVisibleAuthorityRetired:
+		applyVisibleAuthorityRetiredToState(state, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,

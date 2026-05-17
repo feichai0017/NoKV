@@ -14,8 +14,8 @@ import (
 
 // ScopeToProto keeps the StoreKV wire shape transport-only. The authority
 // itself remains rooted in meta/root and compile.AuthorityScope.
-func ScopeToProto(scope compile.AuthorityScope) *kvrpcpb.PerasAuthorityScope {
-	out := &kvrpcpb.PerasAuthorityScope{
+func ScopeToProto(scope compile.AuthorityScope) *kvrpcpb.VisibleAuthorityScope {
+	out := &kvrpcpb.VisibleAuthorityScope{
 		Mount:      string(scope.Mount),
 		MountKeyId: uint64(scope.MountKeyID),
 		Buckets:    make([]uint32, 0, len(scope.Buckets)),
@@ -34,7 +34,7 @@ func ScopeToProto(scope compile.AuthorityScope) *kvrpcpb.PerasAuthorityScope {
 	return out
 }
 
-func ScopeFromProto(in *kvrpcpb.PerasAuthorityScope) (compile.AuthorityScope, error) {
+func ScopeFromProto(in *kvrpcpb.VisibleAuthorityScope) (compile.AuthorityScope, error) {
 	if in == nil {
 		return compile.AuthorityScope{}, fmt.Errorf("peras wire: authority scope missing")
 	}
@@ -57,8 +57,8 @@ func ScopeFromProto(in *kvrpcpb.PerasAuthorityScope) (compile.AuthorityScope, er
 	return out, nil
 }
 
-func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.PerasSegmentWitnessRecord {
-	return &kvrpcpb.PerasSegmentWitnessRecord{
+func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.SegmentWitnessRecord {
+	return &kvrpcpb.SegmentWitnessRecord{
 		EpochId:              record.EpochID,
 		SegmentRoot:          append([]byte(nil), record.SegmentRoot[:]...),
 		SegmentPayloadDigest: append([]byte(nil), record.SegmentPayloadDigest[:]...),
@@ -73,15 +73,15 @@ func SegmentWitnessRecordToProto(record fsperas.SegmentWitnessRecord) *kvrpcpb.P
 	}
 }
 
-func SegmentWitnessRecordsToProto(records []fsperas.SegmentWitnessRecord) []*kvrpcpb.PerasSegmentWitnessRecord {
-	out := make([]*kvrpcpb.PerasSegmentWitnessRecord, 0, len(records))
+func SegmentWitnessRecordsToProto(records []fsperas.SegmentWitnessRecord) []*kvrpcpb.SegmentWitnessRecord {
+	out := make([]*kvrpcpb.SegmentWitnessRecord, 0, len(records))
 	for _, record := range records {
 		out = append(out, SegmentWitnessRecordToProto(record))
 	}
 	return out
 }
 
-func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsperas.SegmentWitnessRecord, error) {
+func SegmentWitnessRecordFromProto(in *kvrpcpb.SegmentWitnessRecord) (fsperas.SegmentWitnessRecord, error) {
 	if in == nil {
 		return fsperas.SegmentWitnessRecord{}, fmt.Errorf("peras wire: segment witness record missing")
 	}
@@ -107,7 +107,7 @@ func SegmentWitnessRecordFromProto(in *kvrpcpb.PerasSegmentWitnessRecord) (fsper
 	return out, nil
 }
 
-func SegmentWitnessRecordsFromProto(in []*kvrpcpb.PerasSegmentWitnessRecord) ([]fsperas.SegmentWitnessRecord, error) {
+func SegmentWitnessRecordsFromProto(in []*kvrpcpb.SegmentWitnessRecord) ([]fsperas.SegmentWitnessRecord, error) {
 	out := make([]fsperas.SegmentWitnessRecord, 0, len(in))
 	for _, segment := range in {
 		record, err := SegmentWitnessRecordFromProto(segment)
@@ -119,9 +119,9 @@ func SegmentWitnessRecordsFromProto(in []*kvrpcpb.PerasSegmentWitnessRecord) ([]
 	return out, nil
 }
 
-func SnapshotToProto(snapshot fsperas.WitnessSnapshot) *kvrpcpb.PerasWitnessProbeResponse {
-	out := &kvrpcpb.PerasWitnessProbeResponse{
-		Segments: make([]*kvrpcpb.PerasSegmentWitnessRecord, 0, len(snapshot.Segments)),
+func SnapshotToProto(snapshot fsperas.WitnessSnapshot) *kvrpcpb.ProbeSegmentWitnessResponse {
+	out := &kvrpcpb.ProbeSegmentWitnessResponse{
+		Segments: make([]*kvrpcpb.SegmentWitnessRecord, 0, len(snapshot.Segments)),
 	}
 	for _, segment := range snapshot.Segments {
 		out.Segments = append(out.Segments, SegmentWitnessRecordToProto(segment))
@@ -129,7 +129,7 @@ func SnapshotToProto(snapshot fsperas.WitnessSnapshot) *kvrpcpb.PerasWitnessProb
 	return out
 }
 
-func SnapshotFromProto(in *kvrpcpb.PerasWitnessProbeResponse) (fsperas.WitnessSnapshot, error) {
+func SnapshotFromProto(in *kvrpcpb.ProbeSegmentWitnessResponse) (fsperas.WitnessSnapshot, error) {
 	if in == nil {
 		return fsperas.WitnessSnapshot{}, fmt.Errorf("peras wire: witness snapshot missing")
 	}

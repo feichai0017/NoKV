@@ -86,33 +86,33 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
 	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
 
-	perasGrant := rootproto.PerasAuthorityGrant{
-		GrantID:  "peras-1",
+	visibleGrant := rootproto.VisibleAuthorityGrant{
+		GrantID:  "visible-1",
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.PerasAuthorityScope{
+		Scope: rootproto.VisibleAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{1},
 		},
 		ExpiresUnixNano: 1_000,
 	}
-	perasIssued := rootevent.PerasAuthorityGranted(perasGrant)
-	perasIssued.PerasGrant.Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, perasGrant.Scope.Buckets)
-	perasRetired := rootevent.PerasAuthorityRetired(perasGrant)
-	require.Equal(t, rootevent.KindPerasAuthorityRetired, perasRetired.Kind)
-	require.Equal(t, perasGrant.GrantID, perasRetired.PerasGrant.GrantID)
+	visibleAuthorityIssued := rootevent.VisibleAuthorityGranted(visibleGrant)
+	visibleAuthorityIssued.VisibleGrant.Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, visibleGrant.Scope.Buckets)
+	visibleAuthorityRetired := rootevent.VisibleAuthorityRetired(visibleGrant)
+	require.Equal(t, rootevent.KindVisibleAuthorityRetired, visibleAuthorityRetired.Kind)
+	require.Equal(t, visibleGrant.GrantID, visibleAuthorityRetired.VisibleGrant.GrantID)
 
 	var root [32]byte
 	var digest [32]byte
 	root[0] = 1
 	digest[0] = 2
-	perasSeal := rootproto.PerasAuthoritySeal{
-		GrantID:              perasGrant.GrantID,
-		EpochID:              perasGrant.EpochID,
-		HolderID:             perasGrant.HolderID,
-		Scope:                perasGrant.Scope,
+	visibleSeal := rootproto.VisibleAuthoritySeal{
+		GrantID:              visibleGrant.GrantID,
+		EpochID:              visibleGrant.EpochID,
+		HolderID:             visibleGrant.HolderID,
+		Scope:                visibleGrant.Scope,
 		SegmentRoot:          root,
 		SegmentPayloadDigest: digest,
 		SealedUnixNano:       10,
@@ -121,11 +121,11 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 		InstallIndex:         13,
 		InstallVersion:       14,
 	}
-	perasSealed := rootevent.PerasAuthoritySealed(perasSeal)
-	perasSealedClone := rootevent.CloneEvent(perasSealed)
-	perasSealed.PerasSeal.Scope.Buckets[0] = 10
-	require.Equal(t, rootevent.KindPerasAuthoritySealed, perasSealedClone.Kind)
-	require.Equal(t, []uint16{1}, perasSealedClone.PerasSeal.Scope.Buckets)
+	visibleSealed := rootevent.VisibleAuthoritySealed(visibleSeal)
+	visibleSealedClone := rootevent.CloneEvent(visibleSealed)
+	visibleSealed.VisibleSeal.Scope.Buckets[0] = 10
+	require.Equal(t, rootevent.KindVisibleAuthoritySealed, visibleSealedClone.Kind)
+	require.Equal(t, []uint16{1}, visibleSealedClone.VisibleSeal.Scope.Buckets)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {

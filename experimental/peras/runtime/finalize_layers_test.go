@@ -19,8 +19,8 @@ func TestNewSealedTrackingLayerRejectsNilRuntime(t *testing.T) {
 
 func TestSealedTrackingLayerFinalizesRuntimeReadView(t *testing.T) {
 	committer, err := NewRuntime(Config{
-		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
-		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Authority:         &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+		Witnesses:         testRuntimeSegmentWitnesses(t, 3),
 		Installer:         &fakeRuntimePerasSegmentInstaller{},
 		VisibleLog:        &recordingVisibleLog{},
 		SegmentFlushEvery: time.Hour,
@@ -49,8 +49,8 @@ func TestSealedTrackingLayerFinalizesRuntimeReadView(t *testing.T) {
 
 func TestSealedTrackingLayerMaterializedSegmentDoesNotEnterSealedOverlay(t *testing.T) {
 	committer, err := NewRuntime(Config{
-		Authority:         &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
-		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Authority:         &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()},
+		Witnesses:         testRuntimeSegmentWitnesses(t, 3),
 		Installer:         &fakeRuntimePerasSegmentInstaller{},
 		VisibleLog:        &recordingVisibleLog{},
 		SegmentFlushEvery: time.Hour,

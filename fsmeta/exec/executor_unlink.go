@@ -10,14 +10,14 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.UnlinkProgram, mount fsmeta.MountIdentity, req fsmeta.UnlinkRequest) (bool, error) {
+func (e *Executor) tryVisibleUnlink(ctx context.Context, program compile.UnlinkProgram, mount fsmeta.MountIdentity, req fsmeta.UnlinkRequest) (bool, error) {
 	compiled := program.Compiled
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	record, err := view.readDentry(plan.PrimaryKey)
 	if err != nil {
 		return false, err
@@ -32,7 +32,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.Un
 	if inode.Type == fsmeta.InodeTypeDirectory {
 		return false, fsmeta.ErrInvalidRequest
 	}
-	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
+	quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
 		Mount:      req.Mount,
 		MountKeyID: mount.MountKeyID,
 		Scope:      req.Parent,
@@ -49,22 +49,22 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.Un
 	if err != nil {
 		return false, err
 	}
-	effects := []compile.WriteEffect{perasDeleteEffect(plan.MutateKeys[0])}
+	effects := []compile.WriteEffect{visibleDeleteEffect(plan.MutateKeys[0])}
 	if inode.LinkCount <= 1 {
-		effects = append(effects, perasDeleteEffect(inodeKey))
+		effects = append(effects, visibleDeleteEffect(inodeKey))
 	} else {
 		inode.LinkCount--
 		inodeValue, err := fsmeta.EncodeInodeValue(inode)
 		if err != nil {
 			return false, err
 		}
-		effects = append(effects, perasPutEffect(inodeKey, inodeValue))
+		effects = append(effects, visiblePutEffect(inodeKey, inodeValue))
 	}
-	concrete, err := view.materializePerasCompiledOp(compiled, effects)
+	concrete, err := view.materializeVisibleCompiledOp(compiled, effects)
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 // Unlink removes one dentry, decrements its inode link count, and deletes the
@@ -75,16 +75,16 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileUnlinkProgram(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileUnlinkProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
 	if err != nil {
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
-	if committed, err := e.tryPerasVisibleUnlink(ctx, program, mount, req); committed || err != nil {
+	if committed, err := e.tryVisibleUnlink(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return err
 		}

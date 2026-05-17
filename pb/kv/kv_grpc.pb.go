@@ -546,137 +546,137 @@ var StoreKV_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PerasWitness_PerasWitnessSegments_FullMethodName = "/nokv.kv.v1.PerasWitness/PerasWitnessSegments"
-	PerasWitness_PerasWitnessProbe_FullMethodName    = "/nokv.kv.v1.PerasWitness/PerasWitnessProbe"
+	SegmentWitness_AppendSegmentWitness_FullMethodName = "/nokv.kv.v1.SegmentWitness/AppendSegmentWitness"
+	SegmentWitness_ProbeSegmentWitness_FullMethodName  = "/nokv.kv.v1.SegmentWitness/ProbeSegmentWitness"
 )
 
-// PerasWitnessClient is the client API for PerasWitness service.
+// SegmentWitnessClient is the client API for SegmentWitness service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type PerasWitnessClient interface {
-	PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error)
-	PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error)
+type SegmentWitnessClient interface {
+	AppendSegmentWitness(ctx context.Context, in *AppendSegmentWitnessRequest, opts ...grpc.CallOption) (*AppendSegmentWitnessResponse, error)
+	ProbeSegmentWitness(ctx context.Context, in *ProbeSegmentWitnessRequest, opts ...grpc.CallOption) (*ProbeSegmentWitnessResponse, error)
 }
 
-type perasWitnessClient struct {
+type segmentWitnessClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewPerasWitnessClient(cc grpc.ClientConnInterface) PerasWitnessClient {
-	return &perasWitnessClient{cc}
+func NewSegmentWitnessClient(cc grpc.ClientConnInterface) SegmentWitnessClient {
+	return &segmentWitnessClient{cc}
 }
 
-func (c *perasWitnessClient) PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error) {
+func (c *segmentWitnessClient) AppendSegmentWitness(ctx context.Context, in *AppendSegmentWitnessRequest, opts ...grpc.CallOption) (*AppendSegmentWitnessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PerasWitnessSegmentsResponse)
-	err := c.cc.Invoke(ctx, PerasWitness_PerasWitnessSegments_FullMethodName, in, out, cOpts...)
+	out := new(AppendSegmentWitnessResponse)
+	err := c.cc.Invoke(ctx, SegmentWitness_AppendSegmentWitness_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *perasWitnessClient) PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error) {
+func (c *segmentWitnessClient) ProbeSegmentWitness(ctx context.Context, in *ProbeSegmentWitnessRequest, opts ...grpc.CallOption) (*ProbeSegmentWitnessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PerasWitnessProbeResponse)
-	err := c.cc.Invoke(ctx, PerasWitness_PerasWitnessProbe_FullMethodName, in, out, cOpts...)
+	out := new(ProbeSegmentWitnessResponse)
+	err := c.cc.Invoke(ctx, SegmentWitness_ProbeSegmentWitness_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// PerasWitnessServer is the server API for PerasWitness service.
-// All implementations should embed UnimplementedPerasWitnessServer
+// SegmentWitnessServer is the server API for SegmentWitness service.
+// All implementations should embed UnimplementedSegmentWitnessServer
 // for forward compatibility.
-type PerasWitnessServer interface {
-	PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error)
-	PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error)
+type SegmentWitnessServer interface {
+	AppendSegmentWitness(context.Context, *AppendSegmentWitnessRequest) (*AppendSegmentWitnessResponse, error)
+	ProbeSegmentWitness(context.Context, *ProbeSegmentWitnessRequest) (*ProbeSegmentWitnessResponse, error)
 }
 
-// UnimplementedPerasWitnessServer should be embedded to have
+// UnimplementedSegmentWitnessServer should be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedPerasWitnessServer struct{}
+type UnimplementedSegmentWitnessServer struct{}
 
-func (UnimplementedPerasWitnessServer) PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PerasWitnessSegments not implemented")
+func (UnimplementedSegmentWitnessServer) AppendSegmentWitness(context.Context, *AppendSegmentWitnessRequest) (*AppendSegmentWitnessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AppendSegmentWitness not implemented")
 }
-func (UnimplementedPerasWitnessServer) PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PerasWitnessProbe not implemented")
+func (UnimplementedSegmentWitnessServer) ProbeSegmentWitness(context.Context, *ProbeSegmentWitnessRequest) (*ProbeSegmentWitnessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeSegmentWitness not implemented")
 }
-func (UnimplementedPerasWitnessServer) testEmbeddedByValue() {}
+func (UnimplementedSegmentWitnessServer) testEmbeddedByValue() {}
 
-// UnsafePerasWitnessServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to PerasWitnessServer will
+// UnsafeSegmentWitnessServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SegmentWitnessServer will
 // result in compilation errors.
-type UnsafePerasWitnessServer interface {
-	mustEmbedUnimplementedPerasWitnessServer()
+type UnsafeSegmentWitnessServer interface {
+	mustEmbedUnimplementedSegmentWitnessServer()
 }
 
-func RegisterPerasWitnessServer(s grpc.ServiceRegistrar, srv PerasWitnessServer) {
-	// If the following call panics, it indicates UnimplementedPerasWitnessServer was
+func RegisterSegmentWitnessServer(s grpc.ServiceRegistrar, srv SegmentWitnessServer) {
+	// If the following call panics, it indicates UnimplementedSegmentWitnessServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&PerasWitness_ServiceDesc, srv)
+	s.RegisterService(&SegmentWitness_ServiceDesc, srv)
 }
 
-func _PerasWitness_PerasWitnessSegments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PerasWitnessSegmentsRequest)
+func _SegmentWitness_AppendSegmentWitness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AppendSegmentWitnessRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PerasWitnessServer).PerasWitnessSegments(ctx, in)
+		return srv.(SegmentWitnessServer).AppendSegmentWitness(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PerasWitness_PerasWitnessSegments_FullMethodName,
+		FullMethod: SegmentWitness_AppendSegmentWitness_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PerasWitnessServer).PerasWitnessSegments(ctx, req.(*PerasWitnessSegmentsRequest))
+		return srv.(SegmentWitnessServer).AppendSegmentWitness(ctx, req.(*AppendSegmentWitnessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PerasWitness_PerasWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PerasWitnessProbeRequest)
+func _SegmentWitness_ProbeSegmentWitness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeSegmentWitnessRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PerasWitnessServer).PerasWitnessProbe(ctx, in)
+		return srv.(SegmentWitnessServer).ProbeSegmentWitness(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PerasWitness_PerasWitnessProbe_FullMethodName,
+		FullMethod: SegmentWitness_ProbeSegmentWitness_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PerasWitnessServer).PerasWitnessProbe(ctx, req.(*PerasWitnessProbeRequest))
+		return srv.(SegmentWitnessServer).ProbeSegmentWitness(ctx, req.(*ProbeSegmentWitnessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// PerasWitness_ServiceDesc is the grpc.ServiceDesc for PerasWitness service.
+// SegmentWitness_ServiceDesc is the grpc.ServiceDesc for SegmentWitness service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var PerasWitness_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "nokv.kv.v1.PerasWitness",
-	HandlerType: (*PerasWitnessServer)(nil),
+var SegmentWitness_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "nokv.kv.v1.SegmentWitness",
+	HandlerType: (*SegmentWitnessServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "PerasWitnessSegments",
-			Handler:    _PerasWitness_PerasWitnessSegments_Handler,
+			MethodName: "AppendSegmentWitness",
+			Handler:    _SegmentWitness_AppendSegmentWitness_Handler,
 		},
 		{
-			MethodName: "PerasWitnessProbe",
-			Handler:    _PerasWitness_PerasWitnessProbe_Handler,
+			MethodName: "ProbeSegmentWitness",
+			Handler:    _SegmentWitness_ProbeSegmentWitness_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -10,6 +10,9 @@ var (
 	errInodeAllocatorRequired        = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: inode allocator required")
 	errAuditorRunnerRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: auditor runner required")
 	errSubtreeHandoffWithoutFrontier = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec: subtree handoff started without committed frontier")
-	errPerasAuthorityNotHeld         = nokverrors.New(nokverrors.KindNotLeader, "fsmeta/exec: peras authority is held by another holder")
-	errPerasOverlayFallbackUnsafe    = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/exec: peras overlay read cannot safely fall back to base mutation")
+	errVisibleAuthorityNotHeld       = nokverrors.New(nokverrors.KindNotLeader, "fsmeta/exec: visible authority is held by another holder")
+	errVisibleOverlayFallbackUnsafe  = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/exec: visible overlay read cannot safely fall back to base mutation")
+
+	ErrVisibleAdmissionRejected   = nokverrors.New(nokverrors.KindConflict, "fsmeta/exec: visible admission rejected")
+	ErrVisibleIneligibleOperation = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: operation is not eligible for visible commit")
 )

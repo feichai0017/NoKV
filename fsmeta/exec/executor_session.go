@@ -14,13 +14,13 @@ import (
 	"time"
 )
 
-func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program compile.OpenWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) tryVisibleOpenWriteSession(ctx context.Context, program compile.OpenWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	plan := delta.Plan
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	inode, ok, err := view.readInode(mount, req.Inode)
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
@@ -48,7 +48,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 		// runner.
 		return fsmeta.SessionRecord{}, false, nil
 	}
-	if index := e.perasPredicateIndex(); !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[2], index) {
+	if index := e.visiblePredicateIndex(); !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[2], index) {
 		if owner, ok, err := view.readSession(mount, plan.ReadKeys[2]); err != nil {
 			return fsmeta.SessionRecord{}, false, err
 		} else if ok {
@@ -71,7 +71,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	committed, err := e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	committed, err := e.tryVisibleCommitAfterRead(ctx, view, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
 	}
@@ -81,13 +81,13 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 	return record, true, nil
 }
 
-func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
+func (e *Executor) tryVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return fsmeta.SessionRecord{}, false, nil
 	}
 	plan := delta.Plan
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	nowTime := e.clock()
 	expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
 	if !ok {
@@ -121,7 +121,7 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, pro
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	committed, err := e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	committed, err := e.tryVisibleCommitAfterRead(ctx, view, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
 	}
@@ -131,13 +131,13 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, pro
 	return record, true, nil
 }
 
-func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program compile.CloseWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.CloseWriteSessionRequest) (bool, error) {
+func (e *Executor) tryVisibleCloseWriteSession(ctx context.Context, program compile.CloseWriteSessionProgram, mount fsmeta.MountIdentity, req fsmeta.CloseWriteSessionRequest) (bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	plan := delta.Plan
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	session, ok, err := view.readSession(mount, plan.ReadKeys[0])
 	if err != nil {
 		return false, err
@@ -163,10 +163,10 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
 }
 
-func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount fsmeta.MountIdentity, record fsmeta.SessionRecord) (bool, error) {
+func (e *Executor) tryVisibleExpireWriteSession(ctx context.Context, mount fsmeta.MountIdentity, record fsmeta.SessionRecord) (bool, error) {
 	program, err := compile.CompileCloseWriteSessionProgram(fsmeta.CloseWriteSessionRequest{
 		Mount:   mount.MountID,
 		Inode:   record.Inode,
@@ -175,7 +175,7 @@ func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount 
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCloseWriteSession(ctx, program, mount, fsmeta.CloseWriteSessionRequest{
+	return e.tryVisibleCloseWriteSession(ctx, program, mount, fsmeta.CloseWriteSessionRequest{
 		Mount:   mount.MountID,
 		Inode:   record.Inode,
 		Session: record.Session,
@@ -219,14 +219,14 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req fsmeta.OpenWriteSes
 		return fsmeta.SessionRecord{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if record, committed, err := e.tryPerasVisibleOpenWriteSession(ctx, program, mount, req); committed || err != nil {
+	if record, committed, err := e.tryVisibleOpenWriteSession(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
@@ -337,14 +337,14 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req fsmeta.Heartbe
 		return fsmeta.SessionRecord{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return fsmeta.SessionRecord{}, err
 	}
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return fsmeta.SessionRecord{}, fsmeta.ErrInvalidRequest
 	}
-	if record, committed, err := e.tryPerasVisibleHeartbeatWriteSession(ctx, program, mount, req); committed || err != nil {
+	if record, committed, err := e.tryVisibleHeartbeatWriteSession(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return fsmeta.SessionRecord{}, err
 		}
@@ -417,11 +417,11 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req fsmeta.CloseWriteS
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
-	if committed, err := e.tryPerasVisibleCloseWriteSession(ctx, program, mount, req); committed || err != nil {
+	if committed, err := e.tryVisibleCloseWriteSession(ctx, program, mount, req); committed || err != nil {
 		return err
 	}
 	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -476,14 +476,14 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return fsmeta.ExpireWriteSessionsResult{}, err
 	}
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
 	scanPrefixes := plan.ReadPrefixes
-	if err := e.withTxnRetryNoPerasFlush(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withTxnRetryNoVisibleFlush(ctx, func(startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   fsmeta.InodeID
@@ -500,7 +500,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 			if err != nil {
 				return err
 			}
-			kvs = e.mergePerasOverlayScan(kvs, scanPrefix, remaining)
+			kvs = e.mergeVisibleOverlayScan(kvs, scanPrefix, remaining)
 			var matched uint32
 			for _, kv := range kvs {
 				if !bytes.HasPrefix(kv.Key, scanPrefix) {
@@ -525,7 +525,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 				if _, seen := expiredSessions[expiredKey]; seen {
 					continue
 				}
-				if committed, err := e.tryPerasVisibleExpireWriteSession(ctx, mount, record); err != nil {
+				if committed, err := e.tryVisibleExpireWriteSession(ctx, mount, record); err != nil {
 					return err
 				} else if committed {
 					expiredSessions[expiredKey] = struct{}{}
@@ -566,7 +566,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req fsmeta.ExpireWri
 		// Fallback expiration mutates base LSM session keys. Drain only after
 		// concrete expired keys are known so ordinary visible session updates do
 		// not wait behind speculative maintenance scans.
-		if err := e.drainPerasAuthority(ctx, drainScope); err != nil {
+		if err := e.drainVisibleAuthority(ctx, drainScope); err != nil {
 			return err
 		}
 		keys := make([]string, 0, len(deletes))

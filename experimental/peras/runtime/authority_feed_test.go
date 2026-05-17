@@ -53,7 +53,7 @@ func TestRootAuthorityFeedAppliesGrantEvents(t *testing.T) {
 	}
 	grant := testGrant("g-event", "holder-event", scope)
 
-	feed.applyRootEvent(rootevent.PerasAuthorityGranted(grant))
+	feed.applyRootEvent(rootevent.VisibleAuthorityGranted(grant))
 	grant, ok, err := table.Find(scope, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -62,23 +62,23 @@ func TestRootAuthorityFeedAppliesGrantEvents(t *testing.T) {
 
 type pollingAuthoritySource struct {
 	mu     sync.Mutex
-	grants []rootproto.PerasAuthorityGrant
+	grants []rootproto.VisibleAuthorityGrant
 }
 
-func (s *pollingAuthoritySource) replace(grants ...rootproto.PerasAuthorityGrant) {
+func (s *pollingAuthoritySource) replace(grants ...rootproto.VisibleAuthorityGrant) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.grants = append([]rootproto.PerasAuthorityGrant(nil), grants...)
+	s.grants = append([]rootproto.VisibleAuthorityGrant(nil), grants...)
 }
 
-func (s *pollingAuthoritySource) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+func (s *pollingAuthoritySource) ListVisibleAuthorityGrants(context.Context, *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(s.grants))
+	out := make([]*metapb.RootVisibleAuthorityGrant, 0, len(s.grants))
 	for _, grant := range s.grants {
-		out = append(out, wire.RootPerasAuthorityGrantToProto(grant))
+		out = append(out, wire.RootVisibleAuthorityGrantToProto(grant))
 	}
-	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
+	return &coordpb.ListVisibleAuthorityGrantsResponse{Grants: out}, nil
 }
 
 func (s *pollingAuthoritySource) WatchRootEvents(ctx context.Context, _ *coordpb.WatchRootEventsRequest, _ ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {

@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
@@ -118,89 +116,6 @@ type SubtreeAuthorityResolver interface {
 	SameAuthority(context.Context, fsmeta.MountID, fsmeta.InodeID, fsmeta.InodeID) (bool, error)
 }
 
-// PerasAuthorityAdmitter is the fsmeta holder-side boundary for Peras.
-// It is intentionally narrower than the root protocol: the executor only asks
-// whether a compiled authority scope is locally owned before it can enter a
-// future Peras visible commit.
-type PerasAuthorityAdmitter interface {
-	AcquirePerasAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
-}
-
-// PerasCommitter is the experimental, opt-in Peras visible commit boundary.
-// Success replaces the ordinary Percolator/Raft commit for this fsmeta
-// operation, so errors are returned and never silently fall back after the
-// holder overlay may already include the operation.
-type PerasCommitter interface {
-	SubmitVisible(context.Context, fsperas.OperationID, compile.MaterializedOp, fsperas.AdmissionFunc) (fsperas.VisibleAck, error)
-}
-
-type PerasOverlayReader interface {
-	GetPerasOverlay(key []byte) (value []byte, deleted bool, ok bool)
-	// GetPerasOverlayView returns overlay-owned bytes. Callers must not mutate
-	// the returned value.
-	GetPerasOverlayView(key []byte) (value []byte, deleted bool, ok bool)
-	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
-}
-
-type PerasOverlayReadSnapshotReader interface {
-	CapturePerasOverlayRead() (overlayGeneration, sealedGeneration uint64)
-	GetPerasOverlayViewAt(overlayGeneration, sealedGeneration uint64, key []byte) (value []byte, deleted bool, ok bool)
-	ScanPerasDirectoryAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV
-}
-
-type PerasDirectoryOverlayReader interface {
-	ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV
-}
-
-type PerasDirectoryOverlayPresence interface {
-	HasPerasDirectory(prefix []byte) bool
-}
-
-type PerasVisibleDirectoryPresence interface {
-	HasPerasVisibleDirectory(prefix []byte) bool
-}
-
-type PerasDirectoryCacheFrontier interface {
-	PerasDirectoryCacheFrontier(prefix []byte) uint64
-}
-
-// PerasSnapshotCapturer records the installed Peras overlay visible at an MVCC
-// snapshot token so later snapshot reads do not consult live overlay state.
-type PerasSnapshotCapturer interface {
-	CapturePerasSnapshot(version uint64) error
-}
-
-// VisibleSnapshotCapturer lets a runtime capture visible Peras state
-// without forcing an authority flush. Runtimes return captured=false when the
-// snapshot cannot be made durable at the visible boundary.
-type VisibleSnapshotCapturer interface {
-	CapturePerasVisibleSnapshot(context.Context, uint64, compile.AuthorityScope) (fsmeta.VisibleSnapshotCapture, bool, error)
-}
-
-// PerasSnapshotOverlayReader serves a captured Peras overlay for a snapshot
-// version. It is intentionally separate from the live overlay reader.
-type PerasSnapshotOverlayReader interface {
-	GetPerasSnapshotOverlayView(version uint64, key []byte) (value []byte, deleted bool, ok bool)
-	ScanPerasSnapshotDirectory(version uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV
-	HasPerasSnapshotDirectory(version uint64, prefix []byte) bool
-}
-
-type perasSnapshotRetirer interface {
-	RetirePerasSnapshot(version uint64)
-}
-
-type PerasFlusher interface {
-	FlushDurable(context.Context) error
-}
-
-type PerasAuthorityFlusher interface {
-	FlushAuthority(context.Context, compile.AuthorityScope) error
-}
-
-type PerasAuthorityDrainer interface {
-	DrainAuthority(context.Context, fsperas.AuthorityRetirer, ...compile.AuthorityScope) error
-}
-
 type VisibleQuotaAdmitter interface {
 	AllowVisibleQuota(context.Context, []QuotaChange) (bool, error)
 }
@@ -233,13 +148,13 @@ type Executor struct {
 	quotas                  QuotaResolver
 	subtrees                SubtreeHandoffPublisher
 	authorities             SubtreeAuthorityResolver
-	perasAuthority          PerasAuthorityAdmitter
-	perasCommitter          PerasCommitter
-	perasClientID           string
+	visibleAuthority        VisibleAuthorityAdmitter
+	visibleCommitter        VisibleCommitter
+	visibleClientID         string
 	negCache                NegativeCache
 	dirPages                DirPageCache
-	dirPagePerasMu          sync.Mutex
-	dirPagePerasFrontier    map[dirpage.DirectoryKey]uint64
+	dirPageVisibleMu        sync.Mutex
+	dirPageVisibleFrontier  map[dirpage.DirectoryKey]uint64
 	lockTTL                 uint64
 	now                     func() time.Time
 	readRetriesTotal        atomic.Uint64
@@ -247,10 +162,10 @@ type Executor struct {
 	txnRetriesTotal         atomic.Uint64
 	txnRetryExhaustedTotal  atomic.Uint64
 	createTotal             atomic.Uint64
-	perasAdmission          perasAdmissionCounters
-	perasVisible            perasVisibleCounters
-	perasDirectoryRead      perasDirectoryReadCounters
-	perasSeq                atomic.Uint64
+	visibleAdmission        visibleAdmissionCounters
+	visibleCommit           visibleCommitCounters
+	visibleDirectoryRead    visibleDirectoryReadCounters
+	visibleSeq              atomic.Uint64
 	atomicOnePhase          map[fsmeta.OperationKind]*atomicOnePhaseCounters
 }
 
@@ -299,7 +214,7 @@ func WithInodeAllocator(allocator InodeAllocator) Option {
 }
 
 // WithNegativeCache wires the visible-commit "this dentry does not exist" memo.
-// Lookup checks Peras overlay first, then Has on the dentry primary key before
+// Lookup checks visible overlay first, then Has on the dentry primary key before
 // consulting the runner; misses are recorded via Remember; mutating ops call
 // Invalidate on the touched dentry keys after a successful commit.
 //
@@ -344,19 +259,19 @@ func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	}
 }
 
-// WithPerasAuthorityAdmitter enables holder-authority admission for
-// Peras-eligible mutations.
-func WithPerasAuthorityAdmitter(admitter PerasAuthorityAdmitter) Option {
+// WithVisibleAuthorityAdmitter enables holder-authority admission for
+// visible-commit-eligible mutations.
+func WithVisibleAuthorityAdmitter(admitter VisibleAuthorityAdmitter) Option {
 	return func(e *Executor) {
-		e.perasAuthority = admitter
+		e.visibleAuthority = admitter
 	}
 }
 
-// WithPerasCommitter enables Peras visible commits. This option is intentionally
+// WithVisibleCommitter enables visible commits. This option is intentionally
 // explicit so production callers choose the visible-commit contract.
-func WithPerasCommitter(committer PerasCommitter) Option {
+func WithVisibleCommitter(committer VisibleCommitter) Option {
 	return func(e *Executor) {
-		e.perasCommitter = committer
+		e.visibleCommitter = committer
 	}
 }
 
@@ -366,17 +281,17 @@ func New(runner TxnRunner, opts ...Option) (*Executor, error) {
 		return nil, errRunnerRequired
 	}
 	executor := &Executor{
-		runner:         runner,
-		lockTTL:        defaultLockTTL,
-		perasClientID:  newPerasClientID(),
-		atomicOnePhase: newAtomicOnePhaseCounters(),
+		runner:          runner,
+		lockTTL:         defaultLockTTL,
+		visibleClientID: newVisibleClientID(),
+		atomicOnePhase:  newAtomicOnePhaseCounters(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(executor)
 		}
 	}
-	if executor.perasCommitter != nil {
+	if executor.visibleCommitter != nil {
 		executor.clearNegativeCache()
 	}
 	return executor, nil

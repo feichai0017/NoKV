@@ -18,35 +18,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakePerasAuthorityClient struct {
+type fakeVisibleAuthorityClient struct {
 	calls     int
 	sealCalls int
-	last      rootproto.PerasAuthorityCommand
-	resp      *coordpb.ApplyPerasAuthorityResponse
-	seals     []*metapb.RootPerasAuthoritySeal
+	last      rootproto.VisibleAuthorityCommand
+	resp      *coordpb.ApplyVisibleAuthorityResponse
+	seals     []*metapb.RootVisibleAuthoritySeal
 	err       error
 }
 
-func (f *fakePerasAuthorityClient) ApplyPerasAuthority(_ context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
+func (f *fakeVisibleAuthorityClient) ApplyVisibleAuthority(_ context.Context, req *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error) {
 	f.calls++
-	f.last = metawire.RootPerasAuthorityCommandFromProto(req.GetCommand())
+	f.last = metawire.RootVisibleAuthorityCommandFromProto(req.GetCommand())
 	return f.resp, f.err
 }
 
-func (f *fakePerasAuthorityClient) ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+func (f *fakeVisibleAuthorityClient) ListVisibleAuthoritySeals(context.Context, *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
 	f.sealCalls++
-	return &coordpb.ListPerasAuthoritySealsResponse{Seals: f.seals}, f.err
+	return &coordpb.ListVisibleAuthoritySealsResponse{Seals: f.seals}, f.err
 }
 
 func TestManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{
-			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
-			Grant:        metawire.RootPerasAuthorityGrantToProto(grant),
-			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{
+			Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
+			Grant:        metawire.RootVisibleAuthorityGrantToProto(grant),
+			ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
 		},
 	}
 	table := NewActiveAuthorities()
@@ -58,13 +58,13 @@ func TestManagerAcquireInstallsGrantedAuthority(t *testing.T) {
 	require.True(t, owned)
 	require.Equal(t, grant, got)
 	require.Equal(t, 1, client.calls)
-	require.Equal(t, rootproto.PerasAuthorityActAcquire, client.last.Kind)
+	require.Equal(t, rootproto.VisibleAuthorityActAcquire, client.last.Kind)
 	require.Equal(t, "holder-a", client.last.HolderID)
 	require.Equal(t, now.Add(time.Minute).UnixNano(), client.last.ExpiresUnixNano)
 	require.Empty(t, client.last.Scope.Buckets)
 	require.Empty(t, client.last.Scope.Parents)
 	require.Empty(t, client.last.Scope.Inodes)
-	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []rootproto.VisibleAuthorityGrant{grant}, table.Snapshot())
 }
 
 func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
@@ -74,10 +74,10 @@ func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
 	wideScope.Buckets = nil
 	wideScope.Parents = nil
 	wideScope.Inodes = nil
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", wideScope, now.Add(time.Minute))
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", wideScope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
-	client := &fakePerasAuthorityClient{}
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
+	client := &fakeVisibleAuthorityClient{}
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -96,10 +96,10 @@ func TestManagerAcquireMountWideGrantCoversBucket(t *testing.T) {
 func TestManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
-	client := &fakePerasAuthorityClient{}
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
+	client := &fakeVisibleAuthorityClient{}
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
@@ -113,11 +113,11 @@ func TestManagerAcquireUsesLocalHeldGrant(t *testing.T) {
 func TestManagerAcquireHeldUpdatesActiveAuthorityView(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	held := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{
-			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
-			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(held)},
+	held := testRuntimeVisibleGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{
+			Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
+			ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(held)},
 		},
 	}
 	table := NewActiveAuthorities()
@@ -128,25 +128,25 @@ func TestManagerAcquireHeldUpdatesActiveAuthorityView(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, owned)
 	require.Equal(t, held, got)
-	require.Equal(t, []rootproto.PerasAuthorityGrant{held}, table.Snapshot())
+	require.Equal(t, []rootproto.VisibleAuthorityGrant{held}, table.Snapshot())
 }
 
 func TestManagerRetireAuthority(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{
-			Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED,
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{
+			Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED,
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	require.NoError(t, manager.Retire(context.Background(), grant))
-	require.Equal(t, rootproto.PerasAuthorityActRetire, client.last.Kind)
+	require.Equal(t, rootproto.VisibleAuthorityActRetire, client.last.Kind)
 	require.Equal(t, grant.GrantID, client.last.GrantID)
 	require.Empty(t, table.Snapshot())
 }
@@ -154,15 +154,15 @@ func TestManagerRetireAuthority(t *testing.T) {
 func TestManagerPublishesSegmentSeal(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{
-			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED,
-			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{
+			Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED,
+			ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 	segment := testRuntimePerasSegment(t)
@@ -171,7 +171,7 @@ func TestManagerPublishesSegmentSeal(t *testing.T) {
 	cursor := InstallCursor{RegionID: 7, Term: 3, Index: 99, InstallVersion: 1234}
 
 	require.NoError(t, manager.PublishSegmentSeal(context.Background(), grant, segment, digest, cursor))
-	require.Equal(t, rootproto.PerasAuthorityActSeal, client.last.Kind)
+	require.Equal(t, rootproto.VisibleAuthorityActSeal, client.last.Kind)
 	require.Equal(t, grant.GrantID, client.last.GrantID)
 	require.Equal(t, segment.Root, client.last.SegmentRoot)
 	require.Equal(t, digest, client.last.SegmentPayloadDigest)
@@ -186,89 +186,89 @@ func TestManagerPublishesSegmentSeal(t *testing.T) {
 func TestManagerListsMatchingRootSeals(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	matching := testRuntimePerasSeal("grant-a", "holder-a", scope, now)
+	matching := testRuntimeVisibleSeal("grant-a", "holder-a", scope, now)
 	otherScope := testRuntimePerasScope(2)
-	other := testRuntimePerasSeal("grant-b", "holder-a", otherScope, now)
-	client := &fakePerasAuthorityClient{
-		seals: []*metapb.RootPerasAuthoritySeal{
-			metawire.RootPerasAuthoritySealToProto(matching),
-			metawire.RootPerasAuthoritySealToProto(other),
+	other := testRuntimeVisibleSeal("grant-b", "holder-a", otherScope, now)
+	client := &fakeVisibleAuthorityClient{
+		seals: []*metapb.RootVisibleAuthoritySeal{
+			metawire.RootVisibleAuthoritySealToProto(matching),
+			metawire.RootVisibleAuthoritySealToProto(other),
 		},
 	}
 	manager, err := NewAuthorityManager(client, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
-	seals, err := manager.ListPerasAuthoritySeals(context.Background(), scope)
+	seals, err := manager.ListVisibleAuthoritySeals(context.Background(), scope)
 	require.NoError(t, err)
-	require.Equal(t, []rootproto.PerasAuthoritySeal{matching}, seals)
+	require.Equal(t, []rootproto.VisibleAuthoritySeal{matching}, seals)
 	require.Equal(t, 1, client.sealCalls)
 }
 
-func TestManagerRetirePerasAuthorityFiltersScope(t *testing.T) {
+func TestManagerRetireVisibleAuthorityFiltersScope(t *testing.T) {
 	now := time.Unix(10, 0)
 	scopeA := testRuntimePerasScope(1)
 	scopeB := testRuntimePerasScope(2)
-	grantA := testRuntimePerasGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
-	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{
-			Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED,
-			ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grantB)},
+	grantA := testRuntimeVisibleGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
+	grantB := testRuntimeVisibleGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{
+			Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED,
+			ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grantB)},
 		},
 	}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grantA, grantB}))
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grantA, grantB}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
-	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scopeA))
+	require.NoError(t, manager.RetireVisibleAuthority(context.Background(), scopeA))
 	require.Equal(t, 1, client.calls)
 	require.Equal(t, grantA.GrantID, client.last.GrantID)
-	require.Equal(t, []rootproto.PerasAuthorityGrant{grantB}, table.Snapshot())
+	require.Equal(t, []rootproto.VisibleAuthorityGrant{grantB}, table.Snapshot())
 }
 
 func TestManagerMountRetireScopeMatchesBucketGrants(t *testing.T) {
 	now := time.Unix(10, 0)
 	scopeA := testRuntimePerasScope(1)
 	scopeB := testRuntimePerasScope(2)
-	grantA := testRuntimePerasGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
-	grantB := testRuntimePerasGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
+	grantA := testRuntimeVisibleGrant("holder-a/1", "holder-a", scopeA, now.Add(time.Minute))
+	grantB := testRuntimeVisibleGrant("holder-a/2", "holder-a", scopeB, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grantA, grantB}))
-	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grantA, grantB}))
+	manager, err := NewAuthorityManager(&fakeVisibleAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	grants := manager.ownedGrantsForScopes(compile.AuthorityScope{Mount: "vol", MountKeyID: 7})
-	require.ElementsMatch(t, []rootproto.PerasAuthorityGrant{grantA, grantB}, grants)
+	require.ElementsMatch(t, []rootproto.VisibleAuthorityGrant{grantA, grantB}, grants)
 }
 
-func TestManagerRetirePerasAuthorityIgnoresForeignGrant(t *testing.T) {
+func TestManagerRetireVisibleAuthorityIgnoresForeignGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
-	client := &fakePerasAuthorityClient{}
+	grant := testRuntimeVisibleGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
+	client := &fakeVisibleAuthorityClient{}
 	table := NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{grant}))
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 	manager, err := NewAuthorityManager(client, table, "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
-	require.NoError(t, manager.RetirePerasAuthority(context.Background(), scope))
+	require.NoError(t, manager.RetireVisibleAuthority(context.Background(), scope))
 	require.Zero(t, client.calls)
-	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, table.Snapshot())
+	require.Equal(t, []rootproto.VisibleAuthorityGrant{grant}, table.Snapshot())
 }
 
 func TestManagerRejectsInvalidConfigAndResponses(t *testing.T) {
 	_, err := NewAuthorityManager(nil, NewActiveAuthorities(), "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, ErrClientRequired)
-	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, nil, "holder-a", time.Minute, nil)
+	_, err = NewAuthorityManager(&fakeVisibleAuthorityClient{}, nil, "holder-a", time.Minute, nil)
 	require.ErrorIs(t, err, ErrTableRequired)
-	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "", time.Minute, nil)
+	_, err = NewAuthorityManager(&fakeVisibleAuthorityClient{}, NewActiveAuthorities(), "", time.Minute, nil)
 	require.ErrorIs(t, err, ErrHolderRequired)
-	_, err = NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", -time.Second, nil)
+	_, err = NewAuthorityManager(&fakeVisibleAuthorityClient{}, NewActiveAuthorities(), "holder-a", -time.Second, nil)
 	require.ErrorIs(t, err, ErrTTLInvalid)
 
-	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{
-		resp: &coordpb.ApplyPerasAuthorityResponse{Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED},
+	manager, err := NewAuthorityManager(&fakeVisibleAuthorityClient{
+		resp: &coordpb.ApplyVisibleAuthorityResponse{Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED},
 	}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return time.Unix(10, 0) })
 	require.NoError(t, err)
 	_, _, err = manager.Acquire(context.Background(), testRuntimePerasScope(1))
@@ -278,8 +278,8 @@ func TestManagerRejectsInvalidConfigAndResponses(t *testing.T) {
 func TestManagerRetireRejectsForeignGrant(t *testing.T) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
-	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
+	grant := testRuntimeVisibleGrant("holder-b/1", "holder-b", scope, now.Add(time.Minute))
+	manager, err := NewAuthorityManager(&fakeVisibleAuthorityClient{}, NewActiveAuthorities(), "holder-a", time.Minute, func() time.Time { return now })
 	require.NoError(t, err)
 
 	err = manager.Retire(context.Background(), grant)
@@ -290,12 +290,12 @@ func TestManagerRetireRejectsForeignGrant(t *testing.T) {
 func BenchmarkManagerAcquireLocalHeld(b *testing.B) {
 	now := time.Unix(10, 0)
 	scope := testRuntimePerasScope(1)
-	grant := testRuntimePerasGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
+	grant := testRuntimeVisibleGrant("holder-a/1", "holder-a", scope, now.Add(time.Minute))
 	table := NewActiveAuthorities()
-	if err := table.Replace([]rootproto.PerasAuthorityGrant{grant}); err != nil {
+	if err := table.Replace([]rootproto.VisibleAuthorityGrant{grant}); err != nil {
 		b.Fatal(err)
 	}
-	manager, err := NewAuthorityManager(&fakePerasAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
+	manager, err := NewAuthorityManager(&fakeVisibleAuthorityClient{}, table, "holder-a", time.Minute, func() time.Time { return now })
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -319,8 +319,8 @@ func testRuntimePerasScope(bucket fsmeta.AffinityBucket) compile.AuthorityScope 
 	}
 }
 
-func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
+func testRuntimeVisibleGrant(id, holder string, scope compile.AuthorityScope, expires time.Time) rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:         id,
 		EpochID:         1,
 		HolderID:        holder,
@@ -329,8 +329,8 @@ func testRuntimePerasGrant(id, holder string, scope compile.AuthorityScope, expi
 	}
 }
 
-func testRuntimePerasSeal(id, holder string, scope compile.AuthorityScope, sealed time.Time) rootproto.PerasAuthoritySeal {
-	return rootproto.PerasAuthoritySeal{
+func testRuntimeVisibleSeal(id, holder string, scope compile.AuthorityScope, sealed time.Time) rootproto.VisibleAuthoritySeal {
+	return rootproto.VisibleAuthoritySeal{
 		GrantID:              id,
 		EpochID:              1,
 		HolderID:             holder,

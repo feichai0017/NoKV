@@ -227,28 +227,28 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-type perasSealLane struct {
+type visibleSealLane struct {
 	owner  *Runtime
-	jobs   chan perasSealRequest
+	jobs   chan visibleSealRequest
 	closed chan struct{}
 	once   sync.Once
 	wg     sync.WaitGroup
 }
 
-type perasSealRequest struct {
+type visibleSealRequest struct {
 	ctx    context.Context
 	holder *fsperas.Holder
 	job    perasFlushJob
 	done   chan error
 }
 
-func newPerasSealLane(owner *Runtime, workers int) *perasSealLane {
+func newVisibleSealLane(owner *Runtime, workers int) *visibleSealLane {
 	if workers <= 0 {
 		workers = 1
 	}
-	lane := &perasSealLane{
+	lane := &visibleSealLane{
 		owner:  owner,
-		jobs:   make(chan perasSealRequest, workers*4),
+		jobs:   make(chan visibleSealRequest, workers*4),
 		closed: make(chan struct{}),
 	}
 	lane.wg.Add(workers)
@@ -258,7 +258,7 @@ func newPerasSealLane(owner *Runtime, workers int) *perasSealLane {
 	return lane
 }
 
-func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
+func (l *visibleSealLane) publish(ctx context.Context, holder *fsperas.Holder, job perasFlushJob) error {
 	if l == nil || l.owner == nil {
 		return ErrRuntimeInvalid
 	}
@@ -271,7 +271,7 @@ func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job
 	default:
 	}
 	done := make(chan error, 1)
-	req := perasSealRequest{ctx: ctx, holder: holder, job: job, done: done}
+	req := visibleSealRequest{ctx: ctx, holder: holder, job: job, done: done}
 	select {
 	case l.jobs <- req:
 	case <-ctx.Done():
@@ -289,7 +289,7 @@ func (l *perasSealLane) publish(ctx context.Context, holder *fsperas.Holder, job
 	}
 }
 
-func (l *perasSealLane) close() {
+func (l *visibleSealLane) close() {
 	if l == nil {
 		return
 	}
@@ -299,21 +299,21 @@ func (l *perasSealLane) close() {
 	l.wg.Wait()
 }
 
-func (l *perasSealLane) depth() int {
+func (l *visibleSealLane) depth() int {
 	if l == nil {
 		return 0
 	}
 	return len(l.jobs)
 }
 
-func (l *perasSealLane) capacity() int {
+func (l *visibleSealLane) capacity() int {
 	if l == nil {
 		return 0
 	}
 	return cap(l.jobs)
 }
 
-func (l *perasSealLane) worker() {
+func (l *visibleSealLane) worker() {
 	defer l.wg.Done()
 	for {
 		select {
@@ -325,7 +325,7 @@ func (l *perasSealLane) worker() {
 	}
 }
 
-func (l *perasSealLane) run(req perasSealRequest) {
+func (l *visibleSealLane) run(req visibleSealRequest) {
 	if err := req.ctx.Err(); err != nil {
 		req.done <- err
 		return

@@ -19,13 +19,12 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
+	"github.com/feichai0017/NoKV/engine/wal"
 	perasraftstore "github.com/feichai0017/NoKV/experimental/peras/adapters/raftstore"
-	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	local "github.com/feichai0017/NoKV/local"
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -70,7 +69,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	mvccGCMetaRootAddr := fs.String("mvcc-gc-meta-root-addr", "", "metadata-root gRPC address for snapshot retention floors; config meta_root is used when empty")
 	storageMaxBatchCount := fs.Int64("storage-max-batch-count", 0, "maximum internal entries accepted by one local storage batch; zero uses engine default")
 	storageMaxBatchSize := fs.Int64("storage-max-batch-size", 0, "maximum bytes accepted by one local storage batch; zero uses engine default")
-	perasWitnessWALPolicy := fs.String("peras-witness-wal-policy", "fsync-batched", "peras witness WAL sync policy: fsync-batched|fsync|flushed|buffered")
+	experimentalSegmentWitness := fs.Bool("experimental-peras-witness", false, "enable the experimental Peras witness service and write fence")
+	segmentWitnessWALPolicy := fs.String("peras-witness-wal-policy", "fsync-batched", "peras witness WAL sync policy: fsync-batched|fsync|flushed|buffered")
 	var storeAddrFlags []string
 	fs.Func("store-addr", "remote store transport mapping in the form storeID=address (repeatable)", func(value string) error {
 		value = strings.TrimSpace(value)
@@ -137,9 +137,13 @@ func runServeCmd(w io.Writer, args []string) error {
 	if *storageMaxBatchCount < 0 || *storageMaxBatchSize < 0 {
 		return fmt.Errorf("storage batch limits must be non-negative")
 	}
-	perasDurability, err := parsePerasWitnessWALPolicy(*perasWitnessWALPolicy)
-	if err != nil {
-		return err
+	var perasDurability wal.DurabilityPolicy
+	if *experimentalSegmentWitness {
+		var parseErr error
+		perasDurability, parseErr = parseSegmentWitnessWALPolicy(*segmentWitnessWALPolicy)
+		if parseErr != nil {
+			return parseErr
+		}
 	}
 	explicitStoreAddrs := make(map[uint64]string, len(storeAddrFlags))
 	for _, mapping := range storeAddrFlags {
@@ -237,15 +241,19 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	var perasWitness *perasraftstore.WitnessNode
-	var perasAuthorityTable *runtimeperas.ActiveAuthorities
-	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
-	perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
-	if err != nil {
-		return err
+	var segmentWitness *perasraftstore.StoreWitnessRuntime
+	if *experimentalSegmentWitness {
+		segmentWitness, err = perasraftstore.StartStoreWitness(context.Background(), *storeID, coordCli, db, perasDurability)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = segmentWitness.Close() }()
 	}
-	if perasAuthorityFeed != nil {
-		defer func() { _ = perasAuthorityFeed.Close() }()
+	var writeFence kv.WriteFence
+	var extraServices []func(grpc.ServiceRegistrar)
+	if segmentWitness != nil {
+		writeFence = segmentWitness.WriteFence()
+		extraServices = append(extraServices, segmentWitness.RegisterGRPCService)
 	}
 
 	coordScheduler := storecontrol.NewClient(storecontrol.Config{
@@ -332,12 +340,8 @@ func runServeCmd(w io.Writer, args []string) error {
 			Mount: fsmeta.MountKeyResolver,
 		},
 		TransportAddr: *listenAddr,
-		WriteFence:    perasWriteFence{authorities: perasAuthorityTable},
-		ExtraServices: []func(grpc.ServiceRegistrar){
-			func(reg grpc.ServiceRegistrar) {
-				kvrpcpb.RegisterPerasWitnessServer(reg, perasraftstore.NewWitnessService(perasWitness))
-			},
-		},
+		WriteFence:    writeFence,
+		ExtraServices: extraServices,
 	})
 	if err != nil {
 		return err
@@ -403,8 +407,8 @@ func runServeCmd(w io.Writer, args []string) error {
 	}
 
 	_, _ = fmt.Fprintf(w, "StoreKV service listening on %s (store=%d)\n", server.Addr(), *storeID)
-	if perasWitness != nil {
-		_, _ = fmt.Fprintf(w, "Peras witness enabled (wal_policy=%s)\n", strings.TrimSpace(*perasWitnessWALPolicy))
+	if segmentWitness != nil {
+		_, _ = fmt.Fprintf(w, "Peras witness enabled (wal_policy=%s)\n", strings.TrimSpace(*segmentWitnessWALPolicy))
 	}
 	if metricsLn != nil {
 		_, _ = fmt.Fprintf(w, "Serve metrics endpoint listening on http://%s/debug/vars\n", metricsLn.Addr().String())

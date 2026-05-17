@@ -18,15 +18,15 @@ type KV struct {
 
 type GrantProvider interface {
 	HolderID() string
-	Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error)
+	Acquire(context.Context, compile.AuthorityScope) (rootproto.VisibleAuthorityGrant, bool, error)
 }
 
 type SealPublisher interface {
-	PublishSegmentSeal(context.Context, rootproto.PerasAuthorityGrant, fsperas.PerasSegment, [32]byte, InstallCursor) error
+	PublishSegmentSeal(context.Context, rootproto.VisibleAuthorityGrant, fsperas.PerasSegment, [32]byte, InstallCursor) error
 }
 
 type SealProvider interface {
-	ListPerasAuthoritySeals(context.Context, compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error)
+	ListVisibleAuthoritySeals(context.Context, compile.AuthorityScope) ([]rootproto.VisibleAuthoritySeal, error)
 }
 
 type SegmentInstallRequest struct {

@@ -36,12 +36,12 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
-func TestExecutorSnapshotSubtreeFlushesPerasAuthorityBeforeToken(t *testing.T) {
+func TestExecutorSnapshotSubtreeFlushesVisibleAuthorityBeforeToken(t *testing.T) {
 	runner := newFakeRunner()
-	flusher := &fakePerasAuthorityFlusher{}
+	flusher := &fakeVisibleAuthorityFlusher{}
 	executor, err := newTestExecutor(runner,
-		WithPerasCommitter(flusher),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithVisibleCommitter(flusher),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 	)
 	require.NoError(t, err)
 
@@ -63,8 +63,8 @@ func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
 	ref := testSnapshotEvidenceRef(3, 0xaa)
 	capturer := &fakeVisibleSnapshotCapturer{capture: true, segmentRefs: []fsmeta.SnapshotEvidenceRef{ref}}
 	executor, err := newTestExecutor(runner,
-		WithPerasCommitter(capturer),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
+		WithVisibleCommitter(capturer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 	)
 	require.NoError(t, err)
 
@@ -98,7 +98,7 @@ func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
 	require.Equal(t, fsmeta.SnapshotSubtreeToken{Mount: "vol", MountKeyID: 9, RootInode: 7, ReadVersion: 42}, token)
 }
 
-func TestExecutorResolveSnapshotSubtreeTokenRejectsInvalidPerasRef(t *testing.T) {
+func TestExecutorResolveSnapshotSubtreeTokenRejectsInvalidVisibleRef(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)

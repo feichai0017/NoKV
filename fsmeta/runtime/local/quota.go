@@ -50,8 +50,8 @@ func (q *QuotaLedger) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRun
 }
 
 // AllowVisibleQuota keeps QuotaLedger compatible with executors that can
-// admit visible writes. The local runtime does not wire a Peras committer, but
-// unlimited quota still has no durable counter side effects.
+// admit visible writes. The local runtime does not wire a visible committer,
+// but unlimited quota still has no durable counter side effects.
 func (q *QuotaLedger) AllowVisibleQuota(context.Context, []fsmetaexec.QuotaChange) (bool, error) {
 	return true, nil
 }

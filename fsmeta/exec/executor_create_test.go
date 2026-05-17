@@ -14,14 +14,14 @@ import (
 	"testing"
 )
 
-func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
+func TestExecutorCreateAdmitsVisibleAuthority(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakePerasAdmitter{owned: true}
+	admitter := &fakeVisibleAdmitter{owned: true}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(admitter),
+		WithVisibleAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -42,23 +42,23 @@ func TestExecutorCreateAdmitsPerasAuthority(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requirePerasStatBool(t, stats, "enabled", true)
-	requirePerasStatUint(t, stats, "eligible_total", 1)
-	requirePerasStatUint(t, stats, "acquire_total", 1)
-	requirePerasStatUint(t, stats, "owned_total", 1)
-	requirePerasStatUint(t, stats, "held_total", 0)
-	requirePerasStatUint(t, stats, "slow_total", 0)
+	requireVisibleStatBool(t, stats, "enabled", true)
+	requireVisibleStatUint(t, stats, "eligible_total", 1)
+	requireVisibleStatUint(t, stats, "acquire_total", 1)
+	requireVisibleStatUint(t, stats, "owned_total", 1)
+	requireVisibleStatUint(t, stats, "held_total", 0)
+	requireVisibleStatUint(t, stats, "slow_total", 0)
 }
 
-func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
+func TestExecutorCreateVisibleCommitBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -81,23 +81,23 @@ func TestExecutorCreatePerasVisibleCommitBypassesRaftCommit(t *testing.T) {
 	require.Empty(t, runner.mutations, "visible commit success must bypass the current Raft commit")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatBool(t, stats, "enabled", true)
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
-	requirePerasVisibleStatUint(t, stats, "success_total", 1)
-	requirePerasVisibleStatUint(t, stats, "error_total", 0)
-	requirePerasVisibleStatUint(t, stats, "skip_no_authority_total", 0)
+	requireVisibleCommitStatBool(t, stats, "enabled", true)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
+	requireVisibleCommitStatUint(t, stats, "error_total", 0)
+	requireVisibleCommitStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
-func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
+func TestExecutorCreateVisibleCommitRejectsExistingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "file", 21)
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -108,24 +108,24 @@ func TestExecutorCreatePerasVisibleCommitRejectsExistingDentry(t *testing.T) {
 		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
 	})
 	require.ErrorIs(t, err, fsmeta.ErrExists)
-	require.Zero(t, committer.calls, "failed not-exists predicate must not enter Peras visible commit")
+	require.Zero(t, committer.calls, "failed not-exists predicate must not enter visible commit")
 	require.Empty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
-	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "skip_predicate_total", 1)
 }
 
-func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
+func TestExecutorCreateVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	runner := newFakeRunner()
-	commitErr := errors.New("peras commit failed")
-	committer := &fakePerasCommitter{err: commitErr}
+	commitErr := errors.New("overlay commit failed")
+	committer := &fakeVisibleCommitter{err: commitErr}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -137,21 +137,21 @@ func TestExecutorCreatePerasVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	})
 	require.ErrorIs(t, err, commitErr)
 	require.Equal(t, 1, committer.calls)
-	require.Empty(t, runner.mutations, "ambiguous Peras evidence must not fall back into a second commit path")
+	require.Empty(t, runner.mutations, "ambiguous Visible evidence must not fall back into a second commit path")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
-	requirePerasVisibleStatUint(t, stats, "success_total", 0)
-	requirePerasVisibleStatUint(t, stats, "error_total", 1)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 0)
+	requireVisibleCommitStatUint(t, stats, "error_total", 1)
 }
 
-func TestExecutorCreatePerasVisibleCommitRequiresAuthorityAdmission(t *testing.T) {
+func TestExecutorCreateVisibleCommitRequiresAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithPerasCommitter(committer),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -166,22 +166,22 @@ func TestExecutorCreatePerasVisibleCommitRequiresAuthorityAdmission(t *testing.T
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
-	requirePerasVisibleStatUint(t, stats, "skip_no_authority_total", 1)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 0)
+	requireVisibleCommitStatUint(t, stats, "skip_no_authority_total", 1)
 }
 
-func TestExecutorCreatePerasVisibleCommitSkipsSharedQuota(t *testing.T) {
+func TestExecutorCreateVisibleCommitSkipsSharedQuota(t *testing.T) {
 	runner := newFakeRunner()
 	quotaKey, err := fsmeta.EncodeUsageKey(testMountIdentity, 7)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &kvrpcpb.Mutation{Op: kvrpcpb.Mutation_Put, Key: quotaKey, Value: []byte("usage")}}
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
 		WithQuotaResolver(quota),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -199,21 +199,21 @@ func TestExecutorCreatePerasVisibleCommitSkipsSharedQuota(t *testing.T) {
 	require.Len(t, runner.mutations[0], 3)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 0)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 0)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
 }
 
-func TestExecutorCreatePerasVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T) {
+func TestExecutorCreateVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T) {
 	runner := newFakeRunner()
-	quota := &fakeQuotaResolver{allowPerasVisible: true}
-	committer := &fakePerasCommitter{}
+	quota := &fakeQuotaResolver{allowVisibleCommit: true}
+	committer := &fakeVisibleCommitter{}
 	inode := testInodeForParentBucket(t, 7)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
 		WithQuotaResolver(quota),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -231,20 +231,20 @@ func TestExecutorCreatePerasVisibleCommitAllowsQuotaResolverWithoutFence(t *test
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
-	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
 }
 
-func TestExecutorCreatePerasVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
+func TestExecutorCreateVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	firstInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	secondInode := testInodeForParentBucket(t, fsmeta.RootInode, firstInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{firstInode, secondInode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -267,23 +267,23 @@ func TestExecutorCreatePerasVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
-	requirePerasVisibleStatUint(t, stats, "success_total", 1)
-	requirePerasVisibleStatUint(t, stats, "skip_predicate_total", 1)
-	requirePerasVisibleStatUint(t, stats, "error_total", 0)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 2)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
+	requireVisibleCommitStatUint(t, stats, "skip_predicate_total", 1)
+	requireVisibleCommitStatUint(t, stats, "error_total", 0)
 }
 
-func TestExecutorCreatePerasVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
+func TestExecutorCreateVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	childInode := testInodeForParentBucket(t, dirInode, dirInode)
 	nextChildInode := testInodeForParentBucket(t, dirInode, dirInode, childInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode, nextChildInode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -321,14 +321,14 @@ func TestExecutorCreatePerasVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	require.Equal(t, uint64(3), committer.Stats()["commit_total"])
 }
 
-func TestExecutorCreateFallsBackWhenPerasAuthorityHeldElsewhere(t *testing.T) {
+func TestExecutorCreateFallsBackWhenVisibleAuthorityHeldElsewhere(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakePerasAdmitter{owned: false}
+	admitter := &fakeVisibleAdmitter{owned: false}
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(admitter),
+		WithVisibleAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -343,20 +343,20 @@ func TestExecutorCreateFallsBackWhenPerasAuthorityHeldElsewhere(t *testing.T) {
 	require.NotEmpty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requirePerasStatUint(t, stats, "eligible_total", 1)
-	requirePerasStatUint(t, stats, "acquire_total", 1)
-	requirePerasStatUint(t, stats, "owned_total", 0)
-	requirePerasStatUint(t, stats, "held_total", 1)
+	requireVisibleStatUint(t, stats, "eligible_total", 1)
+	requireVisibleStatUint(t, stats, "acquire_total", 1)
+	requireVisibleStatUint(t, stats, "owned_total", 0)
+	requireVisibleStatUint(t, stats, "held_total", 1)
 }
 
-func TestExecutorCreateWithSharedQuotaSkipsPerasAuthorityAdmission(t *testing.T) {
+func TestExecutorCreateWithSharedQuotaSkipsVisibleAuthorityAdmission(t *testing.T) {
 	runner := newFakeRunner()
-	admitter := &fakePerasAdmitter{owned: true}
+	admitter := &fakeVisibleAdmitter{owned: true}
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
 		WithQuotaResolver(&fakeQuotaResolver{}),
-		WithPerasAuthorityAdmitter(admitter),
+		WithVisibleAuthorityAdmitter(admitter),
 	)
 	require.NoError(t, err)
 
@@ -371,11 +371,11 @@ func TestExecutorCreateWithSharedQuotaSkipsPerasAuthorityAdmission(t *testing.T)
 	require.Len(t, runner.mutations, 1)
 
 	stats := executor.Stats()
-	requirePerasStatUint(t, stats, "eligible_total", 0)
-	requirePerasStatUint(t, stats, "acquire_total", 0)
-	requirePerasStatUint(t, stats, "owned_total", 0)
-	requirePerasStatUint(t, stats, "slow_total", 1)
-	requirePerasSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
+	requireVisibleStatUint(t, stats, "eligible_total", 0)
+	requireVisibleStatUint(t, stats, "acquire_total", 0)
+	requireVisibleStatUint(t, stats, "owned_total", 0)
+	requireVisibleStatUint(t, stats, "slow_total", 1)
+	requireVisibleSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
 }
 
 func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
@@ -697,12 +697,12 @@ func BenchmarkExecutorCreateDefaultPath(b *testing.B) {
 	benchmarkExecutorCreate(b, executor)
 }
 
-func BenchmarkExecutorCreatePerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorCreateVisibleCommit(b *testing.B) {
 	executor, err := newTestExecutor(
 		newFakeRunner(),
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -718,14 +718,14 @@ func BenchmarkExecutorCheckpointStormDefaultPath100(b *testing.B) {
 	benchmarkExecutorCheckpointStorm(b, executor, nil, 100)
 }
 
-func BenchmarkExecutorCheckpointStormPerasSegment100(b *testing.B) {
+func BenchmarkExecutorCheckpointStormVisibleSegment100(b *testing.B) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(b, runner)
+	committer := newTestVisibleCommitter(b, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -733,12 +733,12 @@ func BenchmarkExecutorCheckpointStormPerasSegment100(b *testing.B) {
 	benchmarkExecutorCheckpointStorm(b, executor, committer, 100)
 }
 
-func BenchmarkExecutorCheckpointStormPerasVisible100(b *testing.B) {
+func BenchmarkExecutorCheckpointStormVisibleCommit100(b *testing.B) {
 	executor, err := newTestExecutor(
 		newFakeRunner(),
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

@@ -5,6 +5,7 @@ package exec
 
 import (
 	"context"
+
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
@@ -22,15 +23,15 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	if capturer, ok := e.perasCommitter.(VisibleSnapshotCapturer); ok {
+	if capturer, ok := e.visibleCommitter.(VisibleSnapshotCapturer); ok {
 		version, err := e.reserveReadVersion(ctx)
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
-		capture, captured, err := capturer.CapturePerasVisibleSnapshot(ctx, version, delta.Authority)
+		capture, captured, err := capturer.CaptureVisibleSnapshot(ctx, version, delta.Authority)
 		if err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
@@ -44,15 +45,15 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req fsmeta.SnapshotSubtr
 			}, nil
 		}
 	}
-	if err := e.flushPerasAuthority(ctx, delta.Authority); err != nil {
+	if err := e.flushVisibleAuthority(ctx, delta.Authority); err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
 	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return fsmeta.SnapshotSubtreeToken{}, err
 	}
-	if capturer, ok := e.perasCommitter.(PerasSnapshotCapturer); ok {
-		if err := capturer.CapturePerasSnapshot(version); err != nil {
+	if capturer, ok := e.visibleCommitter.(InstalledVisibleSnapshotCapturer); ok {
+		if err := capturer.CaptureInstalledVisibleSnapshot(version); err != nil {
 			return fsmeta.SnapshotSubtreeToken{}, err
 		}
 	}
@@ -81,13 +82,13 @@ func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token fsmeta
 	return token.Clone(), nil
 }
 
-func (e *Executor) RetirePerasSnapshot(version uint64) {
+func (e *Executor) RetireVisibleSnapshot(version uint64) {
 	if e == nil || version == 0 {
 		return
 	}
-	retirer, ok := e.perasCommitter.(perasSnapshotRetirer)
+	retirer, ok := e.visibleCommitter.(visibleSnapshotRetirer)
 	if !ok {
 		return
 	}
-	retirer.RetirePerasSnapshot(version)
+	retirer.RetireVisibleSnapshot(version)
 }

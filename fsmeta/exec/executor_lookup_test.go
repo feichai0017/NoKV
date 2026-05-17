@@ -13,7 +13,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/stretchr/testify/require"
 )
@@ -51,15 +50,15 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	require.True(t, runner.mutations[0][1].GetAssertionNotExist())
 }
 
-func TestExecutorCreatePerasVisibleCommitServesLookupOverlay(t *testing.T) {
+func TestExecutorCreateVisibleCommitServesLookupOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -81,14 +80,14 @@ func TestExecutorCreatePerasVisibleCommitServesLookupOverlay(t *testing.T) {
 	require.Equal(t, created.Dentry, lookedUp)
 }
 
-func TestExecutorCreatePerasVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
+func TestExecutorCreateVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -117,12 +116,12 @@ func TestExecutorReadDirPlusOverlayOnlyPathBypassesDirPageCache(t *testing.T) {
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 		WithDirPageCache(cache),
 	)
 	require.NoError(t, err)
@@ -149,7 +148,7 @@ func TestExecutorReadDirPlusOverlayOnlyPathBypassesDirPageCache(t *testing.T) {
 	require.Equal(t, uint64(0), stats.StoreOK)
 }
 
-func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
+func TestExecutorReadDirPlusVisibleOverlayPathBypassesDirPageCache(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -162,7 +161,7 @@ func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
 	defer func() { _ = cache.Close() }()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasCommitter(scanOverlayCommitter{directoryPresent: true}),
+		WithVisibleCommitter(scanOverlayCommitter{directoryPresent: true}),
 		WithDirPageCache(cache),
 	)
 	require.NoError(t, err)
@@ -182,20 +181,20 @@ func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
 	stats := cache.Stats()
 	require.Equal(t, uint64(0), stats.Hits)
 	require.Equal(t, uint64(0), stats.StoreOK)
-	require.Len(t, runner.scanVersions, 2, "Peras-backed ReadDirPlus must not materialize the persistent dirpage cache")
+	require.Len(t, runner.scanVersions, 2, "visible-backed ReadDirPlus must not materialize the persistent dirpage cache")
 }
 
-func TestExecutorReadDirPlusPinsPerasOverlayAcrossDentryAndInodeReads(t *testing.T) {
+func TestExecutorReadDirPlusPinsVisibleOverlayAcrossDentryAndInodeReads(t *testing.T) {
 	runner := newFakeRunner()
 	parent := fsmeta.InodeID(7)
 	seedDentry(t, runner, "vol", parent, "eta", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{23}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -234,7 +233,7 @@ func TestExecutorReadDirPlusPinsPerasOverlayAcrossDentryAndInodeReads(t *testing
 	require.Equal(t, fsmeta.InodeID(22), record.Inode)
 }
 
-func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
+func TestExecutorReadDirPlusCachesSealedVisibleDirectory(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -244,7 +243,7 @@ func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
 	})
 	sealedDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed")
 	sealedInodeKey := inodeKeyForTest(t, "vol", 33)
-	sealedRows := []fsperas.OverlayKV{
+	sealedRows := []VisibleOverlayKV{
 		overlayValueForTest(sealedDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed", 33, fsmeta.InodeTypeFile)),
 		overlayValueForTest(sealedInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 33, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
 	}
@@ -253,7 +252,7 @@ func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
 	defer func() { _ = cache.Close() }()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasCommitter(sealedDirectoryCommitter{
+		WithVisibleCommitter(sealedDirectoryCommitter{
 			rows:     sealedRows,
 			values:   overlayMapForTest(sealedRows...),
 			frontier: 7,
@@ -274,11 +273,11 @@ func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
 	second, err := executor.ReadDirPlus(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
-	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "sealed Peras directory should use frontier-aware dirpage cache")
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "sealed Visible directory should use frontier-aware dirpage cache")
 	require.Greater(t, cache.Stats().Hits, uint64(0))
 }
 
-func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *testing.T) {
+func TestExecutorReadDirPlusInvalidatesCacheWhenSealedVisibleFrontierChanges(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -288,7 +287,7 @@ func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *te
 	})
 	sealedDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed")
 	sealedInodeKey := inodeKeyForTest(t, "vol", 33)
-	sealedRows := []fsperas.OverlayKV{
+	sealedRows := []VisibleOverlayKV{
 		overlayValueForTest(sealedDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed", 33, fsmeta.InodeTypeFile)),
 		overlayValueForTest(sealedInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 33, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
 	}
@@ -300,7 +299,7 @@ func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *te
 		values:   overlayMapForTest(sealedRows...),
 		frontier: 7,
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer), WithDirPageCache(cache))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer), WithDirPageCache(cache))
 	require.NoError(t, err)
 	req := fsmeta.ReadDirRequest{Mount: "vol", Parent: fsmeta.RootInode, Limit: 16}
 
@@ -314,7 +313,7 @@ func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *te
 
 	newDentryKey := dentryKeyForTest(t, "vol", fsmeta.RootInode, "sealed-new")
 	newInodeKey := inodeKeyForTest(t, "vol", 44)
-	newRows := []fsperas.OverlayKV{
+	newRows := []VisibleOverlayKV{
 		overlayValueForTest(newDentryKey, dentryValueForTest(t, fsmeta.RootInode, "sealed-new", 44, fsmeta.InodeTypeFile)),
 		overlayValueForTest(newInodeKey, inodeValueForTest(t, fsmeta.InodeRecord{Inode: 44, Type: fsmeta.InodeTypeFile, LinkCount: 1})),
 	}
@@ -328,7 +327,7 @@ func TestExecutorReadDirPlusInvalidatesCacheWhenSealedPerasFrontierChanges(t *te
 	require.Greater(t, len(runner.scanVersions), scansAfterFirst, "sealed frontier change must invalidate stale dirpage rows")
 }
 
-func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *testing.T) {
+func TestExecutorReadDirPlusUsesDirPageCacheWhenVisibleHasNoDirectoryOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "base", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -339,10 +338,10 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *te
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasCommitter(committer),
+		WithVisibleCommitter(committer),
 		WithDirPageCache(cache),
 	)
 	require.NoError(t, err)
@@ -359,7 +358,7 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenPerasHasNoDirectoryOverlay(t *te
 	second, err := executor.ReadDirPlus(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
-	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "directory without Peras rows should still use dirpage cache")
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "directory without Visible rows should still use dirpage cache")
 }
 
 func TestExecutorReadDirPlusUsesDirPageCacheWhenOverlayRowsAreInAnotherDirectory(t *testing.T) {
@@ -378,12 +377,12 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenOverlayRowsAreInAnotherDirectory
 	cache, err := dirpage.Open(dirpage.Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 	defer func() { _ = cache.Close() }()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 44}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 		WithDirPageCache(cache),
 	)
 	require.NoError(t, err)
@@ -407,19 +406,19 @@ func TestExecutorReadDirPlusUsesDirPageCacheWhenOverlayRowsAreInAnotherDirectory
 	second, err := executor.ReadDirPlus(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
-	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "Peras rows in a different directory must not disable this directory's cache")
+	require.Equal(t, scansAfterFirst, len(runner.scanVersions), "Visible rows in a different directory must not disable this directory's cache")
 }
 
-func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
+func TestExecutorReadDirVisibleCreatedDirectorySkipsBaseScan(t *testing.T) {
 	runner := newFakeRunner()
 	dirInode := testInodeForParentBucket(t, fsmeta.RootInode)
 	childInode := testInodeForParentBucket(t, dirInode, dirInode)
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{dirInode, childInode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -447,7 +446,7 @@ func TestExecutorReadDirPerasCreatedDirectorySkipsBaseScan(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []fsmeta.DentryRecord{file.Dentry}, records)
-	require.Empty(t, runner.scanVersions, "Peras-created directory has a covered base namespace")
+	require.Empty(t, runner.scanVersions, "Visible-created directory has a covered base namespace")
 
 	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
 		Mount:  "vol",
@@ -635,14 +634,14 @@ func TestExecutorReadDirPlusMissingInodeReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, fsmeta.ErrNotFound)
 }
 
-func TestExecutorLookupUsesPerasOverlayWithoutTimestamp(t *testing.T) {
+func TestExecutorLookupUsesVisibleOverlayWithoutTimestamp(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "visible")
 	value := dentryValueForTest(t, fsmeta.RootInode, "visible", 22, fsmeta.InodeTypeFile)
 	committer := scanOverlayCommitter{
 		values: overlayMapForTest(overlayValueForTest(key, value)),
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{
@@ -656,17 +655,17 @@ func TestExecutorLookupUsesPerasOverlayWithoutTimestamp(t *testing.T) {
 	require.Equal(t, uint64(1), runner.nextTS, "overlay lookup must not reserve a read timestamp")
 }
 
-func TestExecutorLookupUsesMergedDirectoryWhenPerasTombstoneHidesBase(t *testing.T) {
+func TestExecutorLookupUsesMergedDirectoryWhenVisibleTombstoneHidesBase(t *testing.T) {
 	runner := newFakeRunner()
 	parent := fsmeta.InodeID(7)
 	seedDentry(t, runner, "vol", parent, "alpha", 22)
 	alphaKey := dentryKeyForTest(t, "vol", parent, "alpha")
 	etaKey := dentryKeyForTest(t, "vol", parent, "eta")
-	rows := []fsperas.OverlayKV{
+	rows := []VisibleOverlayKV{
 		overlayDeleteForTest(alphaKey),
 		overlayValueForTest(etaKey, dentryValueForTest(t, parent, "eta", 22, fsmeta.InodeTypeFile)),
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(scanOverlayCommitter{
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(scanOverlayCommitter{
 		rows:   rows,
 		values: overlayMapForTest(rows...),
 	}))
@@ -679,13 +678,13 @@ func TestExecutorLookupUsesMergedDirectoryWhenPerasTombstoneHidesBase(t *testing
 	require.Equal(t, fsmeta.DentryRecord{Parent: parent, Name: "eta", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
 }
 
-func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
+func TestExecutorLookupUsesVisibleOverlayDeleteWithoutRunner(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "deleted")
 	committer := scanOverlayCommitter{
 		values: overlayMapForTest(overlayDeleteForTest(key)),
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
 	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{
@@ -698,7 +697,7 @@ func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
 	require.Equal(t, uint64(1), runner.nextTS, "overlay tombstone lookup must not reserve a read timestamp")
 }
 
-func TestExecutorLookupChecksPerasOverlayBeforeNegativeCache(t *testing.T) {
+func TestExecutorLookupChecksVisibleOverlayBeforeNegativeCache(t *testing.T) {
 	runner := newFakeRunner()
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
@@ -708,7 +707,7 @@ func TestExecutorLookupChecksPerasOverlayBeforeNegativeCache(t *testing.T) {
 	committer := scanOverlayCommitter{
 		values: overlayMapForTest(overlayValueForTest(key, value)),
 	}
-	executor, err := newTestExecutor(runner, WithNegativeCache(cache), WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithNegativeCache(cache), WithVisibleCommitter(committer))
 	require.NoError(t, err)
 	cache.Remember(key)
 
@@ -723,7 +722,7 @@ func TestExecutorLookupChecksPerasOverlayBeforeNegativeCache(t *testing.T) {
 	require.False(t, cache.Has(key), "overlay hit must invalidate stale negative memo")
 }
 
-func TestExecutorClearsNegativeCacheWhenPerasOverlayIsEnabled(t *testing.T) {
+func TestExecutorClearsNegativeCacheWhenVisibleOverlayIsEnabled(t *testing.T) {
 	runner := newFakeRunner()
 	cache := negativecache.New(negativecache.Config{
 		GroupKeyFn: func(k []byte) []byte { return k },
@@ -731,9 +730,9 @@ func TestExecutorClearsNegativeCacheWhenPerasOverlayIsEnabled(t *testing.T) {
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "stale")
 	cache.Remember(key)
 
-	_, err := newTestExecutor(runner, WithNegativeCache(cache), WithPerasCommitter(scanOverlayCommitter{}))
+	_, err := newTestExecutor(runner, WithNegativeCache(cache), WithVisibleCommitter(scanOverlayCommitter{}))
 	require.NoError(t, err)
-	require.False(t, cache.Has(key), "startup Peras replay can make persisted negative memos stale")
+	require.False(t, cache.Has(key), "startup Visible replay can make persisted negative memos stale")
 }
 
 func TestExecutorReadDirRefillsBaseAfterOverlayTombstone(t *testing.T) {
@@ -743,9 +742,9 @@ func TestExecutorReadDirRefillsBaseAfterOverlayTombstone(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "c", 23)
 	deleteKey := dentryKeyForTest(t, "vol", 7, "a")
 	committer := scanOverlayCommitter{
-		rows: []fsperas.OverlayKV{overlayDeleteForTest(deleteKey)},
+		rows: []VisibleOverlayKV{overlayDeleteForTest(deleteKey)},
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
 	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
@@ -769,13 +768,13 @@ func TestExecutorReadDirRefillsOverlayTombstonesBeforeBaseRows(t *testing.T) {
 	seedDentry(t, runner, "vol", 7, "d", 24)
 	seedDentry(t, runner, "vol", 7, "e", 25)
 	committer := scanOverlayCommitter{
-		rows: []fsperas.OverlayKV{
+		rows: []VisibleOverlayKV{
 			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "a")),
 			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "b")),
 			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "c")),
 		},
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
 	records, err := executor.ReadDir(context.Background(), fsmeta.ReadDirRequest{
@@ -794,7 +793,7 @@ func TestExecutorReadDirOverlayOnlyRefillsOverlayAfterTombstone(t *testing.T) {
 	prefix, err := fsmeta.EncodeDentryPrefix(testMountIdentityFor("vol"), 7)
 	require.NoError(t, err)
 	committer := scanOverlayCommitter{
-		rows: []fsperas.OverlayKV{
+		rows: []VisibleOverlayKV{
 			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "a")),
 			overlayDeleteForTest(dentryKeyForTest(t, "vol", 7, "b")),
 			overlayValueForTest(
@@ -807,9 +806,9 @@ func TestExecutorReadDirOverlayOnlyRefillsOverlayAfterTombstone(t *testing.T) {
 			),
 		},
 	}
-	executor := &Executor{perasCommitter: committer}
+	executor := &Executor{visibleCommitter: committer}
 
-	kvs, rows, _ := executor.mergePerasDirectoryOverlayScan(nil, prefix, prefix, 2)
+	kvs, rows, _ := executor.mergeVisibleDirectoryOverlayScan(nil, prefix, prefix, 2)
 	require.Equal(t, uint32(4), rows)
 	require.Len(t, kvs, 2)
 	first, err := fsmeta.DecodeDentryValue(kvs[0].Value)
@@ -820,7 +819,7 @@ func TestExecutorReadDirOverlayOnlyRefillsOverlayAfterTombstone(t *testing.T) {
 	require.Equal(t, "d", second.Name)
 }
 
-func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) {
+func TestExecutorReadDirPlusUsesVisibleOverlayInodesWithoutBatchGet(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", fsmeta.RootInode, "visible", 22)
 	inodeKey := inodeKeyForTest(t, "vol", 22)
@@ -833,7 +832,7 @@ func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) 
 		directoryPresent: true,
 		values:           overlayMapForTest(overlayValueForTest(inodeKey, inodeValue)),
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
 	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
@@ -1005,11 +1004,11 @@ func TestExecutorDirPageInvalidatedByCreate(t *testing.T) {
 		"epoch bump must force a runner scan on the next ReadDirPlus")
 }
 
-func BenchmarkExecutorReadDirPlusFromPerasView100(b *testing.B) {
+func BenchmarkExecutorReadDirPlusFromVisibleView100(b *testing.B) {
 	const entries = 100
 	mount := testMountIdentityFor("vol")
 	dentries := make([]fsmeta.DentryRecord, entries)
-	overlayRows := make([]fsperas.OverlayKV, 0, entries)
+	overlayRows := make([]VisibleOverlayKV, 0, entries)
 	for i := range entries {
 		inode := fsmeta.InodeID(1_000 + i)
 		dentries[i] = fsmeta.DentryRecord{
@@ -1028,38 +1027,38 @@ func BenchmarkExecutorReadDirPlusFromPerasView100(b *testing.B) {
 		require.NoError(b, err)
 		overlayRows = append(overlayRows, overlayValueForTest(key, value))
 	}
-	executor := &Executor{perasCommitter: scanOverlayCommitter{
+	executor := &Executor{visibleCommitter: scanOverlayCommitter{
 		values: overlayMapForTest(overlayRows...),
 	}}
 
 	b.ReportAllocs()
 	for b.Loop() {
-		pairs, ok, err := executor.readDirPlusFromPerasView(mount, dentries)
+		pairs, ok, err := executor.readDirPlusFromVisibleView(mount, dentries)
 		if err != nil {
 			b.Fatal(err)
 		}
 		if !ok || len(pairs) != entries {
-			b.Fatalf("unexpected Peras view result: ok=%v entries=%d", ok, len(pairs))
+			b.Fatalf("unexpected Visible view result: ok=%v entries=%d", ok, len(pairs))
 		}
 	}
 }
 
 type sealedDirectoryCommitter struct {
-	noopPerasCommitter
-	rows     []fsperas.OverlayKV
-	values   map[string]fsperas.OverlayKV
+	noopVisibleCommitter
+	rows     []VisibleOverlayKV
+	values   map[string]VisibleOverlayKV
 	frontier uint64
 }
 
-func (c sealedDirectoryCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
-	value, deleted, ok := c.GetPerasOverlayView(key)
+func (c sealedDirectoryCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetVisibleOverlayView(key)
 	if !ok {
 		return nil, false, false
 	}
 	return append([]byte(nil), value...), deleted, true
 }
 
-func (c sealedDirectoryCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
+func (c sealedDirectoryCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
 	row, ok := c.values[string(key)]
 	if !ok {
 		return nil, false, false
@@ -1067,11 +1066,11 @@ func (c sealedDirectoryCommitter) GetPerasOverlayView(key []byte) ([]byte, bool,
 	return row.Value, row.Delete, true
 }
 
-func (c sealedDirectoryCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
+func (c sealedDirectoryCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
 	return scanOverlayRowsForTest(c.rows, start, limit)
 }
 
-func (c sealedDirectoryCommitter) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+func (c sealedDirectoryCommitter) ScanVisibleDirectory(prefix, start []byte, limit uint32) []VisibleOverlayKV {
 	rows := scanOverlayRowsForTest(c.rows, start, limit)
 	out := rows[:0]
 	for _, row := range rows {
@@ -1083,7 +1082,7 @@ func (c sealedDirectoryCommitter) ScanPerasDirectory(prefix, start []byte, limit
 	return out
 }
 
-func (c sealedDirectoryCommitter) HasPerasDirectory(prefix []byte) bool {
+func (c sealedDirectoryCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
 	for _, row := range c.rows {
 		if bytes.HasPrefix(row.Key, prefix) {
 			return true
@@ -1092,19 +1091,19 @@ func (c sealedDirectoryCommitter) HasPerasDirectory(prefix []byte) bool {
 	return false
 }
 
-func (c sealedDirectoryCommitter) HasPerasVisibleDirectory([]byte) bool {
+func (c sealedDirectoryCommitter) HasPendingVisibleDirectory([]byte) bool {
 	return false
 }
 
-func (c sealedDirectoryCommitter) PerasDirectoryCacheFrontier(prefix []byte) uint64 {
-	if c.HasPerasDirectory(prefix) {
+func (c sealedDirectoryCommitter) VisibleDirectoryCacheFrontier(prefix []byte) uint64 {
+	if c.HasVisibleDirectoryOverlay(prefix) {
 		return c.frontier
 	}
 	return 0
 }
 
-func scanOverlayRowsForTest(rows []fsperas.OverlayKV, start []byte, limit uint32) []fsperas.OverlayKV {
-	out := make([]fsperas.OverlayKV, 0, len(rows))
+func scanOverlayRowsForTest(rows []VisibleOverlayKV, start []byte, limit uint32) []VisibleOverlayKV {
+	out := make([]VisibleOverlayKV, 0, len(rows))
 	for _, row := range rows {
 		if bytes.Compare(row.Key, start) < 0 {
 			continue

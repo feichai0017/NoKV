@@ -11,111 +11,110 @@ import (
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
-func (e *Executor) admitPerasAuthority(ctx context.Context, delta compile.SemanticDelta) error {
-	if e == nil || e.perasAuthority == nil {
+func (e *Executor) admitVisibleAuthority(ctx context.Context, delta compile.SemanticDelta) error {
+	if e == nil || e.visibleAuthority == nil {
 		return nil
 	}
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.perasAdmission.recordSlow(delta.SlowReason)
+		e.visibleAdmission.recordSlow(delta.SlowReason)
 		return nil
 	}
-	e.perasAdmission.eligibleTotal.Add(1)
-	if e.perasCommitter != nil {
+	e.visibleAdmission.eligibleTotal.Add(1)
+	if e.visibleCommitter != nil {
 		return nil
 	}
-	e.perasAdmission.acquireTotal.Add(1)
-	owned, err := e.perasAuthority.AcquirePerasAuthority(ctx, delta.Authority)
+	e.visibleAdmission.acquireTotal.Add(1)
+	owned, err := e.visibleAuthority.AcquireVisibleAuthority(ctx, delta.Authority)
 	if err != nil {
-		e.perasAdmission.errorTotal.Add(1)
+		e.visibleAdmission.errorTotal.Add(1)
 		return nil
 	}
 	if !owned {
-		e.perasAdmission.heldTotal.Add(1)
+		e.visibleAdmission.heldTotal.Add(1)
 		return nil
 	}
-	e.perasAdmission.ownedTotal.Add(1)
+	e.visibleAdmission.ownedTotal.Add(1)
 	return nil
 }
 
-func (e *Executor) tryPerasVisibleCommit(ctx context.Context, op compile.MaterializedOp) (bool, error) {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) tryVisibleCommit(ctx context.Context, op compile.MaterializedOp) (bool, error) {
+	if e == nil || e.visibleCommitter == nil {
 		return false, nil
 	}
-	if e.perasAuthority == nil {
-		e.perasVisible.skipNoAuthorityTotal.Add(1)
+	if e.visibleAuthority == nil {
+		e.visibleCommit.skipNoAuthorityTotal.Add(1)
 		return false, nil
 	}
 	delta := op.Delta
 	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.perasVisible.skipIneligibleTotal.Add(1)
+		e.visibleCommit.skipIneligibleTotal.Add(1)
 		return false, nil
 	}
 	if op.Placement.RequiresMaterialize {
-		e.perasVisible.skipNonConcreteTotal.Add(1)
+		e.visibleCommit.skipNonConcreteTotal.Add(1)
 		return false, nil
 	}
 	if !op.Placement.CanSegment {
-		e.perasVisible.skipPlacementTotal.Add(1)
+		e.visibleCommit.skipPlacementTotal.Add(1)
 		return false, nil
 	}
-	id := e.nextPerasOperationID(delta.Kind)
-	e.perasVisible.attemptTotal.Add(1)
+	id := e.nextVisibleOperationID(delta.Kind)
+	e.visibleCommit.attemptTotal.Add(1)
 	start := time.Now()
-	_, err := e.perasCommitter.SubmitVisible(ctx, id, op, e.perasPredicatesHold)
+	_, err := e.visibleCommitter.SubmitVisible(ctx, id, op, e.visiblePredicatesHold)
 	latency := uint64(time.Since(start).Nanoseconds())
-	e.perasVisible.latencyTotalNanosecond.Add(latency)
-	recordUint64Max(&e.perasVisible.latencyMaxNanosecond, latency)
+	e.visibleCommit.latencyTotalNanosecond.Add(latency)
+	recordUint64Max(&e.visibleCommit.latencyMaxNanosecond, latency)
 	if err != nil {
-		if errors.Is(err, fsperas.ErrAdmissionRejected) ||
-			errors.Is(err, fsperas.ErrIneligibleOperation) ||
-			errors.Is(err, errPerasAuthorityNotHeld) ||
+		if errors.Is(err, ErrVisibleAdmissionRejected) ||
+			errors.Is(err, ErrVisibleIneligibleOperation) ||
+			errors.Is(err, errVisibleAuthorityNotHeld) ||
 			nokverrors.KindOf(err) == nokverrors.KindNotLeader {
-			e.perasVisible.skipPredicateTotal.Add(1)
+			e.visibleCommit.skipPredicateTotal.Add(1)
 			return false, nil
 		}
-		if isPerasAdmissionTerminalError(err) {
-			e.perasVisible.skipPredicateTotal.Add(1)
+		if isVisibleAdmissionTerminalError(err) {
+			e.visibleCommit.skipPredicateTotal.Add(1)
 			return true, err
 		}
-		e.perasVisible.errorTotal.Add(1)
+		e.visibleCommit.errorTotal.Add(1)
 		return true, err
 	}
-	e.perasVisible.successTotal.Add(1)
+	e.visibleCommit.successTotal.Add(1)
 	return true, nil
 }
 
-func (e *Executor) tryPerasVisibleCommitAfterRead(ctx context.Context, view *perasReadView, op compile.MaterializedOp) (bool, error) {
-	committed, err := e.tryPerasVisibleCommit(ctx, op)
+func (e *Executor) tryVisibleCommitAfterRead(ctx context.Context, view *visibleReadView, op compile.MaterializedOp) (bool, error) {
+	committed, err := e.tryVisibleCommit(ctx, op)
 	if err != nil || committed {
 		return committed, err
 	}
-	if view.observedPerasOverlay() {
-		return false, errPerasOverlayFallbackUnsafe
+	if view.observedVisibleOverlay() {
+		return false, errVisibleOverlayFallbackUnsafe
 	}
 	return false, nil
 }
 
-func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.MaterializedOp, admissionCtx fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
+func (e *Executor) visiblePredicatesHold(ctx context.Context, op compile.MaterializedOp, admissionCtx VisibleAdmissionContext) (VisibleAdmissionResult, bool, error) {
 	delta := op.Delta
-	if !perasPredicateProofsValid(op.PredicateProofs) {
-		return fsperas.AdmissionResult{}, false, nil
+	if !visiblePredicateProofsValid(op.PredicateProofs) {
+		return VisibleAdmissionResult{}, false, nil
 	}
 	frontier := admissionCtx.ProofFrontier
 	proofs := make([]proof.PredicateProof, 0, len(delta.ReadPredicates))
 	if len(delta.ReadPredicates) == 0 {
-		return e.perasAdmissionResult(op, proofs)
+		return e.visibleAdmissionResult(op, proofs)
 	}
-	index := e.perasPredicateIndex()
+	index := e.visiblePredicateIndex()
 	var version uint64
 	var haveVersion bool
 	read := func(key []byte) ([]byte, bool, proof.ReadSource, uint64, error) {
-		if value, deleted, ok := e.perasOverlayGet(key); ok {
+		if value, deleted, ok := e.visibleOverlayGet(key); ok {
 			if deleted {
 				return nil, false, proof.ReadSourceOverlay, 0, nil
 			}
@@ -139,7 +138,7 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 				present, known := index.KeyState(predicate.Key)
 				if known {
 					if !present {
-						return fsperas.AdmissionResult{}, false, fsmeta.ErrNotFound
+						return VisibleAdmissionResult{}, false, fsmeta.ErrNotFound
 					}
 					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, true, 0, proof.ReadSourceOverlay, frontier))
 					continue
@@ -147,10 +146,10 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 			}
 			value, ok, source, proofVersion, err := read(predicate.Key)
 			if err != nil {
-				return fsperas.AdmissionResult{}, false, err
+				return VisibleAdmissionResult{}, false, err
 			}
 			if !ok {
-				return fsperas.AdmissionResult{}, false, fsmeta.ErrNotFound
+				return VisibleAdmissionResult{}, false, fsmeta.ErrNotFound
 			}
 			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicateNotExists:
@@ -158,59 +157,59 @@ func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.Materiali
 				present, known := index.KeyState(predicate.Key)
 				if known {
 					if present {
-						return fsperas.AdmissionResult{}, false, fsmeta.ErrExists
+						return VisibleAdmissionResult{}, false, fsmeta.ErrExists
 					}
 					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 					continue
 				}
-				if e.perasNotExistsKnown(delta.Authority, predicate.Key, index) ||
-					perasNotExistsDerivedFromDelta(delta, predicate, index) {
+				if e.visibleNotExistsKnown(delta.Authority, predicate.Key, index) ||
+					visibleNotExistsDerivedFromDelta(delta, predicate, index) {
 					proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, frontier))
 					continue
 				}
 			}
 			_, ok, source, proofVersion, err := read(predicate.Key)
 			if err != nil {
-				return fsperas.AdmissionResult{}, false, err
+				return VisibleAdmissionResult{}, false, err
 			}
 			if ok {
-				return fsperas.AdmissionResult{}, false, fsmeta.ErrExists
+				return VisibleAdmissionResult{}, false, fsmeta.ErrExists
 			}
 			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicateObservedValue:
 			if !predicate.HasExpectedValue {
-				return fsperas.AdmissionResult{}, false, nil
+				return VisibleAdmissionResult{}, false, nil
 			}
-			if value, deleted, ok := e.perasOverlayGet(predicate.Key); ok {
+			if value, deleted, ok := e.visibleOverlayGet(predicate.Key); ok {
 				if deleted || !bytes.Equal(value, predicate.ExpectedValue) {
-					return fsperas.AdmissionResult{}, false, nil
+					return VisibleAdmissionResult{}, false, nil
 				}
 				proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, 0, proof.ReadSourceOverlay, frontier))
 				continue
 			}
 			value, ok, source, proofVersion, err := read(predicate.Key)
 			if err != nil {
-				return fsperas.AdmissionResult{}, false, err
+				return VisibleAdmissionResult{}, false, err
 			}
 			if !ok || !bytes.Equal(value, predicate.ExpectedValue) {
-				return fsperas.AdmissionResult{}, false, nil
+				return VisibleAdmissionResult{}, false, nil
 			}
 			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, value, true, proofVersion, source, proofFrontierForSource(source, frontier)))
 		case compile.PredicatePrefixScan:
-			return fsperas.AdmissionResult{}, false, nil
+			return VisibleAdmissionResult{}, false, nil
 		default:
-			return fsperas.AdmissionResult{}, false, nil
+			return VisibleAdmissionResult{}, false, nil
 		}
 	}
-	return e.perasAdmissionResult(op, proofs)
+	return e.visibleAdmissionResult(op, proofs)
 }
 
-func (e *Executor) perasAdmissionResult(op compile.MaterializedOp, proofs []proof.PredicateProof) (fsperas.AdmissionResult, bool, error) {
+func (e *Executor) visibleAdmissionResult(op compile.MaterializedOp, proofs []proof.PredicateProof) (VisibleAdmissionResult, bool, error) {
 	guardProofs, err := compile.GuardProofsFor(op.CompiledOp, proofs, op.Delta.RuntimeGuards)
 	if err != nil {
-		return fsperas.AdmissionResult{}, false, nil
+		return VisibleAdmissionResult{}, false, nil
 	}
-	return fsperas.AdmissionResult{
+	return VisibleAdmissionResult{
 		PredicateProofs: proofs,
 		GuardProofs:     guardProofs,
 	}, true, nil
@@ -223,7 +222,7 @@ func proofFrontierForSource(source proof.ReadSource, frontier proof.ProofFrontie
 	return proof.ProofFrontier{}
 }
 
-func perasPredicateProofsValid(proofs []proof.PredicateProof) bool {
+func visiblePredicateProofsValid(proofs []proof.PredicateProof) bool {
 	for _, predicateProof := range proofs {
 		if err := proof.VerifyPredicateProof(predicateProof); err != nil {
 			return false
@@ -232,19 +231,19 @@ func perasPredicateProofsValid(proofs []proof.PredicateProof) bool {
 	return true
 }
 
-func (e *Executor) perasPredicateIndex() fsperas.PredicateIndex {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) visiblePredicateIndex() VisiblePredicateIndex {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
-	index, ok := e.perasCommitter.(fsperas.PredicateIndex)
+	index, ok := e.visibleCommitter.(VisiblePredicateIndex)
 	if !ok {
 		return nil
 	}
 	return index
 }
 
-func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.OperationPlan, inode fsmeta.InodeRecord) {
-	index := e.perasPredicateIndex()
+func (e *Executor) rememberVisibleCreate(mount fsmeta.MountIdentity, plan fsmeta.OperationPlan, inode fsmeta.InodeRecord) {
+	index := e.visiblePredicateIndex()
 	if index == nil {
 		return
 	}
@@ -265,27 +264,27 @@ func (e *Executor) rememberPerasCreate(mount fsmeta.MountIdentity, plan fsmeta.O
 	index.RememberEmptySessionNamespace(mount, inode.Inode)
 }
 
-type perasEmptyDirectoryForgetter interface {
+type visibleEmptyDirectoryForgetter interface {
 	ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID)
 }
 
-func (e *Executor) forgetPerasEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
-	index := e.perasPredicateIndex()
+func (e *Executor) forgetVisibleEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+	index := e.visiblePredicateIndex()
 	if index == nil {
 		return
 	}
-	forgetter, ok := index.(perasEmptyDirectoryForgetter)
+	forgetter, ok := index.(visibleEmptyDirectoryForgetter)
 	if !ok {
 		return
 	}
 	forgetter.ForgetEmptyDirectory(mount, inode)
 }
 
-func perasDeltaAllowsAbsentObservedValue(delta compile.SemanticDelta) bool {
+func visibleDeltaAllowsAbsentObservedValue(delta compile.SemanticDelta) bool {
 	return slices.Contains(delta.RuntimeGuards, compile.GuardExpiredSessionOwner)
 }
 
-func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compile.Predicate, index fsperas.PredicateIndex) bool {
+func visibleNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compile.Predicate, index VisiblePredicateIndex) bool {
 	if delta.Kind != fsmeta.OperationCreate || len(delta.Plan.MutateKeys) < 2 {
 		return false
 	}
@@ -301,7 +300,7 @@ func perasNotExistsDerivedFromDelta(delta compile.SemanticDelta, predicate compi
 	}, delta.Authority.Parents[0])
 }
 
-func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte, index fsperas.PredicateIndex) bool {
+func (e *Executor) visibleNotExistsKnown(scope compile.AuthorityScope, key []byte, index VisiblePredicateIndex) bool {
 	if index == nil || len(key) == 0 || scope.Mount == "" || scope.MountKeyID == 0 {
 		return false
 	}
@@ -328,7 +327,7 @@ func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte,
 	}, parts.Parent)
 }
 
-func isPerasAdmissionTerminalError(err error) bool {
+func isVisibleAdmissionTerminalError(err error) bool {
 	return errors.Is(err, fsmeta.ErrExists) ||
 		errors.Is(err, fsmeta.ErrNotFound) ||
 		errors.Is(err, fsmeta.ErrInvalidRequest) ||

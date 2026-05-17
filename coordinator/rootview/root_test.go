@@ -30,8 +30,8 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f fakeLoadStore) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+func (f fakeLoadStore) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
 }
 func (f fakeLoadStore) Refresh() error            { return nil }
 func (f fakeLoadStore) CanSubmitRootWrites() bool { return true }
@@ -39,31 +39,31 @@ func (f fakeLoadStore) LeaderID() uint64          { return 1 }
 func (f fakeLoadStore) Close() error              { return nil }
 
 type fakeRootBackend struct {
-	snapshot            rootstate.Snapshot
-	observed            rootstorage.ObservedCommitted
-	useObserved         bool
-	tailAdvance         rootstorage.TailAdvance
-	waitAdvance         rootstorage.TailAdvance
-	appendErr           error
-	fenceErr            error
-	refreshErr          error
-	observeErr          error
-	waitErr             error
-	observeCommittedErr error
-	applyGrantErr       error
-	snapshotErr         error
-	refreshCount        int
-	appendCalls         int
-	fenceCalls          []rootstate.AllocatorKind
-	closeCalled         bool
-	isLeader            bool
-	leaderID            uint64
-	tailNotifyCh        chan struct{}
-	applyGrantResult    rootstate.EunomiaState
-	applyGrantCert      rootproto.GrantCertificate
-	applyPerasErr       error
-	applyPerasResult    rootstate.State
-	applyPerasGrant     rootproto.PerasAuthorityGrant
+	snapshot                    rootstate.Snapshot
+	observed                    rootstorage.ObservedCommitted
+	useObserved                 bool
+	tailAdvance                 rootstorage.TailAdvance
+	waitAdvance                 rootstorage.TailAdvance
+	appendErr                   error
+	fenceErr                    error
+	refreshErr                  error
+	observeErr                  error
+	waitErr                     error
+	observeCommittedErr         error
+	applyGrantErr               error
+	snapshotErr                 error
+	refreshCount                int
+	appendCalls                 int
+	fenceCalls                  []rootstate.AllocatorKind
+	closeCalled                 bool
+	isLeader                    bool
+	leaderID                    uint64
+	tailNotifyCh                chan struct{}
+	applyGrantResult            rootstate.EunomiaState
+	applyGrantCert              rootproto.GrantCertificate
+	applyVisibleAuthorityErr    error
+	applyVisibleAuthorityResult rootstate.State
+	applyVisibleGrant           rootproto.VisibleAuthorityGrant
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -169,16 +169,16 @@ func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand
 	return f.applyGrantResult, f.applyGrantCert, nil
 }
 
-func (f *fakeRootBackend) ApplyPerasAuthority(_ context.Context, _ rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	if f.applyPerasErr != nil {
-		return f.applyPerasResult, rootproto.PerasAuthorityGrant{}, f.applyPerasErr
+func (f *fakeRootBackend) ApplyVisibleAuthority(_ context.Context, _ rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	if f.applyVisibleAuthorityErr != nil {
+		return f.applyVisibleAuthorityResult, rootproto.VisibleAuthorityGrant{}, f.applyVisibleAuthorityErr
 	}
-	f.snapshot.State.ActivePerasGrants = clonePerasAuthorityGrants(f.applyPerasResult.ActivePerasGrants)
-	f.snapshot.State.PerasAuthorityEpoch = f.applyPerasResult.PerasAuthorityEpoch
+	f.snapshot.State.ActiveVisibleGrants = cloneVisibleAuthorityGrants(f.applyVisibleAuthorityResult.ActiveVisibleGrants)
+	f.snapshot.State.VisibleAuthorityEpoch = f.applyVisibleAuthorityResult.VisibleAuthorityEpoch
 	if f.useObserved {
 		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
 	}
-	return f.applyPerasResult, f.applyPerasGrant, nil
+	return f.applyVisibleAuthorityResult, f.applyVisibleGrant, nil
 }
 
 func (f *fakeRootBackend) Close() error {
@@ -602,79 +602,79 @@ func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *test
 	require.Equal(t, uint64(3), loaded.ActiveGrants[0].Era)
 }
 
-func TestRootStoreMergesPerasAuthorityStateFromHeldRejection(t *testing.T) {
+func TestRootStoreMergesVisibleAuthorityStateFromHeldRejection(t *testing.T) {
 	stale := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			ActivePerasGrants: []rootproto.PerasAuthorityGrant{
-				testRootviewPerasGrant("peras-stale", 1),
+			ActiveVisibleGrants: []rootproto.VisibleAuthorityGrant{
+				testRootviewVisibleGrant("visible-stale", 1),
 			},
-			PerasAuthorityEpoch: 1,
+			VisibleAuthorityEpoch: 1,
 		},
 	}
-	authoritativeGrant := testRootviewPerasGrant("peras-held", 2)
+	authoritativeGrant := testRootviewVisibleGrant("visible-held", 2)
 	authoritativeGrant.EpochID = 2
 	authoritativeGrant.HolderID = "holder-b"
 	authoritative := rootstate.State{
-		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{authoritativeGrant},
-		PerasAuthorityEpoch: authoritativeGrant.EpochID,
+		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{authoritativeGrant},
+		VisibleAuthorityEpoch: authoritativeGrant.EpochID,
 	}
 	fake := &fakeRootBackend{
-		snapshot:         stale,
-		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
-		useObserved:      true,
-		isLeader:         true,
-		applyPerasErr:    rootstate.ErrPrimacy,
-		applyPerasResult: authoritative,
+		snapshot:                    stale,
+		observed:                    rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:                 true,
+		isLeader:                    true,
+		applyVisibleAuthorityErr:    rootstate.ErrPrimacy,
+		applyVisibleAuthorityResult: authoritative,
 	}
 	store, err := OpenRootStore(fake)
 	require.NoError(t, err)
 
-	state, _, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{Kind: rootproto.PerasAuthorityActAcquire})
+	state, _, err := store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{Kind: rootproto.VisibleAuthorityActAcquire})
 	require.ErrorIs(t, err, rootstate.ErrPrimacy)
 	require.Equal(t, authoritative, state)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "holder-b", loaded.ActivePerasGrants[0].HolderID)
-	require.Equal(t, uint64(2), loaded.PerasAuthorityEpoch)
+	require.Equal(t, "holder-b", loaded.ActiveVisibleGrants[0].HolderID)
+	require.Equal(t, uint64(2), loaded.VisibleAuthorityEpoch)
 }
 
-func TestRootStorePreservesAppliedPerasAuthorityAcrossStaleObservedReload(t *testing.T) {
-	staleGrant := testRootviewPerasGrant("peras-stale", 1)
+func TestRootStorePreservesAppliedVisibleAuthorityAcrossStaleObservedReload(t *testing.T) {
+	staleGrant := testRootviewVisibleGrant("visible-stale", 1)
 	staleGrant.EpochID = 1
 	stale := rootstate.Snapshot{
 		State: rootstate.State{
-			LastCommitted:       rootstate.Cursor{Term: 1, Index: 10},
-			ActivePerasGrants:   []rootproto.PerasAuthorityGrant{staleGrant},
-			PerasAuthorityEpoch: staleGrant.EpochID,
+			LastCommitted:         rootstate.Cursor{Term: 1, Index: 10},
+			ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{staleGrant},
+			VisibleAuthorityEpoch: staleGrant.EpochID,
 		},
 	}
-	appliedGrant := testRootviewPerasGrant("peras-applied", 3)
+	appliedGrant := testRootviewVisibleGrant("visible-applied", 3)
 	appliedGrant.EpochID = 3
 	appliedGrant.HolderID = "holder-c"
 	applied := rootstate.State{
-		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{appliedGrant},
-		PerasAuthorityEpoch: appliedGrant.EpochID,
+		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{appliedGrant},
+		VisibleAuthorityEpoch: appliedGrant.EpochID,
 	}
 	fake := &fakeRootBackend{
-		snapshot:         stale,
-		observed:         rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
-		useObserved:      true,
-		isLeader:         true,
-		applyPerasResult: applied,
-		applyPerasGrant:  appliedGrant,
+		snapshot:                    stale,
+		observed:                    rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
+		useObserved:                 true,
+		isLeader:                    true,
+		applyVisibleAuthorityResult: applied,
+		applyVisibleGrant:           appliedGrant,
 	}
 	store, err := OpenRootStore(fake)
 	require.NoError(t, err)
 
-	state, grant, err := store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{Kind: rootproto.PerasAuthorityActAcquire})
+	state, grant, err := store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{Kind: rootproto.VisibleAuthorityActAcquire})
 	require.NoError(t, err)
 	require.Equal(t, applied, state)
 	require.Equal(t, appliedGrant, grant)
 	loaded, err := store.Load()
 	require.NoError(t, err)
-	require.Equal(t, "holder-c", loaded.ActivePerasGrants[0].HolderID)
-	require.Equal(t, uint64(3), loaded.PerasAuthorityEpoch)
+	require.Equal(t, "holder-c", loaded.ActiveVisibleGrants[0].HolderID)
+	require.Equal(t, uint64(3), loaded.VisibleAuthorityEpoch)
 }
 
 func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
@@ -817,7 +817,7 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
 	require.ErrorIs(t, err, errGrantCommandUnsupported)
 
-	_, _, err = store.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{})
+	_, _, err = store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{})
 	require.ErrorIs(t, err, errGrantCommandUnsupported)
 }
 

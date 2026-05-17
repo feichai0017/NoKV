@@ -95,7 +95,7 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 }
 
 // Publish fans one key event out to matching subscribers. Durable storage
-// events are kept for resume replay; Peras visible events are live-only because
+// events are kept for resume replay; visible events are live-only because
 // their replay boundary is the later durable segment frontier.
 func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	if r == nil || len(evt.Key) == 0 {

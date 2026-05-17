@@ -87,9 +87,9 @@ func main() {
 		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
 		experimentalPeras               = flag.Bool("experimental-peras", false, "enable the experimental Peras visible-commit runtime for --backend=raftstore")
 		perasHolderID                   = flag.String("peras-holder-id", "", "Peras holder id; empty derives a stable local holder id")
-		perasAuthorityTTL               = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
-		perasWitnessStores              = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
-		perasWitnessQuorum              = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
+		visibleAuthorityTTL             = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
+		segmentWitnessStores            = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
+		segmentWitnessQuorum            = flag.Int("peras-witness-quorum", 0, "Peras witness quorum; zero uses majority")
 		perasSegmentWitnessRetries      = flag.Int("peras-segment-witness-retries", 3, "Peras segment witness retries for transient authority lag")
 		perasSegmentWitnessRetryBackoff = flag.Duration("peras-segment-witness-retry-backoff", 20*time.Millisecond, "Peras segment witness retry backoff")
 		perasSegmentBatchSize           = flag.Int("peras-segment-batch-size", 0, "Peras pending visible operations that trigger background flush; zero uses runtime default")
@@ -118,13 +118,13 @@ func main() {
 		fatalf("session-cleanup-limit exceeds maximum %d", fsmeta.MaxSessionExpireLimit)
 		return
 	}
-	if *perasAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *perasWitnessQuorum < 0 ||
+	if *visibleAuthorityTTL < 0 || *perasSegmentWitnessRetryBackoff < 0 || *perasSegmentWitnessRetries < 0 || *segmentWitnessQuorum < 0 ||
 		*perasSegmentBatchSize < 0 || *perasAdmissionPendingLimit < 0 || *perasSegmentMaxReplayMutations < 0 || *perasSegmentCatalogRouteBudget < 0 || *perasSegmentInstallParallelism < 0 || *perasSegmentFlushParallelism < 0 || *perasSegmentFlushEvery < 0 ||
 		*perasBackgroundFlushTimeout < 0 || *perasBackgroundErrorBackoff < 0 {
 		fatalf("peras options must be non-negative")
 		return
 	}
-	perasStoreIDs, err := parseUintList(*perasWitnessStores)
+	perasStoreIDs, err := parseUintList(*segmentWitnessStores)
 	if err != nil {
 		fatalf("parse peras-witness-stores: %v", err)
 		return
@@ -154,9 +154,9 @@ func main() {
 		}
 		extension = perasfsmeta.NewExtension(perasfsmeta.Config{
 			HolderID:                   holderID,
-			AuthorityTTL:               *perasAuthorityTTL,
+			AuthorityTTL:               *visibleAuthorityTTL,
 			WitnessStoreIDs:            perasStoreIDs,
-			WitnessQuorum:              *perasWitnessQuorum,
+			WitnessQuorum:              *segmentWitnessQuorum,
 			SegmentWitnessRetries:      *perasSegmentWitnessRetries,
 			SegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
 			SegmentBatchSize:           *perasSegmentBatchSize,

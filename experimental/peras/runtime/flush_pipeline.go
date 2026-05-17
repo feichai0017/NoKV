@@ -387,9 +387,9 @@ func verifySegmentInstallBeforeSeal(job perasFlushJob) error {
 	return nil
 }
 
-func (c *Runtime) grantForEpoch(epochID uint64) (rootproto.PerasAuthorityGrant, bool) {
+func (c *Runtime) grantForEpoch(epochID uint64) (rootproto.VisibleAuthorityGrant, bool) {
 	if c == nil || c.epochs == nil {
-		return rootproto.PerasAuthorityGrant{}, false
+		return rootproto.VisibleAuthorityGrant{}, false
 	}
 	return c.epochs.grant(epochID)
 }

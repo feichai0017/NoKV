@@ -66,15 +66,15 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	requireAtomicStatUint(t, executor.Stats(), fsmeta.OperationUpdateInode, "skip_total", 1)
 }
 
-func TestExecutorUpdateInodePerasVisibleCommitReadsCreateOverlay(t *testing.T) {
+func TestExecutorUpdateInodeVisibleCommitReadsCreateOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	inode := testInodeForParentBucket(t, 7)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -107,14 +107,14 @@ func TestExecutorUpdateInodePerasVisibleCommitReadsCreateOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, updated, stored)
-	require.Empty(t, runner.mutations, "create+update should stay inside Peras overlay")
+	require.Empty(t, runner.mutations, "create+update should stay inside visible overlay")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
-	requirePerasVisibleStatUint(t, stats, "success_total", 2)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 2)
+	requireVisibleCommitStatUint(t, stats, "success_total", 2)
 }
 
-func TestExecutorUpdateInodePerasRechecksObservedValue(t *testing.T) {
+func TestExecutorUpdateInodeVisibleRechecksObservedValue(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{
@@ -124,7 +124,7 @@ func TestExecutorUpdateInodePerasRechecksObservedValue(t *testing.T) {
 		Size:      1024,
 	})
 	changed := false
-	committer := &fakePerasCommitter{
+	committer := &fakeVisibleCommitter{
 		beforeAdmission: func() {
 			if changed {
 				return
@@ -140,8 +140,8 @@ func TestExecutorUpdateInodePerasRechecksObservedValue(t *testing.T) {
 	}
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -156,9 +156,9 @@ func TestExecutorUpdateInodePerasRechecksObservedValue(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, uint64(2048), updated.Size)
-	require.Zero(t, committer.calls, "stale observed value must reject the Peras admission before commit")
-	require.Len(t, runner.mutations, 1, "rejected Peras admission should fall back to the ordinary transaction path")
-	requirePerasVisibleStatUint(t, executor.Stats(), "skip_predicate_total", 1)
+	require.Zero(t, committer.calls, "stale observed value must reject the visible admission before commit")
+	require.Len(t, runner.mutations, 1, "rejected visible admission should fall back to the ordinary transaction path")
+	requireVisibleCommitStatUint(t, executor.Stats(), "skip_predicate_total", 1)
 }
 
 func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
@@ -256,12 +256,12 @@ func BenchmarkExecutorUpdateInodeDefaultPath(b *testing.B) {
 	benchmarkExecutorUpdateInode(b, runner, executor)
 }
 
-func BenchmarkExecutorUpdateInodePerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorUpdateInodeVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

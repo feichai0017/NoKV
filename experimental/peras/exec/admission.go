@@ -22,7 +22,7 @@ type AdmissionContext struct {
 type AdmissionFunc func(context.Context, compile.MaterializedOp, AdmissionContext) (AdmissionResult, bool, error)
 
 type AuthorityRetirer interface {
-	RetirePerasAuthority(context.Context, ...compile.AuthorityScope) error
+	RetireVisibleAuthority(context.Context, ...compile.AuthorityScope) error
 }
 
 func Admit(ctx context.Context, op compile.MaterializedOp, fn AdmissionFunc, admissionCtx AdmissionContext) error {

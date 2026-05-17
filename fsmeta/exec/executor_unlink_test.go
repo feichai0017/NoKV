@@ -90,16 +90,16 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	require.Equal(t, uint32(1), inode.LinkCount)
 }
 
-func TestExecutorUnlinkPerasVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorUnlinkVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 2})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -116,16 +116,16 @@ func TestExecutorUnlinkPerasVisibleCommitServesOverlay(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkLastReferencePerasVisibleCommitDeletesInode(t *testing.T) {
+func TestExecutorUnlinkLastReferenceVisibleCommitDeletesInode(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -141,16 +141,16 @@ func TestExecutorUnlinkLastReferencePerasVisibleCommitDeletesInode(t *testing.T)
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkRejectsDirectoryBeforePerasVisibleCommit(t *testing.T) {
+func TestExecutorUnlinkRejectsDirectoryBeforeVisibleCommit(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7)
 	seedDentryType(t, runner, "vol", 7, "dir", inode, fsmeta.InodeTypeDirectory)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeDirectory, Mode: 0o755, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -198,12 +198,12 @@ func BenchmarkExecutorUnlinkDefaultPath(b *testing.B) {
 	benchmarkExecutorUnlink(b, runner, executor)
 }
 
-func BenchmarkExecutorUnlinkPerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorUnlinkVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

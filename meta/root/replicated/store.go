@@ -307,7 +307,7 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootstate.NextCursor(snapshot.State.LastCommitted)
-		evt = rootstate.NormalizePerasAuthorityEvent(snapshot.State, next, evt)
+		evt = rootstate.NormalizeVisibleAuthorityEvent(snapshot.State, next, evt)
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
@@ -387,49 +387,49 @@ func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (roo
 	}
 }
 
-func (s *Store) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *Store) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	if s == nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
 
 	switch cmd.Kind {
-	case rootproto.PerasAuthorityActAcquire:
-		return s.acquirePerasAuthorityLocked(ctx, cmd)
-	case rootproto.PerasAuthorityActRetire:
-		return s.retirePerasAuthorityLocked(ctx, cmd)
-	case rootproto.PerasAuthorityActSeal:
-		return s.sealPerasAuthorityLocked(ctx, cmd)
+	case rootproto.VisibleAuthorityActAcquire:
+		return s.acquireVisibleAuthorityLocked(ctx, cmd)
+	case rootproto.VisibleAuthorityActRetire:
+		return s.retireVisibleAuthorityLocked(ctx, cmd)
+	case rootproto.VisibleAuthorityActSeal:
+		return s.sealVisibleAuthorityLocked(ctx, cmd)
 	default:
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
 }
 
-func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *Store) acquireVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	request := rootproto.PerasAuthorityGrant{
+	request := rootproto.VisibleAuthorityGrant{
 		GrantID:         "request",
 		EpochID:         1,
 		HolderID:        holderID,
-		Scope:           rootproto.ClonePerasAuthorityScope(cmd.Scope),
+		Scope:           rootproto.CloneVisibleAuthorityScope(cmd.Scope),
 		ExpiresUnixNano: cmd.ExpiresUnixNano,
 	}
 	requestedGrantID := strings.TrimSpace(cmd.GrantID)
 	if requestedGrantID != "" {
-		if active, ok := activePerasGrantByID(s.state.ActivePerasGrants, requestedGrantID); ok &&
+		if active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, requestedGrantID); ok &&
 			active.HolderID == holderID &&
 			active.ActiveAt(cmd.NowUnixNano) &&
 			active.Covers(cmd.Scope, cmd.NowUnixNano) {
@@ -437,113 +437,113 @@ func (s *Store) acquirePerasAuthorityLocked(ctx context.Context, cmd rootproto.P
 		}
 	}
 
-	var renewal rootproto.PerasAuthorityGrant
-	for _, active := range s.state.ActivePerasGrants {
+	var renewal rootproto.VisibleAuthorityGrant
+	for _, active := range s.state.ActiveVisibleGrants {
 		if !active.Overlaps(request) {
 			continue
 		}
-		// Peras authority TTL is an admission freshness bound, not proof that
+		// Visible authority TTL is an admission freshness bound, not proof that
 		// the holder's visible overlay has been durably drained. Keep overlapping
 		// grants rooted until the holder explicitly retires them; otherwise old
 		// pending segments can be cut off by a newer epoch and fail witness
 		// authority checks.
 		if active.HolderID != holderID {
-			return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+			return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 		}
 		if active.ActiveAt(cmd.NowUnixNano) &&
 			active.Covers(cmd.Scope, cmd.NowUnixNano) &&
 			cmd.ExpiresUnixNano <= active.ExpiresUnixNano {
-			return rootstate.CloneState(s.state), rootproto.ClonePerasAuthorityGrant(active), nil
+			return rootstate.CloneState(s.state), rootproto.CloneVisibleAuthorityGrant(active), nil
 		}
 		if !renewal.Valid() {
-			renewal = rootproto.ClonePerasAuthorityGrant(active)
+			renewal = rootproto.CloneVisibleAuthorityGrant(active)
 		}
 	}
 	if renewal.Valid() {
-		renewal.Scope = mergePerasAuthorityScopes(renewal.Scope, cmd.Scope)
+		renewal.Scope = mergeVisibleAuthorityScopes(renewal.Scope, cmd.Scope)
 		if cmd.ExpiresUnixNano > renewal.ExpiresUnixNano {
 			renewal.ExpiresUnixNano = cmd.ExpiresUnixNano
 		}
-		commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(renewal))
+		commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityGranted(renewal))
 		if err != nil {
-			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+			return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 		}
-		committed, ok := commit.State.ActivePerasGrantByID(renewal.GrantID)
+		committed, ok := commit.State.ActiveVisibleGrantByID(renewal.GrantID)
 		if !ok || !committed.Covers(cmd.Scope, cmd.NowUnixNano) {
-			return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrFinality
+			return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrFinality
 		}
 		return rootstate.CloneState(commit.State), committed, nil
 	}
 
-	epoch := s.state.PerasAuthorityEpoch + 1
+	epoch := s.state.VisibleAuthorityEpoch + 1
 	grantID := requestedGrantID
-	if grantID == "" || activePerasGrantIDExists(s.state.ActivePerasGrants, grantID) {
+	if grantID == "" || activeVisibleGrantIDExists(s.state.ActiveVisibleGrants, grantID) {
 		grantID = fmt.Sprintf("%s/%d", holderID, epoch)
 	}
-	grant := rootproto.PerasAuthorityGrant{
+	grant := rootproto.VisibleAuthorityGrant{
 		GrantID:           grantID,
 		EpochID:           epoch,
 		HolderID:          holderID,
-		Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
+		Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
 		ExpiresUnixNano:   cmd.ExpiresUnixNano,
 		QuotaCreditBytes:  cmd.QuotaCreditBytes,
 		QuotaCreditInodes: cmd.QuotaCreditInodes,
 	}
 	grant.PredecessorDigest = cmd.PredecessorDigest
 	if grant.PredecessorDigest == ([32]byte{}) {
-		if predecessor, ok := s.state.LatestPerasAuthoritySealFor(cmd.Scope); ok {
+		if predecessor, ok := s.state.LatestVisibleAuthoritySealFor(cmd.Scope); ok {
 			grant.PredecessorDigest = predecessor.SegmentRoot
 		}
 	}
-	commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityGranted(grant))
+	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityGranted(grant))
 	if err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
-	committed, ok := commit.State.ActivePerasGrantByID(grantID)
+	committed, ok := commit.State.ActiveVisibleGrantByID(grantID)
 	if !ok {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrFinality
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrFinality
 	}
 	return rootstate.CloneState(commit.State), committed, nil
 }
 
-func (s *Store) retirePerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *Store) retireVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	grantID := strings.TrimSpace(cmd.GrantID)
 	if holderID == "" || grantID == "" {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	active, ok := activePerasGrantByID(s.state.ActivePerasGrants, grantID)
+	active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, grantID)
 	if !ok {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, nil
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, nil
 	}
 	if active.HolderID != holderID {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 	}
-	commit, err := s.appendLocked(ctx, rootevent.PerasAuthorityRetired(active))
+	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityRetired(active))
 	if err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
-	return rootstate.CloneState(commit.State), rootproto.PerasAuthorityGrant{}, nil
+	return rootstate.CloneState(commit.State), rootproto.VisibleAuthorityGrant{}, nil
 }
 
-func (s *Store) sealPerasAuthorityLocked(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *Store) sealVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	holderID := strings.TrimSpace(cmd.HolderID)
 	grantID := strings.TrimSpace(cmd.GrantID)
 	if holderID == "" || grantID == "" || cmd.NowUnixNano <= 0 {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	active, ok := activePerasGrantByID(s.state.ActivePerasGrants, grantID)
+	active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, grantID)
 	if !ok {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 	}
 	if active.HolderID != holderID {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 	}
-	seal := rootproto.PerasAuthoritySeal{
+	seal := rootproto.VisibleAuthoritySeal{
 		GrantID:              active.GrantID,
 		EpochID:              active.EpochID,
 		HolderID:             active.HolderID,
-		Scope:                rootproto.ClonePerasAuthorityScope(active.Scope),
+		Scope:                rootproto.CloneVisibleAuthorityScope(active.Scope),
 		SegmentRoot:          cmd.SegmentRoot,
 		SegmentPayloadDigest: cmd.SegmentPayloadDigest,
 		OperationCount:       cmd.OperationCount,
@@ -555,11 +555,11 @@ func (s *Store) sealPerasAuthorityLocked(ctx context.Context, cmd rootproto.Pera
 		InstallVersion:       cmd.InstallVersion,
 	}
 	if !seal.Valid() {
-		return rootstate.CloneState(s.state), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	commit, err := s.appendLocked(ctx, rootevent.PerasAuthoritySealed(seal))
+	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthoritySealed(seal))
 	if err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
 	return rootstate.CloneState(commit.State), active, nil
 }
@@ -668,22 +668,22 @@ func activeGrantIDExists(grants []rootproto.AuthorityGrant, grantID string) bool
 	return ok
 }
 
-func activePerasGrantIDExists(grants []rootproto.PerasAuthorityGrant, grantID string) bool {
-	_, ok := activePerasGrantByID(grants, grantID)
+func activeVisibleGrantIDExists(grants []rootproto.VisibleAuthorityGrant, grantID string) bool {
+	_, ok := activeVisibleGrantByID(grants, grantID)
 	return ok
 }
 
-func activePerasGrantByID(grants []rootproto.PerasAuthorityGrant, grantID string) (rootproto.PerasAuthorityGrant, bool) {
+func activeVisibleGrantByID(grants []rootproto.VisibleAuthorityGrant, grantID string) (rootproto.VisibleAuthorityGrant, bool) {
 	for _, grant := range grants {
 		if grant.GrantID == grantID {
-			return rootproto.ClonePerasAuthorityGrant(grant), true
+			return rootproto.CloneVisibleAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.PerasAuthorityGrant{}, false
+	return rootproto.VisibleAuthorityGrant{}, false
 }
 
-func mergePerasAuthorityScopes(left, right rootproto.PerasAuthorityScope) rootproto.PerasAuthorityScope {
-	out := rootproto.ClonePerasAuthorityScope(left)
+func mergeVisibleAuthorityScopes(left, right rootproto.VisibleAuthorityScope) rootproto.VisibleAuthorityScope {
+	out := rootproto.CloneVisibleAuthorityScope(left)
 	if out.MountID == "" {
 		out.MountID = right.MountID
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 // Config configures the experimental Peras runtime attached to distributed
-// fsmetamodel. A zero Config is invalid; callers must opt in with a holder id and a
+// fsmeta. A zero Config is invalid; callers must opt in with a holder id and a
 // visible log.
 type Config struct {
 	HolderID     string
@@ -113,10 +113,11 @@ func (e *Extension) Attach(ctx context.Context, env stable.ExtensionContext) (*s
 		}
 		return nil, err
 	}
+	executorAdapter := newExecutorAdapter(authority, perasRuntime)
 	return &stable.ExtensionAttachment{
 		ExecutorOptions: []fsmetaexec.Option{
-			fsmetaexec.WithPerasAuthorityAdmitter(authority),
-			fsmetaexec.WithPerasCommitter(perasRuntime),
+			fsmetaexec.WithVisibleAuthorityAdmitter(executorAdapter),
+			fsmetaexec.WithVisibleCommitter(executorAdapter),
 		},
 		Stats: []stable.ExtensionStats{{
 			Name:     "nokv_fsmeta_peras",

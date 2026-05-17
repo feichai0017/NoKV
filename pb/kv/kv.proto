@@ -406,7 +406,7 @@ message ApplyWatchResponse {
   uint64 dropped_events = 2;
 }
 
-message PerasAuthorityScope {
+message VisibleAuthorityScope {
   string mount = 1;
   uint64 mount_key_id = 2;
   repeated uint32 buckets = 3;
@@ -414,7 +414,7 @@ message PerasAuthorityScope {
   repeated uint64 inodes = 5;
 }
 
-message PerasSegmentWitnessRecord {
+message SegmentWitnessRecord {
   uint64 epoch_id = 1;
   bytes segment_root = 2;
   uint64 operation_count = 3;
@@ -428,14 +428,14 @@ message PerasSegmentWitnessRecord {
   bytes predecessor_digest = 11;
 }
 
-message PerasWitnessSegmentsRequest {
-  PerasAuthorityScope scope = 1;
-  repeated PerasSegmentWitnessRecord records = 2;
+message AppendSegmentWitnessRequest {
+  VisibleAuthorityScope scope = 1;
+  repeated SegmentWitnessRecord records = 2;
 }
 
-message PerasWitnessSegmentsResponse {}
+message AppendSegmentWitnessResponse {}
 
-message PerasWitnessProbeRequest {
+message ProbeSegmentWitnessRequest {
   uint64 epoch_id = 1;
   bytes segment_root = 2;
   bytes segment_payload_digest = 3;
@@ -444,8 +444,8 @@ message PerasWitnessProbeRequest {
   bytes after_segment_payload_digest = 6;
 }
 
-message PerasWitnessProbeResponse {
-  repeated PerasSegmentWitnessRecord segments = 1;
+message ProbeSegmentWitnessResponse {
+  repeated SegmentWitnessRecord segments = 1;
   bytes next_segment_root = 2;
   bytes next_segment_payload_digest = 3;
   bool more = 4;
@@ -466,9 +466,9 @@ service StoreKV {
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
 }
 
-service PerasWitness {
-  rpc PerasWitnessSegments(PerasWitnessSegmentsRequest) returns (PerasWitnessSegmentsResponse);
-  rpc PerasWitnessProbe(PerasWitnessProbeRequest) returns (PerasWitnessProbeResponse);
+service SegmentWitness {
+  rpc AppendSegmentWitness(AppendSegmentWitnessRequest) returns (AppendSegmentWitnessResponse);
+  rpc ProbeSegmentWitness(ProbeSegmentWitnessRequest) returns (ProbeSegmentWitnessResponse);
 }
 
 message KeyError {

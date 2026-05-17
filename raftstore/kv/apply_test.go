@@ -274,7 +274,7 @@ func TestApplyBatchHandlesInstallPreparedMVCCEntriesRequests(t *testing.T) {
 	require.Equal(t, []byte("vb"), gotB.Value)
 }
 
-func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
+func TestNewApplierRejectsFencedVisibleAuthorityWrites(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
@@ -303,7 +303,7 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T) {
+func TestNewApplierRejectsFsmetaWritesWhenVisibleAuthorityViewIsStale(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
@@ -332,7 +332,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
+func TestNewBatchApplierSplitsAroundFencedVisibleAuthorityWrite(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.LSMShardCount = 1
@@ -671,11 +671,11 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *runtimeperas.ActiveAuthorities {
 	t.Helper()
 	table := runtimeperas.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{{
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{{
 		GrantID:         "grant-apply-test",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: string(mount.MountID), MountKeyID: uint64(mount.MountKeyID)},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: string(mount.MountID), MountKeyID: uint64(mount.MountKeyID)},
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}}))
 	return table

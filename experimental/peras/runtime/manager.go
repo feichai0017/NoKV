@@ -21,8 +21,8 @@ import (
 const defaultGrantTTL = 5 * time.Minute
 
 type Client interface {
-	ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
-	ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error)
+	ApplyVisibleAuthority(context.Context, *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error)
+	ListVisibleAuthoritySeals(context.Context, *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error)
 }
 
 type InstallCursor struct {
@@ -52,7 +52,7 @@ type AuthorityManager struct {
 
 type acquireCall struct {
 	done  chan struct{}
-	grant rootproto.PerasAuthorityGrant
+	grant rootproto.VisibleAuthorityGrant
 	owned bool
 	err   error
 }
@@ -93,18 +93,18 @@ func (m *AuthorityManager) HolderID() string {
 	return m.holderID
 }
 
-func (m *AuthorityManager) AcquirePerasAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
+func (m *AuthorityManager) AcquireVisibleAuthority(ctx context.Context, scope compile.AuthorityScope) (bool, error) {
 	_, owned, err := m.Acquire(ctx, scope)
 	return owned, err
 }
 
-func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
+func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityScope) (rootproto.VisibleAuthorityGrant, bool, error) {
 	if m == nil {
-		return rootproto.PerasAuthorityGrant{}, false, ErrClientRequired
+		return rootproto.VisibleAuthorityGrant{}, false, ErrClientRequired
 	}
 	now := m.now()
 	if grant, ok, err := m.table.Find(scope, now); err != nil {
-		return rootproto.PerasAuthorityGrant{}, false, err
+		return rootproto.VisibleAuthorityGrant{}, false, err
 	} else if ok && grant.HolderID == m.holderID {
 		return grant, true, nil
 	}
@@ -116,42 +116,42 @@ func (m *AuthorityManager) Acquire(ctx context.Context, scope compile.AuthorityS
 		case <-call.done:
 			return call.grant, call.owned, call.err
 		case <-ctx.Done():
-			return rootproto.PerasAuthorityGrant{}, false, ctx.Err()
+			return rootproto.VisibleAuthorityGrant{}, false, ctx.Err()
 		}
 	}
 
-	var grant rootproto.PerasAuthorityGrant
+	var grant rootproto.VisibleAuthorityGrant
 	var owned bool
-	cmd := rootproto.PerasAuthorityCommand{
-		Kind:            rootproto.PerasAuthorityActAcquire,
+	cmd := rootproto.VisibleAuthorityCommand{
+		Kind:            rootproto.VisibleAuthorityActAcquire,
 		HolderID:        m.holderID,
 		Scope:           rootScope,
 		NowUnixNano:     now.UnixNano(),
 		ExpiresUnixNano: now.Add(m.ttl).UnixNano(),
 	}
-	resp, err := m.coord.ApplyPerasAuthority(ctx, &coordpb.ApplyPerasAuthorityRequest{
-		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+	resp, err := m.coord.ApplyVisibleAuthority(ctx, &coordpb.ApplyVisibleAuthorityRequest{
+		Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
-		m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, err)
-		return rootproto.PerasAuthorityGrant{}, false, err
+		m.finishAcquire(key, rootproto.VisibleAuthorityGrant{}, false, err)
+		return rootproto.VisibleAuthorityGrant{}, false, err
 	}
 	if err := m.installResponse(resp); err != nil {
-		m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, err)
-		return rootproto.PerasAuthorityGrant{}, false, err
+		m.finishAcquire(key, rootproto.VisibleAuthorityGrant{}, false, err)
+		return rootproto.VisibleAuthorityGrant{}, false, err
 	}
 	switch resp.GetStatus() {
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
-		grant = metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED:
+		grant = metawire.RootVisibleAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
-			m.finishAcquire(key, rootproto.PerasAuthorityGrant{}, false, ErrInvalidResponse)
-			return rootproto.PerasAuthorityGrant{}, false, ErrInvalidResponse
+			m.finishAcquire(key, rootproto.VisibleAuthorityGrant{}, false, ErrInvalidResponse)
+			return rootproto.VisibleAuthorityGrant{}, false, ErrInvalidResponse
 		}
 		owned = true
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD:
 		grant, _, err = m.table.Find(scope, now)
 		owned = false
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED:
 		err = ErrInvalidResponse
 	default:
 		err = ErrInvalidResponse
@@ -174,7 +174,7 @@ func (m *AuthorityManager) beginAcquire(key string) (*acquireCall, bool) {
 	return call, true
 }
 
-func (m *AuthorityManager) finishAcquire(key string, grant rootproto.PerasAuthorityGrant, owned bool, err error) {
+func (m *AuthorityManager) finishAcquire(key string, grant rootproto.VisibleAuthorityGrant, owned bool, err error) {
 	m.acquireMu.Lock()
 	call := m.acquires[key]
 	if call != nil {
@@ -187,7 +187,7 @@ func (m *AuthorityManager) finishAcquire(key string, grant rootproto.PerasAuthor
 	m.acquireMu.Unlock()
 }
 
-func acquireKey(scope rootproto.PerasAuthorityScope) string {
+func acquireKey(scope rootproto.VisibleAuthorityScope) string {
 	var b strings.Builder
 	b.WriteString(strconv.FormatUint(scope.MountKeyID, 10))
 	for _, bucket := range scope.Buckets {
@@ -197,7 +197,7 @@ func acquireKey(scope rootproto.PerasAuthorityScope) string {
 	return b.String()
 }
 
-func acquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
+func acquireScope(scope compile.AuthorityScope) rootproto.VisibleAuthorityScope {
 	rootScope := AuthorityScopeFromDelta(scope)
 	// Root v1 proves exclusion, not workload intent. Request the mount-local
 	// bucket set as one rooted capability so bursty namespace creation pays one
@@ -211,7 +211,7 @@ func acquireScope(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
 	return rootScope
 }
 
-func (m *AuthorityManager) Retire(ctx context.Context, grant rootproto.PerasAuthorityGrant) error {
+func (m *AuthorityManager) Retire(ctx context.Context, grant rootproto.VisibleAuthorityGrant) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -222,14 +222,14 @@ func (m *AuthorityManager) Retire(ctx context.Context, grant rootproto.PerasAuth
 		return ErrNotHeld
 	}
 	now := m.now()
-	cmd := rootproto.PerasAuthorityCommand{
-		Kind:        rootproto.PerasAuthorityActRetire,
+	cmd := rootproto.VisibleAuthorityCommand{
+		Kind:        rootproto.VisibleAuthorityActRetire,
 		HolderID:    m.holderID,
 		GrantID:     grant.GrantID,
 		NowUnixNano: now.UnixNano(),
 	}
-	resp, err := m.coord.ApplyPerasAuthority(ctx, &coordpb.ApplyPerasAuthorityRequest{
-		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+	resp, err := m.coord.ApplyVisibleAuthority(ctx, &coordpb.ApplyVisibleAuthorityRequest{
+		Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
 		return err
@@ -237,16 +237,16 @@ func (m *AuthorityManager) Retire(ctx context.Context, grant rootproto.PerasAuth
 	if err := m.installResponse(resp); err != nil {
 		return err
 	}
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD {
 		return ErrNotHeld
 	}
-	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED {
+	if resp.GetStatus() != metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED {
 		return ErrInvalidResponse
 	}
 	return nil
 }
 
-func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootproto.PerasAuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
+func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootproto.VisibleAuthorityGrant, segment fsperas.PerasSegment, payloadDigest [32]byte, cursor InstallCursor) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -261,8 +261,8 @@ func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootpro
 	}
 	stats := segment.Stats()
 	now := m.now()
-	cmd := rootproto.PerasAuthorityCommand{
-		Kind:                 rootproto.PerasAuthorityActSeal,
+	cmd := rootproto.VisibleAuthorityCommand{
+		Kind:                 rootproto.VisibleAuthorityActSeal,
 		HolderID:             m.holderID,
 		GrantID:              grant.GrantID,
 		NowUnixNano:          now.UnixNano(),
@@ -275,8 +275,8 @@ func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootpro
 		InstallIndex:         cursor.Index,
 		InstallVersion:       cursor.InstallVersion,
 	}
-	resp, err := m.coord.ApplyPerasAuthority(ctx, &coordpb.ApplyPerasAuthorityRequest{
-		Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+	resp, err := m.coord.ApplyVisibleAuthority(ctx, &coordpb.ApplyVisibleAuthorityRequest{
+		Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 	})
 	if err != nil {
 		return err
@@ -284,45 +284,45 @@ func (m *AuthorityManager) PublishSegmentSeal(ctx context.Context, grant rootpro
 	if err := m.installResponse(resp); err != nil {
 		return err
 	}
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD {
 		return ErrNotHeld
 	}
-	if resp.GetStatus() != metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED {
+	if resp.GetStatus() != metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED {
 		return ErrInvalidResponse
 	}
 	return nil
 }
 
-func (m *AuthorityManager) ListPerasAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.PerasAuthoritySeal, error) {
+func (m *AuthorityManager) ListVisibleAuthoritySeals(ctx context.Context, scope compile.AuthorityScope) ([]rootproto.VisibleAuthoritySeal, error) {
 	if m == nil {
 		return nil, ErrClientRequired
 	}
-	resp, err := m.coord.ListPerasAuthoritySeals(ctx, &coordpb.ListPerasAuthoritySealsRequest{})
+	resp, err := m.coord.ListVisibleAuthoritySeals(ctx, &coordpb.ListVisibleAuthoritySealsRequest{})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]rootproto.PerasAuthoritySeal, 0, len(resp.GetSeals()))
+	out := make([]rootproto.VisibleAuthoritySeal, 0, len(resp.GetSeals()))
 	for _, pbSeal := range resp.GetSeals() {
-		seal := metawire.RootPerasAuthoritySealFromProto(pbSeal)
+		seal := metawire.RootVisibleAuthoritySealFromProto(pbSeal)
 		if !seal.Valid() {
 			return nil, ErrInvalidResponse
 		}
 		if !sealCoversScope(seal, scope) {
 			continue
 		}
-		out = append(out, rootproto.ClonePerasAuthoritySeal(seal))
+		out = append(out, rootproto.CloneVisibleAuthoritySeal(seal))
 	}
 	return out, nil
 }
 
-func sealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityScope) bool {
+func sealCoversScope(seal rootproto.VisibleAuthoritySeal, scope compile.AuthorityScope) bool {
 	if !seal.Valid() {
 		return false
 	}
 	if ScopeEmpty(scope) {
 		return true
 	}
-	grant := rootproto.PerasAuthorityGrant{
+	grant := rootproto.VisibleAuthorityGrant{
 		GrantID:         seal.GrantID,
 		EpochID:         seal.EpochID,
 		HolderID:        seal.HolderID,
@@ -332,7 +332,7 @@ func sealCoversScope(seal rootproto.PerasAuthoritySeal, scope compile.AuthorityS
 	return grant.Covers(AuthorityScopeFromDelta(scope), 0)
 }
 
-func (m *AuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+func (m *AuthorityManager) RetireVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
 	if m == nil {
 		return ErrClientRequired
 	}
@@ -345,13 +345,13 @@ func (m *AuthorityManager) RetirePerasAuthority(ctx context.Context, scopes ...c
 	return nil
 }
 
-func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []rootproto.PerasAuthorityGrant {
+func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope) []rootproto.VisibleAuthorityGrant {
 	if m == nil || m.table == nil || strings.TrimSpace(m.holderID) == "" {
 		return nil
 	}
 	now := m.now()
 	snapshot := m.table.Snapshot()
-	out := make([]rootproto.PerasAuthorityGrant, 0, len(snapshot))
+	out := make([]rootproto.VisibleAuthorityGrant, 0, len(snapshot))
 	for _, grant := range snapshot {
 		if grant.HolderID != m.holderID || !grant.ActiveAt(now.UnixNano()) {
 			continue
@@ -370,7 +370,7 @@ func (m *AuthorityManager) ownedGrantsForScopes(scopes ...compile.AuthorityScope
 	return out
 }
 
-func grantMatchesRetireScope(grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+func grantMatchesRetireScope(grant rootproto.VisibleAuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
 	}
@@ -383,38 +383,38 @@ func grantMatchesRetireScope(grant rootproto.PerasAuthorityGrant, scope compile.
 	return GrantCoversDelta(grant, scope, now)
 }
 
-func (m *AuthorityManager) installResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
+func (m *AuthorityManager) installResponse(resp *coordpb.ApplyVisibleAuthorityResponse) error {
 	if m == nil || m.table == nil {
 		return ErrTableRequired
 	}
 	if resp == nil {
 		return ErrInvalidResponse
 	}
-	grants, err := parsePerasAuthorityGrants(resp.GetActiveGrants())
+	grants, err := parseVisibleAuthorityGrants(resp.GetActiveGrants())
 	if err != nil {
 		return err
 	}
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED {
-		grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED {
+		grant := metawire.RootVisibleAuthorityGrantFromProto(resp.GetGrant())
 		if !grant.Valid() {
 			return ErrInvalidResponse
 		}
-		grants = appendPerasGrantIfMissing(grants, grant)
+		grants = appendVisibleGrantIfMissing(grants, grant)
 	}
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD && len(grants) == 0 {
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD && len(grants) == 0 {
 		return ErrInvalidResponse
 	}
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED {
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_UNSPECIFIED {
 		return ErrInvalidResponse
 	}
 	return m.table.Replace(grants)
 }
 
-func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]rootproto.PerasAuthorityGrant, error) {
-	out := make([]rootproto.PerasAuthorityGrant, 0, len(in))
+func parseVisibleAuthorityGrants(in []*metapb.RootVisibleAuthorityGrant) ([]rootproto.VisibleAuthorityGrant, error) {
+	out := make([]rootproto.VisibleAuthorityGrant, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
 	for _, pbGrant := range in {
-		grant := metawire.RootPerasAuthorityGrantFromProto(pbGrant)
+		grant := metawire.RootVisibleAuthorityGrantFromProto(pbGrant)
 		if !grant.Valid() {
 			return nil, ErrInvalidResponse
 		}
@@ -427,7 +427,7 @@ func parsePerasAuthorityGrants(in []*metapb.RootPerasAuthorityGrant) ([]rootprot
 	return out, nil
 }
 
-func appendPerasGrantIfMissing(grants []rootproto.PerasAuthorityGrant, grant rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
+func appendVisibleGrantIfMissing(grants []rootproto.VisibleAuthorityGrant, grant rootproto.VisibleAuthorityGrant) []rootproto.VisibleAuthorityGrant {
 	for _, current := range grants {
 		if current.GrantID == grant.GrantID {
 			return grants

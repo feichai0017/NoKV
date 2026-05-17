@@ -118,7 +118,7 @@ func (c *Runtime) LoadRootSealedSegments(ctx context.Context, scope compile.Auth
 	if c.seals == nil {
 		return c.LoadInstalledSegments(ctx, scope)
 	}
-	seals, err := c.seals.ListPerasAuthoritySeals(ctx, scope)
+	seals, err := c.seals.ListVisibleAuthoritySeals(ctx, scope)
 	if err != nil {
 		return c.recordErrorf("list rooted peras segment seals: %w", err)
 	}
@@ -145,7 +145,7 @@ func (c *Runtime) LoadRootSealedSegments(ctx context.Context, scope compile.Auth
 	return nil
 }
 
-func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.AuthorityScope, seal rootproto.PerasAuthoritySeal) error {
+func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.AuthorityScope, seal rootproto.VisibleAuthoritySeal) error {
 	if c == nil || c.installer == nil || len(c.witnesses) == 0 {
 		return fsperas.ErrInvalidPerasSegment
 	}
@@ -271,7 +271,7 @@ func (c *Runtime) startRecoveryInstallRetry(job perasFlushJob) {
 	}()
 }
 
-func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal rootproto.PerasAuthoritySeal) (fsperas.SegmentWitnessRecord, bool, error) {
+func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal rootproto.VisibleAuthoritySeal) (fsperas.SegmentWitnessRecord, bool, error) {
 	ref := fsperas.WitnessSegmentRef{
 		EpochID:              seal.EpochID,
 		SegmentRoot:          seal.SegmentRoot,
@@ -297,7 +297,7 @@ func (c *Runtime) collectRootSealedWitnessSegment(ctx context.Context, seal root
 	return record, found, nil
 }
 
-func witnessRecordMatchesRootSeal(record fsperas.SegmentWitnessRecord, seal rootproto.PerasAuthoritySeal) bool {
+func witnessRecordMatchesRootSeal(record fsperas.SegmentWitnessRecord, seal rootproto.VisibleAuthoritySeal) bool {
 	return record.EpochID == seal.EpochID &&
 		record.SegmentRoot == seal.SegmentRoot &&
 		record.SegmentPayloadDigest == seal.SegmentPayloadDigest
@@ -311,7 +311,7 @@ func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compil
 	records := make([]fsperas.SegmentCatalogRecord, 0)
 	seen := make(map[[32]byte]struct{})
 	for _, bucket := range buckets {
-		prefix, err := fsmeta.EncodePerasSegmentCatalogIndexPrefix(scope.MountKeyID, bucket)
+		prefix, err := fsmeta.EncodeSegmentCatalogIndexPrefix(scope.MountKeyID, bucket)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +335,7 @@ func (c *Runtime) scanInstalledSegmentCatalogs(ctx context.Context, scope compil
 					return nil, err
 				}
 				parts, ok := fsmeta.InspectKey(kv.Key)
-				if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordIndex || parts.PerasRoot != index.Root {
+				if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordIndex || parts.SegmentRoot != index.Root {
 					return nil, fsperas.ErrInvalidPerasSegment
 				}
 				if _, ok := seen[index.Root]; ok {

@@ -8,28 +8,27 @@ import (
 	"context"
 	"sort"
 
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
-func (e *Executor) perasOverlay() PerasOverlayReader {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) visibleOverlay() VisibleOverlayReader {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
-	overlay, ok := e.perasCommitter.(PerasOverlayReader)
+	overlay, ok := e.visibleCommitter.(VisibleOverlayReader)
 	if !ok {
 		return nil
 	}
 	return overlay
 }
 
-func (e *Executor) flushPeras(ctx context.Context) error {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) flushVisible(ctx context.Context) error {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
-	flusher, ok := e.perasCommitter.(PerasFlusher)
+	flusher, ok := e.visibleCommitter.(VisibleFlusher)
 	if !ok {
 		return nil
 	}
@@ -39,17 +38,17 @@ func (e *Executor) flushPeras(ctx context.Context) error {
 	return flusher.FlushDurable(context.WithoutCancel(ctx))
 }
 
-func (e *Executor) flushPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) flushVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
 	if len(scopes) == 0 {
-		return e.flushPeras(ctx)
+		return e.flushVisible(ctx)
 	}
-	if scoped, ok := e.perasCommitter.(PerasAuthorityFlusher); ok {
+	if scoped, ok := e.visibleCommitter.(VisibleAuthorityFlusher); ok {
 		for _, scope := range scopes {
 			if authorityScopeEmpty(scope) {
-				return e.flushPeras(ctx)
+				return e.flushVisible(ctx)
 			}
 			if err := scoped.FlushAuthority(context.WithoutCancel(ctx), scope); err != nil {
 				return err
@@ -57,86 +56,86 @@ func (e *Executor) flushPerasAuthority(ctx context.Context, scopes ...compile.Au
 		}
 		return nil
 	}
-	return e.flushPeras(ctx)
+	return e.flushVisible(ctx)
 }
 
-func (e *Executor) retirePerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.perasAuthority == nil {
+func (e *Executor) retireVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+	if e == nil || e.visibleAuthority == nil {
 		return nil
 	}
-	retirer, ok := e.perasAuthority.(fsperas.AuthorityRetirer)
+	retirer, ok := e.visibleAuthority.(VisibleAuthorityRetirer)
 	if !ok {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return retirer.RetirePerasAuthority(context.WithoutCancel(ctx), scopes...)
+	return retirer.RetireVisibleAuthority(context.WithoutCancel(ctx), scopes...)
 }
 
-func (e *Executor) drainPerasAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
+func (e *Executor) drainVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
 	if e == nil {
 		return nil
 	}
-	if e.perasCommitter != nil && e.perasAuthority != nil {
-		drainer, drainOK := e.perasCommitter.(PerasAuthorityDrainer)
-		retirer, retireOK := e.perasAuthority.(fsperas.AuthorityRetirer)
+	if e.visibleCommitter != nil && e.visibleAuthority != nil {
+		drainer, drainOK := e.visibleCommitter.(VisibleAuthorityDrainer)
+		retirer, retireOK := e.visibleAuthority.(VisibleAuthorityRetirer)
 		if drainOK && retireOK {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			return drainer.DrainAuthority(context.WithoutCancel(ctx), retirer, scopes...)
+			return drainer.DrainVisibleAuthority(context.WithoutCancel(ctx), retirer, scopes...)
 		}
 	}
-	if err := e.flushPerasAuthority(ctx, scopes...); err != nil {
+	if err := e.flushVisibleAuthority(ctx, scopes...); err != nil {
 		return err
 	}
-	return e.retirePerasAuthority(ctx, scopes...)
+	return e.retireVisibleAuthority(ctx, scopes...)
 }
 
 func authorityScopeEmpty(scope compile.AuthorityScope) bool {
 	return scope.Mount == "" || scope.MountKeyID == 0
 }
 
-func (e *Executor) perasOverlayGet(key []byte) ([]byte, bool, bool) {
-	overlay := e.perasOverlay()
+func (e *Executor) visibleOverlayGet(key []byte) ([]byte, bool, bool) {
+	overlay := e.visibleOverlay()
 	if overlay == nil {
 		return nil, false, false
 	}
-	return overlay.GetPerasOverlayView(key)
+	return overlay.GetVisibleOverlayView(key)
 }
 
-func (e *Executor) perasSnapshotOverlay() PerasSnapshotOverlayReader {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) visibleSnapshotOverlay() VisibleSnapshotOverlayReader {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
-	reader, ok := e.perasCommitter.(PerasSnapshotOverlayReader)
+	reader, ok := e.visibleCommitter.(VisibleSnapshotOverlayReader)
 	if !ok {
 		return nil
 	}
 	return reader
 }
 
-func (e *Executor) perasOverlayReadSnapshot() PerasOverlayReadSnapshotReader {
-	if e == nil || e.perasCommitter == nil {
+func (e *Executor) visibleOverlayReadSnapshot() VisibleOverlayReadSnapshotReader {
+	if e == nil || e.visibleCommitter == nil {
 		return nil
 	}
-	reader, ok := e.perasCommitter.(PerasOverlayReadSnapshotReader)
+	reader, ok := e.visibleCommitter.(VisibleOverlayReadSnapshotReader)
 	if !ok {
 		return nil
 	}
 	return reader
 }
 
-func (e *Executor) readPerasProgram(program compile.ReadProgram) ([]byte, bool, bool) {
+func (e *Executor) readVisibleProgram(program compile.ReadProgram) ([]byte, bool, bool) {
 	if len(program.Key) == 0 {
 		return nil, false, false
 	}
-	return e.perasOverlayGet(program.Key)
+	return e.visibleOverlayGet(program.Key)
 }
 
 func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
-	if value, deleted, ok := e.perasOverlayGet(key); ok {
+	if value, deleted, ok := e.visibleOverlayGet(key); ok {
 		if deleted {
 			return nil, false, nil
 		}
@@ -146,7 +145,7 @@ func (e *Executor) getMergedValue(ctx context.Context, key []byte, version uint6
 }
 
 func (e *Executor) getMergedProgramValue(ctx context.Context, program compile.ReadProgram, version uint64) ([]byte, bool, error) {
-	if value, deleted, ok := e.readPerasProgram(program); ok {
+	if value, deleted, ok := e.readVisibleProgram(program); ok {
 		if deleted {
 			return nil, false, nil
 		}
@@ -155,33 +154,33 @@ func (e *Executor) getMergedProgramValue(ctx context.Context, program compile.Re
 	return e.runner.Get(ctx, program.Key, version)
 }
 
-type perasReadView struct {
-	executor      *Executor
-	ctx           context.Context
-	version       uint64
-	haveVersion   bool
-	observedPeras bool
-	observed      map[string]int
-	proofs        []proof.PredicateProof
+type visibleReadView struct {
+	executor        *Executor
+	ctx             context.Context
+	version         uint64
+	haveVersion     bool
+	observedVisible bool
+	observed        map[string]int
+	proofs          []proof.PredicateProof
 }
 
-func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
+func (e *Executor) newVisibleReadView(ctx context.Context) *visibleReadView {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &perasReadView{
+	return &visibleReadView{
 		executor: e,
 		ctx:      ctx,
 		observed: make(map[string]int),
 	}
 }
 
-func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
+func (v *visibleReadView) get(key []byte) ([]byte, bool, error) {
 	if v == nil || v.executor == nil {
 		return nil, false, fsmeta.ErrInvalidRequest
 	}
-	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
-		v.observedPeras = true
+	if value, deleted, ok := v.executor.visibleOverlayGet(key); ok {
+		v.observedVisible = true
 		if deleted {
 			v.remember(key, nil, false, proof.ReadSourceOverlay, 0)
 			return nil, false, nil
@@ -189,7 +188,7 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 		v.remember(key, value, true, proof.ReadSourceOverlay, 0)
 		return value, true, nil
 	}
-	if index := v.executor.perasPredicateIndex(); index != nil {
+	if index := v.executor.visiblePredicateIndex(); index != nil {
 		present, known := index.KeyState(key)
 		if known && !present {
 			v.remember(key, nil, false, proof.ReadSourceUnknown, 0)
@@ -212,11 +211,11 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	return value, ok, nil
 }
 
-func (v *perasReadView) observedPerasOverlay() bool {
-	return v != nil && v.observedPeras
+func (v *visibleReadView) observedVisibleOverlay() bool {
+	return v != nil && v.observedVisible
 }
 
-func (v *perasReadView) observedKeyFromPerasOverlay(key []byte) bool {
+func (v *visibleReadView) observedKeyFromVisibleOverlay(key []byte) bool {
 	if v == nil {
 		return false
 	}
@@ -227,7 +226,7 @@ func (v *perasReadView) observedKeyFromPerasOverlay(key []byte) bool {
 	return v.proofs[index].Source == proof.ReadSourceOverlay
 }
 
-func (v *perasReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
+func (v *visibleReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
 	if v == nil {
 		return
 	}
@@ -241,14 +240,14 @@ func (v *perasReadView) remember(key, value []byte, present bool, source proof.R
 	v.proofs = append(v.proofs, predicateProof)
 }
 
-func (v *perasReadView) materializePerasCompiledOp(compiled compile.CompiledOp, effects []compile.WriteEffect) (compile.MaterializedOp, error) {
+func (v *visibleReadView) materializeVisibleCompiledOp(compiled compile.CompiledOp, effects []compile.WriteEffect) (compile.MaterializedOp, error) {
 	if v == nil || v.executor == nil {
 		return compile.MaterializeCompiledOpWithEvidence(compiled, effects, compile.PredicateEvidence{}, nil)
 	}
 	return compile.MaterializeCompiledOpWithEvidence(compiled, effects, v.predicateEvidenceForDelta(compiled.Delta), nil)
 }
 
-func (v *perasReadView) predicateProofs() []proof.PredicateProof {
+func (v *visibleReadView) predicateProofs() []proof.PredicateProof {
 	if v == nil || len(v.proofs) == 0 {
 		return nil
 	}
@@ -269,12 +268,12 @@ func clonePredicateProof(predicateProof proof.PredicateProof) proof.PredicatePro
 	return predicateProof
 }
 
-func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) compile.PredicateEvidence {
+func (v *visibleReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) compile.PredicateEvidence {
 	if v == nil || v.executor == nil {
 		return compile.PredicateEvidence{}
 	}
-	index := v.executor.perasPredicateIndex()
-	allowAbsentDowngrade := perasDeltaAllowsAbsentObservedValue(delta)
+	index := v.executor.visiblePredicateIndex()
+	allowAbsentDowngrade := visibleDeltaAllowsAbsentObservedValue(delta)
 	proofs := v.predicateProofs()
 	for _, predicate := range delta.ReadPredicates {
 		if predicate.Kind == compile.PredicatePrefixScan {
@@ -285,7 +284,7 @@ func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) c
 		}
 		if allowAbsentDowngrade &&
 			predicate.Kind == compile.PredicateObservedValue &&
-			v.executor.perasNotExistsKnown(delta.Authority, predicate.Key, index) {
+			v.executor.visibleNotExistsKnown(delta.Authority, predicate.Key, index) {
 			proofs = append(proofs, proof.NewPredicateProof(predicate.Key, nil, false, 0, proof.ReadSourceOverlay, proof.ProofFrontier{}))
 		}
 	}
@@ -294,7 +293,7 @@ func (v *perasReadView) predicateEvidenceForDelta(delta compile.SemanticDelta) c
 	}
 }
 
-func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
+func (v *visibleReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
 	value, ok, err := v.get(key)
 	if err != nil {
 		return fsmeta.DentryRecord{}, err
@@ -305,7 +304,7 @@ func (v *perasReadView) readDentry(key []byte) (fsmeta.DentryRecord, error) {
 	return fsmeta.DecodeDentryValue(value)
 }
 
-func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.InodeID) (fsmeta.InodeRecord, bool, error) {
+func (v *visibleReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.InodeID) (fsmeta.InodeRecord, bool, error) {
 	program, err := compile.CompileGetAttrReadProgram(mount, inodeID)
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
@@ -321,7 +320,7 @@ func (v *perasReadView) readInode(mount fsmeta.MountIdentity, inodeID fsmeta.Ino
 	return inode, true, nil
 }
 
-func (v *perasReadView) readSession(mount fsmeta.MountIdentity, key []byte) (fsmeta.SessionRecord, bool, error) {
+func (v *visibleReadView) readSession(mount fsmeta.MountIdentity, key []byte) (fsmeta.SessionRecord, bool, error) {
 	parts, ok := fsmeta.InspectKey(key)
 	if !ok || parts.Kind != fsmeta.KeyKindSession {
 		return fsmeta.SessionRecord{}, false, fsmeta.ErrInvalidKey
@@ -348,9 +347,9 @@ func (e *Executor) batchGetMergedValuesOrderedAt(ctx context.Context, keys [][]b
 	values := make([][]byte, len(keys))
 	present := make([]bool, len(keys))
 
-	overlay := e.perasOverlay()
-	snapshot := e.perasSnapshotOverlay()
-	readSnapshot := e.perasOverlayReadSnapshot()
+	overlay := e.visibleOverlay()
+	snapshot := e.visibleSnapshotOverlay()
+	readSnapshot := e.visibleOverlayReadSnapshot()
 	useReadSnapshot := !snapshotRead && readSnapshot != nil && (overlayGeneration != 0 || sealedGeneration != 0)
 	if !includeOverlay || (!snapshotRead && overlay == nil && !useReadSnapshot) || (snapshotRead && snapshot == nil) {
 		base, err := e.runner.BatchGet(ctx, keys, version)
@@ -373,11 +372,11 @@ func (e *Executor) batchGetMergedValuesOrderedAt(ctx context.Context, keys [][]b
 		var value []byte
 		var deleted, ok bool
 		if snapshotRead {
-			value, deleted, ok = snapshot.GetPerasSnapshotOverlayView(version, key)
+			value, deleted, ok = snapshot.GetVisibleSnapshotOverlayView(version, key)
 		} else if useReadSnapshot {
-			value, deleted, ok = readSnapshot.GetPerasOverlayViewAt(overlayGeneration, sealedGeneration, key)
+			value, deleted, ok = readSnapshot.GetVisibleOverlayViewAt(overlayGeneration, sealedGeneration, key)
 		} else {
-			value, deleted, ok = overlay.GetPerasOverlayView(key)
+			value, deleted, ok = overlay.GetVisibleOverlayView(key)
 		}
 		switch {
 		case ok && !deleted:
@@ -407,24 +406,24 @@ func (e *Executor) batchGetMergedValuesOrderedAt(ctx context.Context, keys [][]b
 	return values, present, nil
 }
 
-func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
-	overlay := e.perasOverlay()
+func (e *Executor) mergeVisibleOverlayScan(kvs []KV, start []byte, limit uint32) []KV {
+	overlay := e.visibleOverlay()
 	if overlay == nil || limit == 0 {
 		return kvs
 	}
-	overlayKVs := overlay.ScanPerasOverlay(start, limit)
+	overlayKVs := overlay.ScanVisibleOverlay(start, limit)
 	if len(overlayKVs) == 0 {
 		return kvs
 	}
 	return mergeOverlayScanRows(kvs, overlayKVs, limit)
 }
 
-func (e *Executor) mergePerasDirectoryOverlayScan(kvs []KV, prefix, start []byte, limit uint32) ([]KV, uint32, bool) {
-	return e.mergePerasDirectoryOverlayScanAt(kvs, prefix, start, limit, 0, 0)
+func (e *Executor) mergeVisibleDirectoryOverlayScan(kvs []KV, prefix, start []byte, limit uint32) ([]KV, uint32, bool) {
+	return e.mergeVisibleDirectoryOverlayScanAt(kvs, prefix, start, limit, 0, 0)
 }
 
-func (e *Executor) mergePerasDirectoryOverlayScanAt(kvs []KV, prefix, start []byte, limit uint32, overlayGeneration, sealedGeneration uint64) ([]KV, uint32, bool) {
-	overlayKVs, usedIndex := e.scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, prefix, start, limit)
+func (e *Executor) mergeVisibleDirectoryOverlayScanAt(kvs []KV, prefix, start []byte, limit uint32, overlayGeneration, sealedGeneration uint64) ([]KV, uint32, bool) {
+	overlayKVs, usedIndex := e.scanVisibleDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, prefix, start, limit)
 	if len(overlayKVs) == 0 {
 		return kvs, 0, usedIndex
 	}
@@ -432,14 +431,14 @@ func (e *Executor) mergePerasDirectoryOverlayScanAt(kvs []KV, prefix, start []by
 	return out, uint32(len(overlayKVs)), usedIndex
 }
 
-func (e *Executor) scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+func (e *Executor) scanVisibleDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]VisibleOverlayKV, bool) {
 	var (
-		out       []fsperas.OverlayKV
+		out       []VisibleOverlayKV
 		startKey  = cloneBytes(start)
 		usedIndex bool
 	)
 	for {
-		batch, batchUsedIndex := e.scanPerasDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration, prefix, startKey, limit)
+		batch, batchUsedIndex := e.scanVisibleDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration, prefix, startKey, limit)
 		usedIndex = usedIndex || batchUsedIndex
 		if len(batch) == 0 {
 			return out, usedIndex
@@ -453,17 +452,17 @@ func (e *Executor) scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGene
 	}
 }
 
-func (e *Executor) scanPerasSnapshotDirectoryOverlayRows(version uint64, prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
-	reader := e.perasSnapshotOverlay()
+func (e *Executor) scanVisibleSnapshotDirectoryOverlayRows(version uint64, prefix, start []byte, limit uint32) ([]VisibleOverlayKV, bool) {
+	reader := e.visibleSnapshotOverlay()
 	if reader == nil || version == 0 || limit == 0 {
 		return nil, false
 	}
 	var (
-		out      []fsperas.OverlayKV
+		out      []VisibleOverlayKV
 		startKey = cloneBytes(start)
 	)
 	for {
-		overlayKVs := reader.ScanPerasSnapshotDirectory(version, prefix, startKey, limit)
+		overlayKVs := reader.ScanVisibleSnapshotDirectory(version, prefix, startKey, limit)
 		if len(overlayKVs) == 0 {
 			return out, true
 		}
@@ -486,29 +485,29 @@ func (e *Executor) scanPerasSnapshotDirectoryOverlayRows(version uint64, prefix,
 	}
 }
 
-func (e *Executor) scanPerasDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
-	if readSnapshot := e.perasOverlayReadSnapshot(); readSnapshot != nil && (overlayGeneration != 0 || sealedGeneration != 0) {
-		overlayKVs := readSnapshot.ScanPerasDirectoryAt(overlayGeneration, sealedGeneration, prefix, start, limit)
-		return trimPerasDirectoryOverlayBatch(prefix, overlayKVs), true
+func (e *Executor) scanVisibleDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]VisibleOverlayKV, bool) {
+	if readSnapshot := e.visibleOverlayReadSnapshot(); readSnapshot != nil && (overlayGeneration != 0 || sealedGeneration != 0) {
+		overlayKVs := readSnapshot.ScanVisibleDirectoryAt(overlayGeneration, sealedGeneration, prefix, start, limit)
+		return trimVisibleDirectoryOverlayBatch(prefix, overlayKVs), true
 	}
-	overlay := e.perasOverlay()
+	overlay := e.visibleOverlay()
 	if overlay == nil || limit == 0 {
 		return nil, false
 	}
 	var (
-		overlayKVs []fsperas.OverlayKV
+		overlayKVs []VisibleOverlayKV
 		usedIndex  bool
 	)
-	if directoryReader, ok := overlay.(PerasDirectoryOverlayReader); ok {
-		overlayKVs = directoryReader.ScanPerasDirectory(prefix, start, limit)
+	if directoryReader, ok := overlay.(VisibleDirectoryOverlayReader); ok {
+		overlayKVs = directoryReader.ScanVisibleDirectory(prefix, start, limit)
 		usedIndex = true
 	} else {
-		overlayKVs = overlay.ScanPerasOverlay(start, limit)
+		overlayKVs = overlay.ScanVisibleOverlay(start, limit)
 	}
-	return trimPerasDirectoryOverlayBatch(prefix, overlayKVs), usedIndex
+	return trimVisibleDirectoryOverlayBatch(prefix, overlayKVs), usedIndex
 }
 
-func trimPerasDirectoryOverlayBatch(prefix []byte, overlayKVs []fsperas.OverlayKV) []fsperas.OverlayKV {
+func trimVisibleDirectoryOverlayBatch(prefix []byte, overlayKVs []VisibleOverlayKV) []VisibleOverlayKV {
 	if len(overlayKVs) == 0 {
 		return nil
 	}
@@ -523,12 +522,12 @@ func trimPerasDirectoryOverlayBatch(prefix []byte, overlayKVs []fsperas.OverlayK
 }
 
 func (e *Executor) scanMergedDirectoryRowsAt(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool, overlayGeneration, sealedGeneration uint64) ([]KV, uint32, uint32, bool, error) {
-	var overlayKVs []fsperas.OverlayKV
+	var overlayKVs []VisibleOverlayKV
 	var usedIndex bool
 	if snapshotRead {
-		overlayKVs, usedIndex = e.scanPerasSnapshotDirectoryOverlayRows(version, plan.Prefix, plan.StartKey, plan.Limit)
+		overlayKVs, usedIndex = e.scanVisibleSnapshotDirectoryOverlayRows(version, plan.Prefix, plan.StartKey, plan.Limit)
 	} else {
-		overlayKVs, usedIndex = e.scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, plan.Prefix, plan.StartKey, plan.Limit)
+		overlayKVs, usedIndex = e.scanVisibleDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, plan.Prefix, plan.StartKey, plan.Limit)
 	}
 	start := cloneBytes(plan.StartKey)
 	baseRows := make([]KV, 0, plan.Limit)
@@ -548,37 +547,37 @@ func (e *Executor) scanMergedDirectoryRowsAt(ctx context.Context, plan compile.D
 	}
 }
 
-func mergeOverlayScanRows(kvs []KV, overlayKVs []fsperas.OverlayKV, limit uint32) []KV {
+func mergeOverlayScanRows(kvs []KV, overlayKVs []VisibleOverlayKV, limit uint32) []KV {
 	out := make([]KV, 0, int(limit))
-	base, peras := 0, 0
-	for len(out) < int(limit) && (base < len(kvs) || peras < len(overlayKVs)) {
+	base, overlay := 0, 0
+	for len(out) < int(limit) && (base < len(kvs) || overlay < len(overlayKVs)) {
 		switch {
 		case base >= len(kvs):
-			out = appendOverlayScanKV(out, overlayKVs[peras])
-			peras++
-		case peras >= len(overlayKVs):
+			out = appendOverlayScanKV(out, overlayKVs[overlay])
+			overlay++
+		case overlay >= len(overlayKVs):
 			out = append(out, kvs[base])
 			base++
 		default:
-			cmp := bytes.Compare(kvs[base].Key, overlayKVs[peras].Key)
+			cmp := bytes.Compare(kvs[base].Key, overlayKVs[overlay].Key)
 			switch {
 			case cmp < 0:
 				out = append(out, kvs[base])
 				base++
 			case cmp > 0:
-				out = appendOverlayScanKV(out, overlayKVs[peras])
-				peras++
+				out = appendOverlayScanKV(out, overlayKVs[overlay])
+				overlay++
 			default:
-				out = appendOverlayScanKV(out, overlayKVs[peras])
+				out = appendOverlayScanKV(out, overlayKVs[overlay])
 				base++
-				peras++
+				overlay++
 			}
 		}
 	}
 	return out
 }
 
-func appendOverlayScanKV(out []KV, kv fsperas.OverlayKV) []KV {
+func appendOverlayScanKV(out []KV, kv VisibleOverlayKV) []KV {
 	if kv.Delete {
 		return out
 	}
@@ -609,7 +608,7 @@ func directoryBaseScanMayContinue(batch []KV, prefix []byte, limit uint32) bool 
 	return bytes.HasPrefix(batch[len(batch)-1].Key, prefix)
 }
 
-func directoryOverlayScanMayContinue(batch []fsperas.OverlayKV, prefix []byte, limit uint32) bool {
+func directoryOverlayScanMayContinue(batch []VisibleOverlayKV, prefix []byte, limit uint32) bool {
 	if limit == 0 || uint32(len(batch)) < limit {
 		return false
 	}

@@ -174,8 +174,8 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 	}
 }
 
-func (s *protocolMatrixStorage) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+func (s *protocolMatrixStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 }
 
 func (s *protocolMatrixStorage) advanceRootToken() {

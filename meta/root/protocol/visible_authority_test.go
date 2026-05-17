@@ -9,33 +9,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPerasAuthorityGrantCoversScope(t *testing.T) {
-	grant := testPerasGrant(PerasAuthorityScope{
+func TestVisibleAuthorityGrantCoversScope(t *testing.T) {
+	grant := testVisibleGrant(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{1, 2},
 		Parents:    []uint64{10},
 	})
 
-	require.True(t, grant.Covers(PerasAuthorityScope{
+	require.True(t, grant.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{2},
 		Parents:    []uint64{10},
 	}, 100))
-	require.False(t, grant.Covers(PerasAuthorityScope{
+	require.False(t, grant.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{3},
 		Parents:    []uint64{10},
 	}, 100))
-	require.False(t, grant.Covers(PerasAuthorityScope{
+	require.False(t, grant.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 8,
 		Buckets:    []uint16{2},
 		Parents:    []uint64{10},
 	}, 100))
-	require.False(t, grant.Covers(PerasAuthorityScope{
+	require.False(t, grant.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{2},
@@ -43,9 +43,9 @@ func TestPerasAuthorityGrantCoversScope(t *testing.T) {
 	}, 2_000))
 }
 
-func TestPerasAuthorityGrantWildcardScope(t *testing.T) {
-	mountWide := testPerasGrant(PerasAuthorityScope{MountID: "vol", MountKeyID: 7})
-	require.True(t, mountWide.Covers(PerasAuthorityScope{
+func TestVisibleAuthorityGrantWildcardScope(t *testing.T) {
+	mountWide := testVisibleGrant(VisibleAuthorityScope{MountID: "vol", MountKeyID: 7})
+	require.True(t, mountWide.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{15},
@@ -53,20 +53,20 @@ func TestPerasAuthorityGrantWildcardScope(t *testing.T) {
 		Inodes:     []uint64{200},
 	}, 100))
 
-	bucketGrant := testPerasGrant(PerasAuthorityScope{
+	bucketGrant := testVisibleGrant(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{1},
 	})
-	require.False(t, bucketGrant.Covers(PerasAuthorityScope{
+	require.False(t, bucketGrant.Covers(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 	}, 100))
 }
 
-func TestPerasAuthorityGrantOverlap(t *testing.T) {
-	left := testPerasGrant(PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}})
-	right := testPerasGrant(PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{2}})
+func TestVisibleAuthorityGrantOverlap(t *testing.T) {
+	left := testVisibleGrant(VisibleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}})
+	right := testVisibleGrant(VisibleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{2}})
 	require.False(t, left.Overlaps(right))
 
 	right.Scope.Buckets = []uint16{1}
@@ -76,15 +76,15 @@ func TestPerasAuthorityGrantOverlap(t *testing.T) {
 	require.False(t, left.Overlaps(right))
 }
 
-func TestClonePerasAuthorityGrantIsIsolated(t *testing.T) {
-	grant := testPerasGrant(PerasAuthorityScope{
+func TestCloneVisibleAuthorityGrantIsIsolated(t *testing.T) {
+	grant := testVisibleGrant(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{1},
 		Parents:    []uint64{10},
 		Inodes:     []uint64{20},
 	})
-	clone := ClonePerasAuthorityGrant(grant)
+	clone := CloneVisibleAuthorityGrant(grant)
 	clone.Scope.Buckets[0] = 9
 	clone.Scope.Parents[0] = 99
 	clone.Scope.Inodes[0] = 999
@@ -94,25 +94,25 @@ func TestClonePerasAuthorityGrantIsIsolated(t *testing.T) {
 	require.Equal(t, []uint64{20}, grant.Scope.Inodes)
 }
 
-func TestPerasAuthorityGrantValidity(t *testing.T) {
-	require.False(t, PerasAuthorityScope{}.Valid())
-	require.True(t, PerasAuthorityScope{MountID: "vol", MountKeyID: 7}.Valid())
+func TestVisibleAuthorityGrantValidity(t *testing.T) {
+	require.False(t, VisibleAuthorityScope{}.Valid())
+	require.True(t, VisibleAuthorityScope{MountID: "vol", MountKeyID: 7}.Valid())
 
-	require.False(t, PerasAuthorityGrant{}.Valid())
-	require.False(t, PerasAuthorityGrant{GrantID: "g1", EpochID: 1, HolderID: "h1", ExpiresUnixNano: 1_000}.Valid())
-	require.True(t, testPerasGrant(PerasAuthorityScope{MountID: "vol", MountKeyID: 7}).Valid())
+	require.False(t, VisibleAuthorityGrant{}.Valid())
+	require.False(t, VisibleAuthorityGrant{GrantID: "g1", EpochID: 1, HolderID: "h1", ExpiresUnixNano: 1_000}.Valid())
+	require.True(t, testVisibleGrant(VisibleAuthorityScope{MountID: "vol", MountKeyID: 7}).Valid())
 }
 
-func BenchmarkPerasAuthorityGrantCovers(b *testing.B) {
+func BenchmarkVisibleAuthorityGrantCovers(b *testing.B) {
 	b.ReportAllocs()
-	grant := testPerasGrant(PerasAuthorityScope{
+	grant := testVisibleGrant(VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{0, 1, 2, 3, 4, 5, 6, 7},
 		Parents:    []uint64{10, 20, 30, 40},
 		Inodes:     []uint64{100, 200, 300, 400},
 	})
-	scope := PerasAuthorityScope{
+	scope := VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{3},
@@ -126,8 +126,8 @@ func BenchmarkPerasAuthorityGrantCovers(b *testing.B) {
 	}
 }
 
-func testPerasGrant(scope PerasAuthorityScope) PerasAuthorityGrant {
-	return PerasAuthorityGrant{
+func testVisibleGrant(scope VisibleAuthorityScope) VisibleAuthorityGrant {
+	return VisibleAuthorityGrant{
 		GrantID:         "g1",
 		EpochID:         1,
 		HolderID:        "holder-a",

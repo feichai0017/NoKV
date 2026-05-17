@@ -5,7 +5,6 @@ package exec
 
 import (
 	"context"
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
@@ -13,41 +12,41 @@ import (
 	"testing"
 )
 
-func TestExecutorPerasPredicateReadsOverlayBeforeTimestamp(t *testing.T) {
+func TestExecutorVisiblePredicateReadsOverlayBeforeTimestamp(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
 	value := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
 	committer := scanOverlayCommitter{
 		values: overlayMapForTest(overlayValueForTest(key, value)),
 	}
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
-	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializedOp{CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
+	_, ok, err := executor.visiblePredicatesHold(context.Background(), compile.MaterializedOp{CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
 			ExpectedValue:    value,
 			HasExpectedValue: true,
 		}},
-	}}}, fsperas.AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
+	}}}, VisibleAdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), runner.nextTS, "overlay predicate admission must not reserve a read timestamp")
 }
 
-func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
+func TestExecutorVisibleObservedPredicateRechecksExpectedValue(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
 	oldValue := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
 	newValue := dentryValueForTest(t, fsmeta.RootInode, "file", 22, fsmeta.InodeTypeFile)
 	runner.data[string(key)] = newValue
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	committer.RememberKey(key, true)
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 
-	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializedOp{CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
+	_, ok, err := executor.visiblePredicatesHold(context.Background(), compile.MaterializedOp{CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
 		ReadPredicates: []compile.Predicate{{
 			Kind:             compile.PredicateObservedValue,
 			Key:              key,
@@ -55,22 +54,22 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 			HasExpectedValue: true,
 			RuntimeChecked:   true,
 		}},
-	}}}, fsperas.AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
+	}}}, VisibleAdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")
 }
 
-func TestExecutorPerasNotExistsKnownUsesCurrentDirectoryEmptiness(t *testing.T) {
+func TestExecutorVisibleNotExistsKnownUsesCurrentDirectoryEmptiness(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	committer.RememberEmptyDirectory(testMountIdentity, fsmeta.RootInode)
 	committer.ForgetEmptyDirectory(testMountIdentity, fsmeta.RootInode)
-	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(committer))
 	require.NoError(t, err)
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "eta")
 
-	knownAbsent := executor.perasNotExistsKnown(compile.AuthorityScope{
+	knownAbsent := executor.visibleNotExistsKnown(compile.AuthorityScope{
 		Mount:      testMountIdentity.MountID,
 		MountKeyID: testMountIdentity.MountKeyID,
 		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
@@ -79,17 +78,17 @@ func TestExecutorPerasNotExistsKnownUsesCurrentDirectoryEmptiness(t *testing.T) 
 	require.False(t, knownAbsent, "base-empty directory facts are not enough once visible writes made the current directory non-empty")
 }
 
-func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
+func TestExecutorVisiblePredicateRejectsCorruptProof(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")
 	value := dentryValueForTest(t, fsmeta.RootInode, "file", 21, fsmeta.InodeTypeFile)
 	runner.data[string(key)] = value
-	executor, err := newTestExecutor(runner, WithPerasCommitter(newTestPerasCommitter(t, runner)))
+	executor, err := newTestExecutor(runner, WithVisibleCommitter(newTestVisibleCommitter(t, runner)))
 	require.NoError(t, err)
 
 	predicateProof := proof.NewPredicateProof(key, value, true, 7, proof.ReadSourceBase, proof.ProofFrontier{})
 	predicateProof.Digest[0] ^= 0xff
-	_, ok, err := executor.perasPredicatesHold(context.Background(), compile.MaterializedOp{
+	_, ok, err := executor.visiblePredicatesHold(context.Background(), compile.MaterializedOp{
 		CompiledOp: compile.CompiledOp{Delta: compile.SemanticDelta{
 			ReadPredicates: []compile.Predicate{{
 				Kind:             compile.PredicateObservedValue,
@@ -99,15 +98,15 @@ func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 			}},
 		}},
 		PredicateProofs: []proof.PredicateProof{predicateProof},
-	}, fsperas.AdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
+	}, VisibleAdmissionContext{ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: 1}})
 
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 0, runner.getCalls)
 }
 
-func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
-	executor := &Executor{perasCommitter: scanOverlayCommitter{rows: []fsperas.OverlayKV{
+func TestExecutorMergeVisibleOverlayScanUsesOrderedMerge(t *testing.T) {
+	executor := &Executor{visibleCommitter: scanOverlayCommitter{rows: []VisibleOverlayKV{
 		{Key: []byte("k/b"), Delete: true},
 		{Key: []byte("k/c"), Value: []byte("overlay-c")},
 		{Key: []byte("k/e"), Value: []byte("overlay-e")},
@@ -118,7 +117,7 @@ func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
 		{Key: []byte("k/d"), Value: []byte("base-d")},
 	}
 
-	merged := executor.mergePerasOverlayScan(base, []byte("k/"), 4)
+	merged := executor.mergeVisibleOverlayScan(base, []byte("k/"), 4)
 
 	require.Equal(t, []KV{
 		{Key: []byte("k/a"), Value: []byte("base-a")},
@@ -128,14 +127,14 @@ func TestExecutorMergePerasOverlayScanUsesOrderedMerge(t *testing.T) {
 	}, merged)
 }
 
-func TestExecutorPerasOperationIDIsExecutorScoped(t *testing.T) {
+func TestExecutorVisibleOperationIDIsExecutorScoped(t *testing.T) {
 	first, err := New(newFakeRunner())
 	require.NoError(t, err)
 	second, err := New(newFakeRunner())
 	require.NoError(t, err)
 
-	firstID := first.nextPerasOperationID(fsmeta.OperationCreate)
-	secondID := second.nextPerasOperationID(fsmeta.OperationCreate)
+	firstID := first.nextVisibleOperationID(fsmeta.OperationCreate)
+	secondID := second.nextVisibleOperationID(fsmeta.OperationCreate)
 
 	require.Equal(t, uint64(1), firstID.Seq)
 	require.Equal(t, uint64(1), secondID.Seq)
@@ -144,8 +143,8 @@ func TestExecutorPerasOperationIDIsExecutorScoped(t *testing.T) {
 	require.NotEqual(t, firstID.ClientID, secondID.ClientID)
 }
 
-func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {
-	executor, err := New(newFakeRunner(), WithPerasAuthorityAdmitter(ownedPerasAdmitter{}))
+func BenchmarkExecutorAdmitVisibleAuthorityOwned(b *testing.B) {
+	executor, err := New(newFakeRunner(), WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -163,7 +162,7 @@ func BenchmarkExecutorAdmitPerasAuthorityOwned(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := executor.admitPerasAuthority(ctx, delta); err != nil {
+		if err := executor.admitVisibleAuthority(ctx, delta); err != nil {
 			b.Fatal(err)
 		}
 	}

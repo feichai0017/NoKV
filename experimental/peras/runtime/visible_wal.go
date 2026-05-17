@@ -390,7 +390,7 @@ func (l *WALVisibleLog) ReplayVisibleState(ctx context.Context) ([]VisibleLogSta
 	pending := make(map[visibleOperationLogKey]visibleOperationLogEntry)
 	applied := make(map[visibleAppliedLogKey][]fsperas.VisibleAppliedRange)
 	err := l.wal.ReplayFiltered(func(info wal.EntryInfo) bool {
-		return info.Type == wal.RecordTypePerasVisible
+		return info.Type == wal.RecordTypeVisibleCommit
 	}, func(info wal.EntryInfo, payload []byte) error {
 		if err := visibleLogContextErr(ctx); err != nil {
 			return err
@@ -519,7 +519,7 @@ func (l *WALVisibleLog) appendPayloads(payloads [][]byte) ([]wal.EntryInfo, erro
 	records := make([]wal.Record, len(payloads))
 	for i, payload := range payloads {
 		records[i] = wal.Record{
-			Type:    wal.RecordTypePerasVisible,
+			Type:    wal.RecordTypeVisibleCommit,
 			Payload: payload,
 		}
 	}

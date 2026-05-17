@@ -10,7 +10,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-type perasAuthorityUse struct {
+type visibleAuthorityUse struct {
 	id    uint64
 	scope compile.AuthorityScope
 }
@@ -62,7 +62,7 @@ func (c *Runtime) authorityDrainMaterialize() bool {
 }
 
 func (c *Runtime) retireDrainedAuthority(ctx context.Context, retirer fsperas.AuthorityRetirer, scopes ...compile.AuthorityScope) error {
-	if err := retirer.RetirePerasAuthority(ctx, scopes...); err != nil {
+	if err := retirer.RetireVisibleAuthority(ctx, scopes...); err != nil {
 		return c.recordErrorf("retire peras authority: %w", err)
 	}
 	return nil
@@ -78,7 +78,7 @@ func (c *Runtime) enterAuthority(scope compile.AuthorityScope) func() {
 	}
 	c.drainNextID++
 	id := c.drainNextID
-	c.drainUses = append(c.drainUses, perasAuthorityUse{
+	c.drainUses = append(c.drainUses, visibleAuthorityUse{
 		id:    id,
 		scope: CloneScope(scope),
 	})
@@ -98,7 +98,7 @@ func (c *Runtime) leaveAuthority(id uint64) {
 			continue
 		}
 		copy(c.drainUses[i:], c.drainUses[i+1:])
-		c.drainUses[len(c.drainUses)-1] = perasAuthorityUse{}
+		c.drainUses[len(c.drainUses)-1] = visibleAuthorityUse{}
 		c.drainUses = c.drainUses[:len(c.drainUses)-1]
 		break
 	}

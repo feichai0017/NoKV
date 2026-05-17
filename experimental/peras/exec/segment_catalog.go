@@ -55,7 +55,7 @@ func PerasSegmentCatalogIndexKeys(segment PerasSegment) ([][]byte, error) {
 	}
 	keys := make([][]byte, 0, len(buckets))
 	for _, bucket := range buckets {
-		key, err := fsmeta.EncodePerasSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
+		key, err := fsmeta.EncodeSegmentCatalogIndexKey(bucket.mount, bucket.bucket, segment.Root)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +69,7 @@ func PerasSegmentObjectKey(segment PerasSegment) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fsmeta.EncodePerasSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
+	return fsmeta.EncodeSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
 }
 
 func perasSegmentCanonicalCatalogBucket(segment PerasSegment) (perasSegmentCatalogBucket, error) {
@@ -107,7 +107,7 @@ func PerasSegmentCatalogObjectKeys(segment PerasSegment) ([][]byte, error) {
 	}
 	keys := make([][]byte, 0, len(buckets))
 	for _, bucket := range buckets {
-		key, err := fsmeta.EncodePerasSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
+		key, err := fsmeta.EncodeSegmentObjectKey(bucket.mount, bucket.bucket, segment.Root)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func encodePerasSegmentCatalogIndexRecord(epochID, installVersion uint64, root, 
 		return nil, ErrInvalidPerasSegment
 	}
 	parts, ok := fsmeta.InspectKey(objectKey)
-	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
+	if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordObject || parts.SegmentRoot != root {
 		return nil, ErrInvalidPerasSegment
 	}
 	var out bytes.Buffer
@@ -285,7 +285,7 @@ func DecodePerasSegmentCatalogIndexRecord(payload []byte) (SegmentCatalogIndexRe
 		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
 	}
 	parts, ok := fsmeta.InspectKey(objectKey)
-	if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordObject || parts.PerasRoot != root {
+	if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordObject || parts.SegmentRoot != root {
 		return SegmentCatalogIndexRecord{}, ErrInvalidPerasSegment
 	}
 	return SegmentCatalogIndexRecord{

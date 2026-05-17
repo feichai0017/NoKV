@@ -11,14 +11,14 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleLink(ctx context.Context, program compile.LinkProgram, mount fsmeta.MountIdentity, req fsmeta.LinkRequest) (bool, error) {
+func (e *Executor) tryVisibleLink(ctx context.Context, program compile.LinkProgram, mount fsmeta.MountIdentity, req fsmeta.LinkRequest) (bool, error) {
 	compiled := program.Compiled
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	record, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
 		return false, err
@@ -26,7 +26,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, program compile.Link
 	if record.Type == fsmeta.InodeTypeDirectory {
 		return false, fsmeta.ErrInvalidRequest
 	}
-	if !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.perasPredicateIndex()) {
+	if !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.visiblePredicateIndex()) {
 		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
 			return false, fsmeta.ErrExists
 		} else if !errors.Is(err, fsmeta.ErrNotFound) {
@@ -46,7 +46,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, program compile.Link
 	if inode.LinkCount == 0 {
 		inode.LinkCount = 1
 	}
-	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
+	quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
 		Mount:      req.Mount,
 		MountKeyID: mount.MountKeyID,
 		Scope:      req.ToParent,
@@ -77,14 +77,14 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, program compile.Link
 	if err != nil {
 		return false, err
 	}
-	concrete, err := view.materializePerasCompiledOp(compiled, []compile.WriteEffect{
-		perasPutEffect(plan.ReadKeys[1], dentryValue),
-		perasPutEffect(inodeKey, inodeValue),
+	concrete, err := view.materializeVisibleCompiledOp(compiled, []compile.WriteEffect{
+		visiblePutEffect(plan.ReadKeys[1], dentryValue),
+		visiblePutEffect(inodeKey, inodeValue),
 	})
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 // Link creates a second dentry for an existing non-directory inode and bumps
@@ -95,20 +95,20 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileLinkProgram(req, mount, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileLinkProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
 	if err != nil {
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
-	if committed, err := e.tryPerasVisibleLink(ctx, program, mount, req); committed || err != nil {
+	if committed, err := e.tryVisibleLink(ctx, program, mount, req); committed || err != nil {
 		if err != nil {
 			return err
 		}
-		e.forgetPerasEmptyDirectory(mount, req.ToParent)
+		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 		e.invalidateNegative(plan.ReadKeys[1])
 		e.invalidateDirPages(req.Mount, req.ToParent)
 		return nil
@@ -210,10 +210,10 @@ func (e *Executor) Link(ctx context.Context, req fsmeta.LinkRequest) error {
 		return err
 	}
 	// Link writes a fresh dentry at ReadKeys[1]; drop any negative memo
-	// and Peras-derived empty-directory fact, then bump the destination
+	// and visible-derived empty-directory fact, then bump the destination
 	// parent's dirpage epoch so the new dentry shows up on the next
 	// ReadDirPlus.
-	e.forgetPerasEmptyDirectory(mount, req.ToParent)
+	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys[1])
 	e.invalidateDirPages(req.Mount, req.ToParent)
 	return nil

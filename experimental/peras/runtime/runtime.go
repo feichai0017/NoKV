@@ -28,7 +28,7 @@ const (
 	defaultPerasSegmentMaxReplayMutations  = 4096
 	defaultPerasSegmentMaxPayloadBytes     = 512 << 10
 	defaultPerasSegmentCatalogRouteBudget  = 4
-	defaultPerasWitnessBatchMaxBytes       = 32 << 20
+	defaultSegmentWitnessBatchMaxBytes     = 32 << 20
 	defaultPerasSegmentCatalogScanLimit    = 128
 	// A materialized drain expands each replay mutation into MVCC records.
 	// Keep the request below the local write-batch entry cap while preserving
@@ -135,7 +135,7 @@ type Runtime struct {
 	flushTask  *utils.PeriodicTask
 	watchQueue *utils.MPSCQueue[fsmeta.WatchEvent]
 	installQ   *perasInstallLane
-	sealQ      *perasSealLane
+	sealQ      *visibleSealLane
 
 	// Lock order for multi-lock paths:
 	// commitMu -> flushMu -> drainMu -> admissionMu -> epochTable.mu -> readState.mu -> runtimeMetrics.statsMu.
@@ -143,7 +143,7 @@ type Runtime struct {
 	drainMu     sync.Mutex
 	drainCond   *sync.Cond
 	drainNextID uint64
-	drainUses   []perasAuthorityUse
+	drainUses   []visibleAuthorityUse
 	drainScopes []compile.AuthorityScope
 
 	admissionMu   sync.Mutex
@@ -395,7 +395,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		c.installQ = newPerasInstallLane(c, c.installN)
 	}
 	if _, ok := c.authority.(SealPublisher); ok {
-		c.sealQ = newPerasSealLane(c, c.installN)
+		c.sealQ = newVisibleSealLane(c, c.installN)
 	}
 	recoveredVisible, err := c.recoverVisibleLog(context.Background())
 	if err != nil {
@@ -510,7 +510,7 @@ func (c *Runtime) SubmitVisible(ctx context.Context, id fsperas.OperationID, op 
 	return ack, nil
 }
 
-func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, op compile.MaterializedOp, replay fsperas.ReplayOperation) error {
+func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.VisibleAuthorityGrant, holder *fsperas.Holder, op compile.MaterializedOp, replay fsperas.ReplayOperation) error {
 	if c == nil || c.visibleLog == nil {
 		return fsperas.ErrVisibleLogRequired
 	}
@@ -532,7 +532,7 @@ func (c *Runtime) appendVisibleLog(ctx context.Context, grant rootproto.PerasAut
 	return nil
 }
 
-func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
+func (c *Runtime) holderForGrant(ctx context.Context, grant rootproto.VisibleAuthorityGrant, scope compile.AuthorityScope) (*fsperas.Holder, error) {
 	if !grant.Valid() || grant.HolderID != c.authority.HolderID() {
 		return nil, ErrRuntimeInvalid
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 )
 
-type perasAdmissionCounters struct {
+type visibleAdmissionCounters struct {
 	eligibleTotal         atomic.Uint64
 	slowTotal             atomic.Uint64
 	slowReadOnlyTotal     atomic.Uint64
@@ -28,7 +28,7 @@ type perasAdmissionCounters struct {
 	errorTotal            atomic.Uint64
 }
 
-type perasVisibleCounters struct {
+type visibleCommitCounters struct {
 	attemptTotal           atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
@@ -41,13 +41,13 @@ type perasVisibleCounters struct {
 	latencyMaxNanosecond   atomic.Uint64
 }
 
-type perasDirectoryReadCounters struct {
-	total      atomic.Uint64
-	perasOnly  atomic.Uint64
-	dirIndex   atomic.Uint64
-	baseRows   atomic.Uint64
-	perasRows  atomic.Uint64
-	outputRows atomic.Uint64
+type visibleDirectoryReadCounters struct {
+	total       atomic.Uint64
+	visibleOnly atomic.Uint64
+	dirIndex    atomic.Uint64
+	baseRows    atomic.Uint64
+	visibleRows atomic.Uint64
+	outputRows  atomic.Uint64
 }
 
 type atomicOnePhaseCounters struct {
@@ -72,9 +72,9 @@ func (e *Executor) Stats() map[string]any {
 			"txn_retry_exhausted_total":  uint64(0),
 			"create_total":               uint64(0),
 			"commit_contract":            commitContractStats(false),
-			"peras_admission":            perasAdmissionStats(nil, false),
-			"peras_visible_commit":       perasVisibleStats(nil, false),
-			"peras_directory_read":       perasDirectoryReadStats(nil),
+			"visible_admission":          visibleAdmissionStats(nil, false),
+			"visible_commit":             visibleCommitStats(nil, false),
+			"visible_directory_read":     visibleDirectoryReadStats(nil),
 			"atomic_one_phase":           atomicOnePhaseStats(nil),
 			"negative_cache_enabled":     false,
 			"dirpage_cache_enabled":      false,
@@ -86,10 +86,10 @@ func (e *Executor) Stats() map[string]any {
 		"txn_retries_total":          e.txnRetriesTotal.Load(),
 		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
 		"create_total":               e.createTotal.Load(),
-		"commit_contract":            commitContractStats(e.perasCommitter != nil),
-		"peras_admission":            perasAdmissionStats(&e.perasAdmission, e.perasAuthority != nil),
-		"peras_visible_commit":       perasVisibleStats(&e.perasVisible, e.perasCommitter != nil),
-		"peras_directory_read":       perasDirectoryReadStats(&e.perasDirectoryRead),
+		"commit_contract":            commitContractStats(e.visibleCommitter != nil),
+		"visible_admission":          visibleAdmissionStats(&e.visibleAdmission, e.visibleAuthority != nil),
+		"visible_commit":             visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
+		"visible_directory_read":     visibleDirectoryReadStats(&e.visibleDirectoryRead),
 		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
 		"negative_cache_enabled":     e.negCache != nil,
 		"dirpage_cache_enabled":      e.dirPages != nil,
@@ -97,8 +97,8 @@ func (e *Executor) Stats() map[string]any {
 	if stats, ok := e.runner.(statsProvider); ok {
 		out["runner"] = stats.Stats()
 	}
-	if stats, ok := e.perasCommitter.(statsProvider); ok {
-		out["peras_committer"] = stats.Stats()
+	if stats, ok := e.visibleCommitter.(statsProvider); ok {
+		out["visible_committer"] = stats.Stats()
 	}
 	if e.dirPages != nil {
 		stats := e.dirPages.Stats()
@@ -114,31 +114,31 @@ func (e *Executor) Stats() map[string]any {
 	return out
 }
 
-func perasDirectoryReadStats(counters *perasDirectoryReadCounters) map[string]any {
+func visibleDirectoryReadStats(counters *visibleDirectoryReadCounters) map[string]any {
 	if counters == nil {
 		return map[string]any{
-			"total":       uint64(0),
-			"peras_only":  uint64(0),
-			"dir_index":   uint64(0),
-			"base_rows":   uint64(0),
-			"peras_rows":  uint64(0),
-			"output_rows": uint64(0),
+			"total":        uint64(0),
+			"visible_only": uint64(0),
+			"dir_index":    uint64(0),
+			"base_rows":    uint64(0),
+			"visible_rows": uint64(0),
+			"output_rows":  uint64(0),
 		}
 	}
 	return map[string]any{
-		"total":       counters.total.Load(),
-		"peras_only":  counters.perasOnly.Load(),
-		"dir_index":   counters.dirIndex.Load(),
-		"base_rows":   counters.baseRows.Load(),
-		"peras_rows":  counters.perasRows.Load(),
-		"output_rows": counters.outputRows.Load(),
+		"total":        counters.total.Load(),
+		"visible_only": counters.visibleOnly.Load(),
+		"dir_index":    counters.dirIndex.Load(),
+		"base_rows":    counters.baseRows.Load(),
+		"visible_rows": counters.visibleRows.Load(),
+		"output_rows":  counters.outputRows.Load(),
 	}
 }
 
-func commitContractStats(perasEnabled bool) map[string]any {
-	if perasEnabled {
+func commitContractStats(visibleEnabled bool) map[string]any {
+	if visibleEnabled {
 		return map[string]any{
-			"default_write_path":        "peras",
+			"default_write_path":        "visible_commit",
 			"successful_write_boundary": "visible",
 			"durable_boundary":          "witness_quorum_plus_raftstore_segment_install",
 		}
@@ -150,26 +150,26 @@ func commitContractStats(perasEnabled bool) map[string]any {
 	}
 }
 
-func (s *perasDirectoryReadCounters) record(stats compile.DirectoryReadStats) {
+func (s *visibleDirectoryReadCounters) record(stats compile.DirectoryReadStats) {
 	s.total.Add(1)
 	if stats.UsedOverlayOnly {
-		s.perasOnly.Add(1)
+		s.visibleOnly.Add(1)
 	}
 	if stats.UsedDirIndex {
 		s.dirIndex.Add(1)
 	}
 	s.baseRows.Add(uint64(stats.BaseRows))
-	s.perasRows.Add(uint64(stats.OverlayRows))
+	s.visibleRows.Add(uint64(stats.OverlayRows))
 	s.outputRows.Add(uint64(stats.OutputRows))
 }
 
-func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[string]any {
+func visibleAdmissionStats(counters *visibleAdmissionCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":        enabled,
 			"eligible_total": uint64(0),
 			"slow_total":     uint64(0),
-			"slow_by_reason": perasAdmissionSlowReasonStats(nil),
+			"slow_by_reason": visibleAdmissionSlowReasonStats(nil),
 			"acquire_total":  uint64(0),
 			"owned_total":    uint64(0),
 			"held_total":     uint64(0),
@@ -180,7 +180,7 @@ func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[str
 		"enabled":        enabled,
 		"eligible_total": counters.eligibleTotal.Load(),
 		"slow_total":     counters.slowTotal.Load(),
-		"slow_by_reason": perasAdmissionSlowReasonStats(counters),
+		"slow_by_reason": visibleAdmissionSlowReasonStats(counters),
 		"acquire_total":  counters.acquireTotal.Load(),
 		"owned_total":    counters.ownedTotal.Load(),
 		"held_total":     counters.heldTotal.Load(),
@@ -188,7 +188,7 @@ func perasAdmissionStats(counters *perasAdmissionCounters, enabled bool) map[str
 	}
 }
 
-func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]any {
+func visibleCommitStats(counters *visibleCommitCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
 			"enabled":                    enabled,
@@ -227,7 +227,7 @@ func perasVisibleStats(counters *perasVisibleCounters, enabled bool) map[string]
 	}
 }
 
-func perasAdmissionSlowReasonStats(counters *perasAdmissionCounters) map[string]uint64 {
+func visibleAdmissionSlowReasonStats(counters *visibleAdmissionCounters) map[string]uint64 {
 	if counters == nil {
 		return map[string]uint64{
 			string(compile.SlowReasonReadOnly):          0,

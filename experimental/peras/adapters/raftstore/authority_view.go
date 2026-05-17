@@ -11,9 +11,9 @@ import (
 )
 
 type AuthorityView interface {
-	Find(compile.AuthorityScope, time.Time) (rootproto.PerasAuthorityGrant, bool, error)
+	Find(compile.AuthorityScope, time.Time) (rootproto.VisibleAuthorityGrant, bool, error)
 }
 
 type AuthorityFence interface {
-	FencesKey([]byte, time.Time) (rootproto.PerasAuthorityGrant, bool, error)
+	FencesKey([]byte, time.Time) (rootproto.VisibleAuthorityGrant, bool, error)
 }

@@ -22,7 +22,7 @@ const defaultAuthorityFeedInterval = time.Second
 // RootAuthoritySource is the narrow coordinator surface needed by storage
 // witnesses to follow rooted Peras authority grants.
 type RootAuthoritySource interface {
-	ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
+	ListVisibleAuthorityGrants(context.Context, *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error)
 	WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -94,13 +94,13 @@ func (f *RootAuthorityFeed) poll(ctx context.Context) {
 }
 
 func (f *RootAuthorityFeed) bootstrap(ctx context.Context) error {
-	resp, err := f.source.ListPerasAuthorityGrants(ctx, &coordpb.ListPerasAuthorityGrantsRequest{})
+	resp, err := f.source.ListVisibleAuthorityGrants(ctx, &coordpb.ListVisibleAuthorityGrantsRequest{})
 	if err != nil {
 		return err
 	}
-	grants := make([]rootproto.PerasAuthorityGrant, 0, len(resp.GetGrants()))
+	grants := make([]rootproto.VisibleAuthorityGrant, 0, len(resp.GetGrants()))
 	for _, pbGrant := range resp.GetGrants() {
-		grant := metawire.RootPerasAuthorityGrantFromProto(pbGrant)
+		grant := metawire.RootVisibleAuthorityGrantFromProto(pbGrant)
 		if grant.Valid() {
 			grants = append(grants, grant)
 		}
@@ -154,7 +154,7 @@ func (f *RootAuthorityFeed) watch(ctx context.Context, after *rootstorage.TailTo
 
 func (f *RootAuthorityFeed) applyRootEvent(event rootevent.Event) {
 	switch event.Kind {
-	case rootevent.KindPerasAuthorityGranted, rootevent.KindPerasAuthorityRetired:
+	case rootevent.KindVisibleAuthorityGranted, rootevent.KindVisibleAuthorityRetired:
 		if err := f.table.ApplyRootEvent(event); err != nil {
 			log.Printf("peras authority feed apply event kind=%d: %v", event.Kind, err)
 		}

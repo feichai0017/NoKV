@@ -81,12 +81,12 @@ func (c *Runtime) appendSegmentWitnessBatch(ctx context.Context, batch perasFlus
 	return c.appendSegmentWitnessRecordsBounded(ctx, batch.scope, records)
 }
 
-func (c *Runtime) segmentWitnessGrant(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder) (rootproto.PerasAuthorityGrant, error) {
+func (c *Runtime) segmentWitnessGrant(ctx context.Context, scope compile.AuthorityScope, holder *fsperas.Holder) (rootproto.VisibleAuthorityGrant, error) {
 	grant, ok := c.epochs.grant(holder.EpochID())
 	if !ok && c.authority != nil {
 		active, owned, err := c.authority.Acquire(ctx, scope)
 		if err != nil {
-			return rootproto.PerasAuthorityGrant{}, err
+			return rootproto.VisibleAuthorityGrant{}, err
 		}
 		if owned && active.EpochID == holder.EpochID() && active.HolderID == holder.HolderID() {
 			grant = active
@@ -95,12 +95,12 @@ func (c *Runtime) segmentWitnessGrant(ctx context.Context, scope compile.Authori
 		}
 	}
 	if !ok {
-		return rootproto.PerasAuthorityGrant{}, fmt.Errorf("peras witness grant missing for epoch %d: %w", holder.EpochID(), ErrRuntimeInvalid)
+		return rootproto.VisibleAuthorityGrant{}, fmt.Errorf("peras witness grant missing for epoch %d: %w", holder.EpochID(), ErrRuntimeInvalid)
 	}
 	return grant, nil
 }
 
-func (c *Runtime) segmentWitnessRecord(grant rootproto.PerasAuthorityGrant, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte, timestampUnixNano int64) fsperas.SegmentWitnessRecord {
+func (c *Runtime) segmentWitnessRecord(grant rootproto.VisibleAuthorityGrant, holder *fsperas.Holder, segment fsperas.PerasSegment, payload []byte, digest [32]byte, timestampUnixNano int64) fsperas.SegmentWitnessRecord {
 	stats := segment.Stats()
 	return fsperas.SegmentWitnessRecord{
 		EpochID:              holder.EpochID(),
@@ -223,7 +223,7 @@ func witnessQuorumScore(id string, records []fsperas.SegmentWitnessRecord) uint6
 }
 
 func (c *Runtime) appendSegmentWitnessRecordsBounded(ctx context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
-	for _, batch := range splitSegmentWitnessRecords(records, defaultPerasWitnessBatchMaxBytes) {
+	for _, batch := range splitSegmentWitnessRecords(records, defaultSegmentWitnessBatchMaxBytes) {
 		if err := c.appendSegmentWitnessRecords(ctx, scope, batch); err != nil {
 			return err
 		}

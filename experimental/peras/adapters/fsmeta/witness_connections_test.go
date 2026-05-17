@@ -21,7 +21,7 @@ func TestTryBuildWitnessConnectionsRequiresConfiguredStores(t *testing.T) {
 	}}
 	allowed := map[uint64]struct{}{1: {}, 2: {}, 3: {}}
 
-	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
+	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testSegmentWitnessDialOptions(), allowed)
 	require.NoError(t, err)
 	require.False(t, complete)
 	require.NotNil(t, conns)
@@ -37,7 +37,7 @@ func TestTryBuildWitnessConnectionsAcceptsConfiguredStoresOnceAllUp(t *testing.T
 	}}
 	allowed := map[uint64]struct{}{1: {}, 2: {}, 3: {}}
 
-	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testPerasWitnessDialOptions(), allowed)
+	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testSegmentWitnessDialOptions(), allowed)
 	require.NoError(t, err)
 	require.True(t, complete)
 	require.Len(t, conns.witnesses, 3)
@@ -55,7 +55,7 @@ func TestTryBuildWitnessConnectionsAcceptsAllUpStoresByDefault(t *testing.T) {
 		{StoreId: 4, ClientAddr: "127.0.0.1:4", State: coordpb.StoreState_STORE_STATE_TOMBSTONE},
 	}}
 
-	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testPerasWitnessDialOptions(), nil)
+	conns, complete, err := tryBuildWitnessConnections(context.Background(), lister, testSegmentWitnessDialOptions(), nil)
 	require.NoError(t, err)
 	require.True(t, complete)
 	require.Len(t, conns.witnesses, 3)
@@ -65,7 +65,7 @@ func TestTryBuildWitnessConnectionsAcceptsAllUpStoresByDefault(t *testing.T) {
 	require.NoError(t, conns.Close())
 }
 
-func TestPerasWitnessDiscoveryWaitsForStableDefaultStoreSet(t *testing.T) {
+func TestSegmentWitnessDiscoveryWaitsForStableDefaultStoreSet(t *testing.T) {
 	now := time.Unix(100, 0)
 
 	ids, since, complete := witnessDiscoverySettled(nil, time.Time{}, []string{"store-1"}, now)
@@ -73,17 +73,17 @@ func TestPerasWitnessDiscoveryWaitsForStableDefaultStoreSet(t *testing.T) {
 	require.Equal(t, []string{"store-1"}, ids)
 	require.Equal(t, now, since)
 
-	ids, since, complete = witnessDiscoverySettled(ids, since, []string{"store-1", "store-2", "store-3"}, now.Add(perasWitnessDiscoveryBackoff))
+	ids, since, complete = witnessDiscoverySettled(ids, since, []string{"store-1", "store-2", "store-3"}, now.Add(segmentWitnessDiscoveryBackoff))
 	require.False(t, complete)
 	require.Equal(t, []string{"store-1", "store-2", "store-3"}, ids)
-	require.Equal(t, now.Add(perasWitnessDiscoveryBackoff), since)
+	require.Equal(t, now.Add(segmentWitnessDiscoveryBackoff), since)
 
-	ids, _, complete = witnessDiscoverySettled(ids, since, []string{"store-1", "store-2", "store-3"}, since.Add(perasWitnessDiscoverySettle))
+	ids, _, complete = witnessDiscoverySettled(ids, since, []string{"store-1", "store-2", "store-3"}, since.Add(segmentWitnessDiscoverySettle))
 	require.True(t, complete)
 	require.Equal(t, []string{"store-1", "store-2", "store-3"}, ids)
 }
 
-func TestPerasWitnessStoreSelectedIgnoresUnavailableStores(t *testing.T) {
+func TestSegmentWitnessStoreSelectedIgnoresUnavailableStores(t *testing.T) {
 	allowed := map[uint64]struct{}{1: {}}
 	require.False(t, witnessStoreSelected(nil, allowed))
 	require.False(t, witnessStoreSelected(&coordpb.StoreInfo{StoreId: 1, State: coordpb.StoreState_STORE_STATE_UP}, allowed))
@@ -100,6 +100,6 @@ func (f *fakePerasStoreLister) ListStores(context.Context, *coordpb.ListStoresRe
 	return &coordpb.ListStoresResponse{Stores: f.stores}, nil
 }
 
-func testPerasWitnessDialOptions() []grpc.DialOption {
+func testSegmentWitnessDialOptions() []grpc.DialOption {
 	return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 }

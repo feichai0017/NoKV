@@ -103,7 +103,7 @@ func (l *WALWitnessLog) AppendSegments(ctx context.Context, records []fsperas.Se
 		}
 		payloadBytes += len(payload)
 		walRecords = append(walRecords, wal.Record{
-			Type:    wal.RecordTypePerasWitness,
+			Type:    wal.RecordTypeWitnessEvidence,
 			Payload: payload,
 		})
 	}
@@ -130,7 +130,7 @@ func (l *WALWitnessLog) Probe(ctx context.Context, epochID uint64) (fsperas.Witn
 	segments := make(map[witnessSegmentKey]fsperas.SegmentWitnessRecord)
 	err := l.wal.ReplayFiltered(
 		func(info wal.EntryInfo) bool {
-			return info.Type == wal.RecordTypePerasWitness
+			return info.Type == wal.RecordTypeWitnessEvidence
 		},
 		func(_ wal.EntryInfo, payload []byte) error {
 			if err := ctxErr(ctx); err != nil {
@@ -179,7 +179,7 @@ func (l *WALWitnessLog) ProbeSegment(ctx context.Context, ref fsperas.WitnessSeg
 	found := false
 	err := l.wal.ReplayFiltered(
 		func(info wal.EntryInfo) bool {
-			return info.Type == wal.RecordTypePerasWitness
+			return info.Type == wal.RecordTypeWitnessEvidence
 		},
 		func(_ wal.EntryInfo, payload []byte) error {
 			if err := ctxErr(ctx); err != nil {

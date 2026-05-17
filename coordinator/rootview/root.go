@@ -28,7 +28,7 @@ type RootStorage interface {
 	AppendRootEvent(ctx context.Context, event rootevent.Event) error
 	SaveAllocatorState(ctx context.Context, idCurrent, tsCurrent uint64) error
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
+	ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error)
 	Refresh() error
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
@@ -51,7 +51,7 @@ type rootRuntimeBackend interface {
 	CanSubmitRootWrites() bool
 	LeaderID() uint64
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
+	ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error)
 	Close() error
 }
 
@@ -73,7 +73,7 @@ type rootSubmitBackend interface {
 
 type rootCoordinatorProtocolBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
-	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
+	ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error)
 }
 
 type rootCloseBackend interface {
@@ -145,11 +145,11 @@ func (a rootBackendAdapter) ApplyGrant(ctx context.Context, cmd rootproto.GrantC
 	return a.protocol.ApplyGrant(ctx, cmd)
 }
 
-func (a rootBackendAdapter) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (a rootBackendAdapter) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	if a.protocol == nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, errGrantCommandUnsupported
 	}
-	return a.protocol.ApplyPerasAuthority(ctx, cmd)
+	return a.protocol.ApplyVisibleAuthority(ctx, cmd)
 }
 
 func (a rootBackendAdapter) Close() error {
@@ -332,18 +332,18 @@ func (s *RootStore) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) 
 	return state, cert, err
 }
 
-func (s *RootStore) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *RootStore) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	if s == nil || s.root == nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
 	}
 	if !s.supportsProtocol {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, errGrantCommandUnsupported
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, errGrantCommandUnsupported
 	}
-	var grant rootproto.PerasAuthorityGrant
+	var grant rootproto.VisibleAuthorityGrant
 	var state rootstate.State
-	state, err := s.applyPerasAndReload(func() (rootstate.State, error) {
+	state, err := s.applyVisibleAuthorityAndReload(func() (rootstate.State, error) {
 		var applyErr error
-		state, grant, applyErr = s.root.ApplyPerasAuthority(ctx, cmd)
+		state, grant, applyErr = s.root.ApplyVisibleAuthority(ctx, cmd)
 		return state, applyErr
 	})
 	return state, grant, err
@@ -430,7 +430,7 @@ func eunomiaStatePresent(state rootstate.EunomiaState) bool {
 		len(state.RetiredEraFloors) > 0
 }
 
-func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
+func (s *RootStore) applyVisibleAuthorityAndReload(run func() (rootstate.State, error)) (rootstate.State, error) {
 	if s == nil {
 		return rootstate.State{}, nil
 	}
@@ -438,11 +438,11 @@ func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (ro
 		return rootstate.State{}, nil
 	}
 	state, err := run()
-	if perasStatePresent(state) {
-		// The root apply response carries the active Peras grant mirror even
+	if visibleAuthorityStatePresent(state) {
+		// The root apply response carries the active Visible authority grant mirror even
 		// when acquisition loses primacy. Merge it before returning so fsmeta
 		// callers see the current holder instead of repeatedly campaigning.
-		s.mergePerasAuthorityState(state)
+		s.mergeVisibleAuthorityState(state)
 	}
 	if err != nil {
 		return state, err
@@ -450,14 +450,14 @@ func (s *RootStore) applyPerasAndReload(run func() (rootstate.State, error)) (ro
 	if err := s.reload(); err != nil {
 		return state, err
 	}
-	if perasStatePresent(state) {
-		s.mergePerasAuthorityState(state)
+	if visibleAuthorityStatePresent(state) {
+		s.mergeVisibleAuthorityState(state)
 	}
 	return state, nil
 }
 
-func perasStatePresent(state rootstate.State) bool {
-	return len(state.ActivePerasGrants) > 0 || state.PerasAuthorityEpoch != 0
+func visibleAuthorityStatePresent(state rootstate.State) bool {
+	return len(state.ActiveVisibleGrants) > 0 || state.VisibleAuthorityEpoch != 0
 }
 
 // mergeEunomiaState overlays the committed authority grant lifecycle from an
@@ -483,23 +483,23 @@ func (s *RootStore) mergeEunomiaState(state rootstate.EunomiaState) {
 	s.mu.Unlock()
 }
 
-// mergePerasAuthorityState overlays the rooted fsmeta Peras authority
+// mergeVisibleAuthorityState overlays the rooted fsmeta Visible authority
 // mirror from an authoritative Apply response onto the cached snapshot.
 // Region descriptors and allocator fences remain owned by root replay/reload.
-func (s *RootStore) mergePerasAuthorityState(state rootstate.State) {
+func (s *RootStore) mergeVisibleAuthorityState(state rootstate.State) {
 	if s == nil {
 		return
 	}
 	incoming := Snapshot{
-		ActivePerasGrants:   rootstate.CloneState(state).ActivePerasGrants,
-		PerasAuthorityEpoch: state.PerasAuthorityEpoch,
-		PerasAuthoritySeals: rootstate.CloneState(state).PerasAuthoritySeals,
+		ActiveVisibleGrants:   rootstate.CloneState(state).ActiveVisibleGrants,
+		VisibleAuthorityEpoch: state.VisibleAuthorityEpoch,
+		VisibleAuthoritySeals: rootstate.CloneState(state).VisibleAuthoritySeals,
 	}
 	s.mu.Lock()
 	merged := PreserveNewerAuthorityState(incoming, s.snapshot)
-	s.snapshot.ActivePerasGrants = clonePerasAuthorityGrants(merged.ActivePerasGrants)
-	s.snapshot.PerasAuthorityEpoch = merged.PerasAuthorityEpoch
-	s.snapshot.PerasAuthoritySeals = clonePerasAuthoritySeals(merged.PerasAuthoritySeals)
+	s.snapshot.ActiveVisibleGrants = cloneVisibleAuthorityGrants(merged.ActiveVisibleGrants)
+	s.snapshot.VisibleAuthorityEpoch = merged.VisibleAuthorityEpoch
+	s.snapshot.VisibleAuthoritySeals = cloneVisibleAuthoritySeals(merged.VisibleAuthoritySeals)
 	s.mu.Unlock()
 }
 

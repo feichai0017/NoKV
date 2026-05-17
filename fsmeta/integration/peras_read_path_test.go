@@ -13,6 +13,7 @@ import (
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
+	perasfsmeta "github.com/feichai0017/NoKV/experimental/peras/adapters/fsmeta"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -36,8 +37,8 @@ func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T)
 	visibleLog, err := runtimeperas.NewWALVisibleLog(visibleWAL, wal.DurabilityFlushed)
 	require.NoError(t, err)
 	perasRuntime, err := runtimeperas.NewRuntime(runtimeperas.Config{
-		Authority:         integrationPerasGrantProvider{},
-		Witnesses:         integrationPerasWitnesses(3),
+		Authority:         integrationVisibleGrantProvider{},
+		Witnesses:         integrationSegmentWitnesses(3),
 		VisibleLog:        visibleLog,
 		SegmentBatchSize:  1024,
 		SegmentFlushEvery: time.Hour,
@@ -48,8 +49,8 @@ func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T)
 	runtime := openRealClusterRuntimeWithOptions(
 		t,
 		ctx,
-		fsmetaexec.WithPerasAuthorityAdmitter(integrationPerasAdmitter{}),
-		fsmetaexec.WithPerasCommitter(perasRuntime),
+		fsmetaexec.WithVisibleAuthorityAdmitter(integrationPerasAdmitter{}),
+		fsmetaexec.WithVisibleCommitter(perasfsmeta.NewExecutorCommitter(perasRuntime)),
 		fsmetaexec.WithNegativeCache(negatives),
 		fsmetaexec.WithDirPageCache(dirPages),
 	)
@@ -118,18 +119,18 @@ func TestPerasVisibleReadPathBypassesPersistentCachesOnRealCluster(t *testing.T)
 
 type integrationPerasAdmitter struct{}
 
-func (integrationPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
+func (integrationPerasAdmitter) AcquireVisibleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
 	return true, nil
 }
 
-type integrationPerasGrantProvider struct{}
+type integrationVisibleGrantProvider struct{}
 
-func (integrationPerasGrantProvider) HolderID() string {
+func (integrationVisibleGrantProvider) HolderID() string {
 	return "integration-holder"
 }
 
-func (integrationPerasGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.PerasAuthorityGrant, bool, error) {
-	return rootproto.PerasAuthorityGrant{
+func (integrationVisibleGrantProvider) Acquire(context.Context, compile.AuthorityScope) (rootproto.VisibleAuthorityGrant, bool, error) {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:          "integration-grant",
 		EpochID:          1,
 		HolderID:         "integration-holder",
@@ -140,39 +141,39 @@ func (integrationPerasGrantProvider) Acquire(context.Context, compile.AuthorityS
 			Index:    1,
 			Revision: 1,
 		},
-		Scope: rootproto.PerasAuthorityScope{
+		Scope: rootproto.VisibleAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 1,
 		},
 	}, true, nil
 }
 
-type integrationPerasWitness struct {
+type integrationSegmentWitness struct {
 	id      string
 	mu      sync.Mutex
 	records []fsperas.SegmentWitnessRecord
 }
 
-func integrationPerasWitnesses(n int) []fsperas.WitnessReplica {
+func integrationSegmentWitnesses(n int) []fsperas.WitnessReplica {
 	out := make([]fsperas.WitnessReplica, 0, n)
 	for i := range n {
-		out = append(out, &integrationPerasWitness{id: fmt.Sprintf("integration-witness-%d", i)})
+		out = append(out, &integrationSegmentWitness{id: fmt.Sprintf("integration-witness-%d", i)})
 	}
 	return out
 }
 
-func (w *integrationPerasWitness) ID() string {
+func (w *integrationSegmentWitness) ID() string {
 	return w.id
 }
 
-func (w *integrationPerasWitness) AppendSegments(_ context.Context, _ compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
+func (w *integrationSegmentWitness) AppendSegments(_ context.Context, _ compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.records = append(w.records, records...)
 	return nil
 }
 
-func (w *integrationPerasWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
+func (w *integrationSegmentWitness) Probe(_ context.Context, epochID uint64) (fsperas.WitnessSnapshot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out fsperas.WitnessSnapshot

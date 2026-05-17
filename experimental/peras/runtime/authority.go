@@ -17,20 +17,20 @@ import (
 
 type ActiveAuthorities struct {
 	mu     sync.RWMutex
-	grants map[string]rootproto.PerasAuthorityGrant
+	grants map[string]rootproto.VisibleAuthorityGrant
 	ready  bool
 }
 
 func NewActiveAuthorities() *ActiveAuthorities {
-	return &ActiveAuthorities{grants: make(map[string]rootproto.PerasAuthorityGrant)}
+	return &ActiveAuthorities{grants: make(map[string]rootproto.VisibleAuthorityGrant)}
 }
 
 // Replace installs one root-observed active grant snapshot. Invalid entries are
 // rejected instead of being partially installed, so callers never mix two root
 // views in one table.
-func (a *ActiveAuthorities) Replace(grants []rootproto.PerasAuthorityGrant) error {
-	next := make(map[string]rootproto.PerasAuthorityGrant, len(grants))
-	ordered := make([]rootproto.PerasAuthorityGrant, 0, len(grants))
+func (a *ActiveAuthorities) Replace(grants []rootproto.VisibleAuthorityGrant) error {
+	next := make(map[string]rootproto.VisibleAuthorityGrant, len(grants))
+	ordered := make([]rootproto.VisibleAuthorityGrant, 0, len(grants))
 	for _, grant := range grants {
 		if !grant.Valid() {
 			return ErrInvalidGrant
@@ -51,17 +51,17 @@ func (a *ActiveAuthorities) Replace(grants []rootproto.PerasAuthorityGrant) erro
 	return nil
 }
 
-func (a *ActiveAuthorities) Snapshot() []rootproto.PerasAuthorityGrant {
+func (a *ActiveAuthorities) Snapshot() []rootproto.VisibleAuthorityGrant {
 	if a == nil {
 		return nil
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make([]rootproto.PerasAuthorityGrant, 0, len(a.grants))
+	out := make([]rootproto.VisibleAuthorityGrant, 0, len(a.grants))
 	for _, grant := range a.grants {
 		out = append(out, cloneGrant(grant))
 	}
-	slices.SortFunc(out, func(left, right rootproto.PerasAuthorityGrant) int {
+	slices.SortFunc(out, func(left, right rootproto.VisibleAuthorityGrant) int {
 		if left.GrantID < right.GrantID {
 			return -1
 		}
@@ -74,16 +74,16 @@ func (a *ActiveAuthorities) Snapshot() []rootproto.PerasAuthorityGrant {
 }
 
 func (a *ActiveAuthorities) ApplyRootEvent(event rootevent.Event) error {
-	if a == nil || event.PerasGrant == nil {
+	if a == nil || event.VisibleGrant == nil {
 		return nil
 	}
 	switch event.Kind {
-	case rootevent.KindPerasAuthorityGranted:
-		return a.applyGranted(*event.PerasGrant)
-	case rootevent.KindPerasAuthorityRetired:
+	case rootevent.KindVisibleAuthorityGranted:
+		return a.applyGranted(*event.VisibleGrant)
+	case rootevent.KindVisibleAuthorityRetired:
 		next := a.Snapshot()
 		for i := 0; i < len(next); i++ {
-			if next[i].GrantID == event.PerasGrant.GrantID {
+			if next[i].GrantID == event.VisibleGrant.GrantID {
 				next = append(next[:i], next[i+1:]...)
 				i--
 			}
@@ -94,7 +94,7 @@ func (a *ActiveAuthorities) ApplyRootEvent(event rootevent.Event) error {
 	}
 }
 
-func (a *ActiveAuthorities) applyGranted(grant rootproto.PerasAuthorityGrant) error {
+func (a *ActiveAuthorities) applyGranted(grant rootproto.VisibleAuthorityGrant) error {
 	if !grant.Valid() {
 		return ErrInvalidGrant
 	}
@@ -121,24 +121,24 @@ func (a *ActiveAuthorities) applyGranted(grant rootproto.PerasAuthorityGrant) er
 	return a.Replace(next)
 }
 
-func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (rootproto.PerasAuthorityGrant, bool, error) {
+func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (rootproto.VisibleAuthorityGrant, bool, error) {
 	if a == nil {
-		return rootproto.PerasAuthorityGrant{}, false, nil
+		return rootproto.VisibleAuthorityGrant{}, false, nil
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	var found rootproto.PerasAuthorityGrant
+	var found rootproto.VisibleAuthorityGrant
 	for _, grant := range a.grants {
 		if !GrantCoversDelta(grant, scope, now) {
 			continue
 		}
 		if found.Valid() {
-			return rootproto.PerasAuthorityGrant{}, false, ErrAmbiguousAuthority
+			return rootproto.VisibleAuthorityGrant{}, false, ErrAmbiguousAuthority
 		}
 		found = grant
 	}
 	if !found.Valid() {
-		return rootproto.PerasAuthorityGrant{}, false, nil
+		return rootproto.VisibleAuthorityGrant{}, false, nil
 	}
 	return cloneGrant(found), true, nil
 }
@@ -146,36 +146,36 @@ func (a *ActiveAuthorities) Find(scope compile.AuthorityScope, now time.Time) (r
 // FencesKey reports whether a concrete fsmeta key is currently covered by one
 // active Peras authority. Non-fsmeta keys are ignored so generic KV traffic is
 // not accidentally fenced.
-func (a *ActiveAuthorities) FencesKey(key []byte, now time.Time) (rootproto.PerasAuthorityGrant, bool, error) {
+func (a *ActiveAuthorities) FencesKey(key []byte, now time.Time) (rootproto.VisibleAuthorityGrant, bool, error) {
 	if a == nil {
-		return rootproto.PerasAuthorityGrant{}, false, nil
+		return rootproto.VisibleAuthorityGrant{}, false, nil
 	}
 	parts, ok := fsmeta.InspectKey(key)
 	if !ok {
-		return rootproto.PerasAuthorityGrant{}, false, nil
+		return rootproto.VisibleAuthorityGrant{}, false, nil
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if !a.ready {
-		return rootproto.PerasAuthorityGrant{}, false, ErrAuthorityViewStale
+		return rootproto.VisibleAuthorityGrant{}, false, ErrAuthorityViewStale
 	}
-	var found rootproto.PerasAuthorityGrant
+	var found rootproto.VisibleAuthorityGrant
 	for _, grant := range a.grants {
 		if !grantCoversKey(grant, parts, now) {
 			continue
 		}
 		if found.Valid() {
-			return rootproto.PerasAuthorityGrant{}, false, ErrAmbiguousAuthority
+			return rootproto.VisibleAuthorityGrant{}, false, ErrAmbiguousAuthority
 		}
 		found = grant
 	}
 	if !found.Valid() {
-		return rootproto.PerasAuthorityGrant{}, false, nil
+		return rootproto.VisibleAuthorityGrant{}, false, nil
 	}
 	return cloneGrant(found), true, nil
 }
 
-func GrantCoversDelta(grant rootproto.PerasAuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
+func GrantCoversDelta(grant rootproto.VisibleAuthorityGrant, scope compile.AuthorityScope, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
 	}
@@ -206,7 +206,7 @@ func grantCoversBuckets(grant []uint16, requested []fsmeta.AffinityBucket, empty
 	return true
 }
 
-func grantCoversKey(grant rootproto.PerasAuthorityGrant, parts fsmeta.KeyParts, now time.Time) bool {
+func grantCoversKey(grant rootproto.VisibleAuthorityGrant, parts fsmeta.KeyParts, now time.Time) bool {
 	if !grant.Valid() || !grant.ActiveAt(now.UnixNano()) {
 		return false
 	}
@@ -269,12 +269,12 @@ func (a *ActiveAuthorities) HeldBy(holderID string, scope compile.AuthorityScope
 	return grant.HolderID == holderID, nil
 }
 
-func cloneGrant(grant rootproto.PerasAuthorityGrant) rootproto.PerasAuthorityGrant {
-	return rootproto.ClonePerasAuthorityGrant(grant)
+func cloneGrant(grant rootproto.VisibleAuthorityGrant) rootproto.VisibleAuthorityGrant {
+	return rootproto.CloneVisibleAuthorityGrant(grant)
 }
 
-func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.PerasAuthorityScope {
-	return rootproto.PerasAuthorityScope{
+func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.VisibleAuthorityScope {
+	return rootproto.VisibleAuthorityScope{
 		MountID:    string(scope.Mount),
 		MountKeyID: uint64(scope.MountKeyID),
 		Buckets:    perasBucketsFromDelta(scope.Buckets),
@@ -283,15 +283,15 @@ func AuthorityScopeFromDelta(scope compile.AuthorityScope) rootproto.PerasAuthor
 	}
 }
 
-func ScopeFromGrant(grant rootproto.PerasAuthorityGrant) compile.AuthorityScope {
+func ScopeFromGrant(grant rootproto.VisibleAuthorityGrant) compile.AuthorityScope {
 	return scopeFromRootAuthority(grant.Scope)
 }
 
-func ScopeFromSeal(seal rootproto.PerasAuthoritySeal) compile.AuthorityScope {
+func ScopeFromSeal(seal rootproto.VisibleAuthoritySeal) compile.AuthorityScope {
 	return scopeFromRootAuthority(seal.Scope)
 }
 
-func scopeFromRootAuthority(rootScope rootproto.PerasAuthorityScope) compile.AuthorityScope {
+func scopeFromRootAuthority(rootScope rootproto.VisibleAuthorityScope) compile.AuthorityScope {
 	scope := compile.AuthorityScope{
 		Mount:      fsmeta.MountID(rootScope.MountID),
 		MountKeyID: fsmeta.MountKeyID(rootScope.MountKeyID),

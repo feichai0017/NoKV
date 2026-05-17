@@ -52,8 +52,8 @@ type leaseBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
-type perasAuthorityBackend interface {
-	ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error)
+type visibleAuthorityBackend interface {
+	ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error)
 }
 
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
@@ -177,39 +177,39 @@ func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyG
 	}, nil
 }
 
-func (s *Service) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataRootApplyPerasAuthorityRequest) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
+func (s *Service) ApplyVisibleAuthority(ctx context.Context, req *metapb.MetadataRootApplyVisibleAuthorityRequest) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
 	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyPerasAuthorityResponse{}, nil
+		return &metapb.MetadataRootApplyVisibleAuthorityResponse{}, nil
 	}
 	if err := s.requireRootWriteReady(ctx); err != nil {
 		return nil, err
 	}
-	backend, ok := s.backend.(perasAuthorityBackend)
+	backend, ok := s.backend.(visibleAuthorityBackend)
 	if !ok {
-		return nil, statusUnimplemented("metadata root backend does not implement Peras authority protocol")
+		return nil, statusUnimplemented("metadata root backend does not implement Visible authority protocol")
 	}
-	cmd := metawire.RootPerasAuthorityCommandFromProto(req.GetCommand())
-	state, grant, err := backend.ApplyPerasAuthority(ctx, cmd)
+	cmd := metawire.RootVisibleAuthorityCommandFromProto(req.GetCommand())
+	state, grant, err := backend.ApplyVisibleAuthority(ctx, cmd)
 	if err != nil {
 		if errors.Is(err, rootstate.ErrPrimacy) {
-			return &metapb.MetadataRootApplyPerasAuthorityResponse{
+			return &metapb.MetadataRootApplyVisibleAuthorityResponse{
 				State:  metawire.RootStateToProto(state),
-				Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
+				Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
 			}, nil
 		}
 		return nil, rpcError(err)
 	}
-	applyStatus := metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED
+	applyStatus := metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED
 	switch cmd.Kind {
-	case rootproto.PerasAuthorityActRetire:
-		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED
-	case rootproto.PerasAuthorityActSeal:
-		applyStatus = metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED
+	case rootproto.VisibleAuthorityActRetire:
+		applyStatus = metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED
+	case rootproto.VisibleAuthorityActSeal:
+		applyStatus = metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED
 	}
-	return &metapb.MetadataRootApplyPerasAuthorityResponse{
+	return &metapb.MetadataRootApplyVisibleAuthorityResponse{
 		State:  metawire.RootStateToProto(state),
 		Status: applyStatus,
-		Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
+		Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
 	}, nil
 }
 

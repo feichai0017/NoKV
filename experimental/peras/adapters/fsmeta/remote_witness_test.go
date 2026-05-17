@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type remotePerasWitnessStub struct {
+type remoteSegmentWitnessStub struct {
 	segment    fsperas.SegmentWitnessRecord
 	segments   []fsperas.SegmentWitnessRecord
 	scope      compile.AuthorityScope
@@ -27,7 +27,7 @@ type remotePerasWitnessStub struct {
 	probeCalls int
 }
 
-func (s *remotePerasWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
+func (s *remoteSegmentWitnessStub) AppendSegments(_ context.Context, scope compile.AuthorityScope, records []fsperas.SegmentWitnessRecord) error {
 	s.scope = scope
 	s.segments = append(s.segments, records...)
 	if len(records) > 0 {
@@ -36,7 +36,7 @@ func (s *remotePerasWitnessStub) AppendSegments(_ context.Context, scope compile
 	return nil
 }
 
-func (s *remotePerasWitnessStub) Probe(_ context.Context, _ uint64) (fsperas.WitnessSnapshot, error) {
+func (s *remoteSegmentWitnessStub) Probe(_ context.Context, _ uint64) (fsperas.WitnessSnapshot, error) {
 	s.probeCalls++
 	if len(s.snapshot.Segments) > 0 {
 		return s.snapshot, nil
@@ -44,7 +44,7 @@ func (s *remotePerasWitnessStub) Probe(_ context.Context, _ uint64) (fsperas.Wit
 	return fsperas.WitnessSnapshot{Segments: append([]fsperas.SegmentWitnessRecord(nil), s.segments...)}, nil
 }
 
-func (s *remotePerasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
+func (s *remoteSegmentWitnessStub) ProbeSegment(_ context.Context, ref fsperas.WitnessSegmentRef) (fsperas.SegmentWitnessRecord, bool, error) {
 	snapshot, err := s.Probe(context.Background(), ref.EpochID)
 	if err != nil {
 		return fsperas.SegmentWitnessRecord{}, false, err
@@ -57,7 +57,7 @@ func (s *remotePerasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.Wit
 	return fsperas.SegmentWitnessRecord{}, false, nil
 }
 
-func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
+func TestRemoteSegmentWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
@@ -67,10 +67,10 @@ func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 	}
 	record := remotePerasSegmentRecord()
 
-	stub := &remotePerasWitnessStub{}
-	conn, closeServer := startPerasWitnessServer(t, stub)
+	stub := &remoteSegmentWitnessStub{}
+	conn, closeServer := startSegmentWitnessServer(t, stub)
 	defer closeServer()
-	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewPerasWitnessClient(conn))
+	remote, err := newRemoteSegmentWitness("store-1", kvrpcpb.NewSegmentWitnessClient(conn))
 	require.NoError(t, err)
 
 	require.NoError(t, remote.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{record}))
@@ -82,7 +82,7 @@ func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{record}, snapshot.Segments)
 }
 
-func TestRemotePerasWitnessBatchRoundTrip(t *testing.T) {
+func TestRemoteSegmentWitnessBatchRoundTrip(t *testing.T) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
@@ -92,10 +92,10 @@ func TestRemotePerasWitnessBatchRoundTrip(t *testing.T) {
 	}
 	first := remotePerasSegmentRecordWithRoot(5)
 	second := remotePerasSegmentRecordWithRoot(7)
-	stub := &remotePerasWitnessStub{}
-	conn, closeServer := startPerasWitnessServer(t, stub)
+	stub := &remoteSegmentWitnessStub{}
+	conn, closeServer := startSegmentWitnessServer(t, stub)
 	defer closeServer()
-	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewPerasWitnessClient(conn))
+	remote, err := newRemoteSegmentWitness("store-1", kvrpcpb.NewSegmentWitnessClient(conn))
 	require.NoError(t, err)
 
 	require.NoError(t, remote.AppendSegments(context.Background(), scope, []fsperas.SegmentWitnessRecord{first, second}))
@@ -107,15 +107,15 @@ func TestRemotePerasWitnessBatchRoundTrip(t *testing.T) {
 	require.Equal(t, []fsperas.SegmentWitnessRecord{first, second}, snapshot.Segments)
 }
 
-func TestRemotePerasWitnessProbeSegment(t *testing.T) {
+func TestRemoteProbeSegmentWitnessSegment(t *testing.T) {
 	first := remotePerasSegmentRecordWithRoot(5)
 	second := remotePerasSegmentRecordWithRoot(7)
-	stub := &remotePerasWitnessStub{
+	stub := &remoteSegmentWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{first, second}},
 	}
-	conn, closeServer := startPerasWitnessServer(t, stub)
+	conn, closeServer := startSegmentWitnessServer(t, stub)
 	defer closeServer()
-	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewPerasWitnessClient(conn))
+	remote, err := newRemoteSegmentWitness("store-1", kvrpcpb.NewSegmentWitnessClient(conn))
 	require.NoError(t, err)
 
 	record, found, err := remote.ProbeSegment(context.Background(), fsperas.WitnessSegmentRef{
@@ -128,17 +128,17 @@ func TestRemotePerasWitnessProbeSegment(t *testing.T) {
 	require.Equal(t, second, record)
 }
 
-func TestRemotePerasWitnessProbeReadsPages(t *testing.T) {
+func TestRemoteProbeSegmentWitnessReadsPages(t *testing.T) {
 	records := make([]fsperas.SegmentWitnessRecord, 0, 40)
 	for i := range 40 {
 		records = append(records, remotePerasSegmentRecordWithRoot(byte(i+1)))
 	}
-	stub := &remotePerasWitnessStub{
+	stub := &remoteSegmentWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: records},
 	}
-	conn, closeServer := startPerasWitnessServer(t, stub)
+	conn, closeServer := startSegmentWitnessServer(t, stub)
 	defer closeServer()
-	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewPerasWitnessClient(conn))
+	remote, err := newRemoteSegmentWitness("store-1", kvrpcpb.NewSegmentWitnessClient(conn))
 	require.NoError(t, err)
 
 	snapshot, err := remote.Probe(context.Background(), records[0].EpochID)
@@ -147,7 +147,7 @@ func TestRemotePerasWitnessProbeReadsPages(t *testing.T) {
 	require.Greater(t, stub.probeCalls, 1)
 }
 
-func BenchmarkRemotePerasWitnessAppendSegmentsSingleRecord(b *testing.B) {
+func BenchmarkRemoteSegmentWitnessAppendSegmentsSingleRecord(b *testing.B) {
 	scope := compile.AuthorityScope{
 		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
@@ -156,10 +156,10 @@ func BenchmarkRemotePerasWitnessAppendSegmentsSingleRecord(b *testing.B) {
 		Inodes:     []fsmetamodel.InodeID{200},
 	}
 	record := remotePerasSegmentRecord()
-	stub := &remotePerasWitnessStub{}
-	conn, closeServer := startPerasWitnessServer(b, stub)
+	stub := &remoteSegmentWitnessStub{}
+	conn, closeServer := startSegmentWitnessServer(b, stub)
 	defer closeServer()
-	remote, err := newRemotePerasWitness("store-1", kvrpcpb.NewPerasWitnessClient(conn))
+	remote, err := newRemoteSegmentWitness("store-1", kvrpcpb.NewSegmentWitnessClient(conn))
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -169,15 +169,15 @@ func BenchmarkRemotePerasWitnessAppendSegmentsSingleRecord(b *testing.B) {
 	}
 }
 
-func TestRemotePerasWitnessRequiresClient(t *testing.T) {
-	_, err := newRemotePerasWitness("store-1", nil)
+func TestRemoteSegmentWitnessRequiresClient(t *testing.T) {
+	_, err := newRemoteSegmentWitness("store-1", nil)
 	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }
 
-func startPerasWitnessServer(tb testing.TB, witness perasraftstore.Witness) (*grpc.ClientConn, func()) {
+func startSegmentWitnessServer(tb testing.TB, witness perasraftstore.Witness) (*grpc.ClientConn, func()) {
 	tb.Helper()
 	srv := grpc.NewServer()
-	kvrpcpb.RegisterPerasWitnessServer(srv, perasraftstore.NewWitnessService(witness))
+	kvrpcpb.RegisterSegmentWitnessServer(srv, perasraftstore.NewWitnessService(witness))
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
 	go func() {

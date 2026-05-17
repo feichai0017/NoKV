@@ -417,7 +417,7 @@ func decodeOnlyCatalogIndex(t *testing.T, entries []*entrykv.Entry) fsperas.Segm
 			continue
 		}
 		parts, ok := fsmeta.InspectKey(userKey)
-		if !ok || parts.Kind != fsmeta.KeyKindPeras || parts.PerasRecord != fsmeta.PerasSegmentRecordIndex {
+		if !ok || parts.Kind != fsmeta.KeyKindSegment || parts.SegmentRecord != fsmeta.SegmentRecordIndex {
 			continue
 		}
 		next, err := fsperas.DecodePerasSegmentCatalogIndexRecord(entry.Value)
