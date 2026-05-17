@@ -855,6 +855,17 @@ func (db *DB) WALTypedRecordWarnRatio() float64    { return db.opt.WALTypedRecor
 func (db *DB) WALTypedRecordWarnSegments() int64   { return db.opt.WALTypedRecordWarnSegments }
 func (db *DB) ThermosTopK() int                    { return db.opt.ThermosTopK }
 
+// WriteBatchLimits returns the per-batch entry-count and byte-size caps the
+// commit pipeline enforces. Callers that build batched-install paths use
+// these to chunk their writes so the pipeline's Send() never rejects a
+// group as too large.
+func (db *DB) WriteBatchLimits() (count int64, size int64) {
+	if db == nil || db.opt == nil {
+		return 0, 0
+	}
+	return db.opt.MaxBatchCount, db.opt.MaxBatchSize
+}
+
 func (db *DB) ControlLogPointerSnapshot() func() map[uint64]stats.ControlLogPointer {
 	if db == nil || db.opt == nil {
 		return nil

@@ -33,6 +33,8 @@ type WALVisibleLog struct {
 	appendDone  chan struct{}
 	closeOnce   sync.Once
 	batchAppend bool
+
+	retainAppliedRecords bool
 }
 
 const (
@@ -120,6 +122,18 @@ func (l *WALVisibleLog) VisibleLogPolicy() string {
 		return "disabled"
 	}
 	return walDurabilityPolicyName(l.durability)
+}
+
+// SetRetainAppliedRecords keeps visible operation records physically present
+// after applied markers are written. Local materialized Peras uses those
+// records as its durable completion index after it opts out of catalog records.
+func (l *WALVisibleLog) SetRetainAppliedRecords(retain bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.retainAppliedRecords = retain
+	l.mu.Unlock()
 }
 
 func (l *WALVisibleLog) AppendVisible(ctx context.Context, record fsperas.VisibleOperationRecord) error {
@@ -302,7 +316,7 @@ func (l *WALVisibleLog) AppendVisibleApplied(ctx context.Context, record fsperas
 	l.mu.Lock()
 	l.records = removeVisibleAppliedRecords(l.records, l.pending, record)
 	l.removeAppliedPendingLocked(record)
-	canCompact := l.replayed
+	canCompact := l.replayed && !l.retainAppliedRecords
 	l.mu.Unlock()
 	if canCompact {
 		_ = l.CompactApplied()
@@ -353,10 +367,25 @@ func (l *WALVisibleLog) visibleAppliedRecordForReplayPlan(epochID uint64, holder
 }
 
 func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOperationRecord, error) {
+	states, err := l.ReplayVisibleState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]fsperas.VisibleOperationRecord, 0, len(states))
+	for _, state := range states {
+		if state.Applied {
+			continue
+		}
+		out = append(out, state.Record)
+	}
+	return out, nil
+}
+
+func (l *WALVisibleLog) ReplayVisibleState(ctx context.Context) ([]VisibleLogStateRecord, error) {
 	if l == nil || l.wal == nil {
 		return nil, fsperas.ErrVisibleLogRequired
 	}
-	records := make([]fsperas.VisibleOperationRecord, 0)
+	records := make([]VisibleLogStateRecord, 0)
 	latest := make(map[visibleOperationLogKey]int)
 	pending := make(map[visibleOperationLogKey]visibleOperationLogEntry)
 	applied := make(map[visibleAppliedLogKey][]fsperas.VisibleAppliedRange)
@@ -377,10 +406,11 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 		}
 		key := visibleOperationLogKeyForRecord(record)
 		if idx, ok := latest[key]; ok {
-			records[idx] = record
+			records[idx].Record = record
+			records[idx].Applied = false
 		} else {
 			latest[key] = len(records)
-			records = append(records, record)
+			records = append(records, VisibleLogStateRecord{Record: record})
 		}
 		position, err := visibleOperationLogPositionFromEntry(info)
 		if err != nil {
@@ -396,22 +426,21 @@ func (l *WALVisibleLog) ReplayVisible(ctx context.Context) ([]fsperas.VisibleOpe
 	if err != nil {
 		return nil, err
 	}
-	out := records[:0]
-	for _, record := range records {
+	for idx, state := range records {
+		record := state.Record
 		key := visibleOperationLogKeyForRecord(record)
 		entry, ok := pending[key]
 		if ok && visibleOperationPositionApplied(entry.position, applied[visibleAppliedLogKey{epoch: key.epoch, holder: key.holder}]) {
 			delete(pending, key)
-			continue
+			records[idx].Applied = true
 		}
-		out = append(out, record)
 	}
 	l.mu.Lock()
-	l.records = cloneVisibleOperationRecords(out)
+	l.records = clonePendingVisibleStateRecords(records)
 	l.pending = pending
 	l.replayed = true
 	l.mu.Unlock()
-	return cloneVisibleOperationRecords(out), nil
+	return cloneVisibleLogStateRecords(records), nil
 }
 
 func (l *WALVisibleLog) Records() []fsperas.VisibleOperationRecord {
@@ -674,6 +703,34 @@ func cloneVisibleOperationRecords(in []fsperas.VisibleOperationRecord) []fsperas
 	out := make([]fsperas.VisibleOperationRecord, len(in))
 	for i, record := range in {
 		out[i] = cloneVisibleOperationRecord(record)
+	}
+	return out
+}
+
+func clonePendingVisibleStateRecords(in []VisibleLogStateRecord) []fsperas.VisibleOperationRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fsperas.VisibleOperationRecord, 0, len(in))
+	for _, record := range in {
+		if record.Applied {
+			continue
+		}
+		out = append(out, cloneVisibleOperationRecord(record.Record))
+	}
+	return out
+}
+
+func cloneVisibleLogStateRecords(in []VisibleLogStateRecord) []VisibleLogStateRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]VisibleLogStateRecord, len(in))
+	for i, record := range in {
+		out[i] = VisibleLogStateRecord{
+			Record:  cloneVisibleOperationRecord(record.Record),
+			Applied: record.Applied,
+		}
 	}
 	return out
 }

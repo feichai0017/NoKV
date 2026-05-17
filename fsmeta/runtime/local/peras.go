@@ -6,12 +6,10 @@ package local
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"time"
 
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
@@ -105,89 +103,6 @@ func (a *localPerasAuthority) RetirePerasAuthority(context.Context, ...compile.A
 	return nil
 }
 
-type localPerasSegmentInstaller struct {
-	runner *Runner
-}
-
-func (i localPerasSegmentInstaller) InstallSegment(ctx context.Context, req runtimeperas.SegmentInstallRequest) (runtimeperas.InstallCursor, error) {
-	if i.runner == nil {
-		return runtimeperas.InstallCursor{}, runtimeperas.ErrRuntimeInvalid
-	}
-	if _, err := fsperas.VerifyPerasSegmentPayload(req.Payload, req.Segment.Root, req.PayloadDigest); err != nil {
-		return runtimeperas.InstallCursor{}, err
-	}
-	startVersion, err := i.runner.ReserveTimestamp(ctx, 2)
-	if err != nil {
-		return runtimeperas.InstallCursor{}, err
-	}
-	commitVersion := startVersion + 1
-	primary, mutations, err := localPerasInstallMutations(req, commitVersion)
-	if err != nil {
-		return runtimeperas.InstallCursor{}, err
-	}
-	if _, err := i.runner.MutateAtCommit(ctx, primary, mutations, startVersion, commitVersion, 0); err != nil {
-		return runtimeperas.InstallCursor{}, fmt.Errorf("local peras install materialize=%t mutations=%d: %w", req.MaterializeMVCC, len(mutations), err)
-	}
-	return runtimeperas.InstallCursor{
-		RegionID:       localPerasRegionID,
-		Term:           localPerasTerm,
-		Index:          commitVersion,
-		InstallVersion: commitVersion,
-	}, nil
-}
-
-func localPerasInstallMutations(req runtimeperas.SegmentInstallRequest, installVersion uint64) ([]byte, []*kvrpcpb.Mutation, error) {
-	plan := req.Install
-	if len(plan.CanonicalObjectKey) == 0 {
-		var err error
-		plan, err = fsperas.PerasSegmentInstallPlan(req.Segment, req.MaterializeMVCC)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	canonical := cloneBytes(plan.CanonicalObjectKey)
-	if len(canonical) == 0 {
-		return nil, nil, runtimeperas.ErrRuntimeInvalid
-	}
-	catalogValue, err := fsperas.EncodePerasSegmentCatalogRecordWithPayload(req.Segment, installVersion, req.Payload, req.PayloadDigest)
-	if err != nil {
-		return nil, nil, err
-	}
-	mutations := []*kvrpcpb.Mutation{{
-		Op:    kvrpcpb.Mutation_Put,
-		Key:   canonical,
-		Value: catalogValue,
-	}}
-	indexKeys, err := fsperas.PerasSegmentCatalogIndexKeys(req.Segment)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, key := range indexKeys {
-		indexValue, err := fsperas.EncodePerasSegmentCatalogIndexRecordFields(req.Segment.EpochID, installVersion, req.Segment.Root, req.PayloadDigest, uint64(len(req.Payload)), canonical)
-		if err != nil {
-			return nil, nil, err
-		}
-		mutations = appendLocalPerasMutation(mutations, &kvrpcpb.Mutation{
-			Op:    kvrpcpb.Mutation_Put,
-			Key:   key,
-			Value: indexValue,
-		})
-	}
-	if req.MaterializeMVCC {
-		for _, entry := range req.Segment.EntriesView() {
-			mutation := &kvrpcpb.Mutation{Key: cloneBytes(entry.Key)}
-			if entry.Delete {
-				mutation.Op = kvrpcpb.Mutation_Delete
-			} else {
-				mutation.Op = kvrpcpb.Mutation_Put
-				mutation.Value = cloneBytes(entry.Value)
-			}
-			mutations = appendLocalPerasMutation(mutations, mutation)
-		}
-	}
-	return canonical, mutations, nil
-}
-
 func appendLocalPerasMutation(mutations []*kvrpcpb.Mutation, mutation *kvrpcpb.Mutation) []*kvrpcpb.Mutation {
 	if mutation == nil || len(mutation.GetKey()) == 0 {
 		return mutations
@@ -203,33 +118,4 @@ func appendLocalPerasMutation(mutations []*kvrpcpb.Mutation, mutation *kvrpcpb.M
 		}
 	}
 	return append(mutations, mutation)
-}
-
-type localPerasCatalogScanner struct {
-	runner *Runner
-}
-
-func (s localPerasCatalogScanner) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]runtimeperas.KV, error) {
-	if s.runner == nil {
-		return nil, runtimeperas.ErrRuntimeInvalid
-	}
-	if version == 0 {
-		var err error
-		version, err = s.runner.ReserveTimestamp(ctx, 1)
-		if err != nil {
-			return nil, err
-		}
-	}
-	rows, err := s.runner.Scan(ctx, startKey, limit, version)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]runtimeperas.KV, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, runtimeperas.KV{
-			Key:   cloneBytes(row.Key),
-			Value: cloneBytes(row.Value),
-		})
-	}
-	return out, nil
 }

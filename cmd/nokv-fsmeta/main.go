@@ -78,6 +78,8 @@ func main() {
 		localMountKeyID                 = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by --backend=local")
 		localRootInode                  = flag.Uint64("local-root-inode", uint64(fsmeta.RootInode), "root inode for --backend=local")
 		localPeras                      = flag.Bool("local-peras", true, "enable the local Peras visible commit path when --backend=local; use --local-peras=false for direct embedded MVCC")
+		localNegCache                   = flag.Bool("local-negative-cache", true, "enable the slab-backed negative dentry cache when --backend=local; use --local-negative-cache=false to disable")
+		localDirPageCache               = flag.Bool("local-dirpage-cache", true, "enable the slab-backed ReadDirPlus page cache when --backend=local; use --local-dirpage-cache=false to disable")
 		negCacheDir                     = flag.String("negative-cache-dir", "", "optional slab directory for persistent negative dentry cache")
 		dirPageDir                      = flag.String("dirpage-cache-dir", "", "optional slab directory for ReadDirPlus page cache")
 		affinityBuckets                 = flag.Int("affinity-buckets", fsmeta.DefaultAffinityBucketCount, "fsmeta placement bucket count used to choose Create inode IDs")
@@ -185,6 +187,10 @@ func main() {
 			PerasHolderID:             localPerasHolderID(*localPeras, holderID),
 			PerasVisibleLogDir:        localPerasVisibleLogDir(*localPeras, *localWorkDir, *perasVisibleLogDir),
 			PerasVisibleLogDurability: visibleLogDurability,
+			NegativeCacheMode:         localCacheMode(*localNegCache),
+			NegativeCacheDir:          *negCacheDir,
+			DirPageCacheMode:          localCacheMode(*localDirPageCache),
+			DirPageCacheDir:           *dirPageDir,
 		},
 	})
 	if err != nil {
@@ -386,6 +392,13 @@ func localPerasMode(enabled bool) fsmetalocal.PerasMode {
 		return fsmetalocal.PerasModeEnabled
 	}
 	return fsmetalocal.PerasModeDisabled
+}
+
+func localCacheMode(enabled bool) fsmetalocal.CacheMode {
+	if enabled {
+		return fsmetalocal.CacheModeEnabled
+	}
+	return fsmetalocal.CacheModeDisabled
 }
 
 func localPerasHolderID(enabled bool, holderID string) string {

@@ -70,6 +70,119 @@ func TestRunnerRejectsCrossShardMutationWhenCallerOwnedDBIsNotAtomic(t *testing.
 	require.ErrorIs(t, err, errNonAtomicApplyGroup)
 }
 
+func TestRunnerInstallMutationsAtCommitAcceptsCrossShard(t *testing.T) {
+	opts := localdb.NewDefaultOptions()
+	opts.WorkDir = t.TempDir()
+	opts.LSMShardCount = 4
+	opts.UserKeyShapeExtractor = nil
+	db := openTestDB(t, opts)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	first, second := keysOnDifferentLocalShards(t, db, 4)
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	commit, err := runner.InstallMutationsAtCommit(ctx, first, []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: first, Value: []byte("a")},
+		{Op: kvrpcpb.Mutation_Put, Key: second, Value: []byte("b")},
+	}, start, start+1)
+	require.NoError(t, err, "install must tolerate cross-shard groups that percolator commits reject")
+	require.Equal(t, start+1, commit)
+
+	got, ok, err := runner.Get(ctx, first, commit)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("a"), got)
+	got, ok, err = runner.Get(ctx, second, commit)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("b"), got)
+}
+
+func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
+	opts := localdb.NewDefaultOptions()
+	opts.WorkDir = t.TempDir()
+	opts.LSMShardCount = 1
+	opts.UserKeyShapeExtractor = nil
+	// Squeeze the per-batch budget so the install path is forced to chunk.
+	opts.MaxBatchCount = 8
+	opts.MaxBatchSize = 64 << 10
+	db := openTestDB(t, opts)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	const n = 64
+	mutations := make([]*kvrpcpb.Mutation, 0, n)
+	for i := 0; i < n; i++ {
+		k := []byte("install-chunk-" + string(rune('A'+i/26)) + string(rune('a'+i%26)))
+		mutations = append(mutations, &kvrpcpb.Mutation{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   append([]byte(nil), k...),
+			Value: []byte("v"),
+		})
+	}
+	commit, err := runner.InstallMutationsAtCommit(ctx, mutations[0].Key, mutations, start, start+1)
+	require.NoError(t, err, "install must chunk to fit MaxBatchCount=%d", opts.MaxBatchCount)
+	require.Equal(t, start+1, commit)
+
+	for _, mutation := range mutations {
+		got, ok, err := runner.Get(ctx, mutation.Key, commit)
+		require.NoError(t, err)
+		require.True(t, ok, "key %q must be visible after chunked install", mutation.Key)
+		require.Equal(t, []byte("v"), got)
+	}
+}
+
+func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
+	db := openTestDB(t, nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	// commitVersion must be strictly greater than startVersion — same
+	// contract as MutateAtCommit so callers can't accidentally clobber
+	// MVCC ordering through the install path.
+	_, err = runner.InstallMutationsAtCommit(ctx, []byte("x"), []*kvrpcpb.Mutation{
+		{Op: kvrpcpb.Mutation_Put, Key: []byte("x"), Value: []byte("v")},
+	}, start, start)
+	require.Error(t, err)
+}
+
+func TestRunnerInstallMutationsAtCommitEmptyGroupIsNoop(t *testing.T) {
+	db := openTestDB(t, nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	commit, err := runner.InstallMutationsAtCommit(ctx, []byte("primary"), nil, start, start+1)
+	require.NoError(t, err)
+	// An empty install must still complete cleanly; the chain layers that
+	// produce zero mutations (e.g., a future SealedTrackingLayer that only
+	// updates in-memory state) need this path to succeed.
+	require.GreaterOrEqual(t, commit, uint64(0))
+}
+
+// Note: in-process retry of InstallMutationsAtCommit at the same
+// commitVersion is intentionally not supported — the runner's nextTS
+// advances past the commit on the first successful call and the second
+// call returns commit_ts_expired. The crash-recovery story uses a fresh
+// Runner instance (process restart), where nextTS is rebuilt from disk
+// state and the replayed install at the original commitVersion is
+// admitted again. TestLocalRuntimePerasVisibleCommitRecoversMaterializedData
+// covers that end-to-end path.
+
 func TestRunnerTryAtomicMutateAppliesPredicateCheckedGroup(t *testing.T) {
 	db := openTestDB(t, nil)
 	defer func() { require.NoError(t, db.Close()) }()

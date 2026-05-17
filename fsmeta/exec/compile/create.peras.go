@@ -276,10 +276,19 @@ func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {
 
 func compileCreateSegmentPlan(placement PlacementPlan, footprint KeyFootprint) SegmentPlan {
 	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: 2}
-	if placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1 {
+	switch {
+	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
 		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
+		// Multi-bucket catalog op (dentry + inode in different buckets is the
+		// common case). Materialize is safe because installer writes each
+		// entry as a direct MVCC mutation. Local fsmeta opts into this path
+		// via MaterializeSegments=true; distributed leaves it disabled.
+		segment.CanMaterialize = placement.CanSegment
+		segment.MaterializeInstall = SegmentInstallSingleBucket
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	}
 	return segment
 }

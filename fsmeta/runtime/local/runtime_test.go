@@ -399,7 +399,7 @@ func TestLocalRuntimePerasBypassesSegmentWitness(t *testing.T) {
 	require.Equal(t, 0, stats["pending"])
 }
 
-func TestLocalRuntimePerasBuildsWideCatalogSegments(t *testing.T) {
+func TestLocalRuntimePerasBuildsWideMaterializedSegments(t *testing.T) {
 	ctx := context.Background()
 	rt, err := Open(ctx, Options{WorkDir: t.TempDir(), Mount: testMount()})
 	require.NoError(t, err)
@@ -421,7 +421,7 @@ func TestLocalRuntimePerasBuildsWideCatalogSegments(t *testing.T) {
 	require.LessOrEqual(t, stats["segment_total"].(uint64), uint64(16), "local Peras should not inherit distributed route-budget fragmentation")
 }
 
-func TestLocalRuntimePerasVisibleCommitRecoversInstalledCatalog(t *testing.T) {
+func TestLocalRuntimePerasVisibleCommitRecoversMaterializedData(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	opts := Options{

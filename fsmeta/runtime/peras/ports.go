@@ -42,6 +42,29 @@ type SegmentInstaller interface {
 	InstallSegment(context.Context, SegmentInstallRequest) (InstallCursor, error)
 }
 
+// SegmentPayloadRequirement lets an install layer declare whether it consumes
+// the encoded segment payload. Unknown installers are treated as requiring the
+// payload so existing distributed/catalog paths keep their old behavior.
+type SegmentPayloadRequirement interface {
+	NeedsSegmentPayload() bool
+}
+
+// SegmentFinalizeRequest carries the installed segment and cursor into the
+// post-publish runtime finalize stage.
+type SegmentFinalizeRequest struct {
+	Scope           compile.AuthorityScope
+	Plan            fsperas.ReplayPlan
+	Segment         fsperas.PerasSegment
+	InstallCursor   InstallCursor
+	MaterializeMVCC bool
+}
+
+// SegmentFinalizer updates runtime read/dedup state after segment durability
+// and publish requirements have been satisfied.
+type SegmentFinalizer interface {
+	FinalizeSegment(context.Context, SegmentFinalizeRequest) error
+}
+
 type SegmentCatalogScanner interface {
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
 }

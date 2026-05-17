@@ -61,14 +61,23 @@ type Config struct {
 	AdmissionPendingLimit      int
 	SegmentMaxReplayOperations int
 	SegmentMaxReplayMutations  int
-	SegmentMaxPayloadBytes     uint64
-	SegmentCatalogRouteBudget  int
-	SegmentFlushEvery          time.Duration
-	BackgroundFlushTimeout     time.Duration
-	BackgroundErrorBackoff     time.Duration
-	SegmentInstallParallelism  int
-	SegmentFlushParallelism    int
-	MaterializeSegments        bool
+	// MaterializeMaxReplayMutations bounds the per-segment mutation count
+	// when MaterializeSegments=true. Zero falls back to
+	// defaultPerasMaterializeMaxReplayMutations, which is intentionally
+	// small (the distributed install path serializes each materialize
+	// install as one raft commit and prefers many small commits). Local
+	// runtimes that materialize into a single-process base MVCC can set
+	// this to SegmentMaxReplayMutations to avoid fragmenting visible work
+	// into tiny segments.
+	MaterializeMaxReplayMutations int
+	SegmentMaxPayloadBytes        uint64
+	SegmentCatalogRouteBudget     int
+	SegmentFlushEvery             time.Duration
+	BackgroundFlushTimeout        time.Duration
+	BackgroundErrorBackoff        time.Duration
+	SegmentInstallParallelism     int
+	SegmentFlushParallelism       int
+	MaterializeSegments           bool
 	// CatalogOnlyAuthorityDrain keeps DrainAuthority on catalog install when
 	// MaterializeSegments is false. Distributed runtimes leave this disabled
 	// so authority retirement still drains into base MVCC.
@@ -107,6 +116,7 @@ type Runtime struct {
 	witnesses              []fsperas.WitnessReplica
 	witnessMode            SegmentWitnessMode
 	installer              SegmentInstaller
+	finalizer              SegmentFinalizer
 	catalog                SegmentCatalogScanner
 	watch                  perasWatchPublisher
 	visibleLog             fsperas.VisibleLog
@@ -117,6 +127,7 @@ type Runtime struct {
 	admitLimit             int
 	maxOps                 int
 	maxReplay              int
+	materializeMaxReplay   int
 	maxPayload             uint64
 	routeBudget            int
 	installN               int
@@ -314,6 +325,13 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if maxReplay < 0 {
 		return nil, ErrRuntimeInvalid
 	}
+	materializeMaxReplay := cfg.MaterializeMaxReplayMutations
+	if materializeMaxReplay == 0 {
+		materializeMaxReplay = defaultPerasMaterializeMaxReplayMutations
+	}
+	if materializeMaxReplay < 0 {
+		return nil, ErrRuntimeInvalid
+	}
 	maxPayload := cfg.SegmentMaxPayloadBytes
 	if maxPayload == 0 {
 		maxPayload = defaultPerasSegmentMaxPayloadBytes
@@ -363,11 +381,23 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	if bgBackoff < 0 {
 		return nil, ErrRuntimeInvalid
 	}
+	if cfg.MaterializeSegments && cfg.CatalogScanner == nil && cfg.VisibleLog != nil {
+		if _, ok := cfg.VisibleLog.(visibleLogStateReplayer); !ok {
+			return nil, ErrRuntimeInvalid
+		}
+		if _, ok := cfg.VisibleLog.(visibleReplayPlanApplier); !ok {
+			return nil, ErrRuntimeInvalid
+		}
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
 	seals, _ := cfg.Authority.(SealProvider)
+	// cfg.Installer holds the caller-supplied durability layer(s). The
+	// completion-index layer is appended below once c.read exists; the
+	// rest of the chain composition (sealed tracking, catalog, witness)
+	// is the responsibility of future phases.
 	c := &Runtime{
 		authority:              cfg.Authority,
 		seals:                  seals,
@@ -384,6 +414,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		admitLimit:             admitLimit,
 		maxOps:                 maxOps,
 		maxReplay:              maxReplay,
+		materializeMaxReplay:   materializeMaxReplay,
 		maxPayload:             maxPayload,
 		routeBudget:            routeBudget,
 		installN:               installN,
@@ -403,7 +434,11 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	c.drainCond = sync.NewCond(&c.drainMu)
 	c.admissionCond = sync.NewCond(&c.admissionMu)
+	// Phase 3 composition: the caller-supplied installer owns durable
+	// segment evidence. Read-view work runs later through finalizer after
+	// publish/seal or the local materialized write is safe to observe.
 	if c.installer != nil {
+		c.finalizer = NewFinalizeChain(newSealedTrackingLayer(c), newCompletionIndexLayer(c.read))
 		c.installQ = newPerasInstallLane(c, c.installN)
 	}
 	if _, ok := c.authority.(SealPublisher); ok {

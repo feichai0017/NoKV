@@ -175,6 +175,109 @@ func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations [
 	return r.mutate(ctx, primary, mutations, startVersion, commitVersion, false)
 }
 
+// InstallMutationsAtCommit applies a segment-install mutation group at
+// commitVersion without the cross-shard atomicity guard that MutateAtCommit
+// enforces. Large groups are chunked under the local DB's per-batch size /
+// count limit so a single segment can carry many more mutations than a
+// percolator commit ever could; every chunk shares the same commitVersion
+// so the resulting set is observationally one install.
+//
+// Contract for callers: every mutation is a versioned MVCC write whose effect
+// is idempotent on retry. The local DB still routes mutations to their
+// affinity-correct LSM shard internally, so each shard's group is atomically
+// fsynced; the relaxation is only at the cross-shard and cross-chunk
+// boundary. The caller is responsible for not exposing the install as
+// complete until the function returns nil — partial completion on crash is
+// recovered by visibleLog replay re-running the same install with the same
+// commitVersion (the duplicate writes are no-ops because they share the
+// internal-key version).
+//
+// This path is only safe for callers that have committed to "no lock/intent
+// records, no read-your-write within the batch" semantics. percolator
+// commits MUST keep using MutateAtCommit, where the atomicity guard
+// protects the lock/commit-record transition that the percolator protocol
+// relies on for snapshot consistency.
+func (r *Runner) InstallMutationsAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (uint64, error) {
+	if err := ctxErr(ctx); err != nil {
+		return 0, err
+	}
+	if commitVersion <= startVersion {
+		return 0, txnAbort(errCommitVersion)
+	}
+	chunks, err := r.chunkInstallMutations(mutations)
+	if err != nil {
+		return 0, err
+	}
+	var effective uint64
+	for _, chunk := range chunks {
+		v, observer, err := r.applyInstallMutationGroup(primary, chunk, startVersion, commitVersion)
+		if err != nil {
+			return 0, err
+		}
+		if effective == 0 {
+			effective = v
+		}
+		if observer != nil {
+			observer.ObserveMutation(v, chunk)
+		}
+	}
+	return effective, nil
+}
+
+// chunkInstallMutations splits mutations into batches that fit under the
+// local DB's per-write batch count and byte budgets. Chunks preserve the
+// original ordering (each chunk is a prefix slice) so callers that rely on
+// stable mutation order across replays see the same effect.
+func (r *Runner) chunkInstallMutations(mutations []*kvrpcpb.Mutation) ([][]*kvrpcpb.Mutation, error) {
+	if r == nil || r.db == nil {
+		return nil, errDBRequired
+	}
+	if len(mutations) == 0 {
+		return nil, nil
+	}
+	maxCount, maxSize := r.db.WriteBatchLimits()
+	if maxCount <= 0 && maxSize <= 0 {
+		return [][]*kvrpcpb.Mutation{mutations}, nil
+	}
+	// Reserve headroom: build entries doubles the count (commit + lock-free
+	// version markers can append). Keep the chunk strictly below the DB
+	// limit so the downstream Send() check never trips.
+	if maxCount > 0 {
+		maxCount = maxCount / 2
+		if maxCount < 1 {
+			maxCount = 1
+		}
+	}
+	if maxSize > 0 {
+		maxSize = maxSize - (maxSize / 8)
+		if maxSize < 1024 {
+			maxSize = 1024
+		}
+	}
+	chunks := make([][]*kvrpcpb.Mutation, 0, 1)
+	start := 0
+	count := int64(0)
+	size := int64(0)
+	for i, mutation := range mutations {
+		var muSize int64
+		if mutation != nil {
+			muSize = int64(len(mutation.GetKey()) + len(mutation.GetValue()))
+		}
+		if i > start && ((maxCount > 0 && count+1 > maxCount) || (maxSize > 0 && size+muSize > maxSize)) {
+			chunks = append(chunks, mutations[start:i])
+			start = i
+			count = 0
+			size = 0
+		}
+		count++
+		size += muSize
+	}
+	if start < len(mutations) {
+		chunks = append(chunks, mutations[start:])
+	}
+	return chunks, nil
+}
+
 // TryAtomicMutate applies predicate-checked mutations through the same local
 // atomic apply group used by Mutate. handled=false means the caller-owned DB is
 // sharded in a way that cannot preserve group atomicity for this key set.
@@ -254,6 +357,34 @@ func (r *Runner) applyMutationGroup(primary []byte, mutations []*kvrpcpb.Mutatio
 		r.atomicRejectedTotal.Add(1)
 		return 0, nil, errNonAtomicApplyGroup
 	}
+	if err := r.db.ApplyInternalEntries(entries); err != nil {
+		return 0, nil, err
+	}
+	return effectiveCommitVersion, r.completeMutationApply(effectiveCommitVersion, false), nil
+}
+
+// applyInstallMutationGroup is the cross-shard-safe sibling of
+// applyMutationGroup used by segment install. It performs the same
+// validation, latch acquire, and entry build, but routes through
+// db.ApplyInternalEntries without the CanApplyInternalEntriesAtomically
+// guard because install entries are versioned MVCC writes that are
+// idempotent on visibleLog replay. See InstallMutationsAtCommit for the
+// full contract.
+func (r *Runner) applyInstallMutationGroup(primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (uint64, mutationObserver, error) {
+	guard := r.latches.Acquire(mutationLatchKeys(primary, nil, mutations))
+	defer guard.Release()
+	effectiveCommitVersion := r.reserveMutationCommitVersion(commitVersion, false)
+	if err := r.validateMutations(primary, mutations, startVersion, commitVersion); err != nil {
+		return 0, nil, err
+	}
+	entries, err := buildMutationEntries(mutations, startVersion, effectiveCommitVersion)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer releaseEntries(entries)
+	// Intentionally skip CanApplyInternalEntriesAtomically — see method doc.
+	// db.ApplyInternalEntries still routes per shard via the key-affinity
+	// router so each shard's writes are atomically fsynced.
 	if err := r.db.ApplyInternalEntries(entries); err != nil {
 		return 0, nil, err
 	}

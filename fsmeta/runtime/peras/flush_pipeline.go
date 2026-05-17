@@ -238,7 +238,7 @@ func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) e
 		c.metrics.flushTotal.Add(uint64(len(batch.jobs)))
 	}
 	for _, job := range batch.jobs {
-		if err := c.installSegment(job.plan, job.segment, job.materialize); err != nil {
+		if err := c.finalizeSegment(ctx, job); err != nil {
 			return err
 		}
 	}
@@ -247,6 +247,19 @@ func (p flushPipeline) commitBatch(ctx context.Context, batch perasFlushBatch) e
 	}
 	c.signalAdmissionCapacity()
 	return c.markVisibleLogApplied(ctx, batch.holder, batch.plan)
+}
+
+func (c *Runtime) finalizeSegment(ctx context.Context, job perasFlushJob) error {
+	if c == nil || c.finalizer == nil {
+		return ErrRuntimeInvalid
+	}
+	return c.finalizer.FinalizeSegment(ctx, SegmentFinalizeRequest{
+		Scope:           job.scope,
+		Plan:            job.plan,
+		Segment:         job.segment,
+		InstallCursor:   job.cursor,
+		MaterializeMVCC: job.materialize,
+	})
 }
 
 func (p flushPipeline) runBatchJobs(ctx context.Context, batches []perasFlushBatch, run func(context.Context, int, perasFlushBatch) error) error {

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feichai0017/NoKV/engine/slab/dirpage"
+	"github.com/feichai0017/NoKV/engine/slab/negativecache"
 	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
@@ -26,21 +28,34 @@ const (
 	localPerasSegmentMaxReplayMutations = localPerasSegmentBatchSize * 4
 	localPerasSegmentMaxPayloadBytes    = 128 << 10
 	localPerasSegmentFlushEvery         = 250 * time.Millisecond
+	// localPerasMaterializeMaxReplayMutations caps mutations per install
+	// segment when MaterializeSegments=true. Each install translates each
+	// mutation into a base-MVCC commit chunk under the local DB's
+	// MaxBatchCount budget, so capping per-segment mutations keeps single
+	// installs bounded in wall-clock time and lets the install pipeline
+	// drain holder.pending faster than visible commits arrive. Larger
+	// values risk admission backpressure; smaller values fragment segments.
+	// 512 keeps a 1024-create local workload within a small segment count while
+	// avoiding one huge base-MVCC install.
+	localPerasMaterializeMaxReplayMutations = 512
 )
 
 // Runtime is a complete fsmeta runtime backed by one embedded local.DB.
 type Runtime struct {
-	DB        *localdb.DB
-	Runner    *Runner
-	Executor  *fsmetaexec.Executor
-	Mounts    *MountCatalog
-	Quotas    *QuotaLedger
-	Watcher   *Watcher
-	Snapshots *SnapshotRegistry
-	Peras     *runtimeperas.Runtime
+	DB            *localdb.DB
+	Runner        *Runner
+	Executor      *fsmetaexec.Executor
+	Mounts        *MountCatalog
+	Quotas        *QuotaLedger
+	Watcher       *Watcher
+	Snapshots     *SnapshotRegistry
+	Peras         *runtimeperas.Runtime
+	NegativeCache *negativecache.Cache
+	DirPageCache  *dirpage.Cache
 
 	closeDB    bool
 	visibleWAL *wal.Manager
+	negPersist *negativecache.Persistence
 	once       sync.Once
 }
 
@@ -103,6 +118,26 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithInodeAllocator(inodes),
 		fsmetaexec.WithQuotaResolver(quotas),
 	}
+	negCache, negPersist, err := openLocalNegativeCache(opts)
+	if err != nil {
+		if closeDB {
+			_ = db.Close()
+		}
+		return nil, err
+	}
+	if negCache != nil {
+		execOpts = append(execOpts, fsmetaexec.WithNegativeCache(negCache))
+	}
+	dirPages, err := openLocalDirPageCache(opts)
+	if err != nil {
+		if closeDB {
+			_ = db.Close()
+		}
+		return nil, err
+	}
+	if dirPages != nil {
+		execOpts = append(execOpts, fsmetaexec.WithDirPageCache(dirPages))
+	}
 	var perasRuntime *runtimeperas.Runtime
 	var visibleWAL *wal.Manager
 	if opts.perasEnabled() {
@@ -111,6 +146,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if err != nil {
 			if visibleWAL != nil {
 				_ = visibleWAL.Close()
+			}
+			if dirPages != nil {
+				_ = dirPages.Close()
 			}
 			if closeDB {
 				_ = db.Close()
@@ -137,23 +175,58 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if visibleWAL != nil {
 			_ = visibleWAL.Close()
 		}
+		if dirPages != nil {
+			_ = dirPages.Close()
+		}
 		if closeDB {
 			_ = db.Close()
 		}
 		return nil, err
 	}
 	return &Runtime{
-		DB:         db,
-		Runner:     runner,
-		Executor:   executor,
-		Mounts:     mounts,
-		Quotas:     quotas,
-		Watcher:    watcher,
-		Snapshots:  snapshots,
-		Peras:      perasRuntime,
-		closeDB:    closeDB,
-		visibleWAL: visibleWAL,
+		DB:            db,
+		Runner:        runner,
+		Executor:      executor,
+		Mounts:        mounts,
+		Quotas:        quotas,
+		Watcher:       watcher,
+		Snapshots:     snapshots,
+		Peras:         perasRuntime,
+		NegativeCache: negCache,
+		DirPageCache:  dirPages,
+		closeDB:       closeDB,
+		visibleWAL:    visibleWAL,
+		negPersist:    negPersist,
 	}, nil
+}
+
+func openLocalNegativeCache(opts Options) (*negativecache.Cache, *negativecache.Persistence, error) {
+	dir := localNegativeCacheDir(opts)
+	if dir == "" {
+		return nil, nil, nil
+	}
+	cache, persist, err := negativecache.OpenWithPersistence(
+		negativecache.Config{
+			GroupKeyFn: func(k []byte) []byte { return k },
+		},
+		negativecache.PersistConfig{Dir: dir},
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("init local negative cache: %w", err)
+	}
+	return cache, persist, nil
+}
+
+func openLocalDirPageCache(opts Options) (*dirpage.Cache, error) {
+	dir := localDirPageCacheDir(opts)
+	if dir == "" {
+		return nil, nil
+	}
+	cache, err := dirpage.Open(dirpage.Config{Dir: dir})
+	if err != nil {
+		return nil, fmt.Errorf("init local dirpage cache: %w", err)
+	}
+	return cache, nil
 }
 
 // Close releases the runtime-owned DB. Caller-owned DB handles are left open.
@@ -168,6 +241,14 @@ func (r *Runtime) Close() error {
 		}
 		if r.visibleWAL != nil {
 			err = errors.Join(err, r.visibleWAL.Close())
+		}
+		if r.DirPageCache != nil {
+			err = errors.Join(err, r.DirPageCache.Close())
+		}
+		if r.negPersist != nil {
+			if _, snapErr := r.negPersist.Snapshot(); snapErr != nil {
+				err = errors.Join(err, snapErr)
+			}
 		}
 		if r.closeDB && r.DB != nil {
 			err = errors.Join(err, r.DB.Close())
@@ -196,39 +277,34 @@ func openLocalPeras(ctx context.Context, runner *Runner, authority *localPerasAu
 			return nil, nil, fmt.Errorf("init local peras visible log: %w", err)
 		}
 	}
+	if walLog, ok := visibleLog.(*runtimeperas.WALVisibleLog); ok {
+		walLog.SetRetainAppliedRecords(true)
+	}
 	committer, err := runtimeperas.NewRuntime(runtimeperas.Config{
-		Authority:                  authority,
-		SegmentWitnessMode:         runtimeperas.SegmentWitnessModeBypass,
-		Installer:                  localPerasSegmentInstaller{runner: runner},
-		CatalogScanner:             localPerasCatalogScanner{runner: runner},
-		WatchPublisher:             watcher.Router,
-		VisibleLog:                 visibleLog,
-		SegmentBatchSize:           localPerasSegmentBatchSize,
-		AdmissionPendingLimit:      localPerasAdmissionPendingLimit,
-		SegmentMaxReplayOperations: localPerasSegmentMaxReplayOps,
-		SegmentMaxReplayMutations:  localPerasSegmentMaxReplayMutations,
-		SegmentMaxPayloadBytes:     localPerasSegmentMaxPayloadBytes,
-		SegmentCatalogRouteBudget:  fsmeta.DefaultAffinityBucketCount,
-		SegmentInstallParallelism:  localPerasSegmentInstallParallelism(),
-		SegmentFlushParallelism:    localPerasSegmentInstallParallelism(),
-		SegmentFlushEvery:          localPerasSegmentFlushEvery,
-		CatalogOnlyAuthorityDrain:  true,
-		VisibleSnapshotCapture:     true,
-		Now:                        opts.Clock,
+		Authority:                     authority,
+		SegmentWitnessMode:            runtimeperas.SegmentWitnessModeBypass,
+		Installer:                     runtimeperas.NewInstallChain(newMVCCEntryLayer(runner)),
+		WatchPublisher:                watcher.Router,
+		VisibleLog:                    visibleLog,
+		SegmentBatchSize:              localPerasSegmentBatchSize,
+		AdmissionPendingLimit:         localPerasAdmissionPendingLimit,
+		SegmentMaxReplayOperations:    localPerasSegmentMaxReplayOps,
+		SegmentMaxReplayMutations:     localPerasSegmentMaxReplayMutations,
+		MaterializeMaxReplayMutations: localPerasMaterializeMaxReplayMutations,
+		SegmentMaxPayloadBytes:        localPerasSegmentMaxPayloadBytes,
+		SegmentCatalogRouteBudget:     fsmeta.DefaultAffinityBucketCount,
+		SegmentInstallParallelism:     localPerasSegmentInstallParallelism(),
+		SegmentFlushParallelism:       localPerasSegmentInstallParallelism(),
+		SegmentFlushEvery:             localPerasSegmentFlushEvery,
+		MaterializeSegments:           true,
+		VisibleSnapshotCapture:        true,
+		Now:                           opts.Clock,
 	})
 	if err != nil {
 		if visibleWAL != nil {
 			_ = visibleWAL.Close()
 		}
 		return nil, nil, fmt.Errorf("init local peras runtime: %w", err)
-	}
-	scope := authority.Scope()
-	if err := committer.LoadInstalledSegments(ctx, scope); err != nil {
-		committer.Close()
-		if visibleWAL != nil {
-			_ = visibleWAL.Close()
-		}
-		return nil, nil, fmt.Errorf("load local peras segments: %w", err)
 	}
 	return committer, visibleWAL, nil
 }
