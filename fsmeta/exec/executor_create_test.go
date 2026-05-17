@@ -434,6 +434,28 @@ func TestExecutorCreateUsesAtomicMutateOnePhaseWhenHandled(t *testing.T) {
 	require.Equal(t, fsmeta.InodeID(22), record.Inode)
 }
 
+func TestExecutorCreateSkipsSpeculativeAtomicMutateWithoutReadOrdering(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakeSpeculativeAtomicRunner{fakeRunner: base}
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Name:   "file",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	require.Empty(t, runner.atomicCalls)
+	require.Len(t, base.mutations, 1)
+	stats := executor.Stats()
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "attempt_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "success_total", 0)
+	requireAtomicStatUint(t, stats, fsmeta.OperationCreate, "runner_unsupported_total", 1)
+}
+
 func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}

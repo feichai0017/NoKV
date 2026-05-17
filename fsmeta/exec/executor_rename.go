@@ -23,12 +23,19 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.C
 	if err != nil {
 		return false, err
 	}
+	sourceFromPeras := view.observedKeyFromPerasOverlay(plan.ReadKeys[0])
 	if !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.perasPredicateIndex()) {
 		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
 			return false, fsmeta.ErrExists
 		} else if !errors.Is(err, fsmeta.ErrNotFound) {
 			return false, err
 		}
+	}
+	if !sourceFromPeras {
+		if view.observedPerasOverlay() {
+			return false, errPerasOverlayFallbackUnsafe
+		}
+		return false, nil
 	}
 	if move.fromParent != move.toParent {
 		if inode, ok, err := view.readInode(move.identity, record.Inode); err != nil {
@@ -59,7 +66,7 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.C
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommit(ctx, concrete)
+	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 type renameMove struct {

@@ -5,6 +5,7 @@ package contract
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -25,6 +26,7 @@ func NewInodeMappingExecutor(base Executor) (Executor, error) {
 		base:            base,
 		plannedToActual: make(map[fsmeta.InodeID]fsmeta.InodeID),
 		actualToPlanned: make(map[fsmeta.InodeID]fsmeta.InodeID),
+		pendingCreates:  make(map[dentryKey]fsmeta.InodeID),
 	}
 	m.rememberLocked(fsmeta.RootInode, fsmeta.RootInode)
 	return m, nil
@@ -36,17 +38,26 @@ type inodeMappingExecutor struct {
 	mu              sync.RWMutex
 	plannedToActual map[fsmeta.InodeID]fsmeta.InodeID
 	actualToPlanned map[fsmeta.InodeID]fsmeta.InodeID
+	pendingCreates  map[dentryKey]fsmeta.InodeID
 }
 
 func (m *inodeMappingExecutor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
 	planned, hasPlanned := plannedCreateInode(ctx)
 	req.Parent = m.actualInode(req.Parent)
+	pendingKey := dentryKey{parent: req.Parent, name: req.Name}
+	if hasPlanned {
+		m.rememberPendingCreate(pendingKey, planned)
+	}
 	result, err := m.base.Create(ctx, req)
 	if err != nil {
 		if hasPlanned && createOutcomeAmbiguous(err) {
 			if recovered, ok := m.recoverCreate(ctx, req, planned); ok {
+				m.clearPendingCreate(planned)
 				return recovered, nil
 			}
+		}
+		if hasPlanned {
+			m.clearPendingCreate(planned)
 		}
 		return fsmeta.CreateResult{}, err
 	}
@@ -54,6 +65,9 @@ func (m *inodeMappingExecutor) Create(ctx context.Context, req fsmeta.CreateRequ
 		planned = result.Inode.Inode
 	}
 	m.remember(planned, result.Inode.Inode)
+	if hasPlanned {
+		m.clearPendingCreate(planned)
+	}
 	return m.translateCreateResult(result), nil
 }
 
@@ -62,10 +76,24 @@ func createOutcomeAmbiguous(err error) bool {
 }
 
 func (m *inodeMappingExecutor) UpdateInode(ctx context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+	planned := req.Inode
 	req.Parent = m.actualInode(req.Parent)
-	req.Inode = m.actualInode(req.Inode)
+	if actual, ok := m.resolvePendingCreateActual(ctx, req.Mount, req.Parent, req.Name, planned); ok {
+		req.Inode = actual
+	} else {
+		req.Inode = m.actualInode(planned)
+	}
 	record, err := m.base.UpdateInode(ctx, req)
 	if err != nil {
+		if (errors.Is(err, fsmeta.ErrInvalidRequest) || errors.Is(err, fsmeta.ErrNotFound)) && planned != 0 {
+			if actual, ok := m.resolvePendingCreateActual(ctx, req.Mount, req.Parent, req.Name, planned); ok && actual != req.Inode {
+				req.Inode = actual
+				record, err = m.base.UpdateInode(ctx, req)
+				if err == nil {
+					return m.translateInodeRecord(record), nil
+				}
+			}
+		}
 		return fsmeta.InodeRecord{}, err
 	}
 	return m.translateInodeRecord(record), nil
@@ -181,8 +209,9 @@ func (m *inodeMappingExecutor) translateCreateResult(result fsmeta.CreateResult)
 }
 
 func (m *inodeMappingExecutor) translateDentryRecord(record fsmeta.DentryRecord) fsmeta.DentryRecord {
-	record.Parent = m.plannedInode(record.Parent)
-	record.Inode = m.plannedInode(record.Inode)
+	actualParent := record.Parent
+	record.Parent = m.plannedInode(actualParent)
+	record.Inode = m.plannedInodeForDentry(actualParent, record.Name, record.Inode)
 	return record
 }
 
@@ -209,6 +238,49 @@ func (m *inodeMappingExecutor) actualInode(planned fsmeta.InodeID) fsmeta.InodeI
 	return planned
 }
 
+func (m *inodeMappingExecutor) resolvePendingCreateActual(ctx context.Context, mount fsmeta.MountID, parent fsmeta.InodeID, name string, planned fsmeta.InodeID) (fsmeta.InodeID, bool) {
+	if planned == 0 || name == "" {
+		return 0, false
+	}
+	if actual, ok := m.actualInodeIfKnown(planned); ok {
+		return actual, true
+	}
+	key := dentryKey{parent: parent, name: name}
+	if !m.pendingCreateMatches(key, planned) {
+		return 0, false
+	}
+	dentry, err := m.base.Lookup(ctx, fsmeta.LookupRequest{
+		Mount:  mount,
+		Parent: parent,
+		Name:   name,
+	})
+	if err != nil {
+		return 0, false
+	}
+	m.remember(planned, dentry.Inode)
+	return dentry.Inode, true
+}
+
+func (m *inodeMappingExecutor) actualInodeIfKnown(planned fsmeta.InodeID) (fsmeta.InodeID, bool) {
+	if planned == 0 {
+		return 0, false
+	}
+	m.mu.RLock()
+	actual, ok := m.plannedToActual[planned]
+	m.mu.RUnlock()
+	return actual, ok
+}
+
+func (m *inodeMappingExecutor) pendingCreateMatches(key dentryKey, planned fsmeta.InodeID) bool {
+	if planned == 0 {
+		return false
+	}
+	m.mu.RLock()
+	pending, ok := m.pendingCreates[key]
+	m.mu.RUnlock()
+	return ok && pending == planned
+}
+
 func (m *inodeMappingExecutor) plannedInode(actual fsmeta.InodeID) fsmeta.InodeID {
 	if actual == 0 {
 		return 0
@@ -217,6 +289,22 @@ func (m *inodeMappingExecutor) plannedInode(actual fsmeta.InodeID) fsmeta.InodeI
 	planned, ok := m.actualToPlanned[actual]
 	m.mu.RUnlock()
 	if ok {
+		return planned
+	}
+	return actual
+}
+
+func (m *inodeMappingExecutor) plannedInodeForDentry(parent fsmeta.InodeID, name string, actual fsmeta.InodeID) fsmeta.InodeID {
+	if actual == 0 {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if planned, ok := m.actualToPlanned[actual]; ok {
+		return planned
+	}
+	if planned, ok := m.pendingCreates[dentryKey{parent: parent, name: name}]; ok {
+		m.rememberLocked(planned, actual)
 		return planned
 	}
 	return actual
@@ -234,4 +322,26 @@ func (m *inodeMappingExecutor) remember(planned, actual fsmeta.InodeID) {
 func (m *inodeMappingExecutor) rememberLocked(planned, actual fsmeta.InodeID) {
 	m.plannedToActual[planned] = actual
 	m.actualToPlanned[actual] = planned
+}
+
+func (m *inodeMappingExecutor) rememberPendingCreate(key dentryKey, planned fsmeta.InodeID) {
+	if planned == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pendingCreates[key] = planned
+}
+
+func (m *inodeMappingExecutor) clearPendingCreate(planned fsmeta.InodeID) {
+	if planned == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, pending := range m.pendingCreates {
+		if pending == planned {
+			delete(m.pendingCreates, key)
+		}
+	}
 }

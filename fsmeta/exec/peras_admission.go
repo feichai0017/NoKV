@@ -90,6 +90,17 @@ func (e *Executor) tryPerasVisibleCommit(ctx context.Context, op compile.Materia
 	return true, nil
 }
 
+func (e *Executor) tryPerasVisibleCommitAfterRead(ctx context.Context, view *perasReadView, op compile.MaterializedOp) (bool, error) {
+	committed, err := e.tryPerasVisibleCommit(ctx, op)
+	if err != nil || committed {
+		return committed, err
+	}
+	if view.observedPerasOverlay() {
+		return false, errPerasOverlayFallbackUnsafe
+	}
+	return false, nil
+}
+
 func (e *Executor) perasPredicatesHold(ctx context.Context, op compile.MaterializedOp, admissionCtx fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
 	delta := op.Delta
 	if !perasPredicateProofsValid(op.PredicateProofs) {
@@ -311,7 +322,7 @@ func (e *Executor) perasNotExistsKnown(scope compile.AuthorityScope, key []byte,
 	if parts.Kind != fsmeta.KeyKindDentry {
 		return false
 	}
-	return index.DirectoryBaseEmpty(fsmeta.MountIdentity{
+	return index.DirectoryEmpty(fsmeta.MountIdentity{
 		MountID:    scope.Mount,
 		MountKeyID: scope.MountKeyID,
 	}, parts.Parent)

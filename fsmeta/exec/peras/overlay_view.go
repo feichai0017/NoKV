@@ -316,6 +316,15 @@ func (s *OverlaySnapshot) Generation() uint64 {
 	return s.generation
 }
 
+func (v *OverlayView) Generation() uint64 {
+	if v == nil {
+		return 0
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.epoch
+}
+
 func (v *OverlayView) Get(key []byte) (value []byte, deleted bool, ok bool) {
 	value, deleted, ok = v.GetView(key)
 	if !ok {

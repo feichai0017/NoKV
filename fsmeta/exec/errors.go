@@ -11,4 +11,5 @@ var (
 	errAuditorRunnerRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/exec: auditor runner required")
 	errSubtreeHandoffWithoutFrontier = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/exec: subtree handoff started without committed frontier")
 	errPerasAuthorityNotHeld         = nokverrors.New(nokverrors.KindNotLeader, "fsmeta/exec: peras authority is held by another holder")
+	errPerasOverlayFallbackUnsafe    = nokverrors.New(nokverrors.KindUnavailable, "fsmeta/exec: peras overlay read cannot safely fall back to base mutation")
 )

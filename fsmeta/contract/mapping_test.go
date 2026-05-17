@@ -6,6 +6,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -78,12 +79,114 @@ func TestInodeMappingExecutorDoesNotRecoverSemanticCreateError(t *testing.T) {
 	}
 }
 
+func TestInodeMappingExecutorTranslatesCreateObservedBeforeReturn(t *testing.T) {
+	base := newFakeExternalExecutor()
+	createCommitted := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	base.createCommitted = createCommitted
+	base.releaseCreate = releaseCreate
+	exec, err := NewInodeMappingExecutor(base)
+	if err != nil {
+		t.Fatalf("NewInodeMappingExecutor: %v", err)
+	}
+
+	type createResult struct {
+		result fsmeta.CreateResult
+		err    error
+	}
+	done := make(chan createResult, 1)
+	go func() {
+		result, err := exec.Create(withPlannedCreateInode(context.Background(), 10), fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   "alpha",
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+		})
+		done <- createResult{result: result, err: err}
+	}()
+	<-createCommitted
+
+	pairs, err := exec.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: fsmeta.RootInode,
+		Limit:  16,
+	})
+	if err != nil {
+		t.Fatalf("ReadDirPlus: %v", err)
+	}
+	if len(pairs) != 1 {
+		t.Fatalf("ReadDirPlus returned %d pairs, want 1: %#v", len(pairs), pairs)
+	}
+	if pairs[0].Dentry.Inode != 10 || pairs[0].Inode.Inode != 10 {
+		t.Fatalf("pending create was not translated to planned inode: %#v", pairs[0])
+	}
+
+	close(releaseCreate)
+	created := <-done
+	if created.err != nil {
+		t.Fatalf("Create: %v", created.err)
+	}
+	if created.result.Dentry.Inode != 10 || created.result.Inode.Inode != 10 {
+		t.Fatalf("Create result was not translated to planned inode: %+v", created.result)
+	}
+}
+
+func TestInodeMappingExecutorUpdatesCreateObservedBeforeReturn(t *testing.T) {
+	base := newFakeExternalExecutor()
+	createCommitted := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	base.createCommitted = createCommitted
+	base.releaseCreate = releaseCreate
+	exec, err := NewInodeMappingExecutor(base)
+	if err != nil {
+		t.Fatalf("NewInodeMappingExecutor: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := exec.Create(withPlannedCreateInode(context.Background(), 10), fsmeta.CreateRequest{
+			Mount:  "vol",
+			Parent: fsmeta.RootInode,
+			Name:   "alpha",
+			Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+		})
+		done <- err
+	}()
+	<-createCommitted
+
+	updated, err := exec.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  fsmeta.RootInode,
+		Name:    "alpha",
+		Inode:   10,
+		SetSize: true,
+		Size:    128,
+	})
+	if err != nil {
+		t.Fatalf("UpdateInode: %v", err)
+	}
+	if updated.Inode != 10 {
+		t.Fatalf("UpdateInode returned inode %d, want planned inode 10", updated.Inode)
+	}
+	if base.lastUpdated == 10 {
+		t.Fatalf("UpdateInode reached base with planned inode instead of actual inode")
+	}
+
+	close(releaseCreate)
+	if err := <-done; err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+}
+
 type fakeExternalExecutor struct {
+	mu                   sync.Mutex
 	next                 fsmeta.InodeID
 	dentries             map[[2]any]fsmeta.DentryRecord
 	inodes               map[fsmeta.InodeID]fsmeta.InodeRecord
 	lastUpdated          fsmeta.InodeID
 	createErrAfterCommit error
+	createCommitted      chan struct{}
+	releaseCreate        chan struct{}
 }
 
 func newFakeExternalExecutor() *fakeExternalExecutor {
@@ -96,8 +199,10 @@ func newFakeExternalExecutor() *fakeExternalExecutor {
 }
 
 func (f *fakeExternalExecutor) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+	f.mu.Lock()
 	key := [2]any{req.Parent, req.Name}
 	if _, ok := f.dentries[key]; ok {
+		f.mu.Unlock()
 		return fsmeta.CreateResult{}, fsmeta.ErrExists
 	}
 	inodeID := f.next
@@ -106,13 +211,25 @@ func (f *fakeExternalExecutor) Create(_ context.Context, req fsmeta.CreateReques
 	dentry := fsmeta.DentryRecord{Parent: req.Parent, Name: req.Name, Inode: inodeID, Type: req.Attrs.Type}
 	f.dentries[key] = dentry
 	f.inodes[inodeID] = inode
-	if f.createErrAfterCommit != nil {
-		return fsmeta.CreateResult{}, f.createErrAfterCommit
+	if f.createCommitted != nil {
+		close(f.createCommitted)
+		f.createCommitted = nil
+	}
+	release := f.releaseCreate
+	errAfterCommit := f.createErrAfterCommit
+	f.mu.Unlock()
+	if release != nil {
+		<-release
+	}
+	if errAfterCommit != nil {
+		return fsmeta.CreateResult{}, errAfterCommit
 	}
 	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
 func (f *fakeExternalExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	dentry, ok := f.dentries[[2]any{req.Parent, req.Name}]
 	if !ok || dentry.Inode != req.Inode {
 		return fsmeta.InodeRecord{}, fsmeta.ErrNotFound
@@ -126,6 +243,8 @@ func (f *fakeExternalExecutor) UpdateInode(_ context.Context, req fsmeta.UpdateI
 }
 
 func (f *fakeExternalExecutor) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	dentry, ok := f.dentries[[2]any{req.Parent, req.Name}]
 	if !ok {
 		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
@@ -134,6 +253,8 @@ func (f *fakeExternalExecutor) Lookup(_ context.Context, req fsmeta.LookupReques
 }
 
 func (f *fakeExternalExecutor) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []fsmeta.DentryAttrPair
 	for key, dentry := range f.dentries {
 		if key[0] != req.Parent {

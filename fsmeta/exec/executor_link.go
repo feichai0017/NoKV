@@ -84,7 +84,7 @@ func (e *Executor) tryPerasVisibleLink(ctx context.Context, program compile.Link
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommit(ctx, concrete)
+	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 // Link creates a second dentry for an existing non-directory inode and bumps

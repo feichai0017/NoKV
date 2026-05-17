@@ -117,6 +117,17 @@ func (e *Executor) perasSnapshotOverlay() PerasSnapshotOverlayReader {
 	return reader
 }
 
+func (e *Executor) perasOverlayReadSnapshot() PerasOverlayReadSnapshotReader {
+	if e == nil || e.perasCommitter == nil {
+		return nil
+	}
+	reader, ok := e.perasCommitter.(PerasOverlayReadSnapshotReader)
+	if !ok {
+		return nil
+	}
+	return reader
+}
+
 func (e *Executor) readPerasProgram(program compile.ReadProgram) ([]byte, bool, bool) {
 	if len(program.Key) == 0 {
 		return nil, false, false
@@ -145,12 +156,13 @@ func (e *Executor) getMergedProgramValue(ctx context.Context, program compile.Re
 }
 
 type perasReadView struct {
-	executor    *Executor
-	ctx         context.Context
-	version     uint64
-	haveVersion bool
-	observed    map[string]int
-	proofs      []proof.PredicateProof
+	executor      *Executor
+	ctx           context.Context
+	version       uint64
+	haveVersion   bool
+	observedPeras bool
+	observed      map[string]int
+	proofs        []proof.PredicateProof
 }
 
 func (e *Executor) newPerasReadView(ctx context.Context) *perasReadView {
@@ -169,6 +181,7 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 		return nil, false, fsmeta.ErrInvalidRequest
 	}
 	if value, deleted, ok := v.executor.perasOverlayGet(key); ok {
+		v.observedPeras = true
 		if deleted {
 			v.remember(key, nil, false, proof.ReadSourceOverlay, 0)
 			return nil, false, nil
@@ -197,6 +210,21 @@ func (v *perasReadView) get(key []byte) ([]byte, bool, error) {
 	}
 	v.remember(key, value, ok, proof.ReadSourceBase, v.version)
 	return value, ok, nil
+}
+
+func (v *perasReadView) observedPerasOverlay() bool {
+	return v != nil && v.observedPeras
+}
+
+func (v *perasReadView) observedKeyFromPerasOverlay(key []byte) bool {
+	if v == nil {
+		return false
+	}
+	index, ok := v.observed[string(key)]
+	if !ok || index < 0 || index >= len(v.proofs) {
+		return false
+	}
+	return v.proofs[index].Source == proof.ReadSourceOverlay
 }
 
 func (v *perasReadView) remember(key, value []byte, present bool, source proof.ReadSource, version uint64) {
@@ -316,13 +344,15 @@ func (v *perasReadView) readSession(mount fsmeta.MountIdentity, key []byte) (fsm
 	return session, true, nil
 }
 
-func (e *Executor) batchGetMergedValuesOrdered(ctx context.Context, keys [][]byte, version uint64, includeOverlay, snapshotRead bool) ([][]byte, []bool, error) {
+func (e *Executor) batchGetMergedValuesOrderedAt(ctx context.Context, keys [][]byte, version uint64, includeOverlay, snapshotRead bool, overlayGeneration, sealedGeneration uint64) ([][]byte, []bool, error) {
 	values := make([][]byte, len(keys))
 	present := make([]bool, len(keys))
 
 	overlay := e.perasOverlay()
 	snapshot := e.perasSnapshotOverlay()
-	if !includeOverlay || (!snapshotRead && overlay == nil) || (snapshotRead && snapshot == nil) {
+	readSnapshot := e.perasOverlayReadSnapshot()
+	useReadSnapshot := !snapshotRead && readSnapshot != nil && (overlayGeneration != 0 || sealedGeneration != 0)
+	if !includeOverlay || (!snapshotRead && overlay == nil && !useReadSnapshot) || (snapshotRead && snapshot == nil) {
 		base, err := e.runner.BatchGet(ctx, keys, version)
 		if err != nil {
 			return nil, nil, err
@@ -344,6 +374,8 @@ func (e *Executor) batchGetMergedValuesOrdered(ctx context.Context, keys [][]byt
 		var deleted, ok bool
 		if snapshotRead {
 			value, deleted, ok = snapshot.GetPerasSnapshotOverlayView(version, key)
+		} else if useReadSnapshot {
+			value, deleted, ok = readSnapshot.GetPerasOverlayViewAt(overlayGeneration, sealedGeneration, key)
 		} else {
 			value, deleted, ok = overlay.GetPerasOverlayView(key)
 		}
@@ -388,7 +420,11 @@ func (e *Executor) mergePerasOverlayScan(kvs []KV, start []byte, limit uint32) [
 }
 
 func (e *Executor) mergePerasDirectoryOverlayScan(kvs []KV, prefix, start []byte, limit uint32) ([]KV, uint32, bool) {
-	overlayKVs, usedIndex := e.scanPerasDirectoryOverlayRows(prefix, start, limit)
+	return e.mergePerasDirectoryOverlayScanAt(kvs, prefix, start, limit, 0, 0)
+}
+
+func (e *Executor) mergePerasDirectoryOverlayScanAt(kvs []KV, prefix, start []byte, limit uint32, overlayGeneration, sealedGeneration uint64) ([]KV, uint32, bool) {
+	overlayKVs, usedIndex := e.scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, prefix, start, limit)
 	if len(overlayKVs) == 0 {
 		return kvs, 0, usedIndex
 	}
@@ -396,14 +432,14 @@ func (e *Executor) mergePerasDirectoryOverlayScan(kvs []KV, prefix, start []byte
 	return out, uint32(len(overlayKVs)), usedIndex
 }
 
-func (e *Executor) scanPerasDirectoryOverlayRows(prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+func (e *Executor) scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
 	var (
 		out       []fsperas.OverlayKV
 		startKey  = cloneBytes(start)
 		usedIndex bool
 	)
 	for {
-		batch, batchUsedIndex := e.scanPerasDirectoryOverlayBatch(prefix, startKey, limit)
+		batch, batchUsedIndex := e.scanPerasDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration, prefix, startKey, limit)
 		usedIndex = usedIndex || batchUsedIndex
 		if len(batch) == 0 {
 			return out, usedIndex
@@ -450,7 +486,11 @@ func (e *Executor) scanPerasSnapshotDirectoryOverlayRows(version uint64, prefix,
 	}
 }
 
-func (e *Executor) scanPerasDirectoryOverlayBatch(prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+func (e *Executor) scanPerasDirectoryOverlayBatchAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) ([]fsperas.OverlayKV, bool) {
+	if readSnapshot := e.perasOverlayReadSnapshot(); readSnapshot != nil && (overlayGeneration != 0 || sealedGeneration != 0) {
+		overlayKVs := readSnapshot.ScanPerasDirectoryAt(overlayGeneration, sealedGeneration, prefix, start, limit)
+		return trimPerasDirectoryOverlayBatch(prefix, overlayKVs), true
+	}
 	overlay := e.perasOverlay()
 	if overlay == nil || limit == 0 {
 		return nil, false
@@ -465,8 +505,12 @@ func (e *Executor) scanPerasDirectoryOverlayBatch(prefix, start []byte, limit ui
 	} else {
 		overlayKVs = overlay.ScanPerasOverlay(start, limit)
 	}
+	return trimPerasDirectoryOverlayBatch(prefix, overlayKVs), usedIndex
+}
+
+func trimPerasDirectoryOverlayBatch(prefix []byte, overlayKVs []fsperas.OverlayKV) []fsperas.OverlayKV {
 	if len(overlayKVs) == 0 {
-		return nil, usedIndex
+		return nil
 	}
 	out := overlayKVs[:0]
 	for _, row := range overlayKVs {
@@ -475,16 +519,16 @@ func (e *Executor) scanPerasDirectoryOverlayBatch(prefix, start []byte, limit ui
 		}
 		out = append(out, row)
 	}
-	return out, usedIndex
+	return out
 }
 
-func (e *Executor) scanMergedDirectoryRows(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool) ([]KV, uint32, uint32, bool, error) {
+func (e *Executor) scanMergedDirectoryRowsAt(ctx context.Context, plan compile.DirectoryReadPlan, version uint64, snapshotRead bool, overlayGeneration, sealedGeneration uint64) ([]KV, uint32, uint32, bool, error) {
 	var overlayKVs []fsperas.OverlayKV
 	var usedIndex bool
 	if snapshotRead {
 		overlayKVs, usedIndex = e.scanPerasSnapshotDirectoryOverlayRows(version, plan.Prefix, plan.StartKey, plan.Limit)
 	} else {
-		overlayKVs, usedIndex = e.scanPerasDirectoryOverlayRows(plan.Prefix, plan.StartKey, plan.Limit)
+		overlayKVs, usedIndex = e.scanPerasDirectoryOverlayRowsAt(overlayGeneration, sealedGeneration, plan.Prefix, plan.StartKey, plan.Limit)
 	}
 	start := cloneBytes(plan.StartKey)
 	baseRows := make([]KV, 0, plan.Limit)
