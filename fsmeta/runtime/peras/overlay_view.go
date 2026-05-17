@@ -157,6 +157,32 @@ func (c *Runtime) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
 	return c.read.sealed.GetView(key)
 }
 
+func (c *Runtime) CapturePerasOverlayRead() (uint64, uint64) {
+	if c == nil || c.read == nil {
+		return 0, 0
+	}
+	c.read.mu.RLock()
+	overlayGeneration := c.read.overlay.Generation()
+	sealedGeneration := c.read.sealed.Generation()
+	c.read.mu.RUnlock()
+	return overlayGeneration, sealedGeneration
+}
+
+func (c *Runtime) GetPerasOverlayViewAt(overlayGeneration, sealedGeneration uint64, key []byte) ([]byte, bool, bool) {
+	if c == nil || c.read == nil {
+		return nil, false, false
+	}
+	if overlayGeneration != 0 {
+		if value, deleted, ok := c.read.overlay.GetViewAt(overlayGeneration, key); ok {
+			return value, deleted, true
+		}
+	}
+	if sealedGeneration == 0 {
+		return nil, false, false
+	}
+	return c.read.sealed.GetViewAt(sealedGeneration, key)
+}
+
 // CapturePerasSnapshot records the installed catalog overlay visible to one
 // MVCC snapshot version.
 func (c *Runtime) CapturePerasSnapshot(version uint64) error {
@@ -488,14 +514,14 @@ func (c *Runtime) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeI
 	if c == nil || c.read == nil {
 		return false
 	}
-	return c.read.overlay.DirectoryEmpty(mount, inode)
+	return c.read.overlay.DirectoryEmpty(mount, inode) && !c.sealedDirectoryHasRows(mount, inode)
 }
 
 func (c *Runtime) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.read == nil {
 		return false
 	}
-	return c.read.overlay.DirectoryBaseEmpty(mount, inode)
+	return c.read.overlay.DirectoryBaseEmpty(mount, inode) && !c.sealedDirectoryHasRows(mount, inode)
 }
 
 func (c *Runtime) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
@@ -533,6 +559,17 @@ func (c *Runtime) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inod
 	c.read.overlay.RememberEmptySessionNamespace(mount, inode)
 }
 
+func (c *Runtime) sealedDirectoryHasRows(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+	if c == nil || c.read == nil || c.read.sealed == nil {
+		return false
+	}
+	prefix, err := fsmeta.EncodeDentryPrefix(mount, inode)
+	if err != nil {
+		return false
+	}
+	return c.read.sealed.HasDirectory(prefix)
+}
+
 func (c *Runtime) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
 	if c == nil || c.read == nil || limit == 0 {
 		return nil
@@ -545,6 +582,21 @@ func (c *Runtime) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsper
 		return nil
 	}
 	return fsperas.MergeOverlayScans(c.read.sealed.ScanDirectory(prefix, start, limit), c.read.overlay.ScanDirectory(prefix, start, limit), limit)
+}
+
+func (c *Runtime) ScanPerasDirectoryAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	if c == nil || c.read == nil || limit == 0 {
+		return nil
+	}
+	var overlayRows []fsperas.OverlayKV
+	if overlayGeneration != 0 {
+		overlayRows = c.read.overlay.ScanDirectoryAt(overlayGeneration, prefix, start, limit)
+	}
+	var sealedRows []fsperas.OverlayKV
+	if sealedGeneration != 0 {
+		sealedRows = c.read.sealed.ScanDirectoryAt(sealedGeneration, prefix, start, limit)
+	}
+	return fsperas.MergeOverlayScans(sealedRows, overlayRows, limit)
 }
 
 func (c *Runtime) HasPerasDirectory(prefix []byte) bool {

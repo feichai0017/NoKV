@@ -100,7 +100,7 @@ NoKV cluster. It is a service benchmark for fsmeta's server-side API surface:
   this benchmark measures the metadata side of checkpoint publication: artifact
   fan-out, manifest update/rename, watch, snapshot read, and snapshot retire.
 
-Prerequisites:
+Prerequisites for the default Compose mode:
 
 - a running NoKV Docker Compose cluster, or equivalent coordinator/store/fsmeta
   deployment
@@ -123,6 +123,18 @@ checkpointing source links, the official shape, and NoKV's metadata-service
 projection. It does not vendor third-party benchmark code or claim a certified
 IO500/Filebench/MLPerf score.
 
+For CI and single-node tuning, run the same workload driver against the embedded
+fsmeta backend:
+
+```bash
+NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
+```
+
+Local mode builds `cmd/nokv-fsmeta`, starts it with `--backend local`, skips
+coordinator mount bootstrap, and writes `fsmeta_local_*` CSV/manifests. It is
+the right benchmark for the single-node product shape; Compose mode remains the
+distributed raftstore/Peras benchmark.
+
 Default scale is the PR-oriented `median` service run from that profile: 12
 clients, 16 mdtest/mimesis directories x 256 files, 16 varmail users x 128
 messages, and 4 AI workspaces x 64 checkpoint publishes x 8 artifact files.
@@ -138,8 +150,9 @@ session leases do not dominate throughput measurements. The script also waits
 fresh Compose cluster can finish Raft leader election and coordinator grant
 publication; set `NOKV_FSMETA_STABILIZE_SECONDS=0` for an already-warm cluster.
 The underlying script is `scripts/run_fsmeta_benchmarks.sh`; set
-`NOKV_FSMETA_BENCH_MODE=derived-cache` to run the cache on/off slice with two
-temporary fsmeta gateways.
+`NOKV_FSMETA_BENCH_MODE=local`, `compose`, or `derived-cache` to choose the
+runtime shape. The cache on/off slice still requires a running distributed
+cluster because it compares two raftstore-backed gateways.
 
 By default the Compose matrix resets Docker volumes between workloads
 (`NOKV_FSMETA_RESET_BETWEEN_WORKLOADS=1`). This keeps each workload from

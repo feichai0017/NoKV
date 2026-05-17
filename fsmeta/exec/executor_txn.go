@@ -18,8 +18,8 @@ import (
 
 func (e *Executor) mutateWithAtomicOnePhase(ctx context.Context, kind fsmeta.OperationKind, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
 	stats := e.atomicOnePhaseCounters(kind)
-	onePhase, ok := e.runner.(AtomicMutateOnePhase)
-	if !ok {
+	onePhase, ok := e.runner.(ReadOrderedAtomicMutateOnePhase)
+	if !ok || !onePhase.AtomicMutatePreservesReadOrder() {
 		if stats != nil {
 			stats.runnerUnsupportedTotal.Add(1)
 		}

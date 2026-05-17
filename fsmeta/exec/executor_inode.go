@@ -75,7 +75,7 @@ func (e *Executor) tryPerasVisibleUpdateInode(ctx context.Context, program compi
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	committed, err := e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 	if err != nil {
 		return fsmeta.InodeRecord{}, committed, err
 	}

@@ -54,7 +54,13 @@ func runRound(ctx context.Context, addr string, mount fsmeta.MountID, seed int64
 	roundCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	cli, err := fsmetaclient.NewGRPCClient(roundCtx, addr)
+	// The soak checker validates operation histories, so it must read through
+	// the authoritative service path instead of the client's positive lookup
+	// cache. A concurrent read can legitimately return an older dentry after a
+	// rename invalidated the cache, then repopulate that stale value.
+	cli, err := fsmetaclient.NewGRPCClientWithConfig(roundCtx, addr, fsmetaclient.ClientConfig{
+		DisableLookupCache: true,
+	})
 	if err != nil {
 		return fmt.Errorf("dial fsmeta: %w", err)
 	}

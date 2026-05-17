@@ -33,6 +33,7 @@ type fakeRunner struct {
 	scanErrs            []error
 	batchErrs           []error
 	timestampErrs       []error
+	beforeBatchGet      func()
 	mutateErr           error
 	mutateErrs          []error
 	actualCommitVersion uint64
@@ -50,6 +51,11 @@ type fakeAtomicRunner struct {
 	*fakeRunner
 	handled     bool
 	err         error
+	atomicCalls []atomicMutateCall
+}
+
+type fakeSpeculativeAtomicRunner struct {
+	*fakeRunner
 	atomicCalls []atomicMutateCall
 }
 
@@ -204,9 +210,10 @@ type testVersionAllocator interface {
 }
 
 type testPerasCommitter struct {
-	holder   *fsperas.Holder
-	versions testVersionAllocator
-	view     *fsperas.OverlayView
+	holder    *fsperas.Holder
+	versions  testVersionAllocator
+	view      *fsperas.OverlayView
+	submitErr error
 
 	mu          sync.Mutex
 	commitTotal uint64
@@ -233,8 +240,9 @@ type ownedPerasAdmitter struct{}
 
 type scanOverlayCommitter struct {
 	noopPerasCommitter
-	rows   []fsperas.OverlayKV
-	values map[string]fsperas.OverlayKV
+	rows             []fsperas.OverlayKV
+	values           map[string]fsperas.OverlayKV
+	directoryPresent bool
 }
 
 var _ PerasOverlayReader = scanOverlayCommitter{}
@@ -433,6 +441,9 @@ func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.Opera
 		return fsperas.VisibleAck{}, err
 	}
 	op = admitted
+	if c.submitErr != nil {
+		return fsperas.VisibleAck{}, c.submitErr
+	}
 	ack, _, err := c.holder.Submit(ctx, id, op)
 	if err != nil {
 		return fsperas.VisibleAck{}, err
@@ -490,11 +501,32 @@ func (c *testPerasCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool
 	return c.view.GetView(key)
 }
 
+func (c *testPerasCommitter) CapturePerasOverlayRead() (uint64, uint64) {
+	if c == nil || c.view == nil {
+		return 0, 0
+	}
+	return c.view.Generation(), 0
+}
+
+func (c *testPerasCommitter) GetPerasOverlayViewAt(overlayGeneration, _ uint64, key []byte) ([]byte, bool, bool) {
+	if c == nil || c.view == nil {
+		return nil, false, false
+	}
+	return c.view.GetViewAt(overlayGeneration, key)
+}
+
 func (c *testPerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
 	if c == nil || c.view == nil {
 		return nil
 	}
 	return c.view.Scan(start, limit)
+}
+
+func (c *testPerasCommitter) ScanPerasDirectoryAt(overlayGeneration, _ uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	if c == nil || c.view == nil {
+		return nil
+	}
+	return c.view.ScanDirectoryAt(overlayGeneration, prefix, start, limit)
 }
 
 func (c *testPerasCommitter) HasPerasDirectory(prefix []byte) bool {
@@ -690,6 +722,32 @@ func (c scanOverlayCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsp
 	return out
 }
 
+func (c scanOverlayCommitter) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+	out := make([]fsperas.OverlayKV, 0, len(c.rows))
+	for _, row := range c.rows {
+		if !bytes.HasPrefix(row.Key, prefix) || bytes.Compare(row.Key, start) < 0 {
+			continue
+		}
+		out = append(out, row)
+		if uint32(len(out)) == limit {
+			break
+		}
+	}
+	return out
+}
+
+func (c scanOverlayCommitter) HasPerasDirectory(prefix []byte) bool {
+	if c.directoryPresent {
+		return true
+	}
+	for _, row := range c.rows {
+		if bytes.HasPrefix(row.Key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ownedPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
 	return true, nil
 }
@@ -728,6 +786,9 @@ func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool,
 
 func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
 	r.batchVersions = append(r.batchVersions, version)
+	if r.beforeBatchGet != nil {
+		r.beforeBatchGet()
+	}
 	if len(r.batchErrs) > 0 {
 		err := r.batchErrs[0]
 		r.batchErrs = r.batchErrs[1:]
@@ -881,6 +942,21 @@ func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, pr
 			delete(r.data, string(mut.GetKey()))
 		}
 	}
+	return true, nil
+}
+
+func (r *fakeAtomicRunner) AtomicMutatePreservesReadOrder() bool {
+	return true
+}
+
+func (r *fakeSpeculativeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	r.atomicCalls = append(r.atomicCalls, atomicMutateCall{
+		primary:       cloneBytes(primary),
+		predicates:    cloneAtomicPredicates(predicates),
+		mutations:     cloneMutations(mutations),
+		startVersion:  startVersion,
+		commitVersion: commitVersion,
+	})
 	return true, nil
 }
 

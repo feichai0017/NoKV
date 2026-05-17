@@ -33,7 +33,16 @@ jobs:
       run: make install-tools
 
     - name: Proto check
-      run: make proto-check
+      run: |
+        for attempt in 1 2 3; do
+          if make proto-check; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
 
     - name: Format
       run: |

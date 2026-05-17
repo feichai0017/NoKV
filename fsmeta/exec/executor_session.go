@@ -71,7 +71,7 @@ func (e *Executor) tryPerasVisibleOpenWriteSession(ctx context.Context, program 
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	committed, err := e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
 	}
@@ -121,7 +121,7 @@ func (e *Executor) tryPerasVisibleHeartbeatWriteSession(ctx context.Context, pro
 	if err != nil {
 		return fsmeta.SessionRecord{}, false, err
 	}
-	committed, err := e.tryPerasVisibleCommit(ctx, concrete)
+	committed, err := e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 	if err != nil {
 		return fsmeta.SessionRecord{}, committed, err
 	}
@@ -163,7 +163,7 @@ func (e *Executor) tryPerasVisibleCloseWriteSession(ctx context.Context, program
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommit(ctx, concrete)
+	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 func (e *Executor) tryPerasVisibleExpireWriteSession(ctx context.Context, mount fsmeta.MountIdentity, record fsmeta.SessionRecord) (bool, error) {

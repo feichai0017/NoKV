@@ -169,6 +169,32 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
+func TestRuntimeDirectoryEmptyFactsDoNotIgnoreSealedRows(t *testing.T) {
+	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         &fakeRuntimePerasSegmentInstaller{},
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	committer.RememberEmptyDirectory(testRuntimeMount, fsmeta.RootInode)
+	require.True(t, committer.DirectoryEmpty(testRuntimeMount, fsmeta.RootInode))
+	require.True(t, committer.DirectoryBaseEmpty(testRuntimeMount, fsmeta.RootInode))
+
+	require.NoError(t, commitRuntimePeras(ctx, committer, 1, testRuntimeDentryKeyForLabel("sealed"), testRuntimeDentryKeyForLabel("sealed-inode")))
+	committer.ForgetEmptyDirectory(testRuntimeMount, fsmeta.RootInode)
+	require.NoError(t, committer.FlushDurable(ctx))
+
+	require.False(t, committer.DirectoryEmpty(testRuntimeMount, fsmeta.RootInode))
+	require.False(t, committer.DirectoryBaseEmpty(testRuntimeMount, fsmeta.RootInode))
+}
+
 func TestRuntimeWithoutWitnessLayerFlushesVisibleLogToInstall(t *testing.T) {
 	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}

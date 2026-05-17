@@ -48,7 +48,7 @@ help:
 	@echo "  make proto-check        - Verify proto format, lint, and generated code"
 	@echo "  make proto-breaking-check - Run Buf breaking checks against main"
 	@echo "  make bench              - Run benchmarks"
-	@echo "  make fsmeta-bench       - Run isolated Docker Compose fsmeta workload matrix"
+	@echo "  make fsmeta-bench       - Run fsmeta workload matrix (set NOKV_FSMETA_BENCH_MODE=local|compose)"
 	@echo "  make install-tools      - Install development tools"
 	@echo "  make install-tla-tools  - Install pinned TLC locally under third_party/"
 	@echo "  make test-tla-smoke     - Run bounded TLA protocol model checks"

@@ -61,6 +61,24 @@ func TestExecutorPerasObservedPredicateRechecksExpectedValue(t *testing.T) {
 	require.Equal(t, 1, runner.getCalls, "known-present facts cannot replace byte-level observed-value recheck")
 }
 
+func TestExecutorPerasNotExistsKnownUsesCurrentDirectoryEmptiness(t *testing.T) {
+	runner := newFakeRunner()
+	committer := newTestPerasCommitter(t, runner)
+	committer.RememberEmptyDirectory(testMountIdentity, fsmeta.RootInode)
+	committer.ForgetEmptyDirectory(testMountIdentity, fsmeta.RootInode)
+	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
+	require.NoError(t, err)
+	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "eta")
+
+	knownAbsent := executor.perasNotExistsKnown(compile.AuthorityScope{
+		Mount:      testMountIdentity.MountID,
+		MountKeyID: testMountIdentity.MountKeyID,
+		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+	}, key, committer)
+
+	require.False(t, knownAbsent, "base-empty directory facts are not enough once visible writes made the current directory non-empty")
+}
+
 func TestExecutorPerasPredicateRejectsCorruptProof(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "file")

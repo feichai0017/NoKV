@@ -64,7 +64,7 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.Un
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommit(ctx, concrete)
+	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 // Unlink removes one dentry, decrements its inode link count, and deletes the

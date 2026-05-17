@@ -56,11 +56,21 @@ type TxnRunner interface {
 	MutateAtCommit(ctx context.Context, primary []byte, mutations []*kvrpcpb.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
 }
 
-// AtomicMutateOnePhase is an optional TxnRunner extension. handled=false
-// means the runner could not keep the mutation in one proven-atomic local
-// apply group and the caller must fall back to Mutate.
+// AtomicMutateOnePhase is a raw one-phase mutation capability. It is not enough
+// by itself for fsmeta semantic execution: caller-allocated commit timestamps
+// can otherwise let a read at a later timestamp race ahead of a delayed 1PC
+// apply and observe a fractured directory/inode view.
 type AtomicMutateOnePhase interface {
 	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*kvrpcpb.AtomicPredicate, mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) (handled bool, err error)
+}
+
+// ReadOrderedAtomicMutateOnePhase is the one-phase mutation contract the
+// fsmeta executor may consume. Implementations must guarantee that a read at
+// version T cannot miss any successful 1PC write whose commit version is <= T
+// merely because the write had not reached the storage apply boundary yet.
+type ReadOrderedAtomicMutateOnePhase interface {
+	AtomicMutateOnePhase
+	AtomicMutatePreservesReadOrder() bool
 }
 
 // InodeAllocator assigns Create inode IDs. The executor allocates once before
@@ -130,6 +140,12 @@ type PerasOverlayReader interface {
 	// the returned value.
 	GetPerasOverlayView(key []byte) (value []byte, deleted bool, ok bool)
 	ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV
+}
+
+type PerasOverlayReadSnapshotReader interface {
+	CapturePerasOverlayRead() (overlayGeneration, sealedGeneration uint64)
+	GetPerasOverlayViewAt(overlayGeneration, sealedGeneration uint64, key []byte) (value []byte, deleted bool, ok bool)
+	ScanPerasDirectoryAt(overlayGeneration, sealedGeneration uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV
 }
 
 type PerasDirectoryOverlayReader interface {

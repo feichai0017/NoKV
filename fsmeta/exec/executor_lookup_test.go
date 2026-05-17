@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,7 +162,7 @@ func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
 	defer func() { _ = cache.Close() }()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasCommitter(scanOverlayCommitter{}),
+		WithPerasCommitter(scanOverlayCommitter{directoryPresent: true}),
 		WithDirPageCache(cache),
 	)
 	require.NoError(t, err)
@@ -182,6 +183,55 @@ func TestExecutorReadDirPlusPerasOverlayPathBypassesDirPageCache(t *testing.T) {
 	require.Equal(t, uint64(0), stats.Hits)
 	require.Equal(t, uint64(0), stats.StoreOK)
 	require.Len(t, runner.scanVersions, 2, "Peras-backed ReadDirPlus must not materialize the persistent dirpage cache")
+}
+
+func TestExecutorReadDirPlusPinsPerasOverlayAcrossDentryAndInodeReads(t *testing.T) {
+	runner := newFakeRunner()
+	parent := fsmeta.InodeID(7)
+	seedDentry(t, runner, "vol", parent, "eta", 22)
+	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
+	committer := newTestPerasCommitter(t, runner)
+	executor, err := newTestExecutor(
+		runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{23}}),
+		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
+		WithPerasCommitter(committer),
+	)
+	require.NoError(t, err)
+	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
+		Mount:  "vol",
+		Parent: parent,
+		Name:   "omega",
+		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
+	})
+	require.NoError(t, err)
+
+	var once sync.Once
+	runner.beforeBatchGet = func() {
+		once.Do(func() {
+			require.NoError(t, executor.Link(context.Background(), fsmeta.LinkRequest{
+				Mount:      "vol",
+				FromParent: parent,
+				FromName:   "eta",
+				ToParent:   parent,
+				ToName:     "zeta",
+			}))
+		})
+	}
+
+	pairs, err := executor.ReadDirPlus(context.Background(), fsmeta.ReadDirRequest{
+		Mount:  "vol",
+		Parent: parent,
+		Limit:  1,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, "eta", pairs[0].Dentry.Name)
+	require.Equal(t, uint32(1), pairs[0].Inode.LinkCount, "ReadDirPlus must not combine a pre-link dentry page with a post-link inode overlay")
+
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: parent, Name: "zeta"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.InodeID(22), record.Inode)
 }
 
 func TestExecutorReadDirPlusCachesSealedPerasDirectory(t *testing.T) {
@@ -606,6 +656,29 @@ func TestExecutorLookupUsesPerasOverlayWithoutTimestamp(t *testing.T) {
 	require.Equal(t, uint64(1), runner.nextTS, "overlay lookup must not reserve a read timestamp")
 }
 
+func TestExecutorLookupUsesMergedDirectoryWhenPerasTombstoneHidesBase(t *testing.T) {
+	runner := newFakeRunner()
+	parent := fsmeta.InodeID(7)
+	seedDentry(t, runner, "vol", parent, "alpha", 22)
+	alphaKey := dentryKeyForTest(t, "vol", parent, "alpha")
+	etaKey := dentryKeyForTest(t, "vol", parent, "eta")
+	rows := []fsperas.OverlayKV{
+		overlayDeleteForTest(alphaKey),
+		overlayValueForTest(etaKey, dentryValueForTest(t, parent, "eta", 22, fsmeta.InodeTypeFile)),
+	}
+	executor, err := newTestExecutor(runner, WithPerasCommitter(scanOverlayCommitter{
+		rows:   rows,
+		values: overlayMapForTest(rows...),
+	}))
+	require.NoError(t, err)
+
+	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: parent, Name: "alpha"})
+	require.ErrorIs(t, err, fsmeta.ErrNotFound)
+	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: parent, Name: "eta"})
+	require.NoError(t, err)
+	require.Equal(t, fsmeta.DentryRecord{Parent: parent, Name: "eta", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
+}
+
 func TestExecutorLookupUsesPerasOverlayDeleteWithoutRunner(t *testing.T) {
 	runner := newFakeRunner()
 	key := dentryKeyForTest(t, "vol", fsmeta.RootInode, "deleted")
@@ -757,7 +830,8 @@ func TestExecutorReadDirPlusUsesPerasOverlayInodesWithoutBatchGet(t *testing.T) 
 		LinkCount: 1,
 	})
 	committer := scanOverlayCommitter{
-		values: overlayMapForTest(overlayValueForTest(inodeKey, inodeValue)),
+		directoryPresent: true,
+		values:           overlayMapForTest(overlayValueForTest(inodeKey, inodeValue)),
 	}
 	executor, err := newTestExecutor(runner, WithPerasCommitter(committer))
 	require.NoError(t, err)
