@@ -45,6 +45,38 @@ func TestWALVisibleLogReplaySkipsAppliedRecords(t *testing.T) {
 	require.Equal(t, second.Operation, replayed[0].Operation)
 }
 
+func TestWALVisibleLogReplayStateIncludesAppliedRecords(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	log.SetRetainAppliedRecords(true)
+	t.Cleanup(log.Close)
+	ctx := context.Background()
+	first := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 9}, []byte("a"))
+	second := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 10}, []byte("b"))
+
+	require.NoError(t, log.AppendVisible(ctx, first))
+	require.NoError(t, log.AppendVisible(ctx, second))
+	require.NoError(t, log.AppendVisibleReplayPlanApplied(ctx, first.EpochID, first.HolderID, testVisibleReplayPlan(first)))
+
+	replayed, err := log.ReplayVisible(ctx)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1)
+	require.Equal(t, second.Operation.OpID, replayed[0].Operation.OpID)
+
+	state, err := log.ReplayVisibleState(ctx)
+	require.NoError(t, err)
+	require.Len(t, state, 2)
+	require.Equal(t, first.Operation.OpID, state[0].Record.Operation.OpID)
+	require.True(t, state[0].Applied)
+	require.Equal(t, second.Operation.OpID, state[1].Record.Operation.OpID)
+	require.False(t, state[1].Applied)
+}
+
 func TestWALVisibleLogCompactsAppliedSegments(t *testing.T) {
 	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
 	require.NoError(t, err)
@@ -71,6 +103,36 @@ func TestWALVisibleLogCompactsAppliedSegments(t *testing.T) {
 	replayed, err = log.ReplayVisible(ctx)
 	require.NoError(t, err)
 	require.Empty(t, replayed)
+}
+
+func TestWALVisibleLogRetainAppliedRecordsDisablesAppliedCompaction(t *testing.T) {
+	mgr, err := wal.Open(wal.Config{Dir: filepath.Join(t.TempDir(), "wal")})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	log.SetRetainAppliedRecords(true)
+	t.Cleanup(log.Close)
+	ctx := context.Background()
+	record := testVisibleRecord(fsperas.OperationID{ClientID: "client", Seq: 9}, []byte("a"))
+
+	require.NoError(t, log.AppendVisible(ctx, record))
+	require.NoError(t, mgr.Rotate())
+	replayed, err := log.ReplayVisible(ctx)
+	require.NoError(t, err)
+	require.Len(t, replayed, 1)
+	require.NoError(t, log.AppendVisibleReplayPlanApplied(ctx, record.EpochID, record.HolderID, testVisibleReplayPlan(record)))
+
+	files, err := mgr.ListSegments()
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+
+	require.NoError(t, log.CompactApplied())
+	files, err = mgr.ListSegments()
+	require.NoError(t, err)
+	require.Len(t, files, 2)
 }
 
 func TestWALVisibleLogAppliedRangesDoNotCoverGaps(t *testing.T) {
@@ -202,14 +264,15 @@ func testVisibleRecord(id fsperas.OperationID, key []byte) fsperas.VisibleOperat
 func testVisibleReplayOperation(id fsperas.OperationID, key []byte) fsperas.ReplayOperation {
 	segment := compile.SegmentPlan{
 		MergeKey: compile.SegmentMergeKey{
-			MountKeyID:    1,
-			PrimaryBucket: 1,
-			Install:       compile.SegmentInstallSingleBucket,
-			Durability:    compile.DurabilityVisibleOnly,
-			FormatVersion: 1,
+			MountKeyID:       1,
+			HasPrimaryBucket: true,
+			PrimaryBucket:    1,
+			Install:          compile.SegmentInstallSingleBucket,
+			Durability:       compile.DurabilityVisibleOnly,
+			FormatVersion:    1,
 		},
 		Install:               compile.SegmentInstallSingleBucket,
-		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
+		MaterializeMergeKey:   compile.SegmentMergeKey{MountKeyID: 1, HasPrimaryBucket: true, PrimaryBucket: 1, Install: compile.SegmentInstallSingleBucket, Durability: compile.DurabilityVisibleOnly, FormatVersion: 1},
 		MaterializeInstall:    compile.SegmentInstallSingleBucket,
 		CanAppend:             true,
 		CanMaterialize:        true,

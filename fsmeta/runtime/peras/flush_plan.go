@@ -20,6 +20,7 @@ func (c *Runtime) freezeFlushBatchesLocked(target *compile.AuthorityScope, mater
 
 func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) ([]perasFlushBatch, error) {
 	batches := make([]perasFlushBatch, 0, len(plans))
+	needsPayload := c.flushNeedsSegmentPayload()
 	for _, frozen := range plans {
 		sized, err := splitReplayPlanByCompilerBudget(frozen.plan, materialize, c.replaySegmentBudget(materialize), c.replaySegmentCatalogRouteBudget(materialize))
 		if err != nil {
@@ -31,13 +32,18 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			if err != nil {
 				return nil, c.recordErrorf("build peras segment: %w", err)
 			}
-			payload, err := fsperas.EncodePerasSegment(segment)
-			if err != nil {
-				return nil, c.recordErrorf("encode peras segment: %w", err)
-			}
-			digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-			if err != nil {
-				return nil, c.recordErrorf("digest peras segment: %w", err)
+			var payload []byte
+			var digest [32]byte
+			if needsPayload {
+				var err error
+				payload, err = fsperas.EncodePerasSegment(segment)
+				if err != nil {
+					return nil, c.recordErrorf("encode peras segment: %w", err)
+				}
+				digest, err = fsperas.PerasSegmentPayloadDigest(payload)
+				if err != nil {
+					return nil, c.recordErrorf("digest peras segment: %w", err)
+				}
 			}
 			install, err := fsperas.PerasSegmentInstallPlan(segment, materialize)
 			if err != nil {
@@ -54,19 +60,43 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			}
 			jobs = append(jobs, job)
 		}
-		batchPlan, err := joinReplayPlansForBatch(sized)
-		if err != nil {
-			return nil, c.recordErrorf("build peras batch replay plan: %w", err)
+		batchLimit := c.flushBatchJobLimit(materialize)
+		for start := 0; start < len(jobs); start += batchLimit {
+			end := min(start+batchLimit, len(jobs))
+			batchPlan, err := joinReplayPlansForBatch(sized[start:end])
+			if err != nil {
+				return nil, c.recordErrorf("build peras batch replay plan: %w", err)
+			}
+			batches = append(batches, perasFlushBatch{
+				holder:          frozen.holder,
+				scope:           frozen.scope,
+				plan:            batchPlan,
+				jobs:            append([]perasFlushJob(nil), jobs[start:end]...),
+				witnessUnixNano: c.nextWitnessUnixNano(),
+			})
 		}
-		batches = append(batches, perasFlushBatch{
-			holder:          frozen.holder,
-			scope:           frozen.scope,
-			plan:            batchPlan,
-			jobs:            jobs,
-			witnessUnixNano: c.nextWitnessUnixNano(),
-		})
 	}
 	return batches, nil
+}
+
+func (c *Runtime) flushBatchJobLimit(materialize bool) int {
+	if !materialize {
+		return int(^uint(0) >> 1)
+	}
+	if c == nil || c.installN <= 0 {
+		return 1
+	}
+	return c.installN
+}
+
+func (c *Runtime) flushNeedsSegmentPayload() bool {
+	if c == nil {
+		return true
+	}
+	if c.usesSegmentWitness() {
+		return true
+	}
+	return segmentInstallerNeedsPayload(c.installer)
 }
 
 func joinReplayPlansForBatch(plans []fsperas.ReplayPlan) (fsperas.ReplayPlan, error) {
@@ -92,10 +122,14 @@ func (c *Runtime) replaySegmentBudget(materialize bool) compile.SegmentBudget {
 	if !materialize {
 		return budget
 	}
-	if c.maxReplay > 0 && c.maxReplay < defaultPerasMaterializeMaxReplayMutations {
+	cap := c.materializeMaxReplay
+	if cap <= 0 {
+		cap = defaultPerasMaterializeMaxReplayMutations
+	}
+	if c.maxReplay > 0 && c.maxReplay < cap {
 		budget.MaxMutations = uint32(c.maxReplay)
 	} else {
-		budget.MaxMutations = defaultPerasMaterializeMaxReplayMutations
+		budget.MaxMutations = uint32(cap)
 	}
 	return budget
 }

@@ -38,6 +38,32 @@ func newReadState() *readState {
 	}
 }
 
+// mergeCompletions records each completion under read.mu so SubmitVisible
+// can dedup retries against the OpID. The single source of truth for the
+// completion index — both completionIndexLayer (live finalize) and recovery
+// Pattern B (LoadInstalledSegments, which does not run the finalize chain
+// because the catalog already exists) route through here.
+func (rs *readState) mergeCompletions(segment fsperas.PerasSegment) {
+	if rs == nil || len(segment.Completions) == 0 {
+		return
+	}
+	rs.mu.Lock()
+	if rs.completed == nil {
+		rs.completed = make(map[fsperas.OperationID]perasCompletion, len(segment.Completions))
+	}
+	for _, completion := range segment.Completions {
+		rs.completed[completion.OpID] = perasCompletion{epochID: segment.EpochID, completion: completion}
+	}
+	rs.mu.Unlock()
+}
+
+// installSegment merges a freshly-installed segment into the runtime's
+// in-memory view: sealed overlay, sealedSegments slice, replay overlay
+// removal, and segments slice. The per-operation completion index is owned by
+// completionIndexLayer in the finalize chain. Callers that do not run the
+// finalize chain (catalog-recovery Pattern B in LoadInstalledSegments) must
+// invoke c.read.mergeCompletions(segment) themselves so the SubmitVisible
+// dedup map stays accurate.
 func (c *Runtime) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment, materialize bool) error {
 	if c == nil || c.read == nil {
 		return ErrRuntimeInvalid
@@ -53,12 +79,6 @@ func (c *Runtime) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasS
 	}
 	c.read.overlay.RemovePlan(plan)
 	c.read.segments = append(c.read.segments, segment)
-	if c.read.completed == nil {
-		c.read.completed = make(map[fsperas.OperationID]perasCompletion)
-	}
-	for _, completion := range segment.Completions {
-		c.read.completed[completion.OpID] = perasCompletion{epochID: segment.EpochID, completion: completion}
-	}
 	c.read.mu.Unlock()
 
 	c.metrics.segmentTotal.Add(1)
@@ -173,7 +193,6 @@ func (c *Runtime) CapturePerasVisibleSnapshot(ctx context.Context, version uint6
 	c.commitMu.Lock()
 	c.captureVisibleSnapshotLocked(version, mount, prefix)
 	c.commitMu.Unlock()
-	c.triggerSnapshotFlush()
 	return fsmeta.PerasVisibleSnapshotCapture{}, true, nil
 }
 
@@ -326,11 +345,17 @@ func (c *Runtime) HasPerasSnapshotDirectory(version uint64, prefix []byte) bool 
 	if snapshot.visible != nil && snapshot.visible.HasDirectory(prefix) {
 		return true
 	}
+	upper := prefixUpperBound(prefix)
 	for _, segment := range segments {
-		for _, entry := range segment.EntriesView() {
-			if bytes.HasPrefix(entry.Key, prefix) {
-				return true
-			}
+		if !segmentOverlapsPrefix(segment, prefix, upper) {
+			continue
+		}
+		entries := segment.EntriesView()
+		lo := sort.Search(len(entries), func(i int) bool {
+			return bytes.Compare(entries[i].Key, prefix) >= 0
+		})
+		if lo < len(entries) && bytes.HasPrefix(entries[lo].Key, prefix) {
+			return true
 		}
 	}
 	return false
@@ -352,16 +377,34 @@ func (c *Runtime) perasSnapshotView(version uint64) (perasSnapshotView, []fspera
 	return snapshot, segments, true
 }
 
+// scanPerasSnapshotSegmentsDirectory returns sorted directory rows from the
+// pinned sealed segments. Returned Key/Value bytes alias segment storage and
+// stay valid for the lifetime of the snapshot view; callers that persist rows
+// past the snapshot must copy.
 func scanPerasSnapshotSegmentsDirectory(segments []fsperas.PerasSegment, prefix, start []byte, limit uint32) []fsperas.OverlayKV {
 	if len(segments) == 0 || len(prefix) == 0 || limit == 0 {
 		return nil
 	}
+	scanStart := start
+	if bytes.Compare(prefix, scanStart) > 0 {
+		scanStart = prefix
+	}
+	upper := prefixUpperBound(prefix)
 	seen := make(map[string]struct{})
 	rows := make([]fsperas.OverlayKV, 0, int(limit))
 	for segmentIdx := len(segments) - 1; segmentIdx >= 0; segmentIdx-- {
-		for _, entry := range segments[segmentIdx].EntriesView() {
-			if bytes.Compare(entry.Key, start) < 0 || !bytes.HasPrefix(entry.Key, prefix) {
-				continue
+		seg := segments[segmentIdx]
+		if !segmentOverlapsPrefix(seg, scanStart, upper) {
+			continue
+		}
+		entries := seg.EntriesView()
+		lo := sort.Search(len(entries), func(i int) bool {
+			return bytes.Compare(entries[i].Key, scanStart) >= 0
+		})
+		for i := lo; i < len(entries); i++ {
+			entry := entries[i]
+			if !bytes.HasPrefix(entry.Key, prefix) {
+				break
 			}
 			key := string(entry.Key)
 			if _, ok := seen[key]; ok {
@@ -369,8 +412,8 @@ func scanPerasSnapshotSegmentsDirectory(segments []fsperas.PerasSegment, prefix,
 			}
 			seen[key] = struct{}{}
 			rows = append(rows, fsperas.OverlayKV{
-				Key:    cloneBytes(entry.Key),
-				Value:  cloneBytes(entry.Value),
+				Key:    entry.Key,
+				Value:  entry.Value,
 				Delete: entry.Delete,
 			})
 		}
@@ -385,6 +428,35 @@ func scanPerasSnapshotSegmentsDirectory(segments []fsperas.PerasSegment, prefix,
 		rows = rows[:limit]
 	}
 	return rows
+}
+
+// segmentOverlapsPrefix reports whether seg can possibly contain any key that
+// (a) is >= scanStart and (b) has the configured prefix. upper is the exclusive
+// upper bound for the prefix, or nil when the prefix is unbounded above.
+func segmentOverlapsPrefix(seg fsperas.PerasSegment, scanStart, upper []byte) bool {
+	header := seg.ReadHeader
+	if len(header.LastKey) > 0 && bytes.Compare(header.LastKey, scanStart) < 0 {
+		return false
+	}
+	if upper != nil && len(header.FirstKey) > 0 && bytes.Compare(header.FirstKey, upper) >= 0 {
+		return false
+	}
+	return true
+}
+
+// prefixUpperBound returns the smallest key strictly greater than every key
+// that has the given prefix. nil means the prefix has no upper bound (every
+// byte is 0xff).
+func prefixUpperBound(prefix []byte) []byte {
+	upper := make([]byte, len(prefix))
+	copy(upper, prefix)
+	for i := len(upper) - 1; i >= 0; i-- {
+		if upper[i] < 0xff {
+			upper[i]++
+			return upper[:i+1]
+		}
+	}
+	return nil
 }
 
 func visibleSnapshotDirectory(scope compile.AuthorityScope) (fsmeta.MountIdentity, []byte, bool) {

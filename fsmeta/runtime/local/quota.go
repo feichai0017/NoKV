@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"math"
-	"sync"
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta"
@@ -19,8 +18,6 @@ import (
 type QuotaLedger struct {
 	reserveTotal        atomic.Uint64
 	usageMutationsTotal atomic.Uint64
-	mu                  sync.RWMutex
-	overlay             fsmetaexec.PerasOverlayReader
 }
 
 type quotaSubject struct {
@@ -39,17 +36,6 @@ func NewQuotaLedger() *QuotaLedger {
 	return &QuotaLedger{}
 }
 
-// SetPerasOverlay attaches the local Peras read plane used by read-derived
-// quota diagnostics.
-func (q *QuotaLedger) SetPerasOverlay(overlay fsmetaexec.PerasOverlayReader) {
-	if q == nil {
-		return
-	}
-	q.mu.Lock()
-	q.overlay = overlay
-	q.mu.Unlock()
-}
-
 // ReserveQuota implements fsmetaexec.QuotaResolver. Local quotas are unlimited
 // and read-derived, so the hot write path does not carry quota counter keys.
 func (q *QuotaLedger) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRunner, changes []fsmetaexec.QuotaChange, startVersion uint64) ([]*kvrpcpb.Mutation, error) {
@@ -63,9 +49,9 @@ func (q *QuotaLedger) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRun
 	return nil, nil
 }
 
-// AllowPerasVisibleQuota lets quota-affecting operations use local Peras.
-// Unlimited local quota is derived from visible namespace state at read time,
-// so these writes do not need durable quota-counter side effects.
+// AllowPerasVisibleQuota keeps QuotaLedger compatible with executors that can
+// admit visible writes. The local runtime does not wire a Peras committer, but
+// unlimited quota still has no durable counter side effects.
 func (q *QuotaLedger) AllowPerasVisibleQuota(context.Context, []fsmetaexec.QuotaChange) (bool, error) {
 	return true, nil
 }
@@ -124,23 +110,12 @@ func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner f
 			return fsmeta.UsageRecord{}, err
 		}
 		if len(rows) == 0 {
-			if err := q.addOverlayQuotaUsage(ctx, runner, mount, prefix, version, &usage); err != nil {
-				return fsmeta.UsageRecord{}, err
-			}
 			return usage, nil
 		}
 		for _, row := range rows {
 			if !bytes.HasPrefix(row.Key, prefix) {
-				if err := q.addOverlayQuotaUsage(ctx, runner, mount, prefix, version, &usage); err != nil {
-					return fsmeta.UsageRecord{}, err
-				}
 				return usage, nil
 			}
-			if overlay := q.overlayReader(); overlay != nil {
-				if _, _, ok := overlay.GetPerasOverlayView(row.Key); ok {
-					continue
-				}
-			}
 			parts, ok := fsmeta.InspectKey(row.Key)
 			if !ok || parts.Kind != fsmeta.KeyKindDentry {
 				continue
@@ -152,49 +127,6 @@ func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner f
 			inode, ok, err := q.readQuotaInode(ctx, runner, mount, dentry.Inode, version)
 			if err != nil {
 				return fsmeta.UsageRecord{}, err
-			}
-			if !ok {
-				continue
-			}
-			usage.Bytes = saturatingAddUint64(usage.Bytes, inode.Size)
-			usage.Inodes = saturatingAddUint64(usage.Inodes, 1)
-		}
-		start = nextQuotaScanKey(rows[len(rows)-1].Key)
-	}
-}
-
-func (q *QuotaLedger) addOverlayQuotaUsage(ctx context.Context, runner fsmetaexec.TxnRunner, mount fsmeta.MountIdentity, prefix []byte, version uint64, usage *fsmeta.UsageRecord) error {
-	if q == nil || usage == nil {
-		return nil
-	}
-	overlay := q.overlayReader()
-	if overlay == nil {
-		return nil
-	}
-	start := append([]byte(nil), prefix...)
-	for {
-		rows := overlay.ScanPerasOverlay(start, 256)
-		if len(rows) == 0 {
-			return nil
-		}
-		for _, row := range rows {
-			if !bytes.HasPrefix(row.Key, prefix) {
-				return nil
-			}
-			if row.Delete {
-				continue
-			}
-			parts, ok := fsmeta.InspectKey(row.Key)
-			if !ok || parts.Kind != fsmeta.KeyKindDentry {
-				continue
-			}
-			dentry, err := fsmeta.DecodeDentryValue(row.Value)
-			if err != nil {
-				return err
-			}
-			inode, ok, err := q.readQuotaInode(ctx, runner, mount, dentry.Inode, version)
-			if err != nil {
-				return err
 			}
 			if !ok {
 				continue
@@ -211,19 +143,6 @@ func (q *QuotaLedger) readQuotaInode(ctx context.Context, runner fsmetaexec.TxnR
 	if err != nil {
 		return fsmeta.InodeRecord{}, false, err
 	}
-	if overlay := q.overlayReader(); overlay != nil {
-		value, deleted, ok := overlay.GetPerasOverlayView(key)
-		if ok {
-			if deleted {
-				return fsmeta.InodeRecord{}, false, nil
-			}
-			inode, err := fsmeta.DecodeInodeValue(value)
-			if err != nil {
-				return fsmeta.InodeRecord{}, false, err
-			}
-			return inode, true, nil
-		}
-	}
 	value, ok, err := runner.Get(ctx, key, version)
 	if err != nil || !ok {
 		return fsmeta.InodeRecord{}, ok, err
@@ -233,16 +152,6 @@ func (q *QuotaLedger) readQuotaInode(ctx context.Context, runner fsmetaexec.TxnR
 		return fsmeta.InodeRecord{}, false, err
 	}
 	return inode, true, nil
-}
-
-func (q *QuotaLedger) overlayReader() fsmetaexec.PerasOverlayReader {
-	if q == nil {
-		return nil
-	}
-	q.mu.RLock()
-	overlay := q.overlay
-	q.mu.RUnlock()
-	return overlay
 }
 
 func nextQuotaScanKey(key []byte) []byte {

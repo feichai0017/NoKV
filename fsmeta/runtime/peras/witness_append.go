@@ -18,6 +18,27 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
+// witnessSignLayer owns the distributed segment-witness stage. Local runtimes
+// omit this layer; distributed runtimes construct it by providing witness
+// replicas in Config.
+type witnessSignLayer struct {
+	owner *Runtime
+}
+
+func newWitnessSignLayer(owner *Runtime) *witnessSignLayer {
+	if owner == nil || len(owner.witnesses) == 0 {
+		return nil
+	}
+	return &witnessSignLayer{owner: owner}
+}
+
+func (l *witnessSignLayer) signBatch(ctx context.Context, batch perasFlushBatch) error {
+	if l == nil || l.owner == nil {
+		return nil
+	}
+	return l.owner.appendSegmentWitnessBatchWithRetry(ctx, batch)
+}
+
 func (c *Runtime) appendSegmentWitnessBatchWithRetry(ctx context.Context, batch perasFlushBatch) error {
 	var last error
 	attempts := c.retries + 1

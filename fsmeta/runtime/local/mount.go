@@ -62,12 +62,14 @@ func (c *MountCatalog) SameAuthority(_ context.Context, mount fsmeta.MountID, _ 
 
 // StartSubtreeHandoff is a no-op because local fsmeta has no rooted authority
 // handoff layer.
-func (c *MountCatalog) StartSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error {
-	return nil
+func (c *MountCatalog) StartSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, _ fsmeta.InodeID, _ uint64) error {
+	_, err := c.ResolveMount(ctx, mount)
+	return err
 }
 
 // CompleteSubtreeHandoff is a no-op because local fsmeta has no rooted
 // authority handoff layer.
-func (c *MountCatalog) CompleteSubtreeHandoff(context.Context, fsmeta.MountID, fsmeta.InodeID, uint64) error {
-	return nil
+func (c *MountCatalog) CompleteSubtreeHandoff(ctx context.Context, mount fsmeta.MountID, _ fsmeta.InodeID, _ uint64) error {
+	_, err := c.ResolveMount(ctx, mount)
+	return err
 }

@@ -29,3 +29,18 @@ func TestMountCatalogSameAuthorityRequiresRegisteredMount(t *testing.T) {
 	require.False(t, ok)
 	require.True(t, errors.Is(err, fsmeta.ErrMountNotRegistered))
 }
+
+func TestMountCatalogHandoffRequiresRegisteredMount(t *testing.T) {
+	ctx := context.Background()
+	catalog := NewMountCatalog(MountConfig{Mount: testMount()})
+
+	require.NoError(t, catalog.StartSubtreeHandoff(ctx, "vol", fsmeta.RootInode, 10))
+	require.NoError(t, catalog.CompleteSubtreeHandoff(ctx, "vol", fsmeta.RootInode, 11))
+
+	require.ErrorIs(t, catalog.StartSubtreeHandoff(ctx, "other", fsmeta.RootInode, 10), fsmeta.ErrMountNotRegistered)
+	require.ErrorIs(t, catalog.CompleteSubtreeHandoff(ctx, "other", fsmeta.RootInode, 11), fsmeta.ErrMountNotRegistered)
+
+	var nilCatalog *MountCatalog
+	require.ErrorIs(t, nilCatalog.StartSubtreeHandoff(ctx, "vol", fsmeta.RootInode, 10), fsmeta.ErrMountNotRegistered)
+	require.ErrorIs(t, nilCatalog.CompleteSubtreeHandoff(ctx, "vol", fsmeta.RootInode, 11), fsmeta.ErrMountNotRegistered)
+}

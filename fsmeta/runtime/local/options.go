@@ -5,24 +5,21 @@ package local
 
 import (
 	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/feichai0017/NoKV/engine/wal"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	localdb "github.com/feichai0017/NoKV/local"
 )
 
-// PerasMode controls whether the embedded runtime uses its single-node Peras
-// visible commit path. The zero value follows the package default and enables
-// Peras.
-type PerasMode uint8
+// CacheMode controls whether the embedded runtime opens an optional slab cache
+// (negative dentry cache or ReadDirPlus page cache). The zero value enables
+// the cache when WorkDir is available.
+type CacheMode uint8
 
 const (
-	PerasModeDefault PerasMode = iota
-	PerasModeEnabled
-	PerasModeDisabled
+	CacheModeDefault CacheMode = iota
+	CacheModeEnabled
+	CacheModeDisabled
 )
 
 // Options configures the embedded fsmeta runtime.
@@ -52,20 +49,19 @@ type Options struct {
 	// Clock overrides fsmeta/exec's wall clock for write-session expiry.
 	Clock func() time.Time
 
-	// PerasMode controls the single-node Peras visible commit path. The zero
-	// value enables Peras; PerasModeDisabled keeps local fsmeta on direct
-	// embedded MVCC for diagnostics and baseline comparisons.
-	PerasMode PerasMode
+	// NegativeCacheMode controls the slab-backed negative dentry cache. The
+	// zero value enables the cache and persists it under WorkDir/neg-cache.
+	NegativeCacheMode CacheMode
+	// NegativeCacheDir overrides the persistence directory for the negative
+	// dentry cache when set. Empty falls back to WorkDir/neg-cache.
+	NegativeCacheDir string
 
-	// PerasHolderID overrides the stable local holder id used when Peras is
-	// enabled. Empty derives one from the local mount identity.
-	PerasHolderID string
-
-	// PerasVisibleLog is the holder-local visible WAL. PerasVisibleLogDir wires
-	// the default WAL-backed implementation when no explicit log is supplied.
-	PerasVisibleLog           fsperas.VisibleLog
-	PerasVisibleLogDir        string
-	PerasVisibleLogDurability wal.DurabilityPolicy
+	// DirPageCacheMode controls the slab-backed ReadDirPlus page cache. The
+	// zero value enables the cache and persists it under WorkDir/dir-pages.
+	DirPageCacheMode CacheMode
+	// DirPageCacheDir overrides the persistence directory for the ReadDirPlus
+	// page cache when set. Empty falls back to WorkDir/dir-pages.
+	DirPageCacheDir string
 }
 
 func (opts Options) rootInode() fsmeta.InodeID {
@@ -82,37 +78,55 @@ func (opts Options) validate() error {
 	if opts.DB == nil && opts.WorkDir == "" && (opts.DBOptions == nil || opts.DBOptions.WorkDir == "") {
 		return errWorkDirRequired
 	}
-	if !opts.validPerasMode() {
-		return errInvalidPerasMode
-	}
-	if opts.perasEnabled() && opts.PerasVisibleLog == nil && localPerasVisibleLogDir(opts) == "" {
-		return fsperas.ErrVisibleLogRequired
+	if !validCacheMode(opts.NegativeCacheMode) || !validCacheMode(opts.DirPageCacheMode) {
+		return errInvalidCacheMode
 	}
 	return nil
 }
 
-func (opts Options) validPerasMode() bool {
-	switch opts.PerasMode {
-	case PerasModeDefault, PerasModeEnabled, PerasModeDisabled:
+func validCacheMode(mode CacheMode) bool {
+	switch mode {
+	case CacheModeDefault, CacheModeEnabled, CacheModeDisabled:
 		return true
 	default:
 		return false
 	}
 }
 
-func (opts Options) perasEnabled() bool {
-	return opts.PerasMode != PerasModeDisabled
+func (opts Options) negativeCacheEnabled() bool {
+	return opts.NegativeCacheMode != CacheModeDisabled
 }
 
-func (opts Options) perasHolderID() string {
-	if holderID := strings.TrimSpace(opts.PerasHolderID); holderID != "" {
-		return holderID
+func (opts Options) dirPageCacheEnabled() bool {
+	return opts.DirPageCacheMode != CacheModeDisabled
+}
+
+func localNegativeCacheDir(opts Options) string {
+	if !opts.negativeCacheEnabled() {
+		return ""
 	}
-	mountID := strings.TrimSpace(string(opts.Mount.MountID))
-	if mountID == "" {
-		mountID = "default"
+	if opts.NegativeCacheDir != "" {
+		return opts.NegativeCacheDir
 	}
-	return "local/" + mountID
+	workDir := localWorkDir(opts)
+	if workDir == "" {
+		return ""
+	}
+	return filepath.Join(workDir, "neg-cache")
+}
+
+func localDirPageCacheDir(opts Options) string {
+	if !opts.dirPageCacheEnabled() {
+		return ""
+	}
+	if opts.DirPageCacheDir != "" {
+		return opts.DirPageCacheDir
+	}
+	workDir := localWorkDir(opts)
+	if workDir == "" {
+		return ""
+	}
+	return filepath.Join(workDir, "dir-pages")
 }
 
 func localWorkDir(opts Options) string {
@@ -134,17 +148,6 @@ func localDBOptions(opts Options) *localdb.Options {
 	if opts.WorkDir != "" {
 		cfg.WorkDir = opts.WorkDir
 	}
-	cfg.UserKeyShapeExtractor = fsmeta.UserKeyShape
+	cfg.UserKeyShapeExtractor = fsmeta.MountAtomicUserKeyShape
 	return cfg
-}
-
-func localPerasVisibleLogDir(opts Options) string {
-	if opts.PerasVisibleLogDir != "" {
-		return opts.PerasVisibleLogDir
-	}
-	workDir := localWorkDir(opts)
-	if workDir == "" {
-		return ""
-	}
-	return filepath.Join(workDir, "peras-visible-log")
 }

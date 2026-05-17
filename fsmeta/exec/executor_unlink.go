@@ -29,6 +29,9 @@ func (e *Executor) tryPerasVisibleUnlink(ctx context.Context, program compile.Un
 	if !ok {
 		return false, nil
 	}
+	if inode.Type == fsmeta.InodeTypeDirectory {
+		return false, fsmeta.ErrInvalidRequest
+	}
 	quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{{
 		Mount:      req.Mount,
 		MountKeyID: mount.MountKeyID,
@@ -109,6 +112,9 @@ func (e *Executor) Unlink(ctx context.Context, req fsmeta.UnlinkRequest) error {
 			inodeKey, err := fsmeta.EncodeInodeKey(mount, inode.Inode)
 			if err != nil {
 				return err
+			}
+			if inode.Type == fsmeta.InodeTypeDirectory {
+				return fsmeta.ErrInvalidRequest
 			}
 			oldInodeValue, err := fsmeta.EncodeInodeValue(inode)
 			if err != nil {

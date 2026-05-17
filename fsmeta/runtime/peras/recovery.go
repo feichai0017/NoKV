@@ -67,6 +67,7 @@ func (c *Runtime) RecoverWitnessSegments(ctx context.Context, scope compile.Auth
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 			return err
 		}
+		c.read.mergeCompletions(segment)
 		c.metrics.recoveryInstallTotal.Add(1)
 	}
 	return nil
@@ -97,6 +98,11 @@ func (c *Runtime) LoadInstalledSegments(ctx context.Context, scope compile.Autho
 		if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 			return err
 		}
+		// Catalog recovery does not run the install chain (the catalog
+		// already exists on disk), so the completion-index update has
+		// no chain-side owner here — invoke the helper directly to keep
+		// SubmitVisible dedup working after restart.
+		c.read.mergeCompletions(segment)
 		c.metrics.catalogLoadTotal.Add(1)
 	}
 	return nil
@@ -191,6 +197,7 @@ func (c *Runtime) recoverRootSealedSegment(ctx context.Context, scope compile.Au
 	if err := c.installSegment(fsperas.ReplayPlan{}, segment, false); err != nil {
 		return err
 	}
+	c.read.mergeCompletions(segment)
 	c.metrics.recoveryInstallTotal.Add(1)
 	return nil
 }

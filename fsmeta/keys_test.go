@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/feichai0017/NoKV/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -328,6 +329,33 @@ func TestShardForUserKeyUsesShapeLocalityAcrossFamilies(t *testing.T) {
 	target := ShardForUserKey(keys[0], shards)
 	for _, key := range keys[1:] {
 		require.Equal(t, target, ShardForUserKey(key, shards))
+	}
+}
+
+func TestMountAtomicUserKeyShapePinsMountToOneShard(t *testing.T) {
+	const shards = 4
+	mount := testMount
+	inode := findInodeOnBucket(t, mount, 7)
+	keys := make([][]byte, 0, 4)
+
+	inodeKey, err := EncodeInodeKey(mount, inode)
+	require.NoError(t, err)
+	keys = append(keys, inodeKey)
+	dentryA, err := EncodeDentryKey(mount, RootInode, "alpha")
+	require.NoError(t, err)
+	keys = append(keys, dentryA)
+	dentryB, err := EncodeDentryKey(mount, RootInode, "omega")
+	require.NoError(t, err)
+	keys = append(keys, dentryB)
+	session, err := EncodeSessionKey(mount, inode, "writer-1")
+	require.NoError(t, err)
+	keys = append(keys, session)
+
+	target := utils.ShardForUserKey(MountAtomicUserKeyShape(keys[0]).ShardKey, shards)
+	for _, key := range keys[1:] {
+		shape := MountAtomicUserKeyShape(key)
+		require.Equal(t, target, utils.ShardForUserKey(shape.ShardKey, shards))
+		require.NotEmpty(t, shape.BloomPrefix)
 	}
 }
 

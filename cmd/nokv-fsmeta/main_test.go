@@ -9,7 +9,6 @@ import (
 	"expvar"
 	"fmt"
 	"net"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -102,30 +101,6 @@ func TestLocalMountIdentity(t *testing.T) {
 	}
 }
 
-func TestLocalPerasFlagHelpers(t *testing.T) {
-	if got := localPerasMode(true); got != fsmetalocal.PerasModeEnabled {
-		t.Fatalf("enabled mode got %v", got)
-	}
-	if got := localPerasMode(false); got != fsmetalocal.PerasModeDisabled {
-		t.Fatalf("disabled mode got %v", got)
-	}
-	if got := localPerasHolderID(false, "holder-a"); got != "" {
-		t.Fatalf("disabled holder got %q", got)
-	}
-	if got := localPerasHolderID(true, " holder-a "); got != "holder-a" {
-		t.Fatalf("enabled holder got %q", got)
-	}
-	if got := localPerasVisibleLogDir(false, "/tmp/db", "visible"); got != "" {
-		t.Fatalf("disabled visible log dir got %q", got)
-	}
-	if got := localPerasVisibleLogDir(true, "/tmp/db", "visible"); got != filepath.Join("/tmp/db", "visible") {
-		t.Fatalf("relative visible log dir got %q", got)
-	}
-	if got := localPerasVisibleLogDir(true, "/tmp/db", "/var/visible"); got != "/var/visible" {
-		t.Fatalf("absolute visible log dir got %q", got)
-	}
-}
-
 func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 	ctx := context.Background()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
@@ -152,8 +127,8 @@ func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 	if rt.snapshot == nil {
 		t.Fatal("expected local snapshot publisher")
 	}
-	if !strings.Contains(rt.startupSummary, "peras=true") {
-		t.Fatalf("local runtime should enable peras by default: %s", rt.startupSummary)
+	if !strings.Contains(rt.startupSummary, "fsmeta backend: local") || strings.Contains(rt.startupSummary, "peras=") {
+		t.Fatalf("local runtime summary should stay direct-only: %s", rt.startupSummary)
 	}
 	result, err := rt.executor.Create(ctx, fsmeta.CreateRequest{
 		Mount:  "vol",
@@ -173,70 +148,32 @@ func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 	}
 }
 
-func TestOpenConfiguredRuntimeLocalDirectMVCC(t *testing.T) {
+func TestOpenConfiguredRuntimeLocalCommitContract(t *testing.T) {
 	ctx := context.Background()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
 		Backend: fsmetaBackendLocal,
 		Local: fsmetalocal.Options{
-			WorkDir:   t.TempDir(),
-			Mount:     fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
-			PerasMode: fsmetalocal.PerasModeDisabled,
+			WorkDir: t.TempDir(),
+			Mount:   fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
 		},
 	})
 	if err != nil {
-		t.Fatalf("open local direct runtime: %v", err)
+		t.Fatalf("open local runtime: %v", err)
 	}
 	defer func() {
 		if err := rt.close(); err != nil {
-			t.Fatalf("close local direct runtime: %v", err)
+			t.Fatalf("close local runtime: %v", err)
 		}
 	}()
-	if !strings.Contains(rt.startupSummary, "peras=false") {
-		t.Fatalf("local direct runtime should disable peras: %s", rt.startupSummary)
+	if !strings.Contains(rt.contractLog, "one embedded MVCC store") {
+		t.Fatalf("unexpected local contract log: %s", rt.contractLog)
 	}
-}
-
-func TestOpenConfiguredRuntimeLocalPeras(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
-		Backend: fsmetaBackendLocal,
-		Local: fsmetalocal.Options{
-			WorkDir:                   filepath.Join(dir, "db"),
-			Mount:                     fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1},
-			PerasHolderID:             "local-holder",
-			PerasVisibleLogDir:        filepath.Join(dir, "visible-log"),
-			PerasVisibleLogDurability: wal.DurabilityFlushed,
-		},
-	})
-	if err != nil {
-		t.Fatalf("open local peras runtime: %v", err)
+	contract := localCommitContractStats()
+	if got := contract["default_write_path"]; got != "local_mvcc" {
+		t.Fatalf("default write path got %v", got)
 	}
-	defer func() {
-		if err := rt.close(); err != nil {
-			t.Fatalf("close local peras runtime: %v", err)
-		}
-	}()
-	_, err = rt.executor.Create(ctx, fsmeta.CreateRequest{
-		Mount:  "vol",
-		Parent: fsmeta.RootInode,
-		Name:   "before",
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile},
-	})
-	if err != nil {
-		t.Fatalf("create through local peras runtime: %v", err)
-	}
-	if err := rt.executor.Rename(ctx, fsmeta.RenameRequest{
-		Mount:      "vol",
-		FromParent: fsmeta.RootInode,
-		FromName:   "before",
-		ToParent:   fsmeta.RootInode,
-		ToName:     "after",
-	}); err != nil {
-		t.Fatalf("rename through local peras runtime: %v", err)
-	}
-	if got := perasVisibleSuccessTotalFromServer(t, rt); got != 2 {
-		t.Fatalf("local peras visible successes got %d want 2", got)
+	if got := contract["successful_write_boundary"]; got != "durable" {
+		t.Fatalf("successful write boundary got %v", got)
 	}
 }
 
@@ -314,28 +251,6 @@ func TestLocalRuntimeRegistersWatchAndSnapshot(t *testing.T) {
 	if err := cli.RetireSnapshotSubtree(ctx, token); err != nil {
 		t.Fatalf("retire local snapshot: %v", err)
 	}
-}
-
-func perasVisibleSuccessTotalFromServer(t *testing.T, rt *fsmetaServerRuntime) uint64 {
-	t.Helper()
-	statsProvider, ok := rt.executor.(interface{ Stats() map[string]any })
-	if !ok {
-		t.Fatal("executor does not expose stats")
-	}
-	stats := statsProvider.Stats()
-	raw, ok := stats["peras_visible_commit"]
-	if !ok {
-		t.Fatal("missing peras_visible_commit stats")
-	}
-	perasStats, ok := raw.(map[string]any)
-	if !ok {
-		t.Fatalf("peras_visible_commit has type %T", raw)
-	}
-	success, ok := perasStats["success_total"].(uint64)
-	if !ok {
-		t.Fatalf("peras visible success has type %T", perasStats["success_total"])
-	}
-	return success
 }
 
 func openLocalBufconnClient(t *testing.T, rt *fsmetaServerRuntime) (*fsmetaclient.GRPCClient, func()) {

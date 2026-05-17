@@ -10,6 +10,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/feichai0017/NoKV/engine/wal"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
@@ -18,12 +27,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
-	"sort"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
 )
 
 func TestRuntimeCommitsAndServesOverlay(t *testing.T) {
@@ -166,17 +169,16 @@ func TestRuntimeFlushesSegmentAndKeepsReadsVisible(t *testing.T) {
 
 }
 
-func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
+func TestRuntimeWithoutWitnessLayerFlushesVisibleLogToInstall(t *testing.T) {
 	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &fakeRuntimePerasSegmentInstaller{}
 	visibleLog := &replayingVisibleLog{}
 	committer, err := NewRuntime(Config{
-		Authority:          provider,
-		SegmentWitnessMode: SegmentWitnessModeBypass,
-		Installer:          installer,
-		VisibleLog:         visibleLog,
-		SegmentBatchSize:   1024,
-		SegmentFlushEvery:  time.Hour,
+		Authority:         provider,
+		Installer:         installer,
+		VisibleLog:        visibleLog,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 	defer committer.Close()
@@ -186,7 +188,7 @@ func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
 	require.NoError(t, committer.FlushDurable(ctx))
 
 	stats := committer.Stats()
-	require.Equal(t, "bypass", stats["witness_mode"])
+	require.Equal(t, "disabled", stats["witness_mode"])
 	require.Equal(t, 0, stats["witness_count"])
 	require.Equal(t, 0, stats["quorum"])
 	require.Equal(t, uint64(0), stats["witness_batch_total"])
@@ -197,8 +199,13 @@ func TestRuntimeWitnessBypassFlushesVisibleLogToInstall(t *testing.T) {
 	require.Len(t, visibleLog.applied, 1)
 }
 
-func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
-	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+func TestRuntimeRootSealAuthorityRequiresWitnessLayer(t *testing.T) {
+	provider := &publishingRuntimePerasGrantProvider{
+		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
+			holderID: "holder-a",
+			grant:    testRuntimeCommitterGrant(),
+		},
+	}
 	_, err := NewRuntime(Config{
 		Authority:         provider,
 		Installer:         &fakeRuntimePerasSegmentInstaller{},
@@ -209,35 +216,28 @@ func TestRuntimeDefaultRequiresWitnessQuorum(t *testing.T) {
 	require.ErrorIs(t, err, ErrRuntimeInvalid)
 }
 
-func TestRuntimeWitnessBypassRejectsRootSealAuthority(t *testing.T) {
-	provider := &publishingRuntimePerasGrantProvider{
-		fakeRuntimePerasGrantProvider: fakeRuntimePerasGrantProvider{
-			holderID: "holder-a",
-			grant:    testRuntimeCommitterGrant(),
-		},
-	}
+func TestRuntimeMaterializedNoCatalogRequiresAppliedVisibleReplay(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	_, err := NewRuntime(Config{
-		Authority:          provider,
-		SegmentWitnessMode: SegmentWitnessModeBypass,
-		Installer:          &fakeRuntimePerasSegmentInstaller{},
-		VisibleLog:         &recordingVisibleLog{},
-		SegmentBatchSize:   1024,
-		SegmentFlushEvery:  time.Hour,
+		Authority:         provider,
+		Installer:         &fakeRuntimePerasSegmentInstaller{materializes: true},
+		VisibleLog:        &recordingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.ErrorIs(t, err, ErrRuntimeInvalid)
 }
 
 func TestRuntimeMaterializedFlushRemovesReadOverlay(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
-	installer := &fakeRuntimePerasSegmentInstaller{}
+	installer := &fakeRuntimePerasSegmentInstaller{materializes: true}
 	committer, err := NewRuntime(Config{
-		Authority:           provider,
-		Witnesses:           testRuntimePerasWitnesses(t, 3),
-		Installer:           installer,
-		VisibleLog:          &recordingVisibleLog{},
-		SegmentBatchSize:    1024,
-		SegmentFlushEvery:   time.Hour,
-		MaterializeSegments: true,
+		Authority:         provider,
+		Witnesses:         testRuntimePerasWitnesses(t, 3),
+		Installer:         installer,
+		VisibleLog:        &replayingVisibleLog{},
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
 	})
 	require.NoError(t, err)
 	defer committer.Close()
@@ -637,6 +637,12 @@ func TestRuntimeFlushPublishedFailsWhenRecoveredOldEpochCannotPublish(t *testing
 	require.Equal(t, 0, provider.sealCalls)
 	require.Empty(t, log.applied)
 	require.Equal(t, 1, committer.pendingOperations())
+	_, ok := committer.Completion(id)
+	require.False(t, ok, "publish-denied segment must not update retry dedup")
+	committer.read.mu.RLock()
+	require.Empty(t, committer.read.sealedSegments, "publish-denied segment must not enter sealed overlay")
+	require.Empty(t, committer.read.segments, "publish-denied segment must not enter installed segment list")
+	committer.read.mu.RUnlock()
 }
 
 func TestRuntimeVisibleLogFailureDoesNotPublishOverlay(t *testing.T) {
@@ -962,6 +968,63 @@ func TestRuntimeReturnsInstalledCompletionOnRetry(t *testing.T) {
 	require.Equal(t, ack.EpochID, retryAck.EpochID)
 	require.Equal(t, 1, installer.calls)
 	require.Equal(t, 0, committer.Stats()["pending"])
+}
+
+func TestRuntimeRecoversAppliedVisibleCompletionWhenMaterialized(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "wal")
+	mgr, err := wal.Open(wal.Config{Dir: dir})
+	require.NoError(t, err)
+	log, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	log.SetRetainAppliedRecords(true)
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{materializes: true}
+	committer, err := NewRuntime(Config{
+		Authority:         provider,
+		Installer:         installer,
+		VisibleLog:        log,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+
+	opID := fsperas.OperationID{ClientID: "client", Seq: 7}
+	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
+	ack, err := committer.SubmitVisible(ctx, opID, delta, nil)
+	require.NoError(t, err)
+	require.NoError(t, committer.FlushDurable(ctx))
+	require.True(t, installer.materialize)
+	require.Len(t, log.Records(), 0)
+	committer.Close()
+	require.NoError(t, mgr.Close())
+
+	mgr, err = wal.Open(wal.Config{Dir: dir})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mgr.Close()) }()
+	reopenLog, err := NewWALVisibleLog(mgr, wal.DurabilityFlushed)
+	require.NoError(t, err)
+	reopenLog.SetRetainAppliedRecords(true)
+	defer reopenLog.Close()
+	reopenedInstaller := &fakeRuntimePerasSegmentInstaller{materializes: true}
+	reopened, err := NewRuntime(Config{
+		Authority:         provider,
+		Installer:         reopenedInstaller,
+		VisibleLog:        reopenLog,
+		SegmentBatchSize:  1024,
+		SegmentFlushEvery: time.Hour,
+	})
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	completion, ok := reopened.Completion(opID)
+	require.True(t, ok)
+	require.Equal(t, opID, completion.OpID)
+	retryAck, err := reopened.SubmitVisible(ctx, opID, delta, nil)
+	require.NoError(t, err)
+	require.Equal(t, ack.OpID, retryAck.OpID)
+	require.Equal(t, 0, reopenedInstaller.calls)
+	require.Equal(t, 0, reopened.pendingOperations())
 }
 
 func TestRuntimeRejectsInstalledCompletionIDCollision(t *testing.T) {
@@ -2191,6 +2254,38 @@ func TestRuntimeBackgroundFlushDrainsInstallParallelWindow(t *testing.T) {
 	require.Equal(t, 4, installer.calls)
 }
 
+func TestRuntimeBackgroundFlushCommitsBoundedJobBatches(t *testing.T) {
+	provider := &nonSealingRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
+	installer := &fakeRuntimePerasSegmentInstaller{materializes: true}
+	committer, err := NewRuntime(Config{
+		Authority:                  provider,
+		Installer:                  installer,
+		VisibleLog:                 &replayingVisibleLog{},
+		SegmentBatchSize:           1 << 30,
+		SegmentMaxReplayOperations: 1,
+		SegmentInstallParallelism:  4,
+		SegmentFlushEvery:          time.Hour,
+	})
+	require.NoError(t, err)
+	defer committer.Close()
+
+	ctx := context.Background()
+	for i := range 40 {
+		seq := uint64(i + 1)
+		require.NoError(t, commitRuntimePeras(ctx, committer, seq, appendUvarintKey("dentry/", seq), appendUvarintKey("inode/", seq)))
+	}
+	require.Equal(t, 40, committer.Stats()["pending"])
+
+	committer.flushBackground()
+
+	stats := committer.Stats()
+	require.Equal(t, 0, stats["pending"])
+	require.Equal(t, uint64(10), stats["flush_batch_total"])
+	require.Equal(t, uint64(40), stats["flush_jobs_total"])
+	require.Equal(t, uint64(4), stats["flush_jobs_max"])
+	require.Equal(t, 40, installer.calls)
+}
+
 func TestRuntimeCloseCancelsInstallLane(t *testing.T) {
 	provider := &fakeRuntimePerasGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
 	installer := &blockingRuntimePerasSegmentInstaller{}
@@ -2606,15 +2701,16 @@ func runtimePerasCatalogRows(segment fsperas.PerasSegment, installVersion uint64
 }
 
 type fakeRuntimePerasSegmentInstaller struct {
-	mu          sync.Mutex
-	calls       int
-	scope       compile.AuthorityScope
-	segment     fsperas.PerasSegment
-	payload     []byte
-	digest      [32]byte
-	install     compile.InstallPlan
-	materialize bool
-	modes       []bool
+	mu           sync.Mutex
+	calls        int
+	scope        compile.AuthorityScope
+	segment      fsperas.PerasSegment
+	payload      []byte
+	digest       [32]byte
+	install      compile.InstallPlan
+	materialize  bool
+	materializes bool
+	modes        []bool
 }
 
 func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req SegmentInstallRequest) (InstallCursor, error) {
@@ -2629,6 +2725,10 @@ func (i *fakeRuntimePerasSegmentInstaller) InstallSegment(_ context.Context, req
 	i.materialize = req.MaterializeMVCC
 	i.modes = append(i.modes, req.MaterializeMVCC)
 	return testPerasInstallCursor(uint64(i.calls)), nil
+}
+
+func (i *fakeRuntimePerasSegmentInstaller) MaterializesSegments() bool {
+	return i != nil && i.materializes
 }
 
 type recordingVisibleLog struct {
@@ -2668,6 +2768,19 @@ func (l *replayingVisibleLog) ReplayVisible(context.Context) ([]fsperas.VisibleO
 	return out, nil
 }
 
+func (l *replayingVisibleLog) ReplayVisibleState(context.Context) ([]VisibleLogStateRecord, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]VisibleLogStateRecord, 0, len(l.records))
+	for idx, record := range l.records {
+		out = append(out, VisibleLogStateRecord{
+			Record:  record,
+			Applied: replayingVisibleLogAppliedAt(l.applied, record, uint64(idx)),
+		})
+	}
+	return out, nil
+}
+
 func (l *replayingVisibleLog) AppendVisibleApplied(_ context.Context, record fsperas.VisibleAppliedRecord) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -2678,16 +2791,38 @@ func (l *replayingVisibleLog) AppendVisibleApplied(_ context.Context, record fsp
 func (l *replayingVisibleLog) AppendVisibleReplayPlanApplied(_ context.Context, epochID uint64, holderID string, plan fsperas.ReplayPlan) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	startOffset := uint64(0)
+	for _, marker := range l.applied {
+		for _, span := range marker.Ranges {
+			if span.EndOffset > startOffset {
+				startOffset = span.EndOffset
+			}
+		}
+	}
 	l.applied = append(l.applied, fsperas.VisibleAppliedRecord{
 		EpochID:  epochID,
 		HolderID: holderID,
 		Ranges: []fsperas.VisibleAppliedRange{{
 			SegmentID:   1,
-			StartOffset: uint64(len(l.applied)),
-			EndOffset:   uint64(len(l.applied) + len(plan.Operations)),
+			StartOffset: startOffset,
+			EndOffset:   startOffset + uint64(len(plan.Operations)),
 		}},
 	})
 	return nil
+}
+
+func replayingVisibleLogAppliedAt(applied []fsperas.VisibleAppliedRecord, record fsperas.VisibleOperationRecord, offset uint64) bool {
+	for _, marker := range applied {
+		if marker.EpochID != record.EpochID || marker.HolderID != record.HolderID {
+			continue
+		}
+		for _, span := range marker.Ranges {
+			if span.StartOffset <= offset && offset < span.EndOffset {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type fakeRuntimePerasCatalogScanner struct {

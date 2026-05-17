@@ -300,6 +300,23 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 	require.Equal(t, rootstate.AllocatorKindUnknown, kind)
 }
 
+func TestRootPerasSnapshotSegmentRefsFromProtoSkipsInvalidRefs(t *testing.T) {
+	valid := testWirePerasSnapshotSegmentRef(8, 0x70)
+	validProto := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{valid})[0]
+	shortRoot := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)})[0]
+	shortRoot.SegmentRoot = shortRoot.SegmentRoot[:31]
+	zeroEpoch := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(10, 0x90)})[0]
+	zeroEpoch.EpochId = 0
+
+	require.Equal(t, []rootproto.PerasSnapshotSegmentRef{valid}, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{
+		nil,
+		shortRoot,
+		zeroEpoch,
+		validProto,
+	}))
+	require.Nil(t, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{nil, shortRoot, zeroEpoch}))
+}
+
 func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	desc := testWireDescriptor(31, []byte("a"), []byte("m"))
 	left := testWireDescriptor(31, []byte("a"), []byte("f"))

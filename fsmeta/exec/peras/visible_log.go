@@ -485,6 +485,7 @@ func readSegmentPlan(r *witnessReader) (compile.SegmentPlan, error) {
 
 func writeSegmentMergeKey(out *bytes.Buffer, key compile.SegmentMergeKey) {
 	writeUint64(out, uint64(key.MountKeyID))
+	writeBool(out, key.HasPrimaryBucket)
 	writeUint64(out, uint64(key.PrimaryBucket))
 	writeUint64(out, uint64(key.Install))
 	writeUint64(out, uint64(key.Durability))
@@ -493,6 +494,10 @@ func writeSegmentMergeKey(out *bytes.Buffer, key compile.SegmentMergeKey) {
 
 func readSegmentMergeKey(r *witnessReader) (compile.SegmentMergeKey, error) {
 	mountKeyID, err := r.readUint64()
+	if err != nil {
+		return compile.SegmentMergeKey{}, err
+	}
+	hasPrimaryBucket, err := r.readBool()
 	if err != nil {
 		return compile.SegmentMergeKey{}, err
 	}
@@ -513,11 +518,12 @@ func readSegmentMergeKey(r *witnessReader) (compile.SegmentMergeKey, error) {
 		return compile.SegmentMergeKey{}, err
 	}
 	return compile.SegmentMergeKey{
-		MountKeyID:    fsmeta.MountKeyID(mountKeyID),
-		PrimaryBucket: fsmeta.AffinityBucket(primaryBucket),
-		Install:       compile.SegmentInstallMode(install),
-		Durability:    compile.DurabilityClass(durability),
-		FormatVersion: uint16(formatVersion),
+		MountKeyID:       fsmeta.MountKeyID(mountKeyID),
+		HasPrimaryBucket: hasPrimaryBucket,
+		PrimaryBucket:    fsmeta.AffinityBucket(primaryBucket),
+		Install:          compile.SegmentInstallMode(install),
+		Durability:       compile.DurabilityClass(durability),
+		FormatVersion:    uint16(formatVersion),
 	}, nil
 }
 

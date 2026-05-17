@@ -1,0 +1,54 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package peras
+
+import "context"
+
+// sealedTrackingLayer finalizes the runtime read view for an installed
+// segment. Non-materialized segments are added to the sealed overlay; all
+// segments are removed from the visible overlay and counted in segment stats.
+type sealedTrackingLayer struct {
+	runtime *Runtime
+}
+
+func newSealedTrackingLayer(runtime *Runtime) SegmentFinalizeLayer {
+	if runtime == nil {
+		return nil
+	}
+	return &sealedTrackingLayer{runtime: runtime}
+}
+
+func (l *sealedTrackingLayer) FinalizeSegment(_ context.Context, req SegmentFinalizeRequest) error {
+	if l == nil || l.runtime == nil {
+		return ErrRuntimeInvalid
+	}
+	return l.runtime.installSegment(req.Plan, req.Segment, req.MaterializeMVCC)
+}
+
+// completionIndexLayer records each segment's per-operation completion in the
+// runtime's read state so duplicate-operation submits (SubmitVisible retries)
+// can short-circuit without re-issuing the work. The layer is in-memory only
+// and runs after the segment is safe to observe.
+type completionIndexLayer struct {
+	read *readState
+}
+
+func newCompletionIndexLayer(read *readState) SegmentFinalizeLayer {
+	if read == nil {
+		return nil
+	}
+	return &completionIndexLayer{read: read}
+}
+
+// FinalizeSegment merges the segment's completions into the runtime's
+// completion index via readState.mergeCompletions. Durability ownership
+// belongs to the pre-publish installer; this layer only updates retry dedup
+// after the runtime read path is valid.
+func (l *completionIndexLayer) FinalizeSegment(_ context.Context, req SegmentFinalizeRequest) error {
+	if l == nil || l.read == nil {
+		return ErrRuntimeInvalid
+	}
+	l.read.mergeCompletions(req.Segment)
+	return nil
+}

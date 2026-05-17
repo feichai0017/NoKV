@@ -22,7 +22,7 @@ var (
 	errInvalidInternalEntry = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/local: invalid MVCC internal entry")
 	errInvalidAtomicMutate  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: invalid atomic mutate")
 	errAtomicPredicate      = nokverrors.New(nokverrors.KindRetryable, "fsmeta/runtime/local: atomic predicate mismatch")
-	errInvalidPerasMode     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: invalid peras mode")
+	errInvalidCacheMode     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: invalid cache mode")
 )
 
 func txnKeyError(errs ...*kvrpcpb.KeyError) error {

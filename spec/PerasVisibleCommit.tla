@@ -10,8 +10,9 @@ EXTENDS Naturals
 \* the state machine small, but separates the safety boundaries that matter for
 \* the runtime:
 \*
-\*   visible log -> visible ack -> witness quorum -> raftstore install ->
-\*   root seal -> runtime install -> visible applied marker -> visible log GC
+\*   visible log -> visible ack -> optional witness quorum -> store install ->
+\*   optional root seal -> runtime install -> visible applied marker ->
+\*   visible log GC
 \*
 \* A visible record can exist without an ack. That is the crash window where the
 \* WAL append completed but the caller did not observe success. Safety is about
@@ -21,6 +22,7 @@ EXTENDS Naturals
 
 CONSTANTS
     MaxOp,
+    WitnessRequiredOps,
     PublishRequiredOps
 
 Ops == 1..MaxOp
@@ -86,7 +88,8 @@ WitnessOrRecoverSegment(op) ==
                    rootSealed, runtimeInstalled, appliedMarker>>
 
 InstallStoreCatalog(op) ==
-    /\ op \in witnessed
+    /\ op \in visibleLog
+    /\ (op \in WitnessRequiredOps => op \in witnessed)
     /\ op \notin storeInstalled
     /\ storeInstalled' = storeInstalled \cup {op}
     /\ UNCHANGED <<activeHolder, visibleLog, acked, witnessed,
@@ -147,7 +150,9 @@ Next ==
 TypeOK ==
     /\ MaxOp \in Nat
     /\ MaxOp > 0
+    /\ WitnessRequiredOps \subseteq Ops
     /\ PublishRequiredOps \subseteq Ops
+    /\ PublishRequiredOps \subseteq WitnessRequiredOps
     /\ activeHolder \in Holders
     /\ visibleLog \subseteq Ops
     /\ acked \subseteq Ops
@@ -160,8 +165,8 @@ TypeOK ==
 AckRequiresRecoverySource ==
     acked \subseteq (visibleLog \cup runtimeInstalled)
 
-StoreInstallRequiresWitness ==
-    storeInstalled \subseteq witnessed
+StoreInstallRequiresConfiguredWitness ==
+    storeInstalled \cap WitnessRequiredOps \subseteq witnessed
 
 RootSealRequiresStoreInstall ==
     rootSealed \subseteq storeInstalled
@@ -183,7 +188,7 @@ HandoffRequiresDrain ==
 
 PerasVisibleCommitGuarantees ==
     /\ AckRequiresRecoverySource
-    /\ StoreInstallRequiresWitness
+    /\ StoreInstallRequiresConfiguredWitness
     /\ RootSealRequiresStoreInstall
     /\ RootSealOnlyForPublishRequiredOps
     /\ RuntimeInstallRequiresRequiredRootSeal

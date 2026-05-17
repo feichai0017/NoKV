@@ -486,6 +486,26 @@ func UserKeyShape(key []byte) localdb.UserKeyShape {
 	return shape
 }
 
+// MountAtomicUserKeyShape keeps all records for one mount on one local apply
+// shard while preserving record-family bloom prefixes. The embedded fsmeta
+// direct-MVCC runtime uses this stricter shape so multi-key namespace
+// operations remain one local WAL/apply group even when the storage engine has
+// multiple LSM shards.
+func MountAtomicUserKeyShape(key []byte) localdb.UserKeyShape {
+	_, bucketPos, err := decodeMountPrefix(key)
+	if err != nil || bucketPos <= 0 {
+		return localdb.UserKeyShape{}
+	}
+	shape := UserKeyShape(key)
+	if len(shape.BloomPrefix) == 0 && shape.Family == 0 {
+		return localdb.UserKeyShape{}
+	}
+	mountPrefix := key[:bucketPos]
+	shape.LocalityPrefix = mountPrefix
+	shape.ShardKey = mountPrefix
+	return shape
+}
+
 func perasSegmentShardKey(mountKeyID MountKeyID, root []byte) []byte {
 	out := make([]byte, 0, len(keyMagic)+1+encodedMountKeyBytes+1+len(root))
 	out = append(out, keyMagic...)

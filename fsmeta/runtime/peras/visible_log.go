@@ -10,9 +10,25 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 )
 
+// VisibleLogStateRecord is a visible WAL operation plus the applied-marker
+// state that covers it during replay.
+type VisibleLogStateRecord struct {
+	Record  fsperas.VisibleOperationRecord
+	Applied bool
+}
+
+type visibleLogStateReplayer interface {
+	ReplayVisibleState(context.Context) ([]VisibleLogStateRecord, error)
+}
+
 func (c *Runtime) recoverVisibleLog(ctx context.Context) (int, error) {
 	if c == nil || c.visibleLog == nil {
 		return 0, nil
+	}
+	if c.recoverAppliedVisibleLogState() {
+		if replayer, ok := c.visibleLog.(visibleLogStateReplayer); ok {
+			return c.recoverVisibleLogState(ctx, replayer)
+		}
 	}
 	replayer, ok := c.visibleLog.(fsperas.VisibleLogReplayer)
 	if !ok {
@@ -27,41 +43,114 @@ func (c *Runtime) recoverVisibleLog(ctx context.Context) (int, error) {
 	}
 	recovered := 0
 	for _, record := range records {
-		if record.HolderID != c.authority.HolderID() {
-			c.metrics.visibleLogRecoverSkipTotal.Add(1)
-			continue
-		}
-		active, owned, err := c.authority.Acquire(ctx, record.Scope)
+		ok, err := c.recoverVisiblePendingRecord(ctx, record)
 		if err != nil {
-			return recovered, c.recordErrorf("recover peras visible authority: %w", err)
+			return recovered, err
 		}
-		if !owned || active.HolderID != record.HolderID {
-			return recovered, c.recordErrorf("recover peras visible authority transferred: %w", ErrNotHeld)
+		if ok {
+			recovered++
 		}
-		if !visibleLogLineageCovers(record, active) {
-			c.metrics.visibleLogRecoverSkipTotal.Add(1)
-			continue
-		}
-		grant := visibleRecordGrant(record)
-		if active.EpochID == record.EpochID && active.GrantID == record.GrantID {
-			grant = active
-		} else {
-			c.metrics.visibleLogRecoverOldEpochTotal.Add(1)
-		}
-		holder, err := c.holderForGrant(ctx, grant, record.Scope)
-		if err != nil {
-			return recovered, c.recordErrorf("recover peras visible holder: %w", err)
-		}
-		if err := holder.RestoreVisible(record.Scope, record.Operation); err != nil {
-			return recovered, c.recordErrorf("restore peras visible holder: %w", err)
-		}
-		if err := c.read.overlay.AddReplayOperation(record.Operation); err != nil {
-			return recovered, c.recordErrorf("restore peras visible overlay: %w", err)
-		}
-		c.metrics.visibleLogRecoverTotal.Add(1)
-		recovered++
 	}
 	return recovered, nil
+}
+
+func (c *Runtime) recoverAppliedVisibleLogState() bool {
+	return c != nil && c.materialize && c.catalog == nil
+}
+
+func (c *Runtime) recoverVisibleLogState(ctx context.Context, replayer visibleLogStateReplayer) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	records, err := replayer.ReplayVisibleState(ctx)
+	if err != nil {
+		return 0, c.recordErrorf("replay peras visible log: %w", err)
+	}
+	recovered := 0
+	for _, state := range records {
+		if state.Applied {
+			ok, err := c.recoverVisibleAppliedCompletion(ctx, state.Record)
+			if err != nil {
+				return recovered, err
+			}
+			if ok {
+				recovered++
+			}
+			continue
+		}
+		ok, err := c.recoverVisiblePendingRecord(ctx, state.Record)
+		if err != nil {
+			return recovered, err
+		}
+		if ok {
+			recovered++
+		}
+	}
+	return recovered, nil
+}
+
+func (c *Runtime) recoverVisiblePendingRecord(ctx context.Context, record fsperas.VisibleOperationRecord) (bool, error) {
+	if record.HolderID != c.authority.HolderID() {
+		c.metrics.visibleLogRecoverSkipTotal.Add(1)
+		return false, nil
+	}
+	active, owned, err := c.authority.Acquire(ctx, record.Scope)
+	if err != nil {
+		return false, c.recordErrorf("recover peras visible authority: %w", err)
+	}
+	if !owned || active.HolderID != record.HolderID {
+		return false, c.recordErrorf("recover peras visible authority transferred: %w", ErrNotHeld)
+	}
+	if !visibleLogLineageCovers(record, active) {
+		c.metrics.visibleLogRecoverSkipTotal.Add(1)
+		return false, nil
+	}
+	grant := visibleRecordGrant(record)
+	if active.EpochID == record.EpochID && active.GrantID == record.GrantID {
+		grant = active
+	} else {
+		c.metrics.visibleLogRecoverOldEpochTotal.Add(1)
+	}
+	holder, err := c.holderForGrant(ctx, grant, record.Scope)
+	if err != nil {
+		return false, c.recordErrorf("recover peras visible holder: %w", err)
+	}
+	if err := holder.RestoreVisible(record.Scope, record.Operation); err != nil {
+		return false, c.recordErrorf("restore peras visible holder: %w", err)
+	}
+	if err := c.read.overlay.AddReplayOperation(record.Operation); err != nil {
+		return false, c.recordErrorf("restore peras visible overlay: %w", err)
+	}
+	c.metrics.visibleLogRecoverTotal.Add(1)
+	return true, nil
+}
+
+func (c *Runtime) recoverVisibleAppliedCompletion(ctx context.Context, record fsperas.VisibleOperationRecord) (bool, error) {
+	if record.HolderID != c.authority.HolderID() {
+		c.metrics.visibleLogRecoverSkipTotal.Add(1)
+		return false, nil
+	}
+	active, owned, err := c.authority.Acquire(ctx, record.Scope)
+	if err != nil {
+		return false, c.recordErrorf("recover peras visible authority: %w", err)
+	}
+	if !owned || active.HolderID != record.HolderID {
+		return false, c.recordErrorf("recover peras visible authority transferred: %w", ErrNotHeld)
+	}
+	if !visibleLogLineageCovers(record, active) {
+		c.metrics.visibleLogRecoverSkipTotal.Add(1)
+		return false, nil
+	}
+	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
+		EpochID:    record.EpochID,
+		Operations: []fsperas.ReplayOperation{record.Operation},
+	})
+	if err != nil {
+		return false, c.recordErrorf("recover peras visible completion: %w", err)
+	}
+	c.read.mergeCompletions(segment)
+	c.metrics.visibleLogRecoverTotal.Add(1)
+	return true, nil
 }
 
 func visibleRecordGrant(record fsperas.VisibleOperationRecord) rootproto.PerasAuthorityGrant {

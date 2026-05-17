@@ -553,7 +553,18 @@ placementDone:
 	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
+		// Multi-bucket catalog op: materialize is still safe because the
+		// installer writes each entry as a direct MVCC mutation regardless
+		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
+		// materialize ops batch together in one install. Local fsmeta runtimes
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
+		// in SegmentPlanForInstall.
+		segment.CanMaterialize = placement.CanSegment
+		segment.MaterializeInstall = SegmentInstallSingleBucket
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
@@ -751,7 +762,18 @@ placementDone:
 	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
+		// Multi-bucket catalog op: materialize is still safe because the
+		// installer writes each entry as a direct MVCC mutation regardless
+		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
+		// materialize ops batch together in one install. Local fsmeta runtimes
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
+		// in SegmentPlanForInstall.
+		segment.CanMaterialize = placement.CanSegment
+		segment.MaterializeInstall = SegmentInstallSingleBucket
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
@@ -949,7 +971,18 @@ placementDone:
 	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
+		// Multi-bucket catalog op: materialize is still safe because the
+		// installer writes each entry as a direct MVCC mutation regardless
+		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
+		// materialize ops batch together in one install. Local fsmeta runtimes
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
+		// in SegmentPlanForInstall.
+		segment.CanMaterialize = placement.CanSegment
+		segment.MaterializeInstall = SegmentInstallSingleBucket
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
@@ -1147,7 +1180,18 @@ placementDone:
 	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
+	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
+		// Multi-bucket catalog op: materialize is still safe because the
+		// installer writes each entry as a direct MVCC mutation regardless
+		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
+		// materialize ops batch together in one install. Local fsmeta runtimes
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
+		// in SegmentPlanForInstall.
+		segment.CanMaterialize = placement.CanSegment
+		segment.MaterializeInstall = SegmentInstallSingleBucket
+		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
 	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
