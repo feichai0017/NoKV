@@ -29,9 +29,14 @@ profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=127.0.0.1:9400,store1=127
 cache_tmp_dir=""
 plain_pid=""
 cached_pid=""
+local_pid=""
+local_tools_dir=""
+local_tmp_dir=""
 profile_pids=()
 profile_root_dir=""
 compose_built=0
+local_mount_key_id="${NOKV_FSMETA_LOCAL_MOUNT_KEY_ID:-2}"
+local_log_dir="${NOKV_FSMETA_LOCAL_LOG_DIR:-$ROOT/benchmark/data/fsmeta/ci}"
 
 case "$profile" in
 	median)
@@ -73,6 +78,12 @@ case "$output_dir" in
 	*) output_dir="$ROOT/$output_dir" ;;
 esac
 mkdir -p "$output_dir"
+
+case "$local_log_dir" in
+	/*) ;;
+	*) local_log_dir="$ROOT/$local_log_dir" ;;
+esac
+mkdir -p "$local_log_dir"
 
 case "$profile_dir" in
 	/*) ;;
@@ -220,6 +231,7 @@ write_profile_manifest() {
 	local workloads="$1"
 	cat >"$profile_dir/manifest.txt" <<EOF
 run_id=$run_id
+bench_mode=$mode
 benchmark_profile=$profile
 profile_file=benchmark/fsmeta/profiles/official/workloads.yaml
 workloads=$workloads
@@ -246,6 +258,7 @@ write_benchmark_manifest() {
 	local workloads="$2"
 	cat >"${output}.manifest.txt" <<EOF
 run_id=$run_id
+bench_mode=$mode
 scale_profile=$profile
 profile_file=benchmark/fsmeta/profiles/official/workloads.yaml
 workloads=$workloads
@@ -451,6 +464,142 @@ run_compose_benchmarks() {
 	fi
 }
 
+ensure_local_gateway_binary() {
+	if [[ -n "$local_tools_dir" ]]; then
+		return
+	fi
+	local_tools_dir="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-local-tools.XXXXXX")"
+	go build -o "$local_tools_dir/nokv-fsmeta" ./cmd/nokv-fsmeta
+}
+
+stop_local_gateway() {
+	if [[ -n "$local_pid" ]]; then
+		kill "$local_pid" 2>/dev/null || true
+		wait "$local_pid" 2>/dev/null || true
+		local_pid=""
+	fi
+	if [[ -z "${NOKV_FSMETA_LOCAL_WORKDIR:-}" && -n "$local_tmp_dir" ]]; then
+		rm -rf "$local_tmp_dir"
+		local_tmp_dir=""
+	fi
+}
+
+cleanup_local_gateway() {
+	stop_local_gateway
+	if [[ -n "$local_tools_dir" ]]; then
+		rm -rf "$local_tools_dir"
+		local_tools_dir=""
+	fi
+}
+
+start_local_gateway() {
+	local suffix="$1"
+	ensure_local_gateway_binary
+	stop_local_gateway
+
+	local work_dir
+	if [[ -n "${NOKV_FSMETA_LOCAL_WORKDIR:-}" ]]; then
+		work_dir="$NOKV_FSMETA_LOCAL_WORKDIR"
+		if enabled "$reset_between_workloads"; then
+			work_dir="$work_dir/$suffix"
+			rm -rf "$work_dir"
+		fi
+	else
+		local_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-local.XXXXXX")"
+		work_dir="$local_tmp_dir/db"
+	fi
+	mkdir -p "$work_dir"
+
+	local log_file="$local_log_dir/fsmeta-local-${profile}-${run_id}-${suffix}.log"
+	echo "starting local fsmeta gateway on $fsmeta_addr work_dir=$work_dir"
+	"$local_tools_dir/nokv-fsmeta" \
+		--backend local \
+		--addr "$fsmeta_addr" \
+		--metrics-addr "$fsmeta_metrics_addr" \
+		--local-work-dir "$work_dir" \
+		--local-mount-id "$mount" \
+		--local-mount-key-id "$local_mount_key_id" \
+		>"$log_file" 2>&1 &
+	local_pid="$!"
+	if ! wait_port "${fsmeta_addr%%,*}"; then
+		cat "$log_file" >&2 || true
+		return 1
+	fi
+	wait_port "${fsmeta_metrics_addr%%,*}"
+}
+
+run_local_benchmarks() {
+	local workloads="${NOKV_FSMETA_WORKLOADS:-mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent}"
+	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_local_${profile}_${run_id}_isolated.csv}"
+	local coord_addr=""
+	local profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=$fsmeta_metrics_addr}"
+	trap cleanup_local_gateway EXIT
+	case "$output" in
+		/*) ;;
+		*) output="$ROOT/$output" ;;
+	esac
+	if ! enabled "$reset_between_workloads"; then
+		start_local_gateway "shared"
+		profile_dir="$profile_root_dir"
+		profile_pids=()
+		start_profile_capture "$workloads"
+	fi
+	local combined_tmp="$output.tmp"
+	local wrote_header=0
+	local bench_status=0
+	rm -f "$combined_tmp" "$output"
+	IFS=',' read -r -a workload_list <<<"$workloads"
+	for workload in "${workload_list[@]}"; do
+		workload="${workload//[[:space:]]/}"
+		if [[ -z "$workload" ]]; then
+			continue
+		fi
+		local safe_workload="${workload//[^A-Za-z0-9_-]/_}"
+		local workload_output="$output_dir/fsmeta_local_${profile}_${run_id}_${safe_workload}.csv"
+		echo "running isolated local fsmeta workload: $workload"
+		if enabled "$reset_between_workloads"; then
+			start_local_gateway "$safe_workload"
+			profile_dir="$profile_root_dir/$safe_workload"
+			profile_pids=()
+			start_profile_capture "$workload"
+		fi
+		set +e
+		run_bench "$fsmeta_addr" "$workload" "$workload_output"
+		bench_status=$?
+		set -e
+		if enabled "$reset_between_workloads"; then
+			finish_profile_capture
+			stop_local_gateway
+		fi
+		if [[ "$bench_status" -ne 0 ]]; then
+			break
+		fi
+		if [[ "$wrote_header" -eq 0 ]]; then
+			cat "$workload_output" >"$combined_tmp"
+			wrote_header=1
+		else
+			tail -n +2 "$workload_output" >>"$combined_tmp"
+		fi
+		print_bench_summary "$workload_output"
+	done
+	if ! enabled "$reset_between_workloads"; then
+		finish_profile_capture
+	fi
+	if [[ "$bench_status" -ne 0 ]]; then
+		rm -f "$combined_tmp"
+		exit "$bench_status"
+	fi
+	if [[ "$wrote_header" -eq 0 ]]; then
+		echo "no fsmeta workloads selected" >&2
+		rm -f "$combined_tmp"
+		exit 2
+	fi
+	mv "$combined_tmp" "$output"
+	write_benchmark_manifest "$output" "$workloads"
+	print_bench_summary "$output"
+	echo "wrote isolated local fsmeta benchmark summary: $output"
+}
+
 cleanup_cache_gateways() {
 	if [[ -n "$plain_pid" ]]; then
 		kill "$plain_pid" 2>/dev/null || true
@@ -507,11 +656,14 @@ case "$mode" in
 	compose)
 		run_compose_benchmarks
 		;;
+	local)
+		run_local_benchmarks
+		;;
 	derived-cache|cache)
 		run_derived_cache_benchmarks
 		;;
 	*)
-		echo "unknown NOKV_FSMETA_BENCH_MODE=$mode; use compose or derived-cache" >&2
+		echo "unknown NOKV_FSMETA_BENCH_MODE=$mode; use compose, local, or derived-cache" >&2
 		exit 2
 		;;
 esac
