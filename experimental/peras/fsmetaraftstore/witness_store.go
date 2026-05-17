@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package raftstore
+package fsmetaraftstore
 
 import (
 	"context"
@@ -20,12 +20,12 @@ import (
 
 type remotePerasWitness struct {
 	id     string
-	client kvrpcpb.StoreKVClient
+	client kvrpcpb.PerasWitnessClient
 }
 
 const remotePerasWitnessProbePageLimit = 32
 
-func newRemotePerasWitness(id string, client kvrpcpb.StoreKVClient) (*remotePerasWitness, error) {
+func newRemotePerasWitness(id string, client kvrpcpb.PerasWitnessClient) (*remotePerasWitness, error) {
 	if id == "" || client == nil {
 		return nil, runtimeperas.ErrRuntimeInvalid
 	}
@@ -221,7 +221,7 @@ func tryBuildWitnessConnections(ctx context.Context, lister witnessStoreLister, 
 		}
 		witness, err := newRemotePerasWitness(
 			fmt.Sprintf("store-%d", store.GetStoreId()),
-			kvrpcpb.NewStoreKVClient(conn),
+			kvrpcpb.NewPerasWitnessClient(conn),
 		)
 		if err != nil {
 			_ = conn.Close()

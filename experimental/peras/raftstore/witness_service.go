@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package kv
+package peras
 
 import (
 	"bytes"
@@ -11,8 +11,10 @@ import (
 	"slices"
 
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -22,29 +24,58 @@ const (
 	perasWitnessProbeRecordStringBytes = 4
 )
 
-func (s *Service) PerasWitnessSegments(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentsRequest) (*kvrpcpb.PerasWitnessSegmentsResponse, error) {
-	if s == nil || s.perasWitness == nil {
+type WitnessService struct {
+	kvrpcpb.UnimplementedPerasWitnessServer
+	witness Witness
+}
+
+type Witness interface {
+	AppendSegments(context.Context, compile.AuthorityScope, []fsperas.SegmentWitnessRecord) error
+	Probe(context.Context, uint64) (fsperas.WitnessSnapshot, error)
+}
+
+type witnessStats interface {
+	Stats() map[string]any
+}
+
+func NewWitnessService(witness Witness) *WitnessService {
+	return &WitnessService{witness: witness}
+}
+
+func (s *WitnessService) Stats() map[string]any {
+	if s == nil || s.witness == nil {
+		return map[string]any{}
+	}
+	reporter, ok := s.witness.(witnessStats)
+	if !ok {
+		return map[string]any{}
+	}
+	return reporter.Stats()
+}
+
+func (s *WitnessService) PerasWitnessSegments(ctx context.Context, req *kvrpcpb.PerasWitnessSegmentsRequest) (*kvrpcpb.PerasWitnessSegmentsResponse, error) {
+	if s == nil || s.witness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
-	scope, err := rsperas.ScopeFromProto(req.GetScope())
+	scope, err := ScopeFromProto(req.GetScope())
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
-	records, err := rsperas.SegmentWitnessRecordsFromProto(req.GetRecords())
+	records, err := SegmentWitnessRecordsFromProto(req.GetRecords())
 	if err != nil {
 		return nil, rpcInvalidArgument(err.Error())
 	}
 	if len(records) == 0 {
 		return nil, rpcInvalidArgument("peras witness batch requires at least one record")
 	}
-	if err := s.perasWitness.AppendSegments(ctx, scope, records); err != nil {
+	if err := s.witness.AppendSegments(ctx, scope, records); err != nil {
 		return nil, rpcPerasWitnessStatus(err)
 	}
 	return &kvrpcpb.PerasWitnessSegmentsResponse{}, nil
 }
 
-func (s *Service) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {
-	if s == nil || s.perasWitness == nil {
+func (s *WitnessService) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitnessProbeRequest) (*kvrpcpb.PerasWitnessProbeResponse, error) {
+	if s == nil || s.witness == nil {
 		return nil, rpcProtocolPrecondition("raftstore/kv: peras witness is not configured")
 	}
 	if req.GetEpochId() == 0 {
@@ -57,15 +88,15 @@ func (s *Service) PerasWitnessProbe(ctx context.Context, req *kvrpcpb.PerasWitne
 	if targeted {
 		return s.probePerasWitnessSegment(ctx, ref)
 	}
-	snapshot, err := s.perasWitness.Probe(ctx, req.GetEpochId())
+	snapshot, err := s.witness.Probe(ctx, req.GetEpochId())
 	if err != nil {
 		return nil, rpcPerasWitnessStatus(err)
 	}
 	return perasWitnessProbePage(snapshot, req)
 }
 
-func (s *Service) probePerasWitnessSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (*kvrpcpb.PerasWitnessProbeResponse, error) {
-	if prober, ok := s.perasWitness.(fsperas.WitnessSegmentProber); ok {
+func (s *WitnessService) probePerasWitnessSegment(ctx context.Context, ref fsperas.WitnessSegmentRef) (*kvrpcpb.PerasWitnessProbeResponse, error) {
+	if prober, ok := s.witness.(fsperas.WitnessSegmentProber); ok {
 		record, found, err := prober.ProbeSegment(ctx, ref)
 		if err != nil {
 			return nil, rpcPerasWitnessStatus(err)
@@ -74,17 +105,17 @@ func (s *Service) probePerasWitnessSegment(ctx context.Context, ref fsperas.Witn
 			return &kvrpcpb.PerasWitnessProbeResponse{}, nil
 		}
 		return &kvrpcpb.PerasWitnessProbeResponse{
-			Segments: []*kvrpcpb.PerasSegmentWitnessRecord{rsperas.SegmentWitnessRecordToProto(record)},
+			Segments: []*kvrpcpb.PerasSegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
 		}, nil
 	}
-	snapshot, err := s.perasWitness.Probe(ctx, ref.EpochID)
+	snapshot, err := s.witness.Probe(ctx, ref.EpochID)
 	if err != nil {
 		return nil, rpcPerasWitnessStatus(err)
 	}
 	for _, record := range snapshot.Segments {
 		if record.EpochID == ref.EpochID && record.SegmentRoot == ref.SegmentRoot && record.SegmentPayloadDigest == ref.SegmentPayloadDigest {
 			return &kvrpcpb.PerasWitnessProbeResponse{
-				Segments: []*kvrpcpb.PerasSegmentWitnessRecord{rsperas.SegmentWitnessRecordToProto(record)},
+				Segments: []*kvrpcpb.PerasSegmentWitnessRecord{SegmentWitnessRecordToProto(record)},
 			}, nil
 		}
 	}
@@ -148,7 +179,7 @@ func perasWitnessProbePage(snapshot fsperas.WitnessSnapshot, req *kvrpcpb.PerasW
 		if len(resp.Segments) > 0 && (len(resp.Segments) >= limit || payloadBytes+recordBytes > perasWitnessProbeMaxPayloadBytes) {
 			break
 		}
-		resp.Segments = append(resp.Segments, rsperas.SegmentWitnessRecordToProto(record))
+		resp.Segments = append(resp.Segments, SegmentWitnessRecordToProto(record))
 		payloadBytes += recordBytes
 		end++
 		if len(resp.Segments) >= limit {
@@ -217,11 +248,29 @@ func witnessProbeRecordBytes(record fsperas.SegmentWitnessRecord) int {
 
 func rpcPerasWitnessStatus(err error) error {
 	switch {
-	case errors.Is(err, rsperas.ErrWitnessNodeConfigInvalid),
-		errors.Is(err, rsperas.ErrWitnessAuthorityMissing),
-		errors.Is(err, rsperas.ErrWitnessAuthorityMismatch):
+	case errors.Is(err, ErrWitnessNodeConfigInvalid),
+		errors.Is(err, ErrWitnessAuthorityMissing),
+		errors.Is(err, ErrWitnessAuthorityMismatch):
 		return rpcProtocolPrecondition(err.Error())
 	default:
 		return rpcStatus(err)
 	}
+}
+
+func rpcInvalidArgument(message string) error {
+	return status.Error(codes.InvalidArgument, message)
+}
+
+func rpcProtocolPrecondition(message string) error {
+	return status.Error(codes.FailedPrecondition, message)
+}
+
+func rpcStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	return status.Error(codes.Internal, err.Error())
 }

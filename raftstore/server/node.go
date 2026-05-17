@@ -72,8 +72,8 @@ func NewNode(cfg Config) (*Node, error) {
 	}
 	storeCfg := cfg.Store
 	applyOpts := []kv.ApplyOption(nil)
-	if cfg.PerasAuthorityFence != nil {
-		applyOpts = append(applyOpts, kv.WithPerasAuthorityFence(cfg.PerasAuthorityFence))
+	if cfg.WriteFence != nil {
+		applyOpts = append(applyOpts, kv.WithWriteFence(cfg.WriteFence))
 	}
 	if storeCfg.CommandApplier == nil {
 		storeCfg.CommandApplier = kv.NewApplier(cfg.Storage.MVCC, nil, applyOpts...)
@@ -107,15 +107,16 @@ func NewNode(cfg Config) (*Node, error) {
 	storeCfg.PeerBuilder = builder
 
 	st := store.NewStore(storeCfg)
-	kvOpts := []kv.ServiceOption(nil)
-	if cfg.PerasWitness != nil {
-		kvOpts = append(kvOpts, kv.WithPerasWitness(cfg.PerasWitness))
-	}
-	kvService := kv.NewService(st, kvOpts...)
+	kvService := kv.NewService(st)
 	adminService := admin.NewServiceWithSnapshot(st, cfg.Storage.Snapshot)
 	if err := tr.RegisterServer(func(reg grpc.ServiceRegistrar) {
 		kvrpcpb.RegisterStoreKVServer(reg, kvService)
 		adminpb.RegisterRaftAdminServer(reg, adminService)
+		for _, register := range cfg.ExtraServices {
+			if register != nil {
+				register(reg)
+			}
+		}
 	}); err != nil {
 		_ = tr.Close()
 		return nil, err

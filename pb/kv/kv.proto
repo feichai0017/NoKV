@@ -464,6 +464,9 @@ service StoreKV {
   rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
   rpc InstallPreparedMVCCEntries(KvInstallPreparedMVCCEntriesRequest) returns (KvInstallPreparedMVCCEntriesResponse);
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
+}
+
+service PerasWitness {
   rpc PerasWitnessSegments(PerasWitnessSegmentsRequest) returns (PerasWitnessSegmentsResponse);
   rpc PerasWitnessProbe(PerasWitnessProbeRequest) returns (PerasWitnessProbeResponse);
 }

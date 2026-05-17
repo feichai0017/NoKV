@@ -285,7 +285,7 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	applier := NewApplier(db, nil, WithWriteFence(perasFenceForApplyTest{perasFenceTableForApplyTest(t, mount)}))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -296,7 +296,7 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	require.Len(t, resp.GetResponses(), 1)
 	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
 	require.NotNil(t, atomicResp)
-	require.Contains(t, atomicResp.GetError().GetRetryable(), "peras authority fence")
+	require.Contains(t, atomicResp.GetError().GetRetryable(), "write fence")
 
 	reader := percolator.NewReader(db)
 	_, _, err = reader.GetValue(key, 12)
@@ -314,7 +314,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(runtimeperas.NewActiveAuthorities()))
+	applier := NewApplier(db, nil, WithWriteFence(perasFenceForApplyTest{runtimeperas.NewActiveAuthorities()}))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -344,7 +344,7 @@ func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
 	fencedKey, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewBatchApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	applier := NewBatchApplier(db, nil, WithWriteFence(perasFenceForApplyTest{perasFenceTableForApplyTest(t, mount)}))
 	resps, err := applier([]*raftcmdpb.RaftCmdRequest{
 		{
 			Requests: []*raftcmdpb.Request{{
@@ -368,7 +368,7 @@ func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resps, 3)
 	require.Nil(t, resps[0].GetResponses()[0].GetTryAtomicMutate().GetError())
-	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetRetryable(), "peras authority fence")
+	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetRetryable(), "write fence")
 	require.Nil(t, resps[2].GetResponses()[0].GetTryAtomicMutate().GetError())
 
 	reader := percolator.NewReader(db)
@@ -679,6 +679,18 @@ func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *runt
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}}))
 	return table
+}
+
+type perasFenceForApplyTest struct {
+	authorities *runtimeperas.ActiveAuthorities
+}
+
+func (f perasFenceForApplyTest) FenceKey(key []byte, now time.Time) (WriteFenceDecision, error) {
+	grant, ok, err := f.authorities.FencesKey(key, now)
+	if err != nil || !ok {
+		return WriteFenceDecision{}, err
+	}
+	return WriteFenceDecision{Fenced: true, Reason: grant.GrantID}, nil
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {

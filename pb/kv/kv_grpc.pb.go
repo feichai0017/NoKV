@@ -36,8 +36,6 @@ const (
 	StoreKV_TryAtomicMutate_FullMethodName            = "/nokv.kv.v1.StoreKV/TryAtomicMutate"
 	StoreKV_InstallPreparedMVCCEntries_FullMethodName = "/nokv.kv.v1.StoreKV/InstallPreparedMVCCEntries"
 	StoreKV_WatchApply_FullMethodName                 = "/nokv.kv.v1.StoreKV/WatchApply"
-	StoreKV_PerasWitnessSegments_FullMethodName       = "/nokv.kv.v1.StoreKV/PerasWitnessSegments"
-	StoreKV_PerasWitnessProbe_FullMethodName          = "/nokv.kv.v1.StoreKV/PerasWitnessProbe"
 )
 
 // StoreKVClient is the client API for StoreKV service.
@@ -56,8 +54,6 @@ type StoreKVClient interface {
 	TryAtomicMutate(ctx context.Context, in *KvTryAtomicMutateRequest, opts ...grpc.CallOption) (*KvTryAtomicMutateResponse, error)
 	InstallPreparedMVCCEntries(ctx context.Context, in *KvInstallPreparedMVCCEntriesRequest, opts ...grpc.CallOption) (*KvInstallPreparedMVCCEntriesResponse, error)
 	WatchApply(ctx context.Context, in *ApplyWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyWatchResponse], error)
-	PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error)
-	PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error)
 }
 
 type storeKVClient struct {
@@ -197,26 +193,6 @@ func (c *storeKVClient) WatchApply(ctx context.Context, in *ApplyWatchRequest, o
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyClient = grpc.ServerStreamingClient[ApplyWatchResponse]
 
-func (c *storeKVClient) PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PerasWitnessSegmentsResponse)
-	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessSegments_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storeKVClient) PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PerasWitnessProbeResponse)
-	err := c.cc.Invoke(ctx, StoreKV_PerasWitnessProbe_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // StoreKVServer is the server API for StoreKV service.
 // All implementations should embed UnimplementedStoreKVServer
 // for forward compatibility.
@@ -233,8 +209,6 @@ type StoreKVServer interface {
 	TryAtomicMutate(context.Context, *KvTryAtomicMutateRequest) (*KvTryAtomicMutateResponse, error)
 	InstallPreparedMVCCEntries(context.Context, *KvInstallPreparedMVCCEntriesRequest) (*KvInstallPreparedMVCCEntriesResponse, error)
 	WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error
-	PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error)
-	PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error)
 }
 
 // UnimplementedStoreKVServer should be embedded to have
@@ -279,12 +253,6 @@ func (UnimplementedStoreKVServer) InstallPreparedMVCCEntries(context.Context, *K
 }
 func (UnimplementedStoreKVServer) WatchApply(*ApplyWatchRequest, grpc.ServerStreamingServer[ApplyWatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchApply not implemented")
-}
-func (UnimplementedStoreKVServer) PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PerasWitnessSegments not implemented")
-}
-func (UnimplementedStoreKVServer) PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PerasWitnessProbe not implemented")
 }
 func (UnimplementedStoreKVServer) testEmbeddedByValue() {}
 
@@ -515,42 +483,6 @@ func _StoreKV_WatchApply_Handler(srv interface{}, stream grpc.ServerStream) erro
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type StoreKV_WatchApplyServer = grpc.ServerStreamingServer[ApplyWatchResponse]
 
-func _StoreKV_PerasWitnessSegments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PerasWitnessSegmentsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StoreKVServer).PerasWitnessSegments(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StoreKV_PerasWitnessSegments_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StoreKVServer).PerasWitnessSegments(ctx, req.(*PerasWitnessSegmentsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StoreKV_PerasWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PerasWitnessProbeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StoreKVServer).PerasWitnessProbe(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StoreKV_PerasWitnessProbe_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StoreKVServer).PerasWitnessProbe(ctx, req.(*PerasWitnessProbeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // StoreKV_ServiceDesc is the grpc.ServiceDesc for StoreKV service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -602,14 +534,6 @@ var StoreKV_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "InstallPreparedMVCCEntries",
 			Handler:    _StoreKV_InstallPreparedMVCCEntries_Handler,
 		},
-		{
-			MethodName: "PerasWitnessSegments",
-			Handler:    _StoreKV_PerasWitnessSegments_Handler,
-		},
-		{
-			MethodName: "PerasWitnessProbe",
-			Handler:    _StoreKV_PerasWitnessProbe_Handler,
-		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -618,5 +542,143 @@ var StoreKV_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
+	Metadata: "kv/kv.proto",
+}
+
+const (
+	PerasWitness_PerasWitnessSegments_FullMethodName = "/nokv.kv.v1.PerasWitness/PerasWitnessSegments"
+	PerasWitness_PerasWitnessProbe_FullMethodName    = "/nokv.kv.v1.PerasWitness/PerasWitnessProbe"
+)
+
+// PerasWitnessClient is the client API for PerasWitness service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type PerasWitnessClient interface {
+	PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error)
+	PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error)
+}
+
+type perasWitnessClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPerasWitnessClient(cc grpc.ClientConnInterface) PerasWitnessClient {
+	return &perasWitnessClient{cc}
+}
+
+func (c *perasWitnessClient) PerasWitnessSegments(ctx context.Context, in *PerasWitnessSegmentsRequest, opts ...grpc.CallOption) (*PerasWitnessSegmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PerasWitnessSegmentsResponse)
+	err := c.cc.Invoke(ctx, PerasWitness_PerasWitnessSegments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *perasWitnessClient) PerasWitnessProbe(ctx context.Context, in *PerasWitnessProbeRequest, opts ...grpc.CallOption) (*PerasWitnessProbeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PerasWitnessProbeResponse)
+	err := c.cc.Invoke(ctx, PerasWitness_PerasWitnessProbe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PerasWitnessServer is the server API for PerasWitness service.
+// All implementations should embed UnimplementedPerasWitnessServer
+// for forward compatibility.
+type PerasWitnessServer interface {
+	PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error)
+	PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error)
+}
+
+// UnimplementedPerasWitnessServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPerasWitnessServer struct{}
+
+func (UnimplementedPerasWitnessServer) PerasWitnessSegments(context.Context, *PerasWitnessSegmentsRequest) (*PerasWitnessSegmentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessSegments not implemented")
+}
+func (UnimplementedPerasWitnessServer) PerasWitnessProbe(context.Context, *PerasWitnessProbeRequest) (*PerasWitnessProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PerasWitnessProbe not implemented")
+}
+func (UnimplementedPerasWitnessServer) testEmbeddedByValue() {}
+
+// UnsafePerasWitnessServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PerasWitnessServer will
+// result in compilation errors.
+type UnsafePerasWitnessServer interface {
+	mustEmbedUnimplementedPerasWitnessServer()
+}
+
+func RegisterPerasWitnessServer(s grpc.ServiceRegistrar, srv PerasWitnessServer) {
+	// If the following call panics, it indicates UnimplementedPerasWitnessServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PerasWitness_ServiceDesc, srv)
+}
+
+func _PerasWitness_PerasWitnessSegments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessSegmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PerasWitnessServer).PerasWitnessSegments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PerasWitness_PerasWitnessSegments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PerasWitnessServer).PerasWitnessSegments(ctx, req.(*PerasWitnessSegmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PerasWitness_PerasWitnessProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PerasWitnessProbeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PerasWitnessServer).PerasWitnessProbe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PerasWitness_PerasWitnessProbe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PerasWitnessServer).PerasWitnessProbe(ctx, req.(*PerasWitnessProbeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PerasWitness_ServiceDesc is the grpc.ServiceDesc for PerasWitness service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PerasWitness_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "nokv.kv.v1.PerasWitness",
+	HandlerType: (*PerasWitnessServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PerasWitnessSegments",
+			Handler:    _PerasWitness_PerasWitnessSegments_Handler,
+		},
+		{
+			MethodName: "PerasWitnessProbe",
+			Handler:    _PerasWitness_PerasWitnessProbe_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "kv/kv.proto",
 }

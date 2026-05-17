@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
+	perasfsmeta "github.com/feichai0017/NoKV/experimental/peras/fsmetaraftstore"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
@@ -84,6 +85,7 @@ func main() {
 		lockTTL                         = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
 		sessionCleanupInterval          = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
+		experimentalPeras               = flag.Bool("experimental-peras", false, "enable the experimental Peras visible-commit runtime for --backend=raftstore")
 		perasHolderID                   = flag.String("peras-holder-id", "", "Peras holder id; empty derives a stable local holder id")
 		perasAuthorityTTL               = flag.Duration("peras-authority-ttl", 0, "Peras authority grant TTL; zero uses runtime default")
 		perasWitnessStores              = flag.String("peras-witness-stores", "", "comma-separated store IDs used as Peras witnesses; empty uses all UP stores")
@@ -132,10 +134,6 @@ func main() {
 		fatalf("parse peras-visible-log-policy: %v", err)
 		return
 	}
-	holderID := strings.TrimSpace(*perasHolderID)
-	if holderID == "" {
-		holderID = defaultPerasHolderID()
-	}
 	var localMount fsmeta.MountIdentity
 	if backend == fsmetaBackendLocal {
 		localMount, err = localMountIdentity(*localMountID, *localMountKeyID)
@@ -148,33 +146,44 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var extension fsmetaraftstore.Extension
+	if *experimentalPeras {
+		holderID := strings.TrimSpace(*perasHolderID)
+		if holderID == "" {
+			holderID = defaultPerasHolderID()
+		}
+		extension = perasfsmeta.NewExtension(perasfsmeta.Config{
+			HolderID:                   holderID,
+			AuthorityTTL:               *perasAuthorityTTL,
+			WitnessStoreIDs:            perasStoreIDs,
+			WitnessQuorum:              *perasWitnessQuorum,
+			SegmentWitnessRetries:      *perasSegmentWitnessRetries,
+			SegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
+			SegmentBatchSize:           *perasSegmentBatchSize,
+			AdmissionPendingLimit:      *perasAdmissionPendingLimit,
+			SegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
+			SegmentCatalogRouteBudget:  *perasSegmentCatalogRouteBudget,
+			SegmentInstallParallelism:  *perasSegmentInstallParallelism,
+			SegmentFlushParallelism:    *perasSegmentFlushParallelism,
+			SegmentFlushEvery:          *perasSegmentFlushEvery,
+			BackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
+			BackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
+			VisibleLogDir:              *perasVisibleLogDir,
+			VisibleLogDurability:       visibleLogDurability,
+		})
+	}
+
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
 		Backend: backend,
 		Raftstore: fsmetaraftstore.Options{
-			CoordinatorAddr:                 *coordAddr,
-			NegativeCacheDir:                *negCacheDir,
-			DirPageCacheDir:                 *dirPageDir,
-			AffinityBuckets:                 *affinityBuckets,
-			LockTTL:                         *lockTTL,
-			SessionCleanupInterval:          *sessionCleanupInterval,
-			SessionCleanupLimit:             uint32(*sessionCleanupLimit),
-			PerasHolderID:                   holderID,
-			PerasAuthorityTTL:               *perasAuthorityTTL,
-			PerasWitnessStoreIDs:            perasStoreIDs,
-			PerasWitnessQuorum:              *perasWitnessQuorum,
-			PerasSegmentWitnessRetries:      *perasSegmentWitnessRetries,
-			PerasSegmentWitnessRetryBackoff: *perasSegmentWitnessRetryBackoff,
-			PerasSegmentBatchSize:           *perasSegmentBatchSize,
-			PerasAdmissionPendingLimit:      *perasAdmissionPendingLimit,
-			PerasSegmentMaxReplayMutations:  *perasSegmentMaxReplayMutations,
-			PerasSegmentCatalogRouteBudget:  *perasSegmentCatalogRouteBudget,
-			PerasSegmentInstallParallelism:  *perasSegmentInstallParallelism,
-			PerasSegmentFlushParallelism:    *perasSegmentFlushParallelism,
-			PerasSegmentFlushEvery:          *perasSegmentFlushEvery,
-			PerasBackgroundFlushTimeout:     *perasBackgroundFlushTimeout,
-			PerasBackgroundErrorBackoff:     *perasBackgroundErrorBackoff,
-			PerasVisibleLogDir:              *perasVisibleLogDir,
-			PerasVisibleLogDurability:       visibleLogDurability,
+			CoordinatorAddr:        *coordAddr,
+			NegativeCacheDir:       *negCacheDir,
+			DirPageCacheDir:        *dirPageDir,
+			AffinityBuckets:        *affinityBuckets,
+			LockTTL:                *lockTTL,
+			SessionCleanupInterval: *sessionCleanupInterval,
+			SessionCleanupLimit:    uint32(*sessionCleanupLimit),
+			Extension:              extension,
 		},
 		Local: fsmetalocal.Options{
 			WorkDir:           *localWorkDir,
@@ -287,15 +296,19 @@ func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
 			if stats, ok := rt.QuotaResolver.(interface{ Stats() map[string]any }); ok {
 				publishExpvarOnce("nokv_fsmeta_quota", expvar.Func(func() any { return stats.Stats() }))
 			}
-			if rt.Peras != nil {
-				publishExpvarOnce("nokv_fsmeta_peras", expvar.Func(func() any { return rt.Peras.Stats() }))
+			for _, stats := range rt.ExtensionStats {
+				stats := stats
+				if stats.Name == "" || stats.Snapshot == nil {
+					continue
+				}
+				publishExpvarOnce(stats.Name, expvar.Func(func() any { return stats.Snapshot() }))
 			}
 			if rt.SessionCleaner != nil {
 				publishExpvarOnce("nokv_fsmeta_sessions", expvar.Func(func() any { return rt.SessionCleaner.Stats() }))
 			}
 		},
 		startupSummary: "fsmeta backend: raftstore",
-		contractLog:    "fsmeta commit contract: Peras is the default write path; successful metadata writes are visible immediately, while durable completion is reached by witness/segment install and explicit FlushDurable/FlushTo in embedded APIs",
+		contractLog:    "fsmeta commit contract: raftstore backend uses durable MVCC by default; experimental extensions must be enabled explicitly",
 	}
 }
 

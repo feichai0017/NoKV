@@ -21,7 +21,7 @@ type controlWALOpener interface {
 	OpenControlWAL(uint64) (*wal.Manager, error)
 }
 
-func startServePerasWitness(ctx context.Context, storeID uint64, coord runtimeperas.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (kv.PerasWitness, *runtimeperas.ActiveAuthorities, *runtimeperas.RootAuthorityFeed, error) {
+func startServePerasWitness(ctx context.Context, storeID uint64, coord runtimeperas.RootAuthoritySource, db controlWALOpener, durability wal.DurabilityPolicy) (*rsperas.WitnessNode, *runtimeperas.ActiveAuthorities, *runtimeperas.RootAuthorityFeed, error) {
 	if storeID == 0 || coord == nil || db == nil {
 		return nil, nil, nil, fmt.Errorf("serve: peras witness requires store id, coordinator, and db")
 	}
@@ -48,6 +48,21 @@ func startServePerasWitness(ctx context.Context, storeID uint64, coord runtimepe
 		return nil, nil, nil, err
 	}
 	return witness, authorities, feed, nil
+}
+
+type perasWriteFence struct {
+	authorities *runtimeperas.ActiveAuthorities
+}
+
+func (f perasWriteFence) FenceKey(key []byte, now time.Time) (kv.WriteFenceDecision, error) {
+	if f.authorities == nil {
+		return kv.WriteFenceDecision{}, nil
+	}
+	grant, ok, err := f.authorities.FencesKey(key, now)
+	if err != nil || !ok {
+		return kv.WriteFenceDecision{}, err
+	}
+	return kv.WriteFenceDecision{Fenced: true, Reason: grant.GrantID}, nil
 }
 
 func perasWitnessControlGroupID(storeID uint64) uint64 {

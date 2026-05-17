@@ -6,7 +6,6 @@ package server
 import (
 	"time"
 
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -17,6 +16,7 @@ import (
 	"github.com/feichai0017/NoKV/raftstore/store"
 	"github.com/feichai0017/NoKV/raftstore/transport"
 	txnstore "github.com/feichai0017/NoKV/txn/storage"
+	"google.golang.org/grpc"
 )
 
 // Config wires together the dependencies required to host one raftstore node
@@ -48,13 +48,12 @@ type Config struct {
 	MVCCGCPlan MVCCGCPlanConfig
 	// EnableRaftDebugLog enables verbose etcd/raft debug logging so replication/apply traces are emitted.
 	EnableRaftDebugLog bool
-	// PerasWitness enables StoreKV's experimental fsmeta Peras witness RPCs.
-	// Nil keeps the wire surface registered but returns FailedPrecondition.
-	PerasWitness kv.PerasWitness
-	// PerasAuthorityFence enables storage-side admission fencing for ordinary
-	// fsmeta writes that target an active Peras authority. Nil leaves raftstore
-	// apply behaviour unchanged.
-	PerasAuthorityFence rsperas.AuthorityFence
+	// WriteFence lets optional runtime systems reject ordinary writes before
+	// apply. Nil leaves raftstore apply behaviour unchanged.
+	WriteFence kv.WriteFence
+	// ExtraServices registers optional gRPC services on the shared raftstore
+	// transport. Stable raftstore does not interpret these services.
+	ExtraServices []func(grpc.ServiceRegistrar)
 }
 
 // MVCCGCPlanConfig describes the read-only MVCC GC planner owned by raftstore

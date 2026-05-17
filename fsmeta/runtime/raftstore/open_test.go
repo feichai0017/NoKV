@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	execperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/stretchr/testify/require"
 )
@@ -28,52 +26,4 @@ func TestOpenRejectsNegativeLockTTL(t *testing.T) {
 		LockTTL:         -time.Millisecond,
 	})
 	require.ErrorIs(t, err, errLockTTLInvalid)
-}
-
-func TestOpenRejectsNegativePerasAuthorityTTL(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:   "127.0.0.1:1",
-		PerasAuthorityTTL: -time.Millisecond,
-	})
-	require.ErrorIs(t, err, runtimeperas.ErrTTLInvalid)
-}
-
-func TestOpenRejectsNegativePerasSegmentMutationBudget(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:                "127.0.0.1:1",
-		PerasSegmentMaxReplayMutations: -1,
-	})
-	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
-}
-
-func TestOpenRejectsNegativePerasSegmentInstallParallelism(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:                "127.0.0.1:1",
-		PerasSegmentInstallParallelism: -1,
-	})
-	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
-}
-
-func TestOpenRejectsNegativePerasSegmentFlushParallelism(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:              "127.0.0.1:1",
-		PerasSegmentFlushParallelism: -1,
-	})
-	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
-}
-
-func TestOpenRejectsNegativePerasSegmentCatalogRouteBudget(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr:                "127.0.0.1:1",
-		PerasSegmentCatalogRouteBudget: -1,
-	})
-	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
-}
-
-func TestOpenRejectsPerasWithoutVisibleLog(t *testing.T) {
-	_, err := Open(context.Background(), Options{
-		CoordinatorAddr: "127.0.0.1:1",
-		PerasHolderID:   "holder-a",
-	})
-	require.ErrorIs(t, err, execperas.ErrVisibleLogRequired)
 }

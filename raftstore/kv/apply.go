@@ -11,7 +11,6 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/kv"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
@@ -28,14 +27,23 @@ const defaultLatchSlots = 512
 
 type ApplyOption func(*applyConfig)
 
-type applyConfig struct {
-	perasAuthorityFence rsperas.AuthorityFence
-	now                 func() time.Time
+type WriteFenceDecision struct {
+	Fenced bool
+	Reason string
 }
 
-func WithPerasAuthorityFence(authorityFence rsperas.AuthorityFence) ApplyOption {
+type WriteFence interface {
+	FenceKey([]byte, time.Time) (WriteFenceDecision, error)
+}
+
+type applyConfig struct {
+	writeFence WriteFence
+	now        func() time.Time
+}
+
+func WithWriteFence(fence WriteFence) ApplyOption {
 	return func(cfg *applyConfig) {
-		cfg.perasAuthorityFence = authorityFence
+		cfg.writeFence = fence
 	}
 }
 
@@ -447,7 +455,7 @@ func NewApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOption) 
 	}
 	cfg := newApplyConfig(opts)
 	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-		if resp, fenced := rejectPerasFencedRequest(cfg, req); fenced {
+		if resp, fenced := rejectWriteFencedRequest(cfg, req); fenced {
 			return resp, nil
 		}
 		return Apply(db, latches, req)

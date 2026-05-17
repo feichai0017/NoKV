@@ -121,11 +121,11 @@ func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {
 	require.Len(t, mutations, 2, "mount-wide zero delta should be elided")
 }
 
-func TestQuotaAllowsPerasVisibleWhenNoFenceExists(t *testing.T) {
+func TestQuotaAllowsVisibleWhenNoFenceExists(t *testing.T) {
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	ok, err := cache.AllowPerasVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
+	ok, err := cache.AllowVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
 		Mount:      "vol",
 		MountKeyID: 1,
 		Scope:      7,
@@ -137,13 +137,13 @@ func TestQuotaAllowsPerasVisibleWhenNoFenceExists(t *testing.T) {
 	require.Equal(t, 2, lookup.calls, "mount-wide and scoped quota subjects are both checked")
 }
 
-func TestQuotaBlocksPerasVisibleWhenFenceExists(t *testing.T) {
+func TestQuotaBlocksVisibleWhenFenceExists(t *testing.T) {
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
 		{mount: "vol"}: {Subject: &coordpb.QuotaSubject{MountId: "vol"}, LimitBytes: 8192, LimitInodes: 10, Era: 1},
 	}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
-	ok, err := cache.AllowPerasVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
+	ok, err := cache.AllowVisibleQuota(context.Background(), []fsmetaexec.QuotaChange{{
 		Mount:      "vol",
 		MountKeyID: 1,
 		Scope:      7,
@@ -154,7 +154,7 @@ func TestQuotaBlocksPerasVisibleWhenFenceExists(t *testing.T) {
 	require.False(t, ok)
 }
 
-func BenchmarkQuotaAllowPerasVisibleNoFenceCached(b *testing.B) {
+func BenchmarkQuotaAllowVisibleNoFenceCached(b *testing.B) {
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{}}
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 	changes := []fsmetaexec.QuotaChange{{
@@ -164,15 +164,15 @@ func BenchmarkQuotaAllowPerasVisibleNoFenceCached(b *testing.B) {
 		Bytes:      4096,
 		Inodes:     1,
 	}}
-	ok, err := cache.AllowPerasVisibleQuota(context.Background(), changes)
+	ok, err := cache.AllowVisibleQuota(context.Background(), changes)
 	require.NoError(b, err)
 	require.True(b, ok)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		ok, err := cache.AllowPerasVisibleQuota(context.Background(), changes)
+		ok, err := cache.AllowVisibleQuota(context.Background(), changes)
 		if err != nil || !ok {
-			b.Fatalf("AllowPerasVisibleQuota() = %v, %v", ok, err)
+			b.Fatalf("AllowVisibleQuota() = %v, %v", ok, err)
 		}
 	}
 }

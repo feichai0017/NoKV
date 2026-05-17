@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package raftstore
+package fsmetaraftstore
 
 import (
 	"bytes"
@@ -15,8 +15,9 @@ import (
 	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	stable "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/utils"
@@ -30,15 +31,25 @@ type perasSegmentRouteGrouper interface {
 	GroupKeysByRoute(context.Context, [][]byte) ([]client.RouteKeyGroup, error)
 }
 
+type segmentCatalogScanRunner interface {
+	Scan(context.Context, []byte, uint32, uint64) ([]fsmetaexec.KV, error)
+}
+
+type fsmetaWatchRouter interface {
+	Publish(fsmeta.WatchEvent)
+}
+
 type raftstoreSegmentInstaller struct {
-	runner             *Runner
-	router             *fsmetawatch.Router
+	kv                 perasSegmentInstallClient
+	runner             segmentCatalogScanRunner
+	router             fsmetaWatchRouter
 	nextInstallVersion atomic.Uint64
 	routeLimiter       *perasInstallRouteLimiter
 }
 
-func newRaftstoreSegmentInstaller(runner *Runner, router *fsmetawatch.Router) *raftstoreSegmentInstaller {
-	return &raftstoreSegmentInstaller{runner: runner, router: router, routeLimiter: newPerasInstallRouteLimiter()}
+func newRaftstoreSegmentInstaller(kv stable.KVClient, runner segmentCatalogScanRunner, router fsmetaWatchRouter) *raftstoreSegmentInstaller {
+	installer, _ := kv.(perasSegmentInstallClient)
+	return &raftstoreSegmentInstaller{kv: installer, runner: runner, router: router, routeLimiter: newPerasInstallRouteLimiter()}
 }
 
 func raftstoreSegmentInstallParallelism() int {
@@ -50,13 +61,10 @@ func raftstoreSegmentInstallParallelism() int {
 }
 
 func (i *raftstoreSegmentInstaller) InstallSegment(ctx context.Context, req runtimeperas.SegmentInstallRequest) (runtimeperas.InstallCursor, error) {
-	if i == nil || i.runner == nil || i.runner.kv == nil {
+	if i == nil || i.kv == nil {
 		return runtimeperas.InstallCursor{}, runtimeperas.ErrRuntimeInvalid
 	}
-	kv, ok := i.runner.kv.(perasSegmentInstallClient)
-	if !ok {
-		return runtimeperas.InstallCursor{}, runtimeperas.ErrRuntimeInvalid
-	}
+	kv := i.kv
 	installVersion, err := i.reserveInstallVersion(ctx)
 	if err != nil {
 		return runtimeperas.InstallCursor{}, err
@@ -462,7 +470,7 @@ func (l *perasInstallRouteLimiter) storeTokens(storeID uint64) chan struct{} {
 }
 
 type raftstoreSegmentCatalogScanner struct {
-	runner *Runner
+	runner segmentCatalogScanRunner
 }
 
 func (s raftstoreSegmentCatalogScanner) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]runtimeperas.KV, error) {

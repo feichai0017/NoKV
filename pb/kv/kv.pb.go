@@ -4932,7 +4932,7 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x15ApplyWatchEventSource\x12(\n" +
 	"$APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fAPPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12)\n" +
-	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xbe\t\n" +
+	"%APPLY_WATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x022\xf1\a\n" +
 	"\aStoreKV\x12:\n" +
 	"\x03Get\x12\x18.nokv.kv.v1.KvGetRequest\x1a\x19.nokv.kv.v1.KvGetResponse\x12I\n" +
 	"\bBatchGet\x12\x1d.nokv.kv.v1.KvBatchGetRequest\x1a\x1e.nokv.kv.v1.KvBatchGetResponse\x12=\n" +
@@ -4946,7 +4946,8 @@ const file_kv_kv_proto_rawDesc = "" +
 	"\x0fTryAtomicMutate\x12$.nokv.kv.v1.KvTryAtomicMutateRequest\x1a%.nokv.kv.v1.KvTryAtomicMutateResponse\x12\x7f\n" +
 	"\x1aInstallPreparedMVCCEntries\x12/.nokv.kv.v1.KvInstallPreparedMVCCEntriesRequest\x1a0.nokv.kv.v1.KvInstallPreparedMVCCEntriesResponse\x12M\n" +
 	"\n" +
-	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x01\x12i\n" +
+	"WatchApply\x12\x1d.nokv.kv.v1.ApplyWatchRequest\x1a\x1e.nokv.kv.v1.ApplyWatchResponse0\x012\xdb\x01\n" +
+	"\fPerasWitness\x12i\n" +
 	"\x14PerasWitnessSegments\x12'.nokv.kv.v1.PerasWitnessSegmentsRequest\x1a(.nokv.kv.v1.PerasWitnessSegmentsResponse\x12`\n" +
 	"\x11PerasWitnessProbe\x12$.nokv.kv.v1.PerasWitnessProbeRequest\x1a%.nokv.kv.v1.PerasWitnessProbeResponseB+Z)github.com/feichai0017/NoKV/pb/kv;kvrpcpbb\x06proto3"
 
@@ -5142,8 +5143,8 @@ var file_kv_kv_proto_depIdxs = []int32{
 	60, // 93: nokv.kv.v1.StoreKV.TryAtomicMutate:input_type -> nokv.kv.v1.KvTryAtomicMutateRequest
 	36, // 94: nokv.kv.v1.StoreKV.InstallPreparedMVCCEntries:input_type -> nokv.kv.v1.KvInstallPreparedMVCCEntriesRequest
 	62, // 95: nokv.kv.v1.StoreKV.WatchApply:input_type -> nokv.kv.v1.ApplyWatchRequest
-	67, // 96: nokv.kv.v1.StoreKV.PerasWitnessSegments:input_type -> nokv.kv.v1.PerasWitnessSegmentsRequest
-	69, // 97: nokv.kv.v1.StoreKV.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
+	67, // 96: nokv.kv.v1.PerasWitness.PerasWitnessSegments:input_type -> nokv.kv.v1.PerasWitnessSegmentsRequest
+	69, // 97: nokv.kv.v1.PerasWitness.PerasWitnessProbe:input_type -> nokv.kv.v1.PerasWitnessProbeRequest
 	43, // 98: nokv.kv.v1.StoreKV.Get:output_type -> nokv.kv.v1.KvGetResponse
 	45, // 99: nokv.kv.v1.StoreKV.BatchGet:output_type -> nokv.kv.v1.KvBatchGetResponse
 	47, // 100: nokv.kv.v1.StoreKV.Scan:output_type -> nokv.kv.v1.KvScanResponse
@@ -5156,8 +5157,8 @@ var file_kv_kv_proto_depIdxs = []int32{
 	61, // 107: nokv.kv.v1.StoreKV.TryAtomicMutate:output_type -> nokv.kv.v1.KvTryAtomicMutateResponse
 	37, // 108: nokv.kv.v1.StoreKV.InstallPreparedMVCCEntries:output_type -> nokv.kv.v1.KvInstallPreparedMVCCEntriesResponse
 	64, // 109: nokv.kv.v1.StoreKV.WatchApply:output_type -> nokv.kv.v1.ApplyWatchResponse
-	68, // 110: nokv.kv.v1.StoreKV.PerasWitnessSegments:output_type -> nokv.kv.v1.PerasWitnessSegmentsResponse
-	70, // 111: nokv.kv.v1.StoreKV.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
+	68, // 110: nokv.kv.v1.PerasWitness.PerasWitnessSegments:output_type -> nokv.kv.v1.PerasWitnessSegmentsResponse
+	70, // 111: nokv.kv.v1.PerasWitness.PerasWitnessProbe:output_type -> nokv.kv.v1.PerasWitnessProbeResponse
 	98, // [98:112] is the sub-list for method output_type
 	84, // [84:98] is the sub-list for method input_type
 	84, // [84:84] is the sub-list for extension type_name
@@ -5178,7 +5179,7 @@ func file_kv_kv_proto_init() {
 			NumEnums:      9,
 			NumMessages:   67,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_kv_kv_proto_goTypes,
 		DependencyIndexes: file_kv_kv_proto_depIdxs,

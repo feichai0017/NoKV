@@ -6,16 +6,12 @@ package raftstore
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	"github.com/feichai0017/NoKV/engine/slab/negativecache"
-	"github.com/feichai0017/NoKV/engine/wal"
-	execperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
@@ -77,92 +73,21 @@ type Options struct {
 	// shape hints; this value belongs to fsmeta placement policy.
 	AffinityBuckets int
 
-	// PerasHolderID identifies this fsmeta runtime when it acquires Peras
-	// authority. Empty leaves the embedded runtime on the durable Percolator
-	// path; the nokv-fsmeta server derives a stable holder id so Peras is the
-	// default project startup path.
-	PerasHolderID string
-
-	// PerasAuthorityTTL bounds one acquired Peras authority grant. Zero uses
-	// the runtime default; negative is rejected.
-	PerasAuthorityTTL time.Duration
-
-	// PerasWitnessStoreIDs restricts the witness set to these store IDs. Empty
-	// uses every currently UP store reported by the coordinator.
-	PerasWitnessStoreIDs []uint64
-	// PerasWitnessQuorum overrides the default majority of the witness set.
-	PerasWitnessQuorum int
-	// PerasSegmentWitnessRetries retries segment witness append when remote
-	// witnesses have not yet caught up with the active-authority grant.
-	// Zero uses the default.
-	PerasSegmentWitnessRetries int
-	// PerasSegmentWitnessRetryBackoff controls retry spacing for transient missing
-	// authority state on remote witnesses. Zero uses the default.
-	PerasSegmentWitnessRetryBackoff time.Duration
-	// PerasSegmentBatchSize controls how many pending visible Peras operations
-	// trigger opportunistic background flush. SegmentMaxReplayOperations still
-	// bounds one installed segment.
-	// Zero uses the runtime default; negative is rejected.
-	PerasSegmentBatchSize int
-	// PerasAdmissionPendingLimit bounds pending visible Peras operations before
-	// foreground commits wait for background segment drain. Zero uses the
-	// runtime default; negative is rejected.
-	PerasAdmissionPendingLimit int
-	// PerasSegmentMaxReplayOperations bounds one segment install by logical
-	// operation count. Zero uses the runtime default; negative is rejected.
-	PerasSegmentMaxReplayOperations int
-	// PerasSegmentMaxReplayMutations bounds one segment install by replay
-	// mutation count. Keep this aligned with the store-side internal batch
-	// limit: a replay mutation expands to a small fixed number of MVCC entries.
-	// Zero uses the runtime default; negative is rejected.
-	PerasSegmentMaxReplayMutations int
-	// PerasSegmentMaxPayloadBytes bounds one segment by compiler-estimated
-	// payload bytes. Zero uses the runtime default.
-	PerasSegmentMaxPayloadBytes uint64
-	// PerasSegmentCatalogRouteBudget bounds how many catalog buckets/routes one
-	// catalog-only segment install may span. Zero uses the runtime default;
-	// negative is rejected.
-	PerasSegmentCatalogRouteBudget int
-	// PerasSegmentInstallParallelism bounds how many sealed segments from one
-	// flush are installed concurrently. Zero uses GOMAXPROCS; negative is
-	// rejected.
-	PerasSegmentInstallParallelism int
-	// PerasSegmentFlushParallelism bounds how many frozen Peras flush batches
-	// may witness and install concurrently before ordered publish/commit. Zero
-	// follows PerasSegmentInstallParallelism; negative is rejected.
-	PerasSegmentFlushParallelism int
-	// PerasSegmentFlushEvery controls the opportunistic background flush tick.
-	// Zero uses the runtime default; negative is rejected.
-	PerasSegmentFlushEvery time.Duration
-	// PerasBackgroundFlushTimeout bounds opportunistic background segment
-	// installs. Explicit Flush calls use the caller context and are not
-	// shortened by this timeout. Zero uses the runtime default.
-	PerasBackgroundFlushTimeout time.Duration
-	// PerasBackgroundErrorBackoff suppresses opportunistic background flushes
-	// after a failed install so visible commits do not create retry
-	// storms against an unhealthy raftstore. Zero uses the runtime default.
-	PerasBackgroundErrorBackoff time.Duration
-	// PerasVisibleLog is the holder-local WAL surface written before a visible
-	// ack reaches clients. PerasVisibleLogDir wires the default WAL
-	// implementation when no explicit log is provided; the default durability
-	// policy is page-cache flush for the performance-first server profile.
-	PerasVisibleLog           execperas.VisibleLog
-	PerasVisibleLogDir        string
-	PerasVisibleLogDurability wal.DurabilityPolicy
+	// Extension attaches an optional experimental runtime to fsmeta assembly.
+	// Nil keeps the raftstore path on the stable durable MVCC contract.
+	Extension Extension
 }
 
 // Runtime is a complete fsmeta runtime backed by the NoKV raftstore. It owns
 // every client and goroutine it creates; Close releases all of them.
 type Runtime struct {
-	Executor              *fsmetaexec.Executor
-	Watcher               fsmeta.Watcher
-	SnapshotPublisher     fsmeta.SnapshotPublisher
-	MountResolver         fsmetaexec.MountResolver
-	QuotaResolver         fsmetaexec.QuotaResolver
-	SessionCleaner        interface{ Stats() map[string]any }
-	Peras                 interface{ Stats() map[string]any }
-	PerasAuthorityTable   *runtimeperas.ActiveAuthorities
-	PerasAuthorityManager *runtimeperas.AuthorityManager
+	Executor          *fsmetaexec.Executor
+	Watcher           fsmeta.Watcher
+	SnapshotPublisher fsmeta.SnapshotPublisher
+	MountResolver     fsmetaexec.MountResolver
+	QuotaResolver     fsmetaexec.QuotaResolver
+	SessionCleaner    interface{ Stats() map[string]any }
+	ExtensionStats    []ExtensionStats
 
 	close func() error
 	once  sync.Once
@@ -193,16 +118,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	if opts.LockTTL < 0 {
 		return nil, errLockTTLInvalid
-	}
-	if opts.PerasAuthorityTTL < 0 {
-		return nil, runtimeperas.ErrTTLInvalid
-	}
-	if opts.PerasSegmentBatchSize < 0 || opts.PerasAdmissionPendingLimit < 0 || opts.PerasSegmentMaxReplayOperations < 0 || opts.PerasSegmentMaxReplayMutations < 0 || opts.PerasSegmentCatalogRouteBudget < 0 || opts.PerasSegmentInstallParallelism < 0 || opts.PerasSegmentFlushParallelism < 0 || opts.PerasSegmentFlushEvery < 0 ||
-		opts.PerasBackgroundFlushTimeout < 0 || opts.PerasBackgroundErrorBackoff < 0 {
-		return nil, runtimeperas.ErrRuntimeInvalid
-	}
-	if strings.TrimSpace(opts.PerasHolderID) != "" && opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) == "" {
-		return nil, execperas.ErrVisibleLogRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -263,16 +178,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		quotaTTL = defaultQuotaTTL
 	}
 	quotas := &quotaCache{coord: coord, ttl: quotaTTL}
-	peras := runtimeperas.NewActiveAuthorities()
-	var perasAuthorityManager *runtimeperas.AuthorityManager
-	if holderID := strings.TrimSpace(opts.PerasHolderID); holderID != "" {
-		perasAuthorityManager, err = runtimeperas.NewAuthorityManager(coord, peras, holderID, opts.PerasAuthorityTTL, nil)
-		if err != nil {
-			_ = kv.Close()
-			_ = coord.Close()
-			return nil, fmt.Errorf("init peras authority manager: %w", err)
-		}
-	}
 	pub := rootPublisher{coord: coord}
 	router := fsmetawatch.NewRouter()
 	execOpts := []fsmetaexec.Option{
@@ -282,47 +187,26 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithQuotaResolver(quotas),
 		fsmetaexec.WithSubtreeHandoffPublisher(pub),
 	}
-	if perasAuthorityManager != nil {
-		execOpts = append(execOpts, fsmetaexec.WithPerasAuthorityAdmitter(perasAuthorityManager))
-	}
-	var witnessConns *witnessConnections
-	var perasRuntime *runtimeperas.Runtime
-	var visibleWAL *wal.Manager
-	if perasAuthorityManager != nil {
-		if opts.PerasVisibleLog == nil && strings.TrimSpace(opts.PerasVisibleLogDir) != "" {
-			durability := opts.PerasVisibleLogDurability
-			if durability == 0 {
-				durability = wal.DurabilityFlushed
-			}
-			visibleWAL, err = wal.Open(wal.Config{Dir: opts.PerasVisibleLogDir})
-			if err != nil {
-				_ = kv.Close()
-				_ = coord.Close()
-				return nil, fmt.Errorf("init peras visible log wal: %w", err)
-			}
-			opts.PerasVisibleLog, err = runtimeperas.NewWALVisibleLog(visibleWAL, durability)
-			if err != nil {
-				_ = visibleWAL.Close()
-				_ = kv.Close()
-				_ = coord.Close()
-				return nil, fmt.Errorf("init peras visible log: %w", err)
-			}
-		}
-		if opts.PerasVisibleLog == nil {
-			_ = kv.Close()
-			_ = coord.Close()
-			return nil, execperas.ErrVisibleLogRequired
-		}
-		perasRuntime, witnessConns, err = buildPerasRuntime(ctx, coord, runner, router, perasAuthorityManager, dialOpts, opts)
+	var extensionAttachments []*ExtensionAttachment
+	var extensionStats []ExtensionStats
+	if opts.Extension != nil {
+		attachment, err := opts.Extension.Attach(ctx, ExtensionContext{
+			Coordinator: coord,
+			KV:          kv,
+			Runner:      runner,
+			WatchRouter: router,
+			DialOptions: dialOpts,
+		})
 		if err != nil {
-			if visibleWAL != nil {
-				_ = visibleWAL.Close()
-			}
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, err
 		}
-		execOpts = append(execOpts, fsmetaexec.WithPerasCommitter(perasRuntime))
+		if attachment != nil {
+			extensionAttachments = append(extensionAttachments, attachment)
+			execOpts = append(execOpts, attachment.ExecutorOptions...)
+			extensionStats = append(extensionStats, attachment.Stats...)
+		}
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
@@ -338,12 +222,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			},
 		)
 		if err != nil {
-			if witnessConns != nil {
-				_ = witnessConns.Close()
-			}
-			if visibleWAL != nil {
-				_ = visibleWAL.Close()
-			}
+			_ = closeExtensionAttachments(extensionAttachments)
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init negative cache: %w", err)
@@ -357,12 +236,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 			Dir: opts.DirPageCacheDir,
 		})
 		if err != nil {
-			if witnessConns != nil {
-				_ = witnessConns.Close()
-			}
-			if visibleWAL != nil {
-				_ = visibleWAL.Close()
-			}
+			_ = closeExtensionAttachments(extensionAttachments)
 			_ = kv.Close()
 			_ = coord.Close()
 			return nil, fmt.Errorf("init dirpage cache: %w", err)
@@ -374,12 +248,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if witnessConns != nil {
-			_ = witnessConns.Close()
-		}
-		if visibleWAL != nil {
-			_ = visibleWAL.Close()
-		}
+		_ = closeExtensionAttachments(extensionAttachments)
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init executor: %w", err)
@@ -390,12 +259,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		if dirPages != nil {
 			_ = dirPages.Close()
 		}
-		if witnessConns != nil {
-			_ = witnessConns.Close()
-		}
-		if visibleWAL != nil {
-			_ = visibleWAL.Close()
-		}
+		_ = closeExtensionAttachments(extensionAttachments)
 		_ = kv.Close()
 		_ = coord.Close()
 		return nil, fmt.Errorf("init watch source: %w", err)
@@ -403,7 +267,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 
 	var mon *monitor
 	if opts.MonitorInterval >= 0 {
-		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, peras, opts.MonitorInterval)
+		mon = startMonitor(ctx, coord, router, mounts, quotas, pub, opts.MonitorInterval)
 	}
 	var sessions *sessionCleaner
 	if opts.SessionCleanupInterval >= 0 {
@@ -411,15 +275,13 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		Executor:              exec,
-		Watcher:               watcher{Router: router, source: source, mounts: mounts},
-		SnapshotPublisher:     pub,
-		MountResolver:         mounts,
-		QuotaResolver:         quotas,
-		SessionCleaner:        sessions,
-		Peras:                 perasRuntime,
-		PerasAuthorityTable:   peras,
-		PerasAuthorityManager: perasAuthorityManager,
+		Executor:          exec,
+		Watcher:           watcher{Router: router, source: source, mounts: mounts},
+		SnapshotPublisher: pub,
+		MountResolver:     mounts,
+		QuotaResolver:     quotas,
+		SessionCleaner:    sessions,
+		ExtensionStats:    extensionStats,
 	}
 	rt.close = func() error {
 		var first error
@@ -446,20 +308,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 				first = err
 			}
 		}
-		if perasRuntime != nil {
-			if err := perasRuntime.Shutdown(context.Background()); err != nil && first == nil {
-				first = err
-			}
-		}
-		if visibleWAL != nil {
-			if err := visibleWAL.Close(); err != nil && first == nil {
-				first = err
-			}
-		}
-		if witnessConns != nil {
-			if err := witnessConns.Close(); err != nil && first == nil {
-				first = err
-			}
+		if err := closeExtensionAttachments(extensionAttachments); err != nil && first == nil {
+			first = err
 		}
 		if err := kv.Close(); err != nil && first == nil {
 			first = err

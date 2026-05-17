@@ -201,8 +201,8 @@ type PerasAuthorityDrainer interface {
 	DrainAuthority(context.Context, fsperas.AuthorityRetirer, ...compile.AuthorityScope) error
 }
 
-type PerasQuotaAdmitter interface {
-	AllowPerasVisibleQuota(context.Context, []QuotaChange) (bool, error)
+type VisibleQuotaAdmitter interface {
+	AllowVisibleQuota(context.Context, []QuotaChange) (bool, error)
 }
 
 // NegativeCache is the dentry-miss memo surface used by Lookup.

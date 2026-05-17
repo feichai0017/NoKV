@@ -21,19 +21,19 @@ func applyBatchWithFence(
 	if len(reqs) == 0 {
 		return nil, nil
 	}
-	if cfg.perasAuthorityFence == nil {
+	if cfg.writeFence == nil {
 		return ApplyBatch(db, latches, reqs)
 	}
 	resps := make([]*raftcmdpb.RaftCmdResponse, len(reqs))
 	for i := 0; i < len(reqs); {
-		if resp, fenced := rejectPerasFencedRequest(cfg, reqs[i]); fenced {
+		if resp, fenced := rejectWriteFencedRequest(cfg, reqs[i]); fenced {
 			resps[i] = resp
 			i++
 			continue
 		}
 		end := i + 1
 		for end < len(reqs) {
-			if _, fenced := rejectPerasFencedRequest(cfg, reqs[end]); fenced {
+			if _, fenced := rejectWriteFencedRequest(cfg, reqs[end]); fenced {
 				break
 			}
 			end++
@@ -48,13 +48,13 @@ func applyBatchWithFence(
 	return resps, nil
 }
 
-func rejectPerasFencedRequest(cfg applyConfig, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, bool) {
-	if cfg.perasAuthorityFence == nil || req == nil {
+func rejectWriteFencedRequest(cfg applyConfig, req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, bool) {
+	if cfg.writeFence == nil || req == nil {
 		return nil, false
 	}
 	var keyErr *kvrpcpb.KeyError
 	for _, r := range req.GetRequests() {
-		if err := perasFenceErrorForCommand(cfg, r); err != nil {
+		if err := writeFenceErrorForCommand(cfg, r); err != nil {
 			keyErr = err
 			break
 		}
@@ -64,17 +64,17 @@ func rejectPerasFencedRequest(cfg applyConfig, req *raftcmdpb.RaftCmdRequest) (*
 	}
 	resp := &raftcmdpb.RaftCmdResponse{Header: req.GetHeader()}
 	for _, r := range req.GetRequests() {
-		resp.Responses = append(resp.Responses, perasFenceResponseForCommand(r, keyErr))
+		resp.Responses = append(resp.Responses, writeFenceResponseForCommand(r, keyErr))
 	}
 	return resp, true
 }
 
-func perasFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.KeyError {
+func writeFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.KeyError {
 	if r == nil {
 		return nil
 	}
 	check := func(key []byte) *kvrpcpb.KeyError {
-		return perasFenceErrorForKey(cfg, key)
+		return writeFenceErrorForKey(cfg, key)
 	}
 	switch r.GetCmdType() {
 	case raftcmdpb.CmdType_CMD_GET,
@@ -98,11 +98,11 @@ func perasFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.K
 			}
 		}
 	case raftcmdpb.CmdType_CMD_COMMIT:
-		return firstPerasFenceError(cfg, r.GetCommit().GetKeys())
+		return firstWriteFenceError(cfg, r.GetCommit().GetKeys())
 	case raftcmdpb.CmdType_CMD_BATCH_ROLLBACK:
-		return firstPerasFenceError(cfg, r.GetBatchRollback().GetKeys())
+		return firstWriteFenceError(cfg, r.GetBatchRollback().GetKeys())
 	case raftcmdpb.CmdType_CMD_RESOLVE_LOCK:
-		return firstPerasFenceError(cfg, r.GetResolveLock().GetKeys())
+		return firstWriteFenceError(cfg, r.GetResolveLock().GetKeys())
 	case raftcmdpb.CmdType_CMD_CHECK_TXN_STATUS:
 		return check(r.GetCheckTxnStatus().GetPrimaryKey())
 	case raftcmdpb.CmdType_CMD_TXN_HEART_BEAT:
@@ -147,37 +147,37 @@ func perasFenceErrorForCommand(cfg applyConfig, r *raftcmdpb.Request) *kvrpcpb.K
 	return nil
 }
 
-func firstPerasFenceError(cfg applyConfig, keys [][]byte) *kvrpcpb.KeyError {
+func firstWriteFenceError(cfg applyConfig, keys [][]byte) *kvrpcpb.KeyError {
 	for _, key := range keys {
-		if err := perasFenceErrorForKey(cfg, key); err != nil {
+		if err := writeFenceErrorForKey(cfg, key); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func perasFenceErrorForKey(cfg applyConfig, key []byte) *kvrpcpb.KeyError {
-	if len(key) == 0 || cfg.perasAuthorityFence == nil {
+func writeFenceErrorForKey(cfg applyConfig, key []byte) *kvrpcpb.KeyError {
+	if len(key) == 0 || cfg.writeFence == nil {
 		return nil
 	}
 	now := time.Now
 	if cfg.now != nil {
 		now = cfg.now
 	}
-	grant, ok, err := cfg.perasAuthorityFence.FencesKey(key, now())
+	decision, err := cfg.writeFence.FenceKey(key, now())
 	if err != nil {
-		return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + err.Error()}
+		return &kvrpcpb.KeyError{Retryable: "write fence: " + err.Error()}
 	}
-	if !ok {
+	if !decision.Fenced {
 		return nil
 	}
-	if grant.GrantID == "" {
-		return &kvrpcpb.KeyError{Retryable: "peras authority fence"}
+	if decision.Reason == "" {
+		return &kvrpcpb.KeyError{Retryable: "write fence"}
 	}
-	return &kvrpcpb.KeyError{Retryable: "peras authority fence: " + grant.GrantID}
+	return &kvrpcpb.KeyError{Retryable: "write fence: " + decision.Reason}
 }
 
-func perasFenceResponseForCommand(r *raftcmdpb.Request, keyErr *kvrpcpb.KeyError) *raftcmdpb.Response {
+func writeFenceResponseForCommand(r *raftcmdpb.Request, keyErr *kvrpcpb.KeyError) *raftcmdpb.Response {
 	if r == nil {
 		return &raftcmdpb.Response{}
 	}

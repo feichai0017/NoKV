@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package kv_test
+package peras_test
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/raftstore/kv"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -72,7 +71,7 @@ func TestServicePerasWitnessSegmentsSingleRecordProbe(t *testing.T) {
 	witness := &perasWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{record}},
 	}
-	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+	service := rsperas.NewWitnessService(witness)
 
 	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
 		Scope:   rsperas.ScopeToProto(scope),
@@ -101,7 +100,7 @@ func TestServicePerasWitnessSegments(t *testing.T) {
 	first := serviceTestSegmentRecordWithRoot(3)
 	second := serviceTestSegmentRecordWithRoot(4)
 	witness := &perasWitnessStub{}
-	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+	service := rsperas.NewWitnessService(witness)
 
 	_, err := service.PerasWitnessSegments(context.Background(), &kvrpcpb.PerasWitnessSegmentsRequest{
 		Scope: rsperas.ScopeToProto(scope),
@@ -121,7 +120,7 @@ func TestServicePerasWitnessProbeSegment(t *testing.T) {
 	witness := &perasWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{first, second}},
 	}
-	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+	service := rsperas.NewWitnessService(witness)
 
 	resp, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{
 		EpochId:              second.EpochID,
@@ -143,7 +142,7 @@ func TestServicePerasWitnessProbePagesSegments(t *testing.T) {
 	witness := &perasWitnessStub{
 		snapshot: fsperas.WitnessSnapshot{Segments: []fsperas.SegmentWitnessRecord{third, first, second}},
 	}
-	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+	service := rsperas.NewWitnessService(witness)
 
 	firstPage, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{
 		EpochId: first.EpochID,
@@ -171,7 +170,7 @@ func TestServicePerasWitnessProbePagesSegments(t *testing.T) {
 }
 
 func TestServicePerasWitnessRequiresConfiguredNode(t *testing.T) {
-	service := kv.NewService(nil)
+	service := rsperas.NewWitnessService(nil)
 	_, err := service.PerasWitnessProbe(context.Background(), &kvrpcpb.PerasWitnessProbeRequest{EpochId: 1})
 	require.Error(t, err)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -181,10 +180,10 @@ func TestServiceStatsIncludesPerasWitnessStats(t *testing.T) {
 	witness := &perasWitnessStatsStub{stats: map[string]any{
 		"append_total": uint64(3),
 	}}
-	service := kv.NewService(nil, kv.WithPerasWitness(witness))
+	service := rsperas.NewWitnessService(witness)
 
 	stats := service.Stats()
-	require.Equal(t, map[string]any{"append_total": uint64(3)}, stats["peras_witness"])
+	require.Equal(t, map[string]any{"append_total": uint64(3)}, stats)
 }
 
 func serviceTestSegmentRecord() fsperas.SegmentWitnessRecord {

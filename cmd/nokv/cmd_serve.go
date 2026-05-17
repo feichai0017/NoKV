@@ -19,11 +19,13 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
+	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	local "github.com/feichai0017/NoKV/local"
 	workdirmode "github.com/feichai0017/NoKV/local/workdir"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
+	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	myraft "github.com/feichai0017/NoKV/raft"
 	raftclient "github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/kv"
@@ -35,6 +37,7 @@ import (
 	snapshotpkg "github.com/feichai0017/NoKV/raftstore/snapshot"
 	raftstorestats "github.com/feichai0017/NoKV/raftstore/stats"
 	storepkg "github.com/feichai0017/NoKV/raftstore/store"
+	"google.golang.org/grpc"
 )
 
 var notifyContext = signal.NotifyContext
@@ -234,7 +237,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	var perasWitness kv.PerasWitness
+	var perasWitness *rsperas.WitnessNode
 	var perasAuthorityTable *runtimeperas.ActiveAuthorities
 	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
 	perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
@@ -328,9 +331,13 @@ func runServeCmd(w io.Writer, args []string) error {
 			},
 			Mount: fsmeta.MountKeyResolver,
 		},
-		TransportAddr:       *listenAddr,
-		PerasWitness:        perasWitness,
-		PerasAuthorityFence: perasAuthorityTable,
+		TransportAddr: *listenAddr,
+		WriteFence:    perasWriteFence{authorities: perasAuthorityTable},
+		ExtraServices: []func(grpc.ServiceRegistrar){
+			func(reg grpc.ServiceRegistrar) {
+				kvrpcpb.RegisterPerasWitnessServer(reg, rsperas.NewWitnessService(perasWitness))
+			},
+		},
 	})
 	if err != nil {
 		return err

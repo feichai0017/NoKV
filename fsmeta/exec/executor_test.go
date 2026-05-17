@@ -343,7 +343,7 @@ func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ TxnRunner, changes
 	return nil, nil
 }
 
-func (q *fakeQuotaResolver) AllowPerasVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
+func (q *fakeQuotaResolver) AllowVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
 	q.perasChecks = append(q.perasChecks, append([]QuotaChange(nil), changes...))
 	if q.err != nil {
 		return false, q.err

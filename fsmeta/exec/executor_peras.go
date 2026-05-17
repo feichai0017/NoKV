@@ -81,9 +81,9 @@ func (e *Executor) perasQuotaAllowsVisibleCommit(ctx context.Context, changes []
 	if e == nil || e.quotas == nil || len(changes) == 0 {
 		return true, nil
 	}
-	admitter, ok := e.quotas.(PerasQuotaAdmitter)
+	admitter, ok := e.quotas.(VisibleQuotaAdmitter)
 	if !ok {
 		return false, nil
 	}
-	return admitter.AllowPerasVisibleQuota(ctx, changes)
+	return admitter.AllowVisibleQuota(ctx, changes)
 }

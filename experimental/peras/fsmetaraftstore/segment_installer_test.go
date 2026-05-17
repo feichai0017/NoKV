@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package raftstore
+package fsmetaraftstore
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	stable "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/feichai0017/NoKV/raftstore/client"
@@ -59,10 +60,10 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 		Index:         99,
 		CommitVersion: 1,
 	}}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:         segment,
 		Payload:         payload,
@@ -94,7 +95,7 @@ func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 		Index:         99,
 		CommitVersion: 1,
 	}}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 	router := fsmetawatch.NewRouter()
 	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
@@ -104,7 +105,7 @@ func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Close()
 
-	installer := newRaftstoreSegmentInstaller(runner, router)
+	installer := newRaftstoreSegmentInstaller(kv, runner, router)
 	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:       segment,
 		Payload:       payload,
@@ -152,10 +153,10 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 		root:  segment.Root,
 		delay: 20 * time.Millisecond,
 	}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:       segment,
 		Payload:       payload,
@@ -185,10 +186,10 @@ func TestRaftstoreSegmentInstallerGroupsCatalogRoutesByRegion(t *testing.T) {
 			{RegionID: 12, LeaderStoreID: 2, Keys: cloneRuntimeKeySet(routingKeys[2:])},
 		},
 	}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:       segment,
 		Payload:       payload,
@@ -222,10 +223,10 @@ func TestRaftstoreSegmentInstallerLimitsRouteFanoutPerStore(t *testing.T) {
 		},
 		groups: groups,
 	}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 	cursor, err := installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:       segment,
 		Payload:       payload,
@@ -249,9 +250,9 @@ func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
 
 	kv := &cancelingRaftstorePerasInstallKV{}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -290,9 +291,9 @@ func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRoutingRetryable(t *
 			Detail:    "region 7 returned not_leader",
 		},
 	}
-	runner, err := NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
+	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
-	installer := newRaftstoreSegmentInstaller(runner, nil)
+	installer := newRaftstoreSegmentInstaller(kv, runner, nil)
 
 	_, err = installer.InstallSegment(context.Background(), runtimeperas.SegmentInstallRequest{
 		Segment:         segment,
@@ -350,6 +351,33 @@ func encodeRaftstoreInstallSegment(t *testing.T, segment fsperas.PerasSegment) (
 	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
 	require.NoError(t, err)
 	return payload, digest
+}
+
+type fakeRunnerKV struct{}
+
+func (f *fakeRunnerKV) Get(context.Context, []byte, uint64) (*kvrpcpb.GetResponse, error) {
+	return nil, nil
+}
+
+func (f *fakeRunnerKV) BatchGet(context.Context, [][]byte, uint64) (map[string]*kvrpcpb.GetResponse, error) {
+	return nil, nil
+}
+
+func (f *fakeRunnerKV) Scan(context.Context, []byte, uint32, uint64) ([]*kvrpcpb.KV, error) {
+	return nil, nil
+}
+
+func (f *fakeRunnerKV) Mutate(context.Context, []byte, []*kvrpcpb.Mutation, uint64, uint64, uint64) error {
+	return nil
+}
+
+type fakeRunnerTSO struct {
+	resp *coordpb.TsoResponse
+	err  error
+}
+
+func (f *fakeRunnerTSO) Tso(context.Context, *coordpb.TsoRequest) (*coordpb.TsoResponse, error) {
+	return f.resp, f.err
 }
 
 type fakeRaftstorePerasInstallKV struct {
